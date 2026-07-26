@@ -9,10 +9,18 @@ sets right with no annotations, the symbol-closure model works.
     ./selftest              run everything
     ./selftest closure      run cases whose name contains "closure"
     ./selftest -k           keep the scratch trees for inspection
+    ./selftest -j1          one at a time (default: one per core)
+
+Cases are independent -- each builds in its own scratch tree and shares no
+state -- so they run in parallel. Results are printed in declaration order
+regardless, because a suite whose output shuffles between runs is a suite
+nobody diffs.
 """
 
+import concurrent.futures
 import glob
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -27,6 +35,7 @@ if not sys.stdout.isatty():
 
 CASES = []
 KEEP = False
+JOBS = os.cpu_count() or 4
 
 
 def case(fn):
@@ -646,6 +655,39 @@ def new_symbol_widens_the_compiled_set(t):
 
 
 @case
+def one_fmake_at_a_time_per_tree(t):
+    """Two runs sharing a cache file lose each other's writes.
+
+    Scan results, symbol tables, resolved libraries -- the loser's are all
+    discarded and recomputed next time, and one run can be reading objects
+    the other is replacing. Waiting costs less than either."""
+    t.write("main.c", '#include <stdio.h>\nint helper(void);\n'
+            'int main(void){ printf("%d\\n", helper()); return 0; }\n')
+    t.write("helper.c", "int helper(void){ return 7; }\n")
+
+    import threading
+    out = {}
+
+    def run(tag):
+        out[tag] = t.fmake("-v")
+
+    a = threading.Thread(target=run, args=("a",))
+    b = threading.Thread(target=run, args=("b",))
+    a.start(); b.start(); a.join(); b.join()
+
+    for tag, r in out.items():
+        check(r.returncode == 0, f"run {tag} failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "7\n",
+          "the binary is wrong after two concurrent builds")
+
+    # Whichever went second must have found the first one's work, not
+    # recomputed it: that is the property the lock exists for.
+    combined = out["a"].stdout + out["b"].stdout
+    check("cached" in combined,
+          f"the second run should have reused the cache: {combined}")
+
+
+@case
 def a_broken_file_does_not_sink_other_targets(t):
     """Compile failures are per-target too, not just link failures.
 
@@ -940,6 +982,13 @@ def _cross_available():
     return shutil.which(CROSS_CC) is not None
 
 
+def host_machine():
+    """This machine's e_machine value, for comparing against a built tool."""
+    return {"x86_64": 0x3E, "aarch64": 0xB7, "x86": 0x03, "arm": 0x28,
+            "riscv": 0xF3, "ppc64": 0x15}.get(platform.machine().lower()
+                                              .replace("amd64", "x86_64"))
+
+
 def _elf_machine(path):
     with open(path, "rb") as fh:
         head = fh.read(20)
@@ -1065,6 +1114,94 @@ lib-dirs = ["{host_libs}"]
           f"host zlib must be rejected by architecture: {libs}")
     check("zlibVersion" in libs and "(unresolved)" in libs,
           f"the symbol should remain unresolved: {libs}")
+
+
+@case
+def cross_builds_generators_for_the_build_machine(t):
+    """A generator runs here; the program it generates for runs there.
+
+    Compiling the tool with the target toolchain produces something that
+    cannot be executed, which is the classic build-versus-host distinction
+    and the one place a cross build needs two toolchains rather than one."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    t.write("util/mktable.c", r"""
+#include <stdio.h>
+int main(int argc, char **argv){
+    FILE *f = fopen(argv[1], "w");
+    fprintf(f, "int table_value(void){ return 42; }\n");
+    fclose(f);
+    return 0;
+}
+""")
+    t.write("main.c", r"""
+#include <stdio.h>
+int table_value(void);
+int main(void){ printf("%d\n", table_value()); return 0; }
+""")
+    t.write("fmake.toml", f"""
+[toolchain]
+cc   = "{CROSS_CC}"
+arch = "aarch64"
+
+[target.mktable]
+root = "util/mktable.c"
+
+[generate.table]
+uses    = "mktable"
+command = "$tool gen/table.c"
+inputs  = ["util/mktable.c"]
+outputs = ["gen/table.c"]
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"cross build failed: {r.stdout}{r.stderr}")
+
+    tool = os.path.join(t.dir, ".fmake", "tools", "mktable")
+    check(_elf_machine(tool) == host_machine(),
+          "the generator must be built for the machine that runs it")
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    check(_elf_machine(prog) == 0xB7,
+          "the program must still be built for the target")
+
+    qemu = shutil.which("qemu-aarch64") or shutil.which("qemu-aarch64-static")
+    if qemu:
+        out = subprocess.run([qemu, "-L", "/usr/aarch64-linux-gnu", prog],
+                             capture_output=True, text=True).stdout
+        check(out == "42\n", f"the generated code did not survive: {out!r}")
+
+
+@case
+def cross_rejects_an_unrunnable_generator(t):
+    """Declared wrong, caught rather than trusted."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    t.write("util/mk.c", r"""
+#include <stdio.h>
+int main(int argc, char **argv){
+    FILE *f = fopen(argv[1], "w"); fprintf(f, "int v(void){return 1;}\n");
+    fclose(f); return 0;
+}
+""")
+    t.write("main.c", "int v(void);\nint main(void){ return v(); }\n")
+    t.write("fmake.toml", f"""
+[build-toolchain]
+cc = "{CROSS_CC}"
+
+[target.mk]
+root = "util/mk.c"
+
+[generate.v]
+uses    = "mk"
+command = "$tool gen/v.c"
+inputs  = ["util/mk.c"]
+outputs = ["gen/v.c"]
+""")
+    r = t.fmake()
+    check(r.returncode != 0, "a generator that cannot run must be refused")
+    check("cannot run here" in r.stderr,
+          f"the reason should be plain: {r.stderr}")
+    check("build-toolchain" in r.stderr,
+          f"the fix should be named: {r.stderr}")
 
 
 @case
@@ -2088,10 +2225,29 @@ def explain_shows_symbol_provenance(t):
 
 # ---------------------------------------------------------------------------
 
+def run_case(c):
+    """Run one case in its own tree. Returns (status, detail)."""
+    t = Tree(c.__name__)
+    try:
+        c(t)
+        return "ok", ""
+    except Skip as exc:
+        return "skip", str(exc)
+    except Failure as exc:
+        return "fail", str(exc) + (f"\n       tree: {t.dir}" if KEEP else "")
+    except Exception as exc:                           # noqa: BLE001
+        return "err", repr(exc)
+    finally:
+        t.cleanup()
+
+
 def main(argv):
-    global KEEP
+    global KEEP, JOBS
     pats = [a for a in argv if not a.startswith("-")]
     KEEP = "-k" in argv
+    for a in argv:
+        if a.startswith("-j"):
+            JOBS = max(1, int(a[2:] or 1))
 
     if not os.access(FMAKE, os.X_OK):
         print(f"{RED}fmake is not executable at {FMAKE}{OFF}")
@@ -2100,25 +2256,23 @@ def main(argv):
     cases = [c for c in CASES
              if not pats or any(p in c.__name__ for p in pats)]
     failures = skipped = 0
-    for c in cases:
-        t = Tree(c.__name__)
-        try:
-            c(t)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=JOBS) as pool:
+        results = list(pool.map(run_case, cases))
+
+    for c, (status, detail) in zip(cases, results):
+        if status == "ok":
             print(f"{GREEN}ok{OFF}   {c.__name__}")
-        except Skip as exc:
+        elif status == "skip":
             skipped += 1
-            print(f"{DIM}skip {c.__name__} -- {exc}{OFF}")
-        except Failure as exc:
+            print(f"{DIM}skip {c.__name__} -- {detail}{OFF}")
+        elif status == "fail":
             failures += 1
             print(f"{RED}FAIL{OFF} {c.__name__}")
-            print(f"       {exc}")
-            if KEEP:
-                print(f"       {DIM}tree: {t.dir}{OFF}")
-        except Exception as exc:                       # noqa: BLE001
+            print(f"       {detail}")
+        else:
             failures += 1
-            print(f"{RED}ERR {OFF} {c.__name__}: {exc!r}")
-        finally:
-            t.cleanup()
+            print(f"{RED}ERR {OFF} {c.__name__}: {detail}")
 
     print()
     tail = f" ({skipped} skipped)" if skipped else ""

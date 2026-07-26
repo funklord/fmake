@@ -66,7 +66,9 @@ same as they must be listed in a Makefile.
 Sources that do not exist yet -- flex, bison, protoc output -- are declared
 in fmake.toml and generated before the tree is scanned, so everything
 after treats them as ordinary files. A generator that is itself built from
-the tree, as NetHack's makedefs is, names its target with `uses`.
+the tree, as NetHack's makedefs is, names its target with `uses`; on a cross
+build it comes from [build-toolchain], since it has to run here rather than
+on the target.
 
 An optional fmake.toml carries what belongs to no single file: which of two
 libraries a shared source is part of, install paths, named build profiles
@@ -341,6 +343,13 @@ CONF_SCHEMA = {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
     },
+    # The machine doing the building, as opposed to the one being built for.
+    # Only generators need it: a tool named by `uses` is compiled in order to
+    # be run here, so on a cross build it cannot come from [toolchain].
+    "build-toolchain": {
+        "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
+        "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
+    },
 }
 
 
@@ -409,6 +418,7 @@ class Conf:
         self.targets  = self.data.get("target", {})
         self.install  = self.data.get("install", {})
         self.tool     = self.data.get("toolchain", {})
+        self.build_tool_conf = self.data.get("build-toolchain", {})
         profiles      = self.data.get("profile", {})
         self.profile_name = profile or self.project.get("profile")
         if self.profile_name and self.profile_name not in profiles:
@@ -1030,6 +1040,47 @@ class Config:
 # Hashing & cache
 # ---------------------------------------------------------------------------
 
+try:
+    import fcntl                   # absent off Unix; locking is then skipped
+except ImportError:
+    fcntl = None
+
+
+class TreeLock:
+    """One fmake at a time per tree.
+
+    Two runs share .fmake/cache.json, and the loser's writes are simply lost
+    -- scan results, symbol tables, resolved libraries, all recomputed next
+    time. Worse, one can be reading the objects another is replacing. Waiting
+    is friendlier than either, and a build is long enough that the wait is
+    not the expensive part.
+    """
+
+    def __init__(self, state):
+        self.path = os.path.join(state, "lock")
+        self.fh = None
+
+    def __enter__(self):
+        if fcntl is None:
+            return self
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.fh = open(self.path, "w")
+        try:
+            fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            info("waiting for another fmake in this tree")
+            fcntl.flock(self.fh, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *_exc):
+        if self.fh:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_UN)
+            finally:
+                self.fh.close()
+                self.fh = None
+        return False
+
 def sha(data):
     if isinstance(data, str):
         data = data.encode()
@@ -1630,6 +1681,15 @@ def describe_identity(ident):
     bits = {1: "32", 2: "64"}.get(ident[0], "?")
     end = {1: "le", 2: "be"}.get(ident[1], "?")
     return f"{ELF_MACHINES.get(ident[2], 'machine-0x%x' % ident[2])}/{bits}{end}"
+
+
+def host_elf_machine():
+    """The e_machine value this machine runs, or None if it is not known."""
+    want = host_arch()
+    for code, name in ELF_MACHINES.items():
+        if name == want:
+            return code
+    return None
 
 
 def compiler_lib_dirs(cfg):
@@ -2527,6 +2587,8 @@ def build(args, _bootstrapping=False):
     state  = os.path.join(root, STATE_DIR)
     cache  = Cache(os.path.join(state, CACHE_FILE))
     conf   = Conf(load_conf(root), args.profile)
+    if getattr(args, "use_build_toolchain", False):
+        conf.tool = conf.build_tool_conf
     cfg    = Config(args, conf)
     outdir = os.path.abspath(args.output) if args.output else root
     jobs   = args.jobs or (os.cpu_count() or 4)
@@ -2552,14 +2614,28 @@ def build(args, _bootstrapping=False):
         sub.explain = sub.install = False
         sub.eject, sub.dry_run = None, False
         sub.quiet = not VERBOSE
+        # A generator runs here, on the machine doing the building, so it must
+        # not be compiled with the toolchain aimed at the target. That is what
+        # [build-toolchain] is for, and without it a cross build would produce
+        # a tool it cannot execute.
+        sub.use_build_toolchain = True
         say(f"{YELLOW('TOOL')} {name}")
         bootstrapped.append(name)
         if build(sub, _bootstrapping=True) != 0:
             die(f"could not build {name!r}, which a generator needs")
         for cand in (name, f"lib{name}.so", f"lib{name}.a"):
             path = os.path.join(tooldir, cand)
-            if os.path.exists(path):
-                return path
+            if not os.path.exists(path):
+                continue
+            # Checked rather than inferred: whatever came out has to run on
+            # this machine, whatever anyone declared.
+            want, got = host_elf_machine(), elf_identity(path)
+            if want is not None and got is not None and got[2] != want:
+                die(f"{name!r} was built for {describe_identity(got)} and "
+                    f"cannot run here.\nA generator runs on the build "
+                    f"machine, so give it a [build-toolchain] in "
+                    f"{CONF_FILE}.")
+            return path
         die(f"built {name!r} but found no artifact in {_rel(tooldir, root)}")
 
     # Generators run before anything looks at the tree, so their output is
@@ -3501,6 +3577,17 @@ def parse_args(argv):
     return args
 
 
+def _locked_build(args):
+    """Hold the tree lock for the whole build.
+
+    Only at the outermost level: the nested build a `uses` generator triggers
+    runs inside this one and must not wait for it.
+    """
+    state = os.path.join(os.path.abspath(args.directory), STATE_DIR)
+    with TreeLock(state):
+        return build(args)
+
+
 def main(argv):
     global VERBOSE, PROGRESS
     args = parse_args(argv)
@@ -3514,7 +3601,7 @@ def main(argv):
     if args.clean:
         return do_clean(root)
     ensure_gitignore(root)
-    return build(args)
+    return _locked_build(args)
 
 
 if __name__ == "__main__":

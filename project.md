@@ -877,7 +877,10 @@ Each phase is a usable tool, not a milestone toward one.
    overrides, toolchain selection, and `--install`.
 6. **`--eject`.** *Done.* Makefile and `build.ninja` output, both verified by
    building with fmake absent.
-7. **`fmake.py`.** Last, deliberately.
+7. ~~**`fmake.py`.**~~ **Declined.** Every real project met so far has been
+   expressible without it, and §7 already argues it should stay unattractive.
+   Building it for completeness would add the one thing the premise is against:
+   a place to put logic. Recorded as a decision, not a gap.
 
 Phases 1-4 cover the entire target audience. Everything after is for the projects
 that outgrow the premise.
@@ -1243,6 +1246,34 @@ thereafter.
 The general rule is the one from `-fPIC`, seen from the other side: if a flag
 belongs in the cache key, then it has to be *known* before the thing it keys is
 built. A key computed from a value that is still moving is not a key.
+
+### Cross builds need two toolchains, not one
+
+A generator named by `uses` is compiled in order to be *run*, here, on the
+machine doing the building. Compiling it with `[toolchain]` — which describes
+the machine being built *for* — produces something that cannot be executed.
+This is the classic build-versus-host distinction, and generators are the only
+place fmake meets it.
+
+`[build-toolchain]` is the answer, and its default is the plain host compiler,
+so a cross build with a generator works without declaring anything. What
+matters more is that the result is **checked rather than trusted**: whatever
+comes out of the nested build has its ELF header compared against this machine,
+and a tool that cannot run here is refused by name with the fix in the message.
+
+Verified end to end: an x86-64 generator producing a source file, compiled by
+an aarch64 toolchain into a binary that runs under qemu and prints what the
+generator wrote.
+
+### One fmake at a time per tree
+
+Two runs in one tree shared `.fmake/cache.json` with no locking. The loser's
+writes were simply lost — scan results, symbol tables, resolved libraries, all
+recomputed next time — and one run could be reading objects the other was
+replacing. An advisory lock on `.fmake/lock`, taken for the whole build and
+only at the outermost level so the nested bootstrap does not wait on its own
+parent. Waiting costs less than either failure mode, and the second run now
+finds the first one's work.
 
 ### Some libraries intercept rather than implement
 
