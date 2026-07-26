@@ -1,0 +1,1138 @@
+#!/usr/bin/env python3
+"""
+fmake -- a build tool for programs that shouldn't need a build file.
+
+One file, zero dependencies beyond the Python stdlib. Drop it in $PATH and
+run it in a directory containing C or C++ source:
+
+    fmake                      # build every program in the tree
+    fmake myapp                # build one
+    fmake --explain            # show every decision, and why
+    fmake -n                   # print the commands, run nothing
+    fmake --clean              # remove .fmake/
+
+There is no build file. fmake works out what to build by reading the source,
+on the following model:
+
+  roots        Every translation unit defining main() at file scope is a
+               program, named after the file -- or after the containing
+               directory when the file is main.c/main.cpp.
+
+  candidates   The #include graph is a cheap first guess at which other TUs
+               are worth compiling: "foo.h" included where a foo.c exists.
+               It is only a guess. Headers declare, they do not define, and
+               real projects break the 1:1 correspondence constantly (one
+               header implemented across three files, util.h implemented by
+               util_posix.c, no header at all).
+
+  link set     So the link set is not taken from the include graph. Objects
+               are compiled, their symbol tables read with nm, and the link
+               set is the transitive closure from the root's object: for
+               every undefined symbol, link whatever object defines it, and
+               repeat. This is the same computation the linker performs when
+               deciding which members to pull out of a static archive, so it
+               is exact rather than heuristic.
+
+  widening     Undefined symbols that no compiled object defines cause more
+               of the tree to be compiled and the closure retried, rather
+               than a build failure. Candidates are the unbuilt files that
+               appear to *define* the symbol -- matching any mention would
+               drag in every file that merely calls printf -- so a tidy
+               project never pays for this. Definitions that scanning cannot
+               see, such as a template instantiated from a header, need
+               --widen-all, which compiles the whole tree before closing.
+
+  external     What survives closure over everything is external: libc, and
+               libraries. Reporting these is the input to library resolution,
+               which is not implemented yet -- pass -l flags via --ldflags.
+
+Symbol-invisible code has no automatic answer: a plugin registering itself
+from __attribute__((constructor)) is referenced by nothing, so the closure
+never reaches it. Such files must be named explicitly (--force-link), the
+same as they must be listed in a Makefile.
+
+Build state lives in .fmake/ -- objects, depfiles, and a cache of file
+hashes, scan results and symbol tables, so an incremental build re-reads
+none of it.
+"""
+
+import argparse
+import concurrent.futures
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+# ---------------------------------------------------------------------------
+# Paths & constants
+# ---------------------------------------------------------------------------
+
+STATE_DIR   = ".fmake"
+CACHE_FILE  = "cache.json"
+CACHE_VER   = 1
+
+C_EXTS      = {".c"}
+CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
+SRC_EXTS    = C_EXTS | CXX_EXTS
+HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
+
+SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
+               "__pycache__", "CMakeFiles"}
+
+DEFAULT_CFLAGS = ["-O2", "-g"]
+LINK_ERR_LINES = 8              # linker output shown before truncating
+
+# nm symbol type letters. Uppercase is global, lowercase is file-local.
+NM_UNDEF    = "U"
+NM_WEAK     = set("WVwv")      # weak / vague linkage: satisfies, never pulls
+NM_COMMON   = set("Cc")        # tentative definitions, treated as weak
+
+# ---------------------------------------------------------------------------
+# Colours & message helpers
+# ---------------------------------------------------------------------------
+
+_COLOR = sys.stdout.isatty() and os.environ.get("TERM") != "dumb" \
+         and "NO_COLOR" not in os.environ
+
+def _paint(code):
+    return (lambda s: f"\033[{code}m{s}\033[0m") if _COLOR else (lambda s: str(s))
+
+BOLD   = _paint("1")
+DIM    = _paint("2")
+RED    = _paint("31;1")
+GREEN  = _paint("32;1")
+YELLOW = _paint("33;1")
+BLUE   = _paint("34;1")
+CYAN   = _paint("36")
+
+VERBOSE = False
+
+def info(m):  print(f"{GREEN('*')} {m}")
+def warn(m):  print(f"{YELLOW('*')} {m}")
+def note(m):  print(f"{DIM('  ' + m)}")
+def vinfo(m):
+    if VERBOSE:
+        print(f"{DIM('*')} {DIM(m)}")
+
+def die(m):
+    sys.stdout.flush()          # keep the error after the build output
+    print(f"{RED('!!!')} {m}", file=sys.stderr)
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Source scanning
+#
+# Comments are stripped before looking for anything, so that a commented-out
+# #include or a main() in a disabled block is not seen. String literals are
+# deliberately *kept*: #include "foo.h" is itself string-shaped, and losing
+# it would lose the include graph. The scanner still has to track strings
+# properly so that a "//" inside one is not mistaken for a comment.
+#
+# Comment bodies are returned alongside, since the annotation layer will
+# need them.
+# ---------------------------------------------------------------------------
+
+def strip_comments(text):
+    """Return (code, comments). Line numbering is preserved in `code`.
+
+    `comments` is a list of (lineno, text) for later annotation parsing."""
+    out, comments = [], []
+    i, n, line = 0, len(text), 1
+    while i < n:
+        c = text[i]
+
+        # line comment, possibly continued with a trailing backslash
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            start, j = i, i + 2
+            while j < n:
+                if text[j] == "\\" and j + 1 < n and text[j + 1] == "\n":
+                    j += 2
+                elif text[j] == "\n":
+                    break
+                else:
+                    j += 1
+            body = text[start:j]
+            comments.append((line, body))
+            out.append("\n" * body.count("\n"))
+            line += body.count("\n")
+            i = j
+            continue
+
+        # block comment
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            body = text[i:j]
+            comments.append((line, body))
+            out.append("\n" * body.count("\n"))
+            line += body.count("\n")
+            i = j
+            continue
+
+        # C++ raw string: R"delim( ... )delim"
+        if c == '"' and i > 0 and text[i - 1] == "R":
+            m = re.compile(r'"([^ ()\\\t\n]{0,16})\(').match(text, i)
+            if m:
+                close = ')' + m.group(1) + '"'
+                j = text.find(close, m.end())
+                j = n if j < 0 else j + len(close)
+                seg = text[i:j]
+                out.append(seg)
+                line += seg.count("\n")
+                i = j
+                continue
+
+        # ordinary string or character literal
+        if c in "\"'":
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == c or text[j] == "\n":
+                    j += 1
+                    break
+                j += 1
+            seg = text[i:j]
+            out.append(seg)
+            line += seg.count("\n")
+            i = j
+            continue
+
+        out.append(c)
+        if c == "\n":
+            line += 1
+        i += 1
+
+    return "".join(out), comments
+
+
+RE_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"]+)[>"]', re.M)
+
+# A *definition* -- a name, a parameter list, then a brace. Declarations and
+# calls do not match. Everything found here is confirmed later against the
+# object's symbol table, so these only have to be good, not perfect.
+RE_FUNC_DEF = re.compile(
+    r'(?:^|[;}\s*&:])([A-Za-z_][A-Za-z0-9_]*)[ \t\n]*\([^;{)]*\)'
+    r'(?:[ \t\n]*(?:const|noexcept|override|final))*[ \t\n]*\{', re.M)
+
+# File-scope data. Anchored at column zero, since file-scope definitions are
+# conventionally unindented and locals are not; a miss only costs a widening
+# pass, so the heuristic is allowed to be loose.
+RE_DATA_DEF = re.compile(
+    r'^(?:static[ \t]+|const[ \t]+|volatile[ \t]+)*'
+    r'[A-Za-z_][A-Za-z0-9_]*(?:[ \t]*[\*&][ \t]*|[ \t]+)'
+    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\[[^\]]*\])?[ \t]*[=;]', re.M)
+
+RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
+
+
+def scan_source(path):
+    """Read one source file and return its scan record."""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    code, comments = strip_comments(text)
+
+    incs = []
+    for m in RE_INCLUDE.finditer(code):
+        lineno = code.count("\n", 0, m.start()) + 1
+        incs.append([m.group(1), m.group(2), lineno])
+
+    defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
+    defs -= {"if", "for", "while", "switch", "catch", "return", "sizeof"}
+
+    return {
+        "incs":     incs,
+        "has_main": bool(RE_MAIN.search(code)),
+        "defs":     sorted(defs),
+        "comments": [[ln, t] for ln, t in comments],
+    }
+
+# ---------------------------------------------------------------------------
+# Tree walk
+# ---------------------------------------------------------------------------
+
+def walk_tree(root):
+    """Return (sources, headers) as root-relative paths."""
+    srcs, hdrs = [], []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not d.startswith(".")]
+        for f in filenames:
+            ext = os.path.splitext(f)[1]
+            rel = os.path.relpath(os.path.join(dirpath, f), root)
+            if ext in SRC_EXTS:
+                srcs.append(rel)
+            elif ext in HDR_EXTS:
+                hdrs.append(rel)
+    return sorted(srcs), sorted(hdrs)
+
+
+def is_cxx(rel):
+    return os.path.splitext(rel)[1] in CXX_EXTS
+
+# ---------------------------------------------------------------------------
+# Include resolution and candidate sets
+#
+# This produces a *guess* at what is worth compiling. Being wrong here costs
+# extra compilation or a widening pass, never a wrong link set.
+# ---------------------------------------------------------------------------
+
+class Project:
+    def __init__(self, root, srcs, hdrs, scans):
+        self.root  = root
+        self.srcs  = srcs
+        self.hdrs  = hdrs
+        self.scans = scans
+        # basename -> [relative header paths], for unqualified include lookup
+        self.hdr_by_name = {}
+        for h in hdrs:
+            self.hdr_by_name.setdefault(os.path.basename(h), []).append(h)
+        # header stem -> sibling source with the same stem, if any
+        self.src_set = set(srcs)
+        self.incdirs = set()
+
+    def resolve_header(self, inc_name, from_rel):
+        """Resolve a quoted include to a tree-relative header path, or None."""
+        base = os.path.dirname(from_rel)
+        cand = os.path.normpath(os.path.join(base, inc_name))
+        if cand in self.hdr_by_name.get(os.path.basename(cand), []) or \
+           os.path.isfile(os.path.join(self.root, cand)):
+            self.incdirs.add(os.path.dirname(cand) or ".")
+            return cand
+        cand = os.path.normpath(inc_name)
+        if os.path.isfile(os.path.join(self.root, cand)):
+            self.incdirs.add(".")
+            return cand
+        matches = self.hdr_by_name.get(os.path.basename(inc_name), [])
+        if len(matches) == 1:
+            self.incdirs.add(os.path.dirname(matches[0]) or ".")
+            return matches[0]
+        return None
+
+    def sibling_source(self, hdr_rel):
+        """The .c/.cpp sitting next to a header with the same stem."""
+        stem = os.path.splitext(hdr_rel)[0]
+        for ext in (".c", ".cc", ".cpp", ".cxx", ".c++", ".C"):
+            if stem + ext in self.src_set:
+                return stem + ext
+        return None
+
+    def candidates(self, root_src):
+        """Include-graph reachable TUs from a root. A guess, nothing more."""
+        seen_h, out = set(), {root_src}
+        queue = [root_src]
+        while queue:
+            cur = queue.pop()
+            scan = self.scans.get(cur)
+            if not scan:
+                continue
+            for kind, name, _line in scan["incs"]:
+                if kind != '"':
+                    continue
+                h = self.resolve_header(name, cur)
+                if not h or h in seen_h:
+                    continue
+                seen_h.add(h)
+                # headers can include headers; follow those too
+                hscan = self.scans.get(h)
+                if hscan:
+                    for k2, n2, _l2 in hscan["incs"]:
+                        if k2 == '"':
+                            h2 = self.resolve_header(n2, h)
+                            if h2 and h2 not in seen_h:
+                                seen_h.add(h2)
+                                queue.append(h2)
+                src = self.sibling_source(h)
+                if src and src not in out:
+                    out.add(src)
+                    queue.append(src)
+        return out
+
+# ---------------------------------------------------------------------------
+# Toolchain & configuration
+# ---------------------------------------------------------------------------
+
+def tool_version(exe):
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True)
+        return (r.stdout or r.stderr).splitlines()[0].strip()
+    except (OSError, IndexError):
+        return "?"
+
+
+def find_nm():
+    for cand in (os.environ.get("NM"), "nm", "llvm-nm", "gnm"):
+        if cand and shutil.which(cand):
+            return shutil.which(cand)
+    die("no nm found. fmake reads object symbol tables to work out the "
+        "link set; install binutils or llvm, or set $NM.")
+
+
+class Config:
+    def __init__(self, args):
+        self.cc      = os.environ.get("CC", "cc")
+        self.cxx     = os.environ.get("CXX", "c++")
+        self.nm      = find_nm()
+        self.cflags  = list(args.cflags)  or list(DEFAULT_CFLAGS)
+        self.ldflags = list(args.ldflags)
+        if not shutil.which(self.cc):
+            die(f"C compiler {self.cc!r} not found (set $CC)")
+        self.ccver  = tool_version(self.cc)
+        self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
+        self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
+                                 *self.cflags]))[:12]
+
+    def driver(self, cxx):
+        return self.cxx if cxx else self.cc
+
+# ---------------------------------------------------------------------------
+# Hashing & cache
+# ---------------------------------------------------------------------------
+
+def sha(data):
+    if isinstance(data, str):
+        data = data.encode()
+    return hashlib.blake2b(data, digest_size=16).hexdigest()
+
+
+def file_hash(path):
+    h = hashlib.blake2b(digest_size=16)
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 18), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class Cache:
+    """Persisted file hashes, scan results and symbol tables.
+
+    Keyed by content hash throughout, so switching branches or touching a
+    file without changing it rebuilds nothing.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.data = {"version": CACHE_VER, "files": {}, "objects": {},
+                     "units": []}
+        try:
+            with open(path) as fh:
+                d = json.load(fh)
+            if d.get("version") == CACHE_VER:
+                self.data = d
+                self.data.setdefault("units", [])
+        except (OSError, ValueError):
+            pass
+        self.files   = self.data["files"]
+        self.objects = self.data["objects"]
+
+    def save(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(self.data, fh)
+        os.replace(tmp, self.path)
+
+    def hash_of(self, abspath, rel):
+        """Content hash, avoiding the read when size+mtime are unchanged."""
+        try:
+            st = os.stat(abspath)
+        except OSError:
+            return None
+        ent = self.files.get(rel)
+        sig = [st.st_size, int(st.st_mtime_ns)]
+        if ent and ent.get("sig") == sig:
+            return ent["hash"]
+        h = file_hash(abspath)
+        if ent is None:
+            ent = self.files[rel] = {}
+        ent["sig"], ent["hash"] = sig, h
+        ent.pop("scan", None)
+        return h
+
+    def scan(self, abspath, rel):
+        h = self.hash_of(abspath, rel)
+        ent = self.files[rel]
+        if ent.get("scan") is not None and ent.get("scan_h") == h:
+            return ent["scan"]
+        ent["scan"] = scan_source(abspath)
+        ent["scan_h"] = h
+        return ent["scan"]
+
+# ---------------------------------------------------------------------------
+# Depfiles
+# ---------------------------------------------------------------------------
+
+def parse_depfile(path):
+    """Read a `cc -MD` depfile and return the prerequisite paths."""
+    try:
+        with open(path) as fh:
+            text = fh.read()
+    except OSError:
+        return []
+    text = text.replace("\\\n", " ")
+    _, _, rhs = text.partition(":")
+    return [p for p in rhs.split() if p and p != "\\"]
+
+# ---------------------------------------------------------------------------
+# Compiling
+# ---------------------------------------------------------------------------
+
+class Unit:
+    __slots__ = ("rel", "abs", "cxx", "obj", "dep", "scan",
+                 "undef", "strong", "weak", "compiled")
+
+    def __init__(self, rel, root, objdir, scan):
+        self.rel  = rel
+        self.abs  = os.path.join(root, rel)
+        self.cxx  = is_cxx(rel)
+        self.obj  = os.path.join(objdir, rel + ".o")
+        self.dep  = os.path.join(objdir, rel + ".d")
+        self.scan = scan
+        self.undef = self.strong = self.weak = None
+        self.compiled = False
+
+
+def compile_cmd(u, cfg, incflags):
+    cc = cfg.driver(u.cxx)
+    return ([cc, "-c", u.abs, "-o", u.obj, "-MD", "-MF", u.dep]
+            + incflags + cfg.cflags)
+
+
+def object_key(u, cfg, cache, root):
+    """Cache key: source content, every prerequisite's content, and config."""
+    parts = [cfg.key]
+    src_h = cache.hash_of(u.abs, u.rel)
+    if src_h is None:
+        return None
+    parts.append(src_h)
+    for dep in parse_depfile(u.dep):
+        rel = os.path.relpath(dep, root)
+        dh = cache.hash_of(dep, rel)
+        if dh:
+            parts.append(rel + ":" + dh)
+    return sha("|".join(parts))
+
+
+def compile_units(units, cfg, cache, root, incflags, jobs, dry_run):
+    """Compile what is stale. Returns True if anything was actually built."""
+    todo = []
+    for u in units:
+        if u.compiled:
+            continue
+        ent = cache.objects.get(u.rel)
+        key = object_key(u, cfg, cache, root)
+        if (ent and ent.get("key") == key and key is not None
+                and os.path.exists(u.obj)):
+            u.undef  = set(ent["u"])
+            u.strong = set(ent["s"])
+            u.weak   = set(ent["w"])
+            u.compiled = True
+            vinfo(f"cached {u.rel}")
+            continue
+        todo.append(u)
+
+    if not todo:
+        return False
+
+    for u in todo:
+        os.makedirs(os.path.dirname(u.obj), exist_ok=True)
+
+    width = len(str(len(todo)))
+    done = [0]
+    failures = []
+
+    def run_one(u):
+        cmd = compile_cmd(u, cfg, incflags)
+        if dry_run:
+            print(" ".join(cmd))
+            return u, 0, ""
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return u, r.returncode, r.stderr
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for u, rc, err in pool.map(run_one, todo):
+            done[0] += 1
+            tag = "CXX" if u.cxx else "CC "
+            if rc != 0:
+                failures.append((u, err))
+                print(f"[{done[0]:>{width}}/{len(todo)}] {RED(tag)} {u.rel}")
+                sys.stdout.write(err)
+            elif not dry_run:
+                print(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {u.rel}")
+                if err.strip():
+                    sys.stdout.write(err)
+
+    if failures:
+        die(f"{len(failures)} file(s) failed to compile")
+
+    if dry_run:
+        for u in todo:
+            u.undef, u.strong, u.weak = set(), set(), set()
+            u.compiled = True
+        return True
+
+    # Symbol tables, and the cache entries that go with them.
+    read_symbols(todo, cfg, jobs)
+    for u in todo:
+        cache.objects[u.rel] = {
+            "key": object_key(u, cfg, cache, root),
+            "u": sorted(u.undef), "s": sorted(u.strong), "w": sorted(u.weak),
+        }
+    return True
+
+# ---------------------------------------------------------------------------
+# Symbol tables
+#
+# The classification matters more than it looks. Lowercase nm types are
+# file-local and invisible to other objects, so they neither provide nor
+# conflict.
+#
+# Weak and common symbols are providers of last resort. C++ emits a weak
+# definition of every template instantiation and inline function into every
+# object that uses one, so treating them as strong would report duplicate
+# definitions across perfectly ordinary files. But ignoring them entirely is
+# wrong too: `extern template` leaves a plain undefined reference that only a
+# weak definition elsewhere satisfies. So a strong provider wins if there is
+# one, a weak provider is used if there is not, and several weak providers is
+# normal rather than ambiguous.
+# ---------------------------------------------------------------------------
+
+def read_symbols(units, cfg, jobs):
+    def one(u):
+        r = subprocess.run([cfg.nm, "--format=posix", u.obj],
+                           capture_output=True, text=True)
+        undef, strong, weak = set(), set(), set()
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            name, typ = parts[0], parts[1]
+            if typ == NM_UNDEF:
+                undef.add(name)
+            elif typ in NM_WEAK or typ in NM_COMMON:
+                weak.add(name)
+            elif typ.isupper():
+                strong.add(name)
+            # lowercase: file-local, ignored
+        return u, undef, strong, weak
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for u, undef, strong, weak in pool.map(one, units):
+            u.undef, u.strong, u.weak = undef, strong, weak
+            u.compiled = True
+
+# ---------------------------------------------------------------------------
+# Symbol closure -- the link set
+# ---------------------------------------------------------------------------
+
+class Closure:
+    __slots__ = ("root", "link", "why", "external", "ambiguous")
+
+    def __init__(self, root):
+        self.root      = root
+        self.link      = [root]
+        self.why       = {}      # unit rel -> (symbol, needed-by rel)
+        self.external  = {}      # symbol -> [unit rels referencing it]
+        self.ambiguous = []      # (symbol, [providers])
+
+
+def close_over_symbols(root_unit, units, forced=()):
+    """Transitive closure from a root object over undefined symbols.
+
+    `forced` units seed the closure alongside the root. They are what nothing
+    references -- constructor-registered plugins and dlopen targets -- so they
+    have to be asserted, but once seeded their own dependencies resolve
+    normally."""
+    strong_by_sym, weak_by_sym = {}, {}
+    for u in units:
+        for s in u.strong:
+            strong_by_sym.setdefault(s, []).append(u)
+        for s in u.weak:
+            weak_by_sym.setdefault(s, []).append(u)
+
+    cl = Closure(root_unit)
+    seeds = [root_unit] + [u for u in forced if u is not root_unit]
+    for u in seeds[1:]:
+        cl.link.append(u)
+        cl.why[u.rel] = ("--force-link", "")
+    linked = set(seeds)
+    frontier = list(seeds)
+
+    while frontier:
+        cur = frontier.pop()
+        for sym in sorted(cur.undef):
+            if any(sym in o.strong or sym in o.weak for o in linked):
+                continue
+
+            providers = strong_by_sym.get(sym, [])
+            if len(providers) > 1:
+                cl.ambiguous.append((sym, [p.rel for p in providers]))
+                continue
+
+            if not providers:
+                # No strong definition anywhere, but a weak one will do. This
+                # is how a separately instantiated template is reached:
+                # `extern template` leaves the user's object with an undefined
+                # reference that only a vague-linkage definition satisfies.
+                # Several files offering it is normal rather than ambiguous --
+                # vague linkage means the copies are interchangeable -- so
+                # take the first by name and stay deterministic.
+                weak = weak_by_sym.get(sym, [])
+                if not weak:
+                    continue
+                providers = [min(weak, key=lambda u: u.rel)]
+
+            p = providers[0]
+            if p not in linked:
+                linked.add(p)
+                cl.link.append(p)
+                cl.why[p.rel] = (sym, cur.rel)
+                frontier.append(p)
+
+    for u in cl.link:
+        for sym in u.undef:
+            if not any(sym in o.strong or sym in o.weak for o in linked):
+                cl.external.setdefault(sym, []).append(u.rel)
+
+    return cl
+
+# ---------------------------------------------------------------------------
+# Widening
+#
+# An unresolved symbol should widen the compiled set, not fail the build.
+#
+# Candidates are the unbuilt files that appear to *define* the symbol. The
+# distinction matters: filtering on any mention instead would match every
+# file that merely calls printf, and widening would drag in most of the tree
+# to chase a libc symbol it can never resolve. Definitions that this misses
+# -- functions generated by macros, mostly -- need --widen-all or
+# --force-link.
+# ---------------------------------------------------------------------------
+
+def symbol_tokens(sym):
+    """Plausible source identifiers for a symbol, including Itanium mangling."""
+    if sym.startswith("_Z"):
+        toks = set()
+        for m in re.finditer(r"(\d+)", sym):
+            n = int(m.group(1))
+            name = sym[m.end():m.end() + n]
+            if n and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                toks.add(name)
+        return toks
+    return {sym.lstrip("_")}
+
+
+def widen_candidates(symbols, pool_units):
+    toks = set()
+    for s in symbols:
+        toks |= symbol_tokens(s)
+    if not toks:
+        return []
+    out = []
+    for u in pool_units:
+        if toks.intersection(u.scan.get("defs") or []):
+            out.append(u)
+    return out
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
+
+def target_name(rel, root):
+    stem = os.path.splitext(os.path.basename(rel))[0]
+    if stem == "main":
+        d = os.path.dirname(rel)
+        return os.path.basename(os.path.abspath(os.path.join(root, d))) or "a.out"
+    return stem
+
+
+def link_target(name, cl, cfg, outdir, dry_run):
+    objs = [u.obj for u in cl.link]
+    cxx = any(u.cxx for u in cl.link)
+    out = os.path.join(outdir, name)
+    cmd = [cfg.driver(cxx), "-o", out] + objs + cfg.ldflags
+    if dry_run:
+        print(" ".join(cmd))
+        return out, True, True
+    newest = max((os.path.getmtime(o) for o in objs), default=0)
+    if os.path.exists(out) and os.path.getmtime(out) >= newest:
+        vinfo(f"up to date {name}")
+        return out, False, True
+    print(f"{GREEN('LD ')} {BOLD(name)}")
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.stderr.strip():
+        # A missing library produces one linker line per call site, which
+        # buries everything else. fmake already knows the unresolved symbols
+        # and reports them itself, so the raw spew is truncated.
+        lines = r.stderr.rstrip().splitlines()
+        if VERBOSE or len(lines) <= LINK_ERR_LINES:
+            sys.stdout.write(r.stderr)
+        else:
+            sys.stdout.write("\n".join(lines[:LINK_ERR_LINES]) + "\n")
+            note(f"... {len(lines) - LINK_ERR_LINES} more linker lines (-v "
+                 f"for all)")
+    return out, True, r.returncode == 0
+
+# ---------------------------------------------------------------------------
+# --explain
+# ---------------------------------------------------------------------------
+
+def _rel(path, root):
+    """Shorten absolute paths for display; commands stay copy-pasteable."""
+    try:
+        r = os.path.relpath(path, root)
+    except ValueError:
+        return path
+    return path if r.startswith("..") else r
+
+
+def _show_cmd(cmd, root):
+    out = []
+    for a in cmd:
+        if os.path.isabs(a):
+            out.append(_rel(a, root))
+        elif a[:2] in ("-I", "-L") and os.path.isabs(a[2:]):
+            out.append(a[:2] + _rel(a[2:], root))
+        else:
+            out.append(a)
+    return " ".join(out)
+
+
+def explain(name, cl, cfg, incflags, outdir, all_units, root, other_roots=()):
+    W = 36
+    print(f"{BOLD('target')} {BOLD(name)} (exe)")
+    print(f"  {CYAN('link set'):<{W}}"
+          f"{DIM('[symbol closure from ' + _rel(cl.root.obj, root) + ']')}")
+    for u in cl.link:
+        if u is cl.root:
+            print(f"    {u.rel:<{W-4}}{DIM('root: defines main()')}")
+        else:
+            sym, by = cl.why.get(u.rel, ("?", "?"))
+            why = sym if not by else f"<- {sym}  ({by})"
+            print(f"    {u.rel:<{W-4}}{DIM(why)}")
+
+    # Other programs' roots are compiled but obviously not part of this one;
+    # listing them as unreachable reads like a problem when it isn't.
+    linked = {u.rel for u in cl.link}
+    spare = [u for u in all_units
+             if u.rel not in linked and u.rel not in other_roots]
+    if spare:
+        print(f"  {CYAN('compiled, not linked')}")
+        for u in spare:
+            print(f"    {u.rel:<{W-4}}{DIM('defines nothing reachable')}")
+
+    if cl.external:
+        print(f"  {CYAN('external symbols'):<{W}}"
+              f"{DIM('[unresolved within the tree]')}")
+        for sym in sorted(cl.external)[:30]:
+            print(f"    {sym:<{W-4}}"
+                  f"{DIM('referenced by ' + cl.external[sym][0])}")
+        if len(cl.external) > 30:
+            print(f"    {DIM('... and %d more' % (len(cl.external) - 30))}")
+        print(f"    {DIM('library resolution is not implemented yet; '
+                         'pass -l via --ldflags')}")
+
+    print(f"  {CYAN('flags')}")
+    print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) for f in incflags])}")
+    print(f"  {CYAN('argv')}")
+    for u in cl.link[:2]:
+        print(f"    {DIM(_show_cmd(compile_cmd(u, cfg, incflags), root))}")
+    if len(cl.link) > 2:
+        print(f"    {DIM('... %d more' % (len(cl.link) - 2))}")
+    cxx = any(u.cxx for u in cl.link)
+    link_cmd = ([cfg.driver(cxx), "-o", os.path.join(outdir, name)]
+                + [u.obj for u in cl.link] + cfg.ldflags)
+    print(f"    {DIM(_show_cmd(link_cmd, root))}")
+    print()
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+
+def build(args):
+    root = os.path.abspath(args.directory)
+    if not os.path.isdir(root):
+        die(f"no such directory: {args.directory}")
+
+    state  = os.path.join(root, STATE_DIR)
+    cache  = Cache(os.path.join(state, CACHE_FILE))
+    cfg    = Config(args)
+    objdir = os.path.join(state, "obj", cfg.key)
+    outdir = os.path.abspath(args.output) if args.output else root
+    jobs   = args.jobs or (os.cpu_count() or 4)
+
+    srcs, hdrs = walk_tree(root)
+    if not srcs:
+        die("no C or C++ source files found here")
+
+    # ---- scan (cached by content hash) --------------------------------
+    scans = {}
+    for rel in srcs + hdrs:
+        scans[rel] = cache.scan(os.path.join(root, rel), rel)
+
+    proj  = Project(root, srcs, hdrs, scans)
+    roots = [s for s in srcs if scans[s]["has_main"]]
+    if not roots:
+        die("no main() found in any source file. Building libraries is not "
+            "implemented yet (phase 2 covers programs only).")
+
+    wanted = roots
+    if args.targets:
+        by_name = {target_name(r, root): r for r in roots}
+        wanted = []
+        for t in args.targets:
+            if t not in by_name:
+                die(f"no target {t!r}. Available: "
+                    f"{', '.join(sorted(by_name)) or '(none)'}")
+            wanted.append(by_name[t])
+
+    # ---- candidate set from the include graph -------------------------
+    units = {}
+
+    def unit(rel):
+        if rel not in units:
+            units[rel] = Unit(rel, root, objdir, scans[rel])
+        return units[rel]
+
+    candidates = set()
+    for r in wanted:
+        candidates |= proj.candidates(r)
+    for rel in args.force_link:
+        if rel not in proj.src_set:
+            die(f"--force-link: {rel!r} is not a source file in this tree")
+        candidates.add(rel)
+    # Whatever widening discovered last time is a far better starting guess
+    # than the include graph, so start from it. Widening still corrects it if
+    # the tree has changed.
+    candidates |= {r for r in cache.data["units"] if r in proj.src_set}
+    if args.widen_all:
+        candidates = set(srcs)
+
+    incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
+                for d in sorted(proj.incdirs | {"."})]
+
+    for rel in sorted(candidates):
+        unit(rel)
+
+    vinfo(f"{len(srcs)} sources, {len(candidates)} candidates, "
+          f"{len(roots)} root(s)")
+
+    if args.always_make:
+        cache.objects.clear()
+
+    # ---- compile, close, widen ----------------------------------------
+    tried = set()
+    closures = {}
+    while True:
+        pool = [units[r] for r in sorted(units)]
+        compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run)
+
+        # confirm main() against the symbol tables now that objects exist
+        if not args.dry_run:
+            for r in list(wanted):
+                if "main" not in units[r].strong:
+                    warn(f"{r} looked like it defined main() but the object "
+                         f"does not export it; skipping")
+                    wanted.remove(r)
+            if not wanted:
+                die("no target defines main()")
+
+        forced = [units[f] for f in args.force_link if f in units]
+        closures = {r: close_over_symbols(units[r], pool, forced)
+                    for r in wanted}
+
+        unresolved = set()
+        for cl in closures.values():
+            unresolved |= set(cl.external)
+        fresh = unresolved - tried
+        if not fresh or args.widen_all or args.dry_run:
+            break
+        tried |= fresh
+
+        rest = [Unit(rel, root, objdir, scans[rel])
+                for rel in srcs if rel not in units]
+        extra = widen_candidates(fresh, rest)
+        if not extra:
+            break
+        vinfo(f"widening: {len(extra)} more file(s) may define "
+              f"{len(fresh)} unresolved symbol(s)")
+        for u in extra:
+            units[u.rel] = u
+
+    # ---- report ambiguity ---------------------------------------------
+    for name_r, cl in closures.items():
+        for sym, providers in cl.ambiguous:
+            die(f"symbol {sym!r} is defined by more than one file:\n"
+                f"    " + "\n    ".join(providers) + "\n"
+                f"fmake will not guess which one belongs in "
+                f"{target_name(name_r, root)}.")
+
+    # ---- explain or link ----------------------------------------------
+    cache.data["units"] = sorted(units)
+
+    all_units = [units[r] for r in sorted(units)]
+    if args.explain:
+        for r in wanted:
+            explain(target_name(r, root), closures[r], cfg, incflags,
+                    outdir, all_units, root, set(roots) - {r})
+        cache.save()
+        return 0
+
+    # Targets are discovered, not requested, so one of them failing must not
+    # discard the others -- you did not ask for the test binary that needs a
+    # library fmake cannot resolve yet.
+    built, failed, changed = [], [], False
+    for r in wanted:
+        name = target_name(r, root)
+        out, did, ok = link_target(name, closures[r], cfg, outdir,
+                                   args.dry_run)
+        changed = changed or did
+        (built if ok else failed).append((name, closures[r]))
+
+    cache.save()
+    if args.dry_run:
+        return 0
+
+    if not args.quiet:
+        if changed:
+            # Only worth saying when something was actually rebuilt; on a
+            # no-op build it is the same notice every time.
+            ignored = sorted(set(srcs) - set(units))
+            for rel in ignored[:5]:
+                note(f"{rel} not compiled: nothing reaches it "
+                     f"(--force-link if it is needed anyway)")
+            if len(ignored) > 5:
+                note(f"... and {len(ignored) - 5} more")
+
+        names = ", ".join(n for n, _ in built)
+        if built:
+            info(f"built {names}" if changed else f"{names} up to date")
+
+    if failed:
+        print()
+        for name, cl in failed:
+            warn(f"{name} did not link")
+            if cl.external:
+                shown = sorted(cl.external)[:6]
+                note(f"unresolved outside the tree: {', '.join(shown)}"
+                     + (" ..." if len(cl.external) > 6 else ""))
+        note("library resolution is not implemented yet -- pass the "
+             "libraries with --ldflags, or name only the targets you want")
+        return 1
+    return 0
+
+# ---------------------------------------------------------------------------
+# Housekeeping
+# ---------------------------------------------------------------------------
+
+def ensure_gitignore(root):
+    if not os.path.isdir(os.path.join(root, ".git")):
+        return
+    path = os.path.join(root, ".gitignore")
+    try:
+        with open(path) as fh:
+            if any(l.strip().rstrip("/") == STATE_DIR for l in fh):
+                return
+    except OSError:
+        pass
+    try:
+        with open(path, "a") as fh:
+            fh.write(f"{STATE_DIR}/\n")
+    except OSError:
+        pass
+
+
+def do_clean(root):
+    state = os.path.join(root, STATE_DIR)
+    if os.path.isdir(state):
+        shutil.rmtree(state)
+        info(f"removed {STATE_DIR}/")
+    else:
+        info("nothing to clean")
+    return 0
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="fmake",
+        description="Build C and C++ programs with no build file.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="The link set is computed from object symbol tables, not from "
+               "the #include graph. Run --explain to see every decision.")
+    p.add_argument("targets", nargs="*",
+                   help="program(s) to build (default: all)")
+    p.add_argument("-C", "--directory", default=".",
+                   help="build the tree rooted here (default: .)")
+    p.add_argument("-j", "--jobs", type=int, default=0,
+                   help="parallel compile jobs (default: cpu count)")
+    p.add_argument("-o", "--output", default=None,
+                   help="where to put the binaries (default: project root)")
+    p.add_argument("--explain", action="store_true",
+                   help="print the inferred build and exit")
+    p.add_argument("-n", "--dry-run", action="store_true",
+                   help="print commands without running them")
+    p.add_argument("-B", "--always-make", action="store_true",
+                   help="ignore the object cache and rebuild everything")
+    p.add_argument("--clean", action="store_true",
+                   help=f"remove {STATE_DIR}/ and exit")
+    # One shell-quoted string rather than nargs="+", so that flags starting
+    # with a dash are not mistaken for fmake's own options. $CFLAGS and
+    # $LDFLAGS are honoured too, as make does.
+    p.add_argument("--cflags", action="append", default=[], metavar="'FLAGS'",
+                   help=f"replace the default compile flags "
+                        f"({' '.join(DEFAULT_CFLAGS)}); also read from $CFLAGS")
+    p.add_argument("--ldflags", action="append", default=[], metavar="'FLAGS'",
+                   help="extra link flags, e.g. --ldflags='-lm -lcmocka'; "
+                        "also read from $LDFLAGS")
+    p.add_argument("--force-link", action="append", default=[],
+                   metavar="SRC",
+                   help="compile and link these files regardless of whether "
+                        "any symbol reaches them (constructor-registered "
+                        "plugins, dlopen targets)")
+    p.add_argument("--widen-all", action="store_true",
+                   help="compile every source in the tree before closing, "
+                        "instead of filtering candidates by symbol name")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-q", "--quiet", action="store_true")
+    args = p.parse_args(argv)
+
+    def flags(given, env):
+        out = []
+        for chunk in ([os.environ[env]] if env in os.environ else []) + given:
+            out += shlex.split(chunk)
+        return out
+
+    args.cflags     = flags(args.cflags,  "CFLAGS")
+    args.ldflags    = flags(args.ldflags, "LDFLAGS")
+    args.force_link = [f for chunk in args.force_link
+                       for f in shlex.split(chunk)]
+    return args
+
+
+def main(argv):
+    global VERBOSE
+    args = parse_args(argv)
+    VERBOSE = args.verbose
+    root = os.path.abspath(args.directory)
+    if args.clean:
+        return do_clean(root)
+    ensure_gitignore(root)
+    return build(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        print(f"\n{RED('!!!')} Interrupted.")
+        sys.exit(130)
+    except BrokenPipeError:
+        os._exit(0)

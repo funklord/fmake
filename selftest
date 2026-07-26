@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+"""
+selftest -- build real trees with fmake and check what it decided.
+
+Every case here is a claim project.md makes about the design. The important
+ones are the trees that defeat the #include graph: if fmake gets those link
+sets right with no annotations, the symbol-closure model works.
+
+    ./selftest              run everything
+    ./selftest closure      run cases whose name contains "closure"
+    ./selftest -k           keep the scratch trees for inspection
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+FMAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fmake")
+
+GREEN = "\033[32;1m"; RED = "\033[31;1m"; DIM = "\033[2m"; OFF = "\033[0m"
+if not sys.stdout.isatty():
+    GREEN = RED = DIM = OFF = ""
+
+CASES = []
+KEEP = False
+
+
+def case(fn):
+    CASES.append(fn)
+    return fn
+
+
+class Tree:
+    """A scratch source tree with an fmake runner attached."""
+
+    def __init__(self, name):
+        self.name = name
+        self.dir = tempfile.mkdtemp(prefix=f"fmake-{name}-")
+
+    def write(self, rel, text):
+        path = os.path.join(self.dir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text.lstrip("\n"))
+        return path
+
+    def fmake(self, *args, env=None):
+        e = dict(os.environ)
+        e.pop("CFLAGS", None)
+        e.pop("LDFLAGS", None)
+        e.update(env or {})
+        r = subprocess.run([FMAKE, "-C", self.dir, *args],
+                           capture_output=True, text=True, env=e)
+        return r
+
+    def run(self, prog):
+        return subprocess.run([os.path.join(self.dir, prog)],
+                              capture_output=True, text=True)
+
+    def cleanup(self):
+        if not KEEP:
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+
+class Failure(Exception):
+    pass
+
+
+def check(cond, what):
+    if not cond:
+        raise Failure(what)
+
+
+def compiled(r):
+    """Files fmake compiled in this invocation, from the progress lines."""
+    out = []
+    for line in r.stdout.splitlines():
+        if line.startswith("[") and "] " in line:
+            out.append(line.split("] ", 1)[1].split(" ", 1)[1].strip())
+    return out
+
+# ---------------------------------------------------------------------------
+# Cases
+# ---------------------------------------------------------------------------
+
+@case
+def hello_needs_no_files(t):
+    """A lone main.c builds, and takes its name from the directory."""
+    t.write("main.c", """
+#include <stdio.h>
+int main(void){ puts("hello"); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    prog = os.path.basename(t.dir)
+    check(os.path.exists(os.path.join(t.dir, prog)),
+          f"expected a binary named {prog}")
+    check(t.run(prog).stdout == "hello\n", "binary did not run correctly")
+
+
+@case
+def closure_beats_include_graph(t):
+    """The trees that defeat header-to-source matching.
+
+    shapes.h is implemented across circle.c and square.c; util.h is
+    implemented by util_posix.c; scratch.c is unreachable. No name matches
+    any header, so the include graph finds nothing at all."""
+    t.write("shapes.h", "double circle_area(double);\ndouble square_area(double);\n")
+    t.write("circle.c", '#include "shapes.h"\ndouble circle_area(double r){ return 3.0*r*r; }\n')
+    t.write("square.c", '#include "shapes.h"\ndouble square_area(double s){ return s*s; }\n')
+    t.write("util.h", "void banner(void);\n")
+    t.write("util_posix.c", '#include <stdio.h>\n#include "util.h"\nvoid banner(void){ puts("hi"); }\n')
+    t.write("scratch.c", "int unused_thing(void){ return 1; }\n")
+    t.write("main.c", """
+#include <stdio.h>
+#include "shapes.h"
+#include "util.h"
+int main(void){ banner(); printf("%g %g\\n", circle_area(2), square_area(3)); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+
+    e = t.fmake("--explain").stdout
+    for want in ("main.c", "circle.c", "square.c", "util_posix.c"):
+        check(want in e.split("external symbols")[0],
+              f"{want} missing from the link set")
+    check("scratch.c" not in e.split("external symbols")[0]
+          or "not linked" in e, "scratch.c should not be in the link set")
+    check(t.run(os.path.basename(t.dir)).stdout == "hi\n12 9\n",
+          "wrong output")
+
+
+@case
+def closure_ignores_weak_cxx_symbols(t):
+    """Templates and inlines emit weak definitions into every object.
+
+    Treating those as strong would both drag in unrelated files and report
+    duplicate definitions across ordinary C++ sources."""
+    t.write("w.hpp", """
+#include <string>
+template<class T> T twice(T x){ return x + x; }
+inline int helper(int x){ return x + 1; }
+int compute();
+std::string describe();
+""")
+    t.write("compute.cpp", '#include "w.hpp"\nint compute(){ return twice(3) + helper(4); }\n')
+    t.write("describe.cpp", '#include "w.hpp"\nstd::string describe(){ return std::to_string(twice(7)); }\n')
+    t.write("main.cpp", """
+#include <iostream>
+#include "w.hpp"
+int main(){ std::cout << compute() << " " << describe() << "\\n"; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("defined by more than one file" not in r.stderr,
+          "weak symbols were mistaken for duplicate definitions")
+    check(t.run(os.path.basename(t.dir)).stdout == "11 14\n", "wrong output")
+
+
+@case
+def closure_follows_weak_only_providers(t):
+    """A weak definition is still the only definition there is.
+
+    `extern template` leaves main.o with a plain undefined reference to
+    Box<int>::get, and the file that instantiates it offers only a weak (W)
+    definition. Skipping weak providers entirely would compile tpl.cpp,
+    leave it out of the link set, and fail at the linker."""
+    t.write("tpl.hpp", """
+template<class T> struct Box { T v; T get(); };
+extern template struct Box<int>;
+""")
+    t.write("tpl.cpp", """
+#include "tpl.hpp"
+template<class T> T Box<T>::get(){ return v; }
+template struct Box<int>;
+""")
+    t.write("main.cpp", """
+#include <cstdio>
+#include "tpl.hpp"
+int main(){ Box<int> b{41}; printf("%d\\n", b.get()+1); }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    e = t.fmake("--explain").stdout
+    check("tpl.cpp" in e.split("external symbols")[0],
+          f"tpl.cpp should be in the link set: {e}")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
+
+
+@case
+def closure_allows_many_weak_providers(t):
+    """Several files offering the same weak definition is not ambiguity.
+
+    a.cpp and b.cpp each instantiate Box<int> implicitly, so each emits a
+    weak copy of Box<int>::get; main.cpp declares `extern template` and so
+    leaves it undefined. Nothing else in main.cpp refers to either file, so
+    that weak symbol is the only thing the closure can resolve them by --
+    treating weak definitions as strong would see two providers for a needed
+    symbol and refuse to build a legal program.
+
+    --widen-all because the definition lives in a header, so the
+    definition-scanning widening filter cannot see that a.cpp or b.cpp
+    provide it. That limitation is real and noted in project.md."""
+    t.write("box.hpp",
+            "template<class T> struct Box { T v; T get(){ return v; } };\n")
+    t.write("decl.hpp", '#include "box.hpp"\nextern template struct Box<int>;\n')
+    t.write("a.cpp", '#include "box.hpp"\nint a_thing(){ Box<int> b{1}; return b.get(); }\n')
+    t.write("b.cpp", '#include "box.hpp"\nint b_thing(){ Box<int> b{2}; return b.get(); }\n')
+    t.write("main.cpp", """
+#include <cstdio>
+#include "decl.hpp"
+int main(){ Box<int> z{42}; printf("%d\\n", z.get()); }
+""")
+    r = t.fmake("--widen-all", "--cflags", "-O0 -g")
+    check("defined by more than one file" not in r.stderr,
+          f"weak copies were reported as a conflict: {r.stderr}")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
+
+
+@case
+def two_mains_two_programs(t):
+    """Each main() is its own program; shared code is compiled once."""
+    t.write("lib.h", "int shared_calc(int);\n")
+    t.write("lib.c", '#include "lib.h"\nint shared_calc(int x){ return x*3; }\n')
+    t.write("main.c", '#include <stdio.h>\n#include "lib.h"\nint main(void){ printf("app %d\\n", shared_calc(5)); return 0; }\n')
+    t.write("tool.c", '#include <stdio.h>\n#include "lib.h"\nint main(void){ printf("tool %d\\n", shared_calc(9)); return 0; }\n')
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(compiled(r).count("lib.c") == 1, "lib.c should compile exactly once")
+    check(t.run(os.path.basename(t.dir)).stdout == "app 15\n", "wrong output")
+    check(t.run("tool").stdout == "tool 27\n", "wrong output")
+
+
+@case
+def one_target_does_not_drag_in_the_other(t):
+    """Widening must chase definitions, not mentions.
+
+    Filtering on any occurrence of a symbol name would match every file that
+    merely calls printf, and building `tool` would compile main.c too."""
+    t.write("lib.h", "int shared_calc(int);\n")
+    t.write("lib.c", '#include "lib.h"\nint shared_calc(int x){ return x*3; }\n')
+    t.write("main.c", '#include <stdio.h>\n#include "lib.h"\nint main(void){ printf("app %d\\n", shared_calc(5)); return 0; }\n')
+    t.write("tool.c", '#include <stdio.h>\n#include "lib.h"\nint main(void){ printf("tool %d\\n", shared_calc(9)); return 0; }\n')
+
+    r = t.fmake("tool")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("main.c" not in compiled(r),
+          f"main.c should not have been compiled: {compiled(r)}")
+
+
+@case
+def duplicate_definitions_are_refused(t):
+    """Two files defining the same symbol is ambiguity, not a coin flip."""
+    t.write("sys.h", "void sys_init(void);\n")
+    t.write("win32_sys.c", '#include <stdio.h>\n#include "sys.h"\nvoid sys_init(void){ puts("win32"); }\n')
+    t.write("posix_sys.c", '#include <stdio.h>\n#include "sys.h"\nvoid sys_init(void){ puts("posix"); }\n')
+    t.write("main.c", '#include "sys.h"\nint main(void){ sys_init(); return 0; }\n')
+
+    r = t.fmake()
+    check(r.returncode != 0, "should have refused to guess")
+    check("win32_sys.c" in r.stderr and "posix_sys.c" in r.stderr,
+          f"both candidates should be named: {r.stderr}")
+
+
+@case
+def force_link_reaches_unreferenced_code(t):
+    """A constructor-registered plugin is referenced by nothing.
+
+    Closure cannot find it, so it must be asserted -- and once asserted its
+    own dependencies have to resolve normally."""
+    t.write("reg.h", "void register_plugin(const char*);\nvoid run_all(void);\n")
+    t.write("reg.c", """
+#include <stdio.h>
+#include "reg.h"
+static const char *names[16]; static int n;
+void register_plugin(const char *s){ names[n++] = s; }
+void run_all(void){ for(int i=0;i<n;i++) printf("plugin: %s\\n", names[i]); }
+""")
+    t.write("plugin_a.c", '#include "reg.h"\n__attribute__((constructor)) static void init_a(void){ register_plugin("alpha"); }\n')
+    t.write("main.c", '#include "reg.h"\nint main(void){ run_all(); return 0; }\n')
+
+    prog = os.path.basename(t.dir)
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(prog).stdout == "", "plugin should not be linked by default")
+
+    r = t.fmake("--force-link", "plugin_a.c")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(prog).stdout == "plugin: alpha\n",
+          "--force-link should put the plugin in the link set")
+
+
+@case
+def incremental_rebuilds_only_what_changed(t):
+    """Content hashing, depfiles, and a cached link set."""
+    t.write("lib.h", "int calc(int);\n")
+    t.write("lib.c", '#include "lib.h"\nint calc(int x){ return x*2; }\n')
+    t.write("other.c", "int other(void){ return 1; }\n")
+    t.write("main.c", '#include <stdio.h>\n#include "lib.h"\nint main(void){ printf("%d\\n", calc(4)); return 0; }\n')
+    check(t.fmake().returncode == 0, "initial build failed")
+
+    # touching without changing content must rebuild nothing
+    os.utime(os.path.join(t.dir, "lib.c"), None)
+    os.utime(os.path.join(t.dir, "main.c"), None)
+    r = t.fmake()
+    check(compiled(r) == [], f"touch should rebuild nothing: {compiled(r)}")
+
+    # a body change rebuilds one file
+    t.write("lib.c", '#include "lib.h"\nint calc(int x){ return x*10; }\n')
+    r = t.fmake()
+    check(compiled(r) == ["lib.c"], f"expected only lib.c: {compiled(r)}")
+    check(t.run(os.path.basename(t.dir)).stdout == "40\n",
+          "binary was not relinked")
+
+    # a header change rebuilds everything that includes it
+    t.write("lib.h", "int calc(int);\n/* touched */\n")
+    r = t.fmake()
+    check(set(compiled(r)) == {"lib.c", "main.c"},
+          f"expected lib.c and main.c: {compiled(r)}")
+
+
+@case
+def new_symbol_widens_the_compiled_set(t):
+    """An undefined symbol should widen the build, not fail it."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    check(t.fmake().returncode == 0, "initial build failed")
+
+    t.write("extra.c", "int newly_added(void){ return 42; }\n")
+    t.write("main.c", "int newly_added(void);\nint main(void){ return newly_added() == 42 ? 0 : 1; }\n")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("extra.c" in compiled(r), f"widening missed extra.c: {compiled(r)}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "wrong result")
+
+
+@case
+def one_failed_target_does_not_sink_the_rest(t):
+    """Targets are discovered, not requested, so failures are per-target."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    t.write("broken.c", "int nope(void);\nint main(void){ return nope(); }\n")
+
+    r = t.fmake()
+    check(r.returncode != 0, "should report failure")
+    check("built " + os.path.basename(t.dir) in r.stdout,
+          f"the good target should still have been built: {r.stdout}")
+    check("broken did not link" in r.stdout,
+          f"the failure should be named: {r.stdout}")
+
+
+@case
+def explain_shows_symbol_provenance(t):
+    """Every inclusion has to be attributable to a symbol."""
+    t.write("util.h", "int helper(void);\n")
+    t.write("util_impl.c", '#include "util.h"\nint helper(void){ return 7; }\n')
+    t.write("main.c", '#include "util.h"\nint main(void){ return helper() - 7; }\n')
+
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"explain failed: {r.stderr}")
+    check("root: defines main()" in r.stdout, "root not labelled")
+    check("<- helper" in r.stdout,
+          f"util_impl.c should be attributed to `helper`: {r.stdout}")
+
+# ---------------------------------------------------------------------------
+
+def main(argv):
+    global KEEP
+    pats = [a for a in argv if not a.startswith("-")]
+    KEEP = "-k" in argv
+
+    if not os.access(FMAKE, os.X_OK):
+        print(f"{RED}fmake is not executable at {FMAKE}{OFF}")
+        return 2
+
+    cases = [c for c in CASES
+             if not pats or any(p in c.__name__ for p in pats)]
+    failures = 0
+    for c in cases:
+        t = Tree(c.__name__)
+        try:
+            c(t)
+            print(f"{GREEN}ok{OFF}   {c.__name__}")
+        except Failure as exc:
+            failures += 1
+            print(f"{RED}FAIL{OFF} {c.__name__}")
+            print(f"       {exc}")
+            if KEEP:
+                print(f"       {DIM}tree: {t.dir}{OFF}")
+        except Exception as exc:                       # noqa: BLE001
+            failures += 1
+            print(f"{RED}ERR {OFF} {c.__name__}: {exc!r}")
+        finally:
+            t.cleanup()
+
+    print()
+    if failures:
+        print(f"{RED}{failures} of {len(cases)} failed{OFF}")
+    else:
+        print(f"{GREEN}all {len(cases)} passed{OFF}")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)
