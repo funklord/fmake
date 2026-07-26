@@ -731,10 +731,55 @@ gathering there would install the same header under two owners. An explicit
 `headers` list in `fmake.toml` is honoured for any kind, since naming it
 outright is a decision rather than an inference.
 
+### `fmake.mk` — the escape hatch, in Makefile syntax
+
+`[generate.*]` is a Makefile rule wearing TOML, and it cannot say the one
+thing Make says best: a pattern. Twenty `.proto` files need twenty sections,
+or one section that hands every input to a single command — which is not what
+anyone means, and which silently overwrote a source file the first time it was
+tried.
+
+```make
+gen/%.c: proto/%.msg
+	python3 gen.py $< $@
+
+.PHONY: flash
+flash: firmware
+	avrdude -c usbasp -p m328p -U flash:w:$<
+```
+
+A deliberate subset, and the narrowness is the argument. Full Make is
+Turing-complete — `$(shell)`, `$(foreach)`, `$(call)` — and adopting it whole
+would rebuild the thing `fmake.py` was declined for. What is here has no
+variables, no functions, no conditionals: explicit rules, pattern rules,
+`.PHONY`, and the automatic variables everyone knows. **It cannot grow into a
+program**, which Python could not promise.
+
+It also costs nothing to learn. `inputs`/`outputs`/`depends`/`uses` are four
+names invented for this document; `target: prerequisite` is universal.
+
+**Recipes are shell.** This corrects an over-reach: §8's "no shell" was
+written for the commands fmake *constructs* — a compile, where fmake knows the
+exact argv and a shell buys a fork per file and a quoting hazard. A recipe is
+the user's own text, where a pipe or a redirect is ordinary. And fmake was
+being inconsistent about it: the Makefile `--eject` emits runs recipes through
+`/bin/sh` regardless, so refusing them meant fmake declining to do what its own
+output does. `@` and `-` are honoured, automatic variables are substituted
+shell-quoted, and the exit escapes `$` for whichever backend it is writing —
+without that, Make reads `$(x)` as its own function call and a recipe runs,
+succeeds, and writes an empty file.
+
+**`.PHONY` answers something no generator can.** A generator runs because its
+output is needed. Flashing an eeprom, packaging, deploying — these are things a
+tree needs to do that nothing depends on, so they have to be asked for by name.
+`fmake flash` builds the prerequisites and runs the recipe, with prerequisites
+naming an fmake target arriving as paths.
+
 ### `fmake.py` — declined
 
 Loaded only if present. Gets an injected namespace of fmake primitives. For
-genuine code generation and custom rules.
+genuine code generation and custom rules — the role `fmake.mk` now fills, in a
+language that cannot become a program.
 
 This is the SCons/Waf lineage, and it is a real risk: SCons builds have a
 well-earned reputation for becoming unmaintainable programs. Meson went the other

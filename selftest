@@ -872,6 +872,139 @@ with open(sys.argv[1], "w") as fh:
 
 
 @case
+def mk_pattern_rules_scale_without_editing_config(t):
+    """The thing fmake.toml cannot say at all.
+
+    A [generate.*] section is one command with every input and every output,
+    so twenty .msg files need twenty sections. A pattern rule needs two
+    lines, and a twenty-first file needs none."""
+    for name in ("a", "b", "c"):
+        t.write(f"proto/{name}.msg", f"MSG {name}\n")
+    t.write("gen.py", """
+import sys
+name = open(sys.argv[1]).read().split()[1]
+open(sys.argv[2], "w").write("int %s_id(void){ return '%s'; }\\n" % (name, name))
+""")
+    t.write("main.c", """
+#include <stdio.h>
+int a_id(void); int b_id(void); int c_id(void);
+int main(void){ printf("%d\\n", a_id() + b_id() + c_id()); return 0; }
+""")
+    t.write("fmake.mk", "gen/%.c: proto/%.msg\n\tpython3 gen.py $< $@\n")
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "294\n",
+          "the generated files were wrong")
+
+    # A fourth message, and nothing to change.
+    t.write("proto/d.msg", "MSG d\n")
+    t.write("main.c", """
+#include <stdio.h>
+int a_id(void); int b_id(void); int c_id(void); int d_id(void);
+int main(void){ printf("%d\\n", a_id()+b_id()+c_id()+d_id()); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "394\n",
+          "the new message was not picked up")
+
+
+@case
+def mk_recipes_are_shell(t):
+    """A recipe is the user's text, not a command fmake constructed.
+
+    Pipes, redirects and command substitution are ordinary in one, and the
+    Makefile --eject emits runs recipes through /bin/sh regardless -- so
+    refusing them would have meant fmake declining to do what its own output
+    does. The @ and - prefixes are honoured for the same reason."""
+    t.write("in.txt", "MSG hello\n")
+    t.write("fmake.mk",
+            "gen/msg.c: in.txt\n"
+            "\t@mkdir -p gen\n"
+            "\t-false\n"
+            "\tprintf 'const char *msg(void){ return \"%s\"; }\\n'"
+            " \"$(tr a-z A-Z < $< | tail -1)\" > $@\n")
+    t.write("main.c", '#include <stdio.h>\nconst char *msg(void);\n'
+            "int main(void){ puts(msg()); return 0; }\n")
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "MSG HELLO\n",
+          "the pipe, redirect or substitution did not work")
+
+    if not shutil.which("make"):
+        return
+    # And the ejected build must reproduce it. A $ that survives substitution
+    # belongs to the shell; Make would read $(x) as its own function and
+    # expand it to nothing, giving a recipe that runs, succeeds, and writes
+    # an empty file.
+    e = t.fmake("--eject")
+    check(e.returncode == 0, f"eject failed: {e.stderr}")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(e.stdout)
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    shutil.rmtree(os.path.join(t.dir, "gen"), ignore_errors=True)
+    prog = os.path.basename(t.dir)
+    if os.path.exists(os.path.join(t.dir, prog)):
+        os.remove(os.path.join(t.dir, prog))
+    m = _run_in(t.dir, "make")
+    check(m.returncode == 0, f"ejected make failed: {m.stdout}{m.stderr}")
+    check(_run_in(t.dir, "./" + prog).stdout == "MSG HELLO\n",
+          "the ejected build produced something that runs but is wrong")
+
+
+@case
+def mk_phony_rules_are_actions(t):
+    """Flashing an eeprom is not the building of a file.
+
+    It is something a tree needs to do that nothing else depends on, so no
+    generator can express it: a generator runs because its output is needed.
+    A .PHONY rule runs when asked for by name, after its prerequisites are
+    built, and prerequisites naming an fmake target arrive as paths."""
+    t.write("main.c", '#include <stdio.h>\nint main(void){ puts("fw"); return 0; }\n')
+    t.write("fmake.mk",
+            ".PHONY: flash\n\n"
+            "flash: " + os.path.basename(t.dir) + "\n"
+            "\t@echo flashing $< >flashed.txt\n")
+
+    r = t.fmake()
+    check(r.returncode == 0, f"ordinary build failed: {r.stdout}{r.stderr}")
+    check(not os.path.exists(os.path.join(t.dir, "flashed.txt")),
+          "an action ran during an ordinary build")
+
+    r = t.fmake("flash")
+    check(r.returncode == 0, f"flash failed: {r.stdout}{r.stderr}")
+    stamp = os.path.join(t.dir, "flashed.txt")
+    check(os.path.exists(stamp), f"the action did not run: {r.stdout}")
+    with open(stamp) as fh:
+        got = fh.read().strip()
+    check(got.endswith(os.path.basename(t.dir)),
+          f"the prerequisite should arrive as a path: {got!r}")
+
+    r = t.fmake("nosuchthing")
+    check(r.returncode != 0, "an unknown name should be an error")
+    check("flash" in r.stderr,
+          f"the available actions should be listed: {r.stderr}")
+
+
+@case
+def mk_refuses_what_it_does_not_implement(t):
+    """A subset that half-supports Make is worse than one that says no."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    for body, expect in (
+            ("CC = gcc\nout.c: in.txt\n\tcp $< $@\n", "expected"),
+            ("ifeq ($(X),1)\nout.c: in.txt\n\tcp $< $@\nendif\n", "ifeq"),
+            ("out.c: in.txt\n", "no recipe"),
+    ):
+        t.write("fmake.mk", body)
+        r = t.fmake()
+        check(r.returncode != 0, f"should have been refused: {body!r}")
+        check(expect in r.stderr,
+              f"unhelpful message for {body!r}: {r.stderr}")
+
+
+@case
 def generated_by_a_tool_built_from_the_tree(t):
     """The generator is not always something you can install.
 

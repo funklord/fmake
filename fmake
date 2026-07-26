@@ -476,24 +476,199 @@ class Conf:
 # it has stopped being declarative.
 # ---------------------------------------------------------------------------
 
-def _gen_argv(command, ins, outs, tool=None):
+# ---------------------------------------------------------------------------
+# fmake.mk -- generator rules in Makefile syntax
+#
+# [generate.*] is a Makefile rule wearing TOML, and it cannot say the one
+# thing Make says best: a pattern. Twenty .proto files need twenty sections,
+# or one section that hands every input to a single command, which is not
+# what anyone means.
+#
+#     gen/%.c: proto/%.msg
+#     	python3 gen.py $< $@
+#
+# A deliberate subset, and the narrowness is the point. Full Make is
+# Turing-complete -- $(shell), $(foreach), $(call) -- and adopting it whole
+# would rebuild the thing fmake.py was declined for. What is here has no
+# variables, no functions, no conditionals: rules, patterns, and the three
+# automatic variables everyone knows. It cannot grow into a program.
+#
+# Recipes ARE shell, unlike everything fmake constructs for itself. The two
+# cases are different: fmake knows the exact argv for a compile, so a shell
+# there is a fork per file and a quoting hazard for nothing. A recipe is the
+# user's own text, where a pipe or a redirect is ordinary -- and the Makefile
+# --eject emits runs recipes through /bin/sh regardless, so refusing them here
+# meant fmake declining to do what the build file it generates would do.
+#
+# Automatic variables are substituted shell-quoted, so a path with a space
+# survives being interpolated into a command line.
+# ---------------------------------------------------------------------------
+
+MK_FILE = "fmake.mk"
+
+RE_MK_RULE = re.compile(r"^([^\t#][^:=]*?)\s*:\s*([^=].*)?$")
+RE_MK_UNSUPPORTED = re.compile(
+    r"^\s*(?:ifeq|ifneq|ifdef|ifndef|else|endif|include|sinclude|"
+    r"vpath|export|unexport|define|override)\b")
+
+# .PHONY names a rule that produces no file and is run only when asked for by
+# name. Flashing an eeprom, packaging, deploying: things a build tree needs to
+# do that are not the building of a file, and that a generator cannot express
+# because they are not something anything else depends on.
+
+
+def parse_mk(path):
+    """Read fmake.mk into rules shaped like the [generate.*] ones."""
+    try:
+        with open(path, errors="replace") as fh:
+            text = fh.read()
+    except OSError as exc:
+        die(f"{MK_FILE}: {exc}")
+
+    text = text.replace("\\\n", " ")
+    rules, current, phony = [], None, set()
+    for n, raw in enumerate(text.split("\n"), 1):
+        line = raw.split("#", 1)[0] if not raw.startswith("\t") else raw
+        if not line.strip():
+            continue
+
+        if raw.startswith("\t"):
+            if current is None:
+                die(f"{MK_FILE}:{n}: recipe line before any rule")
+            current["commands"].append(line.strip())
+            continue
+
+        if RE_MK_UNSUPPORTED.search(line):
+            die(f"{MK_FILE}:{n}: {line.strip()!r}\n"
+                f"{MK_FILE} is rules only -- no variables, functions or "
+                f"conditionals.\nAnything needing those is a script, and a "
+                f"rule can call one.")
+
+        m = RE_MK_RULE.match(line)
+        if m and m.group(1).strip() == ".PHONY":
+            phony.update((m.group(2) or "").split())
+            current = None
+            continue
+        if not m:
+            die(f"{MK_FILE}:{n}: expected `targets: prerequisites`, "
+                f"got {line.strip()!r}")
+
+        targets = m.group(1).split()
+        rest = (m.group(2) or "").split("|")
+        prereqs = rest[0].split()
+        order_only = rest[1].split() if len(rest) > 1 else []
+        current = {"line": n, "outputs": targets, "inputs": prereqs,
+                   "depends": order_only, "commands": []}
+        rules.append(current)
+
+    for r in rules:
+        if not r["commands"]:
+            die(f"{MK_FILE}:{r['line']}: rule for "
+                f"{' '.join(r['outputs'])} has no recipe")
+        r["phony"] = any(o in phony for o in r["outputs"])
+    return rules
+
+
+def expand_mk_rules(rules, root, src_set):
+    """Turn pattern rules into one concrete rule per matching file.
+
+    `gen/%.c: proto/%.msg` becomes a rule per .msg, with the stem carried
+    through. This is the capability that TOML has no way to express, and the
+    reason for the file.
+    """
+    out = {}
+    for r in rules:
+        if r.get("phony"):
+            continue            # run when named, never as part of a build
+        pattern = [t for t in r["outputs"] + r["inputs"] if "%" in t]
+        if not pattern:
+            name = _mk_ident(r["outputs"][0])
+            out[name] = dict(r, stem=None)
+            continue
+        if any(t.count("%") > 1 for t in r["outputs"] + r["inputs"]):
+            die(f"{MK_FILE}:{r['line']}: more than one % in a rule")
+        if not any("%" in i for i in r["inputs"]):
+            die(f"{MK_FILE}:{r['line']}: a pattern target needs a pattern "
+                f"prerequisite to take its stem from")
+
+        src = next(i for i in r["inputs"] if "%" in i)
+        head, _, tail = src.partition("%")
+        hits = sorted(glob.glob(os.path.join(root, head + "*" + tail),
+                                recursive=True))
+        for hit in hits:
+            rel = os.path.relpath(hit, root)
+            stem = rel[len(head):len(rel) - len(tail)] if tail else rel[len(head):]
+            sub = lambda s: s.replace("%", stem)
+            name = _mk_ident(sub(r["outputs"][0]))
+            out[name] = {
+                "line": r["line"], "stem": stem,
+                "outputs": [sub(t) for t in r["outputs"]],
+                "inputs": [sub(i) for i in r["inputs"]],
+                "depends": [sub(d) for d in r["depends"]],
+                "commands": list(r["commands"]),
+            }
+    return out
+
+
+def _recipe_prefix(line):
+    """Strip Make's recipe prefixes and report what they meant.
+
+    `@` suppresses the echo, `-` ignores a failure. Both are idiomatic enough
+    that passing them to the shell -- which reads @echo as a program name --
+    is the wrong kind of literal-mindedness.
+    """
+    quiet = ignore = False
+    while line[:1] in ("@", "-"):
+        quiet |= line[0] == "@"
+        ignore |= line[0] == "-"
+        line = line[1:]
+    return line.lstrip(), quiet, ignore
+
+
+def _gen_command(command, ins, outs, tool=None, stem=None):
+    """Substitute the automatic variables into a shell command line.
+
+    Quoted on the way in, so a path containing a space survives being
+    interpolated into text that a shell will re-split.
+    """
+    q = shlex.quote
+    for key, val in (("$^", " ".join(q(i) for i in ins)),
+                     ("$@", " ".join(q(o) for o in outs)),
+                     ("$in", " ".join(q(i) for i in ins)),
+                     ("$out", " ".join(q(o) for o in outs)),
+                     ("$<", q(ins[0]) if ins else ""),
+                     ("$*", q(stem) if stem else ""),
+                     ("$tool", q(tool) if tool else "")):
+        command = command.replace(key, val)
+    return command
+
+
+def _gen_argv(command, ins, outs, tool=None, stem=None):
     """Substitute $in and $out into an argv, not into a string.
 
     Splitting first and substituting after means a path containing a space
     stays one argument.
     """
+    # $in/$out are fmake.toml's spelling; $< $@ $^ $* are Make's. Both are
+    # accepted everywhere, because a rule should not mean something different
+    # for having been written in the other file.
+    whole = {"$in": ins, "$out": outs, "$^": ins, "$@": outs}
+    first = {"$<": ins[0] if ins else "", "$*": stem or "",
+             "$tool": tool or ""}
     argv = []
     for tok in shlex.split(command):
-        if tok == "$in":
-            argv += ins
-        elif tok == "$out":
-            argv += outs
+        if tok in whole:
+            argv += whole[tok]
         elif tok == "$tool" and tool:
             argv.append(tool)
         else:
-            argv.append(tok.replace("$in", ins[0] if ins else "")
-                           .replace("$out", outs[0] if outs else "")
-                           .replace("$tool", tool or ""))
+            for key, val in first.items():
+                tok = tok.replace(key, val)
+            tok = (tok.replace("$in", ins[0] if ins else "")
+                      .replace("$out", outs[0] if outs else "")
+                      .replace("$@", outs[0] if outs else "")
+                      .replace("$^", " ".join(ins)))
+            argv.append(tok)
     return argv
 
 
@@ -531,6 +706,76 @@ def _gen_order(rules):
     return order
 
 
+def phony_rules(root):
+    """The .PHONY rules in fmake.mk, by name."""
+    path = os.path.join(root, MK_FILE)
+    if not os.path.isfile(path):
+        return {}
+    out = {}
+    for r in parse_mk(path):
+        if r.get("phony"):
+            for target in r["outputs"]:
+                out[target] = r
+    return out
+
+
+def run_phony(name, rule, root, built, dry_run):
+    """Run an action the user asked for by name.
+
+    Prerequisites naming something fmake built are substituted as paths, so
+    `flash: myprog` gets the artifact rather than the word. Anything else is
+    passed through and is the recipe's business.
+    """
+    ins = [built.get(p, p) for p in rule["inputs"]]
+    missing = [p for p in rule["inputs"]
+               if p not in built and not os.path.exists(os.path.join(root, p))]
+    if missing:
+        die(f"{MK_FILE}:{rule['line']}: {name} needs "
+            f"{', '.join(missing)}, which is neither a target nor a file")
+
+    if not dry_run:
+        say(f"{YELLOW('RUN')} {BOLD(name)}")
+        PROGRESS.flush()        # the recipe writes straight to the terminal
+    for cmd in rule["commands"]:
+        line, quiet, ignore = _recipe_prefix(cmd)
+        line = _gen_command(line, ins, [name], None, None)
+        if dry_run:
+            print(line)
+            continue
+        if not quiet and VERBOSE:
+            note(line)
+        res = subprocess.run(line, shell=True, cwd=root)
+        if res.returncode != 0 and not ignore:
+            die(f"{name} failed ({res.returncode})")
+    return 0
+
+
+def all_generate_rules(root, conf):
+    """Every generator rule, from fmake.toml and fmake.mk alike.
+
+    One function, because three callers need the same answer: the runner,
+    and both eject backends. Two of them reading only the TOML half meant an
+    ejected build silently omitted the pattern rules and could not reproduce
+    what fmake had done.
+    """
+    rules = dict(conf.data.get("generate", {}))
+    path = os.path.join(root, MK_FILE)
+    if os.path.isfile(path):
+        for name, rule in expand_mk_rules(parse_mk(path), root, None).items():
+            if name in rules:
+                die(f"{MK_FILE}:{rule['line']}: a rule for "
+                    f"{rule['outputs'][0]} is also in {CONF_FILE}")
+            rules[name] = rule
+    return rules
+
+
+def _gen_where(rule, name):
+    """Name a rule the way its author wrote it."""
+    if "line" in rule:
+        return f"{MK_FILE}:{rule['line']}"
+    return f"{CONF_FILE}: [generate.{name}]"
+
+
 def run_generators(root, conf, cache, dry_run=False, build_tool=None):
     """Run the [generate.*] rules. Returns their outputs, tree-relative.
 
@@ -539,14 +784,16 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None):
     while bootstrapping such a tool -- those rules are skipped rather than
     run, since a tool cannot depend on its own output.
     """
-    rules = conf.data.get("generate", {})
+    rules = all_generate_rules(root, conf)
     if not rules:
         return []
 
     for name, r in sorted(rules.items()):
-        for key in ("command", "inputs", "outputs"):
+        if not (r.get("command") or r.get("commands")):
+            die(f"{_gen_where(r, name)} needs a command")
+        for key in ("inputs", "outputs"):
             if not r.get(key):
-                die(f"{CONF_FILE}: [generate.{name}] needs {key}")
+                die(f"{_gen_where(r, name)} needs {key}")
 
     store = cache.data.setdefault("generated", {})
     produced = []
@@ -576,7 +823,8 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None):
 
         # Rerun when an input's contents change or the command does, not on
         # mtime, so the rest of the build stays hash-driven too.
-        parts = [r["command"], r.get("uses") or ""]
+        parts = list(r.get("commands") or [r.get("command", "")])
+        parts.append(r.get("uses") or "")
         for path in ins + deps:
             rel = os.path.relpath(path, root)
             parts.append(rel + ":" + (cache.hash_of(path, rel) or "?"))
@@ -594,27 +842,40 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None):
         # $PATH before anything has been compiled.
         tool = build_tool(r["uses"]) if r.get("uses") else None
 
-        argv = _gen_argv(r["command"], ins, outs, tool)
-        if not argv:
-            die(f"{CONF_FILE}: [generate.{name}] command is empty")
-        if not tool and not shutil.which(argv[0]):
-            die(f"{CONF_FILE}: [generate.{name}] needs {argv[0]!r}, which is "
-                f"not installed (build it from this tree with `uses`)")
+        cmds = [_recipe_prefix(c) for c in
+                (r.get("commands") or [r["command"]])]
+        lines = [(_gen_command(c, ins, outs, tool, r.get("stem")), ig)
+                 for c, _q, ig in cmds]
+        for line, _ig in lines:
+            if not line.strip():
+                die(f"{_gen_where(r, name)} command is empty")
+            # A plain command naming a program that is not installed is worth
+            # catching early with a good message. Anything with shell syntax
+            # in it is the shell's business to report.
+            words = shlex.split(line)
+            if (len(words) == len(line.split()) and words
+                    and not any(c in line for c in "|&;<>()$`")
+                    and not shutil.which(words[0])):
+                die(f"{_gen_where(r, name)} needs {words[0]!r}, which is not "
+                    f"installed (build it from this tree with `uses`)")
 
         label = r.get("description") or name
         if dry_run:
-            print(" ".join(argv))
+            for line, _ig in lines:
+                print(line)
             continue
         say(f"{YELLOW('GEN')} {label}")
         for o in outs:
             os.makedirs(os.path.dirname(o) or root, exist_ok=True)
-        res = subprocess.run(argv, cwd=root, capture_output=True, text=True)
-        if res.stdout.strip():
-            PROGRESS.write(res.stdout)
-        if res.stderr.strip():
-            PROGRESS.write(res.stderr)
-        if res.returncode != 0:
-            die(f"[generate.{name}] failed: {' '.join(argv)}")
+        for line, ignore in lines:
+            res = subprocess.run(line, shell=True, cwd=root,
+                                 capture_output=True, text=True)
+            if res.stdout.strip():
+                PROGRESS.write(res.stdout)
+            if res.stderr.strip():
+                PROGRESS.write(res.stderr)
+            if res.returncode != 0 and not ignore:
+                die(f"{_gen_where(r, name)} failed: {line}")
         missing = [os.path.relpath(o, root) for o in outs
                    if not os.path.exists(o)]
         if missing:
@@ -2839,6 +3100,9 @@ def build(args, _bootstrapping=False):
                 f"a directory of that name.\n"
                 f"name it with @target, or with a name in {CONF_FILE}.")
 
+    phony = phony_rules(root)
+    asked_phony = [n for n in args.targets if n in phony]
+
     wanted = targets
     if args.targets:
         by_name = {}
@@ -2847,10 +3111,18 @@ def build(args, _bootstrapping=False):
             by_name[t.filename] = t
         wanted = []
         for name in args.targets:
+            if name in phony:
+                # Its prerequisites are what has to be built; the action
+                # itself runs after.
+                wanted += [by_name[p] for p in phony[name]["inputs"]
+                           if p in by_name]
+                continue
             if name not in by_name:
                 die(f"no target {name!r}. Available: "
-                    f"{', '.join(sorted(t.name for t in targets)) or '(none)'}")
+                    f"{', '.join(sorted(set(list(by_name) + list(phony)))) or '(none)'}")
             wanted.append(by_name[name])
+        if not wanted and asked_phony:
+            wanted = []         # an action with nothing of ours to build
 
     # ---- candidate set from the include graph -------------------------
     units = {}
@@ -3148,6 +3420,16 @@ def build(args, _bootstrapping=False):
         say()
         return do_install(wanted, closures, root, outdir, conf, args)
 
+    if asked_phony and not failed:
+        made = {}
+        for t in wanted:
+            made[t.name] = made[t.filename] = os.path.join(outdir, t.filename)
+        for name in asked_phony:
+            rc = run_phony(name, phony[name], root, made, args.dry_run)
+            if rc:
+                return rc
+        return 0
+
     if broken:
         say()
         warn(f"{len(broken)} file(s) did not compile")
@@ -3279,7 +3561,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
     a(f"all: {' '.join(t.filename for t in targets)}")
     a("")
 
-    gen_rules = conf.data.get("generate", {})
+    gen_rules = all_generate_rules(root, conf)
     gen_outs = [o for n in _gen_order(gen_rules)
                 for o in gen_rules[n]["outputs"]]
     if gen_rules:
@@ -3291,10 +3573,17 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
             r = gen_rules[name]
             outs, ins = r["outputs"], r["inputs"]
             deps = r.get("depends", [])
-            argv = _gen_argv(r["command"], ins, outs)
             a(f"{outs[0]}: {' '.join(ins + deps)}")
             a("\t@mkdir -p $(@D)")
-            a(f"\t{' '.join(argv)}")
+            for c in (r.get("commands") or [r["command"]]):
+                line, quiet, ignore = _recipe_prefix(c)
+                line = _gen_command(line, ins, outs, None, r.get("stem"))
+                # Whatever $ survives substitution is the shell's, and Make
+                # would read $(x) as its own function call and expand it to
+                # nothing -- a recipe that runs, succeeds, and produces an
+                # empty file.
+                a("\t" + ("@" if quiet else "") + ("-" if ignore else "")
+                  + line.replace("$", "$$"))
             # Secondary outputs hang off the first, which is the portable way
             # to say one command produces several files.
             for extra in outs[1:]:
@@ -3415,13 +3704,19 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf):
     a("  description = AR $out")
     a("")
 
-    gen_rules = conf.data.get("generate", {})
+    gen_rules = all_generate_rules(root, conf)
     gen_outs = []
     for name in _gen_order(gen_rules):
         r = gen_rules[name]
-        argv = _gen_argv(r["command"], r["inputs"], r["outputs"])
+        cmds = []
+        for c in (r.get("commands") or [r["command"]]):
+            line, _quiet, ignore = _recipe_prefix(c)
+            line = _gen_command(line, r["inputs"], r["outputs"], None,
+                                r.get("stem"))
+            # Ninja reads $ as its own escape, so the shell's must be doubled.
+            cmds.append(line.replace("$", "$$") + (" || true" if ignore else ""))
         a(f"rule gen_{_mk_ident(name)}")
-        a(f"  command = {' '.join(argv)}")
+        a(f"  command = {' && '.join(cmds)}")
         a(f"  description = GEN {r.get('description') or name}")
         a("")
         deps = r.get("depends", [])
