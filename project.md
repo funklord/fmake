@@ -946,7 +946,7 @@ progress onto stdout and produced a Makefile whose first line was
 
 ---
 
-## 13. What a real project showed
+## 13. What real projects showed
 
 Everything above was developed against a 6-file reference project. Pointing
 fmake at *dunelegacy* — a 292-source, 124k-line C++ SDL game — changed four
@@ -978,6 +978,49 @@ filter, the caching, and the annotation layer all behaved as designed at 50x
 the size. The things that broke were all in the cheap first-guess layer, which
 is the part that is allowed to be wrong — it just should not be wrong this
 often.
+
+### Angband: the first one that actually built
+
+dunelegacy needs SDL3, whose mixer is not packaged for Debian at all, so it
+could not be linked here. *Angband* — 327 C files, 345k lines, curses only —
+needs nothing that was not already installed, and **it builds and runs**:
+
+```toml
+[project]
+defines = ["USE_GCU"]
+exclude = ["src/tests/**", "src/main-nds*.c", "src/main-win.c",
+           "src/main-sdl*.c", "src/main-ibm.c", "src/main-xxx.c",
+           "src/main-stats.c", "src/win/**"]
+```
+
+Ten lines, and `./ang -v` prints its usage. 152 files in the link set,
+`-lncursesw` resolved from the symbols, and the optional Borg AI module
+correctly left out because nothing reaches it.
+
+Getting there found three more things, two of them real bugs in library
+resolution that only a curses program could expose:
+
+- **`libncurses.so` is a linker script whose contents are
+  `INPUT(libncurses.so.6 -ltinfo)`** — a bare relative name and a `-l` flag.
+  §5's script parser handled only absolute paths, because that is the form
+  glibc uses and glibc was the only example to hand. The result was that
+  ncurses contributed no symbols at all, the greedy cover picked `-ltinfo`
+  alone, and 46 curses symbols went unresolved. All three forms occur on one
+  machine.
+- **`_GLOBAL_OFFSET_TABLE_` was reported as a missing dependency.** It is
+  provided by the linker. On the first Angband build it was the *only* thing
+  listed as unresolved, which made a working build read as a failure.
+- **The unused-package report contradicted itself**, announcing that ncurses
+  was not needed while linking it. pkg-config lists `-lncursesw -ltinfo` and
+  only tinfo went unused; a package is now reported as unused only when none
+  of its libraries were needed, since linking less than pkg-config asks for is
+  the entire point.
+
+Angband also produced the best demonstration of the ambiguity rule working as
+intended. It has **84 files each defining `setup_tests`** — every test is its
+own program sharing one `main()` — and fmake refused to guess, correctly. The
+message was improved to match: dozens of providers means separate programs
+rather than one library, and the hint now says so instead of suggesting `@os`.
 
 ---
 
@@ -1035,6 +1078,13 @@ often.
   libraries found by symbol alone as well as by package, but it is only as
   good as the directory list fmake scans — a prefix it never looks in cannot
   be resolved at all, and still needs `--ldflags`.
+- **Linker scripts are parsed, not executed.** `INPUT`, `GROUP` and
+  `AS_NEEDED` are read for filenames and `-l` flags; anything else in the ld
+  script language is ignored. That covers glibc and ncurses, which is what
+  exists in practice, but it is pattern-matching rather than understanding.
+- **The linker-symbol list is hand-written.** `_GLOBAL_OFFSET_TABLE_`, `_end`
+  and friends are filtered by name. A toolchain providing something not on the
+  list would report it as a missing dependency.
 - **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
   `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
   are unhandled.

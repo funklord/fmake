@@ -1324,7 +1324,7 @@ def close_over_library(units, root_unit):
         defined |= u.strong | u.weak
     for u in units:
         for sym in u.undef:
-            if sym not in defined:
+            if sym not in defined and sym not in LINKER_SYMBOLS:
                 cl.external.setdefault(sym, []).append(u.rel)
     return cl
 
@@ -1384,6 +1384,8 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
 
     for u in cl.link:
         for sym in u.undef:
+            if sym in LINKER_SYMBOLS:
+                continue
             if not any(sym in o.strong or sym in o.weak for o in linked):
                 cl.external.setdefault(sym, []).append(u.rel)
 
@@ -1469,6 +1471,19 @@ HEADER_PKG = {
 
 # Linked into everything already; naming them is noise, not information.
 IMPLICIT_LIBS = {"c"}
+
+# Symbols the linker itself provides. No library exports them, so reporting
+# them as unresolved dependencies is a false alarm -- and on a PIC build
+# _GLOBAL_OFFSET_TABLE_ can be the only thing listed, which makes the whole
+# report read as a failure when nothing is wrong.
+LINKER_SYMBOLS = {
+    "_GLOBAL_OFFSET_TABLE_", "_DYNAMIC", "__dso_handle", "__ehdr_start",
+    "_edata", "_end", "__bss_start", "etext", "_etext", "__data_start",
+    "__gmon_start__", "_init", "_fini", "__init_array_start",
+    "__init_array_end", "__fini_array_start", "__fini_array_end",
+    "__preinit_array_start", "__preinit_array_end", "__executable_start",
+    "__start___libc_atexit", "__stop___libc_atexit",
+}
 
 
 def _stdout(cmd):
@@ -1595,14 +1610,23 @@ def linkable_libs(dirs):
     return out
 
 
-RE_LD_SCRIPT_FILE = re.compile(r'(/[^\s()]+\.(?:so[0-9.]*|a))')
+RE_LD_SCRIPT_GROUP = re.compile(r"\b(?:INPUT|GROUP|AS_NEEDED)\s*\(([^)]*)\)")
+RE_LD_SCRIPT_TOKEN = re.compile(r"(-l\S+|[\w./+-]+\.(?:so[0-9.]*|a))")
 
 
-def elf_targets(path):
+def elf_targets(path, dirs=(), _depth=0):
     """The real objects behind a linkable name.
 
-    libc.so and libm.so are GNU ld scripts naming the runtime libraries and
-    a static half, not ELF files -- nm cannot read them directly.
+    libc.so, libm.so and libncurses.so are GNU ld scripts, not ELF files, and
+    nm cannot read them. Their contents come in three forms, all of which
+    occur in practice on one machine:
+
+        GROUP ( /lib/x86_64-linux-gnu/libm.so.6 AS_NEEDED ( ... ) )
+        INPUT ( libncurses.so.6 -ltinfo )
+
+    An absolute path, a bare name relative to the script, and a plain -l.
+    Handling only the first -- which is the obvious one to write, since it is
+    what glibc uses -- silently drops every symbol ncurses exports.
     """
     try:
         with open(path, "rb") as fh:
@@ -1611,12 +1635,32 @@ def elf_targets(path):
         return []
     if magic[:4] == b"\x7fELF" or magic[:8] == b"!<arch>\n":
         return [path]
+    if _depth > 3:
+        return []
     try:
         with open(path, "r", errors="replace") as fh:
             text = fh.read(8192)
     except OSError:
         return []
-    return [p for p in RE_LD_SCRIPT_FILE.findall(text) if os.path.exists(p)]
+
+    here = os.path.dirname(path)
+    search = [here] + [d for d in dirs if d != here]
+    out = []
+    for group in RE_LD_SCRIPT_GROUP.findall(text):
+        for tok in RE_LD_SCRIPT_TOKEN.findall(group):
+            if tok.startswith("-l"):
+                names = [f"lib{tok[2:]}{ext}" for ext in (".so", ".a")]
+                cands = [os.path.join(d, n) for d in search for n in names]
+            elif os.path.isabs(tok):
+                cands = [tok]
+            else:
+                cands = [os.path.join(d, tok) for d in search]
+            for c in cands:
+                if os.path.exists(c):
+                    # A script can name another script.
+                    out += elf_targets(c, dirs, _depth + 1)
+                    break
+    return out
 
 
 def lib_exports(cfg, path):
@@ -1652,10 +1696,12 @@ def find_providers(cfg, wanted, jobs, want_ident=None):
     if not want or not libs:
         return {}, {}
 
+    dirs = cfg.libdirs
+
     def scan(item):
         name, path = item
         syms = set()
-        for t in elf_targets(path):
+        for t in elf_targets(path, dirs):
             # Architecture first: a 20-byte header read is far cheaper than
             # an nm, and on a cross build most of what is on the machine is
             # the wrong architecture and must not contribute a single symbol.
@@ -2014,8 +2060,19 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
     res = dict(res)
     res["proposed"] = {k: v for k, v in proposed.items()
                        if k in res["chosen"]}
-    res["unused"] = {k: v for k, v in proposed.items()
-                     if k not in res["chosen"]}
+    # A package is only "unused" when *none* of its libraries were needed.
+    # pkg-config routinely lists more than a program calls into -- ncursesw
+    # brings tinfo, and linking only what is needed is the entire point --
+    # so reporting each surplus -l would be noise, and naming the module by
+    # one of them reads as a contradiction when the module was linked.
+    used_modules = {v[0] for k, v in proposed.items() if k in res["chosen"]}
+    seen_mod = set()
+    res["unused"] = {}
+    for k, v in proposed.items():
+        if v[0] in used_modules or v[0] in seen_mod:
+            continue
+        seen_mod.add(v[0])
+        res["unused"][k] = v
     # Declared dependencies are not proposals to be weighed -- the author
     # said the library is needed, so it is linked whether or not a symbol
     # happens to require it. @ldflags propagates for the same reason @cflags
@@ -2674,14 +2731,29 @@ def build(args):
     # ---- report ambiguity ---------------------------------------------
     for t, cl in closures.items():
         for sym, providers in cl.ambiguous:
-            hint = ""
-            if any(scans[p].get("dirs", {}).get("os") for p in providers):
-                hint = "\n(one of them has @os; the other may need one too)"
+            shown = providers[:6]
+            listing = "\n    ".join(shown)
+            if len(providers) > len(shown):
+                listing += f"\n    ... and {len(providers) - len(shown)} more"
+
+            # Two very different causes, and the wrong hint sends people the
+            # wrong way. A handful of files is usually one implementation per
+            # platform; dozens is usually a directory of programs that each
+            # supply the same entry point, expecting to be linked separately.
+            if len(providers) > 3:
+                hint = (f"\n{len(providers)} files define it, which usually "
+                        f"means they are separate programs sharing an entry "
+                        f"point rather than one library.\nGive each a "
+                        f"[target.*] with its own sources in {CONF_FILE}, or "
+                        f"drop them with [project] exclude.")
+            elif any(scans[p].get("dirs", {}).get("os") for p in providers):
+                hint = "\nOne of them has @os; the others may need one too."
             else:
                 hint = ("\n@os or @arch on the platform-specific one will "
-                        "settle it.")
+                        "settle it, or name the sources of each target in "
+                        f"{CONF_FILE}.")
             die(f"symbol {sym!r} is defined by more than one file:\n"
-                f"    " + "\n    ".join(providers) + "\n"
+                f"    " + listing + "\n"
                 f"fmake will not guess which one belongs in {t.name}." + hint)
 
     # ---- resolve external symbols to libraries ------------------------

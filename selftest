@@ -1501,6 +1501,65 @@ int main(void){
 
 
 @case
+def libs_resolve_through_linker_scripts(t):
+    """libncurses.so is a script, not an ELF file.
+
+    Its contents are `INPUT(libncurses.so.6 -ltinfo)` -- a bare relative name
+    and a -l flag, neither of which is the absolute path glibc's scripts use.
+    Handling only absolute paths silently drops every symbol ncurses exports,
+    and the greedy cover then picks tinfo alone and leaves the rest
+    unresolved."""
+    if not glob.glob("/usr/include/ncurses.h"):
+        raise Skip("ncurses headers not installed")
+    scripts = [p for p in glob.glob("/usr/lib/*/libncurses*.so")
+               if open(p, "rb").read(4) != b"\x7fELF"]
+    if not scripts:
+        raise Skip("no ncurses linker script on this machine")
+
+    t.write("main.c", """
+#include <ncurses.h>
+int main(void){
+    initscr(); cbreak(); noecho();
+    int c = COLORS; delwin(stdscr); endwin();
+    return c >= 0 ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    libs = before_externals(t.fmake("--explain").stdout)
+    check("-lncurses" in libs,
+          f"ncurses should have been resolved through the script: {libs}")
+    check("(unresolved)" not in libs,
+          f"every curses symbol should resolve: {libs}")
+
+
+@case
+def linker_provided_symbols_are_not_reported(t):
+    """_GLOBAL_OFFSET_TABLE_ is not a missing dependency.
+
+    On a PIC build it can be the only thing listed as unresolved, which makes
+    a perfectly good build read as a failure."""
+    # Programs really do reference these -- checking heap extent against
+    # _end is the classic case -- so the object genuinely leaves them
+    # undefined and something has to know they need no library.
+    t.write("main.c", """
+#include <stdio.h>
+#include <stdint.h>
+extern char _end;
+extern char __bss_start;
+int main(void){
+    printf("%zu\\n", (size_t)(&_end - &__bss_start));
+    return 0;
+}
+""")
+    r = t.fmake("--explain", "--cflags", "-O2 -g -fPIC")
+    check(r.returncode == 0, f"explain failed: {r.stderr}")
+    for sym in ("_GLOBAL_OFFSET_TABLE_", "_DYNAMIC", "__bss_start"):
+        check(sym not in r.stdout,
+              f"{sym} is provided by the linker, not a library: {r.stdout}")
+
+
+@case
 def libs_are_not_linked_for_unused_headers(t):
     """Including a header proves a declaration was wanted, nothing more.
 
