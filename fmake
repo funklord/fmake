@@ -802,10 +802,14 @@ class Project:
             self.hdr_by_name.setdefault(os.path.basename(h), []).append(h)
         # header stem -> sibling source with the same stem, if any
         self.src_set = set(srcs)
+        self.src_by_stem = {}
+        for s_ in srcs:
+            self.src_by_stem.setdefault(
+                os.path.basename(os.path.splitext(s_)[0]), []).append(s_)
         self.incdirs = set()
 
     def resolve_header(self, inc_name, from_rel):
-        """Resolve a quoted include to a tree-relative header path, or None."""
+        """Resolve an include to a tree-relative header path, or None."""
         base = os.path.dirname(from_rel)
         cand = os.path.normpath(os.path.join(base, inc_name))
         if cand in self.hdr_by_name.get(os.path.basename(cand), []) or \
@@ -823,15 +827,40 @@ class Project:
         return None
 
     def sibling_source(self, hdr_rel):
-        """The .c/.cpp sitting next to a header with the same stem."""
+        """The source that probably implements a header.
+
+        A true sibling first -- foo.h next to foo.c. Failing that, a source
+        with the same stem anywhere in the tree, because splitting headers
+        into include/ and sources into src/ is one of the commonest C++
+        layouts there is, and under a strict sibling rule the include graph
+        finds nothing at all in such a project. Measured on a 292-file game:
+        5 headers had a sibling, 256 had a same-stem source elsewhere.
+
+        Ambiguity is left alone. Several sources sharing a stem says nothing
+        about which one a header means, and compiling all of them could
+        introduce duplicate definitions the closure would then refuse to
+        resolve. Widening still finds the right one from the symbols.
+        """
         stem = os.path.splitext(hdr_rel)[0]
-        for ext in (".c", ".cc", ".cpp", ".cxx", ".c++", ".C"):
+        for ext in SRC_EXTS:
             if stem + ext in self.src_set:
                 return stem + ext
-        return None
+        matches = self.src_by_stem.get(os.path.basename(stem), ())
+        return matches[0] if len(matches) == 1 else None
 
     def candidates(self, root_src):
-        """Include-graph reachable TUs from a root. A guess, nothing more."""
+        """Include-graph reachable TUs from a root. A guess, nothing more.
+
+        Angle brackets are followed as well as quotes. Punctuation does not
+        decide whether a header belongs to the project -- whether it resolves
+        inside the tree does. Putting include/ on the -I path and writing
+        <Bullet.h> is standard practice, and it is what CMake encourages; a
+        quotes-only rule sees none of it. Measured on a 292-file game: 2342
+        of its own headers were included with <> against 425 with "".
+
+        A name that resolves to nothing in the tree is a system header, and
+        falls through to library resolution untouched.
+        """
         seen_h, out = set(), {root_src}
         queue = [root_src]
         while queue:
@@ -839,22 +868,13 @@ class Project:
             scan = self.scans.get(cur)
             if not scan:
                 continue
-            for kind, name, _line in scan["incs"]:
-                if kind != '"':
-                    continue
+            for _kind, name, _line in scan["incs"]:
                 h = self.resolve_header(name, cur)
                 if not h or h in seen_h:
                     continue
                 seen_h.add(h)
                 # headers can include headers; follow those too
-                hscan = self.scans.get(h)
-                if hscan:
-                    for k2, n2, _l2 in hscan["incs"]:
-                        if k2 == '"':
-                            h2 = self.resolve_header(n2, h)
-                            if h2 and h2 not in seen_h:
-                                seen_h.add(h2)
-                                queue.append(h2)
+                queue.append(h)
                 src = self.sibling_source(h)
                 if src and src not in out:
                     out.add(src)
@@ -1118,8 +1138,14 @@ def object_key(u, cfg, cache, root, incflags):
     return sha("|".join(parts))
 
 
-def compile_units(units, cfg, cache, root, incflags, jobs, dry_run):
-    """Compile what is stale. Returns True if anything was actually built."""
+def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
+                  broken=None):
+    """Compile what is stale. Returns True if anything was actually built.
+
+    `broken` collects the files that would not compile, so the caller can
+    drop the targets that depended on them and build the rest.
+    """
+    broken = set() if broken is None else broken
     todo = []
     for u in units:
         if u.compiled:
@@ -1161,14 +1187,51 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run):
             if rc != 0:
                 failures.append((u, err))
                 say(f"[{done[0]:>{width}}/{len(todo)}] {RED(tag)} {u.rel}")
-                PROGRESS.write(err)
             elif not dry_run:
                 say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {u.rel}")
                 if err.strip():
                     PROGRESS.write(err)
 
     if failures:
-        die(f"{len(failures)} file(s) failed to compile")
+        # One missing system header fails every file that includes it, and
+        # printing the same diagnostic hundreds of times buries anything
+        # else. Group by the message, not by the file.
+        groups = {}
+        for u, err in failures:
+            first = ""
+            for line in err.splitlines():
+                if "error:" in line:
+                    first = line.split("error:", 1)[1].strip()
+                    break
+            groups.setdefault(first or err.strip()[:200], []).append((u, err))
+        say()
+        for msg, hit in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            first_unit, first_err = hit[0]
+            warn(f"{msg}" if msg else "compilation failed")
+            note(f"in {first_unit.rel}"
+                 + (f" and {len(hit) - 1} other file(s)" if len(hit) > 1
+                    else ""))
+            if VERBOSE or len(groups) == 1 and len(hit) == 1:
+                PROGRESS.write(first_err)
+            elif len(hit) > 1:
+                for u, _e in hit[1:4]:
+                    note(f"   {u.rel}")
+                if len(hit) > 4:
+                    note(f"   ... and {len(hit) - 4} more")
+        if not VERBOSE:
+            note("-v for the full compiler output")
+        say()
+
+        # Not fatal on its own. Targets are discovered rather than requested,
+        # so a test binary whose dependency is missing must not stop the
+        # program next to it from building -- the same argument that makes
+        # link failures per-target. A file that failed simply has no symbols,
+        # so nothing can close over it, and whoever needed it fails alone.
+        for u, _err in failures:
+            u.undef, u.strong, u.weak = set(), set(), set()
+            u.compiled = True
+            broken.add(u.rel)
+            cache.objects.pop(u.rel, None)
 
     if dry_run:
         for u in todo:
@@ -1821,7 +1884,7 @@ def _pc_includedirs(path):
     return [a[2:] for a in shlex.split(expand(cflags)) if a.startswith("-I")]
 
 
-def propose_from_headers(units, pkg, store):
+def propose_from_headers(units, pkg, store, proj=None):
     """Packages the system includes suggest, with the -I flags they need.
 
     Runs before compiling, since that is when -I is needed. What comes back
@@ -1835,6 +1898,8 @@ def propose_from_headers(units, pkg, store):
             if kind != "<" or name in seen:
                 continue
             seen.add(name)
+            if proj is not None and proj.resolve_header(name, u.rel):
+                continue        # a project header that happens to use <>
             got = pkg.for_header(name, store, sig)
             if got is None:
                 continue
@@ -1909,12 +1974,12 @@ def scan_providers(cfg, externals, cache, jobs, want_ident=None):
 
 
 def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
-                      want_ident=None):
+                      want_ident=None, proj=None):
     """Turn one target's external symbols into link flags."""
     # Proposals are recomputed from this target's own link set, so the
     # provenance names a file that is actually in this program. Everything
     # it needs is cached by now, so this costs nothing.
-    _, proposed = propose_from_headers(cl.link, pkg, hdr_store)
+    _, proposed = propose_from_headers(cl.link, pkg, hdr_store, proj)
     want = sorted(cl.external)
 
     chosen, why, implicit, unresolved = choose_libs(
@@ -2005,12 +2070,30 @@ def _expand_sources(patterns, root, proj, who):
     return out
 
 
+# Directory names that say "sources live here" rather than naming anything.
+GENERIC_SRC_DIRS = {"src", "srcs", "source", "sources", "app", "apps",
+                    "cmd", "prog", "programs", "code"}
+
+
 def default_name(rel, root):
+    """What to call the artifact a file roots, absent @target.
+
+    main.c is named after its directory, since "main" names nothing. But
+    src/main.cpp must not produce a binary called `src`: that is not a name,
+    and writing it into the project root collides with the directory it came
+    from. Conventional source-directory names are skipped in favour of
+    whatever encloses them, ending at the project's own name.
+    """
     stem = os.path.splitext(os.path.basename(rel))[0]
-    if stem == "main":
-        d = os.path.dirname(rel)
-        return os.path.basename(os.path.abspath(os.path.join(root, d))) or "a.out"
-    return stem
+    if stem != "main":
+        return stem
+    d = os.path.dirname(rel)
+    while d:
+        base = os.path.basename(d)
+        if base.lower() not in GENERIC_SRC_DIRS:
+            return base
+        d = os.path.dirname(d)
+    return os.path.basename(os.path.abspath(root)) or "a.out"
 
 
 class Target:
@@ -2403,6 +2486,11 @@ def build(args):
                 + "\n    ".join(rels) + "\n"
                 f"give one of them a different @target, or a name in "
                 f"{CONF_FILE}.")
+    for t in targets:
+        if os.path.isdir(os.path.join(outdir, t.filename)):
+            die(f"target {t.filename!r} (from {t.rel}) would be written over "
+                f"a directory of that name.\n"
+                f"name it with @target, or with a name in {CONF_FILE}.")
 
     wanted = targets
     if args.targets:
@@ -2517,7 +2605,7 @@ def build(args):
         cache.objects.clear()
 
     # ---- compile, close, widen ----------------------------------------
-    tried = set()
+    tried, broken = set(), set()
     closures = {}
     while True:
         pool = [units[r] for r in sorted(units)]
@@ -2525,21 +2613,27 @@ def build(args):
         # Recomputed each pass: widening can pull in a file whose system
         # includes need an -I nothing has asked for yet.
         if not args.no_libs:
-            pkg_cflags, proposed = propose_from_headers(pool, pkg, hdr_store)
+            pkg_cflags, proposed = propose_from_headers(pool, pkg, hdr_store,
+                                                        proj)
             incflags = base_incflags + [f for f in pkg_cflags
                                         if f not in base_incflags]
 
-        compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run)
+        compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
+                      broken)
 
         # confirm main() against the symbol tables now that objects exist
         if not args.dry_run:
             for t in list(wanted):
+                if t.rel in broken:
+                    warn(f"{t.name} skipped: {t.rel} did not compile")
+                    wanted.remove(t)
+                    continue
                 if t.kind == "exe" and "main" not in units[t.rel].strong:
                     warn(f"{t.rel} looked like it defined main() but the "
                          f"object does not export it; skipping")
                     wanted.remove(t)
             if not wanted:
-                die("no target defines main()")
+                die("no target could be built")
 
         forced = [units[f] for f in forced_rels if f in units]
         other_roots = {t.rel for t in targets if t.kind == "exe"}
@@ -2609,7 +2703,7 @@ def build(args):
         for t in wanted:
             resolutions[t] = resolve_libraries(t, closures[t], cfg, pkg,
                                                hdr_store, providers, paths,
-                                               target_ident)
+                                               target_ident, proj)
 
     # ---- explain or link ----------------------------------------------
     cache.data["units"] = sorted(units)
@@ -2667,6 +2761,14 @@ def build(args):
         say()
         return do_install(wanted, closures, root, outdir, conf, args)
 
+    if broken:
+        say()
+        warn(f"{len(broken)} file(s) did not compile")
+        for rel in sorted(broken)[:5]:
+            note(rel)
+        if len(broken) > 5:
+            note(f"... and {len(broken) - 5} more")
+
     if failed:
         say()
         for name, cl, res in failed:
@@ -2681,7 +2783,7 @@ def build(args):
         note("name the missing libraries with --ldflags, or build only the "
              "targets you want")
         return 1
-    return 0
+    return 1 if broken else 0
 
 # ---------------------------------------------------------------------------
 # --eject

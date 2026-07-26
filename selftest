@@ -149,6 +149,62 @@ int main(void){ banner(); printf("%g %g\\n", circle_area(2), square_area(3)); re
 
 
 @case
+def candidates_span_a_split_include_layout(t):
+    """include/ for headers, src/ for sources -- and no siblings anywhere.
+
+    Under a strict sibling rule the include graph finds nothing in this
+    layout, which is one of the commonest in C++. Everything would then have
+    to be discovered by widening from symbols, which works but does far more
+    compiling than it needs to."""
+    t.write("include/engine.h", "int engine_tick(void);\n")
+    t.write("include/render.h", "int render_frame(void);\n")
+    t.write("src/engine.cpp", '#include "engine.h"\n'
+            "int engine_tick(void){ return 2; }\n")
+    t.write("src/render.cpp", '#include "render.h"\n'
+            "int render_frame(void){ return 40; }\n")
+    t.write("src/main.cpp", """
+#include <cstdio>
+#include "engine.h"
+#include "render.h"
+int main(){ printf("%d\\n", engine_tick() + render_frame()); }
+""")
+    r = t.fmake("-v")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("widening" not in r.stdout,
+          f"the include graph should have found these without widening: "
+          f"{r.stdout}")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
+
+
+@case
+def candidates_follow_angle_bracket_project_headers(t):
+    """<engine.h> is a project header if it resolves inside the tree.
+
+    Putting include/ on the -I path and using angle brackets for your own
+    headers is standard practice, and what CMake encourages. Deciding by
+    punctuation rather than by what the name resolves to misses all of it --
+    on a real 292-file game, 2342 such includes against 425 quoted ones."""
+    t.write("include/engine.h", "int engine_tick(void);\n")
+    t.write("src/engine.cpp", "#include <engine.h>\n"
+            "int engine_tick(void){ return 42; }\n")
+    t.write("src/main.cpp", """
+#include <cstdio>
+#include <engine.h>
+int main(){ printf("%d\\n", engine_tick()); }
+""")
+    r = t.fmake("-v")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("widening" not in r.stdout,
+          f"angle-bracket project headers should be followed: {r.stdout}")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
+
+    # And it must not be mistaken for a package to look up.
+    e = t.fmake("--explain").stdout
+    check("engine.h" not in before_externals(e).split("link set")[0],
+          f"a project header should not be proposed as a library: {e}")
+
+
+@case
 def closure_ignores_weak_cxx_symbols(t):
     """Templates and inlines emit weak definitions into every object.
 
@@ -351,6 +407,52 @@ def new_symbol_widens_the_compiled_set(t):
     check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
     check("extra.c" in compiled(r), f"widening missed extra.c: {compiled(r)}")
     check(t.run(os.path.basename(t.dir)).returncode == 0, "wrong result")
+
+
+@case
+def a_broken_file_does_not_sink_other_targets(t):
+    """Compile failures are per-target too, not just link failures.
+
+    A real game had a test binary needing a library that was not installed;
+    dying on that would have stopped the game itself from building, which is
+    the same argument that makes link failures per-target."""
+    t.write("main.c", '#include <stdio.h>\nint main(void){ puts("fine"); return 0; }\n')
+    t.write("tests/testmain.c", "#include <nonexistent_library_header.h>\n"
+            "int main(void){ return 0; }\n")
+
+    r = t.fmake()
+    check(r.returncode != 0, "the failure should still be reported")
+    check(os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
+          f"the healthy target should still have been built: {r.stdout}")
+    check("testmain skipped" in r.stdout,
+          f"the broken target should be named: {r.stdout}")
+
+
+@case
+def repeated_compiler_errors_are_grouped(t):
+    """One missing header fails every file that includes it.
+
+    Printing the same diagnostic once per file buries everything else; on a
+    292-file game a single absent header produced 248 identical copies."""
+    t.write("common.h", "#include <nonexistent_library_header.h>\n")
+    calls = []
+    for name in ("a", "b", "c", "d"):
+        t.write(f"{name}.h", f"int {name}_fn(void);\n")
+        t.write(f"{name}.c", f'#include "{name}.h"\n#include "common.h"\n'
+                f"int {name}_fn(void){{ return 1; }}\n")
+        calls.append(f"{name}_fn()")
+    incs = "".join(f'#include "{n}.h"\n' for n in "abcd")
+    t.write("main.c", incs + '#include "common.h"\n'
+            "int main(void){ return " + " + ".join(calls) + "; }\n")
+
+    r = t.fmake()
+    check(r.returncode != 0, "the build should fail")
+    hits = r.stdout.count("nonexistent_library_header.h")
+    check(hits <= 2,
+          f"the same error should be reported once, not {hits} times:"
+          f"\n{r.stdout}")
+    check("other file(s)" in r.stdout,
+          f"the other affected files should be summarised: {r.stdout}")
 
 
 @case

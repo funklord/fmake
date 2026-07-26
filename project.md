@@ -118,6 +118,26 @@ When the project is tidy, step 3 closes and the extra files are never compiled.
 When it isn't, step 4 finds the answer instead of failing. Either way the result
 is exact — the guess only affects how much work is done, never what gets linked.
 
+**Two rules decide what the include graph can see, and both were too narrow.**
+They only showed up on a project big enough to have a conventional layout:
+
+- *A header's implementation need not be its sibling.* `include/Bullet.h`
+  implemented by `src/Bullet.cpp` is one of the commonest C++ layouts there is,
+  and a strict sibling rule finds nothing in it. Measured on a 292-file game: 5
+  headers had a sibling, 256 had a same-stem source elsewhere. A same-stem
+  match anywhere in the tree is used when there is exactly one; several
+  candidates say nothing about which is meant, so those are left to widening.
+- *Angle brackets do not mean "not mine".* Putting `include/` on the `-I` path
+  and writing `<Bullet.h>` is standard practice and what CMake encourages. The
+  same game used `<>` for its own headers 2342 times against 425 quoted. What
+  decides is whether the name resolves inside the tree, not the punctuation —
+  and a name that resolves to nothing local still falls through to library
+  resolution untouched.
+
+Together those took that project from **3 candidates out of 292 sources to
+248**. The remainder — tests, a vendored maths library, platform files — are
+exactly what widening is for.
+
 **The widening filter must match definitions, not mentions.** Filtering on any
 occurrence of a symbol name matches every file that merely *calls* `printf`, so
 chasing one unresolvable libc symbol drags in most of the tree. Candidates are
@@ -146,10 +166,20 @@ template instantiations do) need `--widen-all` or `--force-link`.
   closure alongside the root rather than merely joining the compiled set: once
   asserted, their own dependencies resolve normally — `@sources`, or
   `--force-link` from the command line.
+- **A target's name must not be a directory.** `main.c` is named after its
+  directory, since "main" names nothing — but `src/main.cpp` must not produce a
+  binary called `src`, which is not a name and collides with the directory it
+  came from. Conventional source-directory names (`src`, `source`, `app`, …)
+  are skipped in favour of whatever encloses them, ending at the project's own
+  name, and writing over a directory is refused outright.
 - **One target failing must not sink the others.** Targets are discovered, not
   requested, so a repo whose test binaries need a library fmake cannot resolve
   yet should still produce its programs. Failures are reported per target, with
-  that target's unresolved externals, and the exit status is non-zero.
+  that target's unresolved externals, and the exit status is non-zero. This
+  covers compilation as well as linking: a test binary whose library is not
+  installed must not stop the program beside it from building. A file that
+  fails to compile simply has no symbols, so nothing can close over it, and
+  whichever target needed it is dropped by name.
 - **The binary is named after the root TU**, unless that TU is `main.*`, in which
   case it takes the containing directory's name. `@target` overrides.
 - **A tree with no `main()` builds as a library**, and the closure runs from the
@@ -916,9 +946,48 @@ progress onto stdout and produced a Makefile whose first line was
 
 ---
 
-## 13. Open questions
+## 13. What a real project showed
 
-- **Cost of widening.** A project whose include graph is a poor guide pays for
+Everything above was developed against a 6-file reference project. Pointing
+fmake at *dunelegacy* — a 292-source, 124k-line C++ SDL game — changed four
+things, none of which the small project could have exposed:
+
+1. **The include graph found 3 candidates out of 292.** Both causes are in §3:
+   sibling-only header matching, and ignoring angle-bracket project headers.
+   Fixed, and the same project now yields 248.
+2. **`src/main.cpp` named the target `src`**, whose output path is the source
+   directory. Fixed in §3, and writing over a directory is now refused.
+3. **A compile failure killed every target.** Per-target resilience had been
+   built for link failures only, though the argument is identical — its test
+   binary needs cppunit, which is not installed, and that stopped the game
+   itself from building.
+4. **One missing header produced 248 identical diagnostics.** Compiler errors
+   are now grouped by message rather than by file, which turned that wall into
+   five distinct problems: two absent libraries, a `std::filesystem` use
+   needing a newer `-std`, a generated header, and cppunit.
+
+The build still does not complete, because none of its dependencies — SDL2,
+fmt, gsl, cppunit — are installed here and this environment cannot install
+them. What was exercised is everything up to and including compilation: target
+discovery, the include graph, candidate selection, per-file flags, and error
+reporting. Linking and library resolution against a project of that size remain
+unverified.
+
+Worth noting what did *not* need changing: the symbol closure, the widening
+filter, the caching, and the annotation layer all behaved as designed at 50x
+the size. The things that broke were all in the cheap first-guess layer, which
+is the part that is allowed to be wrong — it just should not be wrong this
+often.
+
+---
+
+## 14. Open questions
+
+- **Cost of widening.** Less pressing than it looked: with §3's two fixes the
+  include graph identifies 248 of 292 files on a real project, so widening
+  covers a remainder rather than doing all the work. Still unmeasured on a tree
+  where the guess genuinely fails.
+  A project whose include graph is a poor guide pays for
   compiling TUs that turn out to be irrelevant. Bounded by the size of the tree
   and paid once thanks to caching — and the resolved unit set is now cached, so
   later builds start from what widening found rather than re-deriving it. The
