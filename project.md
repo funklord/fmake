@@ -17,7 +17,37 @@ out of the way.
 
 `./selftest` covers the design claims below, one case per claim, and every fix
 in §14 is mutation-checked: the case is confirmed to fail when the bug is put
-back. Phase 7 (`fmake.py`) is not written, and is meant to stay unattractive.
+back. Phase 7 (`fmake.py`) is **declined** rather than pending — see §11.
+
+---
+
+## Contents
+
+**The design.** [1. The premise](#1-the-premise) ·
+[2. Design principles](#2-design-principles) ·
+[3. The core rule](#3-the-core-rule) — how the link set is decided, and why the
+obvious answer is wrong ·
+[4. Annotations](#4-annotations) ·
+[5. Dependency inference](#5-dependency-inference) ·
+[6. Precedence](#6-precedence) ·
+[7. Configuration files](#7-configuration-files) ·
+[8. Speed and caching](#8-speed-and-caching) ·
+[9. Implementation](#9-implementation) ·
+[10. `--explain`](#10---explain) ·
+[12. The exit](#12-the-exit)
+
+**What happened when it met reality.**
+[11. Build order](#11-build-order) — what was built, in what order, and what
+each phase turned up ·
+[13. What real projects showed](#13-what-real-projects-showed) — four
+codebases, and the four things a 6-file project could not have exposed ·
+[14. The chains, checked](#14-the-chains-checked) — the same question asked of
+the design rather than of a sample, and the silent wrongness it found ·
+[15. Open questions](#15-open-questions)
+
+If you read one section, read §3: everything else follows from it. If you read
+two, read §14, which is where the design was checked against itself and lost
+several times.
 
 ---
 
@@ -527,7 +557,7 @@ assuming one chain covered both turned out to be the bug.
 so the outer level wins:
 
 ```
-inference  <  source annotations  <  fmake.toml  <  fmake.py  <  CLI / env
+inference  <  source annotations  <  fmake.toml  <  CLI / env
 ```
 
 **Compile flags** are a property of one file, so they run general to specific,
@@ -541,7 +571,7 @@ Additive directives (`@libs`, `@cflags`, `@define`) accumulate across levels
 rather than replacing; scalar ones (`@target`, `@kind`) replace. Both are
 printed by `--explain` when levels disagree.
 
-Only `fmake.py` is missing. Concrete cases these govern: `[target.*] name` overrides `@target`; `$CC` beats
+Concrete cases these govern: `[target.*] name` overrides `@target`; `$CC` beats
 `[toolchain] cc`, so a one-off cross build needs no edit to a tracked file;
 `--ldflags` is appended after every resolved and declared library, so an
 explicit flag always has the last word; and `--no-libs` disables §5 entirely
@@ -701,7 +731,7 @@ gathering there would install the same header under two owners. An explicit
 `headers` list in `fmake.toml` is honoured for any kind, since naming it
 outright is a decision rather than an inference.
 
-### `fmake.py` — opt-in, rare, documented as a last resort
+### `fmake.py` — declined
 
 Loaded only if present. Gets an injected namespace of fmake primitives. For
 genuine code generation and custom rules.
@@ -712,7 +742,13 @@ way with a deliberately non-Turing-complete DSL. The tension is sharper here tha
 for either of them, because fmake *also* accepts metadata from comments — three
 places a fact can live is already a lot.
 
-The resolution is to keep `fmake.py` present but unattractive: TOML covers the
+**Not built, and that is the decision rather than the backlog.** Every project
+met so far — four real codebases, two of which build and run — has been
+expressible without it. The reasoning below is why it was designed in, and it
+is also why it was left out: everything that makes it useful is what makes it
+dangerous.
+
+The original resolution was to keep `fmake.py` present but unattractive: TOML covers the
 normal escapes, `fmake.py` is documented as the thing you shouldn't need, and
 `--explain` always shows which level a fact came from so a `fmake.py` that
 quietly overrides a source annotation is visible rather than mysterious.
@@ -1326,6 +1362,11 @@ different question from whether any particular project builds.
 
 ## 15. Open questions
 
+Struck-through entries were closed by later work and are kept because the
+reasoning that closed them is part of the record. What remains divides into
+three kinds: things nobody has needed yet, things that need a design decision
+rather than code, and one lesson about testing.
+
 - **Cost of widening.** Less pressing than it looked: with §3's two fixes the
   include graph identifies 248 of 292 files on a real project, so widening
   covers a remainder rather than doing all the work. Still unmeasured on a tree
@@ -1431,6 +1472,15 @@ different question from whether any particular project builds.
 - **A generator's own dependencies are not tracked.** A `.y` that `%include`s
   another file re-runs only when the `.y` itself changes; the rest must be
   listed in `depends` by hand. There is no depfile equivalent for generators.
+- **Two hand-written lists are load-bearing**, soon three: linker-provided
+  symbols (§14), interposer libraries (§14), and the builtin header table (§5).
+  All are "things that look like providers but are not, or are not but are."
+  A fourth would be the signal that the provider model wants a real predicate
+  rather than another list, and the threshold is stated here so it is agreed in
+  advance rather than argued about at the time.
+- **`[build-toolchain]` is only consulted for generator tools.** Nothing else
+  in fmake distinguishes the build machine from the target, because nothing
+  else needs to yet. A test binary meant to run during the build would.
 - **A test that split on a substring hid a working feature.** The `--explain`
   libraries header reads `[from the external symbols above]`, so
   `split("external symbols")[0]` truncated the output above the very lines it
