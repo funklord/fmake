@@ -388,6 +388,50 @@ scanned again. **The prediction was right for the design as it stood and wrong
 for the design once rules could live in source** — the cost was not in
 generating, it was in where the rules are allowed to live.
 
+### Both formats, either file
+
+A source comment already took both kinds of statement — `@libs m` beside
+`@rule gen/n.c: data/n.txt`. `fmake.mk` took only rules, so a project wanting
+a pattern rule *and* a project-wide flag needed two files for no reason anyone
+could name. It now takes directives too, in the same spelling:
+
+```make
+@std    c17
+@define SCALE=4
+@libs   m
+
+gen/%.c: data/%.txt
+	python3 mk.py $< $@
+```
+
+**Scope is the thing that has to be explicit.** A directive in a comment is a
+fact about that translation unit; `fmake.mk` has no translation unit, so a
+directive there is a fact about the project — the same level as `[project]`.
+Directives that cannot mean anything without a file or an artifact —
+`@target`, `@kind`, `@os`, `@arch`, `@sources`, `@headers` — are refused there
+and told where they belong, rather than being given an invented scope.
+
+So the three places now divide by what a fact *is*, not by syntax: a comment
+for facts about one file, `fmake.mk` for rules and project-wide flags,
+`fmake.toml` for the structured things that need tables — target membership,
+profiles, toolchains.
+
+### `conf or default` was a trap
+
+Wiring that up hit the sentinel class again in a new disguise. `Config` did:
+
+```python
+conf = conf or Conf({})
+```
+
+`Conf.__bool__` answers "is anything configured", which is a reasonable thing
+for it to mean and fatal here: a `Conf` carrying directives folded in from
+`fmake.mk` is falsy when there is no `fmake.toml`, so `or` discarded it and
+every flag vanished silently. **A `__bool__` with a domain meaning defeats
+every `x or y` in the file.** The call site now tests `is None`; `__bool__`
+also counts what has been folded in, which is defence in depth rather than the
+fix — reverting only the latter leaves the case passing.
+
 ### What counts as a directive
 
 Only Doxygen's own comment markers — `//!`, `///`, `/*!`, `/**`. An `@` in an

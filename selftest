@@ -949,6 +949,77 @@ int main(void){ printf("%d\\n", WORD); return 0; }
 
 
 @case
+def both_formats_work_in_one_file(t):
+    """Rules and directives side by side, in either kind of file.
+
+    A source comment already took both. fmake.mk took only rules, so a
+    project wanting a pattern rule and a project-wide flag needed two files
+    for no reason anyone could name."""
+    t.write("data/n.txt", "value 5\n")
+    t.write("mk.py", """
+import sys
+v = open(sys.argv[1]).read().split()[1]
+open(sys.argv[2], "w").write("int n(void){ return %s; }\\n" % v)
+""")
+    t.write("fmake.mk", """
+@std    c17
+@define SCALE=4
+@libs   m
+
+gen/%.c: data/%.txt
+	python3 mk.py $< $@
+""")
+    t.write("main.c", """
+#include <stdio.h>
+#include <math.h>
+int n(void);
+int main(void){ printf("%.0f\\n", sqrt((double)(n()*SCALE*5))); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "10\n",
+          "the directives beside the rule did not take effect")
+    e = t.fmake("--explain").stdout
+    check("-DSCALE=4" in e and "-std=c17" in e, f"flags missing: {e}")
+    check("-lm" in e, f"@libs in fmake.mk should link: {e}")
+
+
+@case
+def mk_refuses_directives_that_need_a_file(t):
+    """@target names an artifact and @os describes one translation unit.
+
+    fmake.mk has neither, so accepting them there would mean inventing a
+    scope for them. Saying so beats guessing."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    for directive, expect in (("@target thing", "target"),
+                              ("@os linux", "os"),
+                              ("@kind static", "kind")):
+        t.write("fmake.mk", directive + "\n")
+        r = t.fmake()
+        check(r.returncode != 0, f"{directive} should be refused here")
+        check(expect in r.stderr and "fmake.toml" in r.stderr,
+              f"the message should say where it belongs: {r.stderr}")
+
+
+@case
+def a_conf_carrying_only_directives_is_not_discarded(t):
+    """`conf or default` is a trap when __bool__ means something.
+
+    Conf answers "is anything configured", so one holding directives folded
+    in from fmake.mk was falsy with no fmake.toml present, and `or` threw it
+    away -- the compile silently lost every flag."""
+    t.write("fmake.mk", "@define TOKEN=99\n")
+    t.write("main.c", """
+#include <stdio.h>
+int main(void){ printf("%d\\n", TOKEN); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "99\n",
+          "a config with no fmake.toml behind it was discarded")
+
+
+@case
 def mk_pattern_rules_scale_without_editing_config(t):
     """The thing fmake.toml cannot say at all.
 

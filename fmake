@@ -324,7 +324,7 @@ CONF_SCHEMA = {
     "project": {
         "name": S, "std": S, "profile": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
-        "exclude": L, "include-dirs": L,
+        "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
     },
     "profile": {"*": {
         "std": S, "cflags": L, "ldflags": L, "defines": L, "define": L,
@@ -434,7 +434,12 @@ class Conf:
         self.profile = profiles.get(self.profile_name, {})
 
     def __bool__(self):
-        return bool(self.data)
+        """True when this project configures anything at all.
+
+        Careful: this makes an empty-but-real Conf falsy, so `conf or
+        default` is a trap. Test `is None` when a default is wanted.
+        """
+        return bool(self.data or self.project or self.targets)
 
     def cflags(self):
         """Project then profile, so the profile has the last word."""
@@ -521,7 +526,14 @@ RE_MK_UNSUPPORTED = re.compile(
 # because they are not something anything else depends on.
 
 
-def parse_mk(path=None, text=None, origin=None, first_line=1):
+# Directives that mean something without a file to be about. The rest --
+# @target, @kind, @sources, @os, @arch, @headers -- are facts about one
+# translation unit or one artifact, and there is no such context in fmake.mk.
+MK_PROJECT_DIRECTIVES = {"cflags", "ldflags", "define", "std", "libs", "pkg"}
+
+
+def parse_mk(path=None, text=None, origin=None, first_line=1,
+             directives=None):
     """Parse Makefile-syntax rules from fmake.mk, or from a comment.
 
     The same function for both on purpose. A rule written in a `@rule`
@@ -549,6 +561,24 @@ def parse_mk(path=None, text=None, origin=None, first_line=1):
                 die(f"{where}:{n}: recipe line before any rule")
             current["commands"].append(line.strip())
             continue
+
+        # A directive line, the same spelling a comment uses. fmake.mk then
+        # holds everything a simple project needs in one file, instead of
+        # splitting a pattern rule and a project flag across two.
+        d = RE_DIRECTIVE.match(line.strip())
+        if d and directives is not None:
+            dname = DIRECTIVE_ALIAS.get(d.group(1), d.group(1))
+            if dname in MK_PROJECT_DIRECTIVES:
+                directives.setdefault(dname, []).extend(
+                    shlex.split(d.group(2)))
+                current = None
+                continue
+            if dname in DIRECTIVES:
+                die(f"{where}:{n}: @{dname} is a fact about one file or one "
+                    f"target, and {MK_FILE} has neither.\n"
+                    f"Put it in the source file it is about, or in "
+                    f"{CONF_FILE} under [target.*].")
+            die(f"{where}:{n}: unknown directive @{dname}")
 
         if RE_MK_UNSUPPORTED.search(line):
             die(f"{where}:{n}: {line.strip()!r}\n"
@@ -724,7 +754,7 @@ def phony_rules(root):
     if not os.path.isfile(path):
         return {}
     out = {}
-    for r in parse_mk(path):
+    for r in parse_mk(path, directives={}):
         if r.get("phony"):
             for target in r["outputs"]:
                 out[target] = r
@@ -780,6 +810,16 @@ def rules_from_comments(root, srcs, scans):
     return out
 
 
+def mk_directives(root):
+    """Project-scope directives written in fmake.mk."""
+    path = os.path.join(root, MK_FILE)
+    if not os.path.isfile(path):
+        return {}
+    found = {}
+    parse_mk(path, directives=found)
+    return found
+
+
 def all_generate_rules(root, conf, srcs=None, scans=None):
     """Every generator rule, from fmake.toml and fmake.mk alike.
 
@@ -792,7 +832,8 @@ def all_generate_rules(root, conf, srcs=None, scans=None):
     path = os.path.join(root, MK_FILE)
     extra = {}
     if os.path.isfile(path):
-        extra.update(expand_mk_rules(parse_mk(path), root, None))
+        extra.update(expand_mk_rules(parse_mk(path, directives={}),
+                                     root, None))
     if srcs is not None:
         extra.update(rules_from_comments(root, srcs, scans))
     for name, rule in extra.items():
@@ -1288,7 +1329,12 @@ def find_nm(configured=None):
 
 class Config:
     def __init__(self, args, conf=None):
-        conf = conf or Conf({})
+        # `conf or Conf({})` looks equivalent and is not: __bool__ answers
+        # "is there a config file", so a Conf carrying directives folded in
+        # from fmake.mk is falsy when there is no fmake.toml, and `or` threw
+        # it away. A __bool__ that means something domain-specific defeats
+        # every `x or y` in the file.
+        conf = conf if conf is not None else Conf({})
         tool = conf.tool
 
         # $CC beats fmake.toml, per the precedence chain: the environment is
@@ -2944,6 +2990,14 @@ def build(args, _bootstrapping=False):
     state  = os.path.join(root, STATE_DIR)
     cache  = Cache(os.path.join(state, CACHE_FILE))
     conf   = Conf(load_conf(root), args.profile)
+    # fmake.mk may carry project-scope directives beside its rules. They fold
+    # into [project], so the two files say the same things the same way and
+    # a project needing both a rule and a flag needs only one of them.
+    for name, args_ in mk_directives(root).items():
+        key = {"define": "define"}.get(name, name)
+        conf.project[key] = list(conf.project.get(key, [])) + args_
+        if name == "std" and args_:
+            conf.project["std"] = args_[-1]
     if getattr(args, "use_build_toolchain", False):
         # A tool built to run here is a separate build for a separate
         # machine, so it takes none of the target's flags. Inheriting them
