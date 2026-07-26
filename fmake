@@ -2719,8 +2719,13 @@ def build(args, _bootstrapping=False):
     for rel in srcs:
         ann_s = Ann(scans[rel].get("dirs"))
         for pat in ann_s.items("sources"):
-            hits = (glob.glob(os.path.join(root, os.path.dirname(rel), pat))
-                    or glob.glob(os.path.join(root, pat)))
+            # recursive=True everywhere, so ** means the same thing in
+            # @sources as it does in fmake.toml. Two spellings of "all the
+            # files under here" is the kind of difference nobody discovers
+            # except by having a pattern quietly match nothing.
+            hits = (glob.glob(os.path.join(root, os.path.dirname(rel), pat),
+                              recursive=True)
+                    or glob.glob(os.path.join(root, pat), recursive=True))
             got = [os.path.relpath(h, root) for h in sorted(hits)]
             got = [g for g in got if g in proj.src_set]
             if not got:
@@ -2800,17 +2805,22 @@ def build(args, _bootstrapping=False):
     # ---- compile, close, widen ----------------------------------------
     tried, broken = set(), set()
     closures = {}
+    # Computed once, over every source in the tree rather than over the
+    # evolving candidate pool. Recomputing per pass looks thriftier, but the
+    # flags then depend on how far widening has got: a file compiled before
+    # some later file contributed an -I was built with a different include
+    # path than fmake believes it used, and its cache key -- which contains
+    # the flags -- disagrees with the final one, so the next build recompiles
+    # it for no reason. Stable inputs, stable keys, idempotent builds.
+    if not args.no_libs:
+        every_unit = [units.get(rel) or Unit(rel, root, objdir, scans[rel])
+                      for rel in srcs]
+        pkg_cflags, _ = propose_from_headers(every_unit, pkg, hdr_store, proj)
+        incflags = base_incflags + [f for f in pkg_cflags
+                                    if f not in base_incflags]
+
     while True:
         pool = [units[r] for r in sorted(units)]
-
-        # Recomputed each pass: widening can pull in a file whose system
-        # includes need an -I nothing has asked for yet.
-        if not args.no_libs:
-            pkg_cflags, proposed = propose_from_headers(pool, pkg, hdr_store,
-                                                        proj)
-            incflags = base_incflags + [f for f in pkg_cflags
-                                        if f not in base_incflags]
-
         compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
                       broken)
 

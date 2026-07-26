@@ -1197,6 +1197,36 @@ with the list accessor, including `@kind` and `@target`. That worked by
 accident, and would have kept working until a scalar directive needed to behave
 like one.
 
+### The build was not idempotent — fixed
+
+Include flags were derived from the candidate pool and recomputed on every
+widening pass. That looks thriftier than doing it once, and it is wrong twice
+over: a file widened in late can contribute an `-I`, so everything compiled
+before it was built with a different include path than fmake records, and
+because the flags are part of the cache key, the *next* build recompiles those
+files for no reason.
+
+So a complete build did not reach a fixed point. Build, build again, and
+something compiles.
+
+Include flags are now computed once, over every source in the tree, before
+anything is compiled. Stable inputs, stable keys, idempotent builds — verified
+on both reference projects, which now compile 6 and 152 files cold and zero
+thereafter.
+
+The general rule is the one from `-fPIC`, seen from the other side: if a flag
+belongs in the cache key, then it has to be *known* before the thing it keys is
+built. A key computed from a value that is still moving is not a key.
+
+### The exit is equivalent, not merely functional
+
+`--eject` was verified by building with `make` and running the result. That
+shows the emitted build works, not that it is the same build. Comparing symbol
+tables closes the gap: fmake's binaries and the ejected build's are identical
+symbol for symbol, on the reference project's three programs and in the
+selftest. Dropping the per-file flags from the emitted rules makes the
+comparison fail, so it is checking something.
+
 ### What this says about the method
 
 All of these were reachable from the design alone; none needed a project to

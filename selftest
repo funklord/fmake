@@ -597,6 +597,41 @@ def incremental_rebuilds_only_what_changed(t):
 
 
 @case
+def widening_does_not_disturb_what_it_already_built(t):
+    """A build must reach a fixed point on the first attempt.
+
+    The flags a file is compiled with have to be settled before anything is
+    compiled. Deriving them from the candidate pool instead means a file
+    widened in later can contribute an -I, and everything compiled before
+    that was built with a different include path than fmake records -- so
+    the next build recompiles it, and the objects on disk were never quite
+    what fmake thought they were."""
+    if not _have_pkg("libxml-2.0"):
+        raise Skip("libxml2 not installed")
+
+    # extra.c is reachable only through the symbol, and it is the only file
+    # needing an -I, so the include path is not known until widening.
+    t.write("main.c", """
+#include <stdio.h>
+int widened_thing(void);
+int main(void){ printf("%d\\n", widened_thing()); return 0; }
+""")
+    t.write("extra.c", """
+#include <libxml/parser.h>
+int widened_thing(void){ return xmlReadMemory("<a/>",4,NULL,NULL,0) ? 1 : 0; }
+""")
+    r = t.fmake("-v")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("widening" in r.stdout, "the case needs widening to happen")
+
+    for attempt in (1, 2):
+        again = t.fmake("-v")
+        check(not compiled(again),
+              f"build {attempt} after a complete one recompiled "
+              f"{compiled(again)}")
+
+
+@case
 def new_symbol_widens_the_compiled_set(t):
     """An undefined symbol should widen the build, not fail it."""
     t.write("main.c", "int main(void){ return 0; }\n")
@@ -1125,6 +1160,16 @@ def eject_make_builds_without_fmake(t):
     with open(os.path.join(t.dir, "Makefile"), "w") as fh:
         fh.write(r.stdout)
 
+    # Build it with fmake first, so the two can be compared rather than
+    # just checked for not crashing.
+    check(t.fmake().returncode == 0, "fmake's own build failed")
+    _nm = subprocess.run(["nm", "--format=posix",
+                          os.path.join(t.dir, "ejected")],
+                         capture_output=True, text=True)
+    fmake_symbols = sorted(l.split()[0] + " " + l.split()[1]
+                           for l in _nm.stdout.splitlines()
+                           if len(l.split()) > 1)
+
     # fmake's own state goes away, so nothing it built can be mistaken for
     # something make built.
     shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
@@ -1137,6 +1182,16 @@ def eject_make_builds_without_fmake(t):
     out = _run_in(t.dir, "./ejected").stdout
     check(out == "42\n",
           f"the ejected build lost its flags or its link set: {out!r}")
+
+    # Equivalence, not merely "it works": the same link set and the same
+    # flags should produce the same symbols.
+    def symbols(path):
+        r = subprocess.run(["nm", "--format=posix", path],
+                           capture_output=True, text=True)
+        return sorted(l.split()[0] + " " + l.split()[1]
+                      for l in r.stdout.splitlines() if len(l.split()) > 1)
+    check(symbols(os.path.join(t.dir, "ejected")) == fmake_symbols,
+          "the ejected binary does not match the one fmake built")
 
     # A second make must do nothing: the depfiles have to be wired up.
     again = _run_in(t.dir, "make")
