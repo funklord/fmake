@@ -1472,6 +1472,16 @@ rather than code, and one lesson about testing.
 - **A generator's own dependencies are not tracked.** A `.y` that `%include`s
   another file re-runs only when the `.y` itself changes; the rest must be
   listed in `depends` by hand. There is no depfile equivalent for generators.
+- **A fixture that quietly tests nothing is the hardest kind of wrong.** The
+  library-signature case took three attempts, and both failures were the
+  fixture rather than the tool: first the library's source sat inside the
+  scanned tree, so widening compiled it directly and the resolver was never
+  consulted; then the fixture recreated that source on its second call,
+  reintroducing the same problem after it had been fixed. In between, the
+  change looked unverifiable and was nearly reverted. A test that passes
+  because it exercises nothing is indistinguishable from one that passes
+  because the code is right — which is the entire argument for mutating the
+  code and requiring the test to fail.
 - **Two hand-written lists are load-bearing**, soon three: linker-provided
   symbols (§14), interposer libraries (§14), and the builtin header table (§5).
   All are "things that look like providers but are not, or are not but are."

@@ -2013,6 +2013,63 @@ int main(void){
 
 
 @case
+def resolution_notices_a_library_rewritten_in_place(t):
+    """A directory's mtime does not move when a file in it is rewritten.
+
+    It moves on add, remove and rename -- so a package manager installing by
+    rename is caught -- but `install` and a plain redirect both overwrite in
+    place, and a library rebuilt into a prefix would then be resolved against
+    the symbols it used to have.
+
+    The library has to live outside the scanned tree, or widening finds its
+    source and compiles it directly, and the resolver is never consulted at
+    all. That is what made this hard to reproduce.
+    """
+    libdir = os.path.join(t.dir, "prefix", "lib")
+    os.makedirs(libdir, exist_ok=True)
+    src = os.path.join(t.dir, "libsrc.c")
+
+    def build_lib(with_later_b):
+        with open(src, "w") as fh:
+            fh.write("int filler(void){ return 0; }\n")
+            if with_later_b:
+                fh.write("int later_b(void){ return 2; }\n")
+        out = os.path.join(libdir, "libsp.so")
+        # Built somewhere else entirely: creating and removing a temporary
+        # file inside libdir would move its mtime, which is the thing being
+        # held still.
+        tmp = os.path.join(t.dir, "staging.so")
+        r = subprocess.run(["cc", "-shared", "-fPIC", "-o", tmp, src],
+                           capture_output=True, text=True)
+        check(r.returncode == 0, f"could not build the fixture: {r.stderr}")
+        # Overwrite in place rather than rename, so the directory is untouched.
+        with open(tmp, "rb") as a, open(out, "wb") as b:
+            b.write(a.read())
+        os.remove(tmp)
+        # And the source goes away again. Leaving it means widening finds
+        # later_b in the tree and compiles it directly, so the library is
+        # never consulted and the case silently tests nothing.
+        os.remove(src)
+
+    build_lib(False)
+    t.write("main.c", "int later_b(void);\nint main(void){ return later_b(); }\n")
+    t.write("fmake.toml", f'[toolchain]\nlib-dirs = ["{libdir}"]\n')
+
+    r = t.fmake()
+    check(r.returncode != 0,
+          "later_b does not exist yet, so this must not link")
+
+    before = os.stat(libdir).st_mtime_ns
+    build_lib(True)
+    check(os.stat(libdir).st_mtime_ns == before,
+          "the fixture changed the directory mtime, so it proves nothing")
+
+    r = t.fmake()
+    check(r.returncode == 0,
+          f"the rewritten library was not noticed: {r.stdout}{r.stderr}")
+
+
+@case
 def libs_resolve_through_linker_scripts(t):
     """libncurses.so is a script, not an ELF file.
 
