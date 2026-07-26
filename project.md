@@ -10,8 +10,8 @@ so they don't get relitigated.
 Status: **phases 1–6 implemented** — `fmake` builds C and C++ programs and
 libraries from an unannotated tree, resolves their dependencies, accepts
 in-source directives for what cannot be inferred, reads an optional
-`fmake.toml` for what belongs to no single file, and can eject a standalone
-Makefile or `build.ninja` and get out of the way. `./selftest` covers the design
+`fmake.toml` for what belongs to no single file, cross-compiles, and can eject
+a standalone Makefile or `build.ninja` and get out of the way. `./selftest` covers the design
 claims below, case per claim. Phase 7 (`fmake.py`) is not written, and is
 meant to stay unattractive.
 
@@ -387,6 +387,41 @@ The sweep is shared across targets rather than run per target, which is worth
 more than it sounds: on a repo with four programs it is the difference between
 3.9s and 1.1s for a cold build, because the sweep is the only expensive part of
 resolution.
+
+### Cross-compiling: the architecture has to be checked, not assumed
+
+Resolution originally scanned a hardcoded list of host directories, which is
+wrong in both directions on a cross build: the target's libraries are somewhere
+else entirely, and the host's are full of symbols that must not be offered. The
+first real cross build found nothing at all — `0 in libc`, every symbol
+unresolved — and failed at the linker on `sqrt`.
+
+Two things fix it.
+
+**Ask the compiler where it looks.** `cc -print-search-dirs` is authoritative
+and already correct for a cross compiler; on the toolchain used here it names
+`/usr/aarch64-linux-gnu/lib`, a directory no hardcoded list would have guessed.
+A configured sysroot's directories go ahead of it, and the native defaults stay
+behind it.
+
+**Then reject by ELF header, not by path.** This is the part that matters: a
+cross compiler's own search path contains `/usr/lib` — the host's — so *no
+arrangement of directory names separates the target's libraries from the
+host's*. The ELF header does, exactly. fmake reads `(class, byte order,
+machine)` from one of the objects it just compiled and requires every candidate
+library to match, which needs no knowledge of triplets and works for any
+architecture. A 20-byte read also comes in far cheaper than the `nm` it avoids.
+
+Naming the compiler is enough for the rest: `aarch64-linux-gnu-gcc` implies
+`aarch64-linux-gnu-nm`, `-ar` and `-pkg-config`. A host `nm` can often read
+foreign objects, but relying on that is luck rather than design. With a sysroot,
+`PKG_CONFIG_SYSROOT_DIR` and `PKG_CONFIG_LIBDIR` are set too, since pkg-config
+otherwise answers for the build machine.
+
+Verified end to end: a cross-built aarch64 binary that runs under qemu and
+prints the same result as the native build, `-lm` resolved from the target's
+libraries, and the host's zlib correctly refused with *"no aarch64/64le library
+exports zlibVersion"* rather than an incomprehensible linker error.
 
 ### `--wrap`, for free
 
@@ -855,13 +890,14 @@ progress onto stdout and produced a Makefile whose first line was
 - **Generated sources.** A `.c` produced by flex/bison/protoc doesn't exist when
   the scan runs. Needs at minimum a two-pass scan. Currently deferred to
   `fmake.toml` rules, which may not be enough.
-- **Cross-compilation is started, not finished.** `[toolchain]` selects the
-  compiler, `ar`, `nm`, `pkg-config` and sysroot, and `os`/`arch` now decide
-  which TUs are built — that part was a silent correctness bug and is fixed.
-  What is untested is everything downstream: §5 scans the *host's* libraries
-  for symbols, so library resolution on a cross build will resolve against the
-  wrong machine. `[toolchain] lib-dirs` exists as the escape hatch and is the
-  only thing making it usable. This is where "less focused on embedded" shows.
+- ~~**Cross-compilation is started, not finished.**~~ Closed; see §5. Library
+  resolution answers for the target machine, verified end to end against a real
+  aarch64 toolchain.
+- **Cross builds are verified on one toolchain, on Linux.** The architecture
+  check is architecture-agnostic by construction, but sysroot handling, the
+  pkg-config variables and the tool-prefix derivation have only been exercised
+  against `aarch64-linux-gnu-*`. A toolchain that names its tools differently,
+  or a bare-metal one with no libc at all, is untried.
 - **Header-only libraries.** Correctly need no link, and signal 2 naturally
   produces no external symbols for them, so this mostly resolves itself. The
   remaining case is a header-only library that needs `-I` pointing somewhere
@@ -914,3 +950,9 @@ progress onto stdout and produced a Makefile whose first line was
   linker script, or a function pointer table built at runtime. All need
   `@sources`. Whether that one directive is a sufficient answer for all of them
   is unproven.
+- **A test that split on a substring hid a working feature.** The `--explain`
+  libraries header reads `[from the external symbols above]`, so
+  `split("external symbols")[0]` truncated the output above the very lines it
+  was meant to check, and the case failed while fmake was right. The diagnostic
+  `sed` range used to investigate had the identical flaw, which is what made it
+  slow to find. Assertions on `--explain` now split on a line-anchored pattern.

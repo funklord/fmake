@@ -65,8 +65,11 @@ same as they must be listed in a Makefile.
 
 An optional fmake.toml carries what belongs to no single file: which of two
 libraries a shared source is part of, install paths, named build profiles
-(-p release), and the toolchain to build with -- including the platform
-being built for, which is what @os and @arch are tested against. Unknown
+(-p release), and the toolchain to build with. Cross builds resolve
+libraries for the target machine, not the build machine: candidates are
+checked against the ELF header of the objects fmake just compiled, since a
+cross compiler's own search path includes the host's directories and no
+arrangement of path names can separate the two. Unknown
 keys there are an error, unlike unknown directives, because that file is
 fmake's alone while a comment is shared with Doxygen.
 
@@ -707,6 +710,20 @@ def tool_version(exe):
         return "?"
 
 
+RE_TOOL_PREFIX = re.compile(r"^(.*-)(?:gcc|g\+\+|cc|c\+\+|clang(?:\+\+)?)"
+                            r"(?:-\d+(?:\.\d+)*)?$")
+
+
+def _tool_prefix(cc):
+    """The target prefix a compiler name carries, or None.
+
+    aarch64-linux-gnu-gcc -> "aarch64-linux-gnu-". Plain cc, gcc or clang
+    carry none, which is the native case.
+    """
+    m = RE_TOOL_PREFIX.match(os.path.basename(cc))
+    return m.group(1) if m else None
+
+
 def find_nm(configured=None):
     for cand in (os.environ.get("NM"), configured, "nm", "llvm-nm", "gnm"):
         if cand and shutil.which(cand):
@@ -724,7 +741,14 @@ class Config:
         # the outermost level, so a one-off cross build needs no edit.
         self.cc      = os.environ.get("CC")  or tool.get("cc", "cc")
         self.cxx     = os.environ.get("CXX") or tool.get("cxx", "c++")
-        self.nm      = find_nm(tool.get("nm"))
+        # aarch64-linux-gnu-gcc implies aarch64-linux-gnu-nm and -ar. Naming
+        # the compiler should be enough; a host nm can often read foreign
+        # objects, but relying on that is luck rather than design.
+        self.prefix  = _tool_prefix(self.cc)
+        self.triplet = _stdout([self.cc, "-print-multiarch"]).strip() \
+                       or _stdout([self.cc, "-dumpmachine"]).strip()
+        self.nm      = find_nm(tool.get("nm")
+                               or self._prefixed("nm"))
         self.sysroot = tool.get("sysroot")
 
         # A cross build must test @os/@arch against the machine being built
@@ -744,12 +768,13 @@ class Config:
             die(f"C compiler {self.cc!r} not found "
                 f"(set $CC, or [toolchain] cc in {CONF_FILE})")
         self.ar     = (os.environ.get("AR") or tool.get("ar")
+                       or self._prefixed("ar")
                        or shutil.which("ar") or shutil.which("llvm-ar"))
         # The bare name in an ejected build file: a resolved absolute path
         # would not survive being carried to another machine.
         self.ar_name = (os.environ.get("AR") or tool.get("ar")
                         or os.path.basename(self.ar or "ar"))
-        self.pkgexe = tool.get("pkg-config")
+        self.pkgexe = tool.get("pkg-config") or self._prefixed("pkg-config")
         self.extra_libdirs = list(tool.get("lib-dirs", []))
         self.ccver  = tool_version(self.cc)
         self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
@@ -758,6 +783,12 @@ class Config:
         self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
                                  self.os, self.arch, *self.cflags]))[:12]
         self._libdirs = None
+
+    def _prefixed(self, tool):
+        """The toolchain's own copy of a binutil, if there is one."""
+        if not self.prefix:
+            return None
+        return shutil.which(self.prefix + tool)
 
     def driver(self, cxx):
         return self.cxx if cxx else self.cc
@@ -1222,16 +1253,84 @@ def _stdout(cmd):
         return ""
 
 
+# e_machine values worth naming. Only for messages -- the comparison is on the
+# raw triple, so an architecture missing from here still works.
+ELF_MACHINES = {
+    0x03: "x86", 0x3E: "x86_64", 0x28: "arm", 0xB7: "aarch64",
+    0xF3: "riscv", 0x08: "mips", 0x14: "ppc", 0x15: "ppc64",
+    0x02: "sparc", 0x32: "ia64", 0x16: "s390",
+}
+
+
+def elf_identity(path):
+    """(class, byte order, machine) from an ELF header, or None.
+
+    This is what makes cross builds honest. A cross compiler's own search
+    path contains /usr/lib -- the host's -- so no arrangement of directory
+    names separates the target's libraries from the host's. The ELF header
+    does, exactly, for any architecture, without fmake knowing anything
+    about triplets.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(64)
+            if head[:8] == b"!<arch>\n":
+                # An archive: identify it by its first ELF member.
+                blob = head + fh.read(1 << 16)
+                at = blob.find(b"\x7fELF")
+                if at < 0:
+                    return None
+                head = blob[at:at + 20]
+    except OSError:
+        return None
+    if len(head) < 20 or head[:4] != b"\x7fELF":
+        return None
+    order = "little" if head[5] == 1 else "big"
+    return (head[4], head[5], int.from_bytes(head[18:20], order))
+
+
+def describe_identity(ident):
+    if not ident:
+        return "unknown"
+    bits = {1: "32", 2: "64"}.get(ident[0], "?")
+    end = {1: "le", 2: "be"}.get(ident[1], "?")
+    return f"{ELF_MACHINES.get(ident[2], 'machine-0x%x' % ident[2])}/{bits}{end}"
+
+
+def compiler_lib_dirs(cfg):
+    """Where this compiler's linker looks. Authoritative, and correct for a
+    cross compiler, which is why it comes before any guess."""
+    out = []
+    for line in _stdout([cfg.cc, "-print-search-dirs"]).splitlines():
+        if line.startswith("libraries:"):
+            for d in line.split(":", 1)[1].lstrip(" =").split(":"):
+                if d and os.path.isdir(d):
+                    out.append(d)
+    return out
+
+
 def lib_search_dirs(cfg):
     """Where the linker will look, in the order it looks."""
     triplet = _stdout([cfg.cc, "-print-multiarch"]).strip()
-    cands = []
+    cands = list(cfg.extra_libdirs)
+
+    # A sysroot is the unambiguous statement that the target's filesystem is
+    # elsewhere, so its directories come before anything native.
+    if cfg.sysroot:
+        for base in ("/usr/local/lib", "/usr/lib", "/lib"):
+            if triplet:
+                cands.append(os.path.join(cfg.sysroot, base.lstrip("/"),
+                                          triplet))
+            cands.append(os.path.join(cfg.sysroot, base.lstrip("/")))
+
+    cands += compiler_lib_dirs(cfg)
+
     for base in ("/usr/local/lib", "/usr/lib", "/lib"):
         if triplet:
             cands.append(os.path.join(base, triplet))
         cands.append(base)
-    cands += list(getattr(cfg, "extra_libdirs", []))
     cands += [d for d in os.environ.get("LIBRARY_PATH", "").split(":") if d]
+
     out, seen = [], set()
     for d in cands:
         rp = os.path.realpath(d)
@@ -1314,7 +1413,7 @@ def lib_exports(cfg, path):
     return out
 
 
-def find_providers(cfg, wanted, jobs):
+def find_providers(cfg, wanted, jobs, want_ident=None):
     """Which installed libraries define each of these symbols.
 
     Scanned on demand rather than kept as a persistent index: the whole sweep
@@ -1331,6 +1430,11 @@ def find_providers(cfg, wanted, jobs):
         name, path = item
         syms = set()
         for t in elf_targets(path):
+            # Architecture first: a 20-byte header read is far cheaper than
+            # an nm, and on a cross build most of what is on the machine is
+            # the wrong architecture and must not contribute a single symbol.
+            if want_ident and elf_identity(t) not in (None, want_ident):
+                continue
             syms |= lib_exports(cfg, t)
         return name, syms & want
 
@@ -1393,11 +1497,31 @@ def choose_libs(providers, wanted, proposed):
 class PkgConfig:
     """pkg-config, for the -I flags a library's own headers need."""
 
-    def __init__(self, configured=None):
+    def __init__(self, configured=None, sysroot=None, triplet=None):
         self.exe = (shutil.which(configured) if configured else None) \
                    or shutil.which("pkg-config") or shutil.which("pkgconf")
         self._flags = {}
         self._by_incdir = None
+        self.sysroot = sysroot
+
+        # Left alone, pkg-config answers for the host: host .pc files, host
+        # include paths. These two variables are the standard way to point it
+        # at a sysroot instead, and without them a cross build silently
+        # collects the build machine's flags.
+        self.env = dict(os.environ)
+        if sysroot:
+            libdirs = []
+            for base in ("usr/lib", "usr/share", "lib"):
+                if triplet and base == "usr/lib":
+                    libdirs.append(os.path.join(sysroot, base, triplet,
+                                                "pkgconfig"))
+                libdirs.append(os.path.join(sysroot, base, "pkgconfig"))
+            self.env["PKG_CONFIG_SYSROOT_DIR"] = sysroot
+            self.env["PKG_CONFIG_LIBDIR"] = ":".join(libdirs)
+
+    def _run(self, args):
+        return subprocess.run([self.exe] + args, capture_output=True,
+                              text=True, env=self.env)
 
     def flags(self, module):
         """(cflags, libs) for a module, or None if it is not installed.
@@ -1412,8 +1536,7 @@ class PkgConfig:
             return self._flags[module]
         res = None
         if self.exe:
-            r = subprocess.run([self.exe, "--cflags", "--libs", module],
-                               capture_output=True, text=True)
+            r = self._run(["--cflags", "--libs", module])
             if r.returncode == 0:
                 args = shlex.split(r.stdout)
                 res = ([a for a in args
@@ -1423,7 +1546,9 @@ class PkgConfig:
         return res
 
     def _search_path(self):
-        p = _stdout([self.exe, "--variable", "pc_path", "pkg-config"]).strip()
+        if "PKG_CONFIG_LIBDIR" in self.env:
+            return [d for d in self.env["PKG_CONFIG_LIBDIR"].split(":") if d]
+        p = self._run(["--variable", "pc_path", "pkg-config"]).stdout.strip()
         dirs = [d for d in p.split(":") if d] if p else []
         return dirs or ["/usr/lib/pkgconfig", "/usr/share/pkgconfig"]
 
@@ -1450,12 +1575,10 @@ class PkgConfig:
         """Check a `@pkg name >= 1.2` constraint. None if pkg-config is gone."""
         if not self.exe:
             return None
-        r = subprocess.run([self.exe, "--exists", " ".join(spec)],
-                           capture_output=True, text=True)
-        return r.returncode == 0
+        return self._run(["--exists", " ".join(spec)]).returncode == 0
 
     def version(self, module):
-        return _stdout([self.exe, "--modversion", module]).strip() or "?"
+        return self._run(["--modversion", module]).stdout.strip() or "?"
 
     def for_header(self, name, store, sig):
         """(module, cflags, libs) for a system header, or None.
@@ -1470,7 +1593,10 @@ class PkgConfig:
         module = HEADER_PKG.get(name)
         if module is None:
             for inc, mod in self.by_includedir().items():
-                if os.path.exists(os.path.join(inc, name)):
+                real = inc
+                if self.sysroot and not inc.startswith(self.sysroot):
+                    real = os.path.join(self.sysroot, inc.lstrip("/"))
+                if os.path.exists(os.path.join(real, name)):
                     module = mod
                     break
         got = self.flags(module) if module else None
@@ -1593,7 +1719,7 @@ def libdir_signature(cfg):
     return sha("|".join(parts))
 
 
-def scan_providers(cfg, externals, cache, jobs):
+def scan_providers(cfg, externals, cache, jobs, want_ident=None):
     """One sweep of the installed libraries for every target's symbols.
 
     Shared deliberately: a repo with four programs would otherwise scan the
@@ -1604,20 +1730,23 @@ def scan_providers(cfg, externals, cache, jobs):
     want = sorted(externals)
     if not want:
         return {}, {}
-    key = sha("|".join(want) + "#" + libdir_signature(cfg))
+    key = sha("|".join(want) + "#" + libdir_signature(cfg)
+              + "#" + str(want_ident))
     store = cache.data.setdefault("providers", {})
     if key in store:
         return store[key]["providers"], store[key]["paths"]
-    vinfo(f"resolving {len(want)} external symbol(s) against installed "
-          f"libraries")
-    providers, libs = find_providers(cfg, want, jobs)
+    vinfo(f"resolving {len(want)} external symbol(s) against "
+          f"{describe_identity(want_ident)} libraries in "
+          f"{len(cfg.libdirs)} directory(ies)")
+    providers, libs = find_providers(cfg, want, jobs, want_ident)
     paths = {n: p for n, p in libs.items()
              if any(n in v for v in providers.values())}
     store[key] = {"providers": providers, "paths": paths}
     return providers, paths
 
 
-def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths):
+def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
+                      want_ident=None):
     """Turn one target's external symbols into link flags."""
     # Proposals are recomputed from this target's own link set, so the
     # provenance names a file that is actually in this program. Everything
@@ -1627,6 +1756,7 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths):
 
     chosen, why, implicit, unresolved = choose_libs(
         providers, want, set(proposed))
+    ident = want_ident
 
     # A library outside the linker's own search path needs -L, whether it
     # came from pkg-config or from the symbol scan.
@@ -1649,6 +1779,7 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths):
     res = {
         "chosen": chosen, "why": why, "alts": alts, "ldirs": ldirs,
         "implicit": sorted(implicit), "unresolved": unresolved,
+        "ident": ident,
     }
 
     # Not cached: these depend on the header proposals, which are cheap.
@@ -1918,8 +2049,18 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
             print(f"    {'(unresolved)':<{W-4}}"
                   f"{DIM(', '.join(res['unresolved'][:6]))}")
             print(f"    {'':<{W-4}}"
-                  f"{DIM('no installed library exports these -- name it '
-                         'with --ldflags')}")
+                  f"{DIM('no ' + describe_identity(res.get('ident'))
+                         + ' library exports these -- name it with --ldflags')}")
+
+    if VERBOSE:
+        print(f"  {CYAN('library search'):<{W}}"
+              f"{DIM(describe_identity((res or {}).get('ident')) + ' only')}")
+        for d in cfg.libdirs:
+            shown = os.path.normpath(_rel(d, root))
+            if len(shown) > W - 5:
+                shown = "..." + shown[-(W - 8):]
+            print(f"    {shown:<{W-4}}"
+                  f"{DIM(str(len(linkable_libs([d]))) + ' linkable')}")
 
     if cl.external:
         implicit = len(res["implicit"]) if res else 0
@@ -2157,7 +2298,7 @@ def build(args):
     for rel in sorted(candidates):
         unit(rel)
 
-    pkg = PkgConfig(cfg.pkgexe)
+    pkg = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet)
     hdr_store = cache.data.setdefault("headers", {})
     incflags, proposed = list(base_incflags), {}
     pkg_sig = pkg.signature()
@@ -2266,10 +2407,20 @@ def build(args):
         every = set()
         for t in wanted:
             every |= set(closures[t].external)
-        providers, paths = scan_providers(cfg, every, cache, jobs)
+        # The architecture to require of a library is whatever fmake just
+        # compiled. Asking the objects avoids having to know anything about
+        # toolchain triplets, and is right by construction.
+        target_ident = None
+        for u in (units[r] for r in sorted(units)):
+            target_ident = elf_identity(u.obj)
+            if target_ident:
+                break
+        providers, paths = scan_providers(cfg, every, cache, jobs,
+                                          target_ident)
         for t in wanted:
             resolutions[t] = resolve_libraries(t, closures[t], cfg, pkg,
-                                               hdr_store, providers, paths)
+                                               hdr_store, providers, paths,
+                                               target_ident)
 
     # ---- explain or link ----------------------------------------------
     cache.data["units"] = sorted(units)
@@ -2335,8 +2486,8 @@ def build(args):
                 note(f"resolved to: {' '.join(res['ldflags'])}")
             missing = res["unresolved"] if res else sorted(cl.external)
             if missing:
-                note(f"no installed library exports: "
-                     f"{', '.join(missing[:6])}"
+                note(f"no {describe_identity(res.get('ident') if res else None)}"
+                     f" library exports: {', '.join(missing[:6])}"
                      + (" ..." if len(missing) > 6 else ""))
         note("name the missing libraries with --ldflags, or build only the "
              "targets you want")

@@ -11,6 +11,7 @@ sets right with no annotations, the symbol-closure model works.
     ./selftest -k           keep the scratch trees for inspection
 """
 
+import glob
 import os
 import re
 import shutil
@@ -78,6 +79,16 @@ def check(cond, what):
         raise Failure(what)
 
 
+def before_externals(explain_out):
+    """The part of --explain above the external-symbol list.
+
+    Not a plain split on "external symbols": the `libraries` header reads
+    "[from the external symbols above]", so splitting on the bare phrase cuts
+    the output off before the library decisions it was meant to include.
+    """
+    return re.split(r"\n  external symbols", explain_out)[0]
+
+
 def compiled(r):
     """Files fmake compiled in this invocation, from the progress lines."""
     out = []
@@ -129,9 +140,9 @@ int main(void){ banner(); printf("%g %g\\n", circle_area(2), square_area(3)); re
 
     e = t.fmake("--explain").stdout
     for want in ("main.c", "circle.c", "square.c", "util_posix.c"):
-        check(want in e.split("external symbols")[0],
+        check(want in before_externals(e),
               f"{want} missing from the link set")
-    check("scratch.c" not in e.split("external symbols")[0]
+    check("scratch.c" not in before_externals(e)
           or "not linked" in e, "scratch.c should not be in the link set")
     check(t.run(os.path.basename(t.dir)).stdout == "hi\n12 9\n",
           "wrong output")
@@ -189,7 +200,7 @@ int main(){ Box<int> b{41}; printf("%d\\n", b.get()+1); }
     r = t.fmake()
     check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
     e = t.fmake("--explain").stdout
-    check("tpl.cpp" in e.split("external symbols")[0],
+    check("tpl.cpp" in before_externals(e),
           f"tpl.cpp should be in the link set: {e}")
     check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
 
@@ -354,6 +365,193 @@ def one_failed_target_does_not_sink_the_rest(t):
           f"the good target should still have been built: {r.stdout}")
     check("broken did not link" in r.stdout,
           f"the failure should be named: {r.stdout}")
+
+
+CROSS_CC = "aarch64-linux-gnu-gcc"
+
+
+def _cross_available():
+    return shutil.which(CROSS_CC) is not None
+
+
+def _elf_machine(path):
+    with open(path, "rb") as fh:
+        head = fh.read(20)
+    if head[:4] != b"\x7fELF":
+        return None
+    order = "little" if head[5] == 1 else "big"
+    return int.from_bytes(head[18:20], order)
+
+
+@case
+def cross_builds_for_the_target_architecture(t):
+    """A real cross build, end to end.
+
+    The interesting part is not the compiler -- naming that is easy -- but
+    that library resolution has to answer for the target machine. The
+    symbols come from the target's libraries or the link fails."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    t.write("main.c", """
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+int main(int argc, char **argv){
+    double x = argc > 1 ? atof(argv[1]) : 7.0;
+    printf("%.4f\\n", sqrt(x) + lgamma(x));
+    return 0;
+}
+""")
+    t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+
+    r = t.fmake()
+    check(r.returncode == 0, f"cross build failed: {r.stdout}{r.stderr}")
+
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    check(_elf_machine(prog) == 0xB7,
+          f"expected an aarch64 binary, got machine "
+          f"{_elf_machine(prog):#x}")
+
+    e = t.fmake("--explain").stdout
+    check("-lm" in e, f"libm should have been resolved for the target: {e}")
+    check("aarch64" in e, f"the target architecture should be reported: {e}")
+
+    qemu = shutil.which("qemu-aarch64") or shutil.which("qemu-aarch64-static")
+    if qemu:
+        out = subprocess.run([qemu, "-L", "/usr/aarch64-linux-gnu", prog, "7"],
+                             capture_output=True, text=True)
+        check(out.stdout == "9.2250\n",
+              f"the cross-built binary does not run correctly: {out.stdout!r}"
+              f" {out.stderr!r}")
+
+
+@case
+def cross_refuses_host_libraries(t):
+    """The bug this fixes.
+
+    zlib exists on the build machine and not for the target. Offering it
+    would produce a linker error about incompatible architectures; the
+    truthful answer is that the target has no zlib, and the message has to
+    say which architecture it looked for."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    if not os.path.exists("/usr/include/zlib.h"):
+        raise Skip("zlib headers not installed")
+    if glob.glob("/usr/aarch64-linux-gnu/lib/libz.so"):
+        raise Skip("the target has zlib too, so there is nothing to reject")
+
+    t.write("main.c", "#include <stdio.h>\n#include <zlib.h>\n"
+            'int main(void){ printf("%s\\n", zlibVersion()); return 0; }\n')
+
+    # Native first: this must resolve, or the case proves nothing.
+    check("-lz" in t.fmake("--explain").stdout,
+          "zlib should resolve natively")
+
+    t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    # Assert on fmake's own decision. The linker's failure output happens to
+    # contain both "zlibVersion" and "aarch64" (from gcc-cross paths), so
+    # matching those in a failed build would pass even if -lz were offered.
+    e = t.fmake("--explain").stdout
+    libs = before_externals(e)
+    check("-lz" not in libs,
+          f"the host's zlib must not be offered to a cross link: {libs}")
+    check("(unresolved)" in libs and "zlibVersion" in libs,
+          f"zlibVersion should be reported unresolved: {libs}")
+    check("aarch64" in libs,
+          f"the architecture searched should be named: {libs}")
+    check(t.fmake().returncode != 0,
+          "the build cannot succeed without the target's zlib")
+
+
+@case
+def cross_rejects_wrong_architecture_libraries(t):
+    """The architecture check itself, pointed straight at host libraries.
+
+    With this toolchain the host's multiarch directory happens not to be on
+    the cross compiler's search path, so host libraries are excluded by
+    accident of layout. Naming that directory in lib-dirs removes the
+    accident: nothing but the ELF header can reject what is in there, and
+    offering it would produce a link error about incompatible architectures.
+    """
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    host_dir = subprocess.run(["cc", "-print-multiarch"],
+                              capture_output=True, text=True).stdout.strip()
+    host_libs = f"/usr/lib/{host_dir}" if host_dir else "/usr/lib"
+    if not glob.glob(f"{host_libs}/libz.so"):
+        raise Skip(f"no host zlib in {host_libs} to reject")
+    if glob.glob("/usr/aarch64-linux-gnu/lib/libz.so"):
+        raise Skip("the target has zlib too, so there is nothing to reject")
+
+    t.write("main.c", "#include <stdio.h>\n#include <zlib.h>\n"
+            'int main(void){ printf("%s\\n", zlibVersion()); return 0; }\n')
+    t.write("fmake.toml", f"""
+[toolchain]
+cc       = "{CROSS_CC}"
+arch     = "aarch64"
+lib-dirs = ["{host_libs}"]
+""")
+    libs = before_externals(t.fmake("--explain").stdout)
+    check(f"{host_libs}" not in libs or "-lz" not in libs,
+          f"a host library was offered to a cross link: {libs}")
+    check("-lz" not in libs,
+          f"host zlib must be rejected by architecture: {libs}")
+    check("zlibVersion" in libs and "(unresolved)" in libs,
+          f"the symbol should remain unresolved: {libs}")
+
+
+@case
+def cross_derives_binutils_from_the_compiler(t):
+    """Naming the compiler is enough.
+
+    A host nm can often read foreign objects, but relying on that is luck.
+    aarch64-linux-gnu-gcc implies aarch64-linux-gnu-nm and -ar."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    t.write("lib.c", '//! @kind static\n//! @target derived\n'
+            "int twice(int x){ return x * 2; }\n")
+    t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"explain failed: {r.stderr}")
+    check("aarch64-linux-gnu-ar" in r.stdout,
+          f"ar should come from the toolchain prefix: {r.stdout}")
+
+    check(t.fmake().returncode == 0, "cross static library build failed")
+    archive = os.path.join(t.dir, "libderived.a")
+    check(os.path.exists(archive), f"expected libderived.a: {os.listdir(t.dir)}")
+    members = subprocess.run(["aarch64-linux-gnu-nm", "--format=posix",
+                              archive], capture_output=True, text=True).stdout
+    check("twice" in members, f"the archive is not usable: {members!r}")
+
+
+@case
+def cross_platform_filtering_uses_the_target(t):
+    """@arch is tested against what is being built for."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    t.write("cpu.h", "const char *cpu(void);\n")
+    t.write("cpu_x86.c", '//! @arch x86_64\n#include "cpu.h"\n'
+            'const char *cpu(void){ return "x86_64"; }\n')
+    t.write("cpu_arm.c", '//! @arch aarch64\n#include "cpu.h"\n'
+            'const char *cpu(void){ return "aarch64"; }\n')
+    t.write("main.c", '#include <stdio.h>\n#include "cpu.h"\n'
+            "int main(void){ puts(cpu()); return 0; }\n")
+
+    r = t.fmake()
+    check(r.returncode == 0, f"native build failed: {r.stdout}{r.stderr}")
+    check("cpu_arm.c" not in compiled(r),
+          f"the arm file should be excluded natively: {compiled(r)}")
+
+    t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    r = t.fmake()
+    check(r.returncode == 0, f"cross build failed: {r.stdout}{r.stderr}")
+    check("cpu_x86.c" not in compiled(r),
+          f"the x86 file should now be the excluded one: {compiled(r)}")
+    check("cpu_arm.c" in compiled(r),
+          f"the arm file should now build: {compiled(r)}")
 
 
 def _eject_tree(t):
@@ -1156,7 +1354,7 @@ def unresolvable_symbols_are_named(t):
     check(r.returncode != 0, "should have failed")
     check("totally_made_up_fn" in r.stdout,
           f"the missing symbol should be named: {r.stdout}")
-    check("no installed library exports" in r.stdout,
+    check("library exports" in r.stdout,
           f"expected a resolution failure message: {r.stdout}")
 
 
