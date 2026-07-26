@@ -1256,7 +1256,11 @@ This is the classic build-versus-host distinction, and generators are the only
 place fmake meets it.
 
 `[build-toolchain]` is the answer, and its default is the plain host compiler,
-so a cross build with a generator works without declaring anything. What
+so a cross build with a generator works without declaring anything. It carries
+its own flags too, and inherits none of the target's — not a small inaccuracy
+to get wrong: `-march=armv8-a` handed to the build machine's compiler does not
+compile at all, and neither does a `--sysroot` pointing at the target's
+filesystem. What
 matters more is that the result is **checked rather than trusted**: whatever
 comes out of the nested build has its ELF header compared against this machine,
 and a tool that cannot run here is refused by name with the fix in the message.

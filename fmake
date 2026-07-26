@@ -345,10 +345,13 @@ CONF_SCHEMA = {
     },
     # The machine doing the building, as opposed to the one being built for.
     # Only generators need it: a tool named by `uses` is compiled in order to
-    # be run here, so on a cross build it cannot come from [toolchain].
+    # be run here, so on a cross build it cannot come from [toolchain] -- and
+    # it carries its own flags for the same reason, since -march=armv8-a is
+    # not something the build machine's compiler will accept.
     "build-toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
+        "cflags": L, "defines": L, "std": S,
     },
 }
 
@@ -2588,7 +2591,15 @@ def build(args, _bootstrapping=False):
     cache  = Cache(os.path.join(state, CACHE_FILE))
     conf   = Conf(load_conf(root), args.profile)
     if getattr(args, "use_build_toolchain", False):
-        conf.tool = conf.build_tool_conf
+        # A tool built to run here is a separate build for a separate
+        # machine, so it takes none of the target's flags. Inheriting them
+        # is not a small inaccuracy: -march=armv8-a, or a --sysroot pointing
+        # at the target's filesystem, simply will not compile here.
+        bt = conf.build_tool_conf
+        conf.tool = bt
+        conf.project = {k: v for k, v in bt.items()
+                        if k in ("cflags", "defines", "std")}
+        conf.profile = {}
     cfg    = Config(args, conf)
     outdir = os.path.abspath(args.output) if args.output else root
     jobs   = args.jobs or (os.cpu_count() or 4)
@@ -2619,6 +2630,7 @@ def build(args, _bootstrapping=False):
         # [build-toolchain] is for, and without it a cross build would produce
         # a tool it cannot execute.
         sub.use_build_toolchain = True
+        sub.cflags, sub.ldflags = [], []
         say(f"{YELLOW('TOOL')} {name}")
         bootstrapped.append(name)
         if build(sub, _bootstrapping=True) != 0:

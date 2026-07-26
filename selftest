@@ -1205,6 +1205,62 @@ outputs = ["gen/v.c"]
 
 
 @case
+def cross_generators_do_not_inherit_target_flags(t):
+    """A tool built to run here is a separate build for a separate machine.
+
+    -march=armv8-a is not a small inaccuracy to pass to the build machine's
+    compiler; it does not compile at all. Nor does a --sysroot pointing at
+    the target's filesystem. So the tool build takes none of the target's
+    flags, and carries its own if it needs any."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    t.write("util/mk.c", r"""
+#include <stdio.h>
+int main(int argc, char **argv){
+    FILE *f = fopen(argv[1], "w");
+    fprintf(f, "int v(void){ return 9; }\n");
+    fclose(f);
+    return 0;
+}
+""")
+    t.write("main.c", r"""
+#include <stdio.h>
+int v(void);
+int main(void){ printf("%d\n", v()); return 0; }
+""")
+    t.write("fmake.toml", f"""
+[project]
+cflags = ["-march=armv8-a"]
+
+[toolchain]
+cc   = "{CROSS_CC}"
+arch = "aarch64"
+
+[target.mk]
+root = "util/mk.c"
+
+[generate.v]
+uses    = "mk"
+command = "$tool gen/v.c"
+inputs  = ["util/mk.c"]
+outputs = ["gen/v.c"]
+""")
+    r = t.fmake()
+    check(r.returncode == 0,
+          f"the target's -march reached the tool build: {r.stdout}{r.stderr}")
+    check(_elf_machine(os.path.join(t.dir, ".fmake", "tools", "mk"))
+          == host_machine(), "the tool must be built for this machine")
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    check(_elf_machine(prog) == 0xB7, "the program must be built for aarch64")
+
+    qemu = shutil.which("qemu-aarch64") or shutil.which("qemu-aarch64-static")
+    if qemu:
+        out = subprocess.run([qemu, "-L", "/usr/aarch64-linux-gnu", prog],
+                             capture_output=True, text=True).stdout
+        check(out == "9\n", f"wrong output: {out!r}")
+
+
+@case
 def cross_derives_binutils_from_the_compiler(t):
     """Naming the compiler is enough.
 
