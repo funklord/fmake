@@ -356,6 +356,255 @@ def one_failed_target_does_not_sink_the_rest(t):
 
 
 @case
+def conf_splits_two_libraries_from_one_tree(t):
+    """The seam @kind could not reach.
+
+    Two archives sharing a file. Nothing in the source says which library a
+    shared file belongs to, because that is a fact about the project rather
+    than about any file in it -- so the closure must not be consulted, and
+    declared membership is the answer rather than a starting point."""
+    t.write("src/shared.c", "int shared_helper(int x){ return x * 2; }\n")
+    t.write("src/alpha.c", "int shared_helper(int);\n"
+            "int alpha_go(int x){ return shared_helper(x) + 1; }\n")
+    t.write("src/beta.c", "int shared_helper(int);\n"
+            "int beta_go(int x){ return shared_helper(x) + 2; }\n")
+    t.write("fmake.toml", """
+[target.alpha]
+kind    = "static"
+sources = ["src/alpha.c", "src/shared.c"]
+
+[target.beta]
+kind    = "static"
+sources = ["src/beta.c", "src/shared.c"]
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+
+    def syms(archive):
+        out = subprocess.run(["nm", "--format=posix",
+                              os.path.join(t.dir, archive)],
+                             capture_output=True, text=True).stdout
+        return {l.split()[0] for l in out.splitlines()
+                if len(l.split()) > 1 and l.split()[1] == "T"}
+
+    a, b = syms("libalpha.a"), syms("libbeta.a")
+    check("alpha_go" in a and "beta_go" not in a, f"libalpha.a holds {a}")
+    check("beta_go" in b and "alpha_go" not in b, f"libbeta.a holds {b}")
+    check("shared_helper" in a and "shared_helper" in b,
+          "the shared file belongs to both")
+
+
+@case
+def conf_declares_a_target_no_file_roots(t):
+    """A target that exists only in fmake.toml."""
+    t.write("a.c", "int add(int x, int y){ return x + y; }\n")
+    t.write("b.c", "int mul(int x, int y){ return x * y; }\n")
+    t.write("fmake.toml", """
+[target.onlyadd]
+kind    = "static"
+sources = ["a.c"]
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "libonlyadd.a")),
+          f"expected libonlyadd.a: {os.listdir(t.dir)}")
+    out = subprocess.run(["nm", "--format=posix",
+                          os.path.join(t.dir, "libonlyadd.a")],
+                         capture_output=True, text=True).stdout
+    check("add" in out and "mul" not in out,
+          "only the declared source should be in it")
+
+
+@case
+def conf_overrides_annotations(t):
+    """fmake.toml sits above source annotations in the precedence chain."""
+    t.write("main.c", """
+/*! @file
+ *  @target from-the-source
+ */
+int main(void){ return 0; }
+""")
+    t.write("fmake.toml", '[target.from-the-source]\nname = "from-the-toml"\n')
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    names = set(os.listdir(t.dir))
+    check("from-the-toml" in names, f"the toml name should win: {names}")
+    check("from-the-source" not in names, f"stale artifact: {names}")
+
+
+@case
+def conf_profiles_select_flags(t):
+    """Named build configurations, each with its own object directory."""
+    t.write("main.c", """
+#include <stdio.h>
+int main(void){
+#ifdef NDEBUG
+    puts("release");
+#else
+    puts("debug");
+#endif
+    return 0;
+}
+""")
+    t.write("fmake.toml", """
+[profile.release]
+cflags  = ["-O2"]
+defines = ["NDEBUG=1"]
+
+[profile.debug]
+cflags = ["-O0", "-g3"]
+""")
+    prog = os.path.basename(t.dir)
+    check(t.fmake("-p", "release").returncode == 0, "release build failed")
+    check(t.run(prog).stdout == "release\n", "release profile not applied")
+    check(t.fmake("-p", "debug").returncode == 0, "debug build failed")
+    check(t.run(prog).stdout == "debug\n", "debug profile not applied")
+
+    objdirs = os.listdir(os.path.join(t.dir, ".fmake", "obj"))
+    check(len(objdirs) >= 2,
+          f"each profile needs its own object directory: {objdirs}")
+
+    r = t.fmake("-p", "nope")
+    check(r.returncode != 0, "an undefined profile should be an error")
+    check("no profile" in r.stderr, f"unclear error: {r.stderr}")
+
+
+@case
+def conf_exclude_removes_files_entirely(t):
+    """Vendored trees should not contribute targets or symbols."""
+    t.write("main.c", '#include <stdio.h>\nint main(void){ puts("mine"); return 0; }\n')
+    t.write("vendor/third.c", "int main(void){ return 0; }\n")
+    t.write("fmake.toml", '[project]\nexclude = ["vendor/**"]\n')
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("vendor/third.c" not in compiled(r),
+          f"excluded files must not compile: {compiled(r)}")
+    check(not os.path.exists(os.path.join(t.dir, "third")),
+          "the excluded file must not become a target")
+
+
+@case
+def conf_toolchain_sets_the_target_platform(t):
+    """@os must be tested against what is being built for, not the host.
+
+    Without this a cross build silently keeps the host's files and drops the
+    target's, which is wrong every time and produces no error."""
+    t.write("sys.h", "const char *sys_name(void);\n")
+    t.write("linux_sys.c", '//! @os linux\n#include "sys.h"\n'
+            'const char *sys_name(void){ return "linux"; }\n')
+    t.write("windows_sys.c", '//! @os windows\n#include "sys.h"\n'
+            'const char *sys_name(void){ return "windows"; }\n')
+    t.write("main.c", '#include <stdio.h>\n#include "sys.h"\n'
+            "int main(void){ puts(sys_name()); return 0; }\n")
+
+    # No [toolchain]: the host wins, and this machine is not Windows.
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("windows_sys.c" not in compiled(r),
+          f"the windows file should be excluded here: {compiled(r)}")
+
+    # Declaring a target platform must flip the choice.
+    t.write("fmake.toml", '[toolchain]\nos = "windows"\n')
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    e = t.fmake("--explain").stdout
+    check("building for windows" in e,
+          f"the target platform should be reported: {e}")
+    check("linux_sys.c" in e.split("link set")[0],
+          f"the host's file should now be the excluded one: {e}")
+
+
+@case
+def conf_rejects_what_it_does_not_understand(t):
+    """Unknown keys are an error here, unlike unknown directives.
+
+    A comment is shared with Doxygen and may hold commands that are not
+    fmake's. This file belongs to fmake alone, so an unrecognised key is a
+    typo every time."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+
+    t.write("fmake.toml", '[project]\ncflagz = ["-Wall"]\n')
+    r = t.fmake()
+    check(r.returncode != 0, "an unknown key should be refused")
+    check("cflagz" in r.stderr and "cflags" in r.stderr,
+          f"the error should suggest the real key: {r.stderr}")
+
+    t.write("fmake.toml", '[projekt]\ncflags = ["-Wall"]\n')
+    check("unknown section" in t.fmake().stderr, "unknown section not caught")
+
+    t.write("fmake.toml", '[project]\ncflags = "-Wall"\n')
+    check("list of strings" in t.fmake().stderr, "wrong type not caught")
+
+    t.write("fmake.toml", "[project]\ncflags = [\n")
+    r = t.fmake()
+    check(r.returncode != 0 and "fmake.toml" in r.stderr,
+          f"malformed TOML should be reported: {r.stderr}")
+
+
+@case
+def install_places_artifacts_and_headers(t):
+    """What @headers is for."""
+    t.write("greet.h", "const char *greet(void);\n")
+    t.write("greet.c", """
+/*! @file
+ *  @target  greet
+ *  @kind    shared
+ *  @headers greet.h
+ */
+#include "greet.h"
+const char *greet(void){ return "hello"; }
+""")
+    t.write("tool.c", '#include <stdio.h>\n#include "greet.h"\n'
+            "int main(void){ puts(greet()); return 0; }\n")
+    t.write("fmake.toml", '[install]\nprefix = "/usr/local"\nlibdir = "lib64"\n')
+
+    stage = os.path.join(t.dir, "stage")
+    r = t.fmake("--install", "--destdir", stage)
+    check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+
+    got = set()
+    for base, _dirs, files in os.walk(stage):
+        for f in files:
+            got.add(os.path.relpath(os.path.join(base, f), stage))
+    check("usr/local/lib64/libgreet.so" in got, f"library misplaced: {got}")
+    check("usr/local/include/greet.h" in got, f"header not installed: {got}")
+    check("usr/local/bin/tool" in got, f"program misplaced: {got}")
+    check(len([g for g in got if g.endswith("greet.h")]) == 1,
+          f"the header should be installed once, not once per target: {got}")
+
+
+@case
+def install_does_not_publish_headers_for_programs(t):
+    """A program has no public API to publish.
+
+    The header here is reachable only through the executable, so nothing
+    should install it -- deduplication cannot cover this case, only the rule
+    that @headers is gathered for libraries can."""
+    t.write("helper.h", "int helper(void);\n")
+    t.write("helper.c", """
+/*! @file
+ *  @headers helper.h
+ */
+#include "helper.h"
+int helper(void){ return 7; }
+""")
+    t.write("main.c", '#include <stdio.h>\n#include "helper.h"\n'
+            'int main(void){ printf("%d\\n", helper()); return 0; }\n')
+
+    stage = os.path.join(t.dir, "stage")
+    r = t.fmake("--install", "--destdir", stage)
+    check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+
+    got = []
+    for base, _dirs, files in os.walk(stage):
+        got += [os.path.relpath(os.path.join(base, f), stage) for f in files]
+    check(not any(g.endswith("helper.h") for g in got),
+          f"a program must not publish headers: {got}")
+    check(any(g.endswith(os.path.basename(t.dir)) for g in got),
+          f"the program itself should still install: {got}")
+
+
+@case
 def target_directive_names_the_artifact(t):
     """@target overrides the name derived from the file or directory."""
     t.write("main.c", """

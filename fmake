@@ -61,6 +61,13 @@ from __attribute__((constructor)) is referenced by nothing, so the closure
 never reaches it. Such files must be named explicitly (--force-link), the
 same as they must be listed in a Makefile.
 
+An optional fmake.toml carries what belongs to no single file: which of two
+libraries a shared source is part of, install paths, named build profiles
+(-p release), and the toolchain to build with -- including the platform
+being built for, which is what @os and @arch are tested against. Unknown
+keys there are an error, unlike unknown directives, because that file is
+fmake's alone while a comment is shared with Doxygen.
+
 Build state lives in .fmake/ -- objects, depfiles, and a cache of file
 hashes, scan results and symbol tables, so an incremental build re-reads
 none of it.
@@ -70,6 +77,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import fnmatch
 import glob
 import os
 import platform
@@ -78,6 +86,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tomllib
 
 # ---------------------------------------------------------------------------
 # Paths & constants
@@ -265,6 +274,150 @@ def scan_source(path):
     }
 
 # ---------------------------------------------------------------------------
+# fmake.toml
+#
+# Optional, and absent in the common case. It exists for the facts that are
+# neither inferable nor properties of a single file: what a target is called
+# when no file roots it, which files belong to which of two libraries, where
+# things install, and what toolchain to build with.
+#
+# Declarative on purpose -- no conditionals, no interpolation, no computed
+# values. The premise of the project is that build configuration should be
+# short enough to read at a glance, and the way tools lose that is by growing
+# a language. Anything genuinely needing logic belongs in fmake.py.
+#
+# The split between here and annotations follows the same line as @cflags
+# versus @ldflags: the compile side is a property of a file, the link side is
+# a property of an artifact. So [target.*] carries link-side keys only. A
+# per-target compile flag would mean the same source compiled two ways, which
+# means per-target object directories, which nothing has asked for yet.
+#
+# Unknown keys are an error, unlike unknown directives, which are ignored.
+# The difference is that a comment is shared with Doxygen and may legitimately
+# contain commands that are not fmake's, whereas this file belongs to fmake
+# alone -- so a key it does not recognise is a typo, every time.
+# ---------------------------------------------------------------------------
+
+CONF_FILE = "fmake.toml"
+
+S, L = "str", "list"      # scalar string, list of strings
+
+CONF_SCHEMA = {
+    "project": {
+        "name": S, "std": S, "profile": S,
+        "cflags": L, "ldflags": L, "defines": L,
+        "exclude": L, "include-dirs": L,
+    },
+    "profile": {"*": {
+        "std": S, "cflags": L, "ldflags": L, "defines": L,
+    }},
+    "target": {"*": {
+        "name": S, "kind": S, "root": S,
+        "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
+    }},
+    "install": {
+        "prefix": S, "bindir": S, "libdir": S, "includedir": S,
+    },
+    "toolchain": {
+        "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
+        "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
+    },
+}
+
+
+def _conf_check(table, spec, where, out):
+    for key, value in table.items():
+        kind = spec.get(key)
+        if kind is None:
+            near = ", ".join(sorted(spec))
+            out.append(f"{where}: unknown key {key!r}"
+                       + (f" (expected one of: {near})" if near else ""))
+            continue
+        if kind is S:
+            if not isinstance(value, str):
+                out.append(f"{where}.{key}: expected a string")
+        elif kind is L:
+            if not (isinstance(value, list)
+                    and all(isinstance(v, str) for v in value)):
+                out.append(f"{where}.{key}: expected a list of strings")
+
+
+def load_conf(root):
+    """Read and validate fmake.toml. Returns {} when there is no file."""
+    path = os.path.join(root, CONF_FILE)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        die(f"{CONF_FILE}: {exc}")
+    except OSError as exc:
+        die(f"{CONF_FILE}: {exc}")
+
+    problems = []
+    for section, value in data.items():
+        spec = CONF_SCHEMA.get(section)
+        if spec is None:
+            problems.append(f"{CONF_FILE}: unknown section [{section}] "
+                            f"(expected one of: "
+                            f"{', '.join(sorted(CONF_SCHEMA))})")
+            continue
+        if not isinstance(value, dict):
+            problems.append(f"{CONF_FILE}: [{section}] must be a table")
+            continue
+        if "*" in spec:
+            for name, sub in value.items():
+                if not isinstance(sub, dict):
+                    problems.append(f"{CONF_FILE}: [{section}.{name}] must "
+                                    f"be a table")
+                    continue
+                _conf_check(sub, spec["*"], f"[{section}.{name}]", problems)
+        else:
+            _conf_check(value, spec, f"[{section}]", problems)
+
+    if problems:
+        die(f"{CONF_FILE} is not valid:\n    " + "\n    ".join(problems))
+    return data
+
+
+class Conf:
+    """Typed access to fmake.toml, with the selected profile folded in."""
+
+    def __init__(self, data, profile=None):
+        self.data     = data or {}
+        self.project  = self.data.get("project", {})
+        self.targets  = self.data.get("target", {})
+        self.install  = self.data.get("install", {})
+        self.tool     = self.data.get("toolchain", {})
+        profiles      = self.data.get("profile", {})
+        self.profile_name = profile or self.project.get("profile")
+        if self.profile_name and self.profile_name not in profiles:
+            die(f"{CONF_FILE}: no profile {self.profile_name!r} "
+                f"(defined: {', '.join(sorted(profiles)) or 'none'})")
+        self.profile = profiles.get(self.profile_name, {})
+
+    def __bool__(self):
+        return bool(self.data)
+
+    def cflags(self):
+        """Project then profile, so the profile has the last word."""
+        out = []
+        for src in (self.project, self.profile):
+            out += ["-D" + d for d in src.get("defines", [])]
+            std = src.get("std")
+            if std:
+                out.append("-std=" + std)
+            out += src.get("cflags", [])
+        return out
+
+    def ldflags(self):
+        return self.project.get("ldflags", []) + self.profile.get("ldflags", [])
+
+    def target(self, name):
+        return self.targets.get(name, {})
+
+# ---------------------------------------------------------------------------
 # Annotations
 #
 # Build facts belong in the file they are about. The file that includes SDL is
@@ -383,14 +536,21 @@ def host_arch():
             "i686": "x86"}.get(m, m)
 
 
-def platform_excludes(ann):
-    """Why this TU is not built here, or None if it is."""
+def platform_excludes(ann, want_os=None, want_arch=None):
+    """Why this TU is not built for the target platform, or None if it is.
+
+    The platform tested is the one being built *for*. On a native build that
+    is the host; on a cross build [toolchain] os/arch says otherwise, and
+    testing the host instead is silently wrong every time.
+    """
+    want_os = want_os or host_os()
+    want_arch = want_arch or host_arch()
     oses = [o.lower() for o in ann.items("os")]
-    if oses and host_os() not in oses:
-        return f"@os {' '.join(oses)} (host is {host_os()})"
+    if oses and want_os not in oses:
+        return f"@os {' '.join(oses)} (building for {want_os})"
     arches = [a.lower() for a in ann.items("arch")]
-    if arches and host_arch() not in arches:
-        return f"@arch {' '.join(arches)} (host is {host_arch()})"
+    if arches and want_arch not in arches:
+        return f"@arch {' '.join(arches)} (building for {want_arch})"
     return None
 
 
@@ -540,8 +700,8 @@ def tool_version(exe):
         return "?"
 
 
-def find_nm():
-    for cand in (os.environ.get("NM"), "nm", "llvm-nm", "gnm"):
+def find_nm(configured=None):
+    for cand in (os.environ.get("NM"), configured, "nm", "llvm-nm", "gnm"):
         if cand and shutil.which(cand):
             return shutil.which(cand)
     die("no nm found. fmake reads object symbol tables to work out the "
@@ -549,20 +709,43 @@ def find_nm():
 
 
 class Config:
-    def __init__(self, args):
-        self.cc      = os.environ.get("CC", "cc")
-        self.cxx     = os.environ.get("CXX", "c++")
-        self.nm      = find_nm()
-        self.cflags  = list(args.cflags)  or list(DEFAULT_CFLAGS)
-        self.ldflags = list(args.ldflags)
+    def __init__(self, args, conf=None):
+        conf = conf or Conf({})
+        tool = conf.tool
+
+        # $CC beats fmake.toml, per the precedence chain: the environment is
+        # the outermost level, so a one-off cross build needs no edit.
+        self.cc      = os.environ.get("CC")  or tool.get("cc", "cc")
+        self.cxx     = os.environ.get("CXX") or tool.get("cxx", "c++")
+        self.nm      = find_nm(tool.get("nm"))
+        self.sysroot = tool.get("sysroot")
+
+        # A cross build must test @os/@arch against the machine being built
+        # *for*, not the one doing the building. Without this the host is
+        # assumed, which is silently wrong for every cross compilation.
+        self.os      = tool.get("os") or host_os()
+        self.arch    = tool.get("arch") or host_arch()
+
+        self.cflags  = list(args.cflags) or list(DEFAULT_CFLAGS)
+        self.cflags += conf.cflags()
+        self.ldflags = conf.ldflags() + list(args.ldflags)
+        if self.sysroot:
+            self.cflags.append("--sysroot=" + self.sysroot)
+            self.ldflags.insert(0, "--sysroot=" + self.sysroot)
+
         if not shutil.which(self.cc):
-            die(f"C compiler {self.cc!r} not found (set $CC)")
-        self.ar     = (os.environ.get("AR") or shutil.which("ar")
-                       or shutil.which("llvm-ar"))
+            die(f"C compiler {self.cc!r} not found "
+                f"(set $CC, or [toolchain] cc in {CONF_FILE})")
+        self.ar     = (os.environ.get("AR") or tool.get("ar")
+                       or shutil.which("ar") or shutil.which("llvm-ar"))
+        self.pkgexe = tool.get("pkg-config")
+        self.extra_libdirs = list(tool.get("lib-dirs", []))
         self.ccver  = tool_version(self.cc)
         self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
+        # The profile is in here through cflags, so switching profiles gets a
+        # separate object directory rather than invalidating the old one.
         self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
-                                 *self.cflags]))[:12]
+                                 self.os, self.arch, *self.cflags]))[:12]
         self._libdirs = None
 
     def driver(self, cxx):
@@ -1036,6 +1219,7 @@ def lib_search_dirs(cfg):
         if triplet:
             cands.append(os.path.join(base, triplet))
         cands.append(base)
+    cands += list(getattr(cfg, "extra_libdirs", []))
     cands += [d for d in os.environ.get("LIBRARY_PATH", "").split(":") if d]
     out, seen = [], set()
     for d in cands:
@@ -1198,8 +1382,9 @@ def choose_libs(providers, wanted, proposed):
 class PkgConfig:
     """pkg-config, for the -I flags a library's own headers need."""
 
-    def __init__(self):
-        self.exe = shutil.which("pkg-config") or shutil.which("pkgconf")
+    def __init__(self, configured=None):
+        self.exe = (shutil.which(configured) if configured else None) \
+                   or shutil.which("pkg-config") or shutil.which("pkgconf")
         self._flags = {}
         self._by_incdir = None
 
@@ -1421,7 +1606,7 @@ def scan_providers(cfg, externals, cache, jobs):
     return providers, paths
 
 
-def resolve_libraries(cl, cfg, pkg, hdr_store, providers, paths):
+def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths):
     """Turn one target's external symbols into link flags."""
     # Proposals are recomputed from this target's own link set, so the
     # provenance names a file that is actually in this program. Everything
@@ -1466,6 +1651,15 @@ def resolve_libraries(cl, cfg, pkg, hdr_store, providers, paths):
     # happens to require it. @ldflags propagates for the same reason @cflags
     # does not: it is a property of whatever the TU ends up inside.
     declared, extra_ld = [], []
+    for lib in t.conf.get("libs", []):
+        if lib not in declared:
+            declared.append(lib)
+    for spec in t.conf.get("pkg", []):
+        got = pkg.for_module(spec.split()[0], hdr_store, pkg.signature())
+        for l in (got[2] if got else []):
+            if l[2:] not in declared:
+                declared.append(l[2:])
+    extra_ld += t.conf.get("ldflags", [])
     for u in cl.link:
         for lib in u.ann.items("libs"):
             if lib not in declared:
@@ -1492,6 +1686,20 @@ def resolve_libraries(cl, cfg, pkg, hdr_store, providers, paths):
 # Targets
 # ---------------------------------------------------------------------------
 
+def _expand_sources(patterns, root, proj, who):
+    """Resolve a [target.*] sources list to tree-relative files."""
+    out = []
+    for pat in patterns:
+        hits = sorted(glob.glob(os.path.join(root, pat), recursive=True))
+        rels = [os.path.relpath(h, root) for h in hits]
+        rels = [r for r in rels if r in proj.src_set]
+        if not rels:
+            die(f"{CONF_FILE}: [target.{who}] sources {pat!r} matched no "
+                f"source file (excluded ones do not count)")
+        out += [r for r in rels if r not in out]
+    return out
+
+
 def default_name(rel, root):
     stem = os.path.splitext(os.path.basename(rel))[0]
     if stem == "main":
@@ -1503,13 +1711,31 @@ def default_name(rel, root):
 class Target:
     """One artifact: what roots it, what it is called, and what kind it is."""
 
-    __slots__ = ("rel", "name", "kind", "ann")
+    __slots__ = ("rel", "name", "kind", "ann", "conf", "members")
 
-    def __init__(self, rel, root, ann):
+    def __init__(self, rel, root, ann, conf=None):
         self.rel  = rel
         self.ann  = ann
         self.kind = ann.scalar("kind", "exe")
         self.name = ann.scalar("target") or default_name(rel, root)
+        self.conf = {}
+        # Explicit membership, when fmake.toml gives it. This is the answer
+        # to two libraries built from one overlapping tree: the closure
+        # cannot separate them, because nothing in the source says which
+        # file belongs to which, and that is a fact about the project rather
+        # than about any file in it.
+        self.members = None
+        self.apply_conf(conf or {})
+
+    def apply_conf(self, section):
+        """fmake.toml sits above annotations, so it overrides them."""
+        if not section:
+            return
+        self.conf = section
+        self.kind = section.get("kind", self.kind)
+        self.name = section.get("name", self.name)
+        if section.get("sources"):
+            self.members = list(section["sources"])
 
     @property
     def filename(self):
@@ -1586,11 +1812,19 @@ def _show_cmd(cmd, root):
 
 
 def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
-            res=None, excluded=None):
+            res=None, excluded=None, conf=None):
     W = 36
     name = t.filename
-    named = "@target" if t.ann.scalar("target") else "no @target"
+    if t.conf.get("name") or t.conf.get("kind") or t.conf.get("sources"):
+        named = f"[target.*] in {CONF_FILE}"
+    elif t.ann.scalar("target"):
+        named = "@target"
+    else:
+        named = "no @target"
     print(f"{BOLD('target')} {BOLD(name)} ({t.kind})  {DIM('[' + named + ']')}")
+    if t.members is not None:
+        print(f"  {CYAN('membership'):<{W}}"
+              f"{DIM('declared, so the closure is not consulted')}")
 
     # Directives are reported per file, because an unknown one is ignored in
     # silence and this is the only place a typo becomes visible.
@@ -1606,15 +1840,31 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
                 print(f"    {head:<{W-4}}"
                       f"{DIM(rel + ':' + str(ann.line(d)))}")
 
+    if conf:
+        print(f"  {CYAN('configuration')}")
+        print(f"    {CONF_FILE:<{W-4}}"
+              f"{DIM('profile: ' + (conf.profile_name or 'none'))}")
+        if cfg.os != host_os() or cfg.arch != host_arch():
+            print(f"    {'building for':<{W-4}}"
+                  f"{DIM(cfg.os + '/' + cfg.arch + '  (host is '
+                         + host_os() + '/' + host_arch() + ')')}")
+
     if excluded:
         print(f"  {CYAN('excluded here')}")
         for rel, why in sorted(excluded.items()):
             print(f"    {rel:<{W-4}}{DIM(why)}")
-    print(f"  {CYAN('link set'):<{W}}"
-          f"{DIM('[symbol closure from ' + _rel(cl.root.obj, root) + ']')}")
+    if t.members is not None:
+        how = f"[declared in {CONF_FILE}]"
+    elif t.kind != "exe":
+        how = "[every TU in the tree; a library is not pruned]"
+    else:
+        how = "[symbol closure from " + _rel(cl.root.obj, root) + "]"
+    print(f"  {CYAN('link set'):<{W}}{DIM(how)}")
     for u in cl.link:
-        if u is cl.root:
+        if u is cl.root and t.kind == "exe":
             print(f"    {u.rel:<{W-4}}{DIM('root: defines main()')}")
+        elif u is cl.root:
+            print(f"    {u.rel:<{W-4}}{DIM('part of the library')}")
         else:
             sym, by = cl.why.get(u.rel, ("?", "?"))
             why = sym if not by else f"<- {sym}  ({by})"
@@ -1705,7 +1955,8 @@ def build(args):
 
     state  = os.path.join(root, STATE_DIR)
     cache  = Cache(os.path.join(state, CACHE_FILE))
-    cfg    = Config(args)
+    conf   = Conf(load_conf(root), args.profile)
+    cfg    = Config(args, conf)
     objdir = os.path.join(state, "obj", cfg.key)
     outdir = os.path.abspath(args.output) if args.output else root
     jobs   = args.jobs or (os.cpu_count() or 4)
@@ -1726,28 +1977,42 @@ def build(args):
     # to guess, which is the right answer to the wrong question.
     excluded = {}
     for rel in list(srcs):
-        why = platform_excludes(Ann(scans[rel].get("dirs")))
-        if why:
+        for pat in conf.project.get("exclude", []):
+            if fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/*") + "/"):
+                excluded[rel] = f"[project] exclude = {pat!r}"
+                break
+        else:
+            why = platform_excludes(Ann(scans[rel].get("dirs")),
+                                    cfg.os, cfg.arch)
+            if not why:
+                continue
             excluded[rel] = why
-            srcs.remove(rel)
+        srcs.remove(rel)
     if not srcs:
-        die("every source file is excluded on this platform "
-            f"({host_os()}/{host_arch()})")
+        die(f"every source file is excluded when building for "
+            f"{cfg.os}/{cfg.arch}")
 
     proj = Project(root, srcs, hdrs, scans)
 
     # ---- targets ------------------------------------------------------
     # A TU roots an artifact if it defines main() or carries @kind. A tree
     # with neither is a library named after its directory, which is the only
-    # thing it could sensibly be.
-    targets = []
+    # thing it could sensibly be. fmake.toml can also declare a target that
+    # no file roots, and can override anything a file said.
+    targets, claimed = [], set()
     for rel in srcs:
         ann = Ann(scans[rel].get("dirs"))
         if scans[rel]["has_main"] or ann.scalar("kind"):
-            t = Target(rel, root, ann)
+            name = ann.scalar("target") or default_name(rel, root)
+            t = Target(rel, root, ann, conf.target(name))
+            # Both names are spoken for: the one the section was found under,
+            # and whatever it renamed the target to. Otherwise a section that
+            # renames looks unconsumed and gets built a second time.
+            claimed.add(name)
+            claimed.add(t.name)
             if t.kind not in KINDS:
-                die(f"{rel}:{ann.line('kind')}: @kind {t.kind!r} is not one "
-                    f"of {', '.join(KINDS)}")
+                die(f"{rel}: kind {t.kind!r} is not one of "
+                    f"{', '.join(KINDS)}")
             if t.kind == "exe" and not scans[rel]["has_main"]:
                 die(f"{rel}:{ann.line('kind')}: @kind exe needs a main()")
             targets.append(t)
@@ -1755,23 +2020,59 @@ def build(args):
             warn(f"{rel}:{ann.line('target')}: @target on a file that defines "
                  f"no main() and no @kind is ignored")
 
+    # Targets declared only in fmake.toml. These need explicit sources or a
+    # root, since nothing in the tree points at them.
+    for name in sorted(conf.targets):
+        if name in claimed:
+            continue
+        section = conf.targets[name]
+        rel = section.get("root")
+        if rel is None:
+            if not section.get("sources"):
+                die(f"{CONF_FILE}: [target.{name}] declares no root and no "
+                    f"sources, so fmake cannot tell what is in it")
+            rel = None
+        elif rel not in proj.src_set:
+            die(f"{CONF_FILE}: [target.{name}] root = {rel!r} is not a "
+                f"source file in this tree")
+        t = Target(rel or "", root, Ann(), section)
+        t.name = section.get("name", name)
+        if not rel:
+            # No root: the first named source stands in, so the closure and
+            # the link have something concrete to start from.
+            hits = _expand_sources(section["sources"], root, proj, name)
+            t.rel, t.members = hits[0], hits
+        if t.kind not in KINDS:
+            die(f"{CONF_FILE}: [target.{name}] kind = {t.kind!r} is not one "
+                f"of {', '.join(KINDS)}")
+        targets.append(t)
+
+    # Explicit membership is resolved once, here, so a bad glob is reported
+    # before anything is compiled.
+    for t in targets:
+        if t.members is not None and t.conf.get("sources"):
+            t.members = _expand_sources(t.conf["sources"], root, proj, t.name)
+
     whole_tree_library = not targets
     if whole_tree_library:
         ann = Ann()
-        t = Target(os.path.join(os.path.dirname(srcs[0]), "lib"), root, ann)
-        t.rel, t.kind = srcs[0], "static"
-        t.name = os.path.basename(root) or "lib"
+        name = conf.project.get("name") or os.path.basename(root) or "lib"
+        t = Target(srcs[0], root, ann, conf.target(name))
+        t.rel = srcs[0]
+        t.kind = t.conf.get("kind", "static")
+        t.name = t.conf.get("name", name)
         targets.append(t)
-        vinfo(f"no main() anywhere; building the tree as lib{t.name}.a")
+        vinfo(f"no main() anywhere; building the tree as {t.filename}")
 
     clash = {}
     for t in targets:
-        clash.setdefault(t.filename, []).append(t.rel)
+        clash.setdefault(t.filename, []).append(t.rel or f"[target.{t.name}]")
     for fn, rels in sorted(clash.items()):
         if len(rels) > 1:
             die(f"two targets are both called {fn!r}:\n    "
                 + "\n    ".join(rels) + "\n"
-                "give one of them a different @target.")
+                f"give one of them a different @target, or a name in "
+                f"{CONF_FILE}.")
 
     wanted = targets
     if args.targets:
@@ -1815,8 +2116,12 @@ def build(args):
 
     candidates = set()
     for t in wanted:
-        candidates |= (set(srcs) if t.kind != "exe" and whole_tree_library
-                       else proj.candidates(t.rel))
+        if t.members is not None:
+            candidates |= set(t.members)
+        elif t.kind != "exe":
+            candidates |= set(srcs)
+        else:
+            candidates |= proj.candidates(t.rel)
     for rel in forced_rels:
         if rel not in proj.src_set:
             die(f"{rel!r} is not a source file in this tree")
@@ -1825,17 +2130,23 @@ def build(args):
     # than the include graph, so start from it. Widening still corrects it if
     # the tree has changed.
     candidates |= {r for r in cache.data["units"] if r in proj.src_set}
-    if args.widen_all or any(t.kind != "exe" for t in wanted):
-        # A library is everything, so there is nothing to narrow down to.
+    if args.widen_all or any(t.kind != "exe" and t.members is None
+                             for t in wanted):
+        # A library with no declared membership is everything, so there is
+        # nothing to narrow down to.
         candidates = set(srcs)
 
     base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
                      for d in sorted(proj.incdirs | {"."})]
+    for d in conf.project.get("include-dirs", []):
+        flag = "-I" + (d if os.path.isabs(d) else os.path.join(root, d))
+        if flag not in base_incflags:
+            base_incflags.append(flag)
 
     for rel in sorted(candidates):
         unit(rel)
 
-    pkg = PkgConfig()
+    pkg = PkgConfig(cfg.pkgexe)
     hdr_store = cache.data.setdefault("headers", {})
     incflags, proposed = list(base_incflags), {}
     pkg_sig = pkg.signature()
@@ -1893,7 +2204,13 @@ def build(args):
         other_roots = {t.rel for t in targets if t.kind == "exe"}
         closures = {}
         for t in wanted:
-            if t.kind == "exe":
+            if t.members is not None:
+                # Declared membership is the answer, not a starting point.
+                # Nothing in the source says which of two libraries a shared
+                # file belongs to, so the closure must not be consulted.
+                chosen = [units[r] for r in t.members if r in units]
+                closures[t] = close_over_library(chosen, units[t.rel])
+            elif t.kind == "exe":
                 closures[t] = close_over_symbols(units[t.rel], pool, forced,
                                                  forced_why)
             else:
@@ -1940,7 +2257,7 @@ def build(args):
             every |= set(closures[t].external)
         providers, paths = scan_providers(cfg, every, cache, jobs)
         for t in wanted:
-            resolutions[t] = resolve_libraries(closures[t], cfg, pkg,
+            resolutions[t] = resolve_libraries(t, closures[t], cfg, pkg,
                                                hdr_store, providers, paths)
 
     # ---- explain or link ----------------------------------------------
@@ -1951,7 +2268,7 @@ def build(args):
         for t in wanted:
             explain(t, closures[t], cfg, incflags, outdir, all_units, root,
                     {x.rel for x in targets} - {t.rel}, resolutions.get(t),
-                    excluded)
+                    excluded, conf)
         cache.save()
         return 0
 
@@ -1968,8 +2285,10 @@ def build(args):
         (built if ok else failed).append((t.filename, closures[t], res))
 
     cache.save()
-    if args.dry_run:
+    if args.dry_run and not args.install:
         return 0
+    if args.dry_run and args.install:
+        return do_install(wanted, closures, root, outdir, conf, args)
 
     if not args.quiet:
         if changed:
@@ -1986,6 +2305,10 @@ def build(args):
         if built:
             info(f"built {names}" if changed else f"{names} up to date")
 
+    if args.install and not failed:
+        print()
+        return do_install(wanted, closures, root, outdir, conf, args)
+
     if failed:
         print()
         for name, cl, res in failed:
@@ -2000,6 +2323,89 @@ def build(args):
         note("name the missing libraries with --ldflags, or build only the "
              "targets you want")
         return 1
+    return 0
+
+# ---------------------------------------------------------------------------
+# Install
+#
+# The one thing @headers is for. Which headers form a library's public
+# interface is the header question that genuinely is not inferable -- the
+# #include scan knows what a TU consumes, not what the project means to
+# publish -- so it has to be declared, and this is what declaring it buys.
+# ---------------------------------------------------------------------------
+
+INSTALL_DEFAULTS = {"prefix": "/usr/local", "bindir": "bin",
+                    "libdir": "lib", "includedir": "include"}
+
+
+def install_paths(conf, args):
+    p = dict(INSTALL_DEFAULTS)
+    p.update({k: v for k, v in conf.install.items() if v})
+    if args.prefix:
+        p["prefix"] = args.prefix
+    dest = args.destdir or ""
+    out = {}
+    for key in ("bindir", "libdir", "includedir"):
+        sub = p[key]
+        full = sub if os.path.isabs(sub) else os.path.join(p["prefix"], sub)
+        out[key] = os.path.join(dest, full.lstrip("/")) if dest else full
+    out["prefix"] = p["prefix"]
+    return out
+
+
+def do_install(targets, closures, root, outdir, conf, args):
+    paths = install_paths(conf, args)
+    planned = []
+
+    for t in targets:
+        built = os.path.join(outdir, t.filename)
+        if not os.path.exists(built):
+            die(f"{t.filename} has not been built")
+        where = paths["bindir"] if t.kind == "exe" else paths["libdir"]
+        planned.append((built, os.path.join(where, t.filename),
+                        0o755 if t.kind != "static" else 0o644))
+
+        # @headers is gathered only for libraries: a program does not
+        # publish an API, and the file carrying the directive is often
+        # linked into one of the tree's programs as well, which would
+        # otherwise install the same header twice under two owners.
+        # An explicit list in fmake.toml is honoured for any kind, since
+        # naming it outright is a decision rather than an inference.
+        heads = list(t.conf.get("headers", []))
+        if t.kind != "exe":
+            for u in closures[t].link:
+                heads += u.ann.items("headers")
+        for h in dict.fromkeys(heads):
+            src = os.path.join(root, h)
+            if not os.path.isfile(src):
+                die(f"@headers {h!r} does not exist (named for {t.name})")
+            planned.append((src,
+                            os.path.join(paths["includedir"],
+                                         os.path.basename(h)), 0o644))
+
+    seen, unique = set(), []
+    for item in planned:
+        if item[1] not in seen:
+            seen.add(item[1])
+            unique.append(item)
+    planned = unique
+
+    if not planned:
+        info("nothing to install")
+        return 0
+
+    for src, dst, mode in planned:
+        rel = _rel(src, root)
+        if args.dry_run:
+            print(f"install -m {mode:o} {rel} {dst}")
+            continue
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        os.chmod(dst, mode)
+        print(f"{GREEN('->')} {dst}")
+
+    if not args.dry_run:
+        info(f"installed {len(planned)} file(s) under {paths['prefix']}")
     return 0
 
 # ---------------------------------------------------------------------------
@@ -2076,6 +2482,15 @@ def parse_args(argv):
     p.add_argument("--widen-all", action="store_true",
                    help="compile every source in the tree before closing, "
                         "instead of filtering candidates by symbol name")
+    p.add_argument("-p", "--profile", default=None, metavar="NAME",
+                   help=f"build profile from [profile.NAME] in {CONF_FILE}")
+    p.add_argument("--install", action="store_true",
+                   help="build, then install the artifacts and their "
+                        "@headers")
+    p.add_argument("--prefix", default=None,
+                   help="install prefix (default /usr/local, or [install])")
+    p.add_argument("--destdir", default=None,
+                   help="staging root prepended to every install path")
     p.add_argument("--doxygen-aliases", action="store_true",
                    help="print an ALIASES block for your Doxyfile, so Doxygen "
                         "renders the directives instead of warning about them")

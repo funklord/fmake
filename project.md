@@ -7,11 +7,12 @@ This is a living design document. It is updated as decisions are made, and it
 records the reasoning, not just the conclusion — including the options rejected,
 so they don't get relitigated.
 
-Status: **phases 1–4 implemented** — `fmake` builds C and C++ programs and
-libraries from an unannotated tree, resolves their dependencies, and accepts
-in-source directives for what cannot be inferred. `./selftest` covers the design
-claims below, case per claim. Phases 5, 6 and 7 (`fmake.toml`, `--eject`,
-`fmake.py`) are not written yet.
+Status: **phases 1–5 implemented** — `fmake` builds C and C++ programs and
+libraries from an unannotated tree, resolves their dependencies, accepts
+in-source directives for what cannot be inferred, and reads an optional
+`fmake.toml` for what belongs to no single file. `./selftest` covers the design
+claims below, case per claim. Phases 6 and 7 (`--eject`, `fmake.py`) are not
+written yet.
 
 ---
 
@@ -142,8 +143,8 @@ template instantiations do) need `--widen-all` or `--force-link`.
   runs, so C has this problem independently of fmake. Make requires you to list
   the file; so does fmake. Not worse, just not better. Such files **seed** the
   closure alongside the root rather than merely joining the compiled set: once
-  asserted, their own dependencies resolve normally. (`--force-link` today,
-  `@sources` once annotations exist.)
+  asserted, their own dependencies resolve normally — `@sources`, or
+  `--force-link` from the command line.
 - **One target failing must not sink the others.** Targets are discovered, not
   requested, so a repo whose test binaries need a library fmake cannot resolve
   yet should still produce its programs. Failures are reported per target, with
@@ -451,17 +452,20 @@ inference  <  source annotations  <  fmake.toml  <  fmake.py  <  CLI flags / env
 Later wins. Additive directives (`@libs`, `@cflags`, `@define`) accumulate across
 levels rather than replacing; scalar ones (`@target`, `@std`, `@kind`) replace.
 
-Today the middle two levels do not exist, so the chain in force is:
+Only `fmake.py` is missing, so the chain in force is:
 
 ```
-inference  <  source annotations  <  CLI flags / env
+inference  <  source annotations  <  fmake.toml  <  CLI flags / env
 ```
 
-Which is worth stating plainly rather than leaving implied, because the ordering
-is the part that has to stay true when `fmake.toml` lands. Two concrete cases it
-already governs: `--ldflags` is appended after every resolved and declared
-library, so an explicit flag always has the last word; and `--no-libs` disables
-§5 entirely without touching annotations, so `@libs` still applies.
+Concrete cases it governs: `[target.*] name` overrides `@target`; `$CC` beats
+`[toolchain] cc`, so a one-off cross build needs no edit to a tracked file;
+`--ldflags` is appended after every resolved and declared library, so an
+explicit flag always has the last word; and `--no-libs` disables §5 entirely
+without touching annotations, so `@libs` still applies.
+
+Within `fmake.toml`, `[profile.*]` is applied after `[project]`, so a profile
+overrides the defaults it sits beside.
 
 ---
 
@@ -471,11 +475,73 @@ Both are optional and neither exists in the common case.
 
 ### `fmake.toml` — declarative, no logic
 
-Handles the ~95% of escapes that aren't code: install paths, multiple named
-build configurations, per-target overrides, vendored subdirectories, generated
-file rules with fixed commands.
+For the facts that are neither inferable nor properties of a single file: what
+a target is called when no file roots it, which files belong to which of two
+libraries, where things install, and what toolchain to build with.
 
 `tomllib` is stdlib as of Python 3.11, which is part of why 3.11 is the floor.
+
+```toml
+[project]
+cflags  = ["-Wall"]
+exclude = ["vendor/**"]
+
+[profile.release]
+cflags  = ["-O2"]
+defines = ["NDEBUG=1"]
+
+[target.alpha]
+kind    = "static"
+sources = ["src/alpha.c", "src/shared.c"]
+
+[install]
+prefix = "/usr/local"
+
+[toolchain]
+cc   = "aarch64-linux-gnu-gcc"
+arch = "aarch64"
+```
+
+**`[target.*]` carries link-side keys only** — `name`, `kind`, `root`,
+`sources`, `libs`, `pkg`, `ldflags`, `headers`. No `cflags`, no `defines`, no
+`std`. This follows the same line as `@cflags` versus `@ldflags` in §4: the
+compile side is a property of a file, the link side is a property of an
+artifact. A per-target compile flag would mean the same source compiled two
+ways, which means per-target object directories, which nothing has asked for.
+
+**`sources` is the answer, not a starting point.** It closes the seam §4 left
+open: two static libraries built from one overlapping tree. Nothing in the
+source can say which library a shared file belongs to, because that is a fact
+about the project rather than about any file in it — so when membership is
+declared, the closure is not consulted at all, and `--explain` says so.
+
+**`[toolchain] os`/`arch` fix a real bug.** `@os`/`@arch` were tested against
+the host, which is silently wrong for every cross build: the host's files are
+kept and the target's are dropped, with no error. The platform tested is now
+the one being built *for*, and `--explain` prints it whenever it differs from
+the host.
+
+**Unknown keys are an error**, unlike unknown directives, which are ignored.
+The difference is not inconsistency: a comment is shared with Doxygen and may
+legitimately contain commands that are not fmake's, whereas this file belongs
+to fmake alone — so a key it does not recognise is a typo, every time. The
+error names the valid keys for that section.
+
+### Install
+
+`fmake --install [--prefix P] [--destdir D]` builds, then places executables
+in `bindir`, libraries in `libdir`, and `@headers` in `includedir`.
+
+This is what `@headers` is for, and the only thing it is for. Which headers
+form a library's public interface is the header question that genuinely is not
+inferable — the `#include` scan knows what a TU *consumes*, not what the
+project means to *publish*.
+
+Gathered for libraries only. A program publishes no API, and the file carrying
+the directive is usually linked into one of the tree's programs as well, so
+gathering there would install the same header under two owners. An explicit
+`headers` list in `fmake.toml` is honoured for any kind, since naming it
+outright is a decision rather than an inference.
 
 ### `fmake.py` — opt-in, rare, documented as a last resort
 
@@ -634,7 +700,8 @@ Each phase is a usable tool, not a milestone toward one.
    external symbols, so turning them into `-l` flags removed the last reason to
    pass anything by hand. Header table and pkg-config reverse lookup (signal 1),
    shared-library symbol scan (signal 2), and `--wrap` inference.
-5. **`fmake.toml`.** Named configurations, install paths, per-target overrides.
+5. **`fmake.toml`.** *Done.* Named configurations, install paths, per-target
+   overrides, toolchain selection, and `--install`.
 6. **`--eject`.** Makefile and ninja output.
 7. **`fmake.py`.** Last, deliberately.
 
@@ -672,6 +739,25 @@ header table, so it exercises the `.pc` reverse lookup end to end.
 
 Still missing versus the Makefile: the binaries are named `server` and `client`
 rather than `udp-echo-server` and `udp-echo-client`. That needs `@target`.
+
+### Phase 5 results
+
+`fmake.toml` closes the `@kind` seam and the cross-platform filtering bug, and
+`--install` finally gives `@headers` something to do. Verified: two static
+libraries built from one overlapping tree with `shared.c` in both and neither
+one's private file leaking into the other; a target declared only in the config
+with no file rooting it; profiles selecting flags and getting their own object
+directories; `exclude` removing a vendored tree before target discovery, so its
+stray `main()` never becomes a program; `[toolchain] os` flipping which
+platform-specific file is built; and every class of malformed config being
+refused with the valid keys named.
+
+Four claims were mutation-tested; three were caught. The fourth — that
+`@headers` is gathered for libraries only — was masked by the
+install-deduplication, exactly as the Doxygen-marker check was masked by
+marker-stripping in phase 3. Both defences produce the same output when a
+library and a program publish the same header. A second case covering a header
+reachable *only* through a program does discriminate, and now exists.
 
 ### Phase 3 results
 
@@ -728,11 +814,13 @@ only relaxing both makes the test fail.
 - **Generated sources.** A `.c` produced by flex/bison/protoc doesn't exist when
   the scan runs. Needs at minimum a two-pass scan. Currently deferred to
   `fmake.toml` rules, which may not be enough.
-- **Cross-compilation.** `@os`/`@arch` filter TUs against the *host*, which is
-  exactly wrong for cross builds — there is no notion of a target platform
-  distinct from the machine fmake is running on. Toolchain selection, sysroots
-  and target-specific pkg-config paths are unaddressed too. Likely a
-  `fmake.toml` concern, and likely where "less focused on embedded" shows.
+- **Cross-compilation is started, not finished.** `[toolchain]` selects the
+  compiler, `ar`, `nm`, `pkg-config` and sysroot, and `os`/`arch` now decide
+  which TUs are built — that part was a silent correctness bug and is fixed.
+  What is untested is everything downstream: §5 scans the *host's* libraries
+  for symbols, so library resolution on a cross build will resolve against the
+  wrong machine. `[toolchain] lib-dirs` exists as the escape hatch and is the
+  only thing making it usable. This is where "less focused on embedded" shows.
 - **Header-only libraries.** Correctly need no link, and signal 2 naturally
   produces no external symbols for them, so this mostly resolves itself. The
   remaining case is a header-only library that needs `-I` pointing somewhere
@@ -749,8 +837,10 @@ only relaxing both makes the test fail.
 - **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
   `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
   are unhandled.
-- **Install.** `fmake install` needs `@headers`, a prefix, and a DESTDIR. Not yet
-  designed.
+- **Install is minimal.** No uninstall, no manifest, no pkg-config `.pc`
+  generation, no shared-library versioning or `SONAME`, no symlink chain
+  (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain name, which
+  is right for a private library and wrong for a published one.
 - **Per-TU flags are per TU, not per target.** Two binaries sharing 90% of their
   TUs compile those once, and `@cflags`/`@define` belong to the *file*, so there
   is exactly one object per file and no conflict. What is impossible is the same
@@ -763,10 +853,9 @@ only relaxing both makes the test fail.
   That was the original §3 design for libraries and it is still the better answer
   for that case; it needs matching header declarations to mangled symbols, which
   is why it is not built.
-- **`@kind` is per TU but describes an artifact.** Two files in one tree each
-  carrying `@kind static` produce two archives from overlapping sources, with no
-  way to say which file belongs to which. Name clashes are caught; overlapping
-  content is not. This is the seam where `fmake.toml` will have to take over.
+- ~~**`@kind` is per TU but describes an artifact.**~~ Closed by
+  `[target.*] sources` in §7: membership is declared where it is known, and the
+  closure is not consulted for those targets.
 - **Directive typos are silently inert.** `@lib` for `@libs` does nothing and
   says nothing, because unknown commands must be ignored for the Doxygen
   integration to work at all. `--explain` listing what was recognised is the only
