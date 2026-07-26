@@ -42,9 +42,19 @@ on the following model:
                see, such as a template instantiated from a header, need
                --widen-all, which compiles the whole tree before closing.
 
-  external     What survives closure over everything is external: libc, and
-               libraries. Reporting these is the input to library resolution,
-               which is not implemented yet -- pass -l flags via --ldflags.
+  external     What survives closure over everything comes from outside: libc,
+               and libraries. These are matched against the symbol tables of
+               the installed shared libraries to pick the -l flags, so
+               SDL_Init being undefined is what links SDL -- not the presence
+               of an #include, which only proves a declaration was wanted.
+               System includes still contribute the -I flags, via pkg-config,
+               since those are needed before anything is compiled. A header
+               whose library no symbol needs is reported and not linked.
+
+  --wrap       A symbol named __wrap_socket exists for one reason: GNU ld's
+               --wrap. Defining one and not passing the flag yields a binary
+               that silently calls the real function, so the flag is inferred
+               from the link set.
 
 Symbol-invisible code has no automatic answer: a plugin registering itself
 from __attribute__((constructor)) is referenced by nothing, so the closure
@@ -386,9 +396,16 @@ class Config:
         self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
         self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
                                  *self.cflags]))[:12]
+        self._libdirs = None
 
     def driver(self, cxx):
         return self.cxx if cxx else self.cc
+
+    @property
+    def libdirs(self):
+        if self._libdirs is None:
+            self._libdirs = lib_search_dirs(self)
+        return self._libdirs
 
 # ---------------------------------------------------------------------------
 # Hashing & cache
@@ -503,9 +520,13 @@ def compile_cmd(u, cfg, incflags):
             + incflags + cfg.cflags)
 
 
-def object_key(u, cfg, cache, root):
-    """Cache key: source content, every prerequisite's content, and config."""
-    parts = [cfg.key]
+def object_key(u, cfg, cache, root, incflags):
+    """Cache key: source content, every prerequisite's content, and config.
+
+    The include flags are part of the config: gaining an -I can change which
+    header a name resolves to, so an object built without it is not reusable.
+    """
+    parts = [cfg.key, sha("\0".join(incflags))]
     src_h = cache.hash_of(u.abs, u.rel)
     if src_h is None:
         return None
@@ -525,7 +546,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run):
         if u.compiled:
             continue
         ent = cache.objects.get(u.rel)
-        key = object_key(u, cfg, cache, root)
+        key = object_key(u, cfg, cache, root, incflags)
         if (ent and ent.get("key") == key and key is not None
                 and os.path.exists(u.obj)):
             u.undef  = set(ent["u"])
@@ -580,7 +601,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run):
     read_symbols(todo, cfg, jobs)
     for u in todo:
         cache.objects[u.rel] = {
-            "key": object_key(u, cfg, cache, root),
+            "key": object_key(u, cfg, cache, root, incflags),
             "u": sorted(u.undef), "s": sorted(u.strong), "w": sorted(u.weak),
         }
     return True
@@ -740,6 +761,477 @@ def widen_candidates(symbols, pool_units):
     return out
 
 # ---------------------------------------------------------------------------
+# Library resolution
+#
+# Two signals, and the closure hands over the better one for free.
+#
+#   includes   Cheap and available before compiling, which is when the -I
+#              flags are needed. But including a header only proves that a
+#              declaration was wanted, not that anything from the library is
+#              called.
+#
+#   symbols    The external set left over from the closure is a direct
+#              statement of what the program needs from outside the tree. If
+#              SDL_Init is undefined then SDL_Init is genuinely called. This
+#              is strictly better evidence, and it is what picks the -l flags.
+#
+# They are combined rather than ranked: includes propose and supply -I,
+# symbols confirm or contradict. A library proposed by a header that no
+# symbol needs is a header included out of habit -- fmake declines to link
+# it and says so, which is a thing no other build system reports.
+# ---------------------------------------------------------------------------
+
+# Headers whose package cannot be worked out by looking at where they live,
+# because they sit directly in /usr/include alongside everything else. Only
+# the cases where the reverse lookup below is ambiguous need to be here.
+HEADER_PKG = {
+    "zlib.h": "zlib", "sqlite3.h": "sqlite3", "png.h": "libpng",
+    "curl/curl.h": "libcurl", "expat.h": "expat", "pcre2.h": "libpcre2-8",
+    "openssl/ssl.h": "openssl", "openssl/crypto.h": "libcrypto",
+    "ncurses.h": "ncursesw", "curses.h": "ncursesw", "readline/readline.h": "readline",
+    "ft2build.h": "freetype2", "jpeglib.h": "libjpeg", "tiffio.h": "libtiff-4",
+    "archive.h": "libarchive", "lzma.h": "liblzma", "bzlib.h": "bzip2",
+    "zstd.h": "libzstd", "yaml.h": "yaml-0.1", "uuid/uuid.h": "uuid",
+    "usb.h": "libusb", "libusb-1.0/libusb.h": "libusb-1.0",
+    "X11/Xlib.h": "x11", "GL/gl.h": "gl", "GL/glew.h": "glew",
+    "vulkan/vulkan.h": "vulkan", "alsa/asoundlib.h": "alsa",
+    "pulse/pulseaudio.h": "libpulse", "sndfile.h": "sndfile",
+    "ogg/ogg.h": "ogg", "vorbis/codec.h": "vorbis", "FLAC/all.h": "flac",
+    "cmocka.h": "cmocka", "check.h": "check",
+}
+
+# Linked into everything already; naming them is noise, not information.
+IMPLICIT_LIBS = {"c"}
+
+
+def _stdout(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.stdout if r.returncode == 0 else ""
+    except OSError:
+        return ""
+
+
+def lib_search_dirs(cfg):
+    """Where the linker will look, in the order it looks."""
+    triplet = _stdout([cfg.cc, "-print-multiarch"]).strip()
+    cands = []
+    for base in ("/usr/local/lib", "/usr/lib", "/lib"):
+        if triplet:
+            cands.append(os.path.join(base, triplet))
+        cands.append(base)
+    cands += [d for d in os.environ.get("LIBRARY_PATH", "").split(":") if d]
+    out, seen = [], set()
+    for d in cands:
+        rp = os.path.realpath(d)
+        if os.path.isdir(d) and rp not in seen:
+            seen.add(rp)
+            out.append(d)
+    return out
+
+
+def linkable_libs(dirs):
+    """Map -lNAME to a file, for names that will actually link.
+
+    Only the development symlink counts. A machine can carry
+    libSDL2-2.0.so.0 for programs that already exist while having no
+    libSDL2.so at all, and offering -lSDL2 there produces a link error --
+    which is right, because without the dev package the headers are missing
+    too and the compile would have failed first.
+    """
+    out = {}
+    # Shared libraries first, across every directory, before any archive is
+    # considered. Otherwise glibc's own static halves -- libm-2.41.a and
+    # friends -- get offered as link names, and linking one drags in
+    # internals like _dl_x86_cpu_features that no program can resolve.
+    for suffix in (".so", ".a"):
+        for d in dirs:
+            try:
+                entries = sorted(os.listdir(d))
+            except OSError:
+                continue
+            for f in entries:
+                if not f.startswith("lib") or not f.endswith(suffix):
+                    continue
+                name = f[3:-len(suffix)]
+                if name and name not in out:
+                    out[name] = os.path.join(d, f)
+    return out
+
+
+RE_LD_SCRIPT_FILE = re.compile(r'(/[^\s()]+\.(?:so[0-9.]*|a))')
+
+
+def elf_targets(path):
+    """The real objects behind a linkable name.
+
+    libc.so and libm.so are GNU ld scripts naming the runtime libraries and
+    a static half, not ELF files -- nm cannot read them directly.
+    """
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(8)
+    except OSError:
+        return []
+    if magic[:4] == b"\x7fELF" or magic[:8] == b"!<arch>\n":
+        return [path]
+    try:
+        with open(path, "r", errors="replace") as fh:
+            text = fh.read(8192)
+    except OSError:
+        return []
+    return [p for p in RE_LD_SCRIPT_FILE.findall(text) if os.path.exists(p)]
+
+
+def lib_exports(cfg, path):
+    """Symbols a library offers to a link.
+
+    Unlike an object file, every name in a dynamic symbol table is exported,
+    so the lowercase-is-local rule does not apply here -- glibc exports cos
+    as an ifunc, type `i`. Version suffixes (cos@@GLIBC_2.2.5) are stripped.
+    """
+    dyn = not path.endswith(".a")
+    cmd = [cfg.nm, "--defined-only", "--format=posix"]
+    if dyn:
+        cmd.append("-D")
+    r = subprocess.run(cmd + [path], capture_output=True, text=True)
+    out = set()
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if parts:
+            out.add(parts[0].split("@")[0])
+    return out
+
+
+def find_providers(cfg, wanted, jobs):
+    """Which installed libraries define each of these symbols.
+
+    Scanned on demand rather than kept as a persistent index: the whole sweep
+    is about a second, only the wanted symbols are retained, and the answer is
+    cached per target against the external set, so a normal incremental build
+    never gets here at all. No index means no staleness.
+    """
+    libs = linkable_libs(lib_search_dirs(cfg))
+    want = set(wanted)
+    if not want or not libs:
+        return {}, {}
+
+    def scan(item):
+        name, path = item
+        syms = set()
+        for t in elf_targets(path):
+            syms |= lib_exports(cfg, t)
+        return name, syms & want
+
+    found = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for name, hits in pool.map(scan, sorted(libs.items())):
+            for s in hits:
+                found.setdefault(s, []).append(name)
+    return found, libs
+
+
+def default_link_dirs(cfg):
+    """Where the linker already looks, so -L is only added when it is needed."""
+    out = set()
+    for line in _stdout([cfg.cc, "-print-search-dirs"]).splitlines():
+        if line.startswith("libraries:"):
+            for d in line.split(":", 1)[1].lstrip(" =").split(":"):
+                if d:
+                    out.add(os.path.realpath(d))
+    return out
+
+
+def choose_libs(providers, wanted, proposed):
+    """Smallest set of -l flags covering the unresolved symbols.
+
+    Unlike a header naming two packages, a symbol offered by several
+    libraries is ordinary -- glibc merged libm into libc, and distributions
+    ship libcurl beside libcurl-gnutls -- so this picks rather than refuses,
+    and --explain shows what else could have supplied it.
+    """
+    remaining = set(wanted)
+    implicit = set()
+    for s in list(remaining):
+        if IMPLICIT_LIBS.intersection(providers.get(s, ())):
+            implicit.add(s)
+            remaining.discard(s)
+
+    chosen, why = [], {}
+    while remaining:
+        counts = {}
+        for s in remaining:
+            for lib in providers.get(s, ()):
+                if lib not in IMPLICIT_LIBS:
+                    counts.setdefault(lib, set()).add(s)
+        if not counts:
+            break
+        # Most symbols covered, then a library the headers already asked for,
+        # then the shorter name -- libm-2.41 is a private glibc artefact and
+        # libm is the real thing -- then alphabetical, so the choice never
+        # depends on directory scan order.
+        best = max(counts, key=lambda l: (len(counts[l]), l in proposed,
+                                          -len(l), [-ord(c) for c in l]))
+        chosen.append(best)
+        why[best] = sorted(counts[best])
+        remaining -= counts[best]
+
+    return chosen, why, implicit, sorted(remaining)
+
+
+class PkgConfig:
+    """pkg-config, for the -I flags a library's own headers need."""
+
+    def __init__(self):
+        self.exe = shutil.which("pkg-config") or shutil.which("pkgconf")
+        self._flags = {}
+        self._by_incdir = None
+
+    def flags(self, module):
+        """(cflags, libs) for a module, or None if it is not installed.
+
+        -L belongs to neither: it is a link path, and putting it in the
+        compile flags -- which is what dropping everything that is not -l
+        into cflags does -- silently loses it. The library search paths are
+        recovered from where the library actually lives instead, which also
+        covers libraries found by symbol alone.
+        """
+        if module in self._flags:
+            return self._flags[module]
+        res = None
+        if self.exe:
+            r = subprocess.run([self.exe, "--cflags", "--libs", module],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                args = shlex.split(r.stdout)
+                res = ([a for a in args
+                        if not a.startswith(("-l", "-L"))],
+                       [a for a in args if a.startswith("-l")])
+        self._flags[module] = res
+        return res
+
+    def _search_path(self):
+        p = _stdout([self.exe, "--variable", "pc_path", "pkg-config"]).strip()
+        dirs = [d for d in p.split(":") if d] if p else []
+        return dirs or ["/usr/lib/pkgconfig", "/usr/share/pkgconfig"]
+
+    def signature(self):
+        """Stamp that changes when a package is installed or removed."""
+        parts = []
+        for d in (self._search_path() if self.exe else []):
+            try:
+                parts.append(f"{d}:{os.stat(d).st_mtime_ns}")
+            except OSError:
+                pass
+        return sha("|".join(parts))
+
+    def for_header(self, name, store, sig):
+        """(module, cflags, libs) for a system header, or None.
+
+        Cached in the project cache, because resolving a header means reading
+        every .pc file on the machine and running pkg-config, and a no-op
+        build should not pay for that.
+        """
+        key = sig + "|" + name
+        if key in store:
+            return store[key]
+        module = HEADER_PKG.get(name)
+        if module is None:
+            for inc, mod in self.by_includedir().items():
+                if os.path.exists(os.path.join(inc, name)):
+                    module = mod
+                    break
+        got = self.flags(module) if module else None
+        store[key] = None if got is None else [module, got[0], got[1]]
+        return store[key]
+
+    def by_includedir(self):
+        """Map an include directory to the module that owns it.
+
+        Only useful for libraries that keep their headers in a subdirectory,
+        which is exactly the case where an -I is needed. Packages installing
+        straight into /usr/include are ambiguous and are skipped -- they need
+        no -I either, so nothing is lost.
+        """
+        if self._by_incdir is not None:
+            return self._by_incdir
+        self._by_incdir = {}
+        if not self.exe:
+            return self._by_incdir
+        for d in self._search_path():
+            try:
+                names = sorted(os.listdir(d))
+            except OSError:
+                continue
+            for f in names:
+                if not f.endswith(".pc"):
+                    continue
+                for inc in _pc_includedirs(os.path.join(d, f)):
+                    if inc.rstrip("/") in ("/usr/include", "/usr/local/include"):
+                        continue
+                    self._by_incdir.setdefault(inc.rstrip("/"), f[:-3])
+        return self._by_incdir
+
+
+RE_PC_VAR = re.compile(r"\$\{([^}]+)\}")
+
+
+def _pc_includedirs(path):
+    """The -I directories a .pc file advertises, with variables expanded."""
+    variables, cflags = {}, ""
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("Cflags:"):
+                    cflags = line.split(":", 1)[1]
+                elif "=" in line and ":" not in line.split("=", 1)[0]:
+                    k, v = line.split("=", 1)
+                    variables[k.strip()] = v.strip()
+    except OSError:
+        return []
+
+    def expand(s, depth=0):
+        if depth > 8:
+            return s
+        return RE_PC_VAR.sub(
+            lambda m: expand(variables.get(m.group(1), ""), depth + 1), s)
+
+    return [a[2:] for a in shlex.split(expand(cflags)) if a.startswith("-I")]
+
+
+def propose_from_headers(units, pkg, store):
+    """Packages the system includes suggest, with the -I flags they need.
+
+    Runs before compiling, since that is when -I is needed. What comes back
+    is a proposal only: the symbol evidence settles whether a package is
+    really linked.
+    """
+    sig = pkg.signature()
+    cflags, proposed, seen = [], {}, set()
+    for u in units:
+        for kind, name, line in (u.scan.get("incs") or []):
+            if kind != "<" or name in seen:
+                continue
+            seen.add(name)
+            got = pkg.for_header(name, store, sig)
+            if got is None:
+                continue
+            module, mod_cflags, mod_libs = got
+            for f in mod_cflags:
+                if f not in cflags:
+                    cflags.append(f)
+            for l in mod_libs:
+                proposed.setdefault(l[2:], (module, f"{u.rel}:{line}", name))
+    return cflags, proposed
+
+RE_WRAP = re.compile(r"^__wrap_(.+)$")
+
+
+def wrap_flags(cl):
+    """-Wl,--wrap=X for every __wrap_X the link set defines.
+
+    A symbol named __wrap_socket exists for exactly one reason: GNU ld's
+    --wrap, which redirects calls to socket into it. Defining one and not
+    passing the flag produces a binary that silently ignores the wrapper --
+    the failure mode that makes mocked unit tests pass against the real
+    syscall. Nothing but the symbol name is needed to know the intent, and
+    only the closure knows which objects are actually in the link.
+    """
+    needed = set()
+    for u in cl.link:
+        needed |= u.undef
+    out = []
+    for u in cl.link:
+        for sym in sorted(u.strong):
+            m = RE_WRAP.match(sym)
+            if m and m.group(1) in needed:
+                out.append(m.group(1))
+    return sorted(set(out))
+
+
+def libdir_signature(cfg):
+    """Cheap stamp that changes when a library is installed or removed."""
+    parts = []
+    for d in cfg.libdirs:
+        try:
+            parts.append(f"{d}:{os.stat(d).st_mtime_ns}")
+        except OSError:
+            pass
+    return sha("|".join(parts))
+
+
+def scan_providers(cfg, externals, cache, jobs):
+    """One sweep of the installed libraries for every target's symbols.
+
+    Shared deliberately: a repo with four programs would otherwise scan the
+    system four times over, and the sweep is the only expensive part of
+    resolution. Cached against the union of the symbols and a stamp of the
+    library directories, so an ordinary incremental build never sweeps.
+    """
+    want = sorted(externals)
+    if not want:
+        return {}, {}
+    key = sha("|".join(want) + "#" + libdir_signature(cfg))
+    store = cache.data.setdefault("providers", {})
+    if key in store:
+        return store[key]["providers"], store[key]["paths"]
+    vinfo(f"resolving {len(want)} external symbol(s) against installed "
+          f"libraries")
+    providers, libs = find_providers(cfg, want, jobs)
+    paths = {n: p for n, p in libs.items()
+             if any(n in v for v in providers.values())}
+    store[key] = {"providers": providers, "paths": paths}
+    return providers, paths
+
+
+def resolve_libraries(cl, cfg, pkg, hdr_store, providers, paths):
+    """Turn one target's external symbols into link flags."""
+    # Proposals are recomputed from this target's own link set, so the
+    # provenance names a file that is actually in this program. Everything
+    # it needs is cached by now, so this costs nothing.
+    _, proposed = propose_from_headers(cl.link, pkg, hdr_store)
+    want = sorted(cl.external)
+
+    chosen, why, implicit, unresolved = choose_libs(
+        providers, want, set(proposed))
+
+    # A library outside the linker's own search path needs -L, whether it
+    # came from pkg-config or from the symbol scan.
+    defaults = default_link_dirs(cfg)
+    ldirs = []
+    for lib in chosen:
+        d = os.path.dirname(paths.get(lib, ""))
+        if d and os.path.realpath(d) not in defaults and d not in ldirs:
+            ldirs.append(d)
+
+    alts = {}
+    for lib in chosen:
+        other = set()
+        for s in why.get(lib, []):
+            other |= set(providers.get(s, ()))
+        # libm-2.41 beside libm is the same library under a private name,
+        # not a second source worth reporting.
+        alts[lib] = sorted(a for a in other - {lib} - IMPLICIT_LIBS
+                           if not a.startswith(lib + "-"))
+    res = {
+        "chosen": chosen, "why": why, "alts": alts, "ldirs": ldirs,
+        "implicit": sorted(implicit), "unresolved": unresolved,
+    }
+
+    # Not cached: these depend on the header proposals, which are cheap.
+    res = dict(res)
+    res["proposed"] = {k: v for k, v in proposed.items()
+                       if k in res["chosen"]}
+    res["unused"] = {k: v for k, v in proposed.items()
+                     if k not in res["chosen"]}
+    res["wrap"] = wrap_flags(cl)
+    res["ldflags"] = (["-Wl,--wrap=" + w for w in res["wrap"]]
+                      + ["-L" + d for d in res.get("ldirs", [])]
+                      + ["-l" + l for l in res["chosen"]])
+    return res
+
+# ---------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------
 
@@ -751,11 +1243,13 @@ def target_name(rel, root):
     return stem
 
 
-def link_target(name, cl, cfg, outdir, dry_run):
+def link_target(name, cl, cfg, outdir, dry_run, libflags=()):
     objs = [u.obj for u in cl.link]
     cxx = any(u.cxx for u in cl.link)
     out = os.path.join(outdir, name)
-    cmd = [cfg.driver(cxx), "-o", out] + objs + cfg.ldflags
+    # Resolved libraries first, then whatever the user named, so an explicit
+    # --ldflags always has the last word.
+    cmd = [cfg.driver(cxx), "-o", out] + objs + list(libflags) + cfg.ldflags
     if dry_run:
         print(" ".join(cmd))
         return out, True, True
@@ -803,7 +1297,8 @@ def _show_cmd(cmd, root):
     return " ".join(out)
 
 
-def explain(name, cl, cfg, incflags, outdir, all_units, root, other_roots=()):
+def explain(name, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
+            res=None):
     W = 36
     print(f"{BOLD('target')} {BOLD(name)} (exe)")
     print(f"  {CYAN('link set'):<{W}}"
@@ -826,19 +1321,50 @@ def explain(name, cl, cfg, incflags, outdir, all_units, root, other_roots=()):
         for u in spare:
             print(f"    {u.rel:<{W-4}}{DIM('defines nothing reachable')}")
 
+    if res and (res["chosen"] or res["unresolved"] or res["unused"]):
+        print(f"  {CYAN('libraries'):<{W}}"
+              f"{DIM('[from the external symbols above]')}")
+        for lib in res["chosen"]:
+            syms = res["why"].get(lib, [])
+            shown = ", ".join(syms[:3]) + (" ..." if len(syms) > 3 else "")
+            src = res["proposed"].get(lib)
+            tag = f"[also {src[2]} at {src[1]}]" if src else ""
+            print(f"    -l{lib:<{W-6}}{DIM(shown)}")
+            if tag:
+                print(f"    {'':<{W-4}}{DIM(tag)}")
+            for alt in res["alts"].get(lib, [])[:3]:
+                print(f"    {'':<{W-4}}{DIM('could also come from -l' + alt)}")
+        for lib, (module, where, header) in sorted(res["unused"].items()):
+            print(f"    {'(not linked)':<{W-4}}"
+                  f"{DIM(f'{header} at {where} suggests {module}, but no '
+                         f'symbol needs it')}")
+        for w in res.get("wrap", []):
+            print(f"    {'-Wl,--wrap=' + w:<{W-4}}"
+                  f"{DIM('the link set defines __wrap_' + w)}")
+        if res["unresolved"]:
+            print(f"    {'(unresolved)':<{W-4}}"
+                  f"{DIM(', '.join(res['unresolved'][:6]))}")
+            print(f"    {'':<{W-4}}"
+                  f"{DIM('no installed library exports these -- name it '
+                         'with --ldflags')}")
+
     if cl.external:
+        implicit = len(res["implicit"]) if res else 0
+        named = sum(len(v) for v in (res["why"].values() if res else []))
         print(f"  {CYAN('external symbols'):<{W}}"
-              f"{DIM('[unresolved within the tree]')}")
-        for sym in sorted(cl.external)[:30]:
+              f"{DIM(f'[{len(cl.external)} total, {implicit} in libc, '
+                     f'{named} from the libraries above]')}")
+        for sym in sorted(cl.external)[:12]:
             print(f"    {sym:<{W-4}}"
                   f"{DIM('referenced by ' + cl.external[sym][0])}")
-        if len(cl.external) > 30:
-            print(f"    {DIM('... and %d more' % (len(cl.external) - 30))}")
-        print(f"    {DIM('library resolution is not implemented yet; '
-                         'pass -l via --ldflags')}")
+        if len(cl.external) > 12:
+            print(f"    {DIM('... and %d more (-v for all)' % (len(cl.external) - 12))}")
 
+    ldflags = (res["ldflags"] if res else []) + cfg.ldflags
     print(f"  {CYAN('flags')}")
-    print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) for f in incflags])}")
+    print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) if f.startswith('-I') else f for f in incflags])}")
+    if ldflags:
+        print(f"    {' '.join(ldflags)}")
     print(f"  {CYAN('argv')}")
     for u in cl.link[:2]:
         print(f"    {DIM(_show_cmd(compile_cmd(u, cfg, incflags), root))}")
@@ -846,7 +1372,7 @@ def explain(name, cl, cfg, incflags, outdir, all_units, root, other_roots=()):
         print(f"    {DIM('... %d more' % (len(cl.link) - 2))}")
     cxx = any(u.cxx for u in cl.link)
     link_cmd = ([cfg.driver(cxx), "-o", os.path.join(outdir, name)]
-                + [u.obj for u in cl.link] + cfg.ldflags)
+                + [u.obj for u in cl.link] + ldflags)
     print(f"    {DIM(_show_cmd(link_cmd, root))}")
     print()
 
@@ -913,11 +1439,15 @@ def build(args):
     if args.widen_all:
         candidates = set(srcs)
 
-    incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
-                for d in sorted(proj.incdirs | {"."})]
+    base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
+                     for d in sorted(proj.incdirs | {"."})]
 
     for rel in sorted(candidates):
         unit(rel)
+
+    pkg = PkgConfig()
+    hdr_store = cache.data.setdefault("headers", {})
+    incflags, proposed = list(base_incflags), {}
 
     vinfo(f"{len(srcs)} sources, {len(candidates)} candidates, "
           f"{len(roots)} root(s)")
@@ -930,6 +1460,14 @@ def build(args):
     closures = {}
     while True:
         pool = [units[r] for r in sorted(units)]
+
+        # Recomputed each pass: widening can pull in a file whose system
+        # includes need an -I nothing has asked for yet.
+        if not args.no_libs:
+            pkg_cflags, proposed = propose_from_headers(pool, pkg, hdr_store)
+            incflags = base_incflags + [f for f in pkg_cflags
+                                        if f not in base_incflags]
+
         compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run)
 
         # confirm main() against the symbol tables now that objects exist
@@ -972,6 +1510,17 @@ def build(args):
                 f"fmake will not guess which one belongs in "
                 f"{target_name(name_r, root)}.")
 
+    # ---- resolve external symbols to libraries ------------------------
+    resolutions = {}
+    if not args.no_libs and not args.dry_run:
+        every = set()
+        for r in wanted:
+            every |= set(closures[r].external)
+        providers, paths = scan_providers(cfg, every, cache, jobs)
+        for r in wanted:
+            resolutions[r] = resolve_libraries(closures[r], cfg, pkg,
+                                               hdr_store, providers, paths)
+
     # ---- explain or link ----------------------------------------------
     cache.data["units"] = sorted(units)
 
@@ -979,7 +1528,8 @@ def build(args):
     if args.explain:
         for r in wanted:
             explain(target_name(r, root), closures[r], cfg, incflags,
-                    outdir, all_units, root, set(roots) - {r})
+                    outdir, all_units, root, set(roots) - {r},
+                    resolutions.get(r))
         cache.save()
         return 0
 
@@ -989,10 +1539,12 @@ def build(args):
     built, failed, changed = [], [], False
     for r in wanted:
         name = target_name(r, root)
+        res = resolutions.get(r)
         out, did, ok = link_target(name, closures[r], cfg, outdir,
-                                   args.dry_run)
+                                   args.dry_run,
+                                   res["ldflags"] if res else [])
         changed = changed or did
-        (built if ok else failed).append((name, closures[r]))
+        (built if ok else failed).append((name, closures[r], res))
 
     cache.save()
     if args.dry_run:
@@ -1009,20 +1561,23 @@ def build(args):
             if len(ignored) > 5:
                 note(f"... and {len(ignored) - 5} more")
 
-        names = ", ".join(n for n, _ in built)
+        names = ", ".join(n for n, _, _ in built)
         if built:
             info(f"built {names}" if changed else f"{names} up to date")
 
     if failed:
         print()
-        for name, cl in failed:
+        for name, cl, res in failed:
             warn(f"{name} did not link")
-            if cl.external:
-                shown = sorted(cl.external)[:6]
-                note(f"unresolved outside the tree: {', '.join(shown)}"
-                     + (" ..." if len(cl.external) > 6 else ""))
-        note("library resolution is not implemented yet -- pass the "
-             "libraries with --ldflags, or name only the targets you want")
+            if res and res["chosen"]:
+                note(f"resolved to: {' '.join(res['ldflags'])}")
+            missing = res["unresolved"] if res else sorted(cl.external)
+            if missing:
+                note(f"no installed library exports: "
+                     f"{', '.join(missing[:6])}"
+                     + (" ..." if len(missing) > 6 else ""))
+        note("name the missing libraries with --ldflags, or build only the "
+             "targets you want")
         return 1
     return 0
 
@@ -1100,9 +1655,25 @@ def parse_args(argv):
     p.add_argument("--widen-all", action="store_true",
                    help="compile every source in the tree before closing, "
                         "instead of filtering candidates by symbol name")
+    p.add_argument("--no-libs", action="store_true",
+                   help="do not resolve external symbols to libraries; pass "
+                        "every -l and -I yourself")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("-q", "--quiet", action="store_true")
-    args = p.parse_args(argv)
+    # argparse refuses a value that looks like an option, so `--ldflags -lm`
+    # fails where `--ldflags=-lm` works. Since -l is exactly what anyone will
+    # type, rewrite the separated form into the joined one first.
+    joined, i = [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--cflags", "--ldflags") and i + 1 < len(argv):
+            joined.append(f"{a}={argv[i + 1]}")
+            i += 2
+            continue
+        joined.append(a)
+        i += 1
+
+    args = p.parse_args(joined)
 
     def flags(given, env):
         out = []

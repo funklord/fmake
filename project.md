@@ -7,9 +7,10 @@ This is a living design document. It is updated as decisions are made, and it
 records the reasoning, not just the conclusion — including the options rejected,
 so they don't get relitigated.
 
-Status: **phases 1-2 implemented** — `fmake` builds C and C++ programs from an
-unannotated tree. `./selftest` covers the design claims below. Phases 3-7
-(annotations, library resolution, config, eject) are not written yet.
+Status: **phases 1, 2 and 4 implemented** — `fmake` builds C and C++ programs
+from an unannotated tree, and resolves their libraries. `./selftest` covers the
+design claims below. Phases 3, 5, 6, 7 (annotations, `fmake.toml`, `--eject`,
+`fmake.py`) are not written yet.
 
 ---
 
@@ -298,9 +299,46 @@ binary needs from outside the tree. `SDL_Init` undefined means `SDL_Init` is
 genuinely called — not merely that a header was included.
 
 Resolution: match each external symbol against the dynamic symbol tables of
-installed shared libraries (`nm -D --defined-only`), indexed once and cached
-under the library directory mtimes. A hit names the `.so`, which maps back to a
-package and usually to a `.pc` file.
+installed shared libraries (`nm -D --defined-only`). A hit names the library,
+which gives the `-l` flag directly.
+
+Three things learned building it:
+
+- **Only the development symlink counts.** A machine can carry
+  `libSDL2-2.0.so.0` for programs that already exist while having no
+  `libSDL2.so` at all, and offering `-lSDL2` there is a link error. Indexing
+  only `libNAME.so`/`libNAME.a` cuts the sweep from ~2350 libraries to ~520
+  *and* is more correct — and if the dev package is missing, the headers are
+  missing too, so the compile failed first anyway.
+- **`libc.so` and `libm.so` are GNU ld scripts, not ELF.** They name the real
+  runtime libraries in a `GROUP(...)`, and `nm` cannot read them directly.
+- **Dynamic symbol tables do not follow the lowercase-is-local rule.**
+  Everything `nm -D --defined-only` reports is exported — glibc exports `cos`
+  as an ifunc, type `i`. Version suffixes (`cos@@GLIBC_2.2.5`) need stripping.
+
+No persistent index. The whole sweep is about a second, only the wanted symbols
+are retained, and the result is cached against the union of every target's
+external set plus a stamp of the library directories — so an ordinary
+incremental build never scans at all. No index means no staleness.
+
+The sweep is shared across targets rather than run per target, which is worth
+more than it sounds: on a repo with four programs it is the difference between
+3.9s and 1.1s for a cold build, because the sweep is the only expensive part of
+resolution.
+
+### `--wrap`, for free
+
+A symbol named `__wrap_socket` exists for exactly one reason: GNU ld's
+`--wrap`, which redirects calls to `socket` into it. So a link set defining
+`__wrap_X` where `X` is undefined somewhere in that same link set is an
+unambiguous request for `-Wl,--wrap=X`, inferable from the symbol name alone.
+
+This is worth calling out because it is the clearest case of the model paying
+off. Include-scanning cannot reach it — there is no header involved. Only the
+closure knows which objects are in the link, and therefore which wrappers
+apply. And the failure mode it prevents is nasty: without the flag the program
+links perfectly and silently calls the real function, which is how a mocked
+unit test comes to pass against the live syscall.
 
 This is strictly better evidence than signal 1 and catches what it misses:
 
@@ -323,8 +361,22 @@ including TU and line, and a suggested `@pkg`/`@libs`. This is a much better
 error than the linker's bare `undefined reference to 'SDL_Init'`, because fmake
 knows which source line pulled in the header and what it searched.
 
-Ambiguity — two `.pc` files providing a header, or two libraries exporting a
-symbol — is a hard stop naming both candidates, never a coin flip.
+### Ambiguity
+
+Two `.pc` files providing the same header is a hard stop naming both.
+
+Two libraries exporting the same symbol is **not**, and the original plan to
+refuse there was wrong. It is ordinary: glibc merged libm into libc, glibc also
+ships `libm-2.41.a` beside `libm.so`, and distributions ship `libcmocka`
+alongside `libcmockery`. Refusing would reject correct programs constantly.
+
+So the choice is a greedy minimum cover over the unresolved symbols, tie-broken
+by: a library the headers already proposed, then the shorter name, then
+alphabetically. `--explain` names the alternatives it passed over. The
+shorter-name rule is load-bearing rather than cosmetic — without it `libm-2.41`
+beats `libm`, and linking glibc's private static half drags in internals like
+`_dl_x86_cpu_features` that nothing can resolve. Shared libraries are also
+preferred over archives outright, for the same reason.
 
 ---
 
@@ -504,9 +556,10 @@ Each phase is a usable tool, not a milestone toward one.
    `-MD` depfiles, `nm` parsing, symbol closure with weak-symbol handling,
    widening, `.fmake/` layout, `--explain`.
 3. **Annotations.** The directive set, precedence, `--doxygen-aliases`.
-4. **Dependency inference.** Header table and pkg-config reverse lookup (signal
-   1), then the shared-library symbol index (signal 2). This is when the
-   ten-file SDL app builds with zero annotations.
+4. **Dependency inference.** *Done, out of order* — `--explain` already had the
+   external symbols, so turning them into `-l` flags removed the last reason to
+   pass anything by hand. Header table and pkg-config reverse lookup (signal 1),
+   shared-library symbol scan (signal 2), and `--wrap` inference.
 5. **`fmake.toml`.** Named configurations, install paths, per-target overrides.
 6. **`--eject`.** Makefile and ninja output.
 7. **`fmake.py`.** Last, deliberately.
@@ -530,6 +583,21 @@ binaries once cmocka was named in `LDFLAGS`. It could not name the binaries
 `udp-echo-*` — that needs `@target`, which is phase 3.
 
 The premise holds.
+
+### Phase 4 results
+
+The same project now builds **all four** of its targets with no flags at all,
+and its 13 cmocka tests pass. fmake resolved `-lcmocka` from the symbols, and
+inferred every `-Wl,--wrap=` flag — `socket`, `bind`, `close`, `epoll_ctl`,
+`setsockopt`, `signalfd`, `sigprocmask` — which the Makefile lists by hand under
+twenty lines of comments explaining why they are needed.
+
+Also verified: `libxml-2.0`, which needs both an `-I/usr/include/libxml2` before
+anything compiles and an `-lxml2` at link time, and which is not in the builtin
+header table, so it exercises the `.pc` reverse lookup end to end.
+
+Still missing versus the Makefile: the binaries are named `server` and `client`
+rather than `udp-echo-server` and `udp-echo-client`. That needs `@target`.
 
 ---
 
@@ -569,6 +637,18 @@ The premise holds.
   produces no external symbols for them, so this mostly resolves itself. The
   remaining case is a header-only library that needs `-I` pointing somewhere
   non-standard.
+- **Library resolution has no notion of link order.** The chosen `-l` flags are
+  emitted in cover order. That is fine for shared libraries but wrong for static
+  archives, where the linker is order-sensitive and a cyclic dependency between
+  two archives needs one repeated. Untested and probably broken.
+- **`-L` is emitted from where the library was found**, compared against
+  `cc -print-search-dirs`, rather than from pkg-config's `-L`. That covers
+  libraries found by symbol alone as well as by package, but it is only as
+  good as the directory list fmake scans — a prefix it never looks in cannot
+  be resolved at all, and still needs `--ldflags`.
+- **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
+  `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
+  are unhandled.
 - **Install.** `fmake install` needs `@headers`, a prefix, and a DESTDIR. Not yet
   designed.
 - **Multiple mains, shared state.** Two binaries sharing 90% of their TUs compile

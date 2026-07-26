@@ -68,6 +68,10 @@ class Failure(Exception):
     pass
 
 
+class Skip(Exception):
+    """The machine lacks something the case needs -- not a failure."""
+
+
 def check(cond, what):
     if not cond:
         raise Failure(what)
@@ -351,6 +355,176 @@ def one_failed_target_does_not_sink_the_rest(t):
           f"the failure should be named: {r.stdout}")
 
 
+def _have_pkg(module):
+    return subprocess.run(["pkg-config", "--exists", module],
+                          capture_output=True).returncode == 0
+
+
+@case
+def libs_resolve_from_symbols(t):
+    """zlib is linked because compress is called, with no flags given."""
+    if not os.path.exists("/usr/include/zlib.h"):
+        raise Skip("zlib headers not installed")
+    t.write("main.c", """
+#include <stdio.h>
+#include <zlib.h>
+int main(void){
+    unsigned char in[64] = "hello hello hello", out[128];
+    uLongf n = sizeof out;
+    compress(out, &n, in, sizeof in);
+    printf("%s %d\\n", zlibVersion(), (int)(n < sizeof in));
+    return 0;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    e = t.fmake("--explain").stdout
+    check("-lz" in e, f"zlib should have been resolved: {e}")
+    check(t.run(os.path.basename(t.dir)).stdout.endswith(" 1\n"),
+          "binary did not run correctly")
+
+
+@case
+def libs_are_not_linked_for_unused_headers(t):
+    """Including a header proves a declaration was wanted, nothing more.
+
+    Signal 1 (the include) proposes zlib; signal 2 (the symbols) contradicts
+    it, because nothing from zlib is called. The library must not be linked,
+    and the disagreement is worth reporting."""
+    if not os.path.exists("/usr/include/zlib.h"):
+        raise Skip("zlib headers not installed")
+    t.write("main.c", """
+#include <stdio.h>
+#include <zlib.h>
+int main(void){ puts("nothing from zlib"); return 0; }
+""")
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"explain failed: {r.stderr}")
+    check("-lz" not in r.stdout, f"zlib should not be linked: {r.stdout}")
+    check("no symbol needs it" in r.stdout,
+          f"the unused header should be reported: {r.stdout}")
+
+
+@case
+def libs_needing_include_flags_are_found(t):
+    """The -I has to come from pkg-config, before anything is compiled.
+
+    libxml/parser.h lives under /usr/include/libxml2, so the file does not
+    even compile without the flag. It is not in the builtin header table
+    either, so this exercises the .pc reverse lookup."""
+    if not _have_pkg("libxml-2.0"):
+        raise Skip("libxml2 not installed")
+    t.write("main.c", """
+#include <stdio.h>
+#include <libxml/parser.h>
+int main(void){
+    xmlDocPtr d = xmlReadMemory("<a><b/></a>", 11, NULL, NULL, 0);
+    printf("%s\\n", d ? (const char*)xmlDocGetRootElement(d)->name : "?");
+    xmlFreeDoc(d);
+    return 0;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    e = t.fmake("--explain").stdout
+    check("-I/usr/include/libxml2" in e, f"missing the -I flag: {e}")
+    check("-lxml2" in e, f"missing the -l flag: {e}")
+    check(t.run(os.path.basename(t.dir)).stdout == "a\n", "wrong output")
+
+
+@case
+def libm_is_preferred_over_its_private_archive(t):
+    """glibc ships libm-2.41.a beside libm.so; only one of them links.
+
+    Picking the archive drags in internals like _dl_x86_cpu_features that
+    nothing can resolve, so shared libraries must be preferred over archives
+    and the shorter name must win a tie."""
+    t.write("main.c", """
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+int main(int argc, char **argv){
+    double x = argc > 1 ? atof(argv[1]) : 7.0;
+    printf("%.4f\\n", sqrt(x) + lgamma(x));
+    return 0;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    e = t.fmake("--explain").stdout
+    check("-lm\n" in e or "-lm " in e, f"libm not resolved: {e}")
+    check("-lm-" not in e.split("could also")[0],
+          f"a private glibc archive was chosen: {e}")
+    check(t.run(os.path.basename(t.dir)).stdout == "9.2250\n", "wrong output")
+
+
+@case
+def wrap_flags_are_inferred(t):
+    """Defining __wrap_X means --wrap=X, and nothing else.
+
+    Without the flag the program links fine and silently calls the real
+    function -- the failure mode that makes a mocked unit test pass against
+    the real syscall. Only the closure knows which objects are in the link,
+    so only it can decide which wrappers apply."""
+    # argv[0], so the call survives constant folding and a real undefined
+    # reference to strlen reaches the linker.
+    t.write("main.c", """
+#include <stdio.h>
+#include <string.h>
+size_t __wrap_strlen(const char *s){ (void)s; return 99; }
+int main(int argc, char **argv){ (void)argc; printf("%d\\n", (int)strlen(argv[0])); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    e = t.fmake("--explain").stdout
+    check("--wrap=strlen" in e, f"the wrapper should be detected: {e}")
+    check(t.run(os.path.basename(t.dir)).stdout == "99\n",
+          "the wrapper was not actually applied at link time")
+
+
+@case
+def wrap_is_not_inferred_for_unused_wrappers(t):
+    """A __wrap_ symbol for something nothing calls is not a wrap request."""
+    t.write("main.c", """
+#include <stdio.h>
+int __wrap_never_called(void){ return 1; }
+int main(void){ puts("hi"); return 0; }
+""")
+    e = t.fmake("--explain").stdout
+    check("--wrap=never_called" not in e,
+          f"nothing calls never_called, so no flag is warranted: {e}")
+
+
+@case
+def unresolvable_symbols_are_named(t):
+    """A symbol no library exports should be reported by name."""
+    t.write("main.c",
+            "int totally_made_up_fn(int);\n"
+            "int main(void){ return totally_made_up_fn(1); }\n")
+    r = t.fmake()
+    check(r.returncode != 0, "should have failed")
+    check("totally_made_up_fn" in r.stdout,
+          f"the missing symbol should be named: {r.stdout}")
+    check("no installed library exports" in r.stdout,
+          f"expected a resolution failure message: {r.stdout}")
+
+
+@case
+def no_libs_disables_resolution(t):
+    """--no-libs hands the flags back to the caller."""
+    if not os.path.exists("/usr/include/zlib.h"):
+        raise Skip("zlib headers not installed")
+    t.write("main.c", """
+#include <stdio.h>
+#include <zlib.h>
+int main(void){ printf("%s\\n", zlibVersion()); return 0; }
+""")
+    check(t.fmake("--no-libs").returncode != 0,
+          "--no-libs should not have resolved zlib")
+    check(t.fmake("--no-libs", "--ldflags", "-lz").returncode == 0,
+          "explicit --ldflags should still work")
+
+
 @case
 def explain_shows_symbol_provenance(t):
     """Every inclusion has to be attributable to a symbol."""
@@ -377,12 +551,15 @@ def main(argv):
 
     cases = [c for c in CASES
              if not pats or any(p in c.__name__ for p in pats)]
-    failures = 0
+    failures = skipped = 0
     for c in cases:
         t = Tree(c.__name__)
         try:
             c(t)
             print(f"{GREEN}ok{OFF}   {c.__name__}")
+        except Skip as exc:
+            skipped += 1
+            print(f"{DIM}skip {c.__name__} -- {exc}{OFF}")
         except Failure as exc:
             failures += 1
             print(f"{RED}FAIL{OFF} {c.__name__}")
@@ -396,10 +573,11 @@ def main(argv):
             t.cleanup()
 
     print()
+    tail = f" ({skipped} skipped)" if skipped else ""
     if failures:
-        print(f"{RED}{failures} of {len(cases)} failed{OFF}")
+        print(f"{RED}{failures} of {len(cases)} failed{OFF}{tail}")
     else:
-        print(f"{GREEN}all {len(cases)} passed{OFF}")
+        print(f"{GREEN}all {len(cases) - skipped} passed{OFF}{tail}")
     return 1 if failures else 0
 
 
