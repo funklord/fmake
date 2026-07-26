@@ -509,22 +509,28 @@ preferred over archives outright, for the same reason.
 
 ## 6. Precedence
 
-Fixed, and printed by `--explain` whenever two sources disagree:
+Two chains, because they govern different kinds of fact — see §14, where
+assuming one chain covered both turned out to be the bug.
+
+**Artifact identity** — name, kind, membership — is a project-level decision,
+so the outer level wins:
 
 ```
-inference  <  source annotations  <  fmake.toml  <  fmake.py  <  CLI flags / env
+inference  <  source annotations  <  fmake.toml  <  fmake.py  <  CLI / env
 ```
 
-Later wins. Additive directives (`@libs`, `@cflags`, `@define`) accumulate across
-levels rather than replacing; scalar ones (`@target`, `@std`, `@kind`) replace.
-
-Only `fmake.py` is missing, so the chain in force is:
+**Compile flags** are a property of one file, so they run general to specific,
+and then the command line overrides everything as an override should:
 
 ```
-inference  <  source annotations  <  fmake.toml  <  CLI flags / env
+defaults / [project] / [profile]  <  source annotations  <  CLI / env
 ```
 
-Concrete cases it governs: `[target.*] name` overrides `@target`; `$CC` beats
+Additive directives (`@libs`, `@cflags`, `@define`) accumulate across levels
+rather than replacing; scalar ones (`@target`, `@kind`) replace. Both are
+printed by `--explain` when levels disagree.
+
+Only `fmake.py` is missing. Concrete cases these govern: `[target.*] name` overrides `@target`; `$CC` beats
 `[toolchain] cc`, so a one-off cross build needs no edit to a tracked file;
 `--ldflags` is appended after every resolved and declared library, so an
 explicit flag always has the last word; and `--no-libs` disables §5 entirely
@@ -1064,7 +1070,99 @@ rather than one library, and the hint now says so instead of suggesting `@os`.
 
 ---
 
-## 14. Open questions
+## 14. The chains, checked
+
+Sections 3-7 describe a pipeline: **source → candidate → object → symbol →
+link set → library**, with a precedence chain and a cache-key chain running
+alongside it. Everything until now was found by pointing fmake at real code,
+which only finds what those particular projects happen to do. This section is
+the other pass: asking of each chain whether it is *sound* — does it agree
+with what the linker would do — and *confluent* — is the answer independent of
+arbitrary ordering.
+
+Three of the four properties held. The fourth did not, and neither did two
+invariants alongside it.
+
+### Widening terminates and is confluent — holds
+
+`tried` grows monotonically and is bounded by the symbol universe; `units`
+grows monotonically and is bounded by the source list; the candidate pool only
+shrinks. So the loop terminates, and because `widen_candidates` reads a static
+per-file property, no ordering of iterations can produce a different fixpoint.
+
+### The closure was **not** confluent — fixed
+
+The rule established in §3 is *strong wins if one exists, weak is the provider
+of last resort*. That was enforced when **choosing** a provider but not when
+deciding whether to look for one, which asked only "is this symbol defined by
+anything already linked?" — weak or strong alike.
+
+So a weak definition in an object linked for some unrelated reason ends the
+search, and a strong definition elsewhere is never found. Which happens
+depends on which object was popped first, which depends on the alphabetical
+order of an unrelated symbol:
+
+```c
+/* hooks.c */   __attribute__((weak)) int hook(void){ return 1; }
+                int driver(void){ return 10; }
+/* override.c */ int hook(void){ return 2; }   /* the real one */
+```
+
+`driver` sorts before `hook`, so hooks.c is linked first and its weak default
+silently wins: the program prints 11. Rename `driver` to `zdriver` and the
+same program prints 12. That is the weak-override pattern — the single most
+common reason to write a weak symbol — resolved by a coin flip, in a design
+whose stated rule is that there are none.
+
+The satisfaction test now accepts only a *strong* definition. A weak one
+stands only when no strong provider exists anywhere in the pool, which is a
+global property and therefore order-independent.
+
+### The cache key was incomplete — fixed
+
+`-fPIC` is added by fmake itself when any target is shared. It was appended to
+`cfg.cflags` *after* the configuration key was computed, so it named no object
+directory and invalidated nothing. Building only the program and then building
+the shared library as well reused the non-PIC objects, and the `.so` was linked
+from them. Debian's default `-fPIE` masks the consequence; with PIE disabled it
+is a relocation error.
+
+The rule this violated is worth stating on its own: **anything that changes a
+compiler invocation must be in the configuration identity, including flags
+fmake adds for itself.** The key is now recomputed whenever flags change.
+
+### Precedence was documented backwards — fixed
+
+The chain says `inference < annotations < fmake.toml < CLI`. The compile line
+was `(CLI or defaults) + toml + annotations`, and later wins at the compiler —
+so the real order was the exact inverse, and `--cflags -O0` could not override
+a file that asked for `-O2`. Forcing a debug build, which is the entire purpose
+of the flag, did not work.
+
+Fixing it required deciding what the rule actually should be, because both
+orderings are defensible. The answer is that they govern different kinds of
+fact:
+
+- **Artifact identity** — name, kind, membership — is a project-level
+  decision: `inference < annotations < fmake.toml < CLI`. `[target.*] name`
+  beating `@target` is right, and already was.
+- **Compile flags** are a property of a file, so they run general to specific
+  and then override: `defaults / [project] / [profile] < annotations < CLI`.
+
+That is the same line §4 draws between `@cflags` and `@ldflags`, applied to
+precedence rather than to scope. `--eject` emits the command-line band as a
+separate variable so the ordering survives ejection.
+
+### What this says about the method
+
+All three were reachable from the design alone; none needed a project to
+stumble over them. Two were silent — a wrong link set and a stale object — and
+silent wrongness is exactly what pointing the tool at more code does not find,
+because a build that succeeds looks the same either way.
+
+---
+
+## 15. Open questions
 
 - **Cost of widening.** Less pressing than it looked: with §3's two fixes the
   include graph identifies 248 of 292 files on a real project, so widening

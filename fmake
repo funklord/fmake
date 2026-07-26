@@ -959,8 +959,14 @@ class Config:
         self.os      = tool.get("os") or host_os()
         self.arch    = tool.get("arch") or host_arch()
 
-        self.cflags  = list(args.cflags) or list(DEFAULT_CFLAGS)
-        self.cflags += conf.cflags()
+        # Three bands, general to specific: defaults and fmake.toml, then
+        # each file's own annotations, then the command line. Later wins at
+        # the compiler, so the command line has to come last or --cflags -O0
+        # cannot override a file that asked for -O2 -- which is exactly what
+        # anyone reaching for the flag is trying to do.
+        self.cflags   = ([] if args.cflags else list(DEFAULT_CFLAGS))
+        self.cflags  += conf.cflags()
+        self.override = list(args.cflags)
         self.ldflags = conf.ldflags() + list(args.ldflags)
         if self.sysroot:
             self.cflags.append("--sysroot=" + self.sysroot)
@@ -982,9 +988,19 @@ class Config:
         self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
         # The profile is in here through cflags, so switching profiles gets a
         # separate object directory rather than invalidating the old one.
-        self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
-                                 self.os, self.arch, *self.cflags]))[:12]
         self._libdirs = None
+        self.refresh_key()
+
+    def refresh_key(self):
+        """Recompute the configuration identity.
+
+        Must be called after anything changes cflags, including flags fmake
+        adds for itself. The key names the object directory, so a flag that
+        is not in it is a flag that silently reuses objects built without it.
+        """
+        self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
+                                 self.os, self.arch,
+                                 *self.cflags, "|", *self.override]))[:12]
 
     def _prefixed(self, tool):
         """The toolchain's own copy of a binutil, if there is one."""
@@ -1134,7 +1150,7 @@ def unit_cflags(u, pkg, store, sig):
 def compile_cmd(u, cfg, incflags):
     cc = cfg.driver(u.cxx)
     return ([cc, "-c", u.abs, "-o", u.obj, "-MD", "-MF", u.dep]
-            + incflags + cfg.cflags + u.own)
+            + incflags + cfg.cflags + u.own + cfg.override)
 
 
 def object_key(u, cfg, cache, root, incflags):
@@ -1373,7 +1389,14 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
     while frontier:
         cur = frontier.pop()
         for sym in sorted(cur.undef):
-            if any(sym in o.strong or sym in o.weak for o in linked):
+            # Only a *strong* definition already in the link set ends the
+            # search. Accepting a weak one here would let whichever object
+            # happened to be linked first shadow a strong definition
+            # elsewhere -- and which comes first depends on the alphabetical
+            # order of some unrelated symbol, so the same program could link
+            # two different ways. Strong beats weak has to hold globally,
+            # not just at the moment a provider is chosen.
+            if any(sym in o.strong for o in linked):
                 continue
 
             providers = strong_by_sym.get(sym, [])
@@ -1382,13 +1405,14 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
                 continue
 
             if not providers:
-                # No strong definition anywhere, but a weak one will do. This
-                # is how a separately instantiated template is reached:
-                # `extern template` leaves the user's object with an undefined
-                # reference that only a vague-linkage definition satisfies.
-                # Several files offering it is normal rather than ambiguous --
-                # vague linkage means the copies are interchangeable -- so
-                # take the first by name and stay deterministic.
+                # No strong definition anywhere in the pool, so a weak one is
+                # the answer -- this is how a separately instantiated
+                # template is reached, since `extern template` leaves a plain
+                # undefined reference that only vague linkage satisfies.
+                # A weak copy already linked is as good as any other: vague
+                # linkage means they are interchangeable.
+                if any(sym in o.weak for o in linked):
+                    continue
                 weak = weak_by_sym.get(sym, [])
                 if not weak:
                     continue
@@ -2398,7 +2422,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 
     ldflags = (res["ldflags"] if res else []) + cfg.ldflags
     print(f"  {CYAN('flags')}")
-    print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) if f.startswith('-I') else f for f in incflags])}")
+    print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) if f.startswith('-I') else f for f in incflags] + cfg.override)}")
     if ldflags:
         print(f"    {' '.join(ldflags)}")
     print(f"  {CYAN('argv')}")
@@ -2431,7 +2455,6 @@ def build(args, _bootstrapping=False):
     cache  = Cache(os.path.join(state, CACHE_FILE))
     conf   = Conf(load_conf(root), args.profile)
     cfg    = Config(args, conf)
-    objdir = os.path.join(state, "obj", cfg.key)
     outdir = os.path.abspath(args.output) if args.output else root
     jobs   = args.jobs or (os.cpu_count() or 4)
 
@@ -2633,6 +2656,16 @@ def build(args, _bootstrapping=False):
             units[rel] = Unit(rel, root, objdir, scans[rel])
         return units[rel]
 
+    # Shared objects need position-independent code, and mixing PIC objects
+    # into an executable is harmless, so one setting covers the whole tree.
+    # Decided here, before the object directory is named, because -fPIC has
+    # to be part of the configuration identity: building only the program and
+    # then building the library as well must not reuse the non-PIC objects.
+    if any(t.kind == "shared" for t in wanted):
+        cfg.cflags = cfg.cflags + ["-fPIC"]
+        cfg.refresh_key()
+    objdir = os.path.join(state, "obj", cfg.key)
+
     # @sources, resolved next to the file that asked for them, then from the
     # project root. Same semantics as --force-link: the files nothing
     # references but that must be in the link anyway.
@@ -2712,10 +2745,6 @@ def build(args, _bootstrapping=False):
                     f"satisfied (installed: {have})")
         units[rel].own = unit_cflags(units[rel], pkg, hdr_store, pkg_sig)
 
-    # Shared objects need position-independent code, and mixing PIC objects
-    # into an executable is harmless, so one setting covers the whole tree.
-    if any(t.kind == "shared" for t in wanted):
-        cfg.cflags = cfg.cflags + ["-fPIC"]
 
     vinfo(f"{len(srcs)} sources, {len(candidates)} candidates, "
           f"{len(wanted)} target(s)"
@@ -2962,6 +2991,7 @@ def _mk_ident(name):
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
     """A standalone Makefile."""
     common = _eject_flags(cfg.cflags + incflags, root)
+    override = _eject_flags(cfg.override, root)
     L = []
     a = L.append
 
@@ -2980,6 +3010,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
     a(f"AR       = {cfg.ar_name}")
     a(f"CFLAGS   = {' '.join(common)}")
     a(f"CXXFLAGS = {' '.join(common)}")
+    # Emitted separately so it stays after each file's own flags, which is
+    # what makes it an override rather than just another default.
+    a(f"CFLAGS_LAST = {' '.join(override)}")
     if cfg.ldflags:
         a(f"LDFLAGS  = {' '.join(_eject_flags(cfg.ldflags, root))}")
     else:
@@ -3034,8 +3067,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
         order_only = " | $(GENERATED)" if gen_outs else ""
         a(f"{obj}: {rel}{order_only}")
         a("\t@mkdir -p $(@D)")
-        a(f"\t$({var}) $({flags}){' ' + own if own else ''} -c $< -o $@ "
-          f"-MD -MF $(@:.o=.d)")
+        a(f"\t$({var}) $({flags}){' ' + own if own else ''} $(CFLAGS_LAST) "
+          f"-c $< -o $@ -MD -MF $(@:.o=.d)")
         a("")
 
     a("# ---- targets " + "-" * 50)
@@ -3076,6 +3109,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf):
     """A standalone build.ninja."""
     common = " ".join(_eject_flags(cfg.cflags + incflags, root))
+    override = " ".join(_eject_flags(cfg.override, root))
     L = []
     a = L.append
 
@@ -3094,19 +3128,20 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf):
     a(f"cxx = {cfg.cxx}")
     a(f"ar = {cfg.ar_name}")
     a(f"cflags = {common}")
+    a(f"cflags_last = {override}")
     a(f"ldflags = {' '.join(_eject_flags(cfg.ldflags, root))}")
     a(f"objdir = {EJECT_OBJDIR}")
     a("")
     # `deps = gcc` lets ninja read the depfile and then discard it, which is
     # what makes header dependencies free here too.
     a("rule cc")
-    a("  command = $cc $cflags $extra -c $in -o $out -MD -MF $out.d")
+    a("  command = $cc $cflags $extra $cflags_last -c $in -o $out -MD -MF $out.d")
     a("  depfile = $out.d")
     a("  deps = gcc")
     a("  description = CC $in")
     a("")
     a("rule cxx")
-    a("  command = $cxx $cflags $extra -c $in -o $out -MD -MF $out.d")
+    a("  command = $cxx $cflags $extra $cflags_last -c $in -o $out -MD -MF $out.d")
     a("  depfile = $out.d")
     a("  deps = gcc")
     a("  description = CXX $in")

@@ -293,6 +293,109 @@ int main(){ Box<int> z{42}; printf("%d\\n", z.get()); }
 
 
 @case
+def closure_never_lets_weak_shadow_strong(t):
+    """A strong definition must win wherever it is, and whenever it is found.
+
+    hooks.c defines a weak default for `hook` and also `driver`, which main
+    calls. If the closure accepts a weak definition already in the link set
+    as satisfying the symbol, then processing `driver` first pulls in hooks.c
+    and `hook` is then considered done -- so override.c is never linked and
+    the weak default silently wins.
+
+    What decides the order is the alphabetical position of an unrelated
+    symbol, so the same program links two different ways depending on what
+    its functions are called. Renaming driver to zdriver flips it."""
+    for prefix in ("driver", "zdriver"):
+        t.write("hooks.c", f"""
+__attribute__((weak)) int hook(void){{ return 1; }}
+int {prefix}(void){{ return 10; }}
+""")
+        t.write("override.c", "int hook(void){ return 2; }\n")
+        t.write("main.c", f"""
+#include <stdio.h>
+int {prefix}(void); int hook(void);
+int main(void){{ printf("%d\\n", {prefix}() + hook()); return 0; }}
+""")
+        shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+        r = t.fmake()
+        check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+        got = t.run(os.path.basename(t.dir)).stdout
+        check(got == "12\n",
+              f"with {prefix}: the strong override should win, got {got!r}")
+
+
+@case
+def pic_is_part_of_the_object_identity(t):
+    """A flag fmake adds itself still has to invalidate objects.
+
+    Building only the program compiles without -fPIC. Building the shared
+    library too adds it. If that flag is not part of the configuration
+    identity, the objects look up to date and the .so is linked from
+    non-PIC code -- which Debian's default -fPIE happens to mask, so the
+    invariant is checked directly: different effective flags must mean a
+    different object directory.
+    """
+    t.write("greet.c", """
+/*! @file
+ *  @target greet
+ *  @kind   shared
+ */
+static const char msg[] = "hello";
+const char *greet(void){ return msg; }
+""")
+    t.write("tool.c", '#include <stdio.h>\nconst char *greet(void);\n'
+            "int main(void){ puts(greet()); return 0; }\n")
+
+    def objdirs():
+        base = os.path.join(t.dir, ".fmake", "obj")
+        return set(os.listdir(base)) if os.path.isdir(base) else set()
+
+    check(t.fmake("tool").returncode == 0, "program-only build failed")
+    without_pic = objdirs()
+    check(len(without_pic) == 1, f"expected one config: {without_pic}")
+
+    r = t.fmake()
+    check(r.returncode == 0, f"shared build failed: {r.stdout}{r.stderr}")
+    check(len(objdirs()) == 2,
+          f"adding -fPIC must change the object directory, not reuse it: "
+          f"{objdirs()}")
+    check(os.path.exists(os.path.join(t.dir, "libgreet.so")),
+          "the shared library was not produced")
+    check("-fPIC" in t.fmake("--explain").stdout, "-fPIC should be in effect")
+
+
+@case
+def cli_flags_override_annotations(t):
+    """The command line is an override, so it has to come last.
+
+    Forcing -O0 for a debugging run is the entire purpose of the flag, and a
+    file asking for -O2 must not defeat it."""
+    t.write("main.c", """
+/*! @file
+ *  @cflags -O2
+ */
+#include <stdio.h>
+int main(void){
+#if __OPTIMIZE__
+    puts("optimised");
+#else
+    puts("not optimised");
+#endif
+    return 0;
+}
+""")
+    prog = os.path.basename(t.dir)
+    check(t.fmake("--cflags", "-O0").returncode == 0, "build failed")
+    check(t.run(prog).stdout == "not optimised\n",
+          "--cflags should override the file's own flags")
+
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    check(t.fmake().returncode == 0, "build failed")
+    check(t.run(prog).stdout == "optimised\n",
+          "without the flag, the file's own flags still apply")
+
+
+@case
 def two_mains_two_programs(t):
     """Each main() is its own program; shared code is compiled once."""
     t.write("lib.h", "int shared_calc(int);\n")
