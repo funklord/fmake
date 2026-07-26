@@ -2388,6 +2388,12 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
     out = os.path.join(outdir, name)
     cmd = link_cmd(t, cl, cfg, outdir, libflags)
 
+    # `-o dist` names somewhere to put the artifacts, not somewhere that must
+    # already exist. Without this the linker fails with "cannot open output
+    # file", which says nothing about the directory being the problem.
+    if not dry_run:
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+
     if dry_run:
         print(" ".join(cmd))
         return out, True, True
