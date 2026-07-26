@@ -7,9 +7,10 @@ This is a living design document. It is updated as decisions are made, and it
 records the reasoning, not just the conclusion — including the options rejected,
 so they don't get relitigated.
 
-Status: **phases 1, 2 and 4 implemented** — `fmake` builds C and C++ programs
-from an unannotated tree, and resolves their libraries. `./selftest` covers the
-design claims below. Phases 3, 5, 6, 7 (annotations, `fmake.toml`, `--eject`,
+Status: **phases 1–4 implemented** — `fmake` builds C and C++ programs and
+libraries from an unannotated tree, resolves their dependencies, and accepts
+in-source directives for what cannot be inferred. `./selftest` covers the design
+claims below, case per claim. Phases 5, 6 and 7 (`fmake.toml`, `--eject`,
 `fmake.py`) are not written yet.
 
 ---
@@ -240,6 +241,11 @@ in `fmake.toml`, or `fmake.py` if it truly needs code.
 | `@os NAME...` / `@arch NAME...` | This TU only participates on matching platforms. |
 | `@sources GLOB...` | Force TUs into the link set that reachability missed. |
 
+Scalar directives — `@target`, `@kind`, `@std` — replace; last one wins.
+Everything else accumulates, across every comment in a file and every file in
+the link set. Arguments are split shell-style, so quoting works and
+`@define LABEL=\"text\"` needs the backslashes a shell would need.
+
 Notes on specific choices:
 
 - **`@pkg` vs `@libs` are separate on purpose.** They resolve differently:
@@ -247,13 +253,44 @@ Notes on specific choices:
   `@libs` is a literal `-lfoo`. Collapsing them into one directive would mean
   guessing which was meant, and guessing wrong is a link error the user can't
   easily attribute.
+- **Both are assertions, not proposals.** A header only proposes a package,
+  and §5 may decide against it. A directive says the library is needed, so it
+  is linked whether or not a symbol happens to require it. The author knows
+  something the symbols do not — `dlopen`, a linker script, a constructor.
+- **`@pkg` constraints are checked before anything compiles.** Failing at
+  pkg-config with `@pkg sdl2 >= 2.0.18 is not satisfied (installed: 2.0.14)`
+  is a far better error than the compiler's "no such file or directory" forty
+  lines later.
 - **`@headers` is not for build inputs.** Headers used by a TU come from the
   `#include` scan; declaring them again would be redundant and would rot. The
   directive is repurposed for the one header question that *isn't* inferable:
-  which headers form a library's public interface, for install and for `--eject`.
+  which headers form a library's public interface, for install and `--eject`.
+  Both are unimplemented, so today it is parsed and reported and does nothing.
 - **`@ldflags` propagates, `@cflags` does not.** Compile flags are a property of
   the TU. Link flags are a property of anything the TU ends up inside. This
   asymmetry is the thing that makes locality work for dependencies.
+- **`@os`/`@arch` remove a TU from the build entirely** — not from the link
+  set, from existence. This is the answer to §3's duplicate-definition error:
+  `win32_sys.c` and `posix_sys.c` both defining `sys_init` is an ambiguity
+  fmake refuses to resolve, and refusing is the right answer to the wrong
+  question, because only one of them was ever meant to be built here. The
+  error message says so and names the directive.
+- **`@sources` is `--force-link` declared where it belongs**, and `--explain`
+  attributes the file to the directive rather than to the flag.
+
+### What counts as a directive
+
+Only Doxygen's own comment markers — `//!`, `///`, `/*!`, `/**`. An `@` in an
+ordinary comment is never a directive, so an email address in a header banner
+cannot rename the program. This is enforced twice over, by the comment-opener
+test and again by the marker-stripping that runs before a line is examined;
+relaxing either alone changes nothing.
+
+Unknown commands are **ignored in silence**, because `@brief`, `@param` and
+`@author` are not fmake's business and warning about them would make the
+Doxygen integration unusable. The cost is real: `@lib` instead of `@libs` is
+silently inert. The mitigation is that `--explain` lists every directive it
+recognised, per file and with line numbers, so a typo shows up as an absence.
 
 ### Doxygen interoperability
 
@@ -267,6 +304,29 @@ command" warnings for each one. Reuse is not free, but it is cheap:
   block to the *next declaration*; a bare `//! @libs m` above a function attaches
   the metadata to that function in the generated docs. fmake doesn't care, but
   the rendered output will look wrong. Documented, not enforced.
+- One wart with no good fix: a glob containing `/*` inside a block comment —
+  `@sources plugins/*.c` — makes the compiler warn about `"/*" within comment`.
+  Use a `//!` line comment for globs.
+
+### Building libraries
+
+`@kind` needs artifacts that are not programs, so it brings library building
+with it. A tree with no `main()` anywhere is a static library named after its
+directory, which is the only thing it could sensibly be.
+
+**The closure does not apply to a library, and this is not a shortcut.** A
+library exists to be linked against code that has not been written yet, so
+which of its symbols matter is not knowable at the time it is built. Pruning
+would be guessing. So a library is every TU in the tree except other programs'
+roots — an archive with two `main()`s in it is no use to anyone. The consumer's
+linker prunes a static archive at its own link, which is where the information
+to do so finally exists, and a shared object keeps everything by design.
+
+Two mechanical details: `-fPIC` is applied to the whole tree when any target is
+shared, since mixing PIC objects into an executable is harmless and tracking
+per-target object variants is not worth it; and the archive is removed before
+`ar rcs`, because `ar` appends and a stale member would otherwise survive a
+source file being deleted.
 
 ---
 
@@ -390,6 +450,18 @@ inference  <  source annotations  <  fmake.toml  <  fmake.py  <  CLI flags / env
 
 Later wins. Additive directives (`@libs`, `@cflags`, `@define`) accumulate across
 levels rather than replacing; scalar ones (`@target`, `@std`, `@kind`) replace.
+
+Today the middle two levels do not exist, so the chain in force is:
+
+```
+inference  <  source annotations  <  CLI flags / env
+```
+
+Which is worth stating plainly rather than leaving implied, because the ordering
+is the part that has to stay true when `fmake.toml` lands. Two concrete cases it
+already governs: `--ldflags` is appended after every resolved and declared
+library, so an explicit flag always has the last word; and `--no-libs` disables
+§5 entirely without touching annotations, so `@libs` still applies.
 
 ---
 
@@ -555,7 +627,9 @@ Each phase is a usable tool, not a milestone toward one.
 2. **Compile, close, link.** *Done.* Parallel execution, content-hash cache,
    `-MD` depfiles, `nm` parsing, symbol closure with weak-symbol handling,
    widening, `.fmake/` layout, `--explain`.
-3. **Annotations.** The directive set, precedence, `--doxygen-aliases`.
+3. **Annotations.** *Done.* The directive set, precedence, `--doxygen-aliases`,
+   and — because `@kind` demands artifacts that are not programs — building
+   static and shared libraries.
 4. **Dependency inference.** *Done, out of order* — `--explain` already had the
    external symbols, so turning them into `-l` flags removed the last reason to
    pass anything by hand. Header table and pkg-config reverse lookup (signal 1),
@@ -599,6 +673,30 @@ header table, so it exercises the `.pc` reverse lookup end to end.
 Still missing versus the Makefile: the binaries are named `server` and `client`
 rather than `udp-echo-server` and `udp-echo-client`. That needs `@target`.
 
+### Phase 3 results
+
+Two `@target` lines — six lines of comment in total — and fmake now reproduces
+that Makefile exactly: `udp-echo-server`, `udp-echo-client`, and two test
+binaries, all with correct link sets, libraries and `--wrap` flags, from a
+Makefile of roughly 90 lines.
+
+That is the whole thesis of the project in one comparison, so it is worth being
+precise about what the remaining six lines buy: nothing that could have been
+inferred. A binary's name is a naming decision, not a fact about the code.
+
+Verified separately: `@kind static` producing an archive that links into a
+consumer, `@kind shared` producing a working `.so`, a `main()`-free tree
+becoming a library on its own, `@os` resolving the platform-duplicate case,
+`@sources` reaching a constructor-registered plugin, and `@std`/`@define`/
+`@cflags` reaching the compiler.
+
+Four claims were mutation-tested. Three were caught immediately. The fourth —
+that directives only count in Doxygen comments — needed the test rewritten:
+`@target` is scalar and last-wins, and the Doxygen comment happened to come
+last, so the case passed for the wrong reason. It also revealed that the
+restriction is enforced twice, by the opener test *and* by marker-stripping, so
+only relaxing both makes the test fail.
+
 ---
 
 ## 12. Open questions
@@ -630,8 +728,10 @@ rather than `udp-echo-server` and `udp-echo-client`. That needs `@target`.
 - **Generated sources.** A `.c` produced by flex/bison/protoc doesn't exist when
   the scan runs. Needs at minimum a two-pass scan. Currently deferred to
   `fmake.toml` rules, which may not be enough.
-- **Cross-compilation.** `@os`/`@arch` filter TUs, but toolchain selection,
-  sysroots and target-specific pkg-config paths are unaddressed. Likely a
+- **Cross-compilation.** `@os`/`@arch` filter TUs against the *host*, which is
+  exactly wrong for cross builds — there is no notion of a target platform
+  distinct from the machine fmake is running on. Toolchain selection, sysroots
+  and target-specific pkg-config paths are unaddressed too. Likely a
   `fmake.toml` concern, and likely where "less focused on embedded" shows.
 - **Header-only libraries.** Correctly need no link, and signal 2 naturally
   produces no external symbols for them, so this mostly resolves itself. The
@@ -651,9 +751,26 @@ rather than `udp-echo-server` and `udp-echo-client`. That needs `@target`.
   are unhandled.
 - **Install.** `fmake install` needs `@headers`, a prefix, and a DESTDIR. Not yet
   designed.
-- **Multiple mains, shared state.** Two binaries sharing 90% of their TUs compile
-  those once — but if they need *different* `@define`s, they can't. Per-target
-  compile flags mean per-target object directories. Deferred until it comes up.
+- **Per-TU flags are per TU, not per target.** Two binaries sharing 90% of their
+  TUs compile those once, and `@cflags`/`@define` belong to the *file*, so there
+  is exactly one object per file and no conflict. What is impossible is the same
+  file compiled two ways for two targets — that needs per-target object
+  directories, and nothing asks for it yet. `-fPIC` sidesteps the question by
+  being applied tree-wide whenever any target is shared.
+- **A library ignores `@sources` and the closure alike.** It contains everything,
+  so neither has anything to do. That is right for now, but a large tree with one
+  small shared object in it would want the closure back, seeded from `@headers`.
+  That was the original §3 design for libraries and it is still the better answer
+  for that case; it needs matching header declarations to mangled symbols, which
+  is why it is not built.
+- **`@kind` is per TU but describes an artifact.** Two files in one tree each
+  carrying `@kind static` produce two archives from overlapping sources, with no
+  way to say which file belongs to which. Name clashes are caught; overlapping
+  content is not. This is the seam where `fmake.toml` will have to take over.
+- **Directive typos are silently inert.** `@lib` for `@libs` does nothing and
+  says nothing, because unknown commands must be ignored for the Doxygen
+  integration to work at all. `--explain` listing what was recognised is the only
+  mitigation, and it requires the user to go looking.
 - **Symbol-invisible dependencies generally.** §3 lists the constructor-plugin
   case, but the family is larger: anything reached only through `dlopen`, a
   linker script, or a function pointer table built at runtime. All need

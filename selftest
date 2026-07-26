@@ -355,6 +355,289 @@ def one_failed_target_does_not_sink_the_rest(t):
           f"the failure should be named: {r.stdout}")
 
 
+@case
+def target_directive_names_the_artifact(t):
+    """@target overrides the name derived from the file or directory."""
+    t.write("main.c", """
+/*! @file
+ *  @target renamed-thing
+ */
+#include <stdio.h>
+int main(void){ puts("hi"); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "renamed-thing")),
+          f"expected a binary called renamed-thing: {os.listdir(t.dir)}")
+
+
+@case
+def directives_only_count_in_doxygen_comments(t):
+    """An @ in an ordinary comment is not a directive.
+
+    Restricting to Doxygen's own markers is what stops an email address or a
+    stray note from silently renaming the program."""
+    # The Doxygen one comes FIRST deliberately. @target is scalar, so last
+    # wins -- if the plain comments were parsed at all they would override
+    # it, and the test would notice.
+    t.write("main.c", """
+//! @target honoured
+/* @target should-be-ignored -- an ordinary block comment */
+// @target also-ignored -- an ordinary line comment
+#include <stdio.h>
+int main(void){ puts("hi"); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    names = set(os.listdir(t.dir))
+    check("honoured" in names, f"the //! directive should apply: {names}")
+    check("should-be-ignored" not in names and "also-ignored" not in names,
+          f"plain comments must not carry directives: {names}")
+
+
+@case
+def unknown_directives_are_ignored(t):
+    """@brief and @param are documentation, not fmake's business."""
+    t.write("main.c", """
+/*! @file
+ *  @brief   A program.
+ *  @param   argc unused
+ *  @author  Somebody <somebody@example.com>
+ *  @target  survivor
+ *  @see     something@else
+ */
+#include <stdio.h>
+int main(void){ puts("hi"); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "survivor")),
+          f"unknown commands should not disturb the known ones: {r.stdout}")
+
+
+@case
+def os_directive_resolves_platform_duplicates(t):
+    """The answer to two files defining the same symbol.
+
+    Without @os this is the ambiguity error from the closure -- which is the
+    right answer to the wrong question, since only one of them was ever meant
+    to be built here."""
+    t.write("sys.h", "void sys_init(void);\n")
+    t.write("win32_sys.c", """
+/*! @file
+ *  @os windows
+ */
+#include <stdio.h>
+#include "sys.h"
+void sys_init(void){ puts("win32"); }
+""")
+    t.write("posix_sys.c", """
+/*! @file
+ *  @os linux darwin freebsd openbsd netbsd
+ */
+#include <stdio.h>
+#include "sys.h"
+void sys_init(void){ puts("posix"); }
+""")
+    t.write("main.c", '#include "sys.h"\nint main(void){ sys_init(); return 0; }\n')
+
+    r = t.fmake()
+    check("defined by more than one file" not in r.stderr,
+          f"@os should have removed the ambiguity: {r.stderr}")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    out = t.run(os.path.basename(t.dir)).stdout
+    check(out.strip() in ("posix", "win32"), f"unexpected output: {out!r}")
+    check("win32_sys.c" not in compiled(r),
+          f"the excluded file must not be compiled: {compiled(r)}")
+
+
+@case
+def compile_directives_reach_the_compiler(t):
+    """@std, @define and @cflags are properties of the one file."""
+    t.write("main.c", r"""
+/*! @file
+ *  @std    c17
+ *  @define SCALE=6
+ *  @define LABEL=\"tagged\"
+ *  @cflags -Wall
+ */
+#include <stdio.h>
+int main(void){ printf("%s %d\n", LABEL, SCALE * 7); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "tagged 42\n",
+          "the defines did not reach the compiler")
+    e = t.fmake("--explain").stdout
+    check("-std=c17" in e and "-DSCALE=6" in e, f"flags missing: {e}")
+
+
+@case
+def declared_libs_are_linked_regardless(t):
+    """@libs is an assertion, not a proposal.
+
+    The author said the library is needed, so it is linked whether or not a
+    symbol happens to require it -- unlike a header, which only proposes."""
+    t.write("main.c", """
+/*! @file
+ *  @libs m
+ */
+#include <stdio.h>
+int main(void){ puts("no math called here"); return 0; }
+""")
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"explain failed: {r.stderr}")
+    check("-lm" in r.stdout, f"@libs should force the link: {r.stdout}")
+    check(t.fmake().returncode == 0, "build failed")
+
+
+@case
+def sources_directive_forces_files_into_the_link(t):
+    """@sources is --force-link, declared where it belongs."""
+    t.write("main.c", """
+//! @sources plugins/*.c
+#include <stdio.h>
+void plugin_report(void);
+int main(void){ plugin_report(); return 0; }
+""")
+    t.write("plugins/one.c", """
+#include <stdio.h>
+static int n;
+__attribute__((constructor)) static void reg(void){ n = 42; }
+void plugin_report(void){ printf("n=%d\\n", n); }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "n=42\n",
+          "the constructor did not run, so the file was not really linked")
+    e = t.fmake("--explain").stdout
+    check("@sources in main.c" in e,
+          f"provenance should name the directive, not --force-link: {e}")
+
+
+@case
+def sources_directive_rejects_a_pattern_matching_nothing(t):
+    t.write("main.c", "//! @sources nowhere/*.c\nint main(void){ return 0; }\n")
+    r = t.fmake()
+    check(r.returncode != 0, "a glob matching nothing should be an error")
+    check("matched no source file" in r.stderr, f"unclear error: {r.stderr}")
+
+
+@case
+def kind_static_builds_an_archive(t):
+    """@kind static, and the archive actually links into a consumer."""
+    t.write("mathx.h", "double mathx_scale(double, double);\nint mathx_clamp(int, int, int);\n")
+    t.write("mathx.c", """
+/*! @file
+ *  @target  mathx
+ *  @kind    static
+ *  @headers mathx.h
+ */
+#include "mathx.h"
+double mathx_scale(double v, double k){ return v * k; }
+""")
+    t.write("clamp.c", '#include "mathx.h"\n'
+            "int mathx_clamp(int v, int lo, int hi){ return v<lo?lo:v>hi?hi:v; }\n")
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    archive = os.path.join(t.dir, "libmathx.a")
+    check(os.path.exists(archive), f"expected libmathx.a: {os.listdir(t.dir)}")
+
+    # a library is everything the tree defines, so clamp.c must be in it
+    syms = subprocess.run(["nm", "--format=posix", archive],
+                          capture_output=True, text=True).stdout
+    check("mathx_clamp" in syms and "mathx_scale" in syms,
+          "the archive should hold every TU, not a closure")
+
+    use = os.path.join(t.dir, "use.c")
+    with open(use, "w") as fh:
+        fh.write('#include <stdio.h>\n#include "mathx.h"\n'
+                 'int main(void){ printf("%g %d\\n", mathx_scale(3,4),'
+                 ' mathx_clamp(99,0,10)); return 0; }\n')
+    exe = os.path.join(t.dir, "consumer")
+    r2 = subprocess.run(["cc", "-I", t.dir, "-o", exe, use, archive],
+                        capture_output=True, text=True)
+    check(r2.returncode == 0, f"consumer link failed: {r2.stderr}")
+    out = subprocess.run([exe], capture_output=True, text=True).stdout
+    check(out == "12 10\n", f"wrong output from the consumer: {out!r}")
+
+
+@case
+def kind_shared_builds_a_solib(t):
+    """@kind shared, with -fPIC applied because it is needed."""
+    t.write("greet.h", "const char *greet(void);\n")
+    t.write("greet.c", """
+/*! @file
+ *  @target  greet
+ *  @kind    shared
+ */
+#include "greet.h"
+const char *greet(void){ return "from the shared object"; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    so = os.path.join(t.dir, "libgreet.so")
+    check(os.path.exists(so), f"expected libgreet.so: {os.listdir(t.dir)}")
+    e = t.fmake("--explain").stdout
+    check("-fPIC" in e, f"a shared object needs -fPIC: {e}")
+    check("-shared" in e, f"the link should pass -shared: {e}")
+
+
+@case
+def a_tree_with_no_main_is_a_library(t):
+    """The only thing it could sensibly be."""
+    t.write("a.c", "int add(int a, int b){ return a + b; }\n")
+    t.write("b.c", "int mul(int a, int b){ return a * b; }\n")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    archives = [f for f in os.listdir(t.dir) if f.endswith(".a")]
+    check(len(archives) == 1, f"expected one archive: {os.listdir(t.dir)}")
+    syms = subprocess.run(["nm", "--format=posix",
+                           os.path.join(t.dir, archives[0])],
+                          capture_output=True, text=True).stdout
+    check("add" in syms and "mul" in syms, "both files should be in it")
+
+
+@case
+def clashing_target_names_are_refused(t):
+    t.write("one.c", "//! @target same\nint main(void){ return 0; }\n")
+    t.write("two.c", "//! @target same\nint main(void){ return 0; }\n")
+    r = t.fmake()
+    check(r.returncode != 0, "two targets with one name should be refused")
+    check("one.c" in r.stderr and "two.c" in r.stderr,
+          f"both should be named: {r.stderr}")
+
+
+@case
+def pkg_version_constraints_are_checked(t):
+    """An unsatisfiable @pkg should say so, not fail at the compiler."""
+    if not _have_pkg("libxml-2.0"):
+        raise Skip("libxml2 not installed")
+    t.write("main.c", """
+/*! @file
+ *  @pkg libxml-2.0 >= 99.0
+ */
+int main(void){ return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode != 0, "the constraint cannot be satisfied")
+    check("not satisfied" in r.stderr and "99.0" in r.stderr,
+          f"the constraint should be named: {r.stderr}")
+    check("installed:" in r.stderr,
+          f"the installed version helps: {r.stderr}")
+
+
+@case
+def doxygen_aliases_are_emitted(t):
+    """Doxygen warns about unknown commands; this is the fix."""
+    r = t.fmake("--doxygen-aliases")
+    check(r.returncode == 0, f"failed: {r.stderr}")
+    for d in ("target", "pkg", "libs", "kind"):
+        check(f'ALIASES += "{d}=' in r.stdout,
+              f"@{d} missing from the alias block: {r.stdout}")
+
+
 def _have_pkg(module):
     return subprocess.run(["pkg-config", "--exists", module],
                           capture_output=True).returncode == 0
