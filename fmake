@@ -1283,9 +1283,13 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
             u.compiled = True
         return True
 
-    # Symbol tables, and the cache entries that go with them.
-    read_symbols(todo, cfg, jobs)
-    for u in todo:
+    # Symbol tables, and the cache entries that go with them. Only for what
+    # actually compiled: a failed unit has no object file, and asking nm to
+    # read one that is not there is a different error from the one the user
+    # needs to see.
+    made = [u for u in todo if u.rel not in broken]
+    read_symbols(made, cfg, jobs)
+    for u in made:
         cache.objects[u.rel] = {
             "key": object_key(u, cfg, cache, root, incflags),
             "u": sorted(u.undef), "s": sorted(u.strong), "w": sorted(u.weak),
@@ -1313,6 +1317,17 @@ def read_symbols(units, cfg, jobs):
     def one(u):
         r = subprocess.run([cfg.nm, "--format=posix", u.obj],
                            capture_output=True, text=True)
+        # An object nm could not read yields no symbols, and an object with
+        # no symbols is invisible to the closure: it defines nothing so it is
+        # never linked, and needs nothing so it reports no externals. The
+        # file would compile, appear in the build, and simply be absent from
+        # the result. A cross toolchain with the wrong nm gets here.
+        if r.returncode != 0:
+            die(f"{cfg.nm} could not read {u.rel}'s object:\n"
+                f"    {r.stderr.strip().splitlines()[0] if r.stderr.strip() else 'no output'}\n"
+                f"Set [toolchain] nm in {CONF_FILE}, or $NM, to one that "
+                f"understands {describe_identity(elf_identity(u.obj))} "
+                f"objects.")
         undef, strong, weak = set(), set(), set()
         for line in r.stdout.splitlines():
             parts = line.split()
@@ -2800,7 +2815,11 @@ def build(args, _bootstrapping=False):
           + (f", {len(excluded)} excluded by platform" if excluded else ""))
 
     if args.always_make:
+        # Links too, or -B recompiles everything, finds the objects came out
+        # byte-identical, and reports the target up to date -- which is true,
+        # and not what anyone typing --always-make is asking for.
         cache.objects.clear()
+        cache.data.pop("links", None)
 
     # ---- compile, close, widen ----------------------------------------
     tried, broken = set(), set()

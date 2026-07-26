@@ -1990,6 +1990,28 @@ int main(void){ puts("hi"); return 0; }
 
 
 @case
+def an_unreadable_object_is_an_error(t):
+    """nm failing must not look like an object with no symbols.
+
+    Empty symbol sets make a file invisible to the closure -- it defines
+    nothing so it is never linked, and needs nothing so it reports no
+    externals. It would compile, appear in the build, and be absent from the
+    result. A cross toolchain with the wrong nm gets here."""
+    t.write("main.c", "#include <stdio.h>\nint helper(void){ return 1; }\n"
+            'int main(void){ printf("%d\\n", helper()); return 0; }\n')
+    bad = os.path.join(t.dir, "false-nm")
+    with open(bad, "w") as fh:
+        fh.write("#!/bin/sh\nexit 3\n")
+    os.chmod(bad, 0o755)
+
+    r = t.fmake(env={"NM": bad})
+    check(r.returncode != 0, "a broken nm must fail the build, not be ignored")
+    check("could not read" in r.stderr,
+          f"the failure should be reported: {r.stderr}")
+    check("main.c" in r.stderr, f"the object should be named: {r.stderr}")
+
+
+@case
 def unresolvable_symbols_are_named(t):
     """A symbol no library exports should be reported by name."""
     t.write("main.c",
