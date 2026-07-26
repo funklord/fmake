@@ -2701,16 +2701,34 @@ def build(args, _bootstrapping=False):
         die("no C or C++ source files found here")
 
     # ---- scan (cached by content hash) --------------------------------
-    scans = {}
+    # A file that cannot be read is set aside rather than fatal. One
+    # unreadable stray in a directory should not stop a tree from building,
+    # and if it was actually needed the closure says so in its own terms --
+    # an undefined symbol naming what is missing, rather than a traceback
+    # naming a file nobody asked about.
+    scans, unreadable = {}, {}
     for rel in srcs + hdrs:
-        scans[rel] = cache.scan(os.path.join(root, rel), rel)
+        try:
+            scans[rel] = cache.scan(os.path.join(root, rel), rel)
+        except OSError as exc:
+            unreadable[rel] = f"unreadable: {exc.strerror or exc}"
+    for rel in list(unreadable):
+        if rel in srcs:
+            srcs.remove(rel)
+        elif rel in hdrs:
+            hdrs.remove(rel)
+    if unreadable:
+        for rel, why in sorted(unreadable.items())[:5]:
+            warn(f"{rel}: {why}")
+        if len(unreadable) > 5:
+            note(f"... and {len(unreadable) - 5} more")
 
     # ---- platform filtering -------------------------------------------
     # A TU excluded here never exists as far as the rest of the build is
     # concerned. This is what makes win32_sys.c and posix_sys.c coexist:
     # without it they are two definitions of the same symbol and §3 refuses
     # to guess, which is the right answer to the wrong question.
-    excluded = {}
+    excluded = dict(unreadable)
     for rel in list(srcs):
         for pat in conf.project.get("exclude", []):
             if fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/*") + "/"):

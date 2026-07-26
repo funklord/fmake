@@ -1483,6 +1483,33 @@ def eject_ninja_builds_without_fmake(t):
 
 
 @case
+def eject_is_byte_stable(t):
+    """An ejected build file is something you commit.
+
+    If it churns between runs -- because a set iterated in a different order,
+    or a closure discovered files by a different path -- every rebuild shows
+    up as a diff and the file becomes untrustworthy. Checked cold as well as
+    warm, since the cache changes how much widening has to happen."""
+    _eject_tree(t)
+    t.write("extra.c", "int extra_thing(void){ return 1; }\n")
+    t.write("more.c", "int more_thing(void){ return 2; }\n")
+
+    def eject(kind):
+        r = t.fmake("--eject", kind)
+        check(r.returncode == 0, f"eject {kind} failed: {r.stderr}")
+        return r.stdout
+
+    for kind in ("make", "ninja"):
+        warm = [eject(kind), eject(kind)]
+        shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+        cold = eject(kind)
+        check(warm[0] == warm[1],
+              f"{kind} output differs between two warm runs")
+        check(warm[0] == cold,
+              f"{kind} output differs cold versus warm")
+
+
+@case
 def eject_writes_to_stdout_not_over_a_makefile(t):
     """A build tool that eats build files is not a good neighbour."""
     _eject_tree(t)
@@ -2493,6 +2520,44 @@ int main(void){ puts("hi"); return 0; }
     e = t.fmake("--explain").stdout
     check("--wrap=never_called" not in e,
           f"nothing calls never_called, so no flag is warranted: {e}")
+
+
+@case
+def an_unreadable_source_is_set_aside(t):
+    """One stray file nobody can read should not stop a tree building.
+
+    And if it was actually needed, the closure says so in its own terms --
+    an undefined symbol naming what is missing, alongside the warning about
+    the file, rather than a traceback naming a file nobody asked about."""
+    if os.geteuid() == 0:
+        raise Skip("running as root, so permissions prove nothing")
+
+    t.write("main.c", '#include <stdio.h>\nint main(void){ puts("hi"); return 0; }\n')
+    stray = t.write("stray.c", "int unrelated(void){ return 1; }\n")
+    os.chmod(stray, 0)
+    try:
+        r = t.fmake()
+        check(r.returncode == 0,
+              f"an unreadable file nothing needs should not be fatal: "
+              f"{r.stdout}{r.stderr}")
+        check("unreadable" in r.stdout,
+              f"it should still be reported: {r.stdout}")
+        check(t.run(os.path.basename(t.dir)).stdout == "hi\n", "wrong output")
+    finally:
+        os.chmod(stray, 0o644)
+
+    # Now one that is needed.
+    t.write("main.c", "int needed(void);\nint main(void){ return needed(); }\n")
+    dep = t.write("needed.c", "int needed(void){ return 0; }\n")
+    os.chmod(dep, 0)
+    try:
+        shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+        r = t.fmake()
+        check(r.returncode != 0, "the build cannot succeed without it")
+        check("unreadable" in r.stdout, "the cause should be named")
+        check("needed" in r.stdout, "the missing symbol should be named")
+    finally:
+        os.chmod(dep, 0o644)
 
 
 @case

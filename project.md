@@ -1332,6 +1332,18 @@ The general shape is one §5 did not anticipate: **exporting a symbol is not the
 same as implementing it.** Symbol evidence is better than header evidence, but
 it is still evidence about names, not about meaning.
 
+### The exit is byte-stable
+
+An ejected build file is something you commit, so it has to be the same file
+every time. If it churned — because a set iterated differently, or the closure
+discovered files by a different path — every rebuild would show as a diff and
+the file would stop being trustworthy.
+
+Checked cold as well as warm, since the cache changes how much widening has to
+happen and therefore the order in which files are found: identical across
+repeated runs on the reference project, and identical on a 152-file closure
+cold versus warm.
+
 ### The exit is equivalent, not merely functional
 
 `--eject` was verified by building with `make` and running the result. That
@@ -1357,6 +1369,32 @@ inverted in the code. The link command was rendered twice. The directive table
 was declared and then ignored. Each was found by asking what the invariant was
 supposed to be and then checking that one thing enforced it, which is a
 different question from whether any particular project builds.
+
+---
+
+### Writing the tests found the bugs
+
+Auditing what §1–§13 assert against what the suite actually checked was worth
+as much as either earlier pass. Five claims had no case behind them at all —
+`@ldflags` propagating while `@cflags` does not, `$CC` beating
+`[toolchain] cc`, archives not keeping stale members, `@kind exe` requiring a
+`main()`, `.fmake/` being gitignored exactly once — and one flag turned out to
+be simply broken:
+
+**`fmake -o dist` failed with "cannot open output file."** `-o` names somewhere
+to *put* the artifacts, not somewhere that must already exist, and the linker's
+message says nothing about the directory being the problem. Nothing had ever
+run it.
+
+Two more paths had no coverage: `--eject`'s archive and shared-object branches
+— only the program branch had ever executed, in a backend that branches on kind
+in both emitters — and `--widen-all` on the macro-generated definition it exists
+for.
+
+**An unreadable source file produced a traceback.** One stray file nobody can
+read should not stop a tree from building, and if it *is* needed the closure
+already has a way to say so: an undefined symbol naming what is missing. Both
+now happen, with the file reported either way.
 
 ---
 
@@ -1472,6 +1510,11 @@ rather than code, and one lesson about testing.
 - **A generator's own dependencies are not tracked.** A `.y` that `%include`s
   another file re-runs only when the `.y` itself changes; the rest must be
   listed in `depends` by hand. There is no depfile equivalent for generators.
+- **A build with a permanently broken file never reaches a fixed point.**
+  A file that failed to compile is retried on every build, because the fix
+  might be outside it — an installed header, a corrected include path — and a
+  cached failure would hide that. Correct, but it means §8's
+  build-twice-compiles-nothing property holds only for trees that build.
 - **A fixture that quietly tests nothing is the hardest kind of wrong.** The
   library-signature case took three attempts, and both failures were the
   fixture rather than the tool: first the library's source sat inside the
