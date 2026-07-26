@@ -1510,6 +1510,49 @@ def eject_is_byte_stable(t):
 
 
 @case
+def paths_with_spaces_build_and_eject_honestly(t):
+    """fmake itself is fine -- it never goes through a shell.
+
+    The build files it emits are another matter. Ninja escapes a space in a
+    path; Make splits prerequisites on it and has no escaping that survives
+    every position, so the Makefile would look like a build file and mean
+    something else. Refusing is the only honest option, and ninja is
+    somewhere to send people."""
+    t.write("main.c", """
+#include <stdio.h>
+int helper(void);
+int main(void){ printf("%d\\n", helper()); return 0; }
+""")
+    t.write("sub dir/my helper.c", "int helper(void){ return 42; }\n")
+
+    r = t.fmake()
+    check(r.returncode == 0, f"fmake itself should cope: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
+
+    r = t.fmake("--eject")
+    check(r.returncode != 0, "a Makefile cannot express these paths")
+    check("whitespace" in r.stderr and "ninja" in r.stderr,
+          f"the refusal should say why and where to go: {r.stderr}")
+
+    r = t.fmake("--eject", "ninja")
+    check(r.returncode == 0, f"ninja can express them: {r.stderr}")
+    check("my$ helper.c" in r.stdout,
+          f"the space should be escaped, not emitted raw: {r.stdout}")
+
+    if shutil.which("ninja"):
+        with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+            fh.write(r.stdout)
+        shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+        prog = os.path.join(t.dir, os.path.basename(t.dir))
+        if os.path.exists(prog):
+            os.remove(prog)
+        n = _run_in(t.dir, "ninja")
+        check(n.returncode == 0, f"ninja build failed: {n.stdout}{n.stderr}")
+        check(_run_in(t.dir, prog).stdout == "42\n",
+              "the ejected build produced a broken binary")
+
+
+@case
 def eject_writes_to_stdout_not_over_a_makefile(t):
     """A build tool that eats build files is not a good neighbour."""
     _eject_tree(t)

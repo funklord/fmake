@@ -3204,8 +3204,41 @@ def _mk_ident(name):
     return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
 
+RE_NINJA_ESCAPE = re.compile(r"([ :$])")
+
+
+def _ninja(path):
+    """Ninja escapes a space, colon or dollar in a path with `$`."""
+    return RE_NINJA_ESCAPE.sub(r"$\1", path)
+
+
+def _refuse_whitespace(targets, closures, root):
+    """Make cannot express a filename containing whitespace.
+
+    Not a limitation worth working around: Make splits prerequisites on
+    spaces and has no escaping that survives every position one can appear
+    in. Emitting something that looks like a build file and silently means
+    something else is worse than saying so -- and ninja can express it, so
+    there is somewhere to send people.
+    """
+    bad = set()
+    for t in targets:
+        if any(c.isspace() for c in t.filename):
+            bad.add(t.filename)
+        for u in closures[t].link:
+            if any(c.isspace() for c in u.rel):
+                bad.add(u.rel)
+    if bad:
+        die("cannot eject a Makefile for paths containing whitespace:\n    "
+            + "\n    ".join(sorted(bad)[:5])
+            + ("\n    ..." if len(bad) > 5 else "")
+            + "\nMake splits prerequisites on spaces and cannot express "
+              "these.\nUse `--eject ninja`, which can.")
+
+
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
     """A standalone Makefile."""
+    _refuse_whitespace(targets, closures, root)
     common = _eject_flags(cfg.cflags + incflags, root)
     override = _eject_flags(cfg.override, root)
     L = []
@@ -3385,9 +3418,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf):
         a(f"  description = GEN {r.get('description') or name}")
         a("")
         deps = r.get("depends", [])
-        a(f"build {' '.join(r['outputs'])}: gen_{_mk_ident(name)} "
-          f"{' '.join(r['inputs'])}"
-          + (" | " + " ".join(deps) if deps else ""))
+        a(f"build {' '.join(_ninja(o) for o in r['outputs'])}: "
+          f"gen_{_mk_ident(name)} "
+          f"{' '.join(_ninja(i) for i in r['inputs'])}"
+          + (" | " + " ".join(_ninja(d) for d in deps) if deps else ""))
         gen_outs += r["outputs"]
     if gen_rules:
         a("")
@@ -3398,25 +3432,26 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf):
             every[u.rel] = u
     # Order-only: a generated header must exist before anything compiles,
     # but the depfiles decide when a change to it forces a rebuild.
-    after = (" || " + " ".join(gen_outs)) if gen_outs else ""
+    after = (" || " + " ".join(_ninja(g) for g in gen_outs)) if gen_outs else ""
     for rel in sorted(every):
         u = every[rel]
-        a(f"build $objdir/{rel}.o: {'cxx' if u.cxx else 'cc'} {rel}{after}")
+        a(f"build $objdir/{_ninja(rel)}.o: {'cxx' if u.cxx else 'cc'} {_ninja(rel)}{after}")
         if u.own:
             a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
     a("")
 
     for t in targets:
-        objs = " ".join(f"$objdir/{u.rel}.o" for u in closures[t].link)
+        objs = " ".join(f"$objdir/{_ninja(u.rel)}.o"
+                        for u in closures[t].link)
         rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
-        a(f"build {t.filename}: {rule} {objs}")
+        a(f"build {_ninja(t.filename)}: {rule} {objs}")
         if t.kind != "static":
             a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
             res = resolutions.get(t)
             if res and res["ldflags"]:
                 a(f"  libs = {' '.join(_eject_flags(res['ldflags'], root))}")
     a("")
-    a(f"default {' '.join(t.filename for t in targets)}")
+    a(f"default {' '.join(_ninja(t.filename) for t in targets)}")
     return "\n".join(L) + "\n"
 
 # ---------------------------------------------------------------------------

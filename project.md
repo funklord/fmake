@@ -1332,6 +1332,23 @@ The general shape is one §5 did not anticipate: **exporting a symbol is not the
 same as implementing it.** Symbol evidence is better than header evidence, but
 it is still evidence about names, not about meaning.
 
+### What the exit cannot express, it refuses
+
+fmake itself copes with a space in a path, because it never goes through a
+shell — every command is an argv list. The build files it emits are another
+matter, and the two backends differ in what they can say.
+
+Ninja escapes a space, colon or dollar in a path with `$`. Make splits
+prerequisites on whitespace and has no escaping that survives every position
+one can appear in; the emitted Makefile looked like a build file and meant
+something else entirely — `all: space test` naming two targets, and a
+prerequisite list silently splitting in half.
+
+So `--eject` refuses for Make, names the offending paths, and says that
+`--eject ninja` can express them. That is the same stance as §3's
+duplicate-symbol error, applied to output rather than input: producing
+something that looks right and is not is worse than declining.
+
 ### The exit is byte-stable
 
 An ejected build file is something you commit, so it has to be the same file
