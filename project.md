@@ -1413,6 +1413,19 @@ read should not stop a tree from building, and if it *is* needed the closure
 already has a way to say so: an undefined symbol naming what is missing. Both
 now happen, with the file reported either way.
 
+A dangling symlink got through that fix, by a route worth naming because it is
+the same shape as several §14 findings: the hash function returns `None` when
+it cannot stat a file *and leaves no cache entry behind*, so the scanner
+indexed a dict that had never been written to and raised `KeyError` — which is
+not an `OSError`, so the handler written for exactly this situation did not
+catch it. **An error path that reports failure by returning a sentinel needs
+every caller to check it; an error path that raises needs none.** It raises
+now.
+
+Empty files, binary files named `.c`, and symlinked directory loops were all
+already fine — `os.walk` does not follow symlinked directories, and the
+compiler has opinions about the rest.
+
 ---
 
 ## 15. Open questions

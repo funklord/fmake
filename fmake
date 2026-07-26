@@ -86,6 +86,7 @@ none of it.
 """
 
 import argparse
+import errno
 import concurrent.futures
 import hashlib
 import json
@@ -1146,6 +1147,12 @@ class Cache:
 
     def scan(self, abspath, rel):
         h = self.hash_of(abspath, rel)
+        if h is None:
+            # hash_of returns None when the file cannot be stat'd -- a
+            # dangling symlink is the usual way -- and leaves no entry
+            # behind. Raising the error the caller already handles beats
+            # indexing a dict that was never written to.
+            raise OSError(errno.ENOENT, "no such file", abspath)
         ent = self.files[rel]
         if ent.get("scan") is not None and ent.get("scan_h") == h:
             return ent["scan"]

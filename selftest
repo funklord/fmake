@@ -2566,6 +2566,32 @@ int main(void){ puts("hi"); return 0; }
 
 
 @case
+def odd_trees_do_not_crash(t):
+    """Whatever is in the directory, the answer is a message not a traceback.
+
+    A dangling symlink was the one that got through: the hash function
+    returns None when it cannot stat a file and leaves no cache entry, so
+    the scanner indexed a dict that had never been written to and raised
+    KeyError -- which is not an OSError, so the handler for unreadable files
+    did not catch it."""
+    t.write("main.c", '#include <stdio.h>\nint main(void){ puts("ok"); return 0; }\n')
+    os.symlink("/nonexistent-target", os.path.join(t.dir, "dangling.c"))
+    t.write("empty.c", "")
+    with open(os.path.join(t.dir, "binary.c"), "wb") as fh:
+        fh.write(b"\xff\xfe\x00\x01not source at all\n")
+    os.makedirs(os.path.join(t.dir, "loop"), exist_ok=True)
+    os.symlink("..", os.path.join(t.dir, "loop", "up"))
+
+    r = t.fmake()
+    check(r.returncode == 0,
+          f"none of these should stop the build: {r.stdout}{r.stderr}")
+    check("Traceback" not in r.stderr, f"crashed: {r.stderr}")
+    check("dangling.c" in r.stdout,
+          f"the dangling symlink should be reported: {r.stdout}")
+    check(t.run(os.path.basename(t.dir)).stdout == "ok\n", "wrong output")
+
+
+@case
 def an_unreadable_source_is_set_aside(t):
     """One stray file nobody can read should not stop a tree building.
 
