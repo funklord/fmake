@@ -7,6 +7,9 @@ This is a living design document. It is updated as decisions are made, and it
 records the reasoning, not just the conclusion — including the options rejected,
 so they don't get relitigated.
 
+**For using the tool, read `README.md`.** This file is the record of how the
+design was arrived at, which is a different thing and much longer.
+
 Status: **phases 1–6 implemented, plus two passes over the invariants.**
 
 `fmake` builds C and C++ programs and libraries from an unannotated tree,
