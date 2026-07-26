@@ -594,6 +594,69 @@ with open(sys.argv[1], "w") as fh:
 
 
 @case
+def generated_by_a_tool_built_from_the_tree(t):
+    """The generator is not always something you can install.
+
+    NetHack's makedefs and sqlite's lemon are compiled from the same source
+    tree and then run over it. A command that has to be on $PATH before
+    anything is compiled cannot express that."""
+    t.write("util/mktable.c", """
+#include <stdio.h>
+int main(int argc, char **argv){
+    FILE *f = fopen(argv[1], "w");
+    fprintf(f, "int table_value(void){ return 42; }\\n");
+    fclose(f);
+    return 0;
+}
+""")
+    t.write("main.c", """
+#include <stdio.h>
+int table_value(void);
+int main(void){ printf("%d\\n", table_value()); return 0; }
+""")
+    t.write("fmake.toml", """
+[target.mktable]
+root = "util/mktable.c"
+
+[generate.table]
+uses    = "mktable"
+command = "$tool gen/table.c"
+inputs  = ["util/mktable.c"]
+outputs = ["gen/table.c"]
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("TOOL mktable" in r.stdout,
+          f"the tool should be built first: {r.stdout}")
+    check(os.path.exists(os.path.join(t.dir, "gen/table.c")),
+          "the tool did not produce its output")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n",
+          "the generated code was not linked in")
+
+
+@case
+def generated_tool_cannot_need_its_own_output(t):
+    """A tool that consumes what it generates is a cycle, not a build."""
+    t.write("util/mktable.c", '#include "gen/table.h"\n'
+            "int main(void){ return 0; }\n")
+    t.write("main.c", "int main(void){ return 0; }\n")
+    t.write("fmake.toml", """
+[target.mktable]
+root = "util/mktable.c"
+
+[generate.table]
+uses    = "mktable"
+command = "$tool gen/table.h"
+inputs  = ["util/mktable.c"]
+outputs = ["gen/table.h"]
+""")
+    r = t.fmake()
+    check(r.returncode != 0, "a tool needing its own output cannot build")
+    check("mktable" in r.stdout + r.stderr,
+          f"the tool should be named: {r.stdout}{r.stderr}")
+
+
+@case
 def generated_missing_tool_is_reported(t):
     _gen_tree(t)
     t.write("fmake.toml", """

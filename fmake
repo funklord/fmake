@@ -65,7 +65,8 @@ same as they must be listed in a Makefile.
 
 Sources that do not exist yet -- flex, bison, protoc output -- are declared
 in fmake.toml and generated before the tree is scanned, so everything
-after treats them as ordinary files.
+after treats them as ordinary files. A generator that is itself built from
+the tree, as NetHack's makedefs is, names its target with `uses`.
 
 An optional fmake.toml carries what belongs to no single file: which of two
 libraries a shared source is part of, install paths, named build profiles
@@ -331,7 +332,7 @@ CONF_SCHEMA = {
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
-        "description": S,
+        "uses": S, "description": S,
     }},
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
@@ -461,7 +462,7 @@ class Conf:
 # it has stopped being declarative.
 # ---------------------------------------------------------------------------
 
-def _gen_argv(command, ins, outs):
+def _gen_argv(command, ins, outs, tool=None):
     """Substitute $in and $out into an argv, not into a string.
 
     Splitting first and substituting after means a path containing a space
@@ -473,9 +474,12 @@ def _gen_argv(command, ins, outs):
             argv += ins
         elif tok == "$out":
             argv += outs
+        elif tok == "$tool" and tool:
+            argv.append(tool)
         else:
             argv.append(tok.replace("$in", ins[0] if ins else "")
-                           .replace("$out", outs[0] if outs else ""))
+                           .replace("$out", outs[0] if outs else "")
+                           .replace("$tool", tool or ""))
     return argv
 
 
@@ -513,8 +517,14 @@ def _gen_order(rules):
     return order
 
 
-def run_generators(root, conf, cache, dry_run=False):
-    """Run the [generate.*] rules. Returns their outputs, tree-relative."""
+def run_generators(root, conf, cache, dry_run=False, build_tool=None):
+    """Run the [generate.*] rules. Returns their outputs, tree-relative.
+
+    `build_tool` builds a target from this tree and returns its path, for
+    rules that name one with `uses`. When it is None -- which is the case
+    while bootstrapping such a tool -- those rules are skipped rather than
+    run, since a tool cannot depend on its own output.
+    """
     rules = conf.data.get("generate", {})
     if not rules:
         return []
@@ -529,6 +539,9 @@ def run_generators(root, conf, cache, dry_run=False):
 
     for name in _gen_order(rules):
         r = rules[name]
+        if r.get("uses") and build_tool is None:
+            vinfo(f"skipping [generate.{name}] while bootstrapping")
+            continue
         ins = []
         for pat in r["inputs"]:
             hits = sorted(glob.glob(os.path.join(root, pat), recursive=True))
@@ -549,7 +562,7 @@ def run_generators(root, conf, cache, dry_run=False):
 
         # Rerun when an input's contents change or the command does, not on
         # mtime, so the rest of the build stays hash-driven too.
-        parts = [r["command"]]
+        parts = [r["command"], r.get("uses") or ""]
         for path in ins + deps:
             rel = os.path.relpath(path, root)
             parts.append(rel + ":" + (cache.hash_of(path, rel) or "?"))
@@ -561,12 +574,18 @@ def run_generators(root, conf, cache, dry_run=False):
             vinfo(f"generated {name} is up to date")
             continue
 
-        argv = _gen_argv(r["command"], ins, outs)
+        # A tool built from this tree, rather than one already installed.
+        # NetHack's makedefs and sqlite's lemon both work this way, and
+        # neither can be expressed by a command that must already be on
+        # $PATH before anything has been compiled.
+        tool = build_tool(r["uses"]) if r.get("uses") else None
+
+        argv = _gen_argv(r["command"], ins, outs, tool)
         if not argv:
             die(f"{CONF_FILE}: [generate.{name}] command is empty")
-        if not shutil.which(argv[0]):
-            die(f"{CONF_FILE}: [generate.{name}] needs {argv[0]!r}, "
-                f"which is not installed")
+        if not tool and not shutil.which(argv[0]):
+            die(f"{CONF_FILE}: [generate.{name}] needs {argv[0]!r}, which is "
+                f"not installed (build it from this tree with `uses`)")
 
         label = r.get("description") or name
         if dry_run:
@@ -2403,7 +2422,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 # Build
 # ---------------------------------------------------------------------------
 
-def build(args):
+def build(args, _bootstrapping=False):
     root = os.path.abspath(args.directory)
     if not os.path.isdir(root):
         die(f"no such directory: {args.directory}")
@@ -2416,10 +2435,54 @@ def build(args):
     outdir = os.path.abspath(args.output) if args.output else root
     jobs   = args.jobs or (os.cpu_count() or 4)
 
+    bootstrapped = []
+
+    def build_tool(name):
+        """Build a target from this tree so a generator can run it.
+
+        A nested build restricted to that one target, into a scratch
+        directory. The tool is an ordinary program as far as fmake is
+        concerned -- closure, libraries and all -- it just happens to be
+        built first and consumed rather than shipped.
+        """
+        if _bootstrapping:
+            die(f"{CONF_FILE}: [generate.*] uses = {name!r}, but that is "
+                f"itself being built to run a generator. A tool cannot "
+                f"depend on its own output.")
+        tooldir = os.path.join(state, "tools")
+        os.makedirs(tooldir, exist_ok=True)
+        sub = argparse.Namespace(**vars(args))
+        sub.targets, sub.output = [name], tooldir
+        sub.explain = sub.install = False
+        sub.eject, sub.dry_run = None, False
+        sub.quiet = not VERBOSE
+        say(f"{YELLOW('TOOL')} {name}")
+        bootstrapped.append(name)
+        if build(sub, _bootstrapping=True) != 0:
+            die(f"could not build {name!r}, which a generator needs")
+        for cand in (name, f"lib{name}.so", f"lib{name}.a"):
+            path = os.path.join(tooldir, cand)
+            if os.path.exists(path):
+                return path
+        die(f"built {name!r} but found no artifact in {_rel(tooldir, root)}")
+
     # Generators run before anything looks at the tree, so their output is
     # an ordinary source from here on -- seen by the include graph, the
     # closure and the symbol tables alike, with no special case anywhere.
-    generated = run_generators(root, conf, cache, args.dry_run)
+    generated = run_generators(root, conf, cache, args.dry_run,
+                               None if _bootstrapping else build_tool)
+    if bootstrapped:
+        # A nested build wrote object entries to the same cache file. Merge
+        # them in rather than replacing this cache, which still holds the
+        # generator freshness keys that were just written and are not on
+        # disk yet.
+        disk = Cache(os.path.join(state, CACHE_FILE))
+        for section in ("files", "objects"):
+            merged = dict(disk.data.get(section, {}))
+            merged.update(cache.data.get(section, {}))
+            cache.data[section] = merged
+        cache.files = cache.data["files"]
+        cache.objects = cache.data["objects"]
 
     srcs, hdrs = walk_tree(root)
     for rel in generated:

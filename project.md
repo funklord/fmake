@@ -621,6 +621,26 @@ Declared rather than inferred, because the command is not recoverable from the
 file: a `.y` could be bison or byacc, with or without a header, and guessing
 wrong produces a failure nobody can read.
 
+**The generator is not always something you can install.** NetHack compiles
+`makedefs` from its own source tree and runs it to produce `onames.h` and
+`pm.h`; sqlite does the same with `lemon`. A command that must be on `$PATH`
+before anything has been compiled cannot express that at all — the first
+attempt reported *"needs 'makedefs', which is not installed"*, which is true
+and useless.
+
+```toml
+[generate.names]
+uses    = "makedefs"        # a target in this tree
+command = "$tool -o $out"
+outputs = ["include/onames.h"]
+```
+
+`uses` triggers a nested build restricted to that one target, into a scratch
+directory under `.fmake/`. The tool is an ordinary program as far as fmake is
+concerned — closure, libraries and all — it just gets built first and consumed
+rather than shipped. A tool that needs its own output is a cycle and is
+refused by name.
+
 Four things this turned out to need:
 
 - **`depends` separate from `inputs`.** The first attempt expressed "the lexer
@@ -978,6 +998,26 @@ filter, the caching, and the annotation layer all behaved as designed at 50x
 the size. The things that broke were all in the cheap first-guess layer, which
 is the part that is allowed to be wrong — it just should not be wrong this
 often.
+
+### NetHack: the generator that has to be built first
+
+NetHack does not build here either — 3.7 vendors Lua as a separate download
+that a shallow clone does not fetch — but it exposed a structural gap before
+getting anywhere near that. Its 303 sources need `onames.h` and `pm.h`, which
+are produced by `makedefs`, which is compiled from `util/makedefs.c` in the
+same tree.
+
+`[generate.*]` ran commands that had to be installed already, so this was
+inexpressible: generators run before anything is compiled, by design, and that
+design has no room for a generator that *is* compiled. `uses` (§7) closes it
+with a nested build. The gap was worth finding on a project that has it for
+real rather than inventing the case.
+
+Also visible from NetHack, without building it: 22 targets discovered across
+`util/`, `sys/unix/`, `sys/vms/`, `sys/amiga/`, `sys/msdos/` and an
+`outdated/` tree. Per-target compile resilience meant the VMS and Mac
+frontends failing did not stop the rest, which is the behaviour the previous
+game asked for, working unprompted on the next one.
 
 ### Angband: the first one that actually built
 
