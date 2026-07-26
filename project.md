@@ -7,13 +7,17 @@ This is a living design document. It is updated as decisions are made, and it
 records the reasoning, not just the conclusion — including the options rejected,
 so they don't get relitigated.
 
-Status: **phases 1–6 implemented** — `fmake` builds C and C++ programs and
-libraries from an unannotated tree, resolves their dependencies, accepts
-in-source directives for what cannot be inferred, reads an optional
-`fmake.toml` for what belongs to no single file, cross-compiles, and can eject
-a standalone Makefile or `build.ninja` and get out of the way. `./selftest` covers the design
-claims below, case per claim. Phase 7 (`fmake.py`) is not written, and is
-meant to stay unattractive.
+Status: **phases 1–6 implemented, plus two passes over the invariants.**
+
+`fmake` builds C and C++ programs and libraries from an unannotated tree,
+resolves their dependencies, accepts in-source directives for what cannot be
+inferred, reads an optional `fmake.toml` for what belongs to no single file,
+cross-compiles, and can eject a standalone Makefile or `build.ninja` and get
+out of the way.
+
+`./selftest` covers the design claims below, one case per claim, and every fix
+in §14 is mutation-checked: the case is confirmed to fail when the bug is put
+back. Phase 7 (`fmake.py`) is not written, and is meant to stay unattractive.
 
 ---
 
@@ -210,8 +214,9 @@ The classification is not simply "U versus everything else":
   exists anywhere, and several of them offering the same symbol is normal
   rather than ambiguous.
 
-The weak rule took two corrections to get right, and both directions are wrong
-in ways that only show up in real C++:
+The weak rule took three corrections to get right. Two directions are wrong in
+ways that only show up in real C++, and the third was wrong in a way that shows
+up nowhere at all until you look for it:
 
 - **Weak treated as strong** — templates, inline functions and vtables emit a
   weak definition into *every* object that uses them, so a symbol legitimately
@@ -222,11 +227,17 @@ in ways that only show up in real C++:
   that *only* a vague-linkage definition satisfies. Skipping weak providers
   compiles the instantiating file, leaves it out of the link set, and fails at
   the linker with an undefined reference to something that is right there.
+- **Weak accepted as satisfaction** — the rule was applied when *choosing* a
+  provider but not when deciding whether to look for one, so a weak definition
+  in an object linked for an unrelated reason ended the search and a strong
+  definition elsewhere was never found. This is the weak-override pattern, and
+  it failed silently and non-deterministically. §14 has the demonstration.
 
 So: strong wins if one exists, weak is used if none does, multiple strong is an
-error, multiple weak is fine — pick deterministically. This mirrors what the
-linker does, which is the point: the closure is only correct if it reproduces
-the linker's own resolution rules.
+error, multiple weak is fine — pick deterministically. And *strong wins* has to
+hold at every point the rule is consulted, not just where it is written down.
+This mirrors what the linker does, which is the point: the closure is only
+correct if it reproduces the linker's own resolution rules.
 
 Reading ELF/Mach-O symbol tables directly in Python was considered and rejected:
 it's a few hundred lines of format handling per platform to save one cheap
@@ -296,8 +307,8 @@ Notes on specific choices:
 - **`@headers` is not for build inputs.** Headers used by a TU come from the
   `#include` scan; declaring them again would be redundant and would rot. The
   directive is repurposed for the one header question that *isn't* inferable:
-  which headers form a library's public interface, for install and `--eject`.
-  Both are unimplemented, so today it is parsed and reported and does nothing.
+  which headers form a library's public interface. `--install` (§7) is what
+  consumes it; `--eject` still does not emit an install rule.
 - **`@ldflags` propagates, `@cflags` does not.** Compile flags are a property of
   the TU. Link flags are a property of anything the TU ends up inside. This
   asymmetry is the thing that makes locality work for dependencies.
@@ -728,6 +739,11 @@ rebuild anything it doesn't have to.
 - **Symbol tables are cached per object hash.** `nm` runs once per compile, not
   once per build, so §3's closure on an incremental build is a pure in-memory
   graph walk over cached data with no subprocesses at all.
+- **A finished build is a fixed point.** Building twice compiles nothing the
+  second time — checked in the selftest and on both reference projects, which
+  go from 6 and 152 files cold to zero. This is a stronger property than it
+  sounds: it fails the moment any input to a cache key is computed from
+  something that is still changing while the build runs.
 - **The link set is cached, and it is stable.** Symbol closure only changes when
   a symbol is added, removed or renamed — not when a function body changes. So
   the common edit-compile cycle reuses the previous link set outright and the
@@ -742,9 +758,19 @@ rebuild anything it doesn't have to.
   — the work is `subprocess` waiting, which releases it.
 - **No shell.** `subprocess` with an argv list, never `shell=True`. No `/bin/sh`
   fork per compile, and no quoting bugs.
-- **Config hash in the cache key.** Compiler version (`cc -v`), flags, and
-  standard all feed a configuration hash. Changing `CC` or `CFLAGS` invalidates
-  correctly instead of producing a silently mixed build.
+- **Everything that reaches a command line is in the key.** The compiler and
+  its version, the target platform, every band of compile flags, the include
+  flags, and each file's own directives feed a configuration hash. §14 records
+  what happens when something is left out: `-fPIC` was added *after* the key it
+  should have been part of, so a program-only build and a build with a shared
+  library shared one set of objects. The rule has two halves, and the second is
+  easier to miss — a flag that belongs in the key must also be **settled before
+  the thing it keys is built**, or the key is computed from a moving value.
+- **Linking is keyed the same way.** The whole command plus the contents of
+  every object it consumes. Object timestamps alone miss a different library
+  resolved, a `--wrap` added, or an explicit `--ldflags`, none of which touch an
+  object — and the binary is then left as it was, with the build reporting
+  success.
 
 Interpreter startup is ~25-35ms versus ~3ms for a native binary. Real, and it is
 the one thing an interpreted implementation genuinely costs — visible only on
@@ -1217,6 +1243,23 @@ thereafter.
 The general rule is the one from `-fPIC`, seen from the other side: if a flag
 belongs in the cache key, then it has to be *known* before the thing it keys is
 built. A key computed from a value that is still moving is not a key.
+
+### Some libraries intercept rather than implement
+
+`--explain` offered `-lasan` and `-ltsan` as alternatives to `-lm`. They are
+not wrong by symbol evidence: a sanitiser runtime really does export `lgamma`,
+`memcpy` and `malloc`, because it interposes on them. But that makes them
+candidates in a cover that ranks by coverage, and a program calling enough
+intercepted functions could have had one *chosen* — which would link a
+sanitiser into an ordinary build.
+
+Interposers are now excluded from resolution outright. You get them by asking
+for `-fsanitize`, which is a `--cflags` away, and never by fmake deciding they
+looked like the best fit.
+
+The general shape is one §5 did not anticipate: **exporting a symbol is not the
+same as implementing it.** Symbol evidence is better than header evidence, but
+it is still evidence about names, not about meaning.
 
 ### The exit is equivalent, not merely functional
 

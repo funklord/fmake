@@ -1553,6 +1553,19 @@ HEADER_PKG = {
 # Linked into everything already; naming them is noise, not information.
 IMPLICIT_LIBS = {"c"}
 
+# Runtimes that intercept rather than implement. They export the symbols they
+# interpose on -- asan exports lgamma, memcpy, malloc -- so by symbol evidence
+# alone they are perfectly good providers, and the cover could pick one purely
+# because it happens to intercept more of what a program calls. Linking a
+# sanitiser into an ordinary program is not a build fmake should ever choose;
+# you get these by asking for -fsanitize, which is a --cflags away.
+INTERPOSER_LIBS = {
+    "asan", "lsan", "tsan", "msan", "ubsan", "hwasan",
+    "asan_preinit", "tsan_preinit", "ubsan_standalone",
+    "ubsan_standalone_cxx", "gcov", "profiler", "tcmalloc", "jemalloc",
+    "efence", "duma", "mudflap", "mudflapth",
+}
+
 # Symbols the linker itself provides. No library exports them, so reporting
 # them as unresolved dependencies is a false alarm -- and on a PIC build
 # _GLOBAL_OFFSET_TABLE_ can be the only thing listed, which makes the whole
@@ -1772,7 +1785,8 @@ def find_providers(cfg, wanted, jobs, want_ident=None):
     cached per target against the external set, so a normal incremental build
     never gets here at all. No index means no staleness.
     """
-    libs = linkable_libs(lib_search_dirs(cfg))
+    libs = {n: p for n, p in linkable_libs(lib_search_dirs(cfg)).items()
+            if n not in INTERPOSER_LIBS}
     want = set(wanted)
     if not want or not libs:
         return {}, {}
