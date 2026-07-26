@@ -2141,13 +2141,25 @@ def wrap_flags(cl):
 
 
 def libdir_signature(cfg):
-    """Cheap stamp that changes when a library is installed or removed."""
+    """Stamp that changes when any linkable library does.
+
+    Directory mtimes are not enough. A directory's mtime moves when an entry
+    is added, removed or renamed -- so a package manager that installs by
+    rename is caught -- but not when a file is rewritten in place, which is
+    what `install` and a plain redirect both do. Rebuild a library into
+    /usr/local/lib and fmake would go on believing the symbols it had before.
+
+    Stat-ing every candidate instead costs about 3ms for ~900 libraries,
+    which is less than one compiler invocation and is only paid when the
+    resolution cache is consulted at all.
+    """
     parts = []
-    for d in cfg.libdirs:
+    for name, path in sorted(linkable_libs(cfg.libdirs).items()):
         try:
-            parts.append(f"{d}:{os.stat(d).st_mtime_ns}")
+            st = os.stat(path)
+            parts.append(f"{name}:{path}:{st.st_size}:{st.st_mtime_ns}")
         except OSError:
-            pass
+            parts.append(f"{name}:{path}:gone")
     return sha("|".join(parts))
 
 
