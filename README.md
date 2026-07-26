@@ -202,6 +202,14 @@ A tool this opinionated has to be leaveable.
 
 ---
 
+## Licence
+
+GPL-2.0-or-later. Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>.
+
+`fmake -V` prints the version, author and licence.
+
+---
+
 ## Design notes
 
 `project.md` records why it works the way it does, including the things that
