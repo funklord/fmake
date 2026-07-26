@@ -1818,6 +1818,123 @@ int main(void){ printf("%s %d\n", LABEL, SCALE * 7); return 0; }
 
 
 @case
+def ldflags_propagate_and_cflags_do_not(t):
+    """The asymmetry §4 is built on.
+
+    A compile flag is a property of the file it is written in. A link flag is
+    a property of whatever that file ends up inside -- which is what lets a
+    dependency be declared next to the code that uses it and still reach the
+    program three files away."""
+    t.write("dep.h", "int dep_value(void);\n")
+    t.write("dep.c", """
+/*! @file
+ *  @cflags  -DPRIVATE_TO_DEP=1
+ *  @ldflags -Wl,--build-id=none
+ */
+#include "dep.h"
+int dep_value(void){
+#ifdef PRIVATE_TO_DEP
+    return 7;
+#else
+    return 0;
+#endif
+}
+""")
+    t.write("main.c", """
+#include <stdio.h>
+#include "dep.h"
+int main(void){
+#ifdef PRIVATE_TO_DEP
+    printf("leaked %d\\n", dep_value());
+#else
+    printf("%d\\n", dep_value());
+#endif
+    return 0;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+
+    out = t.run(os.path.basename(t.dir)).stdout
+    check(out == "7\n",
+          f"dep.c's @cflags reached main.c, which it should not: {out!r}")
+
+    # The link flag came from dep.c and had to reach the program.
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    notes = subprocess.run(["readelf", "-n", prog],
+                           capture_output=True, text=True).stdout
+    check("Build ID" not in notes,
+          "dep.c's @ldflags did not propagate to the program")
+
+
+@case
+def environment_beats_the_config_file(t):
+    """$CC is the outermost level, so a one-off needs no edit to a file."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    t.write("fmake.toml", '[toolchain]\ncc = "definitely-not-a-compiler"\n')
+
+    r = t.fmake()
+    check(r.returncode != 0, "the configured compiler does not exist")
+    check("definitely-not-a-compiler" in r.stderr,
+          f"the configured compiler should be named: {r.stderr}")
+
+    r = t.fmake(env={"CC": "cc"})
+    check(r.returncode == 0,
+          f"$CC should override [toolchain] cc: {r.stdout}{r.stderr}")
+
+
+@case
+def an_archive_does_not_keep_stale_members(t):
+    """`ar` appends. A member whose source is gone would otherwise survive."""
+    t.write("a.c", "int a_fn(void){ return 1; }\n")
+    t.write("b.c", "int b_fn(void){ return 2; }\n")
+    check(t.fmake().returncode == 0, "first build failed")
+
+    archive = [f for f in os.listdir(t.dir) if f.endswith(".a")]
+    check(len(archive) == 1, f"expected one archive: {os.listdir(t.dir)}")
+    path = os.path.join(t.dir, archive[0])
+
+    def members():
+        out = subprocess.run(["nm", "--format=posix", path],
+                             capture_output=True, text=True).stdout
+        return {l.split()[0] for l in out.splitlines()
+                if len(l.split()) > 1 and l.split()[1] == "T"}
+
+    check(members() == {"a_fn", "b_fn"}, f"unexpected archive: {members()}")
+
+    os.remove(os.path.join(t.dir, "b.c"))
+    check(t.fmake().returncode == 0, "rebuild failed")
+    check(members() == {"a_fn"},
+          f"a deleted source is still in the archive: {members()}")
+
+
+@case
+def kind_exe_requires_a_main(t):
+    t.write("lib.c", "//! @kind exe\n//! @target thing\n"
+            "int helper(void){ return 1; }\n")
+    r = t.fmake()
+    check(r.returncode != 0, "@kind exe without main() should be refused")
+    check("main()" in r.stderr, f"the reason should be plain: {r.stderr}")
+
+
+@case
+def build_state_is_kept_out_of_version_control(t):
+    """.fmake/ is fmake's, and a repository should not have to be told."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    os.makedirs(os.path.join(t.dir, ".git"), exist_ok=True)
+
+    check(t.fmake().returncode == 0, "build failed")
+    with open(os.path.join(t.dir, ".gitignore")) as fh:
+        check(".fmake" in fh.read(), ".fmake/ was not ignored")
+
+    # And it must not be added twice, or every build grows the file.
+    check(t.fmake().returncode == 0, "second build failed")
+    with open(os.path.join(t.dir, ".gitignore")) as fh:
+        check(fh.read().count(".fmake") == 1,
+              "the ignore entry was added more than once")
+
+
+@case
 def declared_libs_are_linked_regardless(t):
     """@libs is an assertion, not a proposal.
 
