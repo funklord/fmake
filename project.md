@@ -351,6 +351,43 @@ Notes on specific choices:
 - **`@sources` is `--force-link` declared where it belongs**, and `--explain`
   attributes the file to the directive rather than to the flag.
 
+### One word per fact, wherever it is written
+
+The premise was that a directive and a build script should say a thing the
+same way. Measured rather than assumed: **ten of twelve directives already
+used the identical word** in a comment and in `fmake.toml` — `arch cflags
+headers kind ldflags libs os pkg sources std`. Two had drifted, `@define`
+against `defines` and `@target` against `name`, and both spellings now work in
+both places. A fact should not need a different word for living somewhere
+else.
+
+### `@rule` — a build rule beside the code that needs it
+
+The larger gap was that a *rule* could only ever live in a separate file. A
+file needing a generated companion had no way to say so, which is precisely
+the thing annotations exist to fix.
+
+```c
+/*! @file
+ *  @rule gen/table.c: data/table.txt
+ *        python3 tools/mktable.py $< $@
+ */
+```
+
+Recipe lines are the ones indented beneath it, exactly as in a Makefile, and
+the text goes through **the same parser `fmake.mk` uses**. That is the point:
+the two are the same language because they are the same code, not because two
+parsers are being kept in step — which is a thing that stops being true.
+Errors are reported against the source file and line the rule was written in.
+
+This is what made the two-pass scan necessary after all. §7 recorded that
+generated sources needed no second pass, because running the generators before
+the tree was walked made their output ordinary. A rule living in a comment
+cannot be read without scanning first, so the tree is scanned, generated, and
+scanned again. **The prediction was right for the design as it stood and wrong
+for the design once rules could live in source** — the cost was not in
+generating, it was in where the rules are allowed to live.
+
 ### What counts as a directive
 
 Only Doxygen's own comment markers — `//!`, `///`, `/*!`, `/**`. An `@` in an

@@ -872,6 +872,83 @@ with open(sys.argv[1], "w") as fh:
 
 
 @case
+def a_rule_can_live_in_the_file_that_needs_it(t):
+    """The original premise, applied to the one fact that had nowhere to go.
+
+    Annotations exist so a build fact lives beside the code it is about. A
+    build *rule* could only ever live in a separate file, so the file needing
+    a generated companion could not say so. @rule takes Makefile syntax and
+    goes through the same parser fmake.mk does -- the same language because
+    it is the same code, not because two parsers were kept in step."""
+    t.write("data/table.txt", "value 42\n")
+    t.write("tools_mk.py", """
+import sys
+v = open(sys.argv[1]).read().split()[1]
+open(sys.argv[2], "w").write("int table_value(void){ return %s; }\\n" % v)
+""")
+    t.write("main.c", """
+/*! @file
+ *  @rule gen/table.c: data/table.txt
+ *        python3 tools_mk.py $< $@
+ */
+#include <stdio.h>
+int table_value(void);
+int main(void){ printf("%d\\n", table_value()); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "gen/table.c")),
+          "the rule in the comment did not run")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
+
+    # It must reach the exit too. Every previous source of rules has failed
+    # to at least once, so this is checked rather than assumed.
+    e = t.fmake("--eject")
+    check(e.returncode == 0, f"eject failed: {e.stderr}")
+    check("gen/table.c: data/table.txt" in e.stdout,
+          f"the comment rule is missing from the ejected build: {e.stdout}")
+
+    # And an error in it is reported against the file it was written in.
+    t.write("main.c", """
+/*! @file
+ *  @rule gen/table.c
+ *        python3 tools_mk.py $< $@
+ */
+int main(void){ return 0; }
+""")
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    r = t.fmake()
+    check(r.returncode != 0, "a malformed rule should be refused")
+    check("main.c:" in r.stderr,
+          f"the error should name the source file, not fmake.mk: {r.stderr}")
+
+
+@case
+def one_word_per_fact_across_files(t):
+    """A fact should not need a different word for living somewhere else.
+
+    Ten of twelve directives already used the same word in a comment and in
+    fmake.toml. The two that drifted were @define against `defines` and
+    @target against `name`; both spellings now work in both places."""
+    t.write("main.c", """
+/*! @file
+ *  @defines WORD=7
+ */
+#include <stdio.h>
+int main(void){ printf("%d\\n", WORD); return 0; }
+""")
+    t.write("fmake.toml", '[target.' + os.path.basename(t.dir) + ']\n'
+            'target = "renamed"\n')
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "renamed")),
+          f"`target =` should work like `name =`: {os.listdir(t.dir)}")
+    out = subprocess.run([os.path.join(t.dir, "renamed")],
+                         capture_output=True, text=True).stdout
+    check(out == "7\n", f"@defines should work like @define: {out!r}")
+
+
+@case
 def mk_pattern_rules_scale_without_editing_config(t):
     """The thing fmake.toml cannot say at all.
 
