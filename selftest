@@ -396,6 +396,104 @@ int main(void){
 
 
 @case
+def relinking_follows_the_command_not_just_mtimes(t):
+    """Object mtimes miss every change that is not a recompile.
+
+    A different library resolved, a --wrap added, an explicit --ldflags: none
+    of them touch an object, so a staleness rule built on object timestamps
+    leaves the binary exactly as it was and reports success."""
+    t.write("main.c", '#include <stdio.h>\nint main(void){ puts("hi"); return 0; }\n')
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+
+    check(t.fmake().returncode == 0, "first build failed")
+
+    def has_build_id():
+        out = subprocess.run(["readelf", "-n", prog],
+                             capture_output=True, text=True).stdout
+        return "Build ID" in out
+
+    if not has_build_id():
+        raise Skip("this toolchain does not emit a build id")
+
+    r = t.fmake("--ldflags", "-Wl,--build-id=none")
+    check(r.returncode == 0, f"relink failed: {r.stdout}{r.stderr}")
+    check(not has_build_id(),
+          "the link flag was ignored: the binary was not relinked")
+
+    # and an unchanged command must still be a no-op
+    r = t.fmake("--ldflags", "-Wl,--build-id=none")
+    check("built" not in r.stdout,
+          f"nothing changed, so nothing should relink: {r.stdout}")
+
+
+@case
+def a_library_will_not_hold_two_definitions(t):
+    """§3 refuses to guess for programs; a library is not exempt.
+
+    `ar` resolves duplicate members by order, silently, and the consumer
+    inherits the coin flip with no way to see where it came from."""
+    t.write("impl_a.c", "int compute(void){ return 1; }\n")
+    t.write("impl_b.c", "int compute(void){ return 2; }\n")
+    t.write("util.c", "int helper(void){ return 0; }\n")
+
+    r = t.fmake()
+    check(r.returncode != 0, "two definitions should be refused")
+    check("impl_a.c" in r.stderr and "impl_b.c" in r.stderr,
+          f"both should be named: {r.stderr}")
+
+    # and the documented escape still works
+    t.write("impl_b.c", "//! @os windows\nint compute(void){ return 2; }\n")
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    r = t.fmake()
+    check(r.returncode == 0, f"@os should settle it: {r.stdout}{r.stderr}")
+    archive = [f for f in os.listdir(t.dir) if f.endswith(".a")]
+    check(len(archive) == 1, f"expected an archive: {os.listdir(t.dir)}")
+    syms = subprocess.run(["nm", "--format=posix",
+                           os.path.join(t.dir, archive[0])],
+                          capture_output=True, text=True).stdout
+    check(syms.count("compute T") == 1,
+          f"the archive should hold one definition: {syms}")
+
+
+@case
+def explain_shows_the_command_that_runs(t):
+    """A drifted --explain is worse than none.
+
+    Principle 4 is that every decision is inspectable, which is only true if
+    what is shown is what is executed -- so both come from one function."""
+    # Something that resolves a library, or the two renderings agree
+    # trivially and the case proves nothing.
+    t.write("main.c", """
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+int main(int argc, char **argv){
+    printf("%f\\n", lgamma(argc > 1 ? atof(argv[1]) : 3.0));
+    return 0;
+}
+""")
+    shown = [l.strip() for l in t.fmake("--explain").stdout.splitlines()
+             if l.strip().startswith(("cc -o", "c++ -o"))]
+    check(shown, "no link command in --explain")
+    check("-lm" in shown[-1],
+          f"the resolved library should appear: {shown[-1]}")
+
+    # The strongest form of the claim: run exactly what was shown, from the
+    # project root, and require a working binary out of it. --explain
+    # compiles but does not link, so there is nothing there yet to be
+    # mistaken for the result.
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    check(not os.path.exists(prog), "--explain should not have linked")
+    r = subprocess.run(shown[-1], shell=True, cwd=t.dir,
+                       capture_output=True, text=True)
+    check(r.returncode == 0,
+          f"the command --explain printed does not work: {r.stderr}")
+    out = _run_in(t.dir, "./" + os.path.basename(t.dir), "5").stdout
+    check(out.startswith("3.17"),
+          f"the binary built from the shown command is wrong: {out!r}")
+
+
+@case
 def two_mains_two_programs(t):
     """Each main() is its own program; shared code is compiled once."""
     t.write("lib.h", "int shared_calc(int);\n")

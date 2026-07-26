@@ -649,6 +649,12 @@ DIRECTIVES = DIRECTIVE_SCALAR | DIRECTIVE_LIST
 
 KINDS = ("exe", "shared", "static")
 
+# The split above is what decides whether a directive replaces or accumulates,
+# so it has to be the single statement of that fact rather than a comment next
+# to code that reads each one by hand. Ann asserts against it.
+assert not (DIRECTIVE_SCALAR & DIRECTIVE_LIST)
+assert DIRECTIVE_SCALAR | DIRECTIVE_LIST == DIRECTIVES
+
 
 def parse_directives(comments):
     """Directives found in Doxygen comments: {name: [[line, [args]], ...]}."""
@@ -689,6 +695,7 @@ class Ann:
 
     def scalar(self, name, default=None):
         """Last value wins, per the precedence rules."""
+        assert name in DIRECTIVE_SCALAR, f"{name} is not a scalar directive"
         entries = self.raw.get(name)
         if not entries or not entries[-1][1]:
             return default
@@ -696,10 +703,12 @@ class Ann:
 
     def items(self, name):
         """Every argument of every occurrence, in order."""
+        assert name in DIRECTIVE_LIST, f"{name} is not an accumulating directive"
         return [a for _ln, args in self.raw.get(name, []) for a in args]
 
     def groups(self, name):
         """Each occurrence separately -- @pkg takes a whole line as one unit."""
+        assert name in DIRECTIVE_LIST, f"{name} is not an accumulating directive"
         return [args for _ln, args in self.raw.get(name, []) if args]
 
     def line(self, name):
@@ -1354,6 +1363,20 @@ def close_over_library(units, root_unit):
     for u in units:
         if u is not root_unit:
             cl.why[u.rel] = ("part of the library", "")
+
+    # A library is not exempt from §3's refusal to guess. Two strong
+    # definitions of one symbol in an archive is resolved by member order,
+    # silently, and the consumer inherits the coin flip with no way to see
+    # it -- so it is caught here, where the cause is. Weak definitions are
+    # excluded as everywhere else: C++ libraries are full of them by design.
+    strong_by_sym = {}
+    for u in units:
+        for sym in u.strong:
+            strong_by_sym.setdefault(sym, []).append(u.rel)
+    for sym, where in sorted(strong_by_sym.items()):
+        if len(where) > 1:
+            cl.ambiguous.append((sym, where))
+
     defined = set()
     for u in units:
         defined |= u.strong | u.weak
@@ -2234,31 +2257,55 @@ class Target:
         return self.name
 
 
-def link_target(t, cl, cfg, outdir, dry_run, libflags=()):
-    name, objs = t.filename, [u.obj for u in cl.link]
-    cxx = any(u.cxx for u in cl.link)
-    out = os.path.join(outdir, name)
+def link_cmd(t, cl, cfg, outdir, libflags=()):
+    """The exact command that produces this artifact.
 
+    One implementation, used both to link and to report. Two would drift, and
+    a drifted --explain is worse than none: principle 4 is that every decision
+    is inspectable, which is only true if what is shown is what is run.
+    """
+    objs = [u.obj for u in cl.link]
+    out = os.path.join(outdir, t.filename)
     if t.kind == "static":
         # An archive is assembled, not linked: no libraries, no entry point.
         # Whatever it leaves undefined is the consumer's problem to resolve.
-        cmd = [cfg.ar, "rcs", out] + objs
-    else:
-        # Resolved libraries first, then whatever the user named, so an
-        # explicit --ldflags always has the last word.
-        cmd = ([cfg.driver(cxx)]
-               + (["-shared"] if t.kind == "shared" else [])
-               + ["-o", out] + objs + list(libflags) + cfg.ldflags)
+        return [cfg.ar, "rcs", out] + objs
+    cxx = any(u.cxx for u in cl.link)
+    # Resolved libraries first, then whatever the user named, so an explicit
+    # --ldflags always has the last word.
+    return ([cfg.driver(cxx)]
+            + (["-shared"] if t.kind == "shared" else [])
+            + ["-o", out] + objs + list(libflags) + cfg.ldflags)
 
-    if t.kind == "static" and not dry_run and os.path.exists(out):
-        os.remove(out)          # ar appends; a stale member would survive
+
+def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
+                root=None):
+    name, objs = t.filename, [u.obj for u in cl.link]
+    out = os.path.join(outdir, name)
+    cmd = link_cmd(t, cl, cfg, outdir, libflags)
+
     if dry_run:
         print(" ".join(cmd))
         return out, True, True
-    newest = max((os.path.getmtime(o) for o in objs), default=0)
-    if os.path.exists(out) and os.path.getmtime(out) >= newest:
-        vinfo(f"up to date {name}")
-        return out, False, True
+
+    # The whole command, plus the contents of everything it consumes. Object
+    # mtimes alone miss every change that is not a recompile -- a different
+    # library resolved, a --wrap added, an explicit --ldflags -- and the
+    # binary is then silently left as it was. Same rule as objects: if the
+    # inputs and the invocation are unchanged, the output is too.
+    key = None
+    if cache is not None and root is not None:
+        parts = list(cmd)
+        for o in objs:
+            parts.append(cache.hash_of(o, os.path.relpath(o, root)) or "?")
+        key = sha("|".join(parts))
+        store = cache.data.setdefault("links", {})
+        if store.get(name) == key and os.path.exists(out):
+            vinfo(f"up to date {name}")
+            return out, False, True
+
+    if t.kind == "static" and os.path.exists(out):
+        os.remove(out)          # ar appends; a stale member would survive
     say(f"{GREEN('AR ' if t.kind == 'static' else 'LD ')} {BOLD(name)}")
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.stderr.strip():
@@ -2272,6 +2319,8 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=()):
             PROGRESS.write("\n".join(lines[:LINK_ERR_LINES]) + "\n")
             note(f"... {len(lines) - LINK_ERR_LINES} more linker lines (-v "
                  f"for all)")
+    if key is not None and r.returncode == 0:
+        cache.data.setdefault("links", {})[name] = key
     return out, True, r.returncode == 0
 
 # ---------------------------------------------------------------------------
@@ -2321,7 +2370,9 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
         print(f"  {CYAN('directives')}")
         for rel, ann in seen:
             for d in ann.names():
-                vals = " ".join(ann.items(d)) or "(no arguments)"
+                # Read each directive the way it is declared, not uniformly.
+                vals = (ann.scalar(d, "") if d in DIRECTIVE_SCALAR
+                        else " ".join(ann.items(d))) or "(no arguments)"
                 head = f"@{d} {vals}"
                 if len(head) > W - 5:
                     head = head[:W - 8] + "..."
@@ -2430,16 +2481,9 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
         print(f"    {DIM(_show_cmd(compile_cmd(u, cfg, incflags), root))}")
     if len(cl.link) > 2:
         print(f"    {DIM('... %d more' % (len(cl.link) - 2))}")
-    cxx = any(u.cxx for u in cl.link)
-    if t.kind == "static":
-        link_cmd = [cfg.ar, "rcs", os.path.join(outdir, name)] + \
-                   [u.obj for u in cl.link]
-    else:
-        link_cmd = ([cfg.driver(cxx)]
-                    + (["-shared"] if t.kind == "shared" else [])
-                    + ["-o", os.path.join(outdir, name)]
-                    + [u.obj for u in cl.link] + ldflags)
-    print(f"    {DIM(_show_cmd(link_cmd, root))}")
+    # The same call the linker gets, not a second rendering of it.
+    shown = link_cmd(t, cl, cfg, outdir, res["ldflags"] if res else [])
+    print(f"    {DIM(_show_cmd(shown, root))}")
     print()
 
 # ---------------------------------------------------------------------------
@@ -2896,12 +2940,17 @@ def build(args, _bootstrapping=False):
         res = resolutions.get(t)
         out, did, ok = link_target(t, closures[t], cfg, outdir,
                                    args.dry_run,
-                                   res["ldflags"] if res else [])
+                                   res["ldflags"] if res else [],
+                                   cache, root)
         changed = changed or did
         (built if ok else failed).append((t.filename, closures[t], res))
 
     cache.save()
     if args.dry_run and not args.install:
+        if not args.no_libs:
+            note("libraries are not resolved in a dry run: nothing was "
+                 "compiled, so there are no symbols to resolve. The link "
+                 "lines above are missing their -l flags.")
         return 0
     if args.dry_run and args.install:
         return do_install(wanted, closures, root, outdir, conf, args)

@@ -1153,12 +1153,66 @@ That is the same line §4 draws between `@cflags` and `@ldflags`, applied to
 precedence rather than to scope. `--eject` emits the command-line band as a
 separate variable so the ordering survives ejection.
 
+### The link step was still on mtimes — fixed
+
+Everything else in fmake is content-hashed. The link was not: it compared the
+output's timestamp against the newest object and skipped if it won. That misses
+every change that is not a recompile — a different library resolved, a `--wrap`
+added, an explicit `--ldflags` — because none of them touch an object.
+
+`fmake --ldflags '-Wl,--build-id=none'` was accepted, reported success, and did
+nothing at all. The link now keys on the whole command plus the contents of
+everything it consumes, which is the same rule objects already used.
+
+### A library could hold two definitions — fixed
+
+§3 makes duplicate strong definitions a hard error for programs, on the grounds
+that fmake does not guess. `close_over_library` took every member without
+looking. Two files defining `compute` produced an archive containing both, `ar`
+resolved it by member order, and the consumer inherited the coin flip with
+nothing anywhere to say so. Libraries are now held to the same rule, weak
+definitions excepted as always.
+
+### `--explain` rendered its own link command — fixed
+
+The command shown and the command run were built by two pieces of code that
+happened to agree. Principle 4 is that every decision is inspectable, which is
+only true if what is shown is what is executed, so there is now one function
+and both callers use it. The test runs the command `--explain` prints and
+requires a working binary out of it.
+
+That also exposed something worth stating outright: **`fmake -n` prints link
+lines with no `-l` flags.** A dry run compiles nothing, so there are no symbols
+to resolve, so resolution is skipped — and the commands printed would not work.
+That is inherent rather than fixable, so the dry run now says so.
+
+### The directive table was decorative — fixed
+
+`DIRECTIVE_SCALAR` and `DIRECTIVE_LIST` declared which directives replace and
+which accumulate, but every reader picked an accessor by hand, so nothing
+enforced the declaration. `Ann` now asserts against the table.
+
+It found existing drift immediately: `--explain` was reading *every* directive
+with the list accessor, including `@kind` and `@target`. That worked by
+accident, and would have kept working until a scalar directive needed to behave
+like one.
+
 ### What this says about the method
 
-All three were reachable from the design alone; none needed a project to
-stumble over them. Two were silent — a wrong link set and a stale object — and
-silent wrongness is exactly what pointing the tool at more code does not find,
-because a build that succeeds looks the same either way.
+All of these were reachable from the design alone; none needed a project to
+stumble over them. Most were silent — a wrong link set, a stale object, a stale
+binary, an archive with two answers in it — and silent wrongness is exactly
+what pointing the tool at more code does not find, because a build that
+succeeds looks the same either way.
+
+The general shape of every one: **a decision made in two places, or a fact
+declared in one place and used in another.** Strong-versus-weak was enforced
+when choosing but not when checking. `-fPIC` was added after the identity that
+was supposed to cover it. The precedence chain was written in the document and
+inverted in the code. The link command was rendered twice. The directive table
+was declared and then ignored. Each was found by asking what the invariant was
+supposed to be and then checking that one thing enforced it, which is a
+different question from whether any particular project builds.
 
 ---
 
