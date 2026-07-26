@@ -367,6 +367,171 @@ def one_failed_target_does_not_sink_the_rest(t):
           f"the failure should be named: {r.stdout}")
 
 
+def _gen_tree(t):
+    """A tree whose only source of a symbol is a generated file."""
+    # The definition arrives through a macro, as flex's yylex does, so the
+    # definition-scanning widening filter cannot see it. Only being a
+    # declared generator output gets this file compiled.
+    t.write("src/mk.py", """
+import sys
+with open(sys.argv[1], "w") as fh:
+    fh.write("#define DEFINE_FN(n, v) int n(void){ return v; }\\n")
+    fh.write("DEFINE_FN(generated_value, 40)\\n")
+""")
+    t.write("main.c", """
+#include <stdio.h>
+int generated_value(void);
+int main(void){ printf("%d\\n", generated_value() + 2); return 0; }
+""")
+    t.write("fmake.toml", f"""
+[generate.values]
+description = "make values.c"
+command = "{sys.executable} src/mk.py $out"
+inputs  = ["src/mk.py"]
+outputs = ["gen/values.c"]
+""")
+
+
+@case
+def generated_sources_are_built(t):
+    """A .c that does not exist when the tree is scanned.
+
+    Running the generators first means everything downstream sees an
+    ordinary source -- no second scanning pass, no special case in the
+    closure."""
+    _gen_tree(t)
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "gen/values.c")),
+          "the generator did not produce its output")
+    check(t.run(os.path.basename(t.dir)).stdout == "42\n",
+          "the generated code was not linked in")
+
+
+@case
+def generated_sources_rerun_on_content_change(t):
+    """Hash-driven like everything else: touching is not changing."""
+    _gen_tree(t)
+    check(t.fmake().returncode == 0, "initial build failed")
+
+    r = t.fmake()
+    check("GEN" not in r.stdout, f"nothing changed, so nothing to do: {r.stdout}")
+
+    os.utime(os.path.join(t.dir, "src/mk.py"), None)
+    r = t.fmake()
+    check("GEN" not in r.stdout, f"touch must not regenerate: {r.stdout}")
+
+    gen = os.path.join(t.dir, "src/mk.py")
+    with open(gen) as fh:
+        body = fh.read()
+    with open(gen, "w") as fh:
+        fh.write(body.replace("40", "100"))
+    r = t.fmake()
+    check("GEN" in r.stdout, f"a real change must regenerate: {r.stdout}")
+    check(t.run(os.path.basename(t.dir)).stdout == "102\n",
+          "the regenerated code was not rebuilt")
+
+
+@case
+def generated_rules_run_in_dependency_order(t):
+    """One generator feeding another is ordinary.
+
+    Alphabetical order would run `stage2` before `stage1` here, so the
+    ordering has to come from what each rule consumes."""
+    t.write("main.c", '#include <stdio.h>\nint v(void);\n'
+            'int main(void){ printf("%d\\n", v()); return 0; }\n')
+    t.write("fmake.toml", f"""
+[generate.zzz_first]
+command = "{sys.executable} -c \\"open('gen/step.txt','w').write('7')\\""
+inputs  = ["main.c"]
+outputs = ["gen/step.txt"]
+
+[generate.aaa_second]
+command = "{sys.executable} -c \\"open('gen/v.c','w').write('int v(void){{ return ' + open('gen/step.txt').read() + '; }}')\\""
+inputs  = ["gen/step.txt"]
+outputs = ["gen/v.c"]
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).stdout == "7\n",
+          "the second generator did not see the first one's output")
+
+
+@case
+def generated_depends_are_not_passed_to_the_command(t):
+    """Ordering and command arguments are different things.
+
+    Declaring a needed-but-not-consumed file as an input would hand it to
+    the tool as a second source, which is how flex ends up lexing a bison
+    header. `depends` orders without feeding."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    t.write("fmake.toml", f"""
+[generate.first]
+command = "{sys.executable} -c \\"open('gen/a.txt','w').write('a')\\""
+inputs  = ["main.c"]
+outputs = ["gen/a.txt"]
+
+[generate.second]
+command = "{sys.executable} src/show.py $out $in"
+inputs  = ["main.c"]
+depends = ["gen/a.txt"]
+outputs = ["gen/args.txt"]
+""")
+    t.write("src/show.py", """
+import sys
+with open(sys.argv[1], "w") as fh:
+    fh.write(" ".join(sys.argv[2:]))
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    with open(os.path.join(t.dir, "gen/args.txt")) as fh:
+        got = fh.read()
+    check("a.txt" not in got,
+          f"a `depends` file was passed to the command: {got!r}")
+    check("main.c" in got, f"the real input was not passed: {got!r}")
+
+
+@case
+def generated_missing_tool_is_reported(t):
+    _gen_tree(t)
+    t.write("fmake.toml", """
+[generate.values]
+command = "definitely-not-a-real-tool $out"
+inputs  = ["src/mk.py"]
+outputs = ["gen/values.c"]
+""")
+    r = t.fmake()
+    check(r.returncode != 0, "a missing generator should fail the build")
+    check("definitely-not-a-real-tool" in r.stderr
+          and "not installed" in r.stderr,
+          f"the tool should be named: {r.stderr}")
+
+
+@case
+def generated_sources_survive_ejection(t):
+    """The exit has to carry the generators, or it is not an exit."""
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    _gen_tree(t)
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(r.stdout)
+
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    shutil.rmtree(os.path.join(t.dir, "gen"), ignore_errors=True)
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    if os.path.exists(prog):
+        os.remove(prog)
+
+    m = _run_in(t.dir, "make")
+    check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "gen/values.c")),
+          "the ejected build did not run the generator")
+    check(_run_in(t.dir, "./" + os.path.basename(t.dir)).stdout == "42\n",
+          "the ejected build produced a broken binary")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

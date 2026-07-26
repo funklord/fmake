@@ -63,6 +63,10 @@ from __attribute__((constructor)) is referenced by nothing, so the closure
 never reaches it. Such files must be named explicitly (--force-link), the
 same as they must be listed in a Makefile.
 
+Sources that do not exist yet -- flex, bison, protoc output -- are declared
+in fmake.toml and generated before the tree is scanned, so everything
+after treats them as ordinary files.
+
 An optional fmake.toml carries what belongs to no single file: which of two
 libraries a shared source is part of, install paths, named build profiles
 (-p release), and the toolchain to build with. Cross builds resolve
@@ -325,6 +329,10 @@ CONF_SCHEMA = {
         "name": S, "kind": S, "root": S,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
     }},
+    "generate": {"*": {
+        "command": S, "inputs": L, "outputs": L, "depends": L,
+        "description": S,
+    }},
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
     },
@@ -426,6 +434,161 @@ class Conf:
 
     def target(self, name):
         return self.targets.get(name, {})
+
+# ---------------------------------------------------------------------------
+# Generated sources
+#
+# A .c produced by flex, bison or protoc does not exist when the tree is
+# scanned, so nothing downstream can see it: not the include graph, not the
+# closure, not the symbol tables. The fix is simply to run the generators
+# first. Everything after that treats the results as ordinary sources, which
+# is why this needs no second scanning pass -- the earlier guess that it would
+# was wrong.
+#
+# Declared in fmake.toml rather than inferred, because the command is not
+# recoverable from the file. A .y could be bison or byacc, with or without a
+# header, and guessing wrong produces a build that fails in a way nobody can
+# read.
+#
+#     [generate.parser]
+#     command = "bison -d -o $out $in"
+#     inputs  = ["src/parser.y"]
+#     outputs = ["src/parser.c", "src/parser.h"]
+#
+# No shell, matching §8: the command is split once and executed directly, so
+# there is no quoting to get wrong and no /bin/sh in the loop. A rule that
+# genuinely needs a pipe should call a script, which is also the point at which
+# it has stopped being declarative.
+# ---------------------------------------------------------------------------
+
+def _gen_argv(command, ins, outs):
+    """Substitute $in and $out into an argv, not into a string.
+
+    Splitting first and substituting after means a path containing a space
+    stays one argument.
+    """
+    argv = []
+    for tok in shlex.split(command):
+        if tok == "$in":
+            argv += ins
+        elif tok == "$out":
+            argv += outs
+        else:
+            argv.append(tok.replace("$in", ins[0] if ins else "")
+                           .replace("$out", outs[0] if outs else ""))
+    return argv
+
+
+def _gen_order(rules):
+    """Rules sorted so that a generator's inputs are produced before it runs.
+
+    Alphabetical would be deterministic but arbitrary, and one generator
+    feeding another is ordinary -- protoc emitting a .cc that a second rule
+    post-processes.
+    """
+    produced = {}
+    for name, r in rules.items():
+        for out in r.get("outputs", []):
+            produced[out] = name
+
+    order, state = [], {}
+
+    def visit(name, chain):
+        if state.get(name) == "done":
+            return
+        if state.get(name) == "busy":
+            die(f"{CONF_FILE}: [generate.*] rules form a cycle: "
+                + " -> ".join(chain + [name]))
+        state[name] = "busy"
+        for src in (rules[name].get("inputs", [])
+                    + rules[name].get("depends", [])):
+            upstream = produced.get(src)
+            if upstream and upstream != name:
+                visit(upstream, chain + [name])
+        state[name] = "done"
+        order.append(name)
+
+    for name in sorted(rules):
+        visit(name, [])
+    return order
+
+
+def run_generators(root, conf, cache, dry_run=False):
+    """Run the [generate.*] rules. Returns their outputs, tree-relative."""
+    rules = conf.data.get("generate", {})
+    if not rules:
+        return []
+
+    for name, r in sorted(rules.items()):
+        for key in ("command", "inputs", "outputs"):
+            if not r.get(key):
+                die(f"{CONF_FILE}: [generate.{name}] needs {key}")
+
+    store = cache.data.setdefault("generated", {})
+    produced = []
+
+    for name in _gen_order(rules):
+        r = rules[name]
+        ins = []
+        for pat in r["inputs"]:
+            hits = sorted(glob.glob(os.path.join(root, pat), recursive=True))
+            if not hits:
+                # Not an error yet: another rule may be about to produce it.
+                cand = os.path.join(root, pat)
+                if not os.path.exists(cand):
+                    die(f"{CONF_FILE}: [generate.{name}] input {pat!r} "
+                        f"matched nothing")
+                hits = [cand]
+            ins += hits
+        deps = []
+        for pat in r.get("depends", []):
+            hits = sorted(glob.glob(os.path.join(root, pat), recursive=True))
+            deps += hits or [os.path.join(root, pat)]
+        outs = [os.path.join(root, o) for o in r["outputs"]]
+        produced += list(r["outputs"])
+
+        # Rerun when an input's contents change or the command does, not on
+        # mtime, so the rest of the build stays hash-driven too.
+        parts = [r["command"]]
+        for path in ins + deps:
+            rel = os.path.relpath(path, root)
+            parts.append(rel + ":" + (cache.hash_of(path, rel) or "?"))
+        key = sha("|".join(parts))
+
+        fresh = (store.get(name) == key
+                 and all(os.path.exists(o) for o in outs))
+        if fresh:
+            vinfo(f"generated {name} is up to date")
+            continue
+
+        argv = _gen_argv(r["command"], ins, outs)
+        if not argv:
+            die(f"{CONF_FILE}: [generate.{name}] command is empty")
+        if not shutil.which(argv[0]):
+            die(f"{CONF_FILE}: [generate.{name}] needs {argv[0]!r}, "
+                f"which is not installed")
+
+        label = r.get("description") or name
+        if dry_run:
+            print(" ".join(argv))
+            continue
+        say(f"{YELLOW('GEN')} {label}")
+        for o in outs:
+            os.makedirs(os.path.dirname(o) or root, exist_ok=True)
+        res = subprocess.run(argv, cwd=root, capture_output=True, text=True)
+        if res.stdout.strip():
+            PROGRESS.write(res.stdout)
+        if res.stderr.strip():
+            PROGRESS.write(res.stderr)
+        if res.returncode != 0:
+            die(f"[generate.{name}] failed: {' '.join(argv)}")
+        missing = [os.path.relpath(o, root) for o in outs
+                   if not os.path.exists(o)]
+        if missing:
+            die(f"[generate.{name}] did not produce {', '.join(missing)}")
+        store[name] = key
+
+    return produced
 
 # ---------------------------------------------------------------------------
 # Annotations
@@ -2113,7 +2276,22 @@ def build(args):
     outdir = os.path.abspath(args.output) if args.output else root
     jobs   = args.jobs or (os.cpu_count() or 4)
 
+    # Generators run before anything looks at the tree, so their output is
+    # an ordinary source from here on -- seen by the include graph, the
+    # closure and the symbol tables alike, with no special case anywhere.
+    generated = run_generators(root, conf, cache, args.dry_run)
+
     srcs, hdrs = walk_tree(root)
+    for rel in generated:
+        ext = os.path.splitext(rel)[1]
+        if ext in SRC_EXTS and rel not in srcs:
+            srcs.append(rel)
+        elif ext in HDR_EXTS and rel not in hdrs:
+            hdrs.append(rel)
+    srcs.sort()
+    hdrs.sort()
+    gen_dirs = sorted({os.path.dirname(g) for g in generated
+                       if os.path.splitext(g)[1] in HDR_EXTS})
     if not srcs:
         die("no C or C++ source files found here")
 
@@ -2278,6 +2456,13 @@ def build(args):
         if rel not in proj.src_set:
             die(f"{rel!r} is not a source file in this tree")
         candidates.add(rel)
+    # A file you wrote a generator for is obviously worth compiling, so
+    # generated sources join the candidate set outright. This is not forcing
+    # them into the link -- the closure still decides that -- but it means
+    # their symbols exist to be closed over. Without it flex output goes
+    # unbuilt, since yylex arrives through a macro that the definition-scanning
+    # widening filter cannot see.
+    candidates |= {g for g in generated if g in proj.src_set}
     # Whatever widening discovered last time is a far better starting guess
     # than the include graph, so start from it. Widening still corrects it if
     # the tree has changed.
@@ -2290,6 +2475,10 @@ def build(args):
 
     base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
                      for d in sorted(proj.incdirs | {"."})]
+    for d in gen_dirs:
+        flag = "-I" + os.path.join(root, d) if d else "-I" + root
+        if flag not in base_incflags:
+            base_incflags.append(flag)
     for d in conf.project.get("include-dirs", []):
         flag = "-I" + (d if os.path.isabs(d) else os.path.join(root, d))
         if flag not in base_incflags:
@@ -2564,6 +2753,29 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
     a(f"all: {' '.join(t.filename for t in targets)}")
     a("")
 
+    gen_rules = conf.data.get("generate", {})
+    gen_outs = [o for n in _gen_order(gen_rules)
+                for o in gen_rules[n]["outputs"]]
+    if gen_rules:
+        a("# ---- generated sources " + "-" * 40)
+        a("")
+        a(f"GENERATED = {' '.join(gen_outs)}")
+        a("")
+        for name in _gen_order(gen_rules):
+            r = gen_rules[name]
+            outs, ins = r["outputs"], r["inputs"]
+            deps = r.get("depends", [])
+            argv = _gen_argv(r["command"], ins, outs)
+            a(f"{outs[0]}: {' '.join(ins + deps)}")
+            a("\t@mkdir -p $(@D)")
+            a(f"\t{' '.join(argv)}")
+            # Secondary outputs hang off the first, which is the portable way
+            # to say one command produces several files.
+            for extra in outs[1:]:
+                a(f"{extra}: {outs[0]}")
+                a("\t@:")
+            a("")
+
     # One rule per object, because per-file flags are the point: @cflags and
     # @define belong to a translation unit, so a single pattern rule cannot
     # express them.
@@ -2582,7 +2794,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
         # only a project that actually needs an -I notices.
         var, flags = ("CXX", "CXXFLAGS") if u.cxx else ("CC", "CFLAGS")
         own = " ".join(_eject_flags(u.own, root))
-        a(f"{obj}: {rel}")
+        order_only = " | $(GENERATED)" if gen_outs else ""
+        a(f"{obj}: {rel}{order_only}")
         a("\t@mkdir -p $(@D)")
         a(f"\t$({var}) $({flags}){' ' + own if own else ''} -c $< -o $@ "
           f"-MD -MF $(@:.o=.d)")
@@ -2614,7 +2827,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf):
 
     all_objs = sorted({f"$(OBJDIR)/{rel}.o" for rel in every})
     a("clean:")
-    a(f"\trm -rf $(OBJDIR) {' '.join(t.filename for t in targets)}")
+    a(f"\trm -rf $(OBJDIR) {' '.join(t.filename for t in targets)}"
+      + (" $(GENERATED)" if gen_outs else ""))
     a("")
     a("# Depfiles the compiler writes as a side effect, so a changed header")
     a("# rebuilds what includes it.")
@@ -2673,13 +2887,33 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf):
     a("  description = AR $out")
     a("")
 
+    gen_rules = conf.data.get("generate", {})
+    gen_outs = []
+    for name in _gen_order(gen_rules):
+        r = gen_rules[name]
+        argv = _gen_argv(r["command"], r["inputs"], r["outputs"])
+        a(f"rule gen_{_mk_ident(name)}")
+        a(f"  command = {' '.join(argv)}")
+        a(f"  description = GEN {r.get('description') or name}")
+        a("")
+        deps = r.get("depends", [])
+        a(f"build {' '.join(r['outputs'])}: gen_{_mk_ident(name)} "
+          f"{' '.join(r['inputs'])}"
+          + (" | " + " ".join(deps) if deps else ""))
+        gen_outs += r["outputs"]
+    if gen_rules:
+        a("")
+
     every = {}
     for t in targets:
         for u in closures[t].link:
             every[u.rel] = u
+    # Order-only: a generated header must exist before anything compiles,
+    # but the depfiles decide when a change to it forces a rebuild.
+    after = (" || " + " ".join(gen_outs)) if gen_outs else ""
     for rel in sorted(every):
         u = every[rel]
-        a(f"build $objdir/{rel}.o: {'cxx' if u.cxx else 'cc'} {rel}")
+        a(f"build $objdir/{rel}.o: {'cxx' if u.cxx else 'cc'} {rel}{after}")
         if u.own:
             a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
     a("")

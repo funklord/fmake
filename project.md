@@ -563,6 +563,61 @@ legitimately contain commands that are not fmake's, whereas this file belongs
 to fmake alone — so a key it does not recognise is a typo, every time. The
 error names the valid keys for that section.
 
+### Generated sources
+
+A `.c` produced by flex, bison or protoc does not exist when the tree is
+scanned, so nothing downstream can see it: not the include graph, not the
+closure, not the symbol tables.
+
+The fix is just to run the generators first. This was expected to need a second
+scanning pass and does not — once the files exist before `walk_tree`, they are
+ordinary sources everywhere after, with no special case in the closure or the
+symbol handling.
+
+```toml
+[generate.parser]
+command = "bison -d -o $out $in"
+inputs  = ["src/parser.y"]
+outputs = ["src/parser.c", "src/parser.h"]
+
+[generate.lexer]
+command = "flex -o $out $in"
+inputs  = ["src/lexer.l"]
+depends = ["src/parser.h"]      # needed, but not an argument
+outputs = ["src/lexer.c"]
+```
+
+Declared rather than inferred, because the command is not recoverable from the
+file: a `.y` could be bison or byacc, with or without a header, and guessing
+wrong produces a failure nobody can read.
+
+Four things this turned out to need:
+
+- **`depends` separate from `inputs`.** The first attempt expressed "the lexer
+  needs the parser's header" by listing it as an input — which also handed it
+  to flex as a second source file to lex. Ordering and command arguments are
+  different things, and conflating them silently produces a working-looking
+  build from garbage.
+- **Rules ordered by what they consume**, not alphabetically. One generator
+  feeding another is ordinary.
+- **Generated files join the candidate set outright.** Not forced into the link
+  — the closure still decides — but their symbols have to exist to be closed
+  over. Without this, flex output goes unbuilt: `yylex` arrives through a macro,
+  which is precisely what the definition-scanning widening filter (§3) cannot
+  see. This is the known limitation showing up in the most ordinary place it
+  could.
+- **No shell**, matching §8. The command is split once and executed directly,
+  so there is no quoting to get wrong. A rule needing a pipe should call a
+  script, which is also the point at which it has stopped being declarative.
+
+Staleness is content-hashed like everything else, so touching a grammar
+regenerates nothing. `--eject` emits the rules too, in both backends, or the
+exit would not be one.
+
+Verified with a real flex + bison calculator: correct generation order, the
+parser rebuilt alone when the grammar changes, and the ejected Makefile and
+`build.ninja` both running the generators from a clean tree.
+
 ### Install
 
 `fmake --install [--prefix P] [--destdir D]` builds, then places executables
@@ -887,9 +942,9 @@ progress onto stdout and produced a Makefile whose first line was
   (`clang-scan-deps`). Note that the *closure* is unaffected — symbols are
   symbols — so this degrades the guess, not the answer, and worst case it falls
   back to compiling the whole tree. Less fatal than it looked before §3 changed.
-- **Generated sources.** A `.c` produced by flex/bison/protoc doesn't exist when
-  the scan runs. Needs at minimum a two-pass scan. Currently deferred to
-  `fmake.toml` rules, which may not be enough.
+- ~~**Generated sources.**~~ Closed; see §7. The prediction that it would need a
+  two-pass scan was wrong — running the generators before the tree is walked
+  makes their output an ordinary source, with no special case downstream.
 - ~~**Cross-compilation is started, not finished.**~~ Closed; see §5. Library
   resolution answers for the target machine, verified end to end against a real
   aarch64 toolchain.
@@ -950,6 +1005,13 @@ progress onto stdout and produced a Makefile whose first line was
   linker script, or a function pointer table built at runtime. All need
   `@sources`. Whether that one directive is a sufficient answer for all of them
   is unproven.
+- **Generated outputs are not cleaned.** `--clean` removes `.fmake/`; files a
+  generator wrote into the tree stay, because fmake did not create the
+  directory and will not guess what else is in it. The ejected Makefile does
+  remove them, which is an inconsistency.
+- **A generator's own dependencies are not tracked.** A `.y` that `%include`s
+  another file re-runs only when the `.y` itself changes; the rest must be
+  listed in `depends` by hand. There is no depfile equivalent for generators.
 - **A test that split on a substring hid a working feature.** The `--explain`
   libraries header reads `[from the external symbols above]`, so
   `split("external symbols")[0]` truncated the output above the very lines it
