@@ -7,12 +7,13 @@ This is a living design document. It is updated as decisions are made, and it
 records the reasoning, not just the conclusion — including the options rejected,
 so they don't get relitigated.
 
-Status: **phases 1–5 implemented** — `fmake` builds C and C++ programs and
+Status: **phases 1–6 implemented** — `fmake` builds C and C++ programs and
 libraries from an unannotated tree, resolves their dependencies, accepts
-in-source directives for what cannot be inferred, and reads an optional
-`fmake.toml` for what belongs to no single file. `./selftest` covers the design
-claims below, case per claim. Phases 6 and 7 (`--eject`, `fmake.py`) are not
-written yet.
+in-source directives for what cannot be inferred, reads an optional
+`fmake.toml` for what belongs to no single file, and can eject a standalone
+Makefile or `build.ninja` and get out of the way. `./selftest` covers the design
+claims below, case per claim. Phase 7 (`fmake.py`) is not written, and is
+meant to stay unattractive.
 
 ---
 
@@ -702,7 +703,8 @@ Each phase is a usable tool, not a milestone toward one.
    shared-library symbol scan (signal 2), and `--wrap` inference.
 5. **`fmake.toml`.** *Done.* Named configurations, install paths, per-target
    overrides, toolchain selection, and `--install`.
-6. **`--eject`.** Makefile and ninja output.
+6. **`--eject`.** *Done.* Makefile and `build.ninja` output, both verified by
+   building with fmake absent.
 7. **`fmake.py`.** Last, deliberately.
 
 Phases 1-4 cover the entire target audience. Everything after is for the projects
@@ -785,7 +787,46 @@ only relaxing both makes the test fail.
 
 ---
 
-## 12. Open questions
+## 12. The exit
+
+`fmake --eject` writes a standalone Makefile to stdout; `--eject ninja` writes
+a `build.ninja`. Everything fmake worked out goes in — link sets, per-file
+flags, resolved libraries, `--wrap` flags — and nothing in the output refers
+back to fmake.
+
+Principle 5 says a tool this opinionated has to be leaveable. A promise to be
+leaveable is worth nothing unless it is exercised, so the selftest ejects a
+build, deletes `.fmake/`, and runs `make` and `ninja` on trees that fail unless
+the emitted flags are genuinely applied.
+
+**It is also the cheapest independent check on the whole model.** If the emitted
+build produces working binaries, then the link sets and flags were right —
+verified by a second code path that shares nothing with the builder but the
+plan. On the reference project it produces four targets whose 13 cmocka tests
+pass, does nothing on a second `make`, and rebuilds exactly the three dependents
+of a touched header.
+
+That check earned its keep immediately: it found `$(CCFLAGS)` where `$(CFLAGS)`
+belonged. Make expands an undefined variable to nothing, so every compile
+silently lost its flags, and the reference project still built and passed —
+because nothing in it actually needed the `-I`. Only a tree that needs its flags
+catches this, which is what the selftest tree is now built to be.
+
+### Stdout, not a file
+
+Writing `Makefile` by default would clobber the hand-written Makefile that fmake
+was very likely run beside — the project used to develop this has exactly that —
+and a build tool that eats build files is not a good neighbour. So the build
+file goes to stdout and progress goes to stderr, which is also what makes
+`fmake --eject > Makefile` safe to run twice.
+
+Routing progress to stderr was not optional: the first attempt emitted compile
+progress onto stdout and produced a Makefile whose first line was
+`[1/6] CC client.c`.
+
+---
+
+## 13. Open questions
 
 - **Cost of widening.** A project whose include graph is a poor guide pays for
   compiling TUs that turn out to be irrelevant. Bounded by the size of the tree
@@ -837,6 +878,14 @@ only relaxing both makes the test fail.
 - **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
   `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
   are unhandled.
+- **Ejected builds are a snapshot, not a translation.** They contain the plan
+  fmake computed for the tree as it stood, with one explicit rule per object.
+  Adding a source file means ejecting again — there is no pattern rule, and
+  there cannot be one, because per-file `@cflags` is the whole point. Nor does
+  the ejected build know how to re-run the closure, so a new symbol dependency
+  is invisible to it.
+- **`--eject` emits no install rule**, and the `clean` rule removes only what
+  it knows about.
 - **Install is minimal.** No uninstall, no manifest, no pkg-config `.pc`
   generation, no shared-library versioning or `SONAME`, no symlink chain
   (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain name, which

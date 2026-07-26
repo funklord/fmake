@@ -12,6 +12,7 @@ sets right with no annotations, the symbol-closure model works.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -353,6 +354,124 @@ def one_failed_target_does_not_sink_the_rest(t):
           f"the good target should still have been built: {r.stdout}")
     check("broken did not link" in r.stdout,
           f"the failure should be named: {r.stdout}")
+
+
+def _eject_tree(t):
+    """A tree whose build fails unless the emitted flags are really applied.
+
+    The header is in a subdirectory reachable only via -I, and the program
+    prints a value that only a @define supplies -- so a build file that
+    silently loses its flags does not compile, rather than quietly working.
+    """
+    t.write("include/dep.h", "int dep_value(void);\n")
+    t.write("src/dep.c", '#include "dep.h"\nint dep_value(void){ return 20; }\n')
+    t.write("src/main.c", """
+/*! @file
+ *  @target ejected
+ *  @define BONUS=22
+ */
+#include <stdio.h>
+#include "dep.h"
+int main(void){ printf("%d\\n", dep_value() + BONUS); return 0; }
+""")
+    t.write("fmake.toml", '[project]\ninclude-dirs = ["include"]\n')
+
+
+def _run_in(cwd, *cmd):
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+
+
+@case
+def eject_make_builds_without_fmake(t):
+    """The exit has to work, and exercising it checks the model twice.
+
+    A second implementation, sharing no code with the builder, producing
+    working binaries from the same link sets and flags."""
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    _eject_tree(t)
+
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(r.stdout)
+
+    # fmake's own state goes away, so nothing it built can be mistaken for
+    # something make built.
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    for f in os.listdir(t.dir):
+        if f == "ejected":
+            os.remove(os.path.join(t.dir, f))
+
+    m = _run_in(t.dir, "make")
+    check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
+    out = _run_in(t.dir, "./ejected").stdout
+    check(out == "42\n",
+          f"the ejected build lost its flags or its link set: {out!r}")
+
+    # A second make must do nothing: the depfiles have to be wired up.
+    again = _run_in(t.dir, "make")
+    check("Nothing to be done" in again.stdout or not again.stdout.strip()
+          or "up to date" in again.stdout,
+          f"the ejected build is not incremental: {again.stdout!r}")
+
+    c = _run_in(t.dir, "make", "clean")
+    check(c.returncode == 0, f"make clean failed: {c.stderr}")
+    check(not os.path.exists(os.path.join(t.dir, "ejected")),
+          "clean should remove the artifacts")
+
+
+@case
+def eject_ninja_builds_without_fmake(t):
+    if not shutil.which("ninja"):
+        raise Skip("ninja not installed")
+    _eject_tree(t)
+
+    r = t.fmake("--eject", "ninja")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+        fh.write(r.stdout)
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    if os.path.exists(os.path.join(t.dir, "ejected")):
+        os.remove(os.path.join(t.dir, "ejected"))
+
+    n = _run_in(t.dir, "ninja")
+    check(n.returncode == 0, f"ninja failed: {n.stdout}{n.stderr}")
+    out = _run_in(t.dir, "./ejected").stdout
+    check(out == "42\n",
+          f"the ejected build lost its flags or its link set: {out!r}")
+
+    again = _run_in(t.dir, "ninja")
+    check("no work to do" in again.stdout,
+          f"the ejected build is not incremental: {again.stdout!r}")
+
+
+@case
+def eject_writes_to_stdout_not_over_a_makefile(t):
+    """A build tool that eats build files is not a good neighbour."""
+    _eject_tree(t)
+    t.write("Makefile", "# hand written, do not touch\nall:\n\t@echo mine\n")
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    with open(os.path.join(t.dir, "Makefile")) as fh:
+        check("hand written" in fh.read(),
+              "the existing Makefile must survive")
+    check("$(OBJDIR)" in r.stdout, "the build file should be on stdout")
+
+
+@case
+def eject_keeps_stdout_clean(t):
+    """Progress must not corrupt the data on stdout."""
+    _eject_tree(t)
+    r = t.fmake("--eject")
+    first = r.stdout.splitlines()[0] if r.stdout else ""
+    check(first.startswith("#"),
+          f"stdout should begin with the build file, not progress: {first!r}")
+    # The progress format is "[1/3] CC  file.c"; the Makefile legitimately
+    # contains "CC = cc", so match the progress shape rather than the word.
+    check(not re.search(r"^\[\s*\d+/\d+\]", r.stdout, re.M),
+          "compile progress leaked into stdout")
+    check("* built" not in r.stdout, "build summary leaked into stdout")
 
 
 @case
