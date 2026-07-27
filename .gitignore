@@ -1,0 +1,16 @@
+# fmake's own build state: objects, depfiles and the cache.
+.fmake/
+
+# Where an ejected Makefile or build.ninja puts its objects.
+build/
+
+# The build products of a tree fmake has been run in. The names come from
+# the sources, so there is nothing general to match -- add your own.
+
+__pycache__/
+*.pyc
+
+# Editor and tool state.
+.claude/
+*.swp
+*~
