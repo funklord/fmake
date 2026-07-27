@@ -39,6 +39,10 @@ obvious answer is wrong ·
 [10. `--explain`](#10---explain) ·
 [12. The exit](#12-the-exit)
 
+**Picking it up.** [16. Working on this](#16-working-on-this) — the
+conventions, how the verification is reproduced, and where the reference
+projects come from.
+
 **What happened when it met reality.**
 [11. Build order](#11-build-order) — what was built, in what order, and what
 each phase turned up ·
@@ -1699,3 +1703,91 @@ rather than code, and one lesson about testing.
   was meant to check, and the case failed while fmake was right. The diagnostic
   `sed` range used to investigate had the identical flaw, which is what made it
   slow to find. Assertions on `--explain` now split on a line-anchored pattern.
+
+---
+
+## 16. Working on this
+
+The sections above record how the design was arrived at. This one records how
+the work was done, because that lived only in commit messages and would not
+survive being picked up cold.
+
+### The files
+
+| | |
+|---|---|
+| `fmake` | the tool; one file, stdlib only, Python 3.11+ |
+| `selftest` | the suite; one case per claim this document makes |
+| `README.md` | how to use it |
+| `project.md` | this: why it works the way it does |
+| `LICENSE` | GPL-2.0-or-later, matching the SPDX headers |
+
+Version is a literal in `fmake` (`VERSION`), currently 0.1.0. `fmake -V` prints
+it with the author and licence.
+
+### The rule that produced most of the findings
+
+**Every fix gets a case, and the case must fail when the fix is reverted.**
+Not "the tests pass" — the test is only evidence if removing the behaviour
+makes it fail. Mutate the code, run the case, confirm it goes red, restore.
+
+This caught more than it prevented. Twice a case that appeared to pass was
+exercising nothing at all: once because a library's source sat inside the
+scanned tree so widening compiled it directly, once because the fixture
+recreated a file it had deliberately deleted. Both looked green. Neither was
+testing anything. A test that passes because the code is right and one that
+passes because it tests nothing are indistinguishable without this step.
+
+It also found drift the other way. Adding assertions to `Ann` — so the
+scalar/list table would be enforced rather than decorative — failed
+immediately on existing code that had been reading every directive as a list.
+
+### Running it
+
+```sh
+./selftest            # ~3 minutes, one case per core
+./selftest closure    # cases whose name contains "closure"
+./selftest -j1 -k     # serially, keeping the scratch trees
+```
+
+It was ~50s at 79 cases and is ~3 minutes at 102, because the cases added
+since are the expensive kind: cross compiles, and ejecting a build and running
+`make` or `ninja` over it. Filtering by name is the way to work; the full run
+is for before a commit.
+
+Cases needing something absent from the machine skip rather than fail — a
+cross toolchain, `ninja`, a library. A skip is not a pass; check the count.
+
+Mutations go through a script reading before-and-after text from files, not
+through a shell heredoc. Three separate incidents came from `\n` collapsing or
+a multi-line anchor breaking while being quoted through nested layers, each
+costing more than the bug being fixed. **Edit `selftest` with an editor, not a
+generated patch.**
+
+### Commits
+
+Bodies are prose: what broke, why, what changed, what was verified, and an
+explicit "not implemented / known limits" list for anything substantial. The
+limits sections are where most of §15 came from. No AI attribution or
+trailers of any kind.
+
+### The reference projects
+
+None are vendored; they are fetched into scratch directories and are not part
+of this repository.
+
+| | |
+|---|---|
+| `xplore-c-example/udp-echo` | 6 files, cmocka tests. The working reference: builds, links, 13 tests pass. |
+| **Angband** | `github.com/angband/angband`. 327 files, 345k lines, curses only. Builds and runs with ten lines of `fmake.toml` — needs `@define USE_GCU` and an exclude list for `src/tests/**` and the non-Linux frontends. |
+| **dunelegacy** | `github.com/henricj/dunelegacy`. 292 files, C++/SDL3. **Cannot be linked here**: SDL3_mixer is not packaged for Debian at all. Everything up to and including compilation was exercised. |
+| **NetHack** | `github.com/NetHack/NetHack`. **Cannot be built here**: 3.7 vendors Lua as a separate download a shallow clone does not fetch. It is what motivated `uses`. |
+
+A cross toolchain (`aarch64-linux-gnu-*`) and `qemu-aarch64` are installed and
+the cross cases depend on them.
+
+### What a fresh start should read first
+
+§3, then §14. The first is the whole design; the second is where it was
+checked against itself and lost, which is the better guide to where the next
+bug will be.
