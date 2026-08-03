@@ -37,7 +37,9 @@ obvious answer is wrong ·
 [8. Speed and caching](#8-speed-and-caching) ·
 [9. Implementation](#9-implementation) ·
 [10. `--explain`](#10---explain) ·
-[12. The exit](#12-the-exit)
+[12. The exit](#12-the-exit) ·
+[17. Qt and moc](#17-qt-and-what-moc-costs) — the one framework named in the
+source, and why it fits §3 rather than fighting it
 
 **Picking it up.** [16. Working on this](#16-working-on-this) — the
 conventions, how the verification is reproduced, and where the reference
@@ -1584,6 +1586,13 @@ rather than code, and one lesson about testing.
   (any template instantiation) is invisible to it. Such files are found only if
   something else pulls them in, or via `--widen-all`. Whether that matters in
   practice for C++ projects is untested.
+- **The widening filter cannot see a vtable either**, and this one is no
+  longer theoretical: §17 found that `_ZTV4Base` is not a string any source
+  spells, so nothing scanning for apparent definitions will ever propose the
+  file that defines it. moc output sidesteps this by joining the candidate set
+  outright. Any other generator whose sole contribution to a program is a
+  vtable would need the same treatment, and there is no general mechanism for
+  saying so.
 - **Static libraries and prebuilt objects as inputs.** A vendored `.a` in the
   tree is a provider of symbols like any other object, and closure should read
   it. Not yet designed, but it looks like it falls out naturally, which is a good
@@ -1694,6 +1703,11 @@ rather than code, and one lesson about testing.
   A fourth would be the signal that the provider model wants a real predicate
   rather than another list, and the threshold is stated here so it is agreed in
   advance rather than argued about at the time.
+  **§17 did not trip it.** `Q_OBJECT` and the Qt `.pc` module names are a
+  *generator trigger* — what to run and where to find it — not another class of
+  thing that looks like a provider and is not. The provider model was untouched
+  by moc, and needed no new `HEADER_PKG` entry to resolve Qt. The threshold
+  stands where it was.
 - **`[build-toolchain]` is only consulted for generator tools.** Nothing else
   in fmake distinguishes the build machine from the target, because nothing
   else needs to yet. A test binary meant to run during the build would.
@@ -1750,13 +1764,15 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 102, because the cases added
-since are the expensive kind: cross compiles, and ejecting a build and running
-`make` or `ninja` over it. Filtering by name is the way to work; the full run
-is for before a commit.
+It was ~50s at 79 cases and is ~3 minutes at 113, because the cases added
+since are the expensive kind: cross compiles, ejecting a build and running
+`make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
+headers. Filtering by name is the way to work — `./selftest moc` is eleven
+cases and a few seconds — and the full run is for before a commit.
 
 Cases needing something absent from the machine skip rather than fail — a
-cross toolchain, `ninja`, a library. A skip is not a pass; check the count.
+cross toolchain, `ninja`, a library, Qt. A skip is not a pass; check the
+count.
 
 Mutations go through a script reading before-and-after text from files, not
 through a shell heredoc. Three separate incidents came from `\n` collapsing or
@@ -1791,3 +1807,172 @@ the cross cases depend on them.
 §3, then §14. The first is the whole design; the second is where it was
 checked against itself and lost, which is the better guide to where the next
 bug will be.
+
+---
+
+## 17. Qt, and what moc costs
+
+Added on request, after an assessment written from outside the project argued
+that moc was the whole blocker for Qt and that fmake's model made it cheap.
+That turned out to be right, and the measurements below are the check rather
+than the claim.
+
+### Why moc fits §3 instead of fighting it
+
+moc reads a class carrying `Q_OBJECT` and writes the signals, the
+introspection and the `QObject` plumbing that class promised. The reason this
+is painful in an include-graph build is that **nothing includes the output** —
+somebody has to list it, which is what `HEADERS` in a `.pro` file and
+`AUTOMOC` in CMake exist to do.
+
+fmake does not decide link sets from the include graph, and the relationship
+here is exactly a symbol relationship. Compiling a `Q_OBJECT` class without
+moc leaves undefined:
+
+```
+_ZN7Counter7changedEi            Counter::changed(int)    the signal body
+_ZTV7Counter                     vtable for Counter       key-function rule
+_ZN7Counter16staticMetaObjectE   from the calling TU
+```
+
+and `moc_counter.o` defines all three. Measured on that program, the set moc
+provides minus the set the class leaves undefined is **empty**. So the closure
+links a moc object for the same reason it links anything, and there is no
+Qt-shaped special case anywhere in the link step. Two consequences fall out:
+
+- **It is more correct than qmake**, which mocs and links everything in
+  `HEADERS` whether the class is reachable from that binary or not. Here a
+  class no program constructs is moc'd, compiled, and then dropped by the
+  closure — `--explain` lists it under *compiled, not linked*.
+- **The payoff is highest for a tree of many small programs over one shared
+  body of Qt code**, which is the case existing tools handle worst. The
+  assessment measured a real project whose 21 test drivers each listed the app
+  sources, so CMake compiled all 58 into 21 object directories — about 1200
+  compilations of the same files, 19m17s wall against 6m57s once they shared
+  one archive. fmake would never have compiled it twice, because "compile each
+  TU once, link the closure per program" is what it does by construction.
+
+The honest framing is therefore not *fmake builds Qt* but **fmake builds trees
+of Qt programs without a build file**.
+
+### Two signals, same division as library resolution
+
+The scan proposes: `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE` in a file means run
+moc on it, matched against the comment-stripped text for the same reason
+`main()` is. The symbols decide: output nothing refers to is compiled and then
+dropped. A `Q_OBJECT` behind an `#if 0` therefore costs one moc run and can
+never reach a binary.
+
+### What the assessment did not cover
+
+Two shapes it missed, both real and both in the suite now.
+
+- **`Q_OBJECT` inside a `.cpp`.** The output is `foo.moc`, and Qt requires
+  that file to `#include` it — so it is text pulled into an existing TU, not a
+  TU of its own. It must land on that file's include path and must never be
+  compiled separately. A source declaring such a class without the include is
+  a project bug, and is named as one rather than left to fail later on an
+  undefined symbol that mentions none of this.
+- **The `#include "moc_foo.cpp"` idiom.** An older habit ends `foo.cpp` with
+  the moc output to save a translation unit. Compiling it as well defines
+  every meta-object twice, and §3 would report that as an ambiguous provider —
+  a baffling way to say a file is already in the build.
+
+### What the mutation pass found
+
+Reverting each behaviour in turn caught everything except one line, and the
+escape was the most interesting result of the exercise.
+
+**Widening cannot be relied on to discover moc output.** Removing the line
+that puts moc output into the candidate set broke nothing, because widening
+found it anyway — widening picks extra files by scanning for apparent
+*definitions*, and `Foo::staticMetaObject` looks like a data definition to the
+regex. So every fixture that emitted a signal was rescued by accident. A class
+whose only debt to moc is its **vtable** is not: no regex sees a vtable,
+`_ZTV4Base` is not a string any source spells, and the build fails to link
+having compiled everything it was asked to. The case now pins exactly that
+shape.
+
+The other finding was smaller and would have been permanent. Told to write to
+a real path, **moc creates the output file and then leaves it empty** when it
+finds no relevant classes — it only says "No output generated" when writing to
+a device. Treating absence as the signal is therefore not enough: an empty
+translation unit was being compiled, listed in every report, and re-moc'd on
+every build for want of a remembered negative result.
+
+### Decisions worth keeping
+
+**Output lives in `.fmake/moc/`, mirroring the tree.** It is a build artifact,
+so `--clean` should take it and git should never see it. Mirroring rather than
+flattening is what stops `a/thing.h` and `b/thing.h` both wanting to be
+`moc_thing.cpp`.
+
+**moc is located through pkg-config, not `$PATH`.** Debian ships no `moc` on
+`$PATH` at all — it lives in Qt's libexec — and where a distribution does
+provide one, qtchooser makes which Qt it belongs to a property of the
+environment rather than of the build, so a tree resolving to Qt 6 can be moc'd
+by Qt 5 and fail on a mangling that never matched. `pkg-config
+--variable=libexecdir Qt6Core` already knows. Nothing in a source
+distinguishes Qt 5 from Qt 6 — the include spellings are identical — so the
+newer is tried first and `[toolchain] moc` exists for when that is wrong.
+
+**`--eject` learned moc rules rather than shipping the generated files.** The
+assessment suggested emitting already-generated sources as ordinary ones and
+called it the cheaper contract; it is cheaper and it is wrong. It would leave
+a standalone Makefile reading out of `.fmake`, which `fmake --clean` deletes
+and git never sees. Ejected builds therefore carry `MOC`/`MOCFLAGS` and one
+rule per output, relocated under the ejected object directory, and both
+backends were verified to build and run from a clean tree with no `.fmake`
+present.
+
+### Flags: two predictions that did not hold here
+
+The assessment expected Qt to need `-fPIC` and `-std=c++17` as special cases.
+Neither was necessary on this machine, and both were checked rather than
+assumed: Debian's gcc defaults to PIE, so the no-PIC build linked and ran, and
+gcc 14 defaults to `gnu++17`, so Qt 6's C++17 minimum is met without asking.
+Both would matter on a distribution that defaults differently, and neither has
+been special-cased on the grounds that an unnecessary flag in the
+configuration identity is a silent cause of rebuilt objects. This is a limit,
+not a claim that the flags never matter.
+
+Include paths and `-l` flags needed nothing new: `#include <QObject>` resolved
+to `Qt6Core` through the existing header-to-package machinery, with no entry
+added to `HEADER_PKG`.
+
+### What was deliberately left out
+
+- **`uic`.** `ui_foo.h` *is* included by the code that uses it, so it is an
+  include-graph dependency rather than a symbol one — a header that must exist
+  before scanning, not an object discovered after compiling. Different
+  mechanism, much smaller reward, and hand-written Qt Widgets code frequently
+  has no `.ui` at all.
+- **`rcc`.** It does ride the same rail in principle: `Q_INIT_RESOURCE(name)`
+  references an initialiser the generated source defines. But in Qt 5 and 6 a
+  resource usually registers itself from a static constructor and
+  `Q_INIT_RESOURCE` is only needed for static libraries, so in the common case
+  there is no undefined symbol to infer from — and nothing in the source says
+  which of two programs `icons.qrc` belongs to. That makes it a
+  config-assisted case rather than an inferred one. Not done.
+- **QML and Qt Quick.** `qmltyperegistrar`, `qmldir` generation and
+  `qmlcachegen` are a protocol, not a rule, and deeply CMake-coupled in Qt 6.
+  Out of scope, and said so rather than half-supported.
+- **Feature probing.** A project whose optional dependencies are `-D` before
+  they are `-l` — where the code does not *exist* when the library is absent —
+  needs a probe-then-define step. Symbol inference answers *what do I link*;
+  it cannot answer *what do I compile*. Outside fmake's core rule, and not a
+  Qt problem.
+
+### Limits
+
+- Exercised against Qt 6.8 on Debian only. Qt 5 is coded for and untested.
+- On a cross build the moc that pkg-config names may be a target binary that
+  cannot execute here; `[toolchain] moc` is the answer and the failure is
+  reported with that pointer, but the case is untested.
+- moc's include path is best effort. It runs its own preprocessor but does not
+  fail on an include it cannot resolve, so a missing `-I` costs an unexpanded
+  macro rather than an error — which is what makes it safe to settle these
+  flags before the include graph exists.
+- `#if 0` is the tested case for scan-and-preprocessor disagreement. Other
+  conditional shapes are handled by the same negative-result path but were not
+  enumerated.

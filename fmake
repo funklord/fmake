@@ -128,7 +128,7 @@ LICENCE     = "GPL-2.0-or-later"
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
-CACHE_VER   = 2   # scan records now carry directives
+CACHE_VER   = 3   # scan records now carry Q_OBJECT
 
 C_EXTS      = {".c"}
 CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
@@ -290,6 +290,14 @@ RE_DATA_DEF = re.compile(
 
 RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
 
+# What makes a file Qt's meta-object compiler's business. Unlike everything
+# else scanned for here this is a token rather than a shape, because that is
+# what Qt made it: a macro whose whole job is to mark the class. It is the
+# one framework-specific name in the file, and the moc section says why it
+# earns that.
+RE_QOBJECT = re.compile(
+    r'\bQ_(?:OBJECT|GADGET|GADGET_EXPORT|NAMESPACE|NAMESPACE_EXPORT)\b')
+
 
 def scan_source(path):
     """Read one source file and return its scan record."""
@@ -308,6 +316,9 @@ def scan_source(path):
     return {
         "incs":     incs,
         "has_main": bool(RE_MAIN.search(code)),
+        # Against the stripped text, for the same reason main() is: the word
+        # in a comment or a string is not a declaration.
+        "qobject":  bool(RE_QOBJECT.search(code)),
         "defs":     sorted(defs),
         "dirs":     parse_directives(comments),
     }
@@ -365,7 +376,7 @@ CONF_SCHEMA = {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
     },
     "toolchain": {
-        "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
+        "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S, "moc": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
     },
     # The machine doing the building, as opposed to the one being built for.
@@ -982,6 +993,211 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
     return produced
 
 # ---------------------------------------------------------------------------
+# Qt's meta-object compiler
+#
+# The only framework fmake knows by name, and it earns that by fitting §3
+# rather than working around it. moc's output is an ordinary translation unit
+# whose defined symbols are exactly the undefined ones its input leaves
+# behind: a class carrying Q_OBJECT compiles to an object wanting
+# Foo::staticMetaObject, the signal bodies and the vtable, and moc_foo.o
+# defines that set and no more. Measured on a two-class program, the set moc
+# provides minus the set the class leaves undefined is empty. So the closure
+# links a moc object for the same reason it links anything, and there is no
+# Qt-shaped special case anywhere in the link step.
+#
+# Two signals, the same division as library resolution. The scan proposes:
+# Q_OBJECT in a file means run moc on it. The symbols decide: output that
+# nothing refers to is compiled and then dropped by the closure. A Q_OBJECT
+# behind an #if 0 therefore costs one moc run and can never reach a binary,
+# and a class no program constructs costs one compile -- which is already
+# better than qmake, whose HEADERS list mocs and links regardless of reach.
+#
+# The parts of Qt that do *not* ride this rail are left out rather than
+# half-supported: .ui is an include-graph dependency rather than a symbol
+# one, and QML type registration is a protocol rather than a rule.
+# ---------------------------------------------------------------------------
+
+# Generated under the state directory rather than beside the source. It is a
+# build artifact -- `--clean` should take it and git should not see it -- and
+# the tree structure is mirrored inside so that two counter.h in different
+# directories do not both want to be moc_counter.cpp.
+MOC_DIR = os.path.join(STATE_DIR, "moc")
+
+# The .pc files that know where Qt keeps its tools. Newest first: nothing in
+# a source distinguishes Qt 5 from Qt 6 -- the include spellings are
+# identical -- so when both are installed the newer is the better guess, and
+# [toolchain] moc is there for when the guess is wrong.
+QT_CORE_MODULES = ("Qt6Core", "Qt5Core")
+
+
+def find_moc(cfg, pkg):
+    """Locate moc, matching the Qt that is about to be linked.
+
+    Deliberately not `shutil.which("moc")`. Debian ships no moc on $PATH at
+    all -- it lives in Qt's libexec -- and on distributions that do provide
+    one, qtchooser makes which Qt it belongs to a property of the environment
+    rather than of the build, so a tree resolving to Qt 6 can be moc'd by
+    Qt 5's moc and fail at the link on a mangling that never matched. The
+    same pkg-config that will answer for the -l flags already knows where
+    that Qt keeps its tools, so ask it rather than the shell's search path.
+    """
+    named = os.environ.get("MOC") or cfg.moc
+    if named:
+        got = shutil.which(named) or (named if os.path.isfile(named) else None)
+        if not got:
+            src = "$MOC" if os.environ.get("MOC") else f"{CONF_FILE} [toolchain]"
+            die(f"moc {named!r} (from {src}) not found")
+        return got
+    for mod in QT_CORE_MODULES:
+        for var in ("libexecdir", "host_bins", "bindir"):
+            d = pkg.variable(mod, var)
+            cand = os.path.join(d, "moc") if d else None
+            if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+    return shutil.which("moc")
+
+
+def moc_plan(srcs, hdrs, scans):
+    """What moc must run on, and where each output goes.
+
+    A file's own text is what counts, which splits the two cases cleanly.
+    foo.cpp including foo.h does not itself carry Q_OBJECT, so the header is
+    moc'd into a moc_foo.cpp that is compiled and linked like any source. A
+    class declared inside foo.cpp does carry it, and Qt requires that file to
+    #include "foo.moc" -- so that output is never a translation unit of its
+    own, only text pulled into one.
+    """
+    included = set()
+    for scan in scans.values():
+        for _kind, name, _line in scan["incs"]:
+            included.add(os.path.basename(name))
+
+    jobs = []
+    for rel in sorted(hdrs):
+        if not scans.get(rel, {}).get("qobject"):
+            continue
+        name = "moc_" + os.path.splitext(os.path.basename(rel))[0] + ".cpp"
+        jobs.append({
+            "src": rel,
+            "out": os.path.normpath(os.path.join(MOC_DIR,
+                                                 os.path.dirname(rel), name)),
+            # An older idiom ends foo.cpp with `#include "moc_foo.cpp"` to
+            # save a translation unit. Compiling it as well would define
+            # every meta-object twice, and §3 would report that as an
+            # ambiguous provider -- a baffling way to say a file is already
+            # in the build.
+            "inline": name in included,
+        })
+
+    for rel in sorted(srcs):
+        if not scans.get(rel, {}).get("qobject"):
+            continue
+        name = os.path.splitext(os.path.basename(rel))[0] + ".moc"
+        own = {os.path.basename(i[1]) for i in scans[rel]["incs"]}
+        if name not in own:
+            # Generating it anyway would leave a file nothing compiles and
+            # nothing includes. Qt's own rule is that this include is how a
+            # class in a .cpp gets its meta-object, so the missing line is
+            # the bug and naming it here beats an undefined symbol later.
+            warn(f'{rel} declares a Q_OBJECT class but does not #include '
+                 f'"{name}", so moc cannot reach it')
+            continue
+        jobs.append({"src": rel, "inline": True,
+                     "out": os.path.normpath(
+                         os.path.join(MOC_DIR, os.path.dirname(rel), name))})
+    return jobs
+
+
+def moc_cflags(root, hdrs, conf):
+    """The include path and defines moc parses with.
+
+    Best effort on purpose, and safe to be: moc runs its own preprocessor but
+    does not fail on an include it cannot resolve, so a missing -I costs an
+    unexpanded macro rather than a build error. It has to be that way, since
+    these flags are needed before the include graph exists -- what moc
+    produces is part of the tree that graph is computed over.
+    """
+    dirs = {os.path.dirname(h) for h in hdrs}
+    dirs |= set(conf.project.get("include-dirs", []))
+    out = []
+    for d in sorted(dirs):
+        p = root if d in ("", ".") else (d if os.path.isabs(d)
+                                         else os.path.join(root, d))
+        if "-I" + p not in out:
+            out.append("-I" + p)
+    for d in (list(conf.project.get("defines", []))
+              + list(conf.project.get("define", []))):
+        out.append("-D" + d)
+    # Whatever the configuration already says: a -D that changes what a class
+    # declaration means changes what moc should read of it too.
+    for f in conf.cflags():
+        if f.startswith(("-D", "-I")) and f not in out:
+            out.append(f)
+    return out
+
+
+def run_moc(root, jobs, moc, flags, cache, dry_run=False):
+    """Run moc where its input changed. Returns the outputs that now exist.
+
+    Keyed on content like everything else, so touching a header re-mocs it
+    and recompiles only the objects whose symbols moved. An input that yields
+    nothing is remembered as having yielded nothing -- the scan sees a
+    Q_OBJECT behind an #if 0 and moc's preprocessor correctly does not, and
+    without the negative result that disagreement costs a moc run per build
+    forever.
+    """
+    store = cache.data.setdefault("moc", {})
+    produced = []
+    for job in jobs:
+        src, out = job["src"], job["out"]
+        abs_out = os.path.join(root, out)
+        key = sha("|".join([moc, "\0".join(flags), src,
+                            cache.hash_of(os.path.join(root, src), src) or "?"]))
+        stamp = store.get(out)
+        if stamp == key and os.path.isfile(abs_out):
+            produced.append(out)
+            continue
+        if stamp == key + "|none" and not os.path.exists(abs_out):
+            continue
+
+        # Run from the tree root with relative paths on both sides. moc writes
+        # the #include back to its input as a path relative to its *output*,
+        # so absolute arguments here would bake this machine's directory
+        # layout into a generated source and defeat --eject.
+        cmd = [moc] + flags + [src, "-o", out]
+        if dry_run:
+            print(" ".join(shlex.quote(c) for c in cmd))
+            continue
+        say(f"{YELLOW('MOC')} {src}")
+        os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
+        try:
+            res = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+        except OSError as exc:
+            die(f"could not run moc ({moc}): {exc.strerror or exc}\n"
+                f"On a cross build moc must be the build machine's, which is "
+                f"what [toolchain] moc in {CONF_FILE} is for.")
+        if res.returncode != 0:
+            if res.stderr.strip():
+                PROGRESS.write(res.stderr)
+            die(f"moc failed on {src}")
+        # Emptiness is the signal, not absence. Told to write to a real path
+        # moc creates the file and then writes nothing to it, so a Q_OBJECT
+        # the scan saw and moc's preprocessor did not -- one behind an #if 0
+        # -- leaves a zero-byte source that would otherwise be compiled and
+        # carried through every report for the life of the tree.
+        if not os.path.isfile(abs_out) or os.path.getsize(abs_out) == 0:
+            vinfo(f"moc found nothing to generate in {src}")
+            if os.path.exists(abs_out):
+                os.unlink(abs_out)
+            store[out] = key + "|none"
+            continue
+        if res.stderr.strip():
+            PROGRESS.write(res.stderr)
+        store[out] = key
+        produced.append(out)
+    return produced
+
+# ---------------------------------------------------------------------------
 # Annotations
 #
 # Build facts belong in the file they are about. The file that includes SDL is
@@ -1402,6 +1618,10 @@ class Config:
         self.ar_name = (os.environ.get("AR") or tool.get("ar")
                         or os.path.basename(self.ar or "ar"))
         self.pkgexe = tool.get("pkg-config") or self._prefixed("pkg-config")
+        # Not prefixed like the binutils are: moc runs here and emits C++, so
+        # a cross build wants the build machine's moc, not a target one it
+        # could not execute. Only asking is reliable, so there is no guess.
+        self.moc    = tool.get("moc")
         self.extra_libdirs = list(tool.get("lib-dirs", []))
         self.ccver  = tool_version(self.cc)
         self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
@@ -2334,6 +2554,7 @@ class PkgConfig:
         self.exe = (shutil.which(configured) if configured else None) \
                    or shutil.which("pkg-config") or shutil.which("pkgconf")
         self._flags = {}
+        self._vars = {}
         self._by_incdir = None
         self.sysroot = sysroot
 
@@ -2377,6 +2598,22 @@ class PkgConfig:
                        [a for a in args if a.startswith("-l")])
         self._flags[module] = res
         return res
+
+    def variable(self, module, name):
+        """A .pc file's own variable, for the directories Qt records in its.
+
+        Not every package defines every variable, and pkg-config answers an
+        undefined one with success and an empty string, so emptiness has to
+        read as absence here rather than as a directory called "".
+        """
+        if not self.exe:
+            return None
+        key = (module, name)
+        if key not in self._vars:
+            r = self._run([f"--variable={name}", module])
+            self._vars[key] = (r.stdout.strip() or None) \
+                              if r.returncode == 0 else None
+        return self._vars[key]
 
     def _search_path(self):
         if "PKG_CONFIG_LIBDIR" in self.env:
@@ -2862,7 +3099,7 @@ def _show_cmd(cmd, root):
 
 
 def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
-            res=None, excluded=None, conf=None):
+            res=None, excluded=None, conf=None, moc=None):
     W = 36
     name = t.filename
     if t.conf.get("name") or t.conf.get("kind") or t.conf.get("sources"):
@@ -2900,6 +3137,15 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
             print(f"    {'building for':<{W-4}}"
                   f"{DIM(cfg.os + '/' + cfg.arch + '  (host is '
                          + host_os() + '/' + host_arch() + ')')}")
+
+    # Which moc, not just that one ran. Two Qt versions on one machine is
+    # ordinary, their moc output is not interchangeable, and the failure when
+    # the wrong one is picked is an undefined symbol that names none of this.
+    if moc and moc.get("jobs"):
+        n = len(moc["jobs"])
+        print(f"  {CYAN('moc')}")
+        print(f"    {_rel(moc['exe'], root):<{W-4}}"
+              f"{DIM(f'{n} file(s) declare Q_OBJECT; found via pkg-config')}")
 
     if excluded:
         print(f"  {CYAN('excluded here')}")
@@ -3030,6 +3276,10 @@ def build(args, _bootstrapping=False):
                         if k in ("cflags", "defines", "std")}
         conf.profile = {}
     cfg    = Config(args, conf)
+    # Built here rather than where the -I flags are worked out, because moc
+    # has to run before the tree is complete and it is pkg-config that knows
+    # where moc lives.
+    pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet)
     outdir = os.path.abspath(args.output) if args.output else root
     jobs   = args.jobs or (os.cpu_count() or 4)
 
@@ -3133,6 +3383,38 @@ def build(args, _bootstrapping=False):
         srcs.sort()
         hdrs.sort()
         scan_all(srcs + hdrs)
+
+    # ---- moc ----------------------------------------------------------
+    # After the generators, so a generated header carrying Q_OBJECT is moc'd
+    # like any other, and before everything else, so what moc writes is an
+    # ordinary source from here on -- seen by the include graph, the closure
+    # and the symbol tables with no special case, exactly as §"Generated
+    # sources" has it.
+    moc_jobs, moc_outs, moc_incdirs, moc_flags = [], [], [], []
+    moc_exe = None
+    if any(s.get("qobject") for s in scans.values()):
+        moc_exe = find_moc(cfg, pkg)
+        if not moc_exe:
+            die("this tree declares Q_OBJECT classes, which need Qt's moc.\n"
+                "Install the Qt development package, or name it with "
+                f"[toolchain] moc in {CONF_FILE}.")
+        moc_jobs = moc_plan(srcs, hdrs, scans)
+        moc_flags = moc_cflags(root, hdrs, conf)
+        moc_outs = run_moc(root, moc_jobs, moc_exe, moc_flags, cache,
+                           args.dry_run)
+        inline = {j["out"] for j in moc_jobs if j["inline"]}
+        for rel in moc_outs:
+            if rel in inline:
+                # foo.moc is text, not a translation unit. It needs to be on
+                # the include path of the file that pulls it in and nowhere
+                # else.
+                d = os.path.dirname(rel)
+                if d not in moc_incdirs:
+                    moc_incdirs.append(d)
+            elif rel not in srcs:
+                srcs.append(rel)
+        srcs.sort()
+        scan_all(srcs)
 
     gen_dirs = sorted({os.path.dirname(g) for g in generated
                        if os.path.splitext(g)[1] in HDR_EXTS})
@@ -3344,6 +3626,16 @@ def build(args, _bootstrapping=False):
     # unbuilt, since yylex arrives through a macro that the definition-scanning
     # widening filter cannot see.
     candidates |= {g for g in generated if g in proj.src_set}
+    # Same for moc output, and it needs saying separately because nothing
+    # includes a moc_foo.cpp -- that is the whole reason moc is hard in an
+    # include-graph build. Widening is not a substitute here: it picks its
+    # extra files by scanning for apparent definitions, which finds
+    # Foo::staticMetaObject but can never find a vtable, since _ZTV4Base is
+    # not a string any source spells. A class whose only debt to moc is its
+    # vtable would fail to link having compiled everything it was asked to.
+    # Compiling is still not linking: the closure decides, so the object of
+    # a class no program constructs is simply never reached.
+    candidates |= {m for m in moc_outs if m in proj.src_set}
     # Whatever widening discovered last time is a far better starting guess
     # than the include graph, so start from it. Widening still corrects it if
     # the tree has changed.
@@ -3356,7 +3648,7 @@ def build(args, _bootstrapping=False):
 
     base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
                      for d in sorted(proj.incdirs | {"."})]
-    for d in gen_dirs:
+    for d in gen_dirs + moc_incdirs:
         flag = "-I" + os.path.join(root, d) if d else "-I" + root
         if flag not in base_incflags:
             base_incflags.append(flag)
@@ -3368,7 +3660,6 @@ def build(args, _bootstrapping=False):
     for rel in sorted(candidates):
         unit(rel)
 
-    pkg = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet)
     hdr_store = cache.data.setdefault("headers", {})
     incflags, proposed = list(base_incflags), {}
     pkg_sig = pkg.signature()
@@ -3523,9 +3814,13 @@ def build(args, _bootstrapping=False):
 
     if args.eject:
         emit = eject_ninja if args.eject == "ninja" else eject_make
+        done = set(moc_outs)
         sys.stdout.write(emit(wanted, closures, resolutions, cfg, incflags,
                               root, conf,
-                              all_generate_rules(root, conf, srcs, scans)))
+                              all_generate_rules(root, conf, srcs, scans),
+                              {"exe": moc_exe, "flags": moc_flags,
+                               "jobs": [j for j in moc_jobs
+                                        if j["out"] in done]}))
         cache.save()
         return 0
 
@@ -3534,7 +3829,8 @@ def build(args, _bootstrapping=False):
         for t in wanted:
             explain(t, closures[t], cfg, incflags, outdir, all_units, root,
                     {x.rel for x in targets} - {t.rel}, resolutions.get(t),
-                    excluded, conf)
+                    excluded, conf,
+                    {"exe": moc_exe, "jobs": moc_jobs} if moc_exe else None)
         cache.save()
         return 0
 
@@ -3633,6 +3929,34 @@ def build(args, _bootstrapping=False):
 # ---------------------------------------------------------------------------
 
 EJECT_OBJDIR = "build"
+EJECT_MOCDIR = "moc"        # inside the object directory
+
+
+def _eject_src(rel):
+    """Where a source file lives in an ejected build.
+
+    Everything stays put except moc output, which moves out of fmake's state
+    directory and under the ejected build's own object directory. A
+    standalone build file should not write into the bookkeeping of the tool
+    it no longer needs, and `fmake --clean` must not be able to delete
+    something an ejected build depends on.
+    """
+    # The directory itself and not just what is under it: an -I naming the
+    # moc root is exactly what a .moc file at the top of the tree produces,
+    # and a prefix test that misses it emits a build that compiles against a
+    # directory only fmake creates.
+    if rel == MOC_DIR or rel.startswith(MOC_DIR + os.sep):
+        return os.path.normpath(os.path.join(EJECT_OBJDIR, EJECT_MOCDIR,
+                                             os.path.relpath(rel, MOC_DIR)))
+    return rel
+
+
+def _eject_obj(rel):
+    """A source's object path, relative to the ejected object directory."""
+    if rel == MOC_DIR or rel.startswith(MOC_DIR + os.sep):
+        return os.path.normpath(os.path.join(EJECT_MOCDIR,
+                                             os.path.relpath(rel, MOC_DIR)))
+    return rel
 
 
 def _eject_flags(flags, root):
@@ -3642,7 +3966,7 @@ def _eject_flags(flags, root):
         for prefix in ("-I", "-L"):
             if f.startswith(prefix) and os.path.isabs(f[2:]):
                 rel = _rel(f[2:], root)
-                out.append(prefix + (rel if rel != root else "."))
+                out.append(prefix + (_eject_src(rel) if rel != root else "."))
                 break
         else:
             out.append(f)
@@ -3686,7 +4010,7 @@ def _refuse_whitespace(targets, closures, root):
 
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
-               gen_rules=None):
+               gen_rules=None, moc=None):
     """A standalone Makefile."""
     _refuse_whitespace(targets, closures, root)
     common = _eject_flags(cfg.cflags + incflags, root)
@@ -3752,26 +4076,57 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
                 a("\t@:")
             a("")
 
-    # One rule per object, because per-file flags are the point: @cflags and
-    # @define belong to a translation unit, so a single pattern rule cannot
-    # express them.
     every = {}
     for t in targets:
         for u in closures[t].link:
             every[u.rel] = u
 
+    # Only the moc outputs this build actually reaches. The caller has
+    # already dropped the inputs that produced nothing -- a rule promising a
+    # file that never appears would stall a build rather than fail it -- and
+    # what is left still includes the classes no target links, which belong
+    # in fmake's own report but not in a Makefile that would never run them.
+    moc = moc or {}
+    moc_jobs = [j for j in (moc.get("jobs") or [])
+                if (j["src"] if j["inline"] else j["out"]) in every]
+    moc_inline = [_eject_src(j["out"]) for j in moc_jobs if j["inline"]]
+    if moc_jobs:
+        a("# ---- moc " + "-" * 54)
+        a("#")
+        a("# Selected by Q_OBJECT in the source, not by a list. Override MOC")
+        a("# if Qt lives elsewhere on the machine doing the building.")
+        a("")
+        a(f"MOC      = {moc['exe']}")
+        a(f"MOCFLAGS = {' '.join(_eject_flags(moc.get('flags', []), root))}")
+        if moc_inline:
+            # The .moc files, which are #included rather than compiled. They
+            # have to exist before anything compiles; after that the depfiles
+            # know when a change to one matters.
+            a(f"MOCINC   = {' '.join(moc_inline)}")
+        a("")
+        for j in moc_jobs:
+            a(f"{_eject_src(j['out'])}: {j['src']}")
+            a("\t@mkdir -p $(@D)")
+            a("\t$(MOC) $(MOCFLAGS) $< -o $@")
+            a("")
+
+    # One rule per object, because per-file flags are the point: @cflags and
+    # @define belong to a translation unit, so a single pattern rule cannot
+    # express them.
     a("# ---- objects " + "-" * 50)
     a("")
     for rel in sorted(every):
         u = every[rel]
-        obj = f"$(OBJDIR)/{rel}.o"
+        obj = f"$(OBJDIR)/{_eject_obj(rel)}.o"
         # CC pairs with CFLAGS, not CCFLAGS. Getting this wrong expands to an
         # undefined variable, so every compile silently loses its flags and
         # only a project that actually needs an -I notices.
         var, flags = ("CXX", "CXXFLAGS") if u.cxx else ("CC", "CFLAGS")
         own = " ".join(_eject_flags(u.own, root))
-        order_only = " | $(GENERATED)" if gen_outs else ""
-        a(f"{obj}: {rel}{order_only}")
+        after = (["$(GENERATED)"] if gen_outs else []) \
+                + (["$(MOCINC)"] if moc_inline else [])
+        order_only = (" | " + " ".join(after)) if after else ""
+        a(f"{obj}: {_eject_src(rel)}{order_only}")
         a("\t@mkdir -p $(@D)")
         a(f"\t$({var}) $({flags}){' ' + own if own else ''} $(CFLAGS_LAST) "
           f"-c $< -o $@ -MD -MF $(@:.o=.d)")
@@ -3781,7 +4136,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
     a("")
     for t in targets:
         ident = _mk_ident(t.name).upper()
-        objs = [f"$(OBJDIR)/{u.rel}.o" for u in closures[t].link]
+        objs = [f"$(OBJDIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link]
         a(f"{ident}_OBJS = \\")
         for i, o in enumerate(objs):
             a(f"\t{o}" + (" \\" if i < len(objs) - 1 else ""))
@@ -3801,7 +4156,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
               + (f" {libs}" if libs else "") + " $(LDFLAGS)")
         a("")
 
-    all_objs = sorted({f"$(OBJDIR)/{rel}.o" for rel in every})
+    all_objs = sorted({f"$(OBJDIR)/{_eject_obj(rel)}.o" for rel in every})
     a("clean:")
     a(f"\trm -rf $(OBJDIR) {' '.join(t.filename for t in targets)}"
       + (" $(GENERATED)" if gen_outs else ""))
@@ -3813,7 +4168,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
-                gen_rules=None):
+                gen_rules=None, moc=None):
     """A standalone build.ninja."""
     common = " ".join(_eject_flags(cfg.cflags + incflags, root))
     override = " ".join(_eject_flags(cfg.override, root))
@@ -3894,18 +4249,40 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
     for t in targets:
         for u in closures[t].link:
             every[u.rel] = u
+
+    moc = moc or {}
+    moc_jobs = [j for j in (moc.get("jobs") or [])
+                if (j["src"] if j["inline"] else j["out"]) in every]
+    if moc_jobs:
+        a("# Selected by Q_OBJECT in the source, not by a list.")
+        a(f"moc = {moc['exe']}")
+        a(f"mocflags = {' '.join(_eject_flags(moc.get('flags', []), root))}")
+        a("")
+        a("rule moc")
+        a("  command = $moc $mocflags $in -o $out")
+        a("  description = MOC $in")
+        a("")
+        for j in moc_jobs:
+            a(f"build {_ninja(_eject_src(j['out']))}: moc {_ninja(j['src'])}")
+        a("")
+    # The .moc files are #included rather than compiled, so nothing declares
+    # a dependency on them until a depfile exists.
+    gen_outs = gen_outs + [_eject_src(j["out"])
+                           for j in moc_jobs if j["inline"]]
+
     # Order-only: a generated header must exist before anything compiles,
     # but the depfiles decide when a change to it forces a rebuild.
     after = (" || " + " ".join(_ninja(g) for g in gen_outs)) if gen_outs else ""
     for rel in sorted(every):
         u = every[rel]
-        a(f"build $objdir/{_ninja(rel)}.o: {'cxx' if u.cxx else 'cc'} {_ninja(rel)}{after}")
+        a(f"build $objdir/{_ninja(_eject_obj(rel))}.o: "
+          f"{'cxx' if u.cxx else 'cc'} {_ninja(_eject_src(rel))}{after}")
         if u.own:
             a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
     a("")
 
     for t in targets:
-        objs = " ".join(f"$objdir/{_ninja(u.rel)}.o"
+        objs = " ".join(f"$objdir/{_ninja(_eject_obj(u.rel))}.o"
                         for u in closures[t].link)
         rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
         a(f"build {_ninja(t.filename)}: {rule} {objs}")

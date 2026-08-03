@@ -2993,6 +2993,414 @@ def explain_shows_symbol_provenance(t):
           f"util_impl.c should be attributed to `helper`: {r.stdout}")
 
 # ---------------------------------------------------------------------------
+# moc
+#
+# The claim under test is that Qt needs no mechanism of its own: moc output
+# is a translation unit whose symbols the existing closure resolves like any
+# other. So most of these check where an object ended up rather than whether
+# moc ran, and the programs return a value that is only correct if the
+# meta-object actually works -- a signal that never fires links perfectly
+# well.
+# ---------------------------------------------------------------------------
+
+
+def _moc_path():
+    """Where fmake would find moc, or None. Mirrors find_moc in fmake.
+
+    Deliberately not `which("moc")`: on Debian there is none on $PATH, so a
+    skip decided that way would skip everywhere that matters.
+    """
+    for mod in ("Qt6Core", "Qt5Core"):
+        if not _have_pkg(mod):
+            continue
+        for var in ("libexecdir", "host_bins", "bindir"):
+            r = subprocess.run(["pkg-config", f"--variable={var}", mod],
+                               capture_output=True, text=True)
+            d = r.stdout.strip()
+            cand = os.path.join(d, "moc") if d else None
+            if cand and os.access(cand, os.X_OK):
+                return cand
+    return shutil.which("moc")
+
+
+def _need_qt():
+    if not _moc_path():
+        raise Skip("Qt development files not installed")
+
+
+def _link_block(out):
+    """Just the link-set listing from --explain.
+
+    The progress lines above it name the same files -- a moc output that was
+    compiled and then discarded appears in both -- so a check against the
+    whole of stdout cannot tell "linked" from "built and not linked", which
+    is the distinction most of these cases exist to make.
+    """
+    after = out.split("link set", 1)[-1]
+    return re.split(r"\n  (?:compiled, not linked|libraries)", after)[0]
+
+
+COUNTER_H = """
+#pragma once
+#include <QObject>
+class Counter : public QObject {
+    Q_OBJECT
+public:
+    explicit Counter(QObject *parent = nullptr) : QObject(parent) {}
+    void bump() { n++; emit changed(n); }
+signals:
+    void changed(int now);
+private:
+    int n = 0;
+};
+"""
+
+# Returns 0 only if the signal actually reached the slot, which takes a
+# working meta-object rather than merely a resolved symbol.
+COUNTER_MAIN = """
+#include <QCoreApplication>
+#include "counter.h"
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    Counter c;
+    int seen = -1;
+    QObject::connect(&c, &Counter::changed, [&](int v){ seen = v; });
+    c.bump();
+    return seen == 1 ? 0 : 1;
+}
+"""
+
+
+@case
+def moc_runs_because_a_class_says_q_object(t):
+    """Q_OBJECT in a header is the whole declaration Qt needs.
+
+    No build file, no HEADERS list, no AUTOMOC switch: the token in the
+    source is the fact, in the same way main() at file scope is."""
+    _need_qt()
+    t.write("counter.h", COUNTER_H)
+    t.write("main.cpp", COUNTER_MAIN)
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("MOC counter.h" in r.stdout, f"moc did not run: {r.stdout}")
+    prog = os.path.basename(t.dir)
+    check(t.run(prog).returncode == 0,
+          "the built program says its signal never arrived")
+
+
+@case
+def moc_output_joins_the_link_by_symbol(t):
+    """The moc object must arrive through the closure, not by special case.
+
+    This is the claim the whole feature rests on. If --explain cannot name
+    the symbol that pulled moc_counter.cpp in, then something is linking it
+    because it is called moc_*, which would be a rule that fails the moment
+    a project names things differently."""
+    _need_qt()
+    t.write("counter.h", COUNTER_H)
+    t.write("main.cpp", COUNTER_MAIN)
+
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"explain failed: {r.stderr}")
+    link = _link_block(r.stdout)
+    lines = [l for l in link.splitlines() if "moc_counter.cpp" in l]
+    check(lines, f"moc output not in the link set: {link}")
+    check("<-" in lines[0],
+          f"moc output was not attributed to a symbol: {lines[0]}")
+    check("staticMetaObject" in lines[0] or "ZTV" in lines[0],
+          f"the symbol should be one moc defines: {lines[0]}")
+
+
+@case
+def moc_output_is_compiled_without_waiting_for_widening(t):
+    """Widening cannot be relied on to discover moc output.
+
+    Widening picks its extra files by scanning for apparent *definitions*,
+    which is a regex over source text. That finds Foo::staticMetaObject, so
+    a class whose signals are emitted survives even if moc output is left
+    out of the candidate set. A class whose only debt to moc is its vtable
+    does not: no regex sees a vtable, `_ZTV4Base` is nothing any source
+    spells, and the build fails to link having compiled everything it was
+    asked to. Hence moc output joins the candidates outright."""
+    _need_qt()
+    t.write("base.h", """
+#pragma once
+#include <QObject>
+class Base : public QObject {
+    Q_OBJECT
+public:
+    virtual ~Base();
+    virtual int kind() const { return 1; }
+};
+""")
+    t.write("base.cpp", '#include "base.h"\nBase::~Base() {}\n')
+    t.write("main.cpp", """
+#include <QCoreApplication>
+#include "base.h"
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    Base *b = new Base();
+    int k = b->kind();
+    delete b;
+    return k == 1 ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(any("moc_base.cpp" in c for c in compiled(r)),
+          f"moc output was never compiled: {compiled(r)}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "program failed")
+
+
+@case
+def moc_leaves_out_a_class_no_program_reaches(t):
+    """A Q_OBJECT class nothing constructs must not reach the binary.
+
+    qmake mocs and links everything in HEADERS whether the class is
+    reachable or not. Here the closure decides, so the cost of an unused
+    class is one compile rather than a permanent passenger."""
+    _need_qt()
+    t.write("counter.h", COUNTER_H)
+    t.write("spare.h", COUNTER_H.replace("Counter", "Spare"))
+    t.write("main.cpp", COUNTER_MAIN)
+
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("moc/moc_spare.cpp" in r.stdout,
+          f"the spare class should still have been moc'd: {r.stdout}")
+    check("moc_spare" not in _link_block(r.stdout),
+          f"an unreachable class was linked anyway: {_link_block(r.stdout)}")
+    check("moc_spare" in r.stdout.split("compiled, not linked")[-1],
+          f"moc_spare.cpp should be listed as compiled and not linked: "
+          f"{r.stdout}")
+
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    syms = subprocess.run(["nm", "-C", prog], capture_output=True,
+                          text=True).stdout
+    check("Spare" not in syms, "Spare symbols reached the binary")
+
+
+@case
+def moc_handles_a_class_declared_in_a_source(t):
+    """Q_OBJECT inside a .cpp needs foo.moc, which is included not compiled.
+
+    Different output name, different relationship: it is text pulled into an
+    existing translation unit rather than one of its own, so it has to land
+    on that file's include path and must never be compiled separately."""
+    _need_qt()
+    t.write("local.cpp", """
+#include <QObject>
+class Local : public QObject {
+    Q_OBJECT
+public:
+    void ping() { emit pinged(7); }
+signals:
+    void pinged(int v);
+};
+int local_check() {
+    Local l;
+    int seen = -1;
+    QObject::connect(&l, &Local::pinged, [&](int v){ seen = v; });
+    l.ping();
+    return seen;
+}
+#include "local.moc"
+""")
+    t.write("main.cpp", """
+#include <QCoreApplication>
+int local_check();
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    return local_check() == 7 ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("MOC local.cpp" in r.stdout, f"moc did not run: {r.stdout}")
+    check(not any(c.endswith("local.moc") for c in compiled(r)),
+          f"local.moc must not be compiled on its own: {compiled(r)}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "the built program says its signal never arrived")
+
+
+@case
+def moc_does_not_compile_an_output_a_source_includes(t):
+    """The `#include "moc_foo.cpp"` idiom must not produce it twice.
+
+    An older habit ends foo.cpp with the moc output to save a translation
+    unit. Compiling it as well defines every meta-object twice, and the
+    closure would report that as an ambiguous provider -- which is a
+    baffling way to say a file is already in the build."""
+    _need_qt()
+    t.write("old.h", COUNTER_H)
+    t.write("old.cpp", """
+#include "old.h"
+int old_check() { Counter c; c.bump(); return 0; }
+#include "moc_old.cpp"
+""")
+    t.write("main.cpp", """
+#include <QCoreApplication>
+int old_check();
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    return old_check();
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(not any("moc_old.cpp" in c for c in compiled(r)),
+          f"moc_old.cpp was compiled as well as included: {compiled(r)}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "the built program did not run")
+
+
+@case
+def moc_says_so_when_a_source_cannot_reach_its_output(t):
+    """A .cpp with Q_OBJECT and no #include of its .moc is a project bug.
+
+    Generating it anyway would leave a file nothing compiles and nothing
+    includes, and the build would fail later on an undefined symbol that
+    names none of this."""
+    _need_qt()
+    t.write("orphan.cpp", """
+#include <QObject>
+class Orphan : public QObject { Q_OBJECT public: void f(); };
+void Orphan::f() {}
+""")
+    t.write("main.cpp", """
+#include <QCoreApplication>
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    return 0;
+}
+""")
+    r = t.fmake()
+    out = r.stdout + r.stderr
+    check("orphan.cpp" in out and "orphan.moc" in out,
+          f"the file and the missing include should both be named: {out}")
+
+
+@case
+def moc_ignores_a_class_the_preprocessor_never_reaches(t):
+    """The scan sees Q_OBJECT behind #if 0; moc correctly does not.
+
+    Told to write to a real path moc creates the file and leaves it empty,
+    so treating absence as the signal is not enough -- an empty translation
+    unit would otherwise be compiled and reported for the life of the tree,
+    and re-mocked on every build for want of a remembered negative."""
+    _need_qt()
+    t.write("ghost.h", """
+#pragma once
+#include <QObject>
+#if 0
+class Ghost : public QObject { Q_OBJECT };
+#endif
+int helper();
+""")
+    t.write("ghost.cpp", '#include "ghost.h"\nint helper(){ return 3; }\n')
+    t.write("main.cpp", """
+#include <QCoreApplication>
+#include "ghost.h"
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    return helper() == 3 ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(not any("moc_ghost" in c for c in compiled(r)),
+          f"an empty moc output was compiled: {compiled(r)}")
+    check(not glob.glob(os.path.join(t.dir, ".fmake/moc/**/*"),
+                        recursive=True),
+          "an empty moc output was left on disk")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "program failed")
+
+    again = t.fmake("-v")
+    check("MOC ghost.h" not in again.stdout,
+          f"moc re-ran for a known-empty input: {again.stdout}")
+
+
+@case
+def moc_output_does_not_collide_across_directories(t):
+    """Two headers of the same name must not want the same output file.
+
+    Flat output would have b/thing.h overwrite a/thing.h's, and the loser
+    fails to link on symbols whose header plainly declares them."""
+    _need_qt()
+    t.write("a/thing.h", COUNTER_H.replace("Counter", "AThing"))
+    t.write("b/thing.h", COUNTER_H.replace("Counter", "BThing"))
+    t.write("main.cpp", """
+#include <QCoreApplication>
+#include "a/thing.h"
+#include "b/thing.h"
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    AThing a; BThing b;
+    int seen = 0;
+    QObject::connect(&a, &AThing::changed, [&](int v){ seen += v; });
+    QObject::connect(&b, &BThing::changed, [&](int v){ seen += 10 * v; });
+    a.bump(); b.bump();
+    return seen == 11 ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "one of the two meta-objects went missing")
+
+
+@case
+def moc_reruns_only_when_the_input_changes(t):
+    """Keyed on content like everything else, not on mtime."""
+    _need_qt()
+    t.write("counter.h", COUNTER_H)
+    t.write("main.cpp", COUNTER_MAIN)
+    check(t.fmake().returncode == 0, "first build failed")
+
+    os.utime(os.path.join(t.dir, "counter.h"), None)
+    r = t.fmake()
+    check("MOC" not in r.stdout, f"a touch re-ran moc: {r.stdout}")
+
+    t.write("counter.h", COUNTER_H.replace("void changed(int now);",
+                                           "void changed(int now);\n"
+                                           "    void reset(int);"))
+    r = t.fmake()
+    check("MOC counter.h" in r.stdout,
+          f"a real change did not re-run moc: {r.stdout}")
+
+
+@case
+def moc_survives_ejection(t):
+    """An ejected build must regenerate moc output, not depend on fmake's.
+
+    Emitting the already-generated sources as ordinary ones is the cheaper
+    contract and the wrong one: it would leave a standalone Makefile reading
+    out of .fmake, which `fmake --clean` deletes and git never sees."""
+    _need_qt()
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    t.write("counter.h", COUNTER_H)
+    t.write("main.cpp", COUNTER_MAIN)
+
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    check(".fmake" not in r.stdout,
+          "the ejected build refers to fmake's state directory")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(r.stdout)
+
+    prog = os.path.basename(t.dir)
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    if os.path.exists(os.path.join(t.dir, prog)):
+        os.remove(os.path.join(t.dir, prog))
+
+    m = _run_in(t.dir, "make")
+    check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
+    check(_run_in(t.dir, "./" + prog).returncode == 0,
+          "the ejected build produced a program whose signal never arrived")
+
+# ---------------------------------------------------------------------------
 
 def run_case(c):
     """Run one case in its own tree. Returns (status, detail)."""

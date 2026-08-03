@@ -144,6 +144,46 @@ Unknown keys are an error, with the valid ones named.
 
 ---
 
+## Qt
+
+`Q_OBJECT` in a class is all the declaration Qt needs. No `HEADERS` list, no
+`AUTOMOC` switch, no build file.
+
+```sh
+$ ls
+counter.h  main.cpp
+$ fmake
+MOC counter.h
+[1/2] CXX .fmake/moc/moc_counter.cpp
+[2/2] CXX main.cpp
+LD  app
+* built app
+```
+
+moc runs on whatever declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE`, and
+**the symbols decide what happens next** — the generated object joins the link
+because something needs `Counter::staticMetaObject`, not because it is called
+`moc_*`. A class no program constructs is moc'd, compiled, and then left out;
+`--explain` lists it under *compiled, not linked*. That is stricter than qmake,
+which links everything in `HEADERS` whether it is reachable or not.
+
+A class declared inside a `.cpp` works too, on Qt's own terms: the output is
+`foo.moc` and that file must `#include` it. If it doesn't, fmake says so rather
+than letting it fail later on an undefined symbol.
+
+moc is found through pkg-config, so it matches the Qt being linked rather than
+whatever `moc` happens to be on `$PATH` — on Debian there is none. Override it
+with `[toolchain] moc` or `$MOC`.
+
+Not handled: `uic`, `rcc`, and QML type registration. The first is an
+include-graph dependency rather than a symbol one; the last is a protocol
+rather than a rule. `.qrc` and `.ui` files need a `[generate.*]` rule.
+
+The case this is best at is a tree of many small programs over one shared body
+of Qt code — each TU compiled once, each program linked to its own closure.
+
+---
+
 ## Commands
 
 ```
@@ -194,6 +234,8 @@ A tool this opinionated has to be leaveable.
 - **No `fmake.py`.** There is deliberately nowhere to put logic. If something
   genuinely needs code, a rule can call a script.
 - **C and C++ only.** C++20 modules are not handled.
+- **Qt means moc**, not the rest of Qt's tooling — see above. Exercised
+  against Qt 6 on Debian; Qt 5 is coded for and untested.
 - **Static archive link order** is not solved; a cycle between two archives
   needs the flags by hand.
 - **Cross-compiling** works, and library resolution answers for the target
