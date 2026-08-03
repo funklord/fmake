@@ -175,9 +175,27 @@ moc is found through pkg-config, so it matches the Qt being linked rather than
 whatever `moc` happens to be on `$PATH` — on Debian there is none. Override it
 with `[toolchain] moc` or `$MOC`.
 
-Not handled: `uic`, `rcc`, and QML type registration. The first is an
-include-graph dependency rather than a symbol one; the last is a protocol
-rather than a rule. `.qrc` and `.ui` files need a `[generate.*]` rule.
+**`uic` and `rcc` are not run for you**, and most Qt Widgets projects need
+them. They are two pattern rules in `fmake.mk`:
+
+```make
+src/ui_%.h: src/%.ui
+	/usr/lib/qt6/libexec/uic $< -o $@
+
+resources/qrc_resources.cpp: resources/resources.qrc
+	/usr/lib/qt6/libexec/rcc --name resources $< -o $@
+```
+
+A `.qrc` also needs `--force-link` on its generated source, because a Qt
+resource registers itself from a static constructor and so no symbol refers to
+it. QML type registration is not handled at all.
+
+Tried on qView (33 TUs, 15 `Q_OBJECT` classes, 7 `.ui` files): it builds and
+runs on the two rules above plus three `-D`s and two excludes — about eight
+lines, none of them about moc. fmake found the same 15 classes as CMake's
+AUTOMOC and produced a binary with identical Qt dependencies. It is slower on
+a clean build (34s against 27s) because CMake concatenates all moc output into
+one translation unit where fmake compiles one per class.
 
 The case this is best at is a tree of many small programs over one shared body
 of Qt code — each TU compiled once, each program linked to its own closure.

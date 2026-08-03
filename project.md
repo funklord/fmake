@@ -1708,6 +1708,12 @@ rather than code, and one lesson about testing.
   thing that looks like a provider and is not. The provider model was untouched
   by moc, and needed no new `HEADER_PKG` entry to resolve Qt. The threshold
   stands where it was.
+- **`uic` is out of scope on a premise the sample contradicts.** §17 left `.ui`
+  to a hand-written rule partly because Qt Widgets code was said often not to
+  use Designer; every project examined does. Revisiting it needs an answer to
+  what proposes a `.ui` file, since nothing in the source does — which makes it
+  a rule over extensions rather than an inference, and a different kind of
+  claim from `Q_OBJECT`.
 - **`[build-toolchain]` is only consulted for generator tools.** Nothing else
   in fmake distinguishes the build machine from the target, because nothing
   else needs to yet. A test binary meant to run during the build would.
@@ -1945,8 +1951,9 @@ added to `HEADER_PKG`.
 - **`uic`.** `ui_foo.h` *is* included by the code that uses it, so it is an
   include-graph dependency rather than a symbol one — a header that must exist
   before scanning, not an object discovered after compiling. Different
-  mechanism, much smaller reward, and hand-written Qt Widgets code frequently
-  has no `.ui` at all.
+  mechanism, and the assessment held that hand-written Qt Widgets code
+  frequently has no `.ui` at all. **That last part did not survive contact
+  with a sample** — see "The uic decision looks weaker than it did" below.
 - **`rcc`.** It does ride the same rail in principle: `Q_INIT_RESOURCE(name)`
   references an initialiser the generated source defines. But in Qt 5 and 6 a
   resource usually registers itself from a static constructor and
@@ -1976,3 +1983,73 @@ added to `HEADER_PKG`.
 - `#if 0` is the tested case for scan-and-preprocessor disagreement. Other
   conditional shapes are handled by the same negative-result path but were not
   enumerated.
+
+### Tried on a real project: qView
+
+`github.com/jurplel/qView`, a Qt 6 Widgets image viewer: 33 translation units
+after excludes, 15 classes declaring `Q_OBJECT`, 7 `.ui` files and one `.qrc`.
+It builds and runs.
+
+**What it needed**, which is the honest measure:
+
+```make
+# fmake.mk -- Qt's other two generators, which fmake does not run itself
+src/ui_%.h: src/%.ui
+	/usr/lib/qt6/libexec/uic $< -o $@
+
+resources/qrc_resources.cpp: resources/resources.qrc
+	/usr/lib/qt6/libexec/rcc --name resources $< -o $@
+```
+
+plus three `defines` that `target_compile_definitions` supplies, two excludes
+(`tests/**` wants QtTest, and a win32 file), and `--force-link` for the
+resource — nothing references it, because it registers itself from a static
+constructor, exactly as predicted above. About eight lines in total, and
+**moc needed none of them**.
+
+**What was confirmed.** fmake found precisely the same 15 `Q_OBJECT` classes
+as CMake's AUTOMOC — same set, discovered from the source rather than from a
+list. The two binaries have identical direct Qt dependencies
+(`Core Gui Network Widgets`) and both run. Worth being exact about the Svg
+case: CMake *asks* for `Qt6::Svg` and the linker's `--as-needed` throws it
+away, while fmake never asks, having found no symbol that needs it — the
+binaries agree, and fmake reached the answer by reasoning rather than by the
+linker discarding the mistake. SVG files still load, because that support is
+a runtime image-format plugin which links Qt6Svg itself.
+
+**Where it is slower.** Clean build 33.9s against CMake's 27.4s including
+configure; incremental with nothing changed, 0.45s. The gap is structural and
+not a defect: CMake concatenates every moc output into one
+`mocs_compilation.cpp`, so it compiles 19 TUs where fmake compiles 33. Fewer,
+larger TUs win for a single binary. One TU per class is what makes the
+closure able to drop a class no program reaches — which paid nothing here,
+since all 15 were reachable, and would pay on the many-small-programs tree
+this is supposed to be good at. That case is still unmeasured.
+
+**An accident worth recording.** qView's own CMake build *fails* on this
+machine. `find_package(Qt6 QUIET COMPONENTS LinguistTools)` sits inside the
+`if(Qt6_FOUND)` branch and clears `Qt6_FOUND` when the optional tool is
+absent, so a later test appends the **Qt5** `X11Extras` target to a Qt 6 build
+and generation dies. Installing the translation tools would hide it. It is a
+bug in that file rather than a limitation of CMake, and the comparison above
+was made after patching it — but it is a fair illustration of the premise:
+fmake had nothing to get wrong there, because it has no configure step and
+takes its facts from the source.
+
+### The uic decision looks weaker than it did
+
+The assessment argued `.ui` should be left out partly on the grounds that
+hand-written Qt Widgets code frequently has none. That is not what the
+sample shows. Every candidate examined uses Designer: qView 7 files,
+smplayer 43, KeePassXC 72. A tree with `.ui` files cannot be built by fmake
+without a rule, and the rule has to name `uic` by absolute path, because
+`uic` is not on `$PATH` on Debian any more than `moc` is — while fmake finds
+moc through pkg-config for exactly that reason.
+
+That is an argument for revisiting uic, and the mechanism is less alien than
+it looked: generated headers already exist, already get an `-I`, and are
+already order-only prerequisites of every compile. The reason it is still not
+done is scope, not principle. The trigger question is the real one — a `.ui`
+file is proposed by nothing in the source, so it would have to be a rule over
+file extensions rather than an inference from a symbol, which is a different
+kind of claim than `Q_OBJECT` makes.
