@@ -81,6 +81,21 @@ therefore a review item here. The sibling Python project `situ` has
 `tools/lint_conventions.py` for exactly this; adopting it would be a
 harmonizing change, worth raising rather than doing in passing.
 
+The conversion from spaces was mechanical, and is worth describing because
+the same job is waiting in the sibling projects. It is not a search and
+replace. A continuation line aligned under an open paren has no structural
+indent of its own, so it takes the tabs of the logical line it belongs to
+and expresses the remaining columns in spaces; a line at module level keeps
+pure spaces, because at level zero there are no tabs to align against. Lines
+inside a triple-quoted string are data -- C fixtures, Makefile snippets,
+expected output -- and are left alone entirely.
+
+What made it safe to believe was not the diff. `ast.dump(ast.parse(...))`
+was identical before and after for both files, which proves every string
+literal survived byte for byte -- and string literals are exactly where this
+conversion could have done real damage, in a place a whitespace-insensitive
+diff would never have shown it.
+
 ## 3. Filenames
 
 Lowercase for everything this project names itself. The tool is `fmake`,
