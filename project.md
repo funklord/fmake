@@ -52,7 +52,8 @@ each phase turned up ·
 codebases, and the four things a 6-file project could not have exposed ·
 [14. The chains, checked](#14-the-chains-checked) — the same question asked of
 the design rather than of a sample, and the silent wrongness it found ·
-[15. Open questions](#15-open-questions)
+[15. Open questions](#15-open-questions) ·
+[18. Vendored archives](#18-vendored-archives)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1593,10 +1594,11 @@ rather than code, and one lesson about testing.
   outright. Any other generator whose sole contribution to a program is a
   vtable would need the same treatment, and there is no general mechanism for
   saying so.
-- **Static libraries and prebuilt objects as inputs.** A vendored `.a` in the
-  tree is a provider of symbols like any other object, and closure should read
-  it. Not yet designed, but it looks like it falls out naturally, which is a good
-  sign for the model.
+- ~~**Static libraries and prebuilt objects as inputs.**~~ Closed for `.a`;
+  see §18. The guess that it would fall out naturally was right, and the two
+  things that did not fall out — where an archive goes on the link line, and
+  keeping it out of the compile step — were both small. Prebuilt loose `.o`
+  files are still unhandled.
 - **LTO and `-ffunction-sections`.** Both change what the linker does with the
   object set. Closure should still be correct (it computes what to *offer* the
   linker, which then discards more), but untested.
@@ -1627,9 +1629,10 @@ rather than code, and one lesson about testing.
   remaining case is a header-only library that needs `-I` pointing somewhere
   non-standard.
 - **Library resolution has no notion of link order.** The chosen `-l` flags are
-  emitted in cover order. That is fine for shared libraries but wrong for static
-  archives, where the linker is order-sensitive and a cyclic dependency between
-  two archives needs one repeated. Untested and probably broken.
+  emitted in cover order. That is fine for shared libraries but wrong for
+  static archives, where the linker is order-sensitive. Still true for
+  resolved `-l` flags; **no longer true for archives in the tree**, which are
+  grouped — see §18.
 - **`-L` is emitted from where the library was found**, compared against
   `cc -print-search-dirs`, rather than from pkg-config's `-L`. That covers
   libraries found by symbol alone as well as by package, but it is only as
@@ -1783,7 +1786,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 130, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 137, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2292,3 +2295,82 @@ Two things had to be said to get there, and both are honest:
 Both are packaging gaps rather than findings, but the smplayer number is worth
 keeping: the generator discovery scales to a 194-file project and agrees with
 qmake exactly.
+
+---
+
+## 18. Vendored archives
+
+§15 predicted that a prebuilt `.a` shipped in the tree would fall out of the
+model, and it did. The prediction was worth checking rather than assuming,
+because two things did *not* fall out, and both would have been wrong in ways
+that only show up later.
+
+**Symbols needed nothing new.** `nm --format=posix` reads an archive exactly
+as it reads an object; it prefixes each member with a `path[member.o]:` header
+line, which has one field and is already skipped by the parser. So an archive
+is a provider like any other: one defining a symbol nothing else does is
+linked, one nothing needs is never mentioned again, and `--explain` attributes
+it to the symbol that pulled it in — transitively, so an archive pulled in by
+another archive says so.
+
+### What did not fall out
+
+**It must not be compiled.** A unit with no source has no object directory, no
+depfile and no compile command. Three places assumed otherwise, and the one
+that got through to a crash was `--explain`, which printed the compile command
+for every unit in the link set and met a `None` depfile.
+
+**Where it goes on the link line is the whole thing.** `ld` resolves left to
+right and searches an archive only for what is undefined at the point it
+reaches it, so an archive listed with the objects — or before them —
+contributes nothing at all. They go after every object.
+
+### The cycle, and getting the test right twice
+
+More than one archive gets `-Wl,--start-group ... -Wl,--end-group`, which makes
+the order among them irrelevant and is the only thing that resolves a genuine
+cycle without naming an archive twice.
+
+The first test written for this proved nothing, and the mutation pass is what
+said so. Two archives that merely call each other are not a hard case: the
+closure discovers them in the order the symbols were needed, which is already
+a working order, so removing the group changed no outcome. Measured directly,
+`main.c libping.a libpong.a` fails and `main.c libpong.a libping.a` succeeds —
+and the closure produces the second.
+
+A cycle that defeats *every* linear order needs the crossing to run both ways,
+into members not yet pulled in:
+
+```
+libA: a1() -> b2()      libB: b1() -> a2()
+      a2()                    b2()
+main: a1() and b1()
+```
+
+Whichever archive the linker reaches first, the other raises a symbol back in
+the first, which it has already walked past. Both orders leave exactly one
+undefined reference; the group leaves none. That is now the case, and
+reverting the group turns it red.
+
+This closes §15's "untested and probably broken" for archives in the tree.
+Resolved `-l` flags are still emitted in cover order, so a cycle between two
+*installed* static libraries is unchanged and still wants the flags by hand.
+
+### Deliberate limits
+
+- **Only `.a`.** A loose prebuilt `.o` in the tree is not picked up.
+- **An archive fmake built is not vendored.** A static target writes
+  `lib<name>.a` into the output directory, which is the tree root unless `-o`
+  says otherwise, so without excluding it the second build would find the
+  first build's output and offer it back as a dependency of itself.
+- **A static target leaves them out** rather than nesting them. `ar` would
+  happily put one archive inside another and no linker would then understand
+  the result; an archive is assembled, not linked, so what it leaves undefined
+  is the consumer's problem.
+- **The whole archive's undefined symbols are reported**, including those of
+  members the linker will never pull in, so a vendored archive can propose
+  libraries the build does not strictly need. Conservative rather than wrong,
+  and `--as-needed` discards the surplus.
+- **The driver is not chosen by the archive.** A C++ archive linked into an
+  otherwise-C program will not by itself select `c++`; the tree's own sources
+  decide, and `@ldflags -lstdc++` covers the rest.

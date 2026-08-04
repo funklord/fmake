@@ -297,6 +297,11 @@ A tool this opinionated has to be leaveable.
 - **Linking what is actually called.** An undefined `SDL_Init` proves SDL is
   used; `#include <SDL.h>` only proves a declaration was wanted. A header
   whose library nothing calls is reported and not linked.
+- **Prebuilt archives you ship.** A `.a` in the tree is a provider of symbols
+  like any object: `nm` reads it, the closure links it if something needs it
+  and leaves it alone if nothing does, and it is placed after every object
+  where a static archive has to go. Two or more get a group, so a cycle
+  between them resolves without naming one twice.
 - **Qt without a build file.** `Q_OBJECT`, `#include "ui_*.h"` and the
   resource paths you open are the declarations; moc, uic and rcc follow from
   them.
@@ -365,14 +370,11 @@ This is the one place fmake reasons from what the source appears to say
 rather than from what the compiler produced, and it is the only pitfall in
 this list that can reach a user.
 
-**A vendored `.a` in the tree is not read.** fmake finds installed libraries,
-not prebuilt archives you ship. You get
-`no ... library exports: helper` with the archive sitting right there. Name
-it with `--ldflags` or `[project] ldflags`.
-
-**Static archive link order.** `-l` flags are emitted in cover order, which
-is fine for shared libraries and wrong for a cycle between two static
-archives. Pass `-Wl,--start-group ... -Wl,--end-group` yourself.
+**Static archive link order, for installed libraries.** Resolved `-l` flags
+are emitted in cover order, which is fine for shared libraries and wrong for
+a cycle between two installed static ones. Pass
+`-Wl,--start-group ... -Wl,--end-group` yourself. Archives *in the tree* are
+handled — see below.
 
 **⚠ `--cflags` replaces the defaults, it does not add to them.**
 `--cflags -Os` builds with `-Os` alone — no `-g`, and no `-O2`. That is what

@@ -3933,6 +3933,195 @@ def rcc_survives_ejection(t):
 
 
 # ---------------------------------------------------------------------------
+# Vendored archives
+#
+# A .a shipped in the tree is a provider of symbols like any object: nm reads
+# it the same way, and posix format puts each member on its own header line,
+# which the parser already skips. So the closure needs nothing new. What an
+# archive does need is to be kept out of the compile step and put in the
+# right place on the link line, which is where all of these cases look.
+# ---------------------------------------------------------------------------
+
+
+def _vendor(t, rel, stem, body, extra=None):
+    """Build a .a in the tree without fmake, leaving no source behind.
+
+    The sources are removed afterwards on purpose: with them in place the
+    symbols would come from translation units and the archive would prove
+    nothing. `extra` adds a second member, which is what it takes to build an
+    archive cycle no link order can satisfy.
+    """
+    objs, tmp = [], []
+    for name, text in [(stem, body)] + ([extra] if extra else []):
+        src = os.path.join(t.dir, name + ".c")
+        obj = os.path.join(t.dir, name + ".o")
+        with open(src, "w") as fh:
+            fh.write(text)
+        check(subprocess.run(["cc", "-c", src, "-o", obj]).returncode == 0,
+              f"could not compile {name}.c")
+        objs.append(obj)
+        tmp += [src, obj]
+    path = os.path.join(t.dir, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    check(subprocess.run(["ar", "rcs", path] + objs).returncode == 0,
+          f"could not archive {rel}")
+    for f in tmp:
+        os.remove(f)
+
+
+@case
+def a_vendored_archive_provides_symbols(t):
+    """A .a in the tree satisfies the closure like any object.
+
+    Also the only test the link *order* needs: an archive is searched only
+    for what is undefined at the point the linker reaches it, so one placed
+    before the objects contributes nothing at all and this fails to link.
+    """
+    _vendor(t, "vendor/libhelper.a", "helper",
+            "int helper(void){ return 42; }\n")
+    t.write("main.c", """
+#include <stdio.h>
+int helper(void);
+int main(void){ printf("%d\\n", helper()); return helper() == 42 ? 0 : 1; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    got = t.run(os.path.basename(t.dir))
+    check(got.returncode == 0, f"the program did not run: {got.stdout}")
+    check(got.stdout.strip() == "42", f"wrong output: {got.stdout!r}")
+
+
+@case
+def a_vendored_archive_is_attributed_to_a_symbol(t):
+    """--explain must say which symbol pulled the archive in."""
+    _vendor(t, "vendor/libhelper.a", "helper",
+            "int helper(void){ return 42; }\n")
+    t.write("main.c", "int helper(void);\nint main(void){ return helper() - 42; }\n")
+
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"explain failed: {r.stderr}")
+    line = [l for l in _link_block(r.stdout) .splitlines()
+            if "libhelper.a" in l]
+    check(line, f"the archive is not in the link set: {r.stdout}")
+    check("<- helper" in line[0],
+          f"the archive was not attributed to a symbol: {line[0]}")
+
+
+@case
+def a_vendored_archive_nothing_needs_is_left_alone(t):
+    """An archive is a provider, not a passenger."""
+    _vendor(t, "libunused.a", "unused", "int unused_thing(void){ return 1; }\n")
+    t.write("main.c", "int main(void){ return 0; }\n")
+
+    r = t.fmake("--explain")
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("libunused.a" not in _link_block(r.stdout),
+          f"an archive nothing needs was linked: {r.stdout}")
+
+
+@case
+def vendored_archives_resolve_a_cycle(t):
+    """Two archives that no order can satisfy, so a group is the only answer.
+
+    Getting this shape right took two attempts. Two archives merely calling
+    each other are not enough: the closure discovers them in the order the
+    symbols were needed, which is already a working order, so a group changes
+    nothing and a test built that way proves nothing.
+
+    A cycle that defeats every linear order needs the crossing to run both
+    ways from members not yet pulled in. Here libA's a1 needs libB's b2 and
+    libB's b1 needs libA's a2, with main calling a1 and b1. Whichever archive
+    the linker reaches first, the second one raises a symbol back in the
+    first, which it has already walked past. Checked directly: both orders
+    leave exactly one undefined reference, and the group leaves none."""
+    _vendor(t, "lib/libA.a", "a1", "int b2(void);\nint a1(void){ return 1 + b2(); }\n",
+            extra=("a2", "int a2(void){ return 10; }\n"))
+    _vendor(t, "lib/libB.a", "b1", "int a2(void);\nint b1(void){ return 100 + a2(); }\n",
+            extra=("b2", "int b2(void){ return 1000; }\n"))
+    t.write("main.c", """
+#include <stdio.h>
+int a1(void); int b1(void);
+int main(void){ int r = a1() + b1(); printf("%d\\n", r); return r == 1111 ? 0 : 1; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    got = t.run(os.path.basename(t.dir))
+    check(got.returncode == 0,
+          f"the mutually dependent archives did not resolve: {got.stdout}")
+    check(got.stdout.strip() == "1111", f"wrong result: {got.stdout!r}")
+
+
+@case
+def fmake_does_not_vendor_its_own_archive(t):
+    """A static target writes lib<name>.a into the tree it was built from.
+
+    Without excluding it the next build finds the previous build's output
+    and offers it back as a dependency of itself, which is a loop that would
+    only show up on the second run.
+    """
+    t.write("foo.c", """
+/*! @kind static
+ *  @target foo
+ */
+int foo(void){ return 5; }
+""")
+    check(t.fmake().returncode == 0, "first build failed")
+    check(os.path.exists(os.path.join(t.dir, "libfoo.a")),
+          "no archive was produced")
+    r = t.fmake("-v")
+    check("vendored archive" not in r.stdout,
+          f"fmake adopted its own output: {r.stdout}")
+
+
+@case
+def a_static_target_does_not_swallow_a_vendored_archive(t):
+    """`ar` would happily nest one archive inside another; no linker would
+    then understand the result. An archive is assembled, not linked, so
+    whatever it leaves undefined is the consumer's problem."""
+    _vendor(t, "vendor/libhelper.a", "helper",
+            "int helper(void){ return 42; }\n")
+    t.write("lib.c", """
+/*! @kind static
+ *  @target mylib
+ */
+int helper(void);
+int wrapped(void){ return helper(); }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    out = subprocess.run(["ar", "t", os.path.join(t.dir, "libmylib.a")],
+                         capture_output=True, text=True).stdout
+    check("libhelper.a" not in out,
+          f"a vendored archive was nested inside the target: {out}")
+
+
+@case
+def a_vendored_archive_survives_ejection(t):
+    """The ejected build must name the archive, and in the right place."""
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    _vendor(t, "vendor/libhelper.a", "helper",
+            "int helper(void){ return 42; }\n")
+    t.write("main.c", "int helper(void);\nint main(void){ return helper() - 42; }\n")
+
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(r.stdout)
+    check("vendor/libhelper.a" in r.stdout,
+          f"the ejected build does not mention the archive: {r.stdout}")
+
+    prog = os.path.basename(t.dir)
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    if os.path.exists(os.path.join(t.dir, prog)):
+        os.remove(os.path.join(t.dir, prog))
+    m = _run_in(t.dir, "make")
+    check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
+    check(_run_in(t.dir, "./" + prog).returncode == 0,
+          "the ejected build produced a broken program")
+
+
+# ---------------------------------------------------------------------------
 
 def run_case(c):
     """Run one case in its own tree. Returns (status, detail)."""

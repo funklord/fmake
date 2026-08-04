@@ -2048,7 +2048,7 @@ def parse_depfile(path):
 
 class Unit:
     __slots__ = ("rel", "abs", "cxx", "obj", "dep", "scan", "ann", "own",
-                 "undef", "strong", "weak", "compiled")
+                 "undef", "strong", "weak", "compiled", "archive")
 
     def __init__(self, rel, root, objdir, scan):
         self.rel  = rel
@@ -2061,6 +2061,10 @@ class Unit:
         self.own  = []            # compile flags this TU asked for itself
         self.undef = self.strong = self.weak = None
         self.compiled = False
+        # A prebuilt archive shipped in the tree rather than a TU fmake
+        # builds. It provides symbols like any object, but it is never
+        # compiled and it goes in a different place on the link line.
+        self.archive = False
 
 
 def unit_cflags(u, pkg, store, sig):
@@ -2240,6 +2244,40 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 # one, a weak provider is used if there is not, and several weak providers is
 # normal rather than ambiguous.
 # ---------------------------------------------------------------------------
+
+def find_archives(root):
+    """Prebuilt .a files shipped in the tree, as relative paths."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not d.startswith(".")]
+        for f in filenames:
+            if f.endswith(".a"):
+                out.append(os.path.relpath(os.path.join(dirpath, f), root))
+    return sorted(out)
+
+
+def archive_units(rels, root, cfg, jobs):
+    """Vendored archives as providers of symbols.
+
+    §15 guessed this would fall out of the model, and it does: nm reads an
+    archive the same way it reads an object, posix format puts each member on
+    its own header line, and a line with one field is already skipped. So the
+    closure needs nothing new. An archive defining a symbol nothing else does
+    is linked; one nothing needs is never mentioned again.
+
+    What it does not get is a compile step or an object directory, so the
+    unit is marked and its `obj` is the archive itself.
+    """
+    made = []
+    for rel in rels:
+        u = Unit(rel, root, "", {})
+        u.obj, u.dep, u.archive = os.path.join(root, rel), None, True
+        made.append(u)
+    if made:
+        read_symbols(made, cfg, jobs)
+    return made
+
 
 def read_symbols(units, cfg, jobs):
     def one(u):
@@ -3268,18 +3306,36 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
     a drifted --explain is worse than none: principle 4 is that every decision
     is inspectable, which is only true if what is shown is what is run.
     """
-    objs = [u.obj for u in cl.link]
+    objs = [u.obj for u in cl.link if not u.archive]
     out = os.path.join(outdir, t.filename)
     if t.kind == "static":
         # An archive is assembled, not linked: no libraries, no entry point.
         # Whatever it leaves undefined is the consumer's problem to resolve.
+        # A vendored archive is left out rather than nested inside this one,
+        # which `ar` would happily do and no linker would then understand.
         return [cfg.ar, "rcs", out] + objs
     cxx = any(u.cxx for u in cl.link)
     # Resolved libraries first, then whatever the user named, so an explicit
     # --ldflags always has the last word.
     return ([cfg.driver(cxx)]
             + (["-shared"] if t.kind == "shared" else [])
-            + ["-o", out] + objs + list(libflags) + cfg.ldflags)
+            + ["-o", out] + objs + archive_flags(cl)
+            + list(libflags) + cfg.ldflags)
+
+
+def archive_flags(cl):
+    """Vendored archives, placed where a static archive has to go.
+
+    After every object, because ld resolves left to right and an archive is
+    searched only for what is undefined at the point it is reached -- listed
+    first it contributes nothing at all. More than one gets a group, which
+    makes the order among them irrelevant and is the only thing that resolves
+    a cycle between two archives without naming one of them twice.
+    """
+    arcs = [u.obj for u in cl.link if u.archive]
+    if len(arcs) < 2:
+        return arcs
+    return ["-Wl,--start-group"] + arcs + ["-Wl,--end-group"]
 
 
 def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
@@ -3510,10 +3566,13 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
     if ldflags:
         print(f"    {' '.join(ldflags)}")
     print(f"  {CYAN('argv')}")
-    for u in cl.link[:2]:
+    # Prebuilt archives have no compile command to show, only a place on the
+    # link line below.
+    built = [u for u in cl.link if not u.archive]
+    for u in built[:2]:
         print(f"    {DIM(_show_cmd(compile_cmd(u, cfg, incflags), root))}")
-    if len(cl.link) > 2:
-        print(f"    {DIM('... %d more' % (len(cl.link) - 2))}")
+    if len(built) > 2:
+        print(f"    {DIM('... %d more' % (len(built) - 2))}")
     # The same call the linker gets, not a second rendering of it.
     shown = link_cmd(t, cl, cfg, outdir, res["ldflags"] if res else [])
     print(f"    {DIM(_show_cmd(shown, root))}")
@@ -4051,6 +4110,29 @@ def build(args, _bootstrapping=False):
         cache.objects.clear()
         cache.data.pop("links", None)
 
+    # ---- vendored archives --------------------------------------------
+    # Anything fmake builds itself is not one of these. A static target
+    # writes lib<name>.a into the output directory, which is the tree root
+    # unless -o says otherwise, so without this the second build would find
+    # the first build's output and offer it back as a dependency of itself.
+    ours = {t.filename for t in targets if t.kind == "static"}
+    out_prefix = os.path.join(os.path.abspath(outdir), "")
+    vendored = []
+    for a in find_archives(root):
+        if os.path.basename(a) in ours:
+            continue        # something this tree builds, not something it ships
+        # And anything already sitting in the output directory, unless that
+        # is the tree itself -- which it is by default, so this test has to
+        # be conditional or it excludes every archive there is.
+        if outdir != root and \
+                os.path.abspath(os.path.join(root, a)).startswith(out_prefix):
+            continue
+        vendored.append(a)
+    archives = archive_units(vendored, root, cfg, jobs)
+    if archives:
+        vinfo(f"{len(archives)} vendored archive(s): "
+              + ", ".join(a.rel for a in archives[:4]))
+
     # ---- compile, close, widen ----------------------------------------
     tried, broken = set(), set()
     closures = {}
@@ -4072,6 +4154,9 @@ def build(args, _bootstrapping=False):
         pool = [units[r] for r in sorted(units)]
         compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
                       broken)
+        # Archives join the pool only after compiling, which is the whole
+        # difference between them and a source: they are already built.
+        pool = pool + archives
 
         # confirm main() against the symbol tables now that objects exist
         if not args.dry_run:
@@ -4471,7 +4556,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
     every = {}
     for t in targets:
         for u in closures[t].link:
-            every[u.rel] = u
+            if not u.archive:       # prebuilt: there is nothing to compile
+                every[u.rel] = u
 
     # Only the moc outputs this build actually reaches. The caller has
     # already dropped the inputs that produced nothing -- a rule promising a
@@ -4565,7 +4651,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
     a("")
     for t in targets:
         ident = _mk_ident(t.name).upper()
-        objs = [f"$(OBJDIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link]
+        objs = [f"$(OBJDIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link
+                if not u.archive]
         a(f"{ident}_OBJS = \\")
         for i, o in enumerate(objs):
             a(f"\t{o}" + (" \\" if i < len(objs) - 1 else ""))
@@ -4573,16 +4660,27 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
         res = resolutions.get(t)
         libs = " ".join(_eject_flags(res["ldflags"], root)) if res else ""
         driver = "CXX" if any(u.cxx for u in closures[t].link) else "CC"
-        a(f"{t.filename}: $({ident}_OBJS)")
+        # Vendored archives are prerequisites, so a changed one relinks, but
+        # they are named on the command line rather than taken from $^: they
+        # have to come after every object, and a group cannot be expressed by
+        # a prerequisite list at all. A static target takes none of them,
+        # matching what fmake itself does.
+        arcs = [] if t.kind == "static" else \
+               [u.rel for u in closures[t].link if u.archive]
+        arcs_txt = " ".join(arcs)
+        if len(arcs) > 1:
+            arcs_txt = f"-Wl,--start-group {arcs_txt} -Wl,--end-group"
+        tail = ((f" {arcs_txt}" if arcs_txt else "")
+                + (f" {libs}" if libs else "") + " $(LDFLAGS)")
+        a(f"{t.filename}: $({ident}_OBJS)"
+          + (f" {' '.join(arcs)}" if arcs else ""))
         if t.kind == "static":
             a("\trm -f $@")
             a("\t$(AR) rcs $@ $^")
         elif t.kind == "shared":
-            a(f"\t$({driver}) -shared -o $@ $^"
-              + (f" {libs}" if libs else "") + " $(LDFLAGS)")
+            a(f"\t$({driver}) -shared -o $@ $({ident}_OBJS){tail}")
         else:
-            a(f"\t$({driver}) -o $@ $^"
-              + (f" {libs}" if libs else "") + " $(LDFLAGS)")
+            a(f"\t$({driver}) -o $@ $({ident}_OBJS){tail}")
         a("")
 
     all_objs = sorted({f"$(OBJDIR)/{_eject_obj(rel)}.o" for rel in every})
@@ -4638,11 +4736,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
     a("  description = CXX $in")
     a("")
     a("rule link")
-    a("  command = $driver -o $out $in $libs $ldflags")
+    a("  command = $driver -o $out $in $arcs $libs $ldflags")
     a("  description = LD $out")
     a("")
     a("rule solink")
-    a("  command = $driver -shared -o $out $in $libs $ldflags")
+    a("  command = $driver -shared -o $out $in $arcs $libs $ldflags")
     a("  description = LD $out")
     a("")
     a("rule archive")
@@ -4677,7 +4775,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
     every = {}
     for t in targets:
         for u in closures[t].link:
-            every[u.rel] = u
+            if not u.archive:       # prebuilt: there is nothing to compile
+                every[u.rel] = u
 
     uic = uic or {}
     uic_jobs = uic.get("jobs") or []
@@ -4741,11 +4840,22 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 
     for t in targets:
         objs = " ".join(f"$objdir/{_ninja(_eject_obj(u.rel))}.o"
-                        for u in closures[t].link)
+                        for u in closures[t].link if not u.archive)
+        arcs = [] if t.kind == "static" else \
+               [u.rel for u in closures[t].link if u.archive]
         rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
-        a(f"build {_ninja(t.filename)}: {rule} {objs}")
+        # Implicit inputs so a changed archive relinks; the command line
+        # places them after the objects and groups them when there is more
+        # than one, neither of which an input list can express.
+        after = (" | " + " ".join(_ninja(x) for x in arcs)) if arcs else ""
+        a(f"build {_ninja(t.filename)}: {rule} {objs}{after}")
         if t.kind != "static":
             a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
+            if arcs:
+                txt = " ".join(arcs)
+                if len(arcs) > 1:
+                    txt = f"-Wl,--start-group {txt} -Wl,--end-group"
+                a(f"  arcs = {txt}")
             res = resolutions.get(t)
             if res and res["ldflags"]:
                 a(f"  libs = {' '.join(_eject_flags(res['ldflags'], root))}")
