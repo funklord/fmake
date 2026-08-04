@@ -54,7 +54,8 @@ codebases, and the four things a 6-file project could not have exposed ·
 the design rather than of a sample, and the silent wrongness it found ·
 [15. Open questions](#15-open-questions) ·
 [18. Vendored archives](#18-vendored-archives) ·
-[19. The instantiation widening could not see](#19-the-instantiation-widening-could-not-see)
+[19. The instantiation widening could not see](#19-the-instantiation-widening-could-not-see) ·
+[20. Declared membership](#20-declared-membership-and-the-dead-end-before-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1619,9 +1620,9 @@ rather than code, and one lesson about testing.
 - **A tree whose sibling programs reuse class names cannot be built at
   once.** Three of Qt's painting examples each define a class `Window`, so the
   symbol has three strong providers and §3 refuses. Correct, and a real limit
-  of one-project-per-tree: `[target.*] sources` is the escape. Whether the
-  include graph should break such a tie -- it proposed the right file in every
-  case -- is a change to §3 and has not been made.
+  of one-project-per-tree. Whether the include graph should *decide* such a
+  tie is still a change to §3 and still has not been made — but it now
+  **suggests**, and prints the `[target.*]` stanza that ends it; see §20.
 - **Cross builds are verified on one toolchain, on Linux.** The architecture
   check is architecture-agnostic by construction, but sysroot handling, the
   pkg-config variables and the tool-prefix derivation have only been exercised
@@ -1789,7 +1790,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 141, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 144, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2454,3 +2455,72 @@ list of declaration keywords, so `template struct Box<int>;` contributes
 `Box` rather than `struct` and `int`. Over-proposing here is cheap by
 construction — §5's rule is that being wrong about candidates costs a compile,
 never a wrong link set — so the list only has to catch the common noise.
+
+---
+
+## 20. Declared membership, and the dead end before it
+
+Building Qt's `painting` examples stops on three classes called `Window`,
+which §15 records as a correct refusal and a real limit. It was also a dead
+end: the message named the problem and left the reader to work out the
+answer. Trying to remove that friction turned up something worse underneath.
+
+### The suggestion
+
+§3 must not let the include graph *decide* an ambiguity — it exists because
+the include graph is not good enough to. It is good enough to **suggest**, and
+a suggestion costs nothing when it is labelled as one. Where the graph reaches
+exactly one of the providers from a target's own root, that is almost always
+the right answer, so the report now says so and prints the stanza that would
+settle it:
+
+```
+The include graph reaches exactly one of them from each program's own root:
+    basicdrawing         basicdrawing/window.cpp
+    painterpaths         painterpaths/window.cpp
+    transformations      transformations/window.cpp
+
+which is a guess, not a decision. To make it the answer, put this in
+fmake.toml -- the source lists are that same guess and are worth checking:
+
+    [target.basicdrawing]
+    sources = ["basicdrawing/main.cpp", "basicdrawing/renderarea.cpp", ...]
+```
+
+Every affected target at once, rather than the first and then exit. Nine
+sibling programs meant nine builds to discover nine instances of one problem.
+
+### What that exposed
+
+Pasting fmake's own suggestion did not work. Three targets still failed, on
+`RenderArea::staticMetaObject`, vtables and typeinfo — all moc's.
+
+`[target.*] sources` switches the closure off, which is the point of it. But
+it was switching off more than membership: **a moc output cannot appear in any
+list a user writes**, because it lives under the state directory and is named
+after an implementation detail. So `sources` was unusable for every Qt target
+there has ever been, and nothing said so — the symbols simply went missing.
+
+The distinction that fixes it is that a declared list answers *which of the
+tree's own files belong*. It is not an answer about generated ones, and it was
+never a choice: a class's meta-object is part of that class, not a second
+opinion about it. Declared members therefore bring their generated companions
+with them.
+
+### Provenance, not symbols
+
+The first version chose companions by symbol — anything generated that defined
+something the members left undefined. That is the rule §3 uses everywhere else
+and it is wrong here, which took a second real failure to notice: three
+sibling programs each with a `RenderArea` produce three moc outputs defining
+the same names, and a symbol match hands all three to whichever target asks
+first. The build then fails on an ambiguous provider, reported against
+generated files the user never wrote.
+
+What settles it is **which file moc read** — a member, or a header a member
+includes. Ownership by provenance rather than by symbol, which is the one
+place in fmake where the symbols are not the better evidence, because the
+question is not *what does this need* but *whose is it*.
+
+With that, all nine painting examples build from the configuration fmake
+suggested, and run.

@@ -4262,6 +4262,116 @@ int main(void){ Box<int> b{21}; return b.twice() == 42 ? 0 : 1; }
 
 
 # ---------------------------------------------------------------------------
+# Declared membership
+# ---------------------------------------------------------------------------
+
+
+@case
+def declared_sources_bring_their_generated_companions(t):
+    """`[target.*] sources` must not mean "and no meta-object either".
+
+    Declaring membership switches the closure off, which is the point: it is
+    the answer to which of the tree's own files belong. It is not an answer
+    about generated ones -- a moc output lives under the state directory, so
+    it cannot appear in any list a user writes, and a class's meta-object is
+    part of that class rather than a second opinion about it. Without this,
+    `sources` is unusable for every Qt target there has ever been."""
+    _need_qt()
+    t.write("fmake.toml",
+            '[target.app]\nsources = ["main.cpp", "widget.cpp"]\n')
+    t.write("widget.h", """
+#pragma once
+#include <QObject>
+class Widget : public QObject {
+    Q_OBJECT
+public:
+    void bump() { emit changed(1); }
+signals:
+    void changed(int);
+};
+""")
+    t.write("widget.cpp", '#include "widget.h"\nint use_widget(){ Widget w; w.bump(); return 0; }\n')
+    t.write("main.cpp", """
+#include <QCoreApplication>
+int use_widget();
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    return use_widget();
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run("app").returncode == 0, "the declared target did not run")
+
+
+@case
+def a_companion_is_owned_by_provenance_not_by_symbol(t):
+    """Two programs with a same-named class must not swap meta-objects.
+
+    Choosing companions by symbol looks equivalent to choosing them by which
+    file moc read, and is not: sibling programs each with a `Panel` produce
+    two moc outputs defining the same names, and a symbol match hands both to
+    whichever target asked first -- which is an ambiguous provider, reported
+    against generated files the user never wrote."""
+    _need_qt()
+    t.write("fmake.toml",
+            '[target.alpha]\nsources = ["a/alpha.cpp"]\n\n'
+            '[target.beta]\nsources = ["b/beta.cpp"]\n')
+    for d, stem, val in (("a", "alpha", 1), ("b", "beta", 2)):
+        t.write(f"{d}/panel.h", f"""
+#pragma once
+#include <QObject>
+class Panel : public QObject {{
+    Q_OBJECT
+public:
+    int value() {{ emit touched(); return {val}; }}
+signals:
+    void touched();
+}};
+""")
+        t.write(f"{d}/{stem}.cpp", f"""
+#include <QCoreApplication>
+#include "panel.h"
+int main(int argc, char **argv) {{
+    QCoreApplication app(argc, argv);
+    Panel p;
+    return p.value() == {val} ? 0 : 1;
+}}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    for prog in ("alpha", "beta"):
+        check(t.run(prog).returncode == 0, f"{prog} got the wrong meta-object")
+
+
+@case
+def an_ambiguous_symbol_suggests_the_owner(t):
+    """A dead end should hand back the config that ends it.
+
+    §3 must not let the include graph decide this -- it exists because the
+    include graph is not good enough to. It is good enough to *suggest*,
+    though, and where it reaches exactly one provider from a program's own
+    root that is almost always the right answer. Reported for every affected
+    target at once, because fixing a tree of sibling programs one build at a
+    time is a bad way to spend an afternoon."""
+    for d, stem, val in (("one", "first", 1), ("two", "second", 2)):
+        t.write(f"{d}/win.h", "#pragma once\nint win(void);\n")
+        t.write(f"{d}/win.c", f'#include "win.h"\nint win(void){{ return {val}; }}\n')
+        t.write(f"{d}/{stem}.c",
+                f'#include "win.h"\nint main(void){{ return win() == {val} ? 0 : 1; }}\n')
+    r = t.fmake()
+    check(r.returncode != 0, "duplicate strong definitions should not build")
+    out = r.stdout + r.stderr
+    check("first" in out and "second" in out,
+          f"both targets should be named: {out}")
+    check("include graph reaches exactly one" in out,
+          f"the suggestion is missing: {out}")
+    check("[target.first]" in out and "[target.second]" in out,
+          f"a paste-ready stanza should be offered: {out}")
+    check('"one/win.c"' in out and '"two/win.c"' in out,
+          f"each stanza should name that target's own file: {out}")
+
+# ---------------------------------------------------------------------------
 
 def run_case(c):
     """Run one case in its own tree. Returns (status, detail)."""

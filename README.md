@@ -348,8 +348,11 @@ Use `-o build` to put artifacts elsewhere, or `@target` to rename it.
 **Two programs in one tree defining the same class.** Three sibling examples
 each with their own `Window` gives `Window::Window()` three strong providers,
 and fmake refuses to guess which belongs to which program. It is right — the
-tree really is ambiguous — but you must say: `[target.NAME] sources = [...]`
-in `fmake.toml` declares membership and skips the closure.
+tree really is ambiguous — but it does not leave you there: it names the file
+the include graph reaches from each program and prints the
+`[target.NAME] sources = [...]` stanza that settles it, for every affected
+target at once. Paste and build. (Generated files such as moc output are not
+in that list and do not need to be — a declared target still gets its own.)
 
 **Code nothing references.** Constructor-registered plugins, test cases
 registered by a macro. Nothing refers to them, so the closure correctly drops

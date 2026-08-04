@@ -1782,6 +1782,21 @@ class Project:
             return matches[0]
         return None
 
+    def reachable_headers(self, rels):
+        """Tree headers reachable by include from these files."""
+        seen, queue = set(), list(rels)
+        while queue:
+            cur = queue.pop()
+            scan = self.scans.get(cur)
+            if not scan:
+                continue
+            for _kind, name, _line in scan["incs"]:
+                h = self.resolve_header(name, cur)
+                if h and h not in seen:
+                    seen.add(h)
+                    queue.append(h)
+        return seen
+
     def sibling_source(self, hdr_rel):
         """The source that probably implements a header.
 
@@ -2385,6 +2400,31 @@ class Closure:
         self.why       = {}      # unit rel -> (symbol, needed-by rel)
         self.external  = {}      # symbol -> [unit rels referencing it]
         self.ambiguous = []      # (symbol, [providers])
+
+
+def companions(members, reachable, moc_jobs, qrc_jobs):
+    """Generated outputs belonging to a declared member list.
+
+    Only for targets whose membership is declared. The list a user writes
+    names their own files; a moc or rcc output is neither theirs to name --
+    it lives under the state directory -- nor theirs to decline, since a
+    class's meta-object is part of that class rather than a second opinion
+    about it.
+
+    Ownership is by provenance, not by symbol. Matching on symbols looks
+    equivalent and is not: three sibling programs each with a `RenderArea`
+    produce three moc outputs defining the same names, and a symbol match
+    hands all three to whichever target asked first. What settles it is which
+    file moc read -- a member, or a header a member includes.
+    """
+    mine, owned = set(members), set()
+    for j in moc_jobs:
+        if j["src"] in mine or j["src"] in reachable:
+            owned.add(j["out"])
+    for j in qrc_jobs:
+        if mine.intersection(j["users"]):
+            owned.add(j["out"])
+    return owned
 
 
 def close_over_library(units, root_unit):
@@ -4247,7 +4287,20 @@ def build(args, _bootstrapping=False):
                 # Declared membership is the answer, not a starting point.
                 # Nothing in the source says which of two libraries a shared
                 # file belongs to, so the closure must not be consulted.
+                #
+                # It decides which of *the tree's own* sources belong, though,
+                # not which generated ones do. A moc output lives under the
+                # state directory and is named after an implementation detail:
+                # it is not something anyone can list, and it is not a choice
+                # either -- a class's meta-object is part of that class, not a
+                # second opinion about it. So declared members bring their
+                # generated companions with them, found by symbol.
                 chosen = [units[r] for r in t.members if r in units]
+                owned = companions(t.members,
+                                   proj.reachable_headers(t.members),
+                                   moc_jobs, qrc_jobs)
+                chosen += [units[o] for o in sorted(owned)
+                           if o in units and units[o] not in chosen]
                 closures[t] = close_over_library(chosen, units[t.rel])
             elif t.kind == "exe":
                 closures[t] = close_over_symbols(units[t.rel], pool, forced,
@@ -4298,32 +4351,67 @@ def build(args, _bootstrapping=False):
             units[u.rel] = u
 
     # ---- report ambiguity ---------------------------------------------
-    for t, cl in closures.items():
-        for sym, providers in cl.ambiguous:
-            shown = providers[:6]
-            listing = "\n    ".join(shown)
-            if len(providers) > len(shown):
-                listing += f"\n    ... and {len(providers) - len(shown)} more"
+    # Every affected target at once, not the first one and then exit. A tree
+    # of sibling programs that each define a `Window` produces the same
+    # complaint once per program, and fixing them one build at a time is a
+    # bad way to spend an afternoon.
+    trouble = [(t, sym, providers) for t, cl in closures.items()
+               for sym, providers in cl.ambiguous]
+    if trouble:
+        first_sym, first_providers = trouble[0][1], trouble[0][2]
+        shown = first_providers[:6]
+        listing = "\n    ".join(shown)
+        if len(first_providers) > len(shown):
+            listing += f"\n    ... and {len(first_providers) - len(shown)} more"
+        lines = [f"symbol {first_sym!r} is defined by more than one file:",
+                 "    " + listing,
+                 "fmake will not guess which one belongs in "
+                 + ", ".join(sorted({t.name for t, _s, _p in trouble})) + "."]
 
+        # The include graph must not decide this -- §3 exists because it is
+        # not good enough to -- but it is good enough to *suggest*, and a
+        # suggestion costs nothing if it is labelled as one. Where it reaches
+        # exactly one of the providers from a target's own root, that is
+        # almost always the right answer, and the stanza below is the thing
+        # the user would otherwise write out by hand.
+        advice, stanzas = [], []
+        for t, _sym, providers in trouble:
+            reach = proj.candidates(t.rel)
+            mine = [p for p in providers if p in reach]
+            if len(mine) != 1:
+                continue
+            advice.append(f"    {t.name:<20} {mine[0]}")
+            members = sorted(r for r in reach if r in proj.src_set)
+            stanzas.append(f"[target.{t.name}]\nsources = ["
+                           + ", ".join(f'"{m}"' for m in members) + "]")
+        if advice:
+            lines += ["",
+                      "The include graph reaches exactly one of them from "
+                      "each program's own root:",
+                      *advice,
+                      "",
+                      "which is a guess, not a decision. To make it the "
+                      f"answer, put this in {CONF_FILE} -- the source lists "
+                      "are that same guess and are worth checking:",
+                      ""]
+            lines += ["    " + s.replace("\n", "\n    ") for s in stanzas]
+        elif len(first_providers) > 3:
             # Two very different causes, and the wrong hint sends people the
             # wrong way. A handful of files is usually one implementation per
             # platform; dozens is usually a directory of programs that each
             # supply the same entry point, expecting to be linked separately.
-            if len(providers) > 3:
-                hint = (f"\n{len(providers)} files define it, which usually "
-                        f"means they are separate programs sharing an entry "
-                        f"point rather than one library.\nGive each a "
-                        f"[target.*] with its own sources in {CONF_FILE}, or "
-                        f"drop them with [project] exclude.")
-            elif any(scans[p].get("dirs", {}).get("os") for p in providers):
-                hint = "\nOne of them has @os; the others may need one too."
-            else:
-                hint = ("\n@os or @arch on the platform-specific one will "
-                        "settle it, or name the sources of each target in "
-                        f"{CONF_FILE}.")
-            die(f"symbol {sym!r} is defined by more than one file:\n"
-                f"    " + listing + "\n"
-                f"fmake will not guess which one belongs in {t.name}." + hint)
+            lines.append(f"\n{len(first_providers)} files define it, which "
+                         f"usually means they are separate programs sharing "
+                         f"an entry point rather than one library.\nGive each "
+                         f"a [target.*] with its own sources in {CONF_FILE}, "
+                         f"or drop them with [project] exclude.")
+        elif any(scans[p].get("dirs", {}).get("os") for p in first_providers):
+            lines.append("\nOne of them has @os; the others may need one too.")
+        else:
+            lines.append("\n@os or @arch on the platform-specific one will "
+                         "settle it, or name the sources of each target in "
+                         f"{CONF_FILE}.")
+        die("\n".join(lines))
 
     # ---- resolve external symbols to libraries ------------------------
     resolutions = {}
