@@ -117,6 +117,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import xml.etree.ElementTree as ET
 
 # ---------------------------------------------------------------------------
 # Paths & constants
@@ -128,7 +129,7 @@ LICENCE     = "GPL-2.0-or-later"
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
-CACHE_VER   = 3   # scan records now carry Q_OBJECT
+CACHE_VER   = 4   # scan records now carry Qt resource references
 
 C_EXTS      = {".c"}
 CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
@@ -298,6 +299,17 @@ RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
 RE_QOBJECT = re.compile(
     r'\bQ_(?:OBJECT|GADGET|GADGET_EXPORT|NAMESPACE|NAMESPACE_EXPORT)\b')
 
+# Qt resource paths, as they are written in code: ":/icons/open.png", or
+# "qrc:/..." when a URL is wanted. Matched against the comment-stripped text,
+# which keeps string literals -- the literal is the whole point here, and a
+# path named in a comment is not a use.
+RE_QRC_PATH = re.compile(r'"(?:qrc)?:(/[^"\\\n]*)"')
+
+# The other way a program says it wants a resource, and the exact one: this
+# expands to a call to qInitResources_<name>, so the symbol does the rest.
+RE_QRC_INIT = re.compile(
+    r'\bQ_INIT_RESOURCE\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)')
+
 
 def scan_source(path):
     """Read one source file and return its scan record."""
@@ -319,6 +331,8 @@ def scan_source(path):
         # Against the stripped text, for the same reason main() is: the word
         # in a comment or a string is not a declaration.
         "qobject":  bool(RE_QOBJECT.search(code)),
+        "qrc":      sorted(set(RE_QRC_PATH.findall(code))),
+        "qrc_init": sorted(set(RE_QRC_INIT.findall(code))),
         "defs":     sorted(defs),
         "dirs":     parse_directives(comments),
     }
@@ -377,7 +391,7 @@ CONF_SCHEMA = {
     },
     "toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
-        "moc": S, "uic": S,
+        "moc": S, "uic": S, "rcc": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
     },
     # The machine doing the building, as opposed to the one being built for.
@@ -1029,6 +1043,11 @@ MOC_DIR = os.path.join(STATE_DIR, "moc")
 # on disk; mirroring the tree would hide that instead of reporting it.
 UI_DIR = os.path.join(STATE_DIR, "ui")
 
+# rcc output is a compiled translation unit, not an include, so it mirrors
+# the tree like moc's -- two resources.qrc in different directories are an
+# ordinary name clash rather than an ambiguity in anybody's C++.
+QRC_DIR = os.path.join(STATE_DIR, "qrc")
+
 RE_UI_HEADER = re.compile(r"^ui_(.+)\.h$")
 
 # The .pc files that know where Qt keeps its tools. Newest first: nothing in
@@ -1199,6 +1218,133 @@ def uic_plan(files, hdrs, scans, root):
         jobs.append({"src": found[0], "inline": True,
                      "out": os.path.join(UI_DIR, f"ui_{stem}.h")})
     return jobs
+
+
+def qrc_declares(path):
+    """The resource paths a .qrc file declares.
+
+    Parsed as the XML it is rather than matched as text: a .qrc is small and
+    machine-written, but prefixes and aliases are attributes, and getting
+    quoting wrong here would silently mean a resource nothing appears to use.
+    """
+    try:
+        tree = ET.parse(path)
+    except (ET.ParseError, OSError) as exc:
+        die(f"{path}: cannot read as a Qt resource file: {exc}")
+    paths = set()
+    for res in tree.getroot().iter("qresource"):
+        prefix = ("/" + (res.get("prefix") or "").strip("/")).rstrip("/")
+        for f in res.iter("file"):
+            name = (f.get("alias") or (f.text or "")).strip()
+            if name:
+                paths.add(prefix + "/" + name.lstrip("/"))
+    return paths
+
+
+def qrc_used_by(scan, paths, stem):
+    """Why this TU needs this resource, or None.
+
+    Two signals, and the exact one first. Q_INIT_RESOURCE names the resource
+    outright and compiles to an undefined qInitResources_<name>, so the
+    closure would find it unaided -- it is here only to decide that rcc must
+    run at all. Otherwise a ":/prefix/..." literal is the evidence, matched
+    on the prefix rather than the whole path because half of them are built
+    up at runtime from a stem and a name.
+    """
+    if stem in scan.get("qrc_init", ()):
+        return f"Q_INIT_RESOURCE({stem})"
+    for lit in scan.get("qrc", ()):
+        # `p.startswith(lit)` is what covers `":/icons/" + name`, which is
+        # how most real code names a resource -- the literal that survives
+        # is the directory, not the file. Comparing whole paths only would
+        # miss those, silently, until the program ran.
+        if lit in paths or any(p.startswith(lit) for p in paths):
+            return f'"{lit}"'
+    return None
+
+
+def rcc_plan(files, scans, root):
+    """Which .qrc files this tree's code actually refers to.
+
+    A resource is the one piece of Qt's tooling with no reliable symbol: it
+    registers itself from a static constructor, so nothing refers to the
+    generated object and the closure alone would drop it. The link decision
+    therefore comes from what the source says it opens, per program -- which
+    is why this returns the users and not just the file.
+    """
+    hits = sorted(glob.glob(os.path.join(root, "**", "*.qrc"), recursive=True))
+    jobs = []
+    for hit in hits:
+        rel = os.path.relpath(hit, root)
+        stem = os.path.splitext(os.path.basename(rel))[0]
+        paths = qrc_declares(hit)
+        users = {}
+        for f in files:
+            why = qrc_used_by(scans.get(f, {}), paths, stem)
+            if why:
+                users[f] = why
+        if not users:
+            continue
+        jobs.append({
+            "src": rel, "name": stem, "users": users,
+            "out": os.path.normpath(os.path.join(QRC_DIR, os.path.dirname(rel),
+                                                 f"qrc_{stem}.cpp")),
+        })
+    return jobs
+
+
+def run_rcc(root, jobs, rcc, cache, dry_run=False):
+    """Compile the resource files. Returns the outputs."""
+    store = cache.data.setdefault("rcc", {})
+    produced = []
+    for job in jobs:
+        src, out = job["src"], job["out"]
+        abs_out = os.path.join(root, out)
+        # The listed files are inputs too, and rcc embeds their contents, so
+        # a changed icon has to re-run it just as a changed .qrc does.
+        parts = [rcc, src, job["name"]]
+        for dep in sorted(qrc_inputs(os.path.join(root, src), root)):
+            parts.append(dep + ":" + (cache.hash_of(os.path.join(root, dep),
+                                                    dep) or "?"))
+        key = sha("|".join(parts
+                           + [cache.hash_of(os.path.join(root, src), src) or "?"]))
+        if store.get(out) == key and os.path.isfile(abs_out):
+            produced.append(out)
+            continue
+
+        cmd = [rcc, "--name", job["name"], src, "-o", out]
+        if dry_run:
+            print(" ".join(shlex.quote(c) for c in cmd))
+            continue
+        say(f"{YELLOW('RCC')} {src}")
+        os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
+        try:
+            res = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+        except OSError as exc:
+            die(f"could not run rcc ({rcc}): {exc.strerror or exc}")
+        if res.stderr.strip():
+            PROGRESS.write(res.stderr)
+        if res.returncode != 0 or not os.path.isfile(abs_out) \
+                or os.path.getsize(abs_out) == 0:
+            die(f"rcc produced nothing from {src}")
+        store[out] = key
+        produced.append(out)
+    return produced
+
+
+def qrc_inputs(path, root):
+    """The files a .qrc embeds, tree-relative, for freshness."""
+    try:
+        tree = ET.parse(path)
+    except (ET.ParseError, OSError):
+        return []
+    base = os.path.dirname(path)
+    out = []
+    for f in tree.getroot().iter("file"):
+        name = (f.text or "").strip()
+        if name:
+            out.append(os.path.relpath(os.path.join(base, name), root))
+    return out
 
 
 def run_moc(root, jobs, moc, flags, cache, dry_run=False):
@@ -1726,6 +1872,7 @@ class Config:
         # could not execute. Only asking is reliable, so there is no guess.
         self.moc    = tool.get("moc")
         self.uic    = tool.get("uic")
+        self.rcc    = tool.get("rcc")
         self.extra_libdirs = list(tool.get("lib-dirs", []))
         self.ccver  = tool_version(self.cc)
         self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
@@ -3203,7 +3350,8 @@ def _show_cmd(cmd, root):
 
 
 def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
-            res=None, excluded=None, conf=None, moc=None, uic=None):
+            res=None, excluded=None, conf=None, moc=None, uic=None,
+            rcc=None):
     W = 36
     name = t.filename
     if t.conf.get("name") or t.conf.get("kind") or t.conf.get("sources"):
@@ -3255,6 +3403,14 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
         print(f"  {CYAN('uic')}")
         print(f"    {_rel(uic['exe'], root):<{W-4}}"
               f"{DIM(f'{n} ui_*.h header(s) included; found via pkg-config')}")
+    if rcc and rcc.get("jobs"):
+        linked = {u.rel for u in cl.link}
+        print(f"  {CYAN('resources')}")
+        for j in rcc["jobs"]:
+            why = next((f"{w} in {f}" for f, w in sorted(j["users"].items())),
+                       "")
+            mark = why if j["out"] in linked else "not opened by this program"
+            print(f"    {j['src']:<{W-4}}{DIM(mark)}")
 
     if excluded:
         print(f"  {CYAN('excluded here')}")
@@ -3568,6 +3724,29 @@ def build(args, _bootstrapping=False):
         hdrs.sort()
         scan_all(hdrs)
 
+    # ---- rcc ----------------------------------------------------------
+    # A resource registers itself from a static constructor, so nothing in
+    # any object refers to the generated one and §3 alone would always drop
+    # it. What the source does say is which resources it opens -- a
+    # ":/icons/..." literal, or Q_INIT_RESOURCE naming one outright -- and
+    # that is per file, so it survives into a per-program answer rather than
+    # linking every resource into every binary.
+    qrc_jobs, qrc_outs = [], []
+    rcc_exe = None
+    qrc_jobs = rcc_plan(srcs + gen_hdrs, scans, root)
+    if qrc_jobs:
+        rcc_exe = find_qt_tool("rcc", cfg.rcc, pkg)
+        if not rcc_exe:
+            die("this tree refers to a Qt resource, which needs Qt's rcc.\n"
+                "Install the Qt development package, or name it with "
+                f"[toolchain] rcc in {CONF_FILE}.")
+        qrc_outs = run_rcc(root, qrc_jobs, rcc_exe, cache, args.dry_run)
+        for rel in qrc_outs:
+            if rel not in srcs:
+                srcs.append(rel)
+        srcs.sort()
+        scan_all(srcs)
+
     # ---- moc ----------------------------------------------------------
     # After the generators, so a generated header carrying Q_OBJECT is moc'd
     # like any other, and before everything else, so what moc writes is an
@@ -3795,6 +3974,7 @@ def build(args, _bootstrapping=False):
     # Compiling is still not linking: the closure decides, so the object of
     # a class no program constructs is simply never reached.
     candidates |= {m for m in moc_outs if m in proj.src_set}
+    candidates |= {q for q in qrc_outs if q in proj.src_set}
     # Whatever widening discovered last time is a far better starting guess
     # than the include graph, so start from it. Widening still corrects it if
     # the tree has changed.
@@ -3911,6 +4091,27 @@ def build(args, _bootstrapping=False):
             elif t.kind == "exe":
                 closures[t] = close_over_symbols(units[t.rel], pool, forced,
                                                  forced_why)
+                # A resource is asserted, not deduced -- nothing references
+                # the object. Which program gets it comes from which of its
+                # files opened it, so the closure has to exist before the
+                # question can be asked, and is then recomputed with the
+                # answer. One extra pass: rcc output refers to Qt and to
+                # nothing in the tree, so it cannot widen anything.
+                have = {u.rel for u in closures[t].link}
+                add = {}
+                for job in qrc_jobs:
+                    if job["out"] in have or job["out"] not in units:
+                        continue
+                    for who, why in job["users"].items():
+                        if who in have:
+                            add[job["out"]] = f"{why} in {who}"
+                            break
+                if add:
+                    extra_why = dict(forced_why)
+                    extra_why.update(add)
+                    closures[t] = close_over_symbols(
+                        units[t.rel], pool,
+                        forced + [units[o] for o in sorted(add)], extra_why)
             else:
                 members = [u for u in pool
                            if u.rel == t.rel or u.rel not in other_roots]
@@ -3996,7 +4197,8 @@ def build(args, _bootstrapping=False):
                               {"exe": moc_exe, "flags": moc_flags,
                                "jobs": [j for j in moc_jobs
                                         if j["out"] in done]},
-                              {"exe": uic_exe, "jobs": ui_jobs}))
+                              {"exe": uic_exe, "jobs": ui_jobs},
+                              {"exe": rcc_exe, "jobs": qrc_jobs}))
         cache.save()
         return 0
 
@@ -4007,7 +4209,8 @@ def build(args, _bootstrapping=False):
                     {x.rel for x in targets} - {t.rel}, resolutions.get(t),
                     excluded, conf,
                     {"exe": moc_exe, "jobs": moc_jobs} if moc_exe else None,
-                    {"exe": uic_exe, "jobs": ui_jobs} if uic_exe else None)
+                    {"exe": uic_exe, "jobs": ui_jobs} if uic_exe else None,
+                    {"exe": rcc_exe, "jobs": qrc_jobs} if rcc_exe else None)
         cache.save()
         return 0
 
@@ -4110,7 +4313,7 @@ EJECT_OBJDIR = "build"
 # directory. A standalone build file should not write into the bookkeeping of
 # the tool it no longer needs, and `fmake --clean` must not be able to delete
 # something an ejected build depends on.
-EJECT_GENDIRS = ((MOC_DIR, "moc"), (UI_DIR, "ui"))
+EJECT_GENDIRS = ((MOC_DIR, "moc"), (UI_DIR, "ui"), (QRC_DIR, "qrc"))
 
 
 def _eject_gen(rel):
@@ -4190,7 +4393,7 @@ def _refuse_whitespace(targets, closures, root):
 
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
-               gen_rules=None, moc=None, uic=None):
+               gen_rules=None, moc=None, uic=None, rcc=None):
     """A standalone Makefile."""
     _refuse_whitespace(targets, closures, root)
     common = _eject_flags(cfg.cflags + incflags, root)
@@ -4297,6 +4500,21 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
             a("\t@mkdir -p $(@D)")
             a("\t$(UIC) $< -o $@")
             a("")
+    rcc = rcc or {}
+    rcc_jobs = [j for j in (rcc.get("jobs") or []) if j["out"] in every]
+    if rcc_jobs:
+        a("# ---- rcc " + "-" * 54)
+        a("#")
+        a("# Selected by what the source opens, not by a list.")
+        a("")
+        a(f"RCC      = {rcc['exe']}")
+        a("")
+        for j in rcc_jobs:
+            a(f"{_eject_src(j['out'])}: {j['src']}")
+            a("\t@mkdir -p $(@D)")
+            a(f"\t$(RCC) --name {j['name']} $< -o $@")
+            a("")
+
     if moc_jobs:
         a("# ---- moc " + "-" * 54)
         a("#")
@@ -4370,7 +4588,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
-                gen_rules=None, moc=None, uic=None):
+                gen_rules=None, moc=None, uic=None, rcc=None):
     """A standalone build.ninja."""
     common = " ".join(_eject_flags(cfg.cflags + incflags, root))
     override = " ".join(_eject_flags(cfg.override, root))
@@ -4464,6 +4682,21 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
         a("")
         for j in uic_jobs:
             a(f"build {_ninja(_eject_src(j['out']))}: uic {_ninja(j['src'])}")
+        a("")
+
+    rcc = rcc or {}
+    rcc_jobs = [j for j in (rcc.get("jobs") or []) if j["out"] in every]
+    if rcc_jobs:
+        a("# Selected by what the source opens, not by a list.")
+        a(f"rcc = {rcc['exe']}")
+        a("")
+        a("rule rcc")
+        a("  command = $rcc --name $resname $in -o $out")
+        a("  description = RCC $in")
+        a("")
+        for j in rcc_jobs:
+            a(f"build {_ninja(_eject_src(j['out']))}: rcc {_ninja(j['src'])}")
+            a(f"  resname = {j['name']}")
         a("")
 
     moc = moc or {}

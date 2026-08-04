@@ -3690,6 +3690,222 @@ int main(void){ printf("%d\\n", widened()); return widened() == 7 ? 0 : 1; }
 
 
 # ---------------------------------------------------------------------------
+# rcc
+#
+# The one Qt generator with no reliable symbol: a resource registers itself
+# from a static constructor, so nothing refers to the generated object and
+# the closure alone would always drop it. What the source does say is which
+# resources it opens, and that is per file -- so these cases are mostly about
+# whether the right program got it.
+# ---------------------------------------------------------------------------
+
+def _qrc(prefix, name, text):
+    return (f'<!DOCTYPE RCC><RCC version="1.0">\n'
+            f'<qresource prefix="{prefix}">\n'
+            f'  <file>{name}</file>\n'
+            f'</qresource>\n</RCC>\n')
+
+
+def _reader(path, want):
+    """A program that opens a resource and checks its contents."""
+    return f"""
+#include <QCoreApplication>
+#include <QFile>
+int main(int argc, char **argv) {{
+    QCoreApplication app(argc, argv);
+    QFile f("{path}");
+    if (!f.open(QIODevice::ReadOnly)) return 2;
+    return f.readAll().trimmed() == "{want}" ? 0 : 1;
+}}
+"""
+
+
+@case
+def rcc_runs_because_the_source_opens_the_resource(t):
+    """A ":/prefix/..." literal is the source saying it uses the resource.
+
+    Nothing else can say it: the generated object is referenced by no
+    symbol, so without this evidence the closure drops it and the program
+    fails at runtime rather than at the link."""
+    _need_qt()
+    t.write("assets/greeting.txt", "hello from the resource\n")
+    t.write("assets/app.qrc", _qrc("/data", "greeting.txt", ""))
+    t.write("main.cpp", _reader(":/data/greeting.txt",
+                                "hello from the resource"))
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("RCC assets/app.qrc" in r.stdout, f"rcc did not run: {r.stdout}")
+    got = t.run(os.path.basename(t.dir))
+    check(got.returncode == 0,
+          f"the resource was not readable at runtime (exit {got.returncode})")
+
+
+@case
+def rcc_ignores_a_resource_nothing_opens(t):
+    """A .qrc in the tree is not by itself a reason to embed it.
+
+    Linking every resource into every binary is what listing them by hand
+    gets you; the point of reading the source is to do better than that."""
+    _need_qt()
+    t.write("assets/greeting.txt", "hello from the resource\n")
+    t.write("assets/app.qrc", _qrc("/data", "greeting.txt", ""))
+    t.write("extra/unused.txt", "nobody wants this\n")
+    t.write("extra/unused.qrc", _qrc("/unused", "unused.txt", ""))
+    t.write("main.cpp", _reader(":/data/greeting.txt",
+                                "hello from the resource"))
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("RCC extra/unused.qrc" not in r.stdout,
+          f"rcc ran for a resource nothing opens: {r.stdout}")
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    check(b"nobody wants this" not in open(prog, "rb").read(),
+          "an unreferenced resource was embedded anyway")
+
+
+@case
+def rcc_gives_each_program_only_what_it_opens(t):
+    """Two programs, two resources, and neither carries the other's.
+
+    This is the case that makes the evidence worth gathering. A rule that
+    linked every .qrc into every binary would pass every other test here and
+    still put a megabyte of somebody else's icons in each one."""
+    _need_qt()
+    t.write("a.txt", "resource for alpha\n")
+    t.write("alpha.qrc", _qrc("/alpha", "a.txt", ""))
+    t.write("b.txt", "resource for beta\n")
+    t.write("beta.qrc", _qrc("/beta", "b.txt", ""))
+    t.write("alpha.cpp", _reader(":/alpha/a.txt", "resource for alpha"))
+    t.write("beta.cpp", _reader(":/beta/b.txt", "resource for beta"))
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    for prog, mine, theirs in (("alpha", b"resource for alpha",
+                                b"resource for beta"),
+                               ("beta", b"resource for beta",
+                                b"resource for alpha")):
+        got = t.run(prog)
+        check(got.returncode == 0, f"{prog} could not read its resource")
+        blob = open(os.path.join(t.dir, prog), "rb").read()
+        check(mine in blob, f"{prog} is missing its own resource")
+        check(theirs not in blob,
+              f"{prog} carries the other program's resource")
+
+
+@case
+def rcc_follows_q_init_resource(t):
+    """Q_INIT_RESOURCE names the resource outright, and is exact.
+
+    It compiles to an undefined qInitResources_<name>, so once rcc has run
+    the closure links the object for the ordinary reason -- no assertion
+    needed, and it works even when no path literal appears anywhere."""
+    _need_qt()
+    t.write("greeting.txt", "named outright\n")
+    t.write("bundle.qrc", _qrc("/data", "greeting.txt", ""))
+    t.write("main.cpp", """
+#include <QCoreApplication>
+#include <QFile>
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    Q_INIT_RESOURCE(bundle);
+    // Deliberately no ":/..." literal anywhere, so Q_INIT_RESOURCE is the
+    // only thing that can have selected this resource.
+    QString path = QString(":") + "/data/greeting.txt";
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return 2;
+    return f.readAll().trimmed() == "named outright" ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("RCC bundle.qrc" in r.stdout, f"rcc did not run: {r.stdout}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "the resource named by Q_INIT_RESOURCE was not linked")
+
+
+@case
+def rcc_matches_a_prefix_built_at_runtime(t):
+    """Half of all resource paths are assembled from a stem and a name.
+
+    Matching whole paths only would miss `":/icons/" + name`, which is the
+    commonest way real code names a resource, and the miss would be silent
+    until the program ran."""
+    _need_qt()
+    t.write("icons/open.txt", "the open icon\n")
+    t.write("icons/icons.qrc", _qrc("/icons", "open.txt", ""))
+    t.write("main.cpp", """
+#include <QCoreApplication>
+#include <QFile>
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    QString name = "open";
+    QFile f(QString(":/icons/") + name + ".txt");
+    if (!f.open(QIODevice::ReadOnly)) return 2;
+    return f.readAll().trimmed() == "the open icon" ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("RCC icons/icons.qrc" in r.stdout,
+          f"a prefix-only reference did not trigger rcc: {r.stdout}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "the resource was not readable at runtime")
+
+
+@case
+def rcc_reruns_when_an_embedded_file_changes(t):
+    """The .qrc lists the inputs; rcc embeds their contents.
+
+    Keying on the .qrc alone would leave a stale copy of every file it names
+    baked into the binary, which nothing would ever report."""
+    _need_qt()
+    t.write("greeting.txt", "first\n")
+    t.write("app.qrc", _qrc("/data", "greeting.txt", ""))
+    t.write("main.cpp", _reader(":/data/greeting.txt", "second"))
+
+    check(t.fmake().returncode == 0, "first build failed")
+    check(t.run(os.path.basename(t.dir)).returncode == 1,
+          "the program should not match yet")
+
+    t.write("greeting.txt", "second\n")
+    r = t.fmake()
+    check("RCC app.qrc" in r.stdout,
+          f"a changed embedded file did not re-run rcc: {r.stdout}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "the binary still carried the old resource contents")
+
+
+@case
+def rcc_survives_ejection(t):
+    """The ejected build must embed the resource itself."""
+    _need_qt()
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    t.write("greeting.txt", "hello from the resource\n")
+    t.write("app.qrc", _qrc("/data", "greeting.txt", ""))
+    t.write("main.cpp", _reader(":/data/greeting.txt",
+                                "hello from the resource"))
+
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    check(".fmake" not in r.stdout,
+          "the ejected build refers to fmake's state directory")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(r.stdout)
+
+    prog = os.path.basename(t.dir)
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    if os.path.exists(os.path.join(t.dir, prog)):
+        os.remove(os.path.join(t.dir, prog))
+
+    m = _run_in(t.dir, "make")
+    check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
+    check(_run_in(t.dir, "./" + prog).returncode == 0,
+          "the ejected build produced a program with no resource")
+
+
+# ---------------------------------------------------------------------------
 
 def run_case(c):
     """Run one case in its own tree. Returns (status, detail)."""

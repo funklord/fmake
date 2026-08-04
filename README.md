@@ -161,7 +161,7 @@ LD  app
 ```
 
 moc runs on whatever declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE`, uic on
-whatever a source includes a `ui_*.h` for, and
+whatever a source includes a `ui_*.h` for, rcc on whatever a source opens, and
 **the symbols decide what happens next** — the generated object joins the link
 because something needs `Counter::staticMetaObject`, not because it is called
 `moc_*`. A class no program constructs is moc'd, compiled, and then left out;
@@ -172,9 +172,10 @@ A class declared inside a `.cpp` works too, on Qt's own terms: the output is
 `foo.moc` and that file must `#include` it. If it doesn't, fmake says so rather
 than letting it fail later on an undefined symbol.
 
-Both tools are found through pkg-config, so they match the Qt being linked
-rather than whatever happens to be on `$PATH` — on Debian neither is. Override
-with `[toolchain] moc` / `uic`, or `$MOC` / `$UIC`.
+All three tools are found through pkg-config, so they match the Qt being
+linked rather than whatever happens to be on `$PATH` — on Debian none of them
+is. Override with `[toolchain] moc` / `uic` / `rcc`, or `$MOC` / `$UIC` /
+`$RCC`.
 
 **`uic` runs on the same principle.** `#include "ui_thing.h"` naming a header
 that exists nowhere, with a `thing.ui` that would produce it, is the source
@@ -194,23 +195,30 @@ So a `.ui` nobody includes is not built, and a `ui_thing.h` you committed
 yourself is left alone rather than overwritten. Two `thing.ui` in one tree are
 refused by name: an unqualified include cannot say which you meant.
 
-**`rcc` is the exception**, and has to be a rule:
+**`rcc` is decided by what you open.** A resource registers itself from a
+static constructor, so no symbol ever refers to the generated object — but a
+`.qrc` declares the paths it provides, and code that uses one names it:
 
-```make
-resources/qrc_resources.cpp: resources/resources.qrc
-	/usr/lib/qt6/libexec/rcc --name resources $< -o $@
+```
+resources.qrc declares  /fonts/Lato-Light.ttf
+aboutdialog.cpp says    ":/fonts/Lato-Light.ttf"
 ```
 
-with `--force-link` on the generated source. Nothing in the source says which
-program a `.qrc` belongs to, and a resource registers itself from a static
-constructor, so neither signal exists. QML type registration is not handled.
+That is per file, so each program gets the resources *it* opens and not the
+other program's. Directory prefixes count, since `":/icons/" + name` is how
+most code names one, and `Q_INIT_RESOURCE(foo)` counts outright. A `.qrc`
+nothing opens is not built.
 
-Tried on qView (33 TUs, 15 `Q_OBJECT` classes, 7 `.ui` files): it builds and
-runs on the rule above, three `-D`s and two excludes. fmake generated the same
-15 moc files as CMake's AUTOMOC and the same 7 ui headers, and produced a
-binary with identical Qt dependencies. It is slower on a clean build (34s
-against 27s) because CMake concatenates all moc output into one translation
-unit where fmake compiles one per class.
+This is textual evidence rather than proof — a path assembled with no `":/…"`
+literal at all leaves nothing to go on, and then you want `--force-link`.
+QML type registration is not handled.
+
+Tried on qView (33 TUs, 15 `Q_OBJECT` classes, 7 `.ui` files, 1 `.qrc`): it
+builds and runs on two excludes and three `-D`s, with **no build file and
+nothing about Qt**. fmake generated the same 15 moc files as CMake's AUTOMOC,
+the same 7 ui headers, and embedded the resource. It is slower on a clean
+build (39s against 27s) because CMake concatenates all moc output into one
+translation unit where fmake compiles one per class.
 
 The case this is best at is a tree of many small programs over one shared body
 of Qt code — each TU compiled once, each program linked to its own closure.
@@ -267,8 +275,8 @@ A tool this opinionated has to be leaveable.
 - **No `fmake.py`.** There is deliberately nowhere to put logic. If something
   genuinely needs code, a rule can call a script.
 - **C and C++ only.** C++20 modules are not handled.
-- **Qt means moc and uic**, not `rcc` or QML — see above. Exercised against
-  Qt 6 on Debian; Qt 5 is coded for and untested.
+- **Qt means moc, uic and rcc**, not QML — see above. Exercised against Qt 6
+  on Debian; Qt 5 is coded for and untested.
 - **Static archive link order** is not solved; a cycle between two archives
   needs the flags by hand.
 - **Cross-compiling** works, and library resolution answers for the target

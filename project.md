@@ -1712,11 +1712,15 @@ rather than code, and one lesson about testing.
   see §17. The answer to "what proposes a `.ui` file" was that the source
   already does — `#include "ui_thing.h"` — so it is an inference after all,
   just from the include graph rather than from a symbol.
-- **`rcc` is the one piece of Qt tooling that must be told.** Nothing in the
-  source says which program a `.qrc` belongs to, and a Qt 5 or 6 resource
-  registers itself from a static constructor, so there is no undefined symbol
-  either. Both signals are absent, which is why it is a `[generate.*]` rule
-  and `--force-link` rather than an inference.
+- ~~**`rcc` is the one piece of Qt tooling that must be told.**~~ Closed; see
+  §17. One of the two signals really is absent — a resource registers itself
+  from a static constructor, so no symbol refers to the generated object —
+  but the other is not, and a resource path in the source turned out to be
+  enough to decide which program opens it.
+- **Resource evidence is textual, and that is a real limit.** A path built
+  with no `":/..."` literal anywhere, and no `Q_INIT_RESOURCE`, leaves nothing
+  to go on. `--force-link` still covers it, but unlike the symbol closure
+  there is no guarantee here, only good evidence.
 - **`[build-toolchain]` is only consulted for generator tools.** Nothing else
   in fmake distinguishes the build machine from the target, because nothing
   else needs to yet. A test binary meant to run during the build would.
@@ -1773,10 +1777,10 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 122, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 129, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
-headers. Filtering by name is the way to work — `./selftest moc` is twelve
+headers. Filtering by name is the way to work — `./selftest rcc` is seven
 cases and a few seconds — and the full run is for before a commit.
 
 Cases needing something absent from the machine skip rather than fail — a
@@ -1955,13 +1959,9 @@ added to `HEADER_PKG`.
   below. It was left out on the assessment's view that Qt Widgets code
   frequently has no `.ui` at all, which did not survive contact with a
   sample.
-- **`rcc`.** It does ride the same rail in principle: `Q_INIT_RESOURCE(name)`
-  references an initialiser the generated source defines. But in Qt 5 and 6 a
-  resource usually registers itself from a static constructor and
-  `Q_INIT_RESOURCE` is only needed for static libraries, so in the common case
-  there is no undefined symbol to infer from — and nothing in the source says
-  which of two programs `icons.qrc` belongs to. That makes it a
-  config-assisted case rather than an inferred one. Not done.
+- ~~**`rcc`.**~~ Implemented; see "rcc, and the resource nobody references"
+  below. The claim that nothing in the source says which program a `.qrc`
+  belongs to was wrong: the paths it opens do.
 - **QML and Qt Quick.** `qmltyperegistrar`, `qmldir` generation and
   `qmlcachegen` are a protocol, not a rule, and deeply CMake-coupled in Qt 6.
   Out of scope, and said so rather than half-supported.
@@ -2118,8 +2118,83 @@ plus `--force-link` on the resource. moc found the same 15 classes as before,
 uic the same 7 headers CMake generates, and the binary runs. Clean build 34.4s
 against CMake's 27.4s, unchanged — uic was never the expensive part.
 
-What is left is `rcc`, and it is left for the reason given above rather than
-for want of a mechanism: nothing in the source says which program a `.qrc`
-belongs to, and in Qt 5 and 6 a resource registers itself from a static
-constructor so there is no undefined symbol to infer from either. It is the
-one piece of Qt's tooling that genuinely needs to be told.
+What was left at that point was `rcc`, which the next section takes up.
+
+### rcc, and the resource nobody references
+
+Left out twice, on the reasoning that both signals were missing. Half of that
+was right and half was not, and the half that was wrong is the interesting
+one.
+
+**The symbol really is absent.** In Qt 5 and 6 a resource registers itself
+from a static constructor — the generated source has an `.init_array` entry —
+so `Q_INIT_RESOURCE` is only needed for static libraries, and in the common
+case no object refers to `qInitResources_foo` at all. §3 alone will therefore
+always drop it: the closure is exactly right and the answer is exactly wrong,
+which is the same shape as the constructor-registered plugins `--force-link`
+already exists for.
+
+**The other signal was there all along.** A `.qrc` declares the paths it
+provides, and code that uses a resource names one:
+
+```
+resources.qrc declares  /fonts/Lato-Light.ttf
+qvaboutdialog.cpp says  ":/fonts/Lato-Light.ttf"
+```
+
+That is the same division as library resolution and as moc — one side
+proposes, the other decides — and it is *per file*, which is what makes it a
+per-program answer rather than "link every resource into every binary". The
+literal is matched against the whole declared path **and as a directory
+prefix**, because most real code assembles the name at runtime and the only
+literal that survives is `":/icons/"`. String literals are kept by the comment
+scan, so a path mentioned in a comment is correctly not a use.
+
+`Q_INIT_RESOURCE(name)` is taken as evidence too, and it is the exact kind:
+it compiles to an undefined `qInitResources_name`, so once rcc has run the
+closure links the object for the ordinary reason with nothing asserted. It is
+read textually only to decide that rcc must run at all.
+
+**How the link decision is made.** The closure is computed, then asked whether
+any file in it opened a resource, then recomputed with those objects seeded.
+One extra pass, and it cannot loop: rcc output refers to Qt and to nothing in
+the tree, so it can never widen anything. `--explain` reports the evidence
+rather than the conclusion:
+
+```
+  resources
+    resources/resources.qrc         "/fonts/Lato-Light.ttf" in src/qvaboutdialog.cpp
+```
+
+**Freshness includes the embedded files**, not just the `.qrc`. rcc copies
+their contents into the generated source, so keying on the `.qrc` alone would
+bake a stale icon into every binary and never mention it.
+
+**The limit worth stating**: this is textual evidence, not a proof. A resource
+path assembled with no `":/..."` literal anywhere and no `Q_INIT_RESOURCE`
+leaves nothing to go on, and the resource will be missing at runtime rather
+than at the link. `--force-link` covers it. Everywhere else in fmake the
+answer is derived from what the compiler and linker actually produced; here it
+is derived from what the source appears to say, and that difference should not
+be blurred.
+
+### qView, finally, with no build file
+
+The whole configuration is now:
+
+```toml
+[project]
+exclude = ["tests/**", "src/qvwin32functions.cpp"]
+defines = ["VERSION=7.0", "QT_DEPRECATED_WARNINGS", "QT_NO_FOREACH"]
+```
+
+Two excludes for files that are not for this platform or this build, and
+three defines `target_compile_definitions` supplies. **No `fmake.mk`, no
+`--force-link`, and nothing about Qt.** 15 classes moc'd, 7 designs generated,
+one resource embedded — verified by finding the font data inside the binary —
+and it runs. Clean build 39s against CMake's 27s, the gap still being one moc
+TU per class against CMake's single concatenated one.
+
+Both remaining lines are the kind §17 said they would be: exclusions and
+feature defines, which symbol inference answers nothing about because they
+decide *what is compiled* rather than what is linked.
