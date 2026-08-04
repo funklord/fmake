@@ -4251,6 +4251,7 @@ def build(args, _bootstrapping=False):
     # ---- compile, close, widen ----------------------------------------
     tried, broken = set(), set()
     closures = {}
+    target_ident, vetted = None, False
     # Computed once, over every source in the tree rather than over the
     # evolving candidate pool. Recomputing per pass looks thriftier, but the
     # flags then depend on how far widening has got: a file compiled before
@@ -4269,8 +4270,37 @@ def build(args, _bootstrapping=False):
         pool = [units[r] for r in sorted(units)]
         compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
                       broken)
+        # The architecture to require is whatever fmake just compiled. Asking
+        # the objects avoids having to know anything about toolchain
+        # triplets, and is right by construction -- but it means waiting
+        # until something has been compiled, which is why this is here and
+        # not where the archives were found.
+        if target_ident is None:
+            for u in pool:
+                target_ident = elf_identity(u.obj)
+                if target_ident:
+                    break
+
         # Archives join the pool only after compiling, which is the whole
-        # difference between them and a source: they are already built.
+        # difference between them and a source: they are already built. And
+        # being already built, they have an architecture of their own, which
+        # nothing else here does: a host archive left in the tree during a
+        # cross build reads perfectly well -- binutils nm will happily list
+        # symbols from a foreign object -- so it is offered, chosen, and then
+        # refused by the linker with `file in wrong format`, which names
+        # neither architecture nor whose decision it was.
+        if archives and not vetted:
+            vetted, keep = True, []
+            for a in archives:
+                got = elf_identity(a.obj)
+                if target_ident and got and got != target_ident:
+                    warn(f"{a.rel} is {describe_identity(got)}, but this "
+                         f"build is {describe_identity(target_ident)}")
+                    note("not using it; anything it defines will be reported "
+                         "as missing")
+                    continue
+                keep.append(a)
+            archives = keep
         pool = pool + archives
 
         # confirm main() against the symbol tables now that objects exist
@@ -4427,14 +4457,8 @@ def build(args, _bootstrapping=False):
         every = set()
         for t in wanted:
             every |= set(closures[t].external)
-        # The architecture to require of a library is whatever fmake just
-        # compiled. Asking the objects avoids having to know anything about
-        # toolchain triplets, and is right by construction.
-        target_ident = None
-        for u in (units[r] for r in sorted(units)):
-            target_ident = elf_identity(u.obj)
-            if target_ident:
-                break
+        # target_ident was settled in the compile loop, from the first object
+        # that had one -- the same question, asked once.
         providers, paths = scan_providers(cfg, every, cache, jobs,
                                           target_ident)
         for t in wanted:

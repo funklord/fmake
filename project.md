@@ -57,7 +57,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [19. The instantiation widening could not see](#19-the-instantiation-widening-could-not-see) ·
 [20. Declared membership](#20-declared-membership-and-the-dead-end-before-it) ·
 [21. What widening costs](#21-what-widening-actually-costs) ·
-[22. Shared library soname](#22-a-shared-library-that-did-not-say-its-own-name)
+[22. Shared library soname](#22-a-shared-library-that-did-not-say-its-own-name) ·
+[23. The wrong-architecture archive](#23-the-archive-that-was-the-wrong-architecture)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1792,7 +1793,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 146, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 148, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2394,6 +2395,9 @@ and nothing said.
 ### Deliberate limits
 
 - **Only `.a`.** A loose prebuilt `.o` in the tree is not picked up.
+- **Identity is the first ELF member's.** An archive holding objects for two
+  architectures — which `ar rcs` will cheerfully produce, since it appends
+  rather than replaces — is judged by whichever went in first.
 - **An archive fmake built is not vendored.** A static target writes
   `lib<name>.a` into the output directory, which is the tree root unless `-o`
   says otherwise, so without excluding it the second build would find the
@@ -2608,3 +2612,60 @@ anybody who links by path.
 person testing their own library reaches for. That is worth remembering as a
 shape: a defect that only appears through the *other* way of using the
 output, and so survives every test written by the person who built it.
+
+---
+
+## 23. The archive that was the wrong architecture
+
+§18 added vendored archives without asking what architecture they were. Found
+by taking the same approach that turned up §22 — exercise a feature from the
+outside — and pointing a cross build at a tree with a host `.a` in it.
+
+Nothing about it looks wrong on the way in. **binutils `nm` reads a foreign
+object perfectly well**, so `aarch64-linux-gnu-nm` lists the symbols of an
+x86-64 archive without complaint, the closure takes them as evidence, and the
+archive is chosen. The refusal comes from the linker, several steps later:
+
+```
+ld: vendor/libhelper.a: error adding symbols: file in wrong format
+```
+
+which names neither architecture, nor which of the two is wrong, nor that
+fmake chose the file.
+
+fmake already asks the ELF header this question — it is what §5 calls the
+thing that makes cross builds honest, because a cross compiler's own search
+path contains the host's `/usr/lib` and no arrangement of directory names
+separates them. `elf_identity` even handles archives already, finding the
+first ELF member. Vendored archives were simply the one input that never got
+asked:
+
+```
+* vendor/libhelper.a is x86_64/64le, but this build is aarch64/64le
+  not using it; anything it defines will be reported as missing
+...
+* crossarc did not link
+  no aarch64/64le library exports: helper
+```
+
+The archive is dropped rather than fatal, and the symbol it would have
+provided is then reported missing in the ordinary way — two messages that
+agree with each other, where before there was one that explained nothing.
+
+**The architecture is asked of the objects, not the configuration.** That was
+already true for libraries and is right by construction: whatever fmake just
+compiled is what an archive has to match, with no knowledge of triplets
+anywhere. It does mean the question cannot be asked until something has been
+compiled, which is why the check lives in the compile loop rather than where
+the archives are found.
+
+Both directions have a case. A check that refused every archive would pass
+the negative one and be useless, which is the failure this pair is really
+guarding against — and the positive case cross-builds an aarch64 archive and
+runs the result under qemu.
+
+While writing the test I appended an aarch64 object to an archive that
+already held an x86-64 one, since `ar rcs` appends rather than replaces, and
+fmake judged the result by the first member. That is a real limit and now
+recorded as one, though a mixed-architecture archive is not a thing anyone
+should be able to produce by accident twice.

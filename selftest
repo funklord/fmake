@@ -4448,6 +4448,72 @@ int main(void){ return greet() == 7 ? 0 : 1; }
           f"not name itself: {got.stderr.strip()[:160]}")
 
 
+@case
+def a_foreign_archive_is_refused_by_name(t):
+    """A host .a left in the tree during a cross build.
+
+    Nothing about it looks wrong on the way in: binutils nm reads a foreign
+    object perfectly well, so the archive is scanned, offered and chosen, and
+    the linker refuses it with `file in wrong format` -- a message that names
+    neither architecture nor whose decision it was. fmake already asks the
+    ELF header this question for installed libraries; archives were the one
+    input that skipped it."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    _vendor(t, "vendor/libhelper.a", "helper",
+            "int helper(void){ return 42; }\n")     # built with the host cc
+    t.write("fmake.toml",
+            f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+    t.write("main.c", """
+int helper(void);
+int main(void){ return helper() == 42 ? 0 : 1; }
+""")
+    r = t.fmake()
+    out = r.stdout + r.stderr
+    check("vendor/libhelper.a" in out and "aarch64" in out,
+          f"the archive and the target architecture should be named: {out}")
+    check("x86_64" in out or "but this build is" in out,
+          f"the mismatch should be stated, not left to the linker: {out}")
+
+
+@case
+def a_cross_built_archive_is_used(t):
+    """The other half: an archive of the right architecture still works.
+
+    A check that refuses everything would pass the case above and be useless,
+    which is the failure mode worth guarding against here."""
+    if not _cross_available():
+        raise Skip(f"{CROSS_CC} not installed")
+    if not shutil.which("qemu-aarch64"):
+        raise Skip("qemu-aarch64 not installed")
+    src = os.path.join(t.dir, "helper.c")
+    obj = os.path.join(t.dir, "helper.o")
+    with open(src, "w") as fh:
+        fh.write("int helper(void){ return 42; }\n")
+    check(subprocess.run([CROSS_CC, "-c", src, "-o", obj]).returncode == 0,
+          "could not cross-compile the archive member")
+    os.makedirs(os.path.join(t.dir, "vendor"), exist_ok=True)
+    check(subprocess.run([CROSS_CC.replace("-gcc", "-ar"), "rcs",
+                          os.path.join(t.dir, "vendor/libhelper.a"),
+                          obj]).returncode == 0, "could not archive it")
+    os.remove(src)
+    os.remove(obj)
+
+    t.write("fmake.toml",
+            f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+    t.write("main.c", """
+int helper(void);
+int main(void){ return helper() == 42 ? 0 : 1; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    prog = os.path.join(t.dir, os.path.basename(t.dir))
+    got = subprocess.run(["qemu-aarch64", "-L", "/usr/aarch64-linux-gnu", prog],
+                         capture_output=True, text=True)
+    check(got.returncode == 0,
+          f"the cross-built program did not run: {got.stderr[:160]}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):
