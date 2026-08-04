@@ -6,6 +6,13 @@
 PREFIX  ?= /usr/local
 DESTDIR ?=
 
+# The interpreter written into the installed copy. Debian Policy 10.4 wants
+# an absolute path, and every packaged Python script on a Debian system has
+# one. The file in the repository keeps /usr/bin/env, because copying it
+# into $PATH and running it anywhere is the other half of what fmake is, and
+# that half wants the lookup.
+PYTHON  ?= /usr/bin/env python3
+
 BINDIR  = $(DESTDIR)$(PREFIX)/bin
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
@@ -20,7 +27,8 @@ fmake.1: fmake
 
 install: fmake.1
 	install -d $(BINDIR) $(MANDIR)
-	install -m 755 fmake $(BINDIR)/fmake
+	sed '1s|^#!.*|#!$(PYTHON)|' fmake > $(BINDIR)/fmake
+	chmod 755 $(BINDIR)/fmake
 	install -m 644 fmake.1 $(MANDIR)/fmake.1
 
 uninstall:

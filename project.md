@@ -1816,7 +1816,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 165, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 166, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -3153,6 +3153,24 @@ installed binary used to build two real trees — a plain C program, and a Qt
 one whose `Q_OBJECT` had to reach moc — because a package that produces a
 `fmake` which cannot find its own way is a package that only looks finished.
 The manual renders from the installed, gzipped copy.
+
+### The interpreter is rewritten on the way in
+
+The repository copy starts `#!/usr/bin/env python3`, because copying the file
+into `$PATH` and running it anywhere is half of what fmake is, and that half
+wants the lookup. Debian Policy 10.4 wants the other thing — an absolute
+interpreter path — and every packaged Python script on a Debian system has
+one. So `make install` rewrites the line, and `debian/rules` passes
+`PYTHON=/usr/bin/python3`.
+
+That leaves two spellings and a way for the rewrite to quietly stop
+happening, so there is a case: it installs to a staging root, checks the
+shebang is the absolute one, and runs the installed copy.
+
+Found by looking at what every other packaged Python script on this machine
+does, rather than by lintian, which is not installed here. It is the kind of
+thing a policy checker exists to catch and the kind of thing a convention
+survey catches just as well.
 
 ### Two things worth knowing
 

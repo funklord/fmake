@@ -5061,6 +5061,41 @@ def the_package_version_matches_the_program(t):
 
 
 @case
+def the_packaged_script_has_an_absolute_interpreter(t):
+    """Debian Policy 10.4: an installed script names its interpreter outright.
+
+    The repository copy keeps `#!/usr/bin/env python3`, because copying it
+    into $PATH and running it anywhere is half of what fmake is and that half
+    wants the lookup. The installed copy must not, so `make install` rewrites
+    the line -- which means there are now two spellings and a way for the
+    rewrite to stop happening without anyone noticing."""
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    if not os.path.exists(os.path.join(REPO, "Makefile")):
+        raise Skip("no Makefile in this tree")
+
+    stage = tempfile.mkdtemp(prefix="fmake-stage-")
+    try:
+        r = subprocess.run(["make", "install", f"DESTDIR={stage}",
+                            "PREFIX=/usr", "PYTHON=/usr/bin/python3"],
+                           cwd=REPO, capture_output=True, text=True)
+        check(r.returncode == 0, f"make install failed: {r.stdout}{r.stderr}")
+        installed = os.path.join(stage, "usr/bin/fmake")
+        check(os.path.exists(installed), "nothing was installed")
+        with open(installed) as fh:
+            first = fh.readline().strip()
+        check(first == "#!/usr/bin/python3",
+              f"the installed shebang is {first!r}")
+        check(os.access(installed, os.X_OK), "the installed copy is not executable")
+
+        got = subprocess.run([installed, "-V"], capture_output=True, text=True)
+        check(got.returncode == 0 and "fmake" in got.stdout,
+              f"the installed copy does not run: {got.stdout}{got.stderr}")
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+@case
 def the_manual_describes_every_option(t):
     """--man is generated from the parser, and has to stay that way.
 

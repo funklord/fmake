@@ -12,4 +12,4 @@ override_dh_auto_test:
 # The Makefile defaults to /usr/local, which is right for `make install` by
 # hand and forbidden in a package.
 override_dh_auto_install:
-	dh_auto_install -- PREFIX=/usr
+	dh_auto_install -- PREFIX=/usr PYTHON=/usr/bin/python3
