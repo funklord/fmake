@@ -5218,40 +5218,53 @@ def an_ejected_makefile_survives_a_deleted_header(t):
 
 
 @case
-def an_ejected_clean_refuses_a_dangerous_objdir(t):
-	"""`make clean OBJDIR=` must not become `rm -rf /` with extra steps.
+def an_ejected_clean_names_what_it_removes(t):
+	"""No wildcards, no rm -rf, no directory removal: only named files.
 
-	OBJDIR is an ordinary Make variable and overriding it is expected usage,
-	so an empty or mistyped one turns the clean target into a removal of
-	something else. build-and-commit.md names this exact shape. It is worse
-	in generated output than in a hand-written file, because the header
-	invites editing and tells the reader fmake is not needed to understand
-	it -- so nobody reviews it.
+	The earlier version of this case checked that `make clean OBJDIR=/` was
+	*refused*. Refusing is the second-best answer. fmake listed every object
+	in the same file one line below, to -include their depfiles, so it knows
+	exactly what the build creates and can say so -- and a generator that
+	knows what it made has no reason to delete by pattern. `OBJDIR=/` now
+	expands to `rm -f //main.c.o ...`, which names files that do not exist
+	and removes nothing.
 
-	Reported independently by three projects, two of which had written the
-	same bug themselves and fixed it the same week."""
+	The object directory itself is left behind. Removing it would mean
+	removing something the rule did not name."""
 	if not shutil.which("make"):
 		raise Skip("make not installed")
-	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("sub/util.h", "#pragma once\nint helper(void);\n")
+	t.write("sub/util.c", '#include "sub/util.h"\nint helper(void){ return 4; }\n')
+	t.write("main.c", '#include "sub/util.h"\nint main(void){ return helper() - 4; }\n')
 	check(t.fmake().returncode == 0, "build failed")
 	r = t.fmake("--eject")
 	check(r.returncode == 0, f"eject failed: {r.stderr}")
 	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
 		fh.write(r.stdout)
 
-	for bad in ("", "/", "../escape"):
-		got = _run_in(t.dir, "make", "clean", f"OBJDIR={bad}")
-		check(got.returncode != 0,
-		      f"clean accepted OBJDIR={bad!r}: {got.stdout}{got.stderr}")
-		check("refusing" in got.stdout + got.stderr,
-		      f"it should say why it refused OBJDIR={bad!r}: {got.stdout}{got.stderr}")
+	body = "\n".join(l for l in r.stdout.splitlines()
+	                  if not l.lstrip().startswith("#"))
+	check("rm -rf" not in body, "the ejected build still has an rm -rf")
+	check("*" not in body.split("clean:")[-1],
+	      f"the clean target has a wildcard: {body.split('clean:')[-1][:200]}")
 
-	# And the ordinary case still works.
-	check(_run_in(t.dir, "make").returncode == 0, "rebuild failed")
-	check(os.path.isdir(os.path.join(t.dir, "build")), "no build dir to clean")
-	check(_run_in(t.dir, "make", "clean").returncode == 0, "plain clean failed")
-	check(not os.path.exists(os.path.join(t.dir, "build")),
-	      "plain clean did not remove the object directory")
+	check(_run_in(t.dir, "make").returncode == 0, "the ejected build failed")
+	prog = os.path.basename(t.dir)
+	objs = os.path.join(t.dir, "build")
+	check(os.path.isdir(objs), "no object directory was made")
+	check(_run_in(t.dir, "make", "clean").returncode == 0, "clean failed")
+	check(not os.path.exists(os.path.join(t.dir, prog)),
+	      "clean left the program behind")
+	left = [f for _d, _s, fs in os.walk(objs) for f in fs]
+	check(not left, f"clean left objects behind: {left[:4]}")
+
+	# And an overridden OBJDIR can no longer reach anything: it names files
+	# under a path that does not exist rather than removing a directory.
+	check(t.fmake().returncode == 0, "rebuild for the abuse check failed")
+	dry = _run_in(t.dir, "make", "-n", "clean", "OBJDIR=/")
+	check("rm -rf" not in dry.stdout, f"still an rm -rf: {dry.stdout}")
+	check(dry.stdout.strip().startswith("rm -f "),
+	      f"clean should be a named rm -f: {dry.stdout[:120]}")
 
 
 @case
@@ -5289,6 +5302,102 @@ int main(int argc, char **argv) {
 	glued = [l for l in r.stdout.splitlines()
 	         if re.search(r"\S\.(cpp|h|c)(<-|defines|root:|\")", l)]
 	check(not glued, f"name and message ran together: {glued[:3]}")
+
+
+@case
+def clean_refuses_a_state_directory_that_is_a_symlink(t):
+	"""`--clean` removes a whole directory, which needs the path checked.
+
+	It is the one shape a wholesale removal is allowed to take -- a
+	directory the tool created, holding nothing else -- and even then the
+	rule is to verify rather than trust, because a clean target eating
+	something it should not is always a path that did not hold what everyone
+	assumed. A symlinked state directory points at something that is not
+	fmake's to remove."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "build failed")
+
+	elsewhere = tempfile.mkdtemp(prefix="fmake-notours-")
+	try:
+		with open(os.path.join(elsewhere, "keepme"), "w") as fh:
+			fh.write("not fmake's\n")
+		state = os.path.join(t.dir, ".fmake")
+		shutil.rmtree(state)
+		os.symlink(elsewhere, state)
+
+		r = t.fmake("--clean")
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, "it should refuse a symlinked state dir")
+		# Not a substring of the word "symlink": without the guard, rmtree
+		# raises and the traceback quotes shutil's own source, which
+		# contains it -- so that assertion passed on the very crash it was
+		# meant to catch. Match fmake's own wording, and require that there
+		# was no traceback at all.
+		check("Traceback" not in out, f"it crashed rather than refused: {out[:200]}")
+		check("refusing to clean" in out, f"it should say it refused: {out[:200]}")
+		check(os.path.exists(os.path.join(elsewhere, "keepme")),
+		      "it followed the symlink and removed what was behind it")
+	finally:
+		if os.path.islink(os.path.join(t.dir, ".fmake")):
+			os.unlink(os.path.join(t.dir, ".fmake"))
+		shutil.rmtree(elsewhere, ignore_errors=True)
+
+
+@case
+def clean_says_how_much_it_removed(t):
+	"""A clean target lists what it deletes; a count is the honest form here.
+
+	Naming several hundred cached objects would be noise, but "nothing to
+	clean" and "removed 4 files" are different facts and a user acting on
+	the wrong one wastes time looking for state that is not there."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "build failed")
+
+	first = t.fmake("--clean")
+	check(first.returncode == 0, f"clean failed: {first.stderr}")
+	check(re.search(r"removed .*\d+ file", first.stdout),
+	      f"it should say how much it removed: {first.stdout}")
+
+	again = t.fmake("--clean")
+	check("nothing to clean" in again.stdout,
+	      f"a second clean has nothing to do: {again.stdout}")
+
+
+@case
+def a_subdirectory_qualified_include_resolves(t):
+	"""`#include "model/profile.h"` from a source root needs -Isrc.
+
+	fmake added an -I for every directory that *contains* sources, which is
+	the obvious answer and useless here: the file is in src/model, so
+	-Isrc/model is what got added, and the include is written relative to
+	src. Ordinary C++, and one project lost 84 files to it in a single
+	build -- every one a plain missing include, so the cause was one compile
+	away and the fix was not.
+
+	The directory now comes from the include text: whatever is left of the
+	resolved path once the include name is taken off the end. For a bare
+	`#include "profile.h"` that is still the containing directory."""
+	t.write("src/model/profile.h", "#pragma once\nint profile_id(void);\n")
+	t.write("src/model/session.h",
+	        '#pragma once\n#include "model/profile.h"\nint session_open(void);\n')
+	t.write("src/model/session.cpp",
+	        '#include "model/session.h"\n'
+	        "int profile_id(void){ return 3; }\n"
+	        "int session_open(void){ return profile_id(); }\n")
+	t.write("src/ui/theme.h",
+	        '#pragma once\n#include "model/session.h"\nint theme_id(void);\n')
+	t.write("src/ui/theme.cpp",
+	        '#include "ui/theme.h"\nint theme_id(void){ return session_open(); }\n')
+	t.write("src/main.cpp",
+	        '#include "ui/theme.h"\nint main(void){ return theme_id() == 3 ? 0 : 1; }\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0, "the program failed")
+
+	flags = t.fmake("-B", "-n").stdout
+	check(re.search(r"-I\S*/src(\s|$)", flags),
+	      f"the source root should be on the include path: {flags[:300]}")
 
 
 # ---------------------------------------------------------------------------

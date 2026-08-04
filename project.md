@@ -70,7 +70,9 @@ the design rather than of a sample, and the silent wrongness it found ·
 [32. Two tracebacks from the command line](#32-two-tracebacks-reachable-from-the-command-line) ·
 [33. The file that was told to leave](#33-the-file-that-was-told-to-leave) ·
 [34. Packaging](#34-packaging) ·
-[36. What five projects said](#36-what-five-projects-said-when-they-ran-it)
+[36. What five projects said](#36-what-five-projects-said-when-they-ran-it) ·
+[37. Where an include points](#37-where-an-include-actually-points) ·
+[38. A test that passed on the crash](#38-a-test-that-passed-on-the-crash-it-was-looking-for)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1681,10 +1683,9 @@ rather than code, and one lesson about testing.
 - **Vendored subtrees are built like any other source.** A directory carrying
   its own `Makefile`/`CMakeLists.txt`, or listed as a git submodule, almost
   never is. §36.
-- **The include path lacks the common parent of the source directories**, so
-  a tree including its own headers subdirectory-qualified from the source root
-  — ordinary C++ — fails every such include. `beerssh` lost 84 files to it and
-  calls it the single highest-value change for that tree. §36.
+- ~~**The include path lacks the common parent of the source directories.**~~
+  Closed; see §37. The answer was not the common parent but the include text
+  itself.
 - **A file the build system excludes, rather than the file itself, cannot be
   expressed**, and neither can an optional feature whose macro the build
   system defines. `hydra` cannot build at all for the first and silently
@@ -1837,7 +1838,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 170, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 173, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -3374,3 +3375,65 @@ recursion to need `FORCE` and no intermediate to need `.SECONDARY`.
 `netcfgd` noticed `OBJDIR` was the canonical name without being told, and
 `fuzzypickles` recognised the configuration-keyed object directory as the fix
 for a bug it had hit and worked around by hand.
+
+---
+
+## 37. Where an include actually points
+
+`beerssh` lost 84 files in one build to this, every one a plain missing
+include, and called it the single highest-value change for that tree.
+
+It includes its own headers subdirectory-qualified from the source root --
+`#include "model/profile.h"`, not `#include "profile.h"` -- which is ordinary
+C++ and is what stops `session.h` being ambiguous across six directories.
+fmake added an `-I` for every directory that *contains* sources:
+
+```
+-I. -Isrc/input -Isrc/model -Isrc/platform -Isrc/ssh -Isrc/term -Isrc/ui
+```
+
+The file is in `src/model`, so `-Isrc/model` is what got added, and the
+include is written relative to `src`, so none of them helped.
+
+The suggestion was to add the common parent of the source directories. The
+answer turned out to be smaller and exact: **the directory is whatever is
+left of the resolved path once the include name is taken off the end of it.**
+`model/profile.h` resolving to `src/model/profile.h` leaves `src`. A bare
+`profile.h` resolving to `src/model/profile.h` leaves `src/model`, which is
+the containing directory -- so this reads as a generalisation of what was
+there rather than a new rule, and the flat case is untouched by construction.
+
+The reproduction went from seven `-I` flags to two, `-I.` and `-Isrc`, and
+the tree builds.
+
+## 38. A test that passed on the crash it was looking for
+
+`--clean` removes a whole directory. That is the one shape a wholesale
+removal is allowed to take -- a directory the tool created, holding nothing
+else -- and even then the rule is to verify the path rather than trust it, so
+a symlinked state directory is now refused instead of followed.
+
+The case for it asserted three things: a non-zero exit, that the output said
+`symlink`, and that what the link pointed at survived. It passed. Removing
+the guard, it **still passed**, and finding out why took six attempts.
+
+Without the guard, `shutil.rmtree` refuses a symlink and raises, so the exit
+is non-zero and the target does survive -- both assertions satisfied by the
+crash. And the third:
+
+```
+stderr contains symlink: True
+```
+
+Python's traceback quotes the source line of every frame, and `shutil.py`'s
+own code mentions `symlink`. **The assertion was satisfied by the text of the
+failure it was meant to detect.** Every check passed, none checked anything,
+and the only reason it came to light is that the mutation run said MISSED and
+the number was not believed.
+
+The case now matches fmake's own wording and requires that there was no
+traceback at all. `working-practice.md` states the principle -- a passing
+check is not evidence until you know it checked something -- and this is what
+it looks like from the inside: not a gate that inspected an empty file list,
+but an assertion whose substring appeared, for the first time, in the
+diagnostic of the bug.

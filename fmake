@@ -1883,13 +1883,33 @@ class Project:
 			    os.path.basename(os.path.splitext(s_)[0]), []).append(s_)
 		self.incdirs = set()
 
+	def incdir_for(self, resolved, inc_name):
+		"""The -I that makes this include text find this file.
+
+		Not the file's own directory, which is the obvious answer and wrong
+		whenever an include carries a path. `#include "model/profile.h"`
+		resolving to src/model/profile.h needs -Isrc; -Isrc/model, the
+		directory the file is actually in, does nothing at all -- and
+		subdirectory-qualified includes from a source root are ordinary C++,
+		which is how one project lost 84 files to this in a single build.
+
+		So the directory is whatever is left of the path once the include
+		name is taken off the end of it. For a bare `#include "profile.h"`
+		that is the containing directory, which is why this reads as a
+		generalisation rather than a change.
+		"""
+		left = resolved[: -len(inc_name)].rstrip("/") if \
+			resolved.endswith(inc_name) else os.path.dirname(resolved)
+		return left or "."
+
 	def resolve_header(self, inc_name, from_rel):
 		"""Resolve an include to a tree-relative header path, or None."""
+		inc_name = inc_name.replace(os.sep, "/")
 		base = os.path.dirname(from_rel)
 		cand = os.path.normpath(os.path.join(base, inc_name))
 		if cand in self.hdr_by_name.get(os.path.basename(cand), []) or \
 		   os.path.isfile(os.path.join(self.root, cand)):
-			self.incdirs.add(os.path.dirname(cand) or ".")
+			self.incdirs.add(self.incdir_for(cand, inc_name))
 			return cand
 		cand = os.path.normpath(inc_name)
 		if os.path.isfile(os.path.join(self.root, cand)):
@@ -1897,7 +1917,7 @@ class Project:
 			return cand
 		matches = self.hdr_by_name.get(os.path.basename(inc_name), [])
 		if len(matches) == 1:
-			self.incdirs.add(os.path.dirname(matches[0]) or ".")
+			self.incdirs.add(self.incdir_for(matches[0], inc_name))
 			return matches[0]
 		return None
 
@@ -5158,21 +5178,33 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("")
 
 	all_objs = sorted({f"$(OBJDIR)/{_eject_obj(rel)}.o" for rel in every})
-	# OBJDIR is an ordinary Make variable and overriding it is expected
-	# usage, so `make clean OBJDIR=` or a mistyped one turns this into an
-	# rm -rf of something else entirely. That is bad in a hand-written
-	# Makefile and worse here: this file is handed to people to edit and
-	# its own header tells them fmake is not needed to read it. Three
-	# projects reported this independently, two of them having written the
-	# same bug themselves and fixed it the same week.
+	# Every file this build creates, named. Not `rm -rf $(OBJDIR)`: OBJDIR
+	# is an ordinary Make variable and overriding it is expected usage, so
+	# an empty or mistyped one removes something else entirely -- and this
+	# file is handed to people to edit, with a header telling them fmake is
+	# not needed to read it, so nobody reviews it. Three projects reported
+	# that shape independently, two having written it themselves.
+	#
+	# Naming them is possible because fmake knows them: it listed every
+	# object to -include the depfiles a line below. A generator that cannot
+	# say what it made has no business deleting by pattern, and one that can
+	# has no need to.
+	#
+	# The directories are left behind. Removing them would mean removing
+	# something this rule did not name, which is the whole point.
+	a("CLEAN = \\")
+	leavings = ([f"$(OBJDIR)/{_eject_obj(rel)}.o" for rel in sorted(every)]
+	            + [f"$(OBJDIR)/{_eject_obj(rel)}.d" for rel in sorted(every)]
+	            + [t.filename for t in targets]
+	            + [_eject_src(j["out"]) for j in uic_jobs]
+	            + [_eject_src(j["out"]) for j in moc_jobs]
+	            + [_eject_src(j["out"]) for j in rcc_jobs]
+	            + list(gen_outs))
+	for i, item in enumerate(leavings):
+		a(f"\t{item}" + (" \\" if i < len(leavings) - 1 else ""))
+	a("")
 	a("clean:")
-	a("\t@case \"$(OBJDIR)\" in \\")
-	a("\t\"\") echo \"clean: OBJDIR is empty, refusing\" >&2; exit 1 ;; \\")
-	a("\t/*) echo \"clean: OBJDIR is absolute, refusing\" >&2; exit 1 ;; \\")
-	a("\t*..*) echo \"clean: OBJDIR escapes the tree, refusing\" >&2; exit 1 ;; \\")
-	a("\tesac")
-	a(f"\trm -rf -- $(OBJDIR) {' '.join(t.filename for t in targets)}"
-	  + (" $(GENERATED)" if gen_outs else ""))
+	a("\trm -f $(CLEAN)")
 	a("")
 	a("# Depfiles the compiler writes as a side effect, so a changed header")
 	a("# rebuilds what includes it.")
@@ -5456,12 +5488,29 @@ def ensure_gitignore(root):
 
 
 def do_clean(root):
+	"""Remove the state directory, having checked it is the state directory.
+
+	This is the one shape a wholesale removal is allowed to take: a
+	directory the tool itself created, and which holds nothing else. Even
+	then the path is verified rather than trusted, because the way a clean
+	target eats something it should not is always a variable that did not
+	contain what everyone assumed.
+
+	A symlink is refused rather than followed -- `shutil.rmtree` declines a
+	symlink anyway, but saying so is better than the traceback.
+	"""
 	state = os.path.join(root, STATE_DIR)
-	if os.path.isdir(state):
-		shutil.rmtree(state)
-		info(f"removed {STATE_DIR}/")
-	else:
+	if os.path.basename(state.rstrip(os.sep)) != STATE_DIR:
+		die(f"refusing to clean {state!r}: that is not {STATE_DIR}/")
+	if os.path.islink(state):
+		die(f"refusing to clean {state!r}: it is a symlink, and what it "
+		    f"points at is not fmake's to remove")
+	if not os.path.isdir(state):
 		info("nothing to clean")
+		return 0
+	count = sum(len(fs) for _d, _sub, fs in os.walk(state))
+	shutil.rmtree(state)
+	info(f"removed {STATE_DIR}/ ({count} file(s))")
 	return 0
 
 # ---------------------------------------------------------------------------
