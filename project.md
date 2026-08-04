@@ -56,7 +56,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [18. Vendored archives](#18-vendored-archives) ·
 [19. The instantiation widening could not see](#19-the-instantiation-widening-could-not-see) ·
 [20. Declared membership](#20-declared-membership-and-the-dead-end-before-it) ·
-[21. What widening costs](#21-what-widening-actually-costs)
+[21. What widening costs](#21-what-widening-actually-costs) ·
+[22. Shared library soname](#22-a-shared-library-that-did-not-say-its-own-name)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1600,9 +1601,13 @@ rather than code, and one lesson about testing.
   things that did not fall out — where an archive goes on the link line, and
   keeping it out of the compile step — were both small. Prebuilt loose `.o`
   files are still unhandled.
-- **LTO and `-ffunction-sections`.** Both change what the linker does with the
-  object set. Closure should still be correct (it computes what to *offer* the
-  linker, which then discards more), but untested.
+- **LTO and `-ffunction-sections`.** `-flto` with GCC works and is now
+  checked by hand: its objects still carry a symbol table `nm` can read, the
+  closure is unaffected, and the binary runs. Clang emits pure bitcode where
+  `nm` may read nothing, which would make every file appear to define nothing
+  — untested, because clang is not installed here. `-ffunction-sections` only
+  changes what the linker discards, which is downstream of everything fmake
+  decides.
 - **C++ modules.** `import std;` breaks the include-graph candidate heuristic,
   and module dependency scanning needs a real compiler pass
   (`clang-scan-deps`). Note that the *closure* is unaffected — symbols are
@@ -1787,7 +1792,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 145, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 146, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2563,3 +2568,43 @@ at scale, and now the only part of this entry still open.
 The entry also predicted that caching would make this a first-build cost
 only, and that holds: the resolved unit set is remembered, so later builds
 start from what widening found rather than re-deriving it.
+
+---
+
+## 22. A shared library that did not say its own name
+
+Found by running `--install` end to end and then asking the question the
+feature exists for: is the installed library actually usable?
+
+fmake linked shared libraries with `-shared` and nothing else, so they
+carried no `DT_SONAME`. What that costs depends entirely on how the consumer
+links, which is the problem:
+
+```
+cc use.c -L<dir> -lgreet          NEEDED  libgreet.so          works
+cc use.c <dir>/libgreet.so        NEEDED  /abs/<dir>/libgreet.so
+```
+
+The second is not a corner case. It is what CMake does by default, and it is
+what falls out of every `DESTDIR` staging flow, where the path linked against
+is a temporary directory that will not exist on the machine that runs the
+program. Measured: the consumer built that way fails with *cannot open shared
+object file* the moment the library is installed where it belongs, and
+`LD_LIBRARY_PATH` cannot repair it, because an absolute `DT_NEEDED` is not
+searched for.
+
+Without a soname the *consumer* decides what the library is called. With one
+the library decides, which is the right way round and is the entire purpose
+of the field. `-Wl,-soname,<filename>` is now passed whenever a shared
+library is linked, in `link_cmd` and in both ejected backends.
+
+No versioning is implied by this and none is offered: fmake builds
+`libfoo.so` and the soname is that same name. A project needing
+`libfoo.so.1.2.3` with the usual symlinks needs a real answer, and this is
+not it — but it is no longer the case that the plain one is broken for
+anybody who links by path.
+
+**Why `--lgreet` hid it.** The bare-name case works, and it is the one a
+person testing their own library reaches for. That is worth remembering as a
+shape: a defect that only appears through the *other* way of using the
+output, and so survives every test written by the person who built it.

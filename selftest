@@ -4401,6 +4401,53 @@ int main(void){ return helper_7() == 7 ? 0 : 1; }
     check(t.run(os.path.basename(t.dir)).returncode == 0, "the program failed")
 
 
+@case
+def a_shared_library_says_its_own_name(t):
+    """Without DT_SONAME the consumer decides what to record, and it is wrong.
+
+    `-lgreet` leaves the bare name and works, which is why this hides. Link
+    the file by path -- what CMake does by default, and what falls out of any
+    DESTDIR staging flow -- and the linker records that absolute path
+    instead. The program then breaks the moment the library is installed
+    where it actually belongs, and no LD_LIBRARY_PATH can repair an absolute
+    DT_NEEDED."""
+    t.write("fmake.toml", '[project]\nexclude = ["consumer/**"]\n')
+    t.write("greet.c", """
+/*! @kind shared
+ *  @target greet
+ *  @headers greet.h
+ */
+#include "greet.h"
+int greet(void){ return 7; }
+""")
+    t.write("greet.h", "#pragma once\nint greet(void);\n")
+    t.write("consumer/use.c", """
+#include <greet.h>
+int main(void){ return greet() == 7 ? 0 : 1; }
+""")
+    check(t.fmake().returncode == 0, "build failed")
+    lib = os.path.join(t.dir, "libgreet.so")
+    check(os.path.exists(lib), "no shared library was produced")
+
+    # Linked by path, exactly as a consumer using the staged copy would.
+    use = os.path.join(t.dir, "use")
+    r = subprocess.run(["cc", os.path.join(t.dir, "consumer/use.c"),
+                        "-I" + t.dir, lib, "-o", use],
+                       capture_output=True, text=True)
+    check(r.returncode == 0, f"could not build the consumer: {r.stderr}")
+
+    # Now put the library where it would really be installed.
+    moved = os.path.join(t.dir, "final")
+    os.makedirs(moved, exist_ok=True)
+    shutil.move(lib, os.path.join(moved, "libgreet.so"))
+
+    env = dict(os.environ, LD_LIBRARY_PATH=moved)
+    got = subprocess.run([use], capture_output=True, text=True, env=env)
+    check(got.returncode == 0,
+          "the consumer broke when the library moved, so the library did "
+          f"not name itself: {got.stderr.strip()[:160]}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

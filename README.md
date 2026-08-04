@@ -297,6 +297,10 @@ A tool this opinionated has to be leaveable.
 - **Linking what is actually called.** An undefined `SDL_Init` proves SDL is
   used; `#include <SDL.h>` only proves a declaration was wanted. A header
   whose library nothing calls is reported and not linked.
+- **Installing a library that works afterwards.** `--install` places the
+  artifact and its `@headers`, and shared libraries carry a `SONAME`, so a
+  consumer that links yours by path — which is what CMake does by default —
+  records the library's name rather than your staging directory.
 - **Prebuilt archives you ship.** A `.a` in the tree is a provider of symbols
   like any object: `nm` reads it, the closure links it if something needs it
   and leaves it alone if nothing does, and it is placed after every object

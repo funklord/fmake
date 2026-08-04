@@ -3406,6 +3406,13 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
     """
     objs = [u.obj for u in cl.link if not u.archive]
     out = os.path.join(outdir, t.filename)
+    # A shared library says its own name, because otherwise the consumer
+    # decides it. Without DT_SONAME the linker records whatever it was given:
+    # `-lgreet` leaves the bare name and works, but linking the file by path
+    # -- which is what CMake does by default, and what any DESTDIR staging
+    # flow produces -- records that absolute path, so the program breaks the
+    # moment the library is installed where it actually belongs, and no
+    # LD_LIBRARY_PATH can repair an absolute DT_NEEDED.
     if t.kind == "static":
         # An archive is assembled, not linked: no libraries, no entry point.
         # Whatever it leaves undefined is the consumer's problem to resolve.
@@ -3416,7 +3423,8 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
     # Resolved libraries first, then whatever the user named, so an explicit
     # --ldflags always has the last word.
     return ([cfg.driver(cxx)]
-            + (["-shared"] if t.kind == "shared" else [])
+            + (["-shared", "-Wl,-soname," + t.filename]
+               if t.kind == "shared" else [])
             + ["-o", out] + objs + archive_flags(cl)
             + list(libflags) + cfg.ldflags)
 
@@ -4833,7 +4841,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
             a("\trm -f $@")
             a("\t$(AR) rcs $@ $^")
         elif t.kind == "shared":
-            a(f"\t$({driver}) -shared -o $@ $({ident}_OBJS){tail}")
+            a(f"\t$({driver}) -shared -Wl,-soname,{t.filename} -o $@ $({ident}_OBJS){tail}")
         else:
             a(f"\t$({driver}) -o $@ $({ident}_OBJS){tail}")
         a("")
@@ -4895,7 +4903,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
     a("  description = LD $out")
     a("")
     a("rule solink")
-    a("  command = $driver -shared -o $out $in $arcs $libs $ldflags")
+    a("  command = $driver -shared -Wl,-soname,$soname -o $out $in $arcs $libs $ldflags")
     a("  description = LD $out")
     a("")
     a("rule archive")
@@ -5006,6 +5014,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
         a(f"build {_ninja(t.filename)}: {rule} {objs}{after}")
         if t.kind != "static":
             a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
+            if t.kind == "shared":
+                a(f"  soname = {t.filename}")
             if arcs:
                 txt = " ".join(arcs)
                 if len(arcs) > 1:
