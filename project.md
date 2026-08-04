@@ -3822,3 +3822,73 @@ the thing that caught it now: running the old interpreter.
 
 It surfaced by accident, while correcting a README sentence about which
 Python version the package requires.
+
+## 45. A way in, not only a way out
+
+`--eject` was built as an exit: a tool this opinionated has to be leaveable.
+Two of the five evaluations independently pointed out that it is also the
+adoption path, and that nothing says so.
+
+netcfgd, in an addendum correcting their own evaluation for never having
+tried it:
+
+> Ejecting is probably **the adoption path for exactly the projects most
+> likely to say no**. [...] "Use fmake as a generator, commit the output, and
+> your users need nothing" is a different and much easier sell than "adopt a
+> build tool", and it costs the project nothing it does not already have.
+
+fuzzypickles went further and named the missing piece:
+
+> Ejecting a Makefile that a hand-written one can **include**. If the
+> ejected file can be a *fragment* that an existing Makefile includes for
+> the compile rules while keeping its own packaging targets, that is an
+> incremental adoption path rather than a switch. **That would make the
+> verdict above obsolete, because scope stops being the objection.**
+
+Their verdict was "not a switch today, and the reason is scope rather than
+quality": fmake would own compile-and-link well, but their build is mostly
+not compile-and-link -- CPack, qmake, androiddeployqt, five submodules, and
+a `make apk` sequencing all of it. Adoption meant two build systems where
+there was one. A fragment removes that objection without answering it.
+
+`--eject make-fragment` is the same emitter with three differences, and only
+one of them is about taste:
+
+- **No default goal.** The parent keeps `all`, and the fragment's aggregate
+  rules are `fmake-all` and `fmake-clean` so they cannot collide. If it is
+  included before the parent defines anything, `fmake-all` is the first rule
+  and therefore what Make lands on -- deliberately, so the accident builds
+  everything rather than one object file.
+- **`FM_` on every variable it owns.** This is the one that matters. A
+  parent Makefile setting `CFLAGS` is the most ordinary thing a Makefile
+  does, and with unprefixed names it would replace every flag fmake worked
+  out -- silently, since the build still runs. The case sets
+  `CFLAGS = -this-would-break-everything` in the parent and requires the
+  program to build and print the right answer.
+- **`CC`, `CXX` and `AR` unprefixed and `?=`.** Those the parent *should*
+  control, and a cross build is the obvious reason.
+
+### Three smaller things in the same file
+
+All from beerssh and netcfgd reading the ejected output against the rules
+they would judge it by, which is the review nobody else was going to do.
+
+- **The `-include` line spelled out every object.** It worked. It was also
+  unpleasant to hand-edit, in a file whose header invites hand-editing.
+  There is an `OBJS` list now and the line reads `-include $(OBJS:.o=.d)`.
+- **`.SECONDARY` is absent and should say so.** beerssh worked out that none
+  is needed -- the output is flat, one explicit rule per object, so nothing
+  is an intermediate and the hazard has nowhere to live -- and observed that
+  somebody adding a bare `.SECONDARY:` later to be helpful would reintroduce
+  it. The header now says why there is none.
+- **Ejecting silently changes the flags.** netcfgd ejected over a Makefile
+  carrying `-std=c11 -Os` and nine warning flags its own comments called
+  *"not decoration: this code parses bytes from a socket into indices, and
+  every one of them has caught something in code shaped like this."* The
+  ejected `CFLAGS` was `-O2 -g -I.`. fmake cannot be blamed -- the Makefile
+  had been deleted before the run -- but the header can say it, and now
+  does: diff the flags first, a dropped `-W` set is silent and shows up as
+  behaviour.
+
+That last one is the same failure as §40 in a different place: a build that
+succeeds while doing less than it should, with nothing to notice.

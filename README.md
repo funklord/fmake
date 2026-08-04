@@ -305,7 +305,7 @@ fmake --clean            remove .fmake/
 | `-B` | ignore the cache and rebuild |
 | `--cflags 'FLAGS'` | replace the default `-O2 -g`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
-| `--eject [make\|ninja]` | write a standalone build file to stdout |
+| `--eject [make\|make-fragment\|ninja]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile |
 | `--force-link SRC` | link a file no symbol reaches |
 | `--widen-all` | compile the whole tree before deciding the link set |
 | `--no-libs` | resolve no libraries; pass every `-l` yourself |
@@ -327,6 +327,36 @@ builds a tree both ways and diffs the two symbol tables, and by hand on qView
 (2562 symbols, none differing).
 
 A tool this opinionated has to be leaveable.
+
+### Ejecting is also a way in
+
+Adoption does not have to be a switch. `--eject make-fragment` writes the
+same rules for an existing Makefile to `include`, so a project keeps whatever
+its own build does — patching a vendored submodule, cross-building for two
+Android ABIs, packaging — and stops maintaining object rules:
+
+```make
+.PHONY: all
+all: myapp package          # your default goal, kept
+
+include compile.mk          # fmake --eject make-fragment > compile.mk
+
+package: myapp
+        ...
+```
+
+The fragment sets no default goal, names its aggregate rules `fmake-all` and
+`fmake-clean`, and prefixes every variable it owns with `FM_` — so your
+`CFLAGS` cannot silently replace the flags fmake worked out. `CC`, `CXX` and
+`AR` are yours, set with `?=`.
+
+Committing the output is a real option in itself: your users then need no
+fmake at all, only `make`.
+
+**Diff the flags first.** Ejecting over an existing build system adopts
+fmake's defaults in place of whatever that one passed — a language standard,
+a warning set. Neither is an error, and neither shows up anywhere but the
+diff.
 
 ---
 

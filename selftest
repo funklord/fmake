@@ -1260,6 +1260,85 @@ outputs = ["gen/values.c"]
 
 
 @case
+def an_ejected_fragment_is_included_not_obeyed(t):
+	"""fuzzypickles named this as what would change their answer.
+
+	Their build's difficulty is mostly not compile-and-link: CPack, qmake,
+	androiddeployqt, five submodules, and a `make apk` sequencing all of it.
+	Adopting fmake wholesale means two build systems where there was one. A
+	fragment their Makefile includes for the compile rules is an incremental
+	path instead of a switch.
+
+	Two things have to hold, and the second is the one that would fail
+	silently. The parent keeps its own default goal and its own targets --
+	and the parent's CFLAGS, which is the most ordinary thing for a Makefile
+	to set, must not replace the flags fmake worked out."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("main.c", "#include <stdio.h>\nint util_twice(int);\n"
+	                  'int main(void){ printf("%d\\n", util_twice(21)); '
+	                  "return 0; }\n")
+	t.write("src/util.c", "int util_twice(int n){ return n * 2; }\n")
+
+	e = t.fmake("--eject", "make-fragment")
+	check(e.returncode == 0, f"eject failed: {e.stderr}")
+	t.write("compile.mk", e.stdout)
+	check("FM_CFLAGS" in e.stdout and "\nCFLAGS" not in e.stdout,
+	      "a fragment must not own CFLAGS")
+	check("\nall:" not in e.stdout,
+	      "a fragment must not define the parent's default goal")
+
+	prog = os.path.basename(t.dir)
+	t.write("Makefile",
+	        "CFLAGS = -this-would-break-everything\n\n"
+	        ".PHONY: all package\n"
+	        f"all: {prog} package\n\n"
+	        "include compile.mk\n\n"
+	        f"package: {prog}\n\t@echo packaged\n")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = subprocess.run(["make", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0,
+	      f"the including Makefile failed: {r.stdout}{r.stderr}")
+	check("packaged" in r.stdout,
+	      f"the parent's own target should still run: {r.stdout}")
+	check(t.run(prog).stdout == "42\n",
+	      "the fragment's rules did not produce a working program")
+
+
+@case
+def an_ejected_makefile_names_its_objects_once(t):
+	"""beerssh: the -include line spelled out every object.
+
+	It worked, and it was unpleasant to hand-edit in a file whose header
+	invites hand-editing."""
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+
+	out = t.fmake("--eject").stdout
+	check("-include $(OBJS:.o=.d)" in out,
+	      f"the depfiles should come from a named list: {out[-400:]}")
+
+
+@case
+def an_ejected_makefile_warns_off_the_two_helpful_edits(t):
+	"""Both are things a reader would reasonably do, and both are wrong.
+
+	Adding a bare `.SECONDARY:' to be helpful reintroduces a hazard the flat
+	output does not otherwise have -- beerssh worked out why none is needed
+	and said the reason belonged in the file. And netcfgd ejected over a
+	Makefile carrying nine warning flags its own comments called "not
+	decoration", which the ejected CFLAGS silently dropped: the diff is the
+	only place that fact exists."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	out = t.fmake("--eject").stdout
+	check(".SECONDARY" in out,
+	      f"the file should say why it has none: {out[:900]}")
+	check("diff the flags first" in out,
+	      f"the file should say the flags are fmake's, not yours: {out[:900]}")
+
+
+@case
 def generated_sources_survive_ejection(t):
 	"""The exit has to carry the generators, or it is not an exit."""
 	if not shutil.which("make"):
