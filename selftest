@@ -5031,6 +5031,71 @@ int main(void){ return util() - 1; }
 
 
 # ---------------------------------------------------------------------------
+# Packaging
+# ---------------------------------------------------------------------------
+
+REPO = os.path.dirname(os.path.abspath(FMAKE))
+
+
+@case
+def the_package_version_matches_the_program(t):
+    """debian/changelog and VERSION are the same number in two places.
+
+    Nothing enforces that, and the failure is quiet in the worst way: a
+    package that installs cleanly and reports a version it is not."""
+    changelog = os.path.join(REPO, "debian/changelog")
+    if not os.path.exists(changelog):
+        raise Skip("no debian/ in this tree")
+    with open(changelog) as fh:
+        first = fh.readline()
+    m = re.match(r"\S+ \(([^)]+)\)", first)
+    check(m, f"cannot read a version from {first!r}")
+    packaged = m.group(1).split("-")[0]
+
+    with open(FMAKE) as fh:
+        src = fh.read()
+    m = re.search(r'^VERSION\s*=\s*"([^"]+)"', src, re.M)
+    check(m, "no VERSION in fmake")
+    check(m.group(1) == packaged,
+          f"fmake says {m.group(1)}, debian/changelog says {packaged}")
+
+
+@case
+def the_manual_describes_every_option(t):
+    """--man is generated from the parser, and has to stay that way.
+
+    A manual page is the one piece of documentation nobody re-reads, so a
+    hand-kept copy of the option list is a copy that goes stale in a place
+    only a stranger will look. This checks the generated page against what
+    argparse actually accepts, which is the property that makes generating
+    it worth doing at all."""
+    page = subprocess.run([FMAKE, "--man"], capture_output=True, text=True)
+    check(page.returncode == 0, f"--man failed: {page.stderr}")
+    helped = subprocess.run([FMAKE, "--help"], capture_output=True, text=True)
+
+    opts = set(re.findall(r"(?<![\w-])(--[a-z][a-z-]+)", helped.stdout))
+    check(len(opts) > 10, f"suspiciously few options found: {opts}")
+    # roff escapes the hyphens, so compare against the escaped spelling.
+    missing = [o for o in sorted(opts)
+               if o.replace("-", "\\-") not in page.stdout]
+    check(not missing, f"the manual does not mention: {missing}")
+
+    check(".TH FMAKE 1" in page.stdout, "no roff header")
+    if shutil.which("man"):
+        with tempfile.NamedTemporaryFile("w", suffix=".1", delete=False) as fh:
+            fh.write(page.stdout)
+            path = fh.name
+        try:
+            r = subprocess.run(["man", "--warnings", "-l", path],
+                               capture_output=True, text=True,
+                               env=dict(os.environ, MANWIDTH="80"))
+            check(not r.stderr.strip(),
+                  f"roff warnings from the generated page: {r.stderr[:200]}")
+        finally:
+            os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
 
 def run_case(c):
     """Run one case in its own tree. Returns (status, detail)."""

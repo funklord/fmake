@@ -1,0 +1,32 @@
+Source: fmake
+Section: devel
+Priority: optional
+Maintainer: Nabeel Sowan <nabeel@vibes.se>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/funklord/fmake
+
+Package: fmake
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.11)
+Recommends: pkgconf | pkg-config, binutils
+Suggests: ninja-build, make
+Description: build tool for C and C++ that needs no build file
+ fmake works out what to build by reading the source. A translation unit
+ defining main() at file scope is a program; the link set is the transitive
+ closure over undefined symbols, taken from object symbol tables rather than
+ from the #include graph, so it is exact rather than heuristic. Libraries are
+ chosen the same way: an undefined SDL_Init proves SDL is called, where
+ including SDL.h only proves a declaration was wanted.
+ .
+ What cannot be inferred is written down next to the code it describes, in
+ Doxygen-format comments, so the same comment documents and builds. A small
+ Makefile-syntax file carries rules, and a TOML file the handful of facts that
+ belong to no single file.
+ .
+ Qt is handled without a build file: moc, uic and rcc are driven by Q_OBJECT,
+ by the ui_*.h a source includes, and by the resource paths it opens.
+ .
+ fmake --eject writes a standalone Makefile or build.ninja and gets out of the
+ way, producing binaries that match its own symbol for symbol.

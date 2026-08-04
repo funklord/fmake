@@ -1699,6 +1699,101 @@ DOXYGEN_ALIAS_TEXT = {
 }
 
 
+RE_ROFF_DASH = re.compile(r"(^|\s)-")
+
+
+def _roff(s):
+    """Escape text for roff.
+
+    Backslashes, a leading dot or quote -- which would start a macro -- and
+    the hyphens that begin an option, which roff would otherwise typeset as
+    a hyphenation point rather than the minus a reader is meant to type.
+    """
+    s = s.replace("\\", "\\e")
+    s = RE_ROFF_DASH.sub(lambda m: m.group(1) + "\\-", s)
+    return "\\&" + s if s.startswith((".", "'")) else s
+
+
+def man_page(parser):
+    """The manual page, built from the parser that defines the options.
+
+    Written here rather than kept as a file for the same reason
+    --doxygen-aliases exists: a second copy of the option list is a copy that
+    goes stale, and the packaging is exactly where nobody would notice. Every
+    flag below is the one argparse will accept, because it is the one
+    argparse was given.
+    """
+    out = [f'.TH FMAKE 1 "" "fmake {VERSION}" "User Commands"',
+           ".SH NAME", "fmake \\- build C and C++ programs with no build file",
+           ".SH SYNOPSIS", ".B fmake",
+           ".RI [ options ]",
+           ".RI [ targets ]",
+           ".SH DESCRIPTION",
+           _roff("fmake works out what to build by reading the source. "
+                 "A translation unit defining main() at file scope is a "
+                 "program, named after the file, or after its directory when "
+                 "the file is main.c."),
+           ".PP",
+           _roff("The link set is not guessed. Objects are compiled, their "
+                 "symbol tables read with nm, and the link set is the "
+                 "transitive closure from the root's object over undefined "
+                 "symbols -- the same computation the linker performs when "
+                 "deciding which members to pull out of an archive."),
+           ".PP",
+           _roff("Libraries are chosen the same way. An undefined SDL_Init "
+                 "proves SDL is called; including SDL.h only proves a "
+                 "declaration was wanted. Includes supply the -I flags, "
+                 "symbols decide the -l flags."),
+           ".PP",
+           _roff("Run fmake --explain to see every decision and the evidence "
+                 "for it, down to the command line."),
+           ".SH OPTIONS"]
+
+    for act in parser._actions:
+        if not act.option_strings:
+            continue
+        names = ", ".join("\\fB" + o.replace("-", "\\-") + "\\fR"
+                          for o in act.option_strings)
+        if act.metavar:
+            names += " \\fI" + _roff(str(act.metavar)) + "\\fR"
+        elif act.nargs != 0 and act.dest != "help":
+            names += " \\fI" + act.dest.upper() + "\\fR"
+        out.append(".TP")
+        out.append(names)
+        out.append(_roff(" ".join((act.help or "").split())))
+
+    out += [".SH FILES", ".TP", "\\fBfmake.mk\\fR",
+            _roff("Build rules in Makefile syntax, and flags for the whole "
+                  "project."),
+            ".TP", "\\fBfmake.toml\\fR",
+            _roff("The facts that belong to no single file: targets, "
+                  "profiles, install paths, toolchains."),
+            ".TP", "\\fB.fmake/\\fR",
+            _roff("Cache, objects and generated sources. Removed by "
+                  "--clean; safe to delete."),
+            ".SH EXAMPLES", ".TP", "\\fBfmake\\fR",
+            _roff("Build every program in this tree."),
+            ".TP", "\\fBfmake \\-\\-explain\\fR",
+            _roff("Print what it would do and why, and stop."),
+            ".TP", "\\fBfmake \\-\\-eject > Makefile\\fR",
+            _roff("Write a standalone build file and stop needing fmake."),
+            ".SH ENVIRONMENT",
+            _roff("CC, CXX, AR, NM, CFLAGS and LDFLAGS are honoured and take "
+                  "precedence over fmake.toml. MOC, UIC and RCC name Qt's "
+                  "tools when the ones pkg-config reports are not wanted."),
+            ".SH EXIT STATUS",
+            _roff("Zero when everything asked for was built. Non-zero when a "
+                  "file did not compile, a target did not link, or the tree "
+                  "could not be understood."),
+            ".SH AUTHOR", _roff(AUTHOR),
+            ".SH COPYRIGHT", _roff("Licensed under " + LICENCE + "."),
+            ".SH SEE ALSO",
+            ".BR make (1),",
+            ".BR ninja (1),",
+            ".BR pkg-config (1)"]
+    return "\n".join(out) + "\n"
+
+
 def doxygen_aliases():
     """An ALIASES block, so Doxygen renders the directives instead of
     warning about unknown commands."""
@@ -5401,6 +5496,8 @@ def parse_args(argv):
     p.add_argument("--doxygen-aliases", action="store_true",
                    help="print an ALIASES block for your Doxyfile, so Doxygen "
                         "renders the directives instead of warning about them")
+    p.add_argument("--man", action="store_true",
+                   help="print this manual as a roff page, for packaging")
     p.add_argument("--no-libs", action="store_true",
                    help="do not resolve external symbols to libraries; pass "
                         "every -l and -I yourself")
@@ -5424,6 +5521,9 @@ def parse_args(argv):
         i += 1
 
     args = p.parse_args(joined)
+    # Kept so --man can describe the options from the parser that defines
+    # them, rather than from a second list that would go stale.
+    parse_args.parser = p
 
     def flags(given, env):
         out = []
@@ -5466,6 +5566,9 @@ def main(argv):
         PROGRESS = sys.stderr
     if args.doxygen_aliases:
         sys.stdout.write(doxygen_aliases())
+        return 0
+    if args.man:
+        sys.stdout.write(man_page(parse_args.parser))
         return 0
     root = os.path.abspath(args.directory)
     if args.clean:

@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+# Nothing to build: fmake is a script. dh_auto_test would run the suite,
+# which needs a compiler, a linker and several optional libraries -- fine on
+# a developer's machine and not something a package build should depend on.
+override_dh_auto_build:
+override_dh_auto_test:
+
+# The Makefile defaults to /usr/local, which is right for `make install` by
+# hand and forbidden in a package.
+override_dh_auto_install:
+	dh_auto_install -- PREFIX=/usr
