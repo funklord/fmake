@@ -1855,6 +1855,60 @@ def walk_tree(root):
 	return sorted(srcs), sorted(hdrs)
 
 
+def vendored_dirs(root, srcs):
+	"""Subtrees that are a checkout of some other project.
+
+    Two signals, and neither is a guess: `.gitmodules` is this repository
+    stating that a path belongs to someone else, and a `.git` inside a
+    subdirectory is git having put a checkout there. A tree merely copied in
+    carries neither and is indistinguishable from the project's own code,
+    which is the right answer -- nobody tracked it separately, so nothing
+    says it is separate.
+
+    Only directories that lead to a source are examined, so this costs a
+    handful of stat calls rather than a second walk, and a vendored tree
+    with nothing to compile in it does not need naming.
+    """
+	out, seen = set(), set()
+	gm = os.path.join(root, ".gitmodules")
+	if os.path.isfile(gm):
+		try:
+			with open(gm, encoding="utf-8", errors="replace") as f:
+				text = f.read()
+		except OSError:
+			text = ""
+		for m in re.finditer(r"(?m)^[ \t]*path[ \t]*=[ \t]*(.+?)[ \t]*$", text):
+			p = m.group(1).strip().strip('"').strip("/")
+			# A path out of the tree is not ours to reason about, and an
+			# absolute one is not a subtree at all.
+			if p and not p.startswith("/") and ".." not in p.split("/"):
+				out.add(os.path.normpath(p))
+	for rel in srcs:
+		d = os.path.dirname(rel)
+		while d and d not in seen:
+			seen.add(d)
+			if os.path.exists(os.path.join(root, d, ".git")):
+				out.add(d)
+			d = os.path.dirname(d)
+	return out
+
+
+def vendor_of(rel, dirs):
+	"""The vendored subtree this file is in, or None.
+
+    Nearest first, so a submodule inside a submodule is attributed to the
+    one that actually contains the file.
+    """
+	if not dirs:
+		return None
+	d = os.path.dirname(rel)
+	while d:
+		if d in dirs:
+			return d
+		d = os.path.dirname(d)
+	return None
+
+
 def is_cxx(rel):
 	return os.path.splitext(rel)[1] in CXX_EXTS
 
@@ -4203,12 +4257,29 @@ def build(args, _bootstrapping=False):
 	def main_is_a_mirage(rel):
 		return nomain.get(rel) == main_stamp(rel)
 
+	# A main() in a vendored subtree is that project's own program -- its
+	# test runner, its fuzzers, its example tools -- and not something this
+	# tree asked for. The sources around it usually are: both projects that
+	# reported this build a library out of the submodule and want nothing
+	# else from it. So the file stops rooting a target and stays in the pool
+	# like any other source; `[target.x] root = ...` still builds it for
+	# anyone who does want it, which is the only way to ask, and vendored
+	# code cannot be annotated by a project that treats it as read-only.
+	vendored = vendored_dirs(root, srcs)
+	passed_over = []
+
 	targets, claimed = [], set()
 	for rel in srcs:
 		ann = Ann(scans[rel].get("dirs"))
 		if ann.scalar("kind") is None and scans[rel]["has_main"] \
 		        and main_is_a_mirage(rel):
 			continue
+		if scans[rel]["has_main"] and not ann.scalar("kind") \
+		        and not ann.scalar("target"):
+			owner = vendor_of(rel, vendored)
+			if owner:
+				passed_over.append((owner, rel))
+				continue
 		if scans[rel]["has_main"] or ann.scalar("kind"):
 			name = ann.scalar("target") or default_name(rel, root)
 			t = Target(rel, root, ann, conf.target(name))
@@ -4253,6 +4324,24 @@ def build(args, _bootstrapping=False):
 			die(f"{CONF_FILE}: [target.{name}] kind = {t.kind!r} is not one "
 			    f"of {', '.join(KINDS)}")
 		targets.append(t)
+
+	# Said once per subtree rather than once per file: libvterm contributes
+	# four and miniz ten, and a list of ten is noise where the directory is
+	# the whole finding. Visible without --verbose, because a program that
+	# was not built is worth a line even when not building it is right.
+	rooted = {t.rel for t in targets}
+	skipped = {}
+	for owner, rel in passed_over:
+		if rel not in rooted:
+			skipped.setdefault(owner, []).append(rel)
+	for owner in sorted(skipped):
+		names = sorted(skipped[owner])
+		shown = ", ".join(os.path.basename(n) for n in names[:3])
+		if len(names) > 3:
+			shown += f", and {len(names) - 3} more"
+		n = len(names)
+		info(f"{owner} is a separate checkout; leaving its own "
+		     f"{n} program{'' if n == 1 else 's'} to it ({shown})")
 
 	# Explicit membership is resolved once, here, so a bad glob is reported
 	# before anything is compiled.
@@ -4561,7 +4650,12 @@ def build(args, _bootstrapping=False):
 				die("no target could be built")
 
 		forced = [units[f] for f in forced_rels if f in units]
+		# The vendored main()s too. They stopped rooting a target, which is
+		# the point, but the reason a library must not contain them did not
+		# change with it -- an archive carrying a second entry point is §28,
+		# and it would now arrive by the one path that no longer names it.
 		other_roots = {t.rel for t in targets if t.kind == "exe"}
+		other_roots |= {rel for _, rel in passed_over} - {t.rel for t in targets}
 		closures = {}
 		for t in wanted:
 			if t.members is not None:

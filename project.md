@@ -3437,3 +3437,59 @@ check is not evidence until you know it checked something -- and this is what
 it looks like from the inside: not a gate that inspected an empty file list,
 but an assertion whose substring appeared, for the first time, in the
 diagnostic of the bug.
+
+## 39. Whose program is it
+
+Two of the five evaluations reported the same thing from opposite ends of a
+tree. beerssh: *"The vendored submodule's own programs get built. `unterm`,
+`vterm-ctrl`, `vterm-dump` and `harness` all linked successfully -- they are
+libvterm's upstream tools. This project treats vendored code as exempt and
+builds only the library from it. They were the only four things that did
+link."* fuzzypickles: two submodules each producing a program called `test`,
+and ten vendored fuzzers all defining `LLVMFuzzerTestOneInput`.
+
+fuzzypickles proposed the obvious fix -- *"ignoring vendored subtrees by
+default"* -- and it is wrong, which beerssh's report shows in the same
+paragraph as the complaint. Both projects **build a library out of the
+subtree**: libvterm is a static archive in one, `flog` is one of four
+archives in the other. Skipping the directory would break both as surely as
+building all of it does.
+
+The two reports agree on something narrower than either states. What is
+unwanted is not the vendored *code* but the vendored *decisions*: upstream
+decided that `t/harness.c` is a program, and that decision was about
+upstream's build, not this one. So the rule touches exactly one thing -- a
+`main()` in a vendored subtree does not root a target. The file stays in the
+pool, the library sources beside it link as before, and `[target.x] root =`
+still builds it for anyone who wants it. That last part is not a courtesy:
+`@target` in the source is the usual way to settle what a file is, and it is
+unavailable here for precisely the reason the feature exists.
+
+The signal is `.gitmodules`, or a `.git` that git put inside a subdirectory.
+Neither is a heuristic -- one is this repository stating that a path belongs
+to someone else, the other is git having placed a checkout there. Both are
+needed and the cases prove it: a fresh clone before `git submodule init` has
+the entry and no `.git`, which is the state about half of CI is in.
+
+A subtree merely copied in carries neither, and is then indistinguishable
+from the project's own code. That is the right answer rather than a gap:
+nobody recorded it as separate, so nothing says it is.
+
+### The half of the change that is not the feature
+
+Removing a file from the roots removes it from `other_roots`, and
+`other_roots` is what keeps an entry point out of an archive. So the fix
+walked §28 back in through the door it had just opened -- a tree whose only
+`main()`s are vendored builds as one library, and that library would carry
+one of them, surfacing much later as a duplicate symbol in whatever links it.
+
+The guard is one line and the case for it fails without it. Worth recording
+because the shape recurs: a change that narrows what a thing *means* has to
+be checked against everything that was keyed on the old meaning, and here the
+two were four hundred lines apart with nothing naming the connection.
+
+Mutation testing found it, but only because the alternative design was
+mutated too. Four cases, four mutations, each caught by a different one --
+and the fifth mutation, the wholesale-ignore design fuzzypickles asked for,
+is what proves the escape-hatch case is testing anything at all. A case that
+no mutation fails is not a case yet.

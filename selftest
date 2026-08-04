@@ -5400,6 +5400,113 @@ def a_subdirectory_qualified_include_resolves(t):
 	      f"the source root should be on the include path: {flags[:300]}")
 
 
+def _vendored_tree(t, marker):
+	"""Our program, a vendored library we use, and that library's own test."""
+	t.write("src/main.c",
+	        '#include "../flog/flog.h"\n'
+	        "int main(void){ flog_say(); return 0; }\n")
+	t.write("flog/flog.h", "void flog_say(void);\n")
+	t.write("flog/flog.c",
+	        '#include <stdio.h>\n#include "flog.h"\n'
+	        'void flog_say(void){ puts("hi"); }\n')
+	t.write("flog/tests/test.c",
+	        '#include "../flog.h"\nint main(void){ flog_say(); return 0; }\n')
+	marker(t)
+
+
+def _as_submodule_file(t):
+	t.write("flog/.git", "gitdir: ../.git/modules/flog\n")
+
+
+def _as_gitmodules_entry(t):
+	t.write(".gitmodules", '[submodule "flog"]\n\tpath = flog\n'
+	                       "\turl = https://example.invalid/flog\n")
+
+
+@case
+def a_submodules_own_programs_are_left_to_it(t):
+	"""A main() in a vendored checkout is that project's program, not ours.
+
+	Two evaluations reported this from opposite ends of the same tree: one
+	found its submodule's four upstream tools built, the other ten vendored
+	fuzzers and two programs both called `test`. Neither wanted them, and
+	both wanted the *library* out of the same directory -- so ignoring the
+	subtree wholesale would have been just as wrong as building it.
+
+	The signal is a `.git` git put there. What it changes is only whether a
+	file roots a target; the file stays in the pool, and the library sources
+	beside it link exactly as before."""
+	_vendored_tree(t, _as_submodule_file)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	check(not os.path.exists(os.path.join(t.dir, "test")),
+	      f"built the submodule's own program: {out}")
+	check(os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
+	      f"did not build our program: {out}")
+	check("separate checkout" in out,
+	      f"passing over the program should be said out loud: {out}")
+	# The point of not ignoring the subtree: its library is still ours.
+	check(t.run(os.path.basename(t.dir)).stdout == "hi\n",
+	      "the vendored library did not get linked in")
+
+
+@case
+def gitmodules_marks_a_subtree_as_vendored_too(t):
+	"""The other signal, and the only one a fresh clone has.
+
+	`git submodule init` has not run, so the directory holds sources and no
+	`.git` at all -- which is the state a CI checkout is in about half the
+	time. The path is in `.gitmodules` either way."""
+	_vendored_tree(t, _as_gitmodules_entry)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(not os.path.exists(os.path.join(t.dir, "test")),
+	      f"built the submodule's own program: {r.stdout}{r.stderr}")
+
+
+@case
+def a_vendored_program_can_be_asked_for(t):
+	"""Passed over is not refused.
+
+	`@target` in the source is the usual way to settle what a file is, and
+	it is unavailable here for the same reason the feature exists: a project
+	that vendors code by reference does not edit it. So the escape has to be
+	in fmake.toml, where naming the root builds it."""
+	_vendored_tree(t, _as_submodule_file)
+	t.write("fmake.toml", '[target.flogtest]\nroot = "flog/tests/test.c"\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run("flogtest").returncode == 0,
+	      f"asked-for vendored program did not build: {r.stdout}{r.stderr}")
+
+
+@case
+def a_vendored_main_stays_out_of_a_library(t):
+	"""It stopped rooting a target; it did not stop being an entry point.
+
+	With no main() of our own the tree is one archive, and the rule that
+	keeps a program's root out of it is keyed on the roots -- which this
+	file no longer is. An archive carrying a second `main` links into the
+	next program that uses it and reports a duplicate symbol under a path in
+	.fmake, which is §28 arriving by a door the fix opened."""
+	_vendored_tree(t, _as_submodule_file)
+	os.unlink(os.path.join(t.dir, "src/main.c"))
+	t.write("src/lib.c", "int ours(void){ return 7; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	lib = os.path.join(t.dir, f"lib{os.path.basename(t.dir)}.a")
+	check(os.path.exists(lib), f"no archive built: {r.stdout}{r.stderr}")
+	syms = subprocess.run(["nm", "--format=posix", lib],
+	                      capture_output=True, text=True).stdout
+	check(not re.search(r"^main [TT]", syms, re.M),
+	      f"the archive carries the vendored main(): {syms}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):
