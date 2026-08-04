@@ -64,7 +64,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [26. An optimisation that was not](#26-an-optimisation-that-was-not-one) ·
 [27. Symlinks](#27-symlinks-and-a-count-that-named-the-wrong-reason) ·
 [28. The main that was not there](#28-the-main-that-was-not-there) ·
-[29. A test that only tests sometimes](#29-a-test-that-only-tests-when-it-feels-like-it)
+[29. A test that only tests sometimes](#29-a-test-that-only-tests-when-it-feels-like-it) ·
+[30. The library in an unusual place](#30-the-library-in-an-unusual-place)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1648,9 +1649,11 @@ rather than code, and one lesson about testing.
   grouped — see §18.
 - **`-L` is emitted from where the library was found**, compared against
   `cc -print-search-dirs`, rather than from pkg-config's `-L`. That covers
-  libraries found by symbol alone as well as by package, but it is only as
-  good as the directory list fmake scans — a prefix it never looks in cannot
-  be resolved at all, and still needs `--ldflags`.
+  libraries found by symbol alone as well as by package, and it is only as
+  good as the directory list fmake scans — but that list now includes the
+  directories resolved packages name, so a prefix pkg-config knows about is
+  no longer invisible. See §30. A library in a directory *nothing* names
+  still needs `--ldflags`.
 - **Linker scripts are parsed, not executed.** `INPUT`, `GROUP` and
   `AS_NEEDED` are read for filenames and `-l` flags; anything else in the ld
   script language is ignored. That covers glibc and ncurses, which is what
@@ -1805,7 +1808,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 157, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 158, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2936,3 +2939,44 @@ which is the promise; the other checks that they are serialised, which is how.
 Measured beforehand rather than assumed: four fmakes launched at once on a
 cold 31-file tree all exited 0, three of them reported waiting, the binary was
 correct and the cache was still valid JSON.
+
+---
+
+## 30. The library in an unusual place
+
+A library built and installed into `/opt`, `~/.local`, or any hand-made
+prefix, with a perfectly good `.pc` file, could not be used at all. Three
+separate faults, each hiding the next.
+
+**The `.pc` file was invisible.** `PkgConfig._search_path` asked
+`pkg-config --variable=pc_path`, which reports the **built-in** search path
+and deliberately excludes `$PKG_CONFIG_PATH`. So the header-to-package map
+never saw the package. The symptom was not a missing library but a missing
+*include*: `mylib.h: No such file or directory` for a library that is plainly
+installed and that `pkg-config --cflags mylib` answers correctly — because
+that call inherits the environment, while the directory scan does not.
+`$PKG_CONFIG_PATH` is now searched first and `$PKG_CONFIG_LIBDIR` replaces
+the default, which is what the two variables mean.
+
+**The `-L` was parsed and thrown away.** §5 recovers library paths from where
+a library was actually found rather than from pkg-config, which is what makes
+libraries found by symbol alone work at all. But it can only find one in a
+directory it looks in, and a hand-made prefix is in none of them. The
+directories a resolved package names are now added to the scan set — which is
+pkg-config *proposing*, exactly as it proposes the `-I`, with the symbols
+still deciding.
+
+**And then it worked once.** Collecting those directories as a side effect of
+running pkg-config meant collecting them on the first build and never again:
+the package answer is cached across builds, so the second build resolved the
+header from the cache without ever calling `pkg-config`, and lost the
+directory. `--explain` on a warm tree said `no symbol needs it` and
+`(unresolved) mylib_answer` about a program that had just linked — two runs
+of the same tool disagreeing, which is worse than either answer alone. The
+directories are part of the cached entry now.
+
+That third fault is the one worth remembering. The first two were found by
+trying the feature; the third only appeared on the *second* build, and would
+have looked like an unrelated intermittent failure to anyone who met it
+later. A cache turns "computed as a side effect" into "computed once, then
+wrong" — and the fix is to make the side effect part of what is stored.

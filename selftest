@@ -4827,6 +4827,66 @@ def a_build_waits_for_a_lock_it_cannot_take(t):
           f"it should say why it paused: {out}")
 
 
+@case
+def a_package_in_an_unusual_prefix_is_found(t):
+    """A library under /opt, ~/.local or any hand-built prefix.
+
+    Three separate things have to work and none of them did. The .pc file is
+    only reachable through $PKG_CONFIG_PATH, which `pkg-config
+    --variable=pc_path` does not report -- so the header-to-package map never
+    saw it and the include did not resolve, for a library that is plainly
+    installed. Then the -L was parsed and discarded, because §5 recovers
+    library paths from where a library was found rather than from
+    pkg-config; that works only for directories fmake already looks in, and
+    this is not one. And finally the answer is cached across builds, so
+    collecting the directory as a side effect of running pkg-config
+    collected it on the first build and never again."""
+    if not shutil.which("pkg-config"):
+        raise Skip("pkg-config not installed")
+
+    prefix = tempfile.mkdtemp(prefix="fmake-prefix-")
+    try:
+        for sub in ("lib/pkgconfig", "include"):
+            os.makedirs(os.path.join(prefix, sub), exist_ok=True)
+        with open(os.path.join(prefix, "include/mylib.h"), "w") as fh:
+            fh.write("#pragma once\nint mylib_answer(void);\n")
+        src = os.path.join(prefix, "mylib.c")
+        with open(src, "w") as fh:
+            fh.write("int mylib_answer(void){ return 42; }\n")
+        lib = os.path.join(prefix, "lib/libmylib.so")
+        r = subprocess.run(["cc", "-fPIC", "-shared", "-Wl,-soname,libmylib.so",
+                            src, "-o", lib], capture_output=True, text=True)
+        check(r.returncode == 0, f"could not build the library: {r.stderr}")
+        with open(os.path.join(prefix, "lib/pkgconfig/mylib.pc"), "w") as fh:
+            fh.write(f"prefix={prefix}\nlibdir=${{prefix}}/lib\n"
+                     f"includedir=${{prefix}}/include\n\n"
+                     "Name: mylib\nDescription: elsewhere\nVersion: 1.0\n"
+                     "Libs: -L${libdir} -lmylib\nCflags: -I${includedir}\n")
+
+        t.write("main.c", """
+#include <mylib.h>
+int main(void){ return mylib_answer() == 42 ? 0 : 1; }
+""")
+        env = {"PKG_CONFIG_PATH": os.path.join(prefix, "lib/pkgconfig")}
+        run_env = dict(env, LD_LIBRARY_PATH=os.path.join(prefix, "lib"))
+
+        first = t.fmake(env=env)
+        check(first.returncode == 0,
+              f"build failed: {first.stdout}{first.stderr}")
+        check(t.run(os.path.basename(t.dir), run_env).returncode == 0,
+              "the program did not run")
+
+        # Again, with the package answer now coming from the cache. This is
+        # where collecting the directory as a side effect stopped working.
+        again = t.fmake("-B", env=env)
+        check(again.returncode == 0,
+              f"the second build lost the library: {again.stdout}{again.stderr}")
+        check(t.run(os.path.basename(t.dir), run_env).returncode == 0,
+              "the program from the second build did not run")
+    finally:
+        shutil.rmtree(prefix, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

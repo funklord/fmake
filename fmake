@@ -129,7 +129,7 @@ LICENCE     = "GPL-2.0-or-later"
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
-CACHE_VER   = 4   # scan records now carry Qt resource references
+CACHE_VER   = 5   # package entries now carry their -L directories
 
 C_EXTS      = {".c"}
 CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
@@ -2964,6 +2964,17 @@ class PkgConfig:
                    or shutil.which("pkg-config") or shutil.which("pkgconf")
         self._flags = {}
         self._vars = {}
+        # Every -L a resolved package named. A library under /opt or a home
+        # prefix is not in any directory the linker searches by default, so
+        # without these it is invisible: the header resolves, the -l is
+        # chosen, and nothing can find the file.
+        #
+        # Kept per module as well as in one list, because the answer is
+        # cached across builds: collecting it only as a side effect of
+        # running pkg-config means it is collected on the first build and
+        # never again, and the second build silently loses the directory.
+        self.libdirs = []
+        self._dirs = {}
         self._by_incdir = None
         self.sysroot = sysroot
 
@@ -3005,8 +3016,17 @@ class PkgConfig:
                 res = ([a for a in args
                         if not a.startswith(("-l", "-L"))],
                        [a for a in args if a.startswith("-l")])
+                self._dirs[module] = [a[2:] for a in args
+                                      if a.startswith("-L") and a[2:]
+                                      and os.path.isdir(a[2:])]
+                self._note_dirs(self._dirs[module])
         self._flags[module] = res
         return res
+
+    def _note_dirs(self, dirs):
+        for d in dirs or ():
+            if d not in self.libdirs:
+                self.libdirs.append(d)
 
     def variable(self, module, name):
         """A .pc file's own variable, for the directories Qt records in its.
@@ -3025,11 +3045,27 @@ class PkgConfig:
         return self._vars[key]
 
     def _search_path(self):
+        """Where .pc files live, in pkg-config's own order.
+
+        $PKG_CONFIG_PATH first, then either $PKG_CONFIG_LIBDIR or the
+        built-in path -- which is what pkg-config does, and what the two
+        variables mean: one adds, the other replaces.
+
+        Asking `--variable=pc_path` gives only the built-in list; it does not
+        include $PKG_CONFIG_PATH, and that omission is invisible until it
+        matters. A package installed under /opt or a home prefix answers
+        `pkg-config --cflags` perfectly well, because the subprocess inherits
+        the environment, while being absent from the header-to-package map
+        that decides anything is ever asked about it. The symptom is a
+        missing include for a library that is plainly installed.
+        """
+        extra = [d for d in self.env.get("PKG_CONFIG_PATH", "").split(":") if d]
         if "PKG_CONFIG_LIBDIR" in self.env:
-            return [d for d in self.env["PKG_CONFIG_LIBDIR"].split(":") if d]
+            return extra + [d for d in self.env["PKG_CONFIG_LIBDIR"].split(":")
+                            if d]
         p = self._run(["--variable", "pc_path", "pkg-config"]).stdout.strip()
         dirs = [d for d in p.split(":") if d] if p else []
-        return dirs or ["/usr/lib/pkgconfig", "/usr/share/pkgconfig"]
+        return extra + (dirs or ["/usr/lib/pkgconfig", "/usr/share/pkgconfig"])
 
     def signature(self):
         """Stamp that changes when a package is installed or removed."""
@@ -3045,9 +3081,11 @@ class PkgConfig:
         """(module, cflags, libs) for a module named outright by @pkg."""
         key = sig + "|pkg|" + module
         if key in store:
+            self._note_dirs((store[key] or [None, None, None, []])[3])
             return store[key]
         got = self.flags(module)
-        store[key] = None if got is None else [module, got[0], got[1]]
+        store[key] = (None if got is None else
+                      [module, got[0], got[1], self._dirs.get(module, [])])
         return store[key]
 
     def satisfies(self, spec):
@@ -3068,6 +3106,7 @@ class PkgConfig:
         """
         key = sig + "|" + name
         if key in store:
+            self._note_dirs((store[key] or [None, None, None, []])[3])
             return store[key]
         module = HEADER_PKG.get(name)
         if module is None:
@@ -3088,7 +3127,8 @@ class PkgConfig:
                     module = mod
                     break
         got = self.flags(module) if module else None
-        store[key] = None if got is None else [module, got[0], got[1]]
+        store[key] = (None if got is None else
+                      [module, got[0], got[1], self._dirs.get(module, [])])
         return store[key]
 
     def by_includedir(self):
@@ -3165,7 +3205,7 @@ def propose_from_headers(units, pkg, store, proj=None):
             got = pkg.for_header(name, store, sig)
             if got is None:
                 continue
-            module, mod_cflags, mod_libs = got
+            module, mod_cflags, mod_libs = got[0], got[1], got[2]
             for f in mod_cflags:
                 if f not in cflags:
                     cflags.append(f)
@@ -4315,6 +4355,17 @@ def build(args, _bootstrapping=False):
         pkg_cflags, _ = propose_from_headers(every_unit, pkg, hdr_store, proj)
         incflags = base_incflags + [f for f in pkg_cflags
                                     if f not in base_incflags]
+
+    # Wherever the packages resolved so far said their libraries live. §5
+    # recovers -L from where a library was actually found rather than from
+    # pkg-config, which is what makes libraries found by symbol alone work
+    # -- but it can only find one in a directory it looks in, and a package
+    # under /opt or a home prefix is in none of them. This is pkg-config
+    # proposing, exactly as it proposes the -I; the symbols still decide.
+    if pkg.libdirs:
+        cfg.extra_libdirs += [d for d in pkg.libdirs
+                              if d not in cfg.extra_libdirs]
+        cfg._libdirs = None         # recomputed with the new directories
 
     while True:
         pool = [units[r] for r in sorted(units)]
