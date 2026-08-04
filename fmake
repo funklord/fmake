@@ -4729,6 +4729,19 @@ def build(args, _bootstrapping=False):
                 note(f"no {describe_identity(res.get('ident') if res else None)}"
                      f" library exports: {', '.join(missing[:6])}"
                      + (" ..." if len(missing) > 6 else ""))
+            # A file fmake was told to leave out is the commonest reason a
+            # symbol in this tree has nowhere to come from, and the exclusion
+            # is invisible here: @os with a typo removes a file on every
+            # platform, and a stray [project] exclude pattern removes
+            # whatever it happens to match. --explain has always said so;
+            # the failure never did, and the failure is what people read.
+            toks = set()
+            for s in missing:
+                toks |= symbol_tokens(s)
+            for rel, why in sorted(excluded.items()):
+                if toks.intersection(scans.get(rel, {}).get("defs") or []):
+                    note(f"{rel} is excluded ({why}) and appears to define "
+                         f"one of them")
         note("name the missing libraries with --ldflags, or build only the "
              "targets you want")
         return 1

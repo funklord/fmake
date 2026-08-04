@@ -4984,6 +4984,52 @@ def a_tree_it_cannot_write_to_says_so(t):
         os.chmod(sub, 0o755)
 
 
+@case
+def an_excluded_file_is_named_when_its_symbol_goes_missing(t):
+    """`@os windwos` removes a file on every platform, silently.
+
+    A typo in @os or @arch does not make the directive inert the way an
+    unknown directive is -- it deletes the file from the build, and the only
+    sign is an undefined symbol much later. --explain has always shown the
+    exclusion and its reason; the failure never did, and the failure is what
+    people read."""
+    t.write("util.c", """
+/*! @os windwos */
+int util(void){ return 1; }
+""")
+    t.write("main.c", """
+int util(void);
+int main(void){ return util() - 1; }
+""")
+    r = t.fmake()
+    out = r.stdout + r.stderr
+    check(r.returncode != 0, "it cannot link without util()")
+    check("util.c is excluded" in out,
+          f"the excluded file should be named: {out}")
+    check("windwos" in out,
+          f"and the reason it was excluded: {out}")
+
+
+@case
+def an_exclude_pattern_that_took_too_much_is_named(t):
+    """The same for a [project] exclude that matched more than intended.
+
+    Reached by the same route -- a file fmake was told to leave out is the
+    commonest reason a symbol in this tree has nowhere to come from -- so it
+    costs nothing to cover both and would be strange to cover one."""
+    t.write("fmake.toml", '[project]\nexclude = ["util*.c"]\n')
+    t.write("util.c", "int util(void){ return 1; }\n")
+    t.write("main.c", """
+int util(void);
+int main(void){ return util() - 1; }
+""")
+    r = t.fmake()
+    out = r.stdout + r.stderr
+    check(r.returncode != 0, "it cannot link without util()")
+    check("util.c is excluded" in out and "util*.c" in out,
+          f"the file and the pattern that removed it should be named: {out}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

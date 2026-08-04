@@ -67,7 +67,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [29. A test that only tests sometimes](#29-a-test-that-only-tests-when-it-feels-like-it) ·
 [30. The library in an unusual place](#30-the-library-in-an-unusual-place) ·
 [31. Advice that pointed the wrong way](#31-advice-that-pointed-the-wrong-way) ·
-[32. Two tracebacks from the command line](#32-two-tracebacks-reachable-from-the-command-line)
+[32. Two tracebacks from the command line](#32-two-tracebacks-reachable-from-the-command-line) ·
+[33. The file that was told to leave](#33-the-file-that-was-told-to-leave)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1811,7 +1812,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 161, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 163, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -3061,3 +3062,48 @@ all been tried on purpose rather than met by accident.
 
 Both fixes have a case, and the read-only one skips under `root`, who can
 write anywhere and would see the test quietly pass while testing nothing.
+
+---
+
+## 33. The file that was told to leave
+
+A sweep of the directives, in the same spirit as §32's sweep of the error
+paths: every one given a bad value on purpose, to see what it says.
+
+Most were already right. `@kind shard` names the three valid values.
+`@std zzz9` reaches the compiler, which rejects it by name. `@pkg
+totally-not-installed` is refused up front with the file and line. `@target`
+on a file that roots nothing says so and carries on.
+
+**`@os` is the exception, and it is a different kind of wrong.** §4 accepts
+that an unknown *directive* is silently inert — the cost of sharing comments
+with Doxygen — and that is fine, because inert is harmless. A typo in the
+*value* of a known directive is not inert: `@os windwos` matches no platform,
+so the file is excluded everywhere, on every machine, permanently. The only
+sign is an undefined symbol at the link, and nothing on that path mentions
+exclusion at all.
+
+`--explain` has always had it right:
+
+```
+  excluded here
+    util.c                          @os windwos (building for linux)
+```
+
+but a person whose build just failed is reading the failure, not asking for
+an explanation of a build that did not happen. So the failure now says it,
+cross-referencing the missing symbols against what the excluded files appear
+to define:
+
+```
+* os did not link
+  no x86_64/64le library exports: util
+  util.c is excluded (@os windwos (building for linux)) and appears to define one of them
+```
+
+The same route covers a `[project] exclude` pattern that matched more than it
+meant to, which is the commoner mistake of the two and reads identically. It
+needs no list of valid platform names — which §15 would have counted against
+it — because it does not check the value at all. It notices that something
+this tree defines has nowhere to come from, and that a file which appears to
+define it was told to leave.
