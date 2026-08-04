@@ -160,7 +160,8 @@ LD  app
 * built app
 ```
 
-moc runs on whatever declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE`, and
+moc runs on whatever declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE`, uic on
+whatever a source includes a `ui_*.h` for, and
 **the symbols decide what happens next** — the generated object joins the link
 because something needs `Counter::staticMetaObject`, not because it is called
 `moc_*`. A class no program constructs is moc'd, compiled, and then left out;
@@ -171,31 +172,45 @@ A class declared inside a `.cpp` works too, on Qt's own terms: the output is
 `foo.moc` and that file must `#include` it. If it doesn't, fmake says so rather
 than letting it fail later on an undefined symbol.
 
-moc is found through pkg-config, so it matches the Qt being linked rather than
-whatever `moc` happens to be on `$PATH` — on Debian there is none. Override it
-with `[toolchain] moc` or `$MOC`.
+Both tools are found through pkg-config, so they match the Qt being linked
+rather than whatever happens to be on `$PATH` — on Debian neither is. Override
+with `[toolchain] moc` / `uic`, or `$MOC` / `$UIC`.
 
-**`uic` and `rcc` are not run for you**, and most Qt Widgets projects need
-them. They are two pattern rules in `fmake.mk`:
+**`uic` runs on the same principle.** `#include "ui_thing.h"` naming a header
+that exists nowhere, with a `thing.ui` that would produce it, is the source
+asking for it.
+
+```sh
+$ ls
+main.cpp  thing.ui
+$ fmake
+UIC thing.ui
+[1/1] CXX main.cpp
+LD  app
+* built app
+```
+
+So a `.ui` nobody includes is not built, and a `ui_thing.h` you committed
+yourself is left alone rather than overwritten. Two `thing.ui` in one tree are
+refused by name: an unqualified include cannot say which you meant.
+
+**`rcc` is the exception**, and has to be a rule:
 
 ```make
-src/ui_%.h: src/%.ui
-	/usr/lib/qt6/libexec/uic $< -o $@
-
 resources/qrc_resources.cpp: resources/resources.qrc
 	/usr/lib/qt6/libexec/rcc --name resources $< -o $@
 ```
 
-A `.qrc` also needs `--force-link` on its generated source, because a Qt
-resource registers itself from a static constructor and so no symbol refers to
-it. QML type registration is not handled at all.
+with `--force-link` on the generated source. Nothing in the source says which
+program a `.qrc` belongs to, and a resource registers itself from a static
+constructor, so neither signal exists. QML type registration is not handled.
 
 Tried on qView (33 TUs, 15 `Q_OBJECT` classes, 7 `.ui` files): it builds and
-runs on the two rules above plus three `-D`s and two excludes — about eight
-lines, none of them about moc. fmake found the same 15 classes as CMake's
-AUTOMOC and produced a binary with identical Qt dependencies. It is slower on
-a clean build (34s against 27s) because CMake concatenates all moc output into
-one translation unit where fmake compiles one per class.
+runs on the rule above, three `-D`s and two excludes. fmake generated the same
+15 moc files as CMake's AUTOMOC and the same 7 ui headers, and produced a
+binary with identical Qt dependencies. It is slower on a clean build (34s
+against 27s) because CMake concatenates all moc output into one translation
+unit where fmake compiles one per class.
 
 The case this is best at is a tree of many small programs over one shared body
 of Qt code — each TU compiled once, each program linked to its own closure.
@@ -252,8 +267,8 @@ A tool this opinionated has to be leaveable.
 - **No `fmake.py`.** There is deliberately nowhere to put logic. If something
   genuinely needs code, a rule can call a script.
 - **C and C++ only.** C++20 modules are not handled.
-- **Qt means moc**, not the rest of Qt's tooling — see above. Exercised
-  against Qt 6 on Debian; Qt 5 is coded for and untested.
+- **Qt means moc and uic**, not `rcc` or QML — see above. Exercised against
+  Qt 6 on Debian; Qt 5 is coded for and untested.
 - **Static archive link order** is not solved; a cycle between two archives
   needs the flags by hand.
 - **Cross-compiling** works, and library resolution answers for the target

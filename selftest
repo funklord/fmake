@@ -83,9 +83,11 @@ class Tree:
                            capture_output=True, text=True, env=e)
         return r
 
-    def run(self, prog):
+    def run(self, prog, env=None):
+        e = dict(os.environ)
+        e.update(env or {})
         return subprocess.run([os.path.join(self.dir, prog)],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=e)
 
     def cleanup(self):
         if not KEEP:
@@ -3371,6 +3373,48 @@ def moc_reruns_only_when_the_input_changes(t):
 
 
 @case
+def moc_output_does_not_cross_between_same_named_sources(t):
+    """Two local.cpp, each with its own local.moc, must not swap.
+
+    `#include "local.moc"` is unqualified and the file is not in the
+    including directory, so a global include path picks whichever sorts
+    first and the other file compiles against a class it has never heard
+    of. The include belongs to the one TU that asks for it."""
+    _need_qt()
+    for d, cls, val in (("a", "ThingA", 1), ("b", "ThingB", 2)):
+        t.write(f"{d}/local.cpp", f"""
+#include <QObject>
+class {cls} : public QObject {{
+    Q_OBJECT
+public:
+    void ping() {{ emit pinged({val}); }}
+signals:
+    void pinged(int v);
+}};
+int check_{d}() {{
+    {cls} x;
+    int seen = -1;
+    QObject::connect(&x, &{cls}::pinged, [&](int v){{ seen = v; }});
+    x.ping();
+    return seen;
+}}
+#include "local.moc"
+""")
+    t.write("main.cpp", """
+#include <QCoreApplication>
+int check_a(); int check_b();
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    return (check_a() == 1 && check_b() == 2) ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "the two .moc files were crossed")
+
+
+@case
 def moc_survives_ejection(t):
     """An ejected build must regenerate moc output, not depend on fmake's.
 
@@ -3399,6 +3443,251 @@ def moc_survives_ejection(t):
     check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
     check(_run_in(t.dir, "./" + prog).returncode == 0,
           "the ejected build produced a program whose signal never arrived")
+
+# ---------------------------------------------------------------------------
+# uic
+#
+# Unlike moc there is no symbol to fall back on: a generated header is an
+# include-graph dependency, so the #include has to be believed. That makes
+# the trigger the interesting part, and most of these cases are about what
+# does and does not count as the source asking for it.
+# ---------------------------------------------------------------------------
+
+THING_UI = """
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Thing</class>
+ <widget class="QWidget" name="Thing">
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="label">
+     <property name="text">
+      <string>hello</string>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
+"""
+
+THING_MAIN = """
+#include <QApplication>
+#include <QLabel>
+#include <QWidget>
+#include "ui_thing.h"
+int main(int argc, char **argv) {
+    QApplication app(argc, argv);
+    QWidget w;
+    Ui_Thing ui;
+    ui.setupUi(&w);
+    return ui.label->text() == "hello" ? 0 : 1;
+}
+"""
+
+OFFSCREEN = {"QT_QPA_PLATFORM": "offscreen"}
+
+
+@case
+def uic_runs_because_a_source_includes_its_header(t):
+    """The include is the declaration, not the file extension.
+
+    `#include "ui_thing.h"` naming a header that exists nowhere, with a
+    thing.ui that would produce it, is the source asking for uic in as many
+    words."""
+    _need_qt()
+    t.write("thing.ui", THING_UI)
+    t.write("main.cpp", THING_MAIN)
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("UIC thing.ui" in r.stdout, f"uic did not run: {r.stdout}")
+    check(t.run(os.path.basename(t.dir), OFFSCREEN).returncode == 0,
+          "the generated widget did not carry its label text")
+
+
+@case
+def uic_ignores_a_ui_file_nobody_includes(t):
+    """A .ui in the tree is not by itself a reason to run uic.
+
+    Keying on the file extension would generate headers for a directory of
+    unused designs, and would make a stray .ui in a vendored subtree part of
+    the build."""
+    _need_qt()
+    t.write("thing.ui", THING_UI)
+    t.write("unused.ui", THING_UI.replace("Thing", "Unused"))
+    t.write("main.cpp", THING_MAIN)
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("UIC unused.ui" not in r.stdout,
+          f"uic ran for a design nothing includes: {r.stdout}")
+    check(not os.path.exists(os.path.join(t.dir, ".fmake/ui/ui_unused.h")),
+          "a header nothing asked for was generated")
+
+
+@case
+def uic_leaves_a_checked_in_header_alone(t):
+    """A ui_*.h already in the tree is someone's file, not fmake's.
+
+    Projects do commit generated headers. Overwriting one -- or generating a
+    second copy that shadows it on the include path -- would silently
+    replace what the tree says with what fmake would have said."""
+    _need_qt()
+    t.write("thing.ui", THING_UI.replace("hello", "from the .ui file"))
+    t.write("ui_thing.h", """
+#pragma once
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QWidget>
+struct Ui_Thing {
+    QLabel *label;
+    void setupUi(QWidget *w) {
+        label = new QLabel(QString("checked in"), w);
+        (new QVBoxLayout(w))->addWidget(label);
+    }
+};
+""")
+    t.write("main.cpp", THING_MAIN.replace('== "hello"', '== "checked in"'))
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("UIC" not in r.stdout, f"uic overrode a real header: {r.stdout}")
+    check(t.run(os.path.basename(t.dir), OFFSCREEN).returncode == 0,
+          "the checked-in header was not the one used")
+
+
+@case
+def uic_refuses_an_ambiguous_include(t):
+    """Two thing.ui cannot both answer `#include "ui_thing.h"`.
+
+    The ambiguity is in the C++ rather than on disk -- an unqualified
+    include cannot say which directory it meant -- so picking one silently
+    would build a program from a design nobody chose."""
+    _need_qt()
+    t.write("a/thing.ui", THING_UI)
+    t.write("b/thing.ui", THING_UI)
+    t.write("main.cpp", THING_MAIN)
+
+    r = t.fmake()
+    check(r.returncode != 0, "an ambiguous include should not build")
+    check("a/thing.ui" in r.stderr and "b/thing.ui" in r.stderr,
+          f"both candidates should be named: {r.stderr}")
+
+
+@case
+def uic_reruns_only_when_the_input_changes(t):
+    """Content-keyed like everything else, not mtime."""
+    _need_qt()
+    t.write("thing.ui", THING_UI)
+    t.write("main.cpp", THING_MAIN)
+    check(t.fmake().returncode == 0, "first build failed")
+
+    os.utime(os.path.join(t.dir, "thing.ui"), None)
+    check("UIC" not in t.fmake().stdout, "a touch re-ran uic")
+
+    t.write("thing.ui", THING_UI.replace("hello", "goodbye"))
+    r = t.fmake()
+    check("UIC thing.ui" in r.stdout,
+          f"a real change did not re-run uic: {r.stdout}")
+    check(t.run(os.path.basename(t.dir), OFFSCREEN).returncode == 1,
+          "the rebuilt program still had the old label text")
+
+
+@case
+def qt_generators_skip_an_excluded_subtree(t):
+    """Excluded means excluded, including for moc and uic.
+
+    The generators used to run before the exclusion filter, so a vendored
+    directory fmake was told to ignore still had its classes moc'd and its
+    designs generated -- and moc output for an excluded header would then be
+    compiled, which is the work the exclude existed to prevent."""
+    _need_qt()
+    t.write("fmake.toml", '[project]\nexclude = ["vendor/**"]\n')
+    t.write("vendor/thing.ui", THING_UI)
+    t.write("vendor/widget.h", """
+#pragma once
+#include <QObject>
+class Vendored : public QObject { Q_OBJECT public: void f(); };
+""")
+    t.write("vendor/widget.cpp", """
+#include "widget.h"
+#include "ui_thing.h"
+void Vendored::f() {}
+""")
+    t.write("main.cpp", """
+#include <QCoreApplication>
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    return 0;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check("UIC" not in r.stdout,
+          f"uic ran for an excluded subtree: {r.stdout}")
+    check("MOC" not in r.stdout,
+          f"moc ran for an excluded subtree: {r.stdout}")
+
+
+@case
+def uic_survives_ejection(t):
+    """The ejected build must regenerate its own ui headers."""
+    _need_qt()
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    t.write("thing.ui", THING_UI)
+    t.write("main.cpp", THING_MAIN)
+
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    check(".fmake" not in r.stdout,
+          "the ejected build refers to fmake's state directory")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(r.stdout)
+
+    prog = os.path.basename(t.dir)
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    if os.path.exists(os.path.join(t.dir, prog)):
+        os.remove(os.path.join(t.dir, prog))
+
+    m = _run_in(t.dir, "make")
+    check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
+    env = dict(os.environ); env.update(OFFSCREEN)
+    got = subprocess.run([os.path.join(t.dir, prog)], capture_output=True,
+                         text=True, env=env)
+    check(got.returncode == 0, "the ejected build produced a broken program")
+
+
+@case
+def widened_files_keep_their_own_flags(t):
+    """A file found by widening must still get its @define.
+
+    Per-TU flags were computed once, over the candidate set, before widening
+    had run -- so anything the include graph missed was compiled with no
+    @define, @cflags or @std at all. Nothing downstream reads the
+    annotations again, so the result was a program that built cleanly and
+    answered differently. Not a Qt case; moc only happened to reveal it."""
+    t.write("extra.c", """
+/*! @define SCALE=7 */
+#ifndef SCALE
+#define SCALE 1
+#endif
+int widened(void){ return SCALE; }
+""")
+    t.write("main.c", """
+#include <stdio.h>
+int widened(void);
+int main(void){ printf("%d\\n", widened()); return widened() == 7 ? 0 : 1; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    got = t.run(os.path.basename(t.dir))
+    check(got.stdout.strip() == "7",
+          f"@define was dropped on a widened file: printed {got.stdout!r}")
+
 
 # ---------------------------------------------------------------------------
 

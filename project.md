@@ -1708,12 +1708,15 @@ rather than code, and one lesson about testing.
   thing that looks like a provider and is not. The provider model was untouched
   by moc, and needed no new `HEADER_PKG` entry to resolve Qt. The threshold
   stands where it was.
-- **`uic` is out of scope on a premise the sample contradicts.** §17 left `.ui`
-  to a hand-written rule partly because Qt Widgets code was said often not to
-  use Designer; every project examined does. Revisiting it needs an answer to
-  what proposes a `.ui` file, since nothing in the source does — which makes it
-  a rule over extensions rather than an inference, and a different kind of
-  claim from `Q_OBJECT`.
+- ~~**`uic` is out of scope on a premise the sample contradicts.**~~ Closed;
+  see §17. The answer to "what proposes a `.ui` file" was that the source
+  already does — `#include "ui_thing.h"` — so it is an inference after all,
+  just from the include graph rather than from a symbol.
+- **`rcc` is the one piece of Qt tooling that must be told.** Nothing in the
+  source says which program a `.qrc` belongs to, and a Qt 5 or 6 resource
+  registers itself from a static constructor, so there is no undefined symbol
+  either. Both signals are absent, which is why it is a `[generate.*]` rule
+  and `--force-link` rather than an inference.
 - **`[build-toolchain]` is only consulted for generator tools.** Nothing else
   in fmake distinguishes the build machine from the target, because nothing
   else needs to yet. A test binary meant to run during the build would.
@@ -1770,10 +1773,10 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 113, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 122, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
-headers. Filtering by name is the way to work — `./selftest moc` is eleven
+headers. Filtering by name is the way to work — `./selftest moc` is twelve
 cases and a few seconds — and the full run is for before a commit.
 
 Cases needing something absent from the machine skip rather than fail — a
@@ -1948,12 +1951,10 @@ added to `HEADER_PKG`.
 
 ### What was deliberately left out
 
-- **`uic`.** `ui_foo.h` *is* included by the code that uses it, so it is an
-  include-graph dependency rather than a symbol one — a header that must exist
-  before scanning, not an object discovered after compiling. Different
-  mechanism, and the assessment held that hand-written Qt Widgets code
-  frequently has no `.ui` at all. **That last part did not survive contact
-  with a sample** — see "The uic decision looks weaker than it did" below.
+- ~~**`uic`.**~~ Implemented; see "uic, and what the include already says"
+  below. It was left out on the assessment's view that Qt Widgets code
+  frequently has no `.ui` at all, which did not survive contact with a
+  sample.
 - **`rcc`.** It does ride the same rail in principle: `Q_INIT_RESOURCE(name)`
   references an initialiser the generated source defines. But in Qt 5 and 6 a
   resource usually registers itself from a static constructor and
@@ -2036,20 +2037,89 @@ was made after patching it — but it is a fair illustration of the premise:
 fmake had nothing to get wrong there, because it has no configure step and
 takes its facts from the source.
 
-### The uic decision looks weaker than it did
+### uic, and what the include already says
 
-The assessment argued `.ui` should be left out partly on the grounds that
-hand-written Qt Widgets code frequently has none. That is not what the
-sample shows. Every candidate examined uses Designer: qView 7 files,
-smplayer 43, KeePassXC 72. A tree with `.ui` files cannot be built by fmake
-without a rule, and the rule has to name `uic` by absolute path, because
-`uic` is not on `$PATH` on Debian any more than `moc` is — while fmake finds
-moc through pkg-config for exactly that reason.
+Left out at first, on the assessment's view that a generated header is an
+include-graph dependency rather than a symbol one and that Qt Widgets code
+frequently has no `.ui` anyway. The first half is true and turned out not to
+matter; the second half is false. Every project examined uses Designer —
+qView 7 files, smplayer 43, KeePassXC 72 — so a tree needing uic is the
+common case rather than the exception, which made "write two pattern rules
+yourself" a poor answer.
 
-That is an argument for revisiting uic, and the mechanism is less alien than
-it looked: generated headers already exist, already get an `-I`, and are
-already order-only prerequisites of every compile. The reason it is still not
-done is scope, not principle. The trigger question is the real one — a `.ui`
-file is proposed by nothing in the source, so it would have to be a rule over
-file extensions rather than an inference from a symbol, which is a different
-kind of claim than `Q_OBJECT` makes.
+**The trigger is the include, not the file extension.** `#include
+"ui_thing.h"` naming a header that exists nowhere in the tree, with a
+`thing.ui` that would produce it, is the source asking for uic in as many
+words. It is the same thing CMake's AUTOUIC keys on, and it keeps the feature
+inside the premise: the source says what it needs, and fmake does not go
+looking for work nobody asked for. Three consequences, all wanted:
+
+- a `.ui` nobody includes is not built, so a directory of unused designs or a
+  stray file in a vendored subtree costs nothing;
+- a `ui_thing.h` someone committed is left alone rather than overwritten or
+  shadowed — projects do commit generated headers, and replacing what the
+  tree says with what fmake would have said is not fmake's call;
+- a tree with no `.ui` files never looks for uic at all.
+
+Where moc could fall back on symbols, uic cannot: nothing is undefined if the
+header is missing, the compile simply fails. So the include has to be
+believed, and the one thing that cannot be resolved is refused rather than
+guessed. **Output is flat**, in `.fmake/ui/`, because `#include "ui_thing.h"`
+is unqualified: two `thing.ui` in one tree are ambiguous in the C++ itself,
+not merely awkward on disk. Mirroring the tree would hide that; instead both
+candidates are named and the build stops.
+
+### Two bugs this turned up
+
+Neither was about uic, and one was not about Qt at all.
+
+**Per-TU flags were dropped on anything widening found.** They were computed
+once, over the candidate set, before the widening loop had run — so a file the
+include graph missed was compiled with no `@define`, `@cflags`, `@std` or
+`@pkg` at all. Nothing downstream reads the annotations again, so there was no
+error: the program built cleanly and answered differently. Demonstrated in
+plain C with a `@define SCALE=7` that a widened file never received, printing
+1 instead of 7. The flags are now computed wherever a unit enters the pool.
+This is the §14 pattern exactly — a chain that is right at every step except
+the one nobody asked about.
+
+**An included moc output was found through a global include path.** `#include
+"foo.moc"` is unqualified and the file is not in the including directory, so
+two `local.cpp` in different directories each resolved to whichever `.moc`
+sorted first. It goes on the include path of the files that actually include
+it and nowhere else — which needs the *includers* rather than the input,
+because the `#include "moc_foo.cpp"` idiom has moc read `foo.h` while
+`foo.cpp` does the including. Getting that distinction wrong broke the idiom
+case, and the case caught it.
+
+A third thing was wrong and is now fixed: **the generators ran before the
+exclusion filter**, so a subtree named in `[project] exclude` still had its
+classes moc'd and its designs generated — and moc output for an excluded
+header would then have been compiled, which is the work the exclude existed
+to prevent.
+
+### qView again, with both generators
+
+The whole configuration is now four lines of `fmake.toml` and one `fmake.mk`
+rule:
+
+```toml
+[project]
+exclude = ["tests/**", "src/qvwin32functions.cpp"]
+defines = ["VERSION=7.0", "QT_DEPRECATED_WARNINGS", "QT_NO_FOREACH"]
+```
+
+```make
+resources/qrc_resources.cpp: resources/resources.qrc
+	/usr/lib/qt6/libexec/rcc --name resources $< -o $@
+```
+
+plus `--force-link` on the resource. moc found the same 15 classes as before,
+uic the same 7 headers CMake generates, and the binary runs. Clean build 34.4s
+against CMake's 27.4s, unchanged — uic was never the expensive part.
+
+What is left is `rcc`, and it is left for the reason given above rather than
+for want of a mechanism: nothing in the source says which program a `.qrc`
+belongs to, and in Qt 5 and 6 a resource registers itself from a static
+constructor so there is no undefined symbol to infer from either. It is the
+one piece of Qt's tooling that genuinely needs to be told.

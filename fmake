@@ -376,7 +376,8 @@ CONF_SCHEMA = {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
     },
     "toolchain": {
-        "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S, "moc": S,
+        "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
+        "moc": S, "uic": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
     },
     # The machine doing the building, as opposed to the one being built for.
@@ -1023,6 +1024,13 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 # directories do not both want to be moc_counter.cpp.
 MOC_DIR = os.path.join(STATE_DIR, "moc")
 
+# uic output is flat, unlike moc's. `#include "ui_foo.h"` is unqualified, so
+# two foo.ui in one tree are ambiguous in the C++ rather than merely awkward
+# on disk; mirroring the tree would hide that instead of reporting it.
+UI_DIR = os.path.join(STATE_DIR, "ui")
+
+RE_UI_HEADER = re.compile(r"^ui_(.+)\.h$")
+
 # The .pc files that know where Qt keeps its tools. Newest first: nothing in
 # a source distinguishes Qt 5 from Qt 6 -- the include spellings are
 # identical -- so when both are installed the newer is the better guess, and
@@ -1030,31 +1038,33 @@ MOC_DIR = os.path.join(STATE_DIR, "moc")
 QT_CORE_MODULES = ("Qt6Core", "Qt5Core")
 
 
-def find_moc(cfg, pkg):
-    """Locate moc, matching the Qt that is about to be linked.
+def find_qt_tool(name, configured, pkg):
+    """Locate one of Qt's generators, matching the Qt about to be linked.
 
-    Deliberately not `shutil.which("moc")`. Debian ships no moc on $PATH at
-    all -- it lives in Qt's libexec -- and on distributions that do provide
-    one, qtchooser makes which Qt it belongs to a property of the environment
-    rather than of the build, so a tree resolving to Qt 6 can be moc'd by
-    Qt 5's moc and fail at the link on a mangling that never matched. The
-    same pkg-config that will answer for the -l flags already knows where
-    that Qt keeps its tools, so ask it rather than the shell's search path.
+    Deliberately not `shutil.which(name)`. Debian ships neither moc nor uic
+    on $PATH at all -- they live in Qt's libexec -- and on distributions that
+    do provide them, qtchooser makes which Qt they belong to a property of
+    the environment rather than of the build, so a tree resolving to Qt 6 can
+    be moc'd by Qt 5's moc and fail at the link on a mangling that never
+    matched. The same pkg-config that will answer for the -l flags already
+    knows where that Qt keeps its tools, so ask it rather than the shell's
+    search path.
     """
-    named = os.environ.get("MOC") or cfg.moc
+    named = os.environ.get(name.upper()) or configured
     if named:
         got = shutil.which(named) or (named if os.path.isfile(named) else None)
         if not got:
-            src = "$MOC" if os.environ.get("MOC") else f"{CONF_FILE} [toolchain]"
-            die(f"moc {named!r} (from {src}) not found")
+            where = (f"${name.upper()}" if os.environ.get(name.upper())
+                     else f"{CONF_FILE} [toolchain]")
+            die(f"{name} {named!r} (from {where}) not found")
         return got
     for mod in QT_CORE_MODULES:
         for var in ("libexecdir", "host_bins", "bindir"):
             d = pkg.variable(mod, var)
-            cand = os.path.join(d, "moc") if d else None
+            cand = os.path.join(d, name) if d else None
             if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
                 return cand
-    return shutil.which("moc")
+    return shutil.which(name)
 
 
 def moc_plan(srcs, hdrs, scans):
@@ -1067,10 +1077,16 @@ def moc_plan(srcs, hdrs, scans):
     #include "foo.moc" -- so that output is never a translation unit of its
     own, only text pulled into one.
     """
-    included = set()
-    for scan in scans.values():
-        for _kind, name, _line in scan["incs"]:
-            included.add(os.path.basename(name))
+    # Who includes what, by basename. Needed because the file moc reads and
+    # the file that includes its output are not always the same one: a class
+    # in foo.cpp produces foo.moc which foo.cpp includes, but the
+    # `#include "moc_foo.cpp"` idiom has moc read foo.h while foo.cpp does
+    # the including. Whoever includes it is who needs it on their include
+    # path.
+    includers = {}
+    for rel in sorted(scans):
+        for _kind, name, _line in scans[rel]["incs"]:
+            includers.setdefault(os.path.basename(name), []).append(rel)
 
     jobs = []
     for rel in sorted(hdrs):
@@ -1086,7 +1102,8 @@ def moc_plan(srcs, hdrs, scans):
             # every meta-object twice, and §3 would report that as an
             # ambiguous provider -- a baffling way to say a file is already
             # in the build.
-            "inline": name in included,
+            "inline": name in includers,
+            "includers": includers.get(name, []),
         })
 
     for rel in sorted(srcs):
@@ -1102,7 +1119,7 @@ def moc_plan(srcs, hdrs, scans):
             warn(f'{rel} declares a Q_OBJECT class but does not #include '
                  f'"{name}", so moc cannot reach it')
             continue
-        jobs.append({"src": rel, "inline": True,
+        jobs.append({"src": rel, "inline": True, "includers": [rel],
                      "out": os.path.normpath(
                          os.path.join(MOC_DIR, os.path.dirname(rel), name))})
     return jobs
@@ -1134,6 +1151,54 @@ def moc_cflags(root, hdrs, conf):
         if f.startswith(("-D", "-I")) and f not in out:
             out.append(f)
     return out
+
+
+def uic_plan(files, hdrs, scans, root):
+    """Which .ui files the source actually asks for.
+
+    The trigger is the include, not the file extension. `#include
+    "ui_foo.h"` naming a header that exists nowhere in the tree, with a
+    foo.ui that would produce it, is the source asking for uic in as many
+    words -- and it is the same thing CMake's AUTOUIC keys on. Three
+    consequences, all of them wanted: a .ui nobody includes is not built, a
+    ui_foo.h someone checked in is left alone rather than overwritten, and a
+    tree with no .ui files never looks for uic at all.
+
+    Unlike moc there is no symbol to fall back on -- a generated header is an
+    include-graph dependency, so the include has to be believed.
+    """
+    have = {os.path.basename(h) for h in hdrs}
+    wanted = {}
+    for rel in sorted(files):
+        for _kind, name, line in scans.get(rel, {}).get("incs", ()):
+            base = os.path.basename(name)
+            m = RE_UI_HEADER.match(base)
+            if m and base not in have:
+                wanted.setdefault(m.group(1), (rel, line))
+    if not wanted:
+        return []
+
+    by_stem = {}
+    for hit in sorted(glob.glob(os.path.join(root, "**", "*.ui"),
+                                recursive=True)):
+        stem = os.path.splitext(os.path.basename(hit))[0]
+        by_stem.setdefault(stem, []).append(os.path.relpath(hit, root))
+
+    jobs = []
+    for stem, (rel, line) in sorted(wanted.items()):
+        found = by_stem.get(stem)
+        if not found:
+            # Not ours. Some other generator may produce it, or it is simply
+            # missing -- either way the compiler names it better than a guess
+            # here would.
+            continue
+        if len(found) > 1:
+            die(f'{rel}:{line}: #include "ui_{stem}.h" is ambiguous -- '
+                f'{" and ".join(found)} would both produce it. An unqualified '
+                f'include cannot say which, so rename one.')
+        jobs.append({"src": found[0], "inline": True,
+                     "out": os.path.join(UI_DIR, f"ui_{stem}.h")})
+    return jobs
 
 
 def run_moc(root, jobs, moc, flags, cache, dry_run=False):
@@ -1193,6 +1258,44 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False):
             continue
         if res.stderr.strip():
             PROGRESS.write(res.stderr)
+        store[out] = key
+        produced.append(out)
+    return produced
+
+
+def run_uic(root, jobs, uic, cache, dry_run=False):
+    """Run uic where its input changed. Returns the outputs.
+
+    Simpler than moc in every respect: one .ui produces exactly one header,
+    always, and there is no preprocessor to disagree with the scan. An empty
+    result is a failure rather than a fact about the input.
+    """
+    store = cache.data.setdefault("uic", {})
+    produced = []
+    for job in jobs:
+        src, out = job["src"], job["out"]
+        abs_out = os.path.join(root, out)
+        key = sha("|".join([uic, src,
+                            cache.hash_of(os.path.join(root, src), src) or "?"]))
+        if store.get(out) == key and os.path.isfile(abs_out):
+            produced.append(out)
+            continue
+
+        cmd = [uic, src, "-o", out]
+        if dry_run:
+            print(" ".join(shlex.quote(c) for c in cmd))
+            continue
+        say(f"{YELLOW('UIC')} {src}")
+        os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
+        try:
+            res = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+        except OSError as exc:
+            die(f"could not run uic ({uic}): {exc.strerror or exc}")
+        if res.stderr.strip():
+            PROGRESS.write(res.stderr)
+        if res.returncode != 0 or not os.path.isfile(abs_out) \
+                or os.path.getsize(abs_out) == 0:
+            die(f"uic produced nothing from {src}")
         store[out] = key
         produced.append(out)
     return produced
@@ -1622,6 +1725,7 @@ class Config:
         # a cross build wants the build machine's moc, not a target one it
         # could not execute. Only asking is reliable, so there is no guess.
         self.moc    = tool.get("moc")
+        self.uic    = tool.get("uic")
         self.extra_libdirs = list(tool.get("lib-dirs", []))
         self.ccver  = tool_version(self.cc)
         self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
@@ -3099,7 +3203,7 @@ def _show_cmd(cmd, root):
 
 
 def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
-            res=None, excluded=None, conf=None, moc=None):
+            res=None, excluded=None, conf=None, moc=None, uic=None):
     W = 36
     name = t.filename
     if t.conf.get("name") or t.conf.get("kind") or t.conf.get("sources"):
@@ -3146,6 +3250,11 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
         print(f"  {CYAN('moc')}")
         print(f"    {_rel(moc['exe'], root):<{W-4}}"
               f"{DIM(f'{n} file(s) declare Q_OBJECT; found via pkg-config')}")
+    if uic and uic.get("jobs"):
+        n = len(uic["jobs"])
+        print(f"  {CYAN('uic')}")
+        print(f"    {_rel(uic['exe'], root):<{W-4}}"
+              f"{DIM(f'{n} ui_*.h header(s) included; found via pkg-config')}")
 
     if excluded:
         print(f"  {CYAN('excluded here')}")
@@ -3384,38 +3493,6 @@ def build(args, _bootstrapping=False):
         hdrs.sort()
         scan_all(srcs + hdrs)
 
-    # ---- moc ----------------------------------------------------------
-    # After the generators, so a generated header carrying Q_OBJECT is moc'd
-    # like any other, and before everything else, so what moc writes is an
-    # ordinary source from here on -- seen by the include graph, the closure
-    # and the symbol tables with no special case, exactly as §"Generated
-    # sources" has it.
-    moc_jobs, moc_outs, moc_incdirs, moc_flags = [], [], [], []
-    moc_exe = None
-    if any(s.get("qobject") for s in scans.values()):
-        moc_exe = find_moc(cfg, pkg)
-        if not moc_exe:
-            die("this tree declares Q_OBJECT classes, which need Qt's moc.\n"
-                "Install the Qt development package, or name it with "
-                f"[toolchain] moc in {CONF_FILE}.")
-        moc_jobs = moc_plan(srcs, hdrs, scans)
-        moc_flags = moc_cflags(root, hdrs, conf)
-        moc_outs = run_moc(root, moc_jobs, moc_exe, moc_flags, cache,
-                           args.dry_run)
-        inline = {j["out"] for j in moc_jobs if j["inline"]}
-        for rel in moc_outs:
-            if rel in inline:
-                # foo.moc is text, not a translation unit. It needs to be on
-                # the include path of the file that pulls it in and nowhere
-                # else.
-                d = os.path.dirname(rel)
-                if d not in moc_incdirs:
-                    moc_incdirs.append(d)
-            elif rel not in srcs:
-                srcs.append(rel)
-        srcs.sort()
-        scan_all(srcs)
-
     gen_dirs = sorted({os.path.dirname(g) for g in generated
                        if os.path.splitext(g)[1] in HDR_EXTS})
     if not srcs:
@@ -3437,12 +3514,23 @@ def build(args, _bootstrapping=False):
     # concerned. This is what makes win32_sys.c and posix_sys.c coexist:
     # without it they are two definitions of the same symbol and §3 refuses
     # to guess, which is the right answer to the wrong question.
-    excluded = dict(unreadable)
-    for rel in list(srcs):
+    def exclude_pattern(rel):
+        """The [project] exclude pattern matching a path, or None.
+
+        Wanted for headers too, not just sources: an excluded subtree must
+        not have its Q_OBJECT classes moc'd or its .ui files generated, or
+        the work fmake was told to skip comes back as generated code.
+        """
         for pat in conf.project.get("exclude", []):
             if fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/*") + "/"):
-                excluded[rel] = f"[project] exclude = {pat!r}"
-                break
+                return pat
+        return None
+
+    excluded = dict(unreadable)
+    for rel in list(srcs):
+        pat = exclude_pattern(rel)
+        if pat:
+            excluded[rel] = f"[project] exclude = {pat!r}"
         else:
             why = platform_excludes(Ann(scans[rel].get("dirs")),
                                     cfg.os, cfg.arch)
@@ -3453,6 +3541,77 @@ def build(args, _bootstrapping=False):
     if not srcs:
         die(f"every source file is excluded when building for "
             f"{cfg.os}/{cfg.arch}")
+
+    # Headers under an excluded subtree are excluded too. srcs was filtered
+    # above; hdrs is not filtered in place because include resolution may
+    # still legitimately reach into such a directory.
+    gen_hdrs = [h for h in hdrs if not exclude_pattern(h)]
+
+    # ---- uic ----------------------------------------------------------
+    # Before moc, so a widget header that includes its ui_ header is moc'd
+    # against the real thing rather than against a missing include. Nothing
+    # here depends on that -- moc does not fail on an include it cannot find
+    # -- but it costs nothing to be right about the order.
+    ui_jobs, ui_outs = [], []
+    uic_exe = None
+    ui_jobs = uic_plan(srcs + gen_hdrs, hdrs, scans, root)
+    if ui_jobs:
+        uic_exe = find_qt_tool("uic", cfg.uic, pkg)
+        if not uic_exe:
+            die("this tree includes a ui_*.h header generated from a .ui "
+                "file, which needs Qt's uic.\nInstall the Qt development "
+                f"package, or name it with [toolchain] uic in {CONF_FILE}.")
+        ui_outs = run_uic(root, ui_jobs, uic_exe, cache, args.dry_run)
+        for rel in ui_outs:
+            if rel not in hdrs:
+                hdrs.append(rel)
+        hdrs.sort()
+        scan_all(hdrs)
+
+    # ---- moc ----------------------------------------------------------
+    # After the generators, so a generated header carrying Q_OBJECT is moc'd
+    # like any other, and before everything else, so what moc writes is an
+    # ordinary source from here on -- seen by the include graph, the closure
+    # and the symbol tables with no special case, exactly as §"Generated
+    # sources" has it.
+    moc_jobs, moc_outs, moc_flags, moc_own = [], [], [], {}
+    moc_incflags, src_set = [], set(srcs)
+    moc_exe = None
+    if any(scans[r].get("qobject") for r in srcs + gen_hdrs if r in scans):
+        moc_exe = find_qt_tool("moc", cfg.moc, pkg)
+        if not moc_exe:
+            die("this tree declares Q_OBJECT classes, which need Qt's moc.\n"
+                "Install the Qt development package, or name it with "
+                f"[toolchain] moc in {CONF_FILE}.")
+        moc_jobs = moc_plan(srcs, gen_hdrs, scans)
+        moc_flags = moc_cflags(root, hdrs, conf)
+        moc_outs = run_moc(root, moc_jobs, moc_exe, moc_flags, cache,
+                           args.dry_run)
+        done = set(moc_outs)
+        for j in moc_jobs:
+            if j["out"] not in done:
+                continue
+            if j["inline"]:
+                # An included moc output is text, not a translation unit, and
+                # `#include "foo.moc"` is unqualified. Putting its directory
+                # on the global include path means two local.cpp in different
+                # directories each find whichever .moc sorts first -- so it
+                # goes on the include path of the files that actually pull it
+                # in, and nowhere else. Per-TU flags are already part of the
+                # object's cache key, so this costs nothing extra.
+                flag = "-I" + os.path.join(root, os.path.dirname(j["out"]))
+                for who in j["includers"]:
+                    if who in src_set:
+                        moc_own.setdefault(who, []).append(flag)
+                    elif flag not in moc_incflags:
+                        # A header did the including, so every TU reaching it
+                        # needs the path and there is no one TU to give it
+                        # to. Rare, and worth being conservative about.
+                        moc_incflags.append(flag)
+            elif j["out"] not in srcs:
+                srcs.append(j["out"])
+        srcs.sort()
+        scan_all(srcs)
 
     proj = Project(root, srcs, hdrs, scans)
 
@@ -3648,8 +3807,14 @@ def build(args, _bootstrapping=False):
 
     base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
                      for d in sorted(proj.incdirs | {"."})]
-    for d in gen_dirs + moc_incdirs:
+    # uic output is flat and its includes are unqualified, so one -I covers
+    # it. Added explicitly rather than left to the include graph to discover,
+    # because a header nothing has walked to yet still has to be findable.
+    for d in gen_dirs + ([UI_DIR] if ui_outs else []):
         flag = "-I" + os.path.join(root, d) if d else "-I" + root
+        if flag not in base_incflags:
+            base_incflags.append(flag)
+    for flag in moc_incflags:
         if flag not in base_incflags:
             base_incflags.append(flag)
     for d in conf.project.get("include-dirs", []):
@@ -3664,17 +3829,26 @@ def build(args, _bootstrapping=False):
     incflags, proposed = list(base_incflags), {}
     pkg_sig = pkg.signature()
 
-    # @pkg constraints are checked once, up front: failing at the compiler's
-    # "no such file" is a much worse error than naming the package.
+    def own_flags(u):
+        """The compile flags a TU asked for, plus any fmake owes it.
+
+        Wanted wherever a Unit enters the pool, not just here: a Unit is
+        created with no flags of its own, and widening adds units after this
+        point. A file the include graph missed would otherwise be compiled
+        without its @define, @cflags or @std -- silently, since nothing
+        downstream reads the annotations again, and a wrong -D produces a
+        program that builds and answers differently.
+        """
+        for group in u.ann.groups("pkg"):
+            # Checked up front rather than at the compiler's "no such file",
+            # which is a much worse way to learn a package is missing.
+            if pkg.satisfies(group) is False:
+                die(f"{u.rel}:{u.ann.line('pkg')}: @pkg {' '.join(group)} is "
+                    f"not satisfied (installed: {pkg.version(group[0])})")
+        return unit_cflags(u, pkg, hdr_store, pkg_sig) + moc_own.get(u.rel, [])
+
     for rel in sorted(units):
-        ann = units[rel].ann
-        for group in ann.groups("pkg"):
-            ok = pkg.satisfies(group)
-            if ok is False:
-                have = pkg.version(group[0])
-                die(f"{rel}:{ann.line('pkg')}: @pkg {' '.join(group)} is not "
-                    f"satisfied (installed: {have})")
-        units[rel].own = unit_cflags(units[rel], pkg, hdr_store, pkg_sig)
+        units[rel].own = own_flags(units[rel])
 
 
     vinfo(f"{len(srcs)} sources, {len(candidates)} candidates, "
@@ -3758,6 +3932,7 @@ def build(args, _bootstrapping=False):
         vinfo(f"widening: {len(extra)} more file(s) may define "
               f"{len(fresh)} unresolved symbol(s)")
         for u in extra:
+            u.own = own_flags(u)
             units[u.rel] = u
 
     # ---- report ambiguity ---------------------------------------------
@@ -3820,7 +3995,8 @@ def build(args, _bootstrapping=False):
                               all_generate_rules(root, conf, srcs, scans),
                               {"exe": moc_exe, "flags": moc_flags,
                                "jobs": [j for j in moc_jobs
-                                        if j["out"] in done]}))
+                                        if j["out"] in done]},
+                              {"exe": uic_exe, "jobs": ui_jobs}))
         cache.save()
         return 0
 
@@ -3830,7 +4006,8 @@ def build(args, _bootstrapping=False):
             explain(t, closures[t], cfg, incflags, outdir, all_units, root,
                     {x.rel for x in targets} - {t.rel}, resolutions.get(t),
                     excluded, conf,
-                    {"exe": moc_exe, "jobs": moc_jobs} if moc_exe else None)
+                    {"exe": moc_exe, "jobs": moc_jobs} if moc_exe else None,
+                    {"exe": uic_exe, "jobs": ui_jobs} if uic_exe else None)
         cache.save()
         return 0
 
@@ -3929,34 +4106,37 @@ def build(args, _bootstrapping=False):
 # ---------------------------------------------------------------------------
 
 EJECT_OBJDIR = "build"
-EJECT_MOCDIR = "moc"        # inside the object directory
+# Where fmake's generated trees land inside an ejected build's object
+# directory. A standalone build file should not write into the bookkeeping of
+# the tool it no longer needs, and `fmake --clean` must not be able to delete
+# something an ejected build depends on.
+EJECT_GENDIRS = ((MOC_DIR, "moc"), (UI_DIR, "ui"))
+
+
+def _eject_gen(rel):
+    """Remap a generated path out of the state directory, or None.
+
+    Matches the directory itself as well as what is under it: an -I naming a
+    generated root is exactly what flat uic output produces, and a prefix
+    test that misses it emits a build compiling against a directory only
+    fmake creates.
+    """
+    for src_dir, dst in EJECT_GENDIRS:
+        if rel == src_dir or rel.startswith(src_dir + os.sep):
+            return os.path.normpath(os.path.join(dst,
+                                                 os.path.relpath(rel, src_dir)))
+    return None
 
 
 def _eject_src(rel):
-    """Where a source file lives in an ejected build.
-
-    Everything stays put except moc output, which moves out of fmake's state
-    directory and under the ejected build's own object directory. A
-    standalone build file should not write into the bookkeeping of the tool
-    it no longer needs, and `fmake --clean` must not be able to delete
-    something an ejected build depends on.
-    """
-    # The directory itself and not just what is under it: an -I naming the
-    # moc root is exactly what a .moc file at the top of the tree produces,
-    # and a prefix test that misses it emits a build that compiles against a
-    # directory only fmake creates.
-    if rel == MOC_DIR or rel.startswith(MOC_DIR + os.sep):
-        return os.path.normpath(os.path.join(EJECT_OBJDIR, EJECT_MOCDIR,
-                                             os.path.relpath(rel, MOC_DIR)))
-    return rel
+    """Where a source file lives in an ejected build."""
+    sub = _eject_gen(rel)
+    return os.path.join(EJECT_OBJDIR, sub) if sub else rel
 
 
 def _eject_obj(rel):
     """A source's object path, relative to the ejected object directory."""
-    if rel == MOC_DIR or rel.startswith(MOC_DIR + os.sep):
-        return os.path.normpath(os.path.join(EJECT_MOCDIR,
-                                             os.path.relpath(rel, MOC_DIR)))
-    return rel
+    return _eject_gen(rel) or rel
 
 
 def _eject_flags(flags, root):
@@ -4010,7 +4190,7 @@ def _refuse_whitespace(targets, closures, root):
 
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
-               gen_rules=None, moc=None):
+               gen_rules=None, moc=None, uic=None):
     """A standalone Makefile."""
     _refuse_whitespace(targets, closures, root)
     common = _eject_flags(cfg.cflags + incflags, root)
@@ -4089,7 +4269,34 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
     moc = moc or {}
     moc_jobs = [j for j in (moc.get("jobs") or [])
                 if (j["src"] if j["inline"] else j["out"]) in every]
-    moc_inline = [_eject_src(j["out"]) for j in moc_jobs if j["inline"]]
+    # Every uic job was triggered by an include that some file makes, so
+    # unlike moc there is nothing to filter -- a header nothing wanted would
+    # never have been generated.
+    uic = uic or {}
+    uic_jobs = uic.get("jobs") or []
+
+    # The generated files that are #included rather than compiled: the uic
+    # headers and the .moc bodies. They must exist before anything compiles,
+    # and nothing declares that until a depfile does, so they are an
+    # order-only prerequisite of every object.
+    genhdrs = ([_eject_src(j["out"]) for j in uic_jobs]
+               + [_eject_src(j["out"]) for j in moc_jobs if j["inline"]])
+    if genhdrs:
+        a(f"GENHDRS = {' '.join(genhdrs)}")
+        a("")
+
+    if uic_jobs:
+        a("# ---- uic " + "-" * 54)
+        a("#")
+        a('# Selected by `#include "ui_*.h"` in the source, not by a list.')
+        a("")
+        a(f"UIC      = {uic['exe']}")
+        a("")
+        for j in uic_jobs:
+            a(f"{_eject_src(j['out'])}: {j['src']}")
+            a("\t@mkdir -p $(@D)")
+            a("\t$(UIC) $< -o $@")
+            a("")
     if moc_jobs:
         a("# ---- moc " + "-" * 54)
         a("#")
@@ -4098,11 +4305,6 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
         a("")
         a(f"MOC      = {moc['exe']}")
         a(f"MOCFLAGS = {' '.join(_eject_flags(moc.get('flags', []), root))}")
-        if moc_inline:
-            # The .moc files, which are #included rather than compiled. They
-            # have to exist before anything compiles; after that the depfiles
-            # know when a change to one matters.
-            a(f"MOCINC   = {' '.join(moc_inline)}")
         a("")
         for j in moc_jobs:
             a(f"{_eject_src(j['out'])}: {j['src']}")
@@ -4124,7 +4326,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
         var, flags = ("CXX", "CXXFLAGS") if u.cxx else ("CC", "CFLAGS")
         own = " ".join(_eject_flags(u.own, root))
         after = (["$(GENERATED)"] if gen_outs else []) \
-                + (["$(MOCINC)"] if moc_inline else [])
+                + (["$(GENHDRS)"] if genhdrs else [])
         order_only = (" | " + " ".join(after)) if after else ""
         a(f"{obj}: {_eject_src(rel)}{order_only}")
         a("\t@mkdir -p $(@D)")
@@ -4168,7 +4370,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
-                gen_rules=None, moc=None):
+                gen_rules=None, moc=None, uic=None):
     """A standalone build.ninja."""
     common = " ".join(_eject_flags(cfg.cflags + incflags, root))
     override = " ".join(_eject_flags(cfg.override, root))
@@ -4250,6 +4452,20 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
         for u in closures[t].link:
             every[u.rel] = u
 
+    uic = uic or {}
+    uic_jobs = uic.get("jobs") or []
+    if uic_jobs:
+        a('# Selected by `#include "ui_*.h"` in the source, not by a list.')
+        a(f"uic = {uic['exe']}")
+        a("")
+        a("rule uic")
+        a("  command = $uic $in -o $out")
+        a("  description = UIC $in")
+        a("")
+        for j in uic_jobs:
+            a(f"build {_ninja(_eject_src(j['out']))}: uic {_ninja(j['src'])}")
+        a("")
+
     moc = moc or {}
     moc_jobs = [j for j in (moc.get("jobs") or [])
                 if (j["src"] if j["inline"] else j["out"]) in every]
@@ -4265,10 +4481,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
         for j in moc_jobs:
             a(f"build {_ninja(_eject_src(j['out']))}: moc {_ninja(j['src'])}")
         a("")
-    # The .moc files are #included rather than compiled, so nothing declares
-    # a dependency on them until a depfile exists.
-    gen_outs = gen_outs + [_eject_src(j["out"])
-                           for j in moc_jobs if j["inline"]]
+    # The uic headers and .moc bodies are #included rather than compiled, so
+    # nothing declares a dependency on them until a depfile exists.
+    gen_outs = gen_outs + [_eject_src(j["out"]) for j in uic_jobs] \
+               + [_eject_src(j["out"]) for j in moc_jobs if j["inline"]]
 
     # Order-only: a generated header must exist before anything compiles,
     # but the depfiles decide when a change to it forces a rebuild.
