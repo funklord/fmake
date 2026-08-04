@@ -4887,6 +4887,52 @@ int main(void){ return mylib_answer() == 42 ? 0 : 1; }
         shutil.rmtree(prefix, ignore_errors=True)
 
 
+@case
+def one_program_pulled_into_another_is_reported(t):
+    """A function defined next to a main() is still a function.
+
+    So the closure reaches it, links the file it lives in, and gets a second
+    main() -- which the linker reports in terms of object paths under .fmake,
+    several steps from the cause. fmake then offered to name the missing
+    libraries, when nothing was missing at all: the advice pointed at the
+    opposite of the problem.
+
+    §3 excludes other programs' roots when assembling a library and does not
+    when closing over a program, deliberately -- refusing to link a function
+    because of what shares its file would be its own kind of guess. So this
+    is reported, with the fix that actually works."""
+    t.write("tool.c", """
+#include <stdio.h>
+int shared_bit(void){ return 5; }
+int main(void){ printf("tool\\n"); return 0; }
+""")
+    t.write("app.c", """
+#include <stdio.h>
+int shared_bit(void);
+int main(void){ printf("%d\\n", shared_bit()); return 0; }
+""")
+    r = t.fmake()
+    out = r.stdout + r.stderr
+    check(r.returncode != 0, "two main()s in one link should not build")
+    check("app" in out and "tool.c" in out,
+          f"the program and the file it swallowed should be named: {out}")
+    check("shared_bit" in out,
+          f"the symbol that pulled it in should be named: {out}")
+    check("missing libraries" not in out,
+          f"nothing is missing; that advice points the wrong way: {out}")
+
+    # And the fix it recommends has to work.
+    t.write("shared.c", "int shared_bit(void){ return 5; }\n")
+    t.write("tool.c", """
+#include <stdio.h>
+int main(void){ printf("tool\\n"); return 0; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"the suggested fix failed: {r.stdout}{r.stderr}")
+    check(t.run("app").stdout.strip() == "5", "app is wrong")
+    check(t.run("tool").stdout.strip() == "tool", "tool is wrong")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

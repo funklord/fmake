@@ -65,7 +65,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [27. Symlinks](#27-symlinks-and-a-count-that-named-the-wrong-reason) ·
 [28. The main that was not there](#28-the-main-that-was-not-there) ·
 [29. A test that only tests sometimes](#29-a-test-that-only-tests-when-it-feels-like-it) ·
-[30. The library in an unusual place](#30-the-library-in-an-unusual-place)
+[30. The library in an unusual place](#30-the-library-in-an-unusual-place) ·
+[31. Advice that pointed the wrong way](#31-advice-that-pointed-the-wrong-way)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1638,10 +1639,11 @@ rather than code, and one lesson about testing.
   pkg-config variables and the tool-prefix derivation have only been exercised
   against `aarch64-linux-gnu-*`. A toolchain that names its tools differently,
   or a bare-metal one with no libc at all, is untried.
-- **Header-only libraries.** Correctly need no link, and signal 2 naturally
-  produces no external symbols for them, so this mostly resolves itself. The
-  remaining case is a header-only library that needs `-I` pointing somewhere
-  non-standard.
+- ~~**Header-only libraries.**~~ Correctly need no link, and signal 2
+  naturally produces no external symbols for them. The remaining case — one
+  needing `-I` somewhere non-standard — was closed by §30 as a side effect:
+  a header-only package in a hand-made prefix now resolves, verified with a
+  `.pc` carrying `Cflags` and an empty `Libs`.
 - **Library resolution has no notion of link order.** The chosen `-l` flags are
   emitted in cover order. That is fine for shared libraries but wrong for
   static archives, where the linker is order-sensitive. Still true for
@@ -1746,12 +1748,12 @@ rather than code, and one lesson about testing.
   with no `":/..."` literal anywhere, and no `Q_INIT_RESOURCE`, leaves nothing
   to go on. `--force-link` still covers it, but unlike the symbol closure
   there is no guarantee here, only good evidence.
-- **A program's root file can be pulled into another program.** If one
-  program's root defines a symbol another needs, the closure links it — and
-  with it a second `main`. The linker says so plainly, so it is loud rather
-  than silent, but §3 excludes other roots when building a *library* and does
-  not when building a program. Found while writing §28's fixture, where it
-  was the fixture's fault; whether it is ever a real tree's fault is untested.
+- **A program's root file can be pulled into another program.** Still true
+  and still deliberate — a function defined next to a `main()` is a function,
+  and refusing to link it would be its own guess — but it is now *reported*
+  rather than left to the linker; see §31. What has not been decided is
+  whether §3 should exclude other roots outright, as it already does when
+  assembling a library.
 - **`[build-toolchain]` is only consulted for generator tools.** Nothing else
   in fmake distinguishes the build machine from the target, because nothing
   else needs to yet. A test binary meant to run during the build would.
@@ -1808,7 +1810,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 158, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 159, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2980,3 +2982,49 @@ trying the feature; the third only appeared on the *second* build, and would
 have looked like an unrelated intermittent failure to anyone who met it
 later. A cache turns "computed as a side effect" into "computed once, then
 wrong" — and the fix is to make the side effect part of what is stored.
+
+---
+
+## 31. Advice that pointed the wrong way
+
+Two programs, one of which defines a function the other calls, in the file
+that holds its `main()`. The closure reaches the function, links the file it
+lives in, and the program gets a second `main()`. What fmake said:
+
+```
+ld: .../tool.c.o: in function `main':
+    multiple definition of `main'; .../app.c.o: first defined here
+* app did not link
+  name the missing libraries with --ldflags, or build only the targets you want
+```
+
+The linker's half is accurate and unhelpful — object paths under `.fmake`,
+several steps from the cause. fmake's own half is worse than unhelpful: it
+offers to name the **missing** libraries when nothing is missing at all. The
+advice points at the opposite of the problem, and following it cannot lead
+anywhere.
+
+fmake can see this before linking, and now does. Every exe root defines
+`main()`, so a closure that reaches a second root is exactly this situation:
+
+```
+!!! a program's own file was pulled into another program:
+    app links tool.c, which roots tool
+        <- shared_bit  (app.c)
+
+Both define main(), so this cannot link. What is shared belongs in a file of
+its own: move it out of tool.c and both programs can reach it.
+Naming each program's sources in fmake.toml settles it too.
+```
+
+**Reported, not resolved.** §3 excludes other programs' roots when assembling
+a library and does not when closing over a program, and that asymmetry is
+deliberate: a function defined next to a `main()` is still a function, and
+declining to link it because of what shares its file would be its own kind of
+guess. Whether the rule should change is still open in §15; that it should be
+explained is not.
+
+The case checks the fix as well as the message — moving the shared function
+into a file of its own, which is what the message recommends, and then that
+both programs build and run. A recommendation nobody has followed through is
+a guess with a confident tone.

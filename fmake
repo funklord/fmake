@@ -4556,6 +4556,39 @@ def build(args, _bootstrapping=False):
                          f"{CONF_FILE}.")
         die("\n".join(lines))
 
+    # ---- one program's root inside another's link set -----------------
+    # Every exe root defines main(), so a closure that reaches a second one
+    # cannot link -- and the linker says so in terms of object paths under
+    # .fmake, several steps from the cause. Worse, fmake's own summary then
+    # offered to name the missing libraries, when nothing is missing at all.
+    # §3 excludes other roots when assembling a library and does not when
+    # closing over a program, deliberately: a function defined next to a
+    # main() is still a function, and refusing to link it would be its own
+    # kind of guess. So this reports rather than resolves.
+    roots = {t.rel: t.name for t in wanted if t.kind == "exe"}
+    intruders = []
+    for t, cl in closures.items():
+        if t.kind != "exe":
+            continue
+        for u in cl.link:
+            if u.rel != t.rel and u.rel in roots:
+                sym, by = cl.why.get(u.rel, ("", ""))
+                intruders.append((t.name, u.rel, roots[u.rel], sym, by))
+    if intruders:
+        lines = ["a program's own file was pulled into another program:"]
+        for name, rel, owner, sym, by in intruders:
+            lines.append(f"    {name} links {rel}, which roots {owner}"
+                         + (f"\n        <- {sym}" + (f"  ({by})" if by else "")
+                            if sym else ""))
+        lines += ["",
+                  "Both define main(), so this cannot link. What is shared "
+                  "belongs in a file of its own:",
+                  "move it out of " + ", ".join(sorted({r for _n, r, *_ in intruders}))
+                  + " and both programs can reach it.",
+                  "Naming each program's sources in " + CONF_FILE
+                  + " settles it too."]
+        die("\n".join(lines))
+
     # ---- resolve external symbols to libraries ------------------------
     resolutions = {}
     if not args.no_libs and not args.dry_run:
