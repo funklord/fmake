@@ -58,7 +58,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [20. Declared membership](#20-declared-membership-and-the-dead-end-before-it) ·
 [21. What widening costs](#21-what-widening-actually-costs) ·
 [22. Shared library soname](#22-a-shared-library-that-did-not-say-its-own-name) ·
-[23. The wrong-architecture archive](#23-the-archive-that-was-the-wrong-architecture)
+[23. The wrong-architecture archive](#23-the-archive-that-was-the-wrong-architecture) ·
+[24. Checking the exit](#24-checking-the-exit-actually-is-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1793,7 +1794,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 148, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 149, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2669,3 +2670,39 @@ already held an x86-64 one, since `ar rcs` appends rather than replaces, and
 fmake judged the result by the first member. That is a real limit and now
 recorded as one, though a mixed-architecture archive is not a thing anyone
 should be able to produce by accident twice.
+
+---
+
+## 24. Checking the exit actually is one
+
+§12 claims an ejected build "produces binaries matching fmake's symbol for
+symbol". That was asserted rather than tested, and every ejection case in the
+suite checked something weaker: that the emitted build **works**. A build file
+can lose a flag, an archive, or the order of the link line and still produce a
+program that runs and prints the right number.
+
+The claim held, checked by hand across everything added since it was written:
+
+| | symbols | differing |
+|---|---|---|
+| qView — moc, uic, rcc | 2562 | **0** |
+| two vendored archives in a cycle | 34 | **0** |
+| shared library | 20 | **0**, `SONAME` present in both |
+
+But holding is not the same as being guarded, and the two nearest misses say
+why this needed a case. Vendored archives and the shared-library soname were
+both added to `link_cmd` and to *one* ejection backend before the other — each
+a change where fmake's own build stays perfectly correct and only the exit
+drifts. Nothing in the suite could have noticed.
+
+There is now a case that builds a tree both ways and compares the two binaries'
+symbol tables. The tree is chosen so that a plain hello world would not do: a
+per-file `@define`, an `-I` only the config supplies, and a prebuilt archive
+that has to land after the objects. Both of the obvious drifts — dropping the
+archive from the ejected link line, dropping `@cflags`/`@define` from the
+ejected object rule — turn it red while leaving every other test in the suite
+green, which is exactly the property wanted.
+
+The narrower point is worth keeping separately: **"it works" is a weaker test
+than "it is the same"**, and for a feature whose whole purpose is
+equivalence, only the second one is the feature.

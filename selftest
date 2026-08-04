@@ -4514,6 +4514,79 @@ int main(void){ return helper() == 42 ? 0 : 1; }
           f"the cross-built program did not run: {got.stderr[:160]}")
 
 
+@case
+def an_ejected_build_matches_symbol_for_symbol(t):
+    """The README's claim, made testable.
+
+    Every other ejection case checks that the emitted build *works*. That is
+    a weaker thing: a build file can lose a flag, an archive, or the order of
+    the link line and still produce a program that runs. The claim is that it
+    produces the same program, and the two places that nearly broke it --
+    vendored archives, and the shared library soname -- were both added to
+    the linker and to one ejection backend before the other.
+
+    The tree deliberately covers what a plain hello world would not: a
+    per-file @define, an -I only the config supplies, and a prebuilt archive
+    that has to land after the objects."""
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    _vendor(t, "vendor/libextra.a", "extra", "int extra(void){ return 20; }\n")
+    t.write("include/dep.h", "int dep_value(void);\n")
+    t.write("src/dep.c", '#include "dep.h"\nint dep_value(void){ return 22; }\n')
+    t.write("src/main.c", """
+/*! @file
+ *  @target ejected
+ *  @define BONUS=1
+ */
+#include <stdio.h>
+#include "dep.h"
+int extra(void);
+int main(void){ printf("%d\\n", dep_value() + extra() + BONUS); return 0; }
+""")
+    t.write("fmake.toml", '[project]\ninclude-dirs = ["include"]\n')
+
+    check(t.fmake().returncode == 0, "fmake build failed")
+    mine = os.path.join(t.dir, "ejected")
+    check(t.run("ejected").stdout.strip() == "43", "fmake built it wrong")
+
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+
+    # A copy with no .fmake in it, so the emitted file is on its own.
+    other = tempfile.mkdtemp(prefix="fmake-ejected-")
+    try:
+        for name in os.listdir(t.dir):
+            if name in (".fmake", "ejected"):
+                continue
+            src = os.path.join(t.dir, name)
+            dst = os.path.join(other, name)
+            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+        with open(os.path.join(other, "Makefile"), "w") as fh:
+            fh.write(r.stdout)
+
+        m = _run_in(other, "make")
+        check(m.returncode == 0, f"the ejected build failed: {m.stdout}{m.stderr}")
+        theirs = os.path.join(other, "ejected")
+        check(_run_in(other, "./ejected").stdout.strip() == "43",
+              "the ejected build produced a different answer")
+
+        def syms(path):
+            out = subprocess.run(["nm", "--format=posix", path],
+                                 capture_output=True, text=True).stdout
+            return sorted(l.split()[0] + " " + l.split()[1]
+                          for l in out.splitlines() if len(l.split()) >= 2)
+
+        a, b = syms(mine), syms(theirs)
+        check(a and b, "one of the binaries had no symbols to compare")
+        extra_a = [s for s in a if s not in b]
+        extra_b = [s for s in b if s not in a]
+        check(not extra_a and not extra_b,
+              f"the two binaries differ: only in fmake's {extra_a[:5]}, "
+              f"only in the ejected one {extra_b[:5]}")
+    finally:
+        shutil.rmtree(other, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

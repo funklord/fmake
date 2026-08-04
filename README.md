@@ -274,7 +274,9 @@ the config file.
 `fmake --eject` writes a standalone Makefile — or `--eject ninja` a
 `build.ninja` — containing everything fmake worked out, with nothing referring
 back to fmake. The output is byte-stable, so it is safe to commit, and it
-produces binaries matching fmake's symbol for symbol.
+produces binaries matching fmake's symbol for symbol — checked by a test that
+builds a tree both ways and diffs the two symbol tables, and by hand on qView
+(2562 symbols, none differing).
 
 A tool this opinionated has to be leaveable.
 
