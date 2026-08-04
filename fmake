@@ -4004,9 +4004,33 @@ def build(args, _bootstrapping=False):
     # with neither is a library named after its directory, which is the only
     # thing it could sensibly be. fmake.toml can also declare a target that
     # no file roots, and can override anything a file said.
+    # A file whose main() the compiler did not agree with, remembered so the
+    # disagreement is reported once rather than every build. The scan reads
+    # text and cannot evaluate #if, so a main() behind one is seen; the
+    # object settles it, and the answer only changes if the file changes or
+    # the configuration does. Both are in the stamp. Same shape as moc's
+    # negative result for a Q_OBJECT the preprocessor never reaches.
+    nomain = cache.data.setdefault("nomain", {})
+
+    def main_stamp(rel):
+        """What the answer depends on: the file, and the configuration.
+
+        Computed in one place because the store and the check have to agree
+        exactly -- two copies that drift merely never match, which looks like
+        the feature being off rather than broken.
+        """
+        return sha((cache.hash_of(os.path.join(root, rel), rel) or "?")
+                   + cfg.key)
+
+    def main_is_a_mirage(rel):
+        return nomain.get(rel) == main_stamp(rel)
+
     targets, claimed = [], set()
     for rel in srcs:
         ann = Ann(scans[rel].get("dirs"))
+        if ann.scalar("kind") is None and scans[rel]["has_main"] \
+                and main_is_a_mirage(rel):
+            continue
         if scans[rel]["has_main"] or ann.scalar("kind"):
             name = ann.scalar("target") or default_name(rel, root)
             t = Target(rel, root, ann, conf.target(name))
@@ -4339,6 +4363,10 @@ def build(args, _bootstrapping=False):
                 if t.kind == "exe" and "main" not in units[t.rel].strong:
                     warn(f"{t.rel} looked like it defined main() but the "
                          f"object does not export it; skipping")
+                    # Remembered against the file and the configuration, so
+                    # the next build does not propose it, compile it, link
+                    # nothing and say this again.
+                    nomain[t.rel] = main_stamp(t.rel)
                     wanted.remove(t)
             if not wanted:
                 die("no target could be built")

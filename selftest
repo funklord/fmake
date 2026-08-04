@@ -4717,6 +4717,71 @@ int main(void){ return shared_thing() == 5 ? 0 : 1; }
     check(t.run(os.path.basename(t.dir)).returncode == 0, "program failed")
 
 
+MIRAGE_TOOL = """
+#ifdef WANT_TOOL
+#include <stdio.h>
+int main(void){ printf("tool\\n"); return 0; }
+#endif
+int tool_spare(void){ return 3; }
+"""
+
+
+@case
+def a_main_behind_an_ifdef_is_reported_once(t):
+    """The scan reads text and cannot evaluate #if; the object settles it.
+
+    A main() behind a disabled #ifdef is seen by the scan, so a target is
+    proposed, compiled, found to export no main, and dropped -- correctly,
+    and with a warning that is worth reading the first time. Angband has such
+    a file, and said so on every build forever. The same shape as moc's
+    negative result for a Q_OBJECT the preprocessor never reaches."""
+    t.write("tool.c", MIRAGE_TOOL)
+    t.write("helper.c", "int helper(void){ return 1; }\n")
+    t.write("app.c", """
+int helper(void);
+int main(void){ return helper() == 1 ? 0 : 1; }
+""")
+    first = t.fmake()
+    check("looked like it defined main" in first.stdout + first.stderr,
+          f"the disagreement should be reported once: {first.stdout}")
+    check(t.run("app").returncode == 0, "the real program should still build")
+
+    again = t.fmake()
+    check("looked like it defined main" not in again.stdout + again.stderr,
+          f"it should not be reported again: {again.stdout}")
+
+
+@case
+def a_mirage_main_is_reconsidered_when_it_becomes_real(t):
+    """Remembering the answer must not mean refusing to look again.
+
+    The stamp covers the file's contents and the configuration, which are
+    the two things that decide whether the #ifdef is on. Getting this wrong
+    would leave a program permanently unbuildable with no way to find out
+    why, which is far worse than the warning it replaced."""
+    t.write("tool.c", MIRAGE_TOOL)
+    t.write("helper.c", "int helper(void){ return 1; }\n")
+    t.write("app.c", """
+int helper(void);
+int main(void){ return helper() == 1 ? 0 : 1; }
+""")
+    check(t.fmake().returncode == 0, "first build failed")
+    check(not os.path.exists(os.path.join(t.dir, "tool")),
+          "tool should not have been built yet")
+
+    r = t.fmake("--cflags", "-O2 -DWANT_TOOL")
+    check(r.returncode == 0, f"build with the define failed: {r.stdout}{r.stderr}")
+    check(os.path.exists(os.path.join(t.dir, "tool")),
+          f"the define makes main() real, so it should build: {r.stdout}")
+    check(t.run("tool").stdout.strip() == "tool", "the program misbehaved")
+
+    # And a plain edit is the other way the answer can change.
+    t.write("tool.c", MIRAGE_TOOL + "\nint spare(void){ return 2; }\n")
+    r = t.fmake()
+    check("looked like it defined main" in r.stdout + r.stderr,
+          f"an edited file should be looked at afresh: {r.stdout}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

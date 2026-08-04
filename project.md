@@ -62,7 +62,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [24. Checking the exit](#24-checking-the-exit-actually-is-one) ·
 [25. The cache remembered failures](#25-the-cache-remembered-the-failures-too) ·
 [26. An optimisation that was not](#26-an-optimisation-that-was-not-one) ·
-[27. Symlinks](#27-symlinks-and-a-count-that-named-the-wrong-reason)
+[27. Symlinks](#27-symlinks-and-a-count-that-named-the-wrong-reason) ·
+[28. The main that was not there](#28-the-main-that-was-not-there)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1741,6 +1742,12 @@ rather than code, and one lesson about testing.
   with no `":/..."` literal anywhere, and no `Q_INIT_RESOURCE`, leaves nothing
   to go on. `--force-link` still covers it, but unlike the symbol closure
   there is no guarantee here, only good evidence.
+- **A program's root file can be pulled into another program.** If one
+  program's root defines a symbol another needs, the closure links it — and
+  with it a second `main`. The linker says so plainly, so it is loud rather
+  than silent, but §3 excludes other roots when building a *library* and does
+  not when building a program. Found while writing §28's fixture, where it
+  was the fixture's fault; whether it is ever a real tree's fault is untested.
 - **`[build-toolchain]` is only consulted for generator tools.** Nothing else
   in fmake distinguishes the build machine from the target, because nothing
   else needs to yet. A test binary meant to run during the build would.
@@ -1797,7 +1804,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 154, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 156, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2848,3 +2855,50 @@ reported correctly as *unreadable* on one line and then counted as a platform
 exclusion on the next, which sends anyone looking for the cause to `@os`
 first. It now says `N excluded`, and `--explain` gives the reason per file,
 which it always did.
+
+---
+
+## 28. The main() that was not there
+
+Every build of Angband said this, and had done since Angband was first built
+here:
+
+```
+* randname.c looked like it defined main() but the object does not export it; skipping
+```
+
+It is true, and it is right to say once. `randname.c` really does contain
+`int main(int argc, char *argv[])`, behind an `#ifdef` this configuration does
+not enable. The scan reads text and cannot evaluate `#if`, so it proposes a
+target; the object settles it; the target is dropped.
+
+Saying it on *every* build is the problem, and it is the same shape as the
+`Q_OBJECT` behind an `#if 0` that §17 already solved for moc: a disagreement
+between what the text says and what the preprocessor does, which is settled
+by evidence and then worth remembering. The answer is now stamped against the
+file's contents and the configuration — the only two things that decide
+whether the `#ifdef` is on — so the file is not proposed, compiled and linked
+again to reach the same conclusion.
+
+Remembering must not become refusing to look. Adding `-DWANT_TOOL` to a tree
+where that is what the `#ifdef` wants builds the program, because the stamp
+covers the configuration; editing the file re-reports, because it covers the
+contents. Both are cases. Getting this wrong would leave a program
+permanently unbuildable with no way to discover why, which is much worse than
+the message it replaces.
+
+### Two mistakes worth keeping
+
+**The stamp was computed in two places.** The mutation that removed the
+configuration from it was written against the *check* and not the *store*, so
+the two simply never matched — which reads as the feature being switched off
+rather than broken, and the test passed. It is one function now, and the
+mutation bites.
+
+**The fixture found a real limitation, by being wrong.** The first version
+put `helper()` in the same file as the conditional `main`, so with the define
+on, the other program's closure pulled that file in and got a second `main`.
+That is not the feature under test, but it is a real shape: §3 excludes other
+programs' roots when assembling a *library* and does not when closing over a
+program. The linker says `multiple definition of main` plainly, so it is loud
+rather than silent, and it is recorded in §15 rather than changed here.
