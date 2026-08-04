@@ -3636,3 +3636,66 @@ The message now consults the schema. And the case covering that branch
 three. The test had written §31 down as a requirement. It now asserts the
 distinction rather than the sentence, which is a better case than the one it
 replaced -- and it was found by the fix failing it, not by reading it.
+
+## 42. The feature that was there
+
+netcfgd declined, and named one reason:
+
+> `client/` exists to produce `libncfg_client.a`. `gui/` links it. That
+> archive *is* the deliverable [...] fmake linked the library sources
+> **into the test binary** and produced no archive. `--help` offers
+> `--no-libs`, which is about resolving external symbols to system
+> libraries, and nothing that says "these translation units are a library
+> others link".
+>
+> **Suggestion:** treat "library plus consumers" as a first-class inferred
+> output, or say plainly in the README that fmake builds programs.
+
+Neither, because the premise is wrong. Their tree builds today, with one
+comment and no build file:
+
+```
+/**
+ * @kind static
+ * @target ncfg_client
+ */
+```
+
+That produces `libncfg_client.a` holding exactly `ncfg_client.c.o` and
+`ncfg_json.c.o`, and `client_test` beside it, unaffected. §3 decides the
+archive's membership the same way it decides a program's.
+
+So this was a **discoverability** failure, not a missing feature, and that
+is worth more attention than a missing feature would have been. A gap is
+found by the person who needs it; a feature nobody can find is declined by
+someone who then reports the tool cannot do it, and the report is
+convincing because they did the work. They read `--help`, they read the
+README, and they ran it. Three surfaces, and the answer was in none of
+them: the README's directive table said `@kind` "inferred from `main()`
+otherwise", which describes the mechanism and not the thing anybody wants
+it for.
+
+The fix is in the place the question is asked. `--explain` printed the kind
+and never said what decided it:
+
+    target client_test (exe)  [no @target]
+
+and now says:
+
+    kind    exe: tests/client_test.c defines main(); @kind static builds
+            an archive instead
+
+Three provenances -- declared in `fmake.toml`, declared with `@kind`, or
+inferred -- and only the inferred one names the alternative, because that is
+the only case where the reader might not know there is one. The README grew
+the worked example: the same tree twice, once producing a program and once
+producing both.
+
+### What this says about the other four reports
+
+Every one of them was written by someone who ran fmake rather than read
+about it, which is the only reason this surfaced at all. It also means the
+rest of their findings deserve the same question before any of them is
+built: **is this missing, or is it unfindable?** For hydra's two it was
+genuinely missing, and §40 and §41 built it. For this one the answer was a
+comment nobody could have guessed was there.

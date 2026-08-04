@@ -2464,6 +2464,73 @@ double mathx_scale(double v, double k){ return v * k; }
 
 
 @case
+def a_library_and_its_consumers_coexist(t):
+	"""netcfgd's shape, and the reason they declined.
+
+	A library, and a test binary beside it that links the library. Their
+	report: "fmake linked the library sources into the test binary and
+	produced no archive [...] nothing that says these translation units are
+	a library others link." It builds correctly today and the answer is one
+	comment, which is a discoverability failure rather than a missing
+	feature -- so this pins the shape, and --explain now names @kind where
+	the question gets asked.
+
+	Both artifacts, from one tree, with no fmake.toml."""
+	t.write("ncfg_client.h", "#pragma once\nint ncfg_connect(const char *);\n")
+	t.write("ncfg_client.c",
+	        "/**\n * @kind static\n * @target ncfg_client\n */\n"
+	        '#include "ncfg_client.h"\n'
+	        "int ncfg_json_parse(const char *);\n"
+	        "int ncfg_connect(const char *s){ return ncfg_json_parse(s); }\n")
+	t.write("ncfg_json.c",
+	        "int ncfg_json_parse(const char *s){ return s && *s ? 1 : 0; }\n")
+	t.write("tests/client_test.c",
+	        '#include "../ncfg_client.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", ncfg_connect("{}")); return 0; }\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	archive = os.path.join(t.dir, "libncfg_client.a")
+	check(os.path.exists(archive),
+	      f"the archive is a deliverable too: {os.listdir(t.dir)}")
+	members = subprocess.run(["ar", "t", archive],
+	                         capture_output=True, text=True).stdout.split()
+	check(sorted(members) == ["ncfg_client.c.o", "ncfg_json.c.o"],
+	      f"the archive should hold the library, not the test: {members}")
+	# The test binary is unaffected by the archive existing.
+	check(t.run("client_test").stdout == "1\n",
+	      "the consumer should still build and run")
+
+
+@case
+def explain_says_what_decided_the_kind(t):
+	"""The line netcfgd would have needed, where they were looking.
+
+	`(exe)` was stated and never explained. Three provenances, and the
+	inferred one names the alternative -- that is the whole point: a reader
+	asking "why is there no archive" gets the answer rather than a fact."""
+	t.write("lib.c", "int helper(void){ return 1; }\n")
+	t.write("tests/prog.c",
+	        "int helper(void);\nint main(void){ return helper() - 1; }\n")
+
+	ex = t.fmake("--explain").stdout
+	check("tests/prog.c defines main()" in ex and "@kind static" in ex,
+	      f"an inferred exe should say so and name the alternative: {ex}")
+
+	t.write("lib.c", "//! @kind static\n//! @target helper\n"
+	                 "int helper(void){ return 1; }\n")
+	ex = t.fmake("-B", "--explain").stdout
+	check("static: @kind in lib.c" in ex,
+	      f"a declared kind should name the file that declared it: {ex}")
+
+	os.unlink(os.path.join(t.dir, "tests/prog.c"))
+	t.write("lib.c", "int helper(void){ return 1; }\n")
+	ex = t.fmake("-B", "--explain").stdout
+	check("nothing here defines main()" in ex,
+	      f"a whole-tree library should say why it is one: {ex}")
+
+
+@case
 def kind_shared_builds_a_solib(t):
 	"""@kind shared, with -fPIC applied because it is needed."""
 	t.write("greet.h", "const char *greet(void);\n")

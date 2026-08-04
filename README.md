@@ -51,7 +51,35 @@ called; `#include <SDL.h>` only proves a declaration was wanted. Includes
 supply the `-I` flags, symbols decide the `-l` flags, and a header whose
 library nothing calls is reported and not linked.
 
-Run `fmake --explain` to see every decision, down to the exact command line.
+**A library and the things that link it is one comment.** The shape most
+worth a build system — library sources, one or more programs, tests linking
+the library — needs no build file either. With nothing said, the library
+sources link straight into whichever program reaches them, which is right
+for that binary and produces no archive:
+
+```
+$ fmake
+[1/2] CC  ncfg_client.c
+[2/2] CC  tests/client_test.c
+LD  client_test
+```
+
+`@kind static` in the source that heads the library says the archive is a
+deliverable in its own right. The link set is still computed from symbols,
+so the archive gets the units the library needs and the test binary is
+unaffected:
+
+```
+$ fmake                       # ncfg_client.c now carries @kind static
+AR  libncfg_client.a          #   members: ncfg_client.c.o, ncfg_json.c.o
+LD  client_test
+```
+
+`@kind shared` builds a `.so` instead, with a soname; `--install` then uses
+`@headers` to know what to put in `include/`.
+
+Run `fmake --explain` to see every decision, down to the exact command line
+— including which kind each target is and what decided it.
 
 ---
 
@@ -77,7 +105,7 @@ like `@brief` are ignored.
 | Directive | Means |
 |---|---|
 | `@target NAME` | Name of the artifact this file roots |
-| `@kind exe\|shared\|static` | What to build; inferred from `main()` otherwise |
+| `@kind exe\|shared\|static` | Build an archive or `.so` from this file's closure; `exe` is inferred from `main()` |
 | `@pkg NAME [OP VER]` | pkg-config dependency, version constraint optional |
 | `@pkg_optional NAME defines MACRO` | Define `MACRO` if pkg-config finds `NAME` |
 | `@libs NAME…` | Raw `-l`, for libraries with no `.pc` file |

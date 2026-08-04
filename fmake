@@ -3871,6 +3871,25 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	else:
 		named = "no @target"
 	print(f"{BOLD('target')} {BOLD(name)} ({t.kind})  {DIM('[' + named + ']')}")
+
+	# Where the kind came from, and -- when nothing said -- that something
+	# could. A tree of library sources with one test beside it is the shape
+	# a build system is most annoying for, and fmake builds it correctly
+	# today: the library units link into the test and there is no archive,
+	# which is right for that binary and not what the project ships. One
+	# project declined over this without finding @kind, having read --help
+	# and found nothing that says these translation units are a library.
+	# The line costs nothing and is printed where the question is asked.
+	if t.conf.get("kind"):
+		how = f"[target.*] in {CONF_FILE} says so"
+	elif t.ann.scalar("kind"):
+		how = f"@kind in {t.rel}"
+	elif t.kind == "exe":
+		how = f"{t.rel} defines main(); @kind static builds an archive instead"
+	else:
+		how = "nothing here defines main()"
+	print(f"  {_col(CYAN('kind'), W)}{DIM(f'{t.kind}: {how}')}")
+
 	if t.members is not None:
 		print(f"  {_col(CYAN('membership'), W)}"
 		      f"{DIM('declared, so the closure is not consulted')}")
