@@ -4587,6 +4587,73 @@ int main(void){ printf("%d\\n", dep_value() + extra() + BONUS); return 0; }
         shutil.rmtree(other, ignore_errors=True)
 
 
+@case
+def a_file_that_cannot_compile_is_not_remembered(t):
+    """A failure must not be cached as a discovery.
+
+    The resolved unit set is remembered so a later build starts from what
+    widening found rather than re-deriving it, and it was remembering
+    everything -- including the files that failed. Those define nothing, so
+    they can never be why anything links, and keeping them guarantees
+    compiling and failing again on every future build.
+
+    The distinction that matters: a file the *include graph* reaches is
+    proposed afresh every time and must still be retried, or the error would
+    be hidden rather than forgotten. So this tree reaches broken.c only
+    through widening -- main.c has no includes at all, and both candidates
+    appear to define the symbol it wants."""
+    t.write("main.c", """
+int real_thing(void);
+int main(void){ return real_thing() - 7; }
+""")
+    t.write("good.c", "int real_thing(void){ return 7; }\n")
+    t.write("broken.c",
+            '#include "nowhere_at_all.h"\nint real_thing(void){ return 0; }\n')
+
+    first = t.fmake()
+    check(any("broken.c" in c for c in compiled(first)),
+          f"widening should have tried it once: {compiled(first)}")
+    check(any("good.c" in c for c in compiled(first)),
+          f"the file that works should have been found: {compiled(first)}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0,
+          "the program should still build and run")
+
+    again = t.fmake()
+    check(not any("broken.c" in c for c in compiled(again)),
+          f"the failure was remembered and retried: {compiled(again)}")
+    check(not compiled(again), f"the rebuild was not a no-op: {compiled(again)}")
+    check(again.returncode == 0,
+          f"a clean rebuild should not report failure: {again.stdout}")
+
+
+@case
+def widen_all_does_not_stay_switched_on(t):
+    """--widen-all is an override, not something learned about the tree.
+
+    Its unit set is every file there is. Remembering it would leave the flag
+    in effect for every later build through the cache, which is a route
+    nobody would think to look for when wondering why a build compiles the
+    whole tree."""
+    t.write("main.c", "int helper_1(void);\nint main(void){ return helper_1() - 1; }\n")
+    for i in range(1, 21):
+        t.write(f"f{i}.c", f"int helper_{i}(void){{ return {i}; }}\n")
+
+    def candidates(r):
+        m = re.search(r"(\d+) candidates", r.stdout + r.stderr)
+        return int(m.group(1)) if m else -1
+
+    plain = candidates(t.fmake("-v"))
+    check(0 < plain <= 4, f"a normal build should propose a few files: {plain}")
+
+    wide = candidates(t.fmake("-v", "--widen-all"))
+    check(wide >= 21, f"--widen-all should propose everything: {wide}")
+
+    after = candidates(t.fmake("-v"))
+    check(after <= plain + 1,
+          f"--widen-all stayed switched on through the cache: {after} "
+          f"candidates afterwards against {plain} before")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

@@ -59,7 +59,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [21. What widening costs](#21-what-widening-actually-costs) ·
 [22. Shared library soname](#22-a-shared-library-that-did-not-say-its-own-name) ·
 [23. The wrong-architecture archive](#23-the-archive-that-was-the-wrong-architecture) ·
-[24. Checking the exit](#24-checking-the-exit-actually-is-one)
+[24. Checking the exit](#24-checking-the-exit-actually-is-one) ·
+[25. The cache remembered failures](#25-the-cache-remembered-the-failures-too)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1794,7 +1795,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 149, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 151, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2549,7 +2550,10 @@ Measured now, on three trees.
 | **loose tree** (C) | 201 | 1 | 2 | 2 | **0** |
 
 Angband is the real answer: 327 `.c` files in the repository, 168 after the
-platform excludes, a clean `-j8` build in 67s and a no-op rebuild in 3.5s.
+platform excludes, a clean `-j8` build in 67s and a no-op rebuild in 0.44s.
+(That last figure was first recorded here as 3.5s, which was measuring §25's
+bug rather than the build: the "no-op" was recompiling eleven files that
+could never compile.)
 The include graph finds 122 of the 150 files that end up linked — 81% — and
 widening supplies the remaining 28, overshooting by exactly one. `--widen-all`
 compiles 157 and takes 70s, so the whole apparatus buys about 4% of the build
@@ -2706,3 +2710,50 @@ green, which is exactly the property wanted.
 The narrower point is worth keeping separately: **"it works" is a weaker test
 than "it is the same"**, and for a feature whose whole purpose is
 equivalence, only the second one is the feature.
+
+---
+
+## 25. The cache remembered the failures too
+
+Found while profiling the no-op build on Angband, which took 3.5 seconds and
+should have taken almost none. The profile never got far enough to be
+interesting: the "no-op" was compiling eleven files, every one of which
+failed.
+
+The resolved unit set is cached so a later build starts from what widening
+found rather than re-deriving it, which §8 argues for and §21 measured the
+benefit of. It was caching **everything in the pool**, including the files
+that failed to compile. Those define nothing — that is what failing means
+here — so they can never be why anything links, and remembering them
+guarantees compiling them again, and failing again, on every future build
+until the tree is cleaned.
+
+Angband has such files by construction: `nds/`, `sdl2/`, `stats/db.c` and
+`snd-sdl.c` want headers this configuration does not have. One build reported
+them, which is right. Every subsequent build re-reported them, which is not.
+
+```
+no-op rebuild:  3.5s  ->  0.44s
+```
+
+**Forgetting is not hiding**, and the distinction is what makes this safe. A
+file the include graph reaches is proposed afresh every build regardless of
+the cache, so a genuine error keeps being reported. Only a file reachable
+*solely* through the remembered set stops being retried — and it was put
+there by a widening pass that has since been shown to be pointless.
+
+### And a flag that would not switch off
+
+`--widen-all` compiles the whole tree before deciding, which is an override
+rather than something learned. Its unit set was being remembered like any
+other, so a single `--widen-all` left every later build starting from every
+file in the tree — the flag still in effect, by a route nobody would think to
+look for when wondering why an incremental build had got slow. It is no
+longer written to the cache at all.
+
+Both have a case. The first needed three attempts at a fixture, and the two
+failures are the useful part: a file that nothing proposes is never tried, so
+proving it is not *retried* proves nothing; and a file the include graph
+reaches is retried correctly, so it cannot demonstrate the bug either. The
+shape that does is a file reachable only by widening, alongside another that
+supplies the same symbol and actually compiles.

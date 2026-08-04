@@ -4467,7 +4467,20 @@ def build(args, _bootstrapping=False):
                                                target_ident, proj)
 
     # ---- explain or link ----------------------------------------------
-    cache.data["units"] = sorted(units)
+    # What widening discovered, to start from next time -- but not what it
+    # discovered was useless. A file that failed to compile defines nothing,
+    # so it can never be why anything links; remembering it only guarantees
+    # compiling it again, and failing again, on every future build. If it is
+    # genuinely reachable the include graph or widening proposes it afresh
+    # and the error comes back, which is the difference between forgetting it
+    # and hiding it.
+    #
+    # --widen-all is not remembered at all. Its set is every file in the tree
+    # rather than a discovery about this program, and inheriting it would
+    # leave the flag switched on for every later build by a route nobody
+    # would think to look for.
+    if not args.widen_all:
+        cache.data["units"] = sorted(r for r in units if r not in broken)
 
     if args.eject:
         emit = eject_ninja if args.eject == "ninja" else eject_make
