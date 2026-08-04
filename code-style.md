@@ -117,6 +117,19 @@ breaking while being quoted through nested layers, each costing more than
 the bug being fixed. Mutations go through a script reading before-and-after
 text from files, never through a shell heredoc.
 
+## ASCII in source
+
+Source and comments are ASCII. Write `--` where prose would use an em dash,
+and "section" for a section sign.
+
+This governs the text the repository writes about itself, not the data the
+software handles. Documentation may use typographic punctuation; so may
+user-facing text in UI software, and anything that genuinely requires
+Unicode.
+
+Enabled here (`ascii_only` in `.style-gate.toml`): this is a build tool with
+no user-facing Unicode and nothing that needs it.
+
 ## See also
 
 - **`~/.claude/guidelines/code-style.md`** -- the source this file copies.

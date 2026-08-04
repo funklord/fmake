@@ -880,7 +880,7 @@ def relinking_follows_the_command_not_just_mtimes(t):
 
 @case
 def a_library_will_not_hold_two_definitions(t):
-	"""§3 refuses to guess for programs; a library is not exempt.
+	"""section 3 refuses to guess for programs; a library is not exempt.
 
     `ar` resolves duplicate members by order, silently, and the consumer
     inherits the coin flip with no way to see where it came from."""
@@ -1442,7 +1442,7 @@ def mk_refuses_directives_that_need_a_file(t):
     Which remedy the message offers is per directive, not a fixed sentence.
     [target.*] takes `kind` and `target`; it does not take `os`, and this
     case asserted it did until the schema was consulted instead of assumed
-    -- §31 written into a test."""
+    -- section 31 written into a test."""
 	t.write("main.c", "int main(void){ return 0; }\n")
 	for directive, expect, conf in (("@target thing", "target", True),
 	                                ("@os linux", "os", False),
@@ -2765,7 +2765,7 @@ int main(void){ printf("%s %d\n", LABEL, SCALE * 7); return 0; }
 
 @case
 def ldflags_propagate_and_cflags_do_not(t):
-	"""The asymmetry §4 is built on.
+	"""The asymmetry section 4 is built on.
 
     A compile flag is a property of the file it is written in. A link flag is
     a property of whatever that file ends up inside -- which is what lets a
@@ -3018,7 +3018,7 @@ def a_missing_header_names_the_platform_escape(t):
 
 @case
 def an_unrelated_error_gets_no_platform_advice(t):
-	"""A wrong remedy costs more than none -- §31, and this is where it
+	"""A wrong remedy costs more than none -- section 31, and this is where it
 	would land, since a compile failure is read by someone already stuck."""
 	t.write("main.c", "int main(void){ return \"oops\"; }\n")
 
@@ -3099,7 +3099,7 @@ def a_name_the_author_chose_is_refused_not_renamed(t):
 
 @case
 def a_target_section_that_matches_nothing_says_what_exists(t):
-	"""§31: name a place that exists.
+	"""section 31: name a place that exists.
 
 	A [target.*] section is keyed by the name a target already has, and that
 	is not always the directory -- src/main.cpp is called after the project,
@@ -5039,7 +5039,7 @@ int main(void){ printf("%d\\n", helper()); return 0; }
 def widening_finds_an_explicit_template_instantiation(t):
 	"""A file whose only definitions are template instantiations.
 
-    §15 recorded this as untested and it was broken. `extern template` in a
+    section 15 recorded this as untested and it was broken. `extern template` in a
     header leaves a plain undefined reference, satisfied by exactly one
     translation unit -- conventionally a file that instantiates them for the
     whole project, with no header of its own, so the include graph never
@@ -5180,7 +5180,7 @@ int main(int argc, char **argv) {{
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 
-    §3 must not let the include graph decide this -- it exists because the
+    section 3 must not let the include graph decide this -- it exists because the
     include graph is not good enough to. It is good enough to *suggest*,
     though, and where it reaches exactly one provider from a program's own
     root that is almost always the right answer. Reported for every affected
@@ -5205,7 +5205,7 @@ def an_ambiguous_symbol_suggests_the_owner(t):
 
 @case
 def widening_does_not_compile_the_whole_tree(t):
-	"""The shape §15 feared: many loose files, one small binary.
+	"""The shape section 15 feared: many loose files, one small binary.
 
     The worry was that a tree whose include graph is a poor guide would pay
     for compiling translation units it turns out not to need. It does not,
@@ -5530,7 +5530,7 @@ def two_links_to_one_directory_are_walked_once(t):
 
     The cycle guard is keyed on the real path rather than on the walked one
     for exactly this: a diamond is not a loop, and walking it twice would
-    hand §3 a duplicate of every symbol in the directory and no way to
+    hand section 3 a duplicate of every symbol in the directory and no way to
     choose."""
 	os.makedirs(os.path.join(t.dir, "elsewhere"), exist_ok=True)
 	t.write("elsewhere/thing.c", "int shared_thing(void){ return 5; }\n")
@@ -5667,7 +5667,7 @@ def a_package_in_an_unusual_prefix_is_found(t):
     only reachable through $PKG_CONFIG_PATH, which `pkg-config
     --variable=pc_path` does not report -- so the header-to-package map never
     saw it and the include did not resolve, for a library that is plainly
-    installed. Then the -L was parsed and discarded, because §5 recovers
+    installed. Then the -L was parsed and discarded, because section 5 recovers
     library paths from where a library was found rather than from
     pkg-config; that works only for directories fmake already looks in, and
     this is not one. And finally the answer is cached across builds, so
@@ -5729,7 +5729,7 @@ def one_program_pulled_into_another_is_reported(t):
     libraries, when nothing was missing at all: the advice pointed at the
     opposite of the problem.
 
-    §3 excludes other programs' roots when assembling a library and does not
+    section 3 excludes other programs' roots when assembling a library and does not
     when closing over a program, deliberately -- refusing to link a function
     because of what shares its file would be its own kind of guess. So this
     is reported, with the fix that actually works."""
@@ -6299,7 +6299,7 @@ def a_feature_compiled_away_is_not_silent(t):
 	out = r.stdout + r.stderr
 	# The whole phrase, not the word: this case's own name reaches the
 	# output as the scratch directory, and a bare "conditional" matched it.
-	# §38 in the harmless direction, which is the only reason it was cheap.
+	# section 38 in the harmless direction, which is the only reason it was cheap.
 	check("the preprocessor did not take" in out,
 	      f"a feature compiled away should be reported: {out}")
 
@@ -6309,7 +6309,7 @@ def a_library_the_code_does_not_call_is_a_different_finding(t):
 	"""And must not be reported as the one above.
 
 	An include the preprocessor did read, whose library no symbol needs, is
-	§3 working -- the symbol evidence disagreed with the include and won.
+	section 3 working -- the symbol evidence disagreed with the include and won.
 	Warning about it would put a warning on correct builds, which is how a
 	warning stops being read."""
 	_optional_feature(t, None)
@@ -6345,7 +6345,7 @@ def found_means_defined(t):
 	The pattern every optional dependency in every C project uses, and the
 	one thing fmake could not see. What the directive adds is the macro, not
 	the library: once the macro is defined the guarded code is there and its
-	symbols ask for the library themselves, so §3 still decides the link."""
+	symbols ask for the library themselves, so section 3 still decides the link."""
 	_optional_annotated(t, "zlib")
 
 	r = t.fmake()
@@ -6396,7 +6396,7 @@ def a_malformed_pkg_optional_is_fatal(t):
 
 @case
 def advice_names_only_a_place_that_exists(t):
-	"""§31 again: a remedy that does not work is worse than none.
+	"""section 31 again: a remedy that does not work is worse than none.
 
 	`@target` in fmake.mk is refused with an offer of [target.*], which is
 	real. `@pkg_optional` has no such key, and offering one would send the
@@ -6540,7 +6540,7 @@ def a_vendored_main_stays_out_of_a_library(t):
 	keeps a program's root out of it is keyed on the roots -- which this
 	file no longer is. An archive carrying a second `main` links into the
 	next program that uses it and reports a duplicate symbol under a path in
-	.fmake, which is §28 arriving by a door the fix opened."""
+	.fmake, which is section 28 arriving by a door the fix opened."""
 	_vendored_tree(t, _as_submodule_file)
 	os.unlink(os.path.join(t.dir, "src/main.c"))
 	t.write("src/lib.c", "int ours(void){ return 7; }\n")

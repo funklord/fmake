@@ -11,3 +11,6 @@ indent_width = 4
 # real count: it catches a collapsed file list, it does not police a
 # number, so adding files never requires touching it.
 floor = 8
+
+# No user-facing Unicode here and nothing that needs it.
+ascii_only = true

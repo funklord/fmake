@@ -570,7 +570,7 @@ class Conf:
 #     inputs  = ["src/parser.y"]
 #     outputs = ["src/parser.c", "src/parser.h"]
 #
-# No shell, matching §8: the command is split once and executed directly, so
+# No shell, matching section 8: the command is split once and executed directly, so
 # there is no quoting to get wrong and no /bin/sh in the loop. A rule that
 # genuinely needs a pipe should call a script, which is also the point at which
 # it has stopped being declarative.
@@ -672,7 +672,7 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 			if dname in DIRECTIVES:
 				# Only name a remedy that exists. @pkg_optional has no
 				# [target.*] key, so offering one sends the reader to write
-				# something fmake will then reject -- §31, and this is the
+				# something fmake will then reject -- section 31, and this is the
 				# message that would do it.
 				where_else = ("Put it in the source file it is about."
 				              if dname not in CONF_TARGET_DIRECTIVES else
@@ -1126,7 +1126,7 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 # ---------------------------------------------------------------------------
 # Qt's meta-object compiler
 #
-# The only framework fmake knows by name, and it earns that by fitting §3
+# The only framework fmake knows by name, and it earns that by fitting section 3
 # rather than working around it. moc's output is an ordinary translation unit
 # whose defined symbols are exactly the undefined ones its input leaves
 # behind: a class carrying Q_OBJECT compiles to an object wanting
@@ -1234,7 +1234,7 @@ def moc_plan(srcs, hdrs, scans):
 		                                         os.path.dirname(rel), name)),
 			# An older idiom ends foo.cpp with `#include "moc_foo.cpp"` to
 			# save a translation unit. Compiling it as well would define
-			# every meta-object twice, and §3 would report that as an
+			# every meta-object twice, and section 3 would report that as an
 			# ambiguous provider -- a baffling way to say a file is already
 			# in the build.
 		    "inline": name in includers,
@@ -1985,7 +1985,7 @@ def _walk(root):
     ancestor makes os.walk descend forever. Keyed on the real path, so two
     links to one directory are walked once rather than producing two names
     for every file in it -- which would be two definitions of every symbol,
-    and §3 refusing to choose between them.
+    and section 3 refusing to choose between them.
     """
 	seen = set()
 	for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
@@ -2537,7 +2537,7 @@ def unit_cflags(u, pkg, store, sig):
 	# "Found means defined": the pattern every optional dependency in every
 	# C project uses, and the one thing fmake could not see. What it adds is
 	# the macro, not the library -- once the macro is defined the guarded
-	# code is there and its symbols ask for the library on their own, so §3
+	# code is there and its symbols ask for the library on their own, so section 3
 	# still decides the link. A package that is not installed adds nothing,
 	# which is the same answer the configure step would have given.
 	for group in u.ann.groups("pkg_optional"):
@@ -2752,7 +2752,7 @@ def find_archives(root):
 def archive_units(rels, root, cfg, jobs):
 	"""Vendored archives as providers of symbols.
 
-    §15 guessed this would fall out of the model, and it does: nm reads an
+    section 15 guessed this would fall out of the model, and it does: nm reads an
     archive the same way it reads an object, posix format puts each member on
     its own header line, and a line with one field is already skipped. So the
     closure needs nothing new. An archive defining a symbol nothing else does
@@ -2862,7 +2862,7 @@ def close_over_library(units, root_unit):
 		if u is not root_unit:
 			cl.why[u.rel] = ("part of the library", "")
 
-	# A library is not exempt from §3's refusal to guess. Two strong
+	# A library is not exempt from section 3's refusal to guess. Two strong
 	# definitions of one symbol in an archive is resolved by member order,
 	# silently, and the consumer inherits the coin flip with no way to see
 	# it -- so it is caught here, where the cause is. Weak definitions are
@@ -3763,7 +3763,7 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 		res["unused"][k] = v
 	# Two reasons a proposal is declined, and they are not the same finding.
 	# "This header suggested a library the code does not call into" is a note
-	# -- the symbol evidence disagreed with the include, which is §3 working.
+	# -- the symbol evidence disagreed with the include, which is section 3 working.
 	# "This header sits behind a conditional the preprocessor did not take"
 	# is a different sentence: the code that would have called into it was
 	# removed before the compiler saw it, so there is no symbol to find and
@@ -4374,7 +4374,7 @@ def build(args, _bootstrapping=False):
 
 	# Scanned before generating, because @rule lives in a comment and cannot
 	# be read any other way -- and again afterwards, because generating adds
-	# files nobody has looked at. The two-pass scan §7 once said was
+	# files nobody has looked at. The two-pass scan section 7 once said was
 	# unnecessary turns out to be exactly what putting rules in comments
 	# costs.
 	srcs, hdrs = walk_tree(root)
@@ -4427,7 +4427,7 @@ def build(args, _bootstrapping=False):
 	# ---- platform filtering -------------------------------------------
 	# A TU excluded here never exists as far as the rest of the build is
 	# concerned. This is what makes win32_sys.c and posix_sys.c coexist:
-	# without it they are two definitions of the same symbol and §3 refuses
+	# without it they are two definitions of the same symbol and section 3 refuses
 	# to guess, which is the right answer to the wrong question.
 	def exclude_pattern(rel):
 		"""The [project] exclude pattern matching a path, or None.
@@ -4502,7 +4502,7 @@ def build(args, _bootstrapping=False):
 
 	# ---- rcc ----------------------------------------------------------
 	# A resource registers itself from a static constructor, so nothing in
-	# any object refers to the generated one and §3 alone would always drop
+	# any object refers to the generated one and section 3 alone would always drop
 	# it. What the source does say is which resources it opens -- a
 	# ":/icons/..." literal, or Q_INIT_RESOURCE naming one outright -- and
 	# that is per file, so it survives into a per-program answer rather than
@@ -4529,7 +4529,7 @@ def build(args, _bootstrapping=False):
 	# After the generators, so a generated header carrying Q_OBJECT is moc'd
 	# like any other, and before everything else, so what moc writes is an
 	# ordinary source from here on -- seen by the include graph, the closure
-	# and the symbol tables with no special case, exactly as §"Generated
+	# and the symbol tables with no special case, exactly as section "Generated
 	# sources" has it.
 	moc_jobs, moc_outs, moc_flags, moc_own = [], [], [], {}
 	moc_incflags, src_set = [], set(srcs)
@@ -5038,7 +5038,7 @@ def build(args, _bootstrapping=False):
 		incflags = base_incflags + [f for f in pkg_cflags
 		                            if f not in base_incflags]
 
-	# Wherever the packages resolved so far said their libraries live. §5
+	# Wherever the packages resolved so far said their libraries live. section 5
 	# recovers -L from where a library was actually found rather than from
 	# pkg-config, which is what makes libraries found by symbol alone work
 	# -- but it can only find one in a directory it looks in, and a package
@@ -5107,7 +5107,7 @@ def build(args, _bootstrapping=False):
 		forced = [units[f] for f in forced_rels if f in units]
 		# The vendored main()s too. They stopped rooting a target, which is
 		# the point, but the reason a library must not contain them did not
-		# change with it -- an archive carrying a second entry point is §28,
+		# change with it -- an archive carrying a second entry point is section 28,
 		# and it would now arrive by the one path that no longer names it.
 		other_roots = {t.rel for t in targets if t.kind == "exe"}
 		other_roots |= {rel for _, rel in passed_over} - {t.rel for t in targets}
@@ -5198,7 +5198,7 @@ def build(args, _bootstrapping=False):
 		         "fmake will not guess which one belongs in "
 		         + ", ".join(sorted({t.name for t, _s, _p in trouble})) + "."]
 
-		# The include graph must not decide this -- §3 exists because it is
+		# The include graph must not decide this -- section 3 exists because it is
 		# not good enough to -- but it is good enough to *suggest*, and a
 		# suggestion costs nothing if it is labelled as one. Where it reaches
 		# exactly one of the providers from a target's own root, that is
@@ -5248,7 +5248,7 @@ def build(args, _bootstrapping=False):
 	# cannot link -- and the linker says so in terms of object paths under
 	# .fmake, several steps from the cause. Worse, fmake's own summary then
 	# offered to name the missing libraries, when nothing is missing at all.
-	# §3 excludes other roots when assembling a library and does not when
+	# section 3 excludes other roots when assembling a library and does not when
 	# closing over a program, deliberately: a function defined next to a
 	# main() is still a function, and refusing to link it would be its own
 	# kind of guess. So this reports rather than resolves.
