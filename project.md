@@ -3699,3 +3699,70 @@ rest of their findings deserve the same question before any of them is
 built: **is this missing, or is it unfindable?** For hydra's two it was
 genuinely missing, and §40 and §41 built it. For this one the answer was a
 comment nobody could have guessed was there.
+
+## 43. The blocker that was a comment, again
+
+hydra's first finding, and the only one in five reports called a hard
+blocker:
+
+> `src/` holds `android_view.cpp`, `android_downloads.cpp`,
+> `android_intents.cpp` and `android_dialogs.cpp`. CMake adds them only
+> inside `if(ANDROID)`. They carry no self-guard, because the build system
+> is what excludes them. [...] So it does not merely link something odd --
+> it fails. **fmake cannot build hydra's `src/` today**, and no flag fixes
+> it, because the question is which files belong in this build rather than
+> how to compile them.
+
+Right about the question. The answer is `@os android`, four comments, and
+the build goes through. §42 asked whether a finding is missing or
+unfindable, and this is the second one running to be unfindable.
+
+Worth understanding *why* those files get compiled at all, because it is
+§40's mechanism from the other side. Nothing links them: the app does not
+reference them on Linux. But `main.cpp` includes `android_view.h` behind an
+`#ifdef ANDROID`, and the scan reads text and cannot evaluate a conditional,
+so the header is proposed, its implementation becomes a candidate, and the
+candidate is compiled before any symbol has a chance to say it is not
+needed. The proposal being wrong is by design -- being wrong there costs a
+compile and never a wrong link set -- and here the compile is the thing that
+fails.
+
+So a file that cannot compile is not evidence that the tree cannot be built.
+Reproduced as a case, and in the reproduction fmake **still produced the
+program**: the failed file was not reachable, so nothing needed it. That is
+the design working, and it is also why the diagnostic matters more than the
+failure does -- somebody reading it decides whether the tree is broken.
+
+### Two causes, one symptom, and no way to tell
+
+A header on no include path is equally the symptom of a package nobody
+installed and of a file belonging to another platform. fmake cannot tell
+them apart, so the failure names both and lets the reader choose:
+
+    * QJniEnvironment: No such file or directory
+      in android_view.c
+      QJniEnvironment is on no include path here
+      if it comes from a package, install it or name it with @pkg
+      if android_view.c belongs to another platform, @os NAME or @arch NAME
+      keeps it out of this build
+
+Naming the likelier cause would have been worse than naming neither. This
+is §31's rule with the sign flipped: there, advice was wrong because it
+pointed at a `[target.*]` key that did not exist; here it would be wrong by
+being confident. A guess dressed as a diagnosis is how somebody spends an
+afternoon installing a package they do not need.
+
+The advice is gated on the message actually being a not-found, so a type
+error gets none -- that is the case that would otherwise rot, since the
+cheapest wrong implementation prints the note on every failure and every
+existing case still passes.
+
+### What hydra asked for instead, and why it is not here
+
+They proposed a filename convention: ignore `*_<platform>.cpp` unless
+building for that platform, since it is "the one a tool can act on without
+being told". It would work, and it is a **default change** -- a file called
+`net_win32.c` would stop being built by a tool that built it yesterday, in a
+project that never opted in. That is a convention change and belongs to
+whoever owns the convention, not to whoever is in the file. Recorded here,
+unbuilt, with the same standing as the tests question in §36.

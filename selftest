@@ -2464,6 +2464,62 @@ double mathx_scale(double v, double k){ return v * k; }
 
 
 @case
+def a_missing_header_names_the_platform_escape(t):
+	"""hydra's hard blocker, and the answer they did not find.
+
+	Four Android sources CMake adds only inside if(ANDROID), carrying no
+	self-guard because the build system is what excludes them. fmake sees
+	the include behind the #ifdef -- the scan cannot evaluate one -- so the
+	file is proposed, compiled, and fails on a header that is not here.
+	Their conclusion: "no flag fixes it, because the question is which files
+	belong in this build". Right about the question; the answer is @os, and
+	nothing said so.
+
+	Both causes are named because fmake cannot tell them apart. A header
+	that is not on any include path is equally the symptom of a package
+	nobody installed."""
+	t.write("android_view.h", "#pragma once\nint android_view_attach(void);\n")
+	t.write("main.c",
+	        "#include <stdio.h>\n#ifdef ANDROID\n"
+	        '#include "android_view.h"\n#endif\n'
+	        "int platform_id(void);\n"
+	        'int main(void){ printf("%d\\n", platform_id()); return 0; }\n')
+	t.write("platform_linux.c", "int platform_id(void){ return 1; }\n")
+	t.write("android_view.c",
+	        '#include "android_view.h"\n#include <fmake_no_such_header.h>\n'
+	        "int android_view_attach(void){ return 0; }\n")
+
+	out = t.fmake().stdout + t.fmake().stderr
+	check("fmake_no_such_header.h is on no include path here" in out,
+	      f"the missing header should be named: {out}")
+	check("@os NAME" in out,
+	      f"the platform escape should be offered: {out}")
+	check("@pkg" in out,
+	      f"the other cause should be offered too: {out}")
+
+	# And it is a real escape, not just advice.
+	t.write("android_view.c",
+	        '/** @os android */\n#include "android_view.h"\n'
+	        "#include <fmake_no_such_header.h>\n"
+	        "int android_view_attach(void){ return 0; }\n")
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"@os should settle it: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1\n",
+	      "the program should build and run without the Android file")
+
+
+@case
+def an_unrelated_error_gets_no_platform_advice(t):
+	"""A wrong remedy costs more than none -- §31, and this is where it
+	would land, since a compile failure is read by someone already stuck."""
+	t.write("main.c", "int main(void){ return \"oops\"; }\n")
+
+	out = t.fmake().stdout + t.fmake().stderr
+	check("@os NAME" not in out,
+	      f"a type error has nothing to do with platforms: {out}")
+
+
+@case
 def a_library_and_its_consumers_coexist(t):
 	"""netcfgd's shape, and the reason they declined.
 

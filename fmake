@@ -2433,6 +2433,23 @@ def object_key(u, cfg, cache, root, incflags):
 	return sha("|".join(parts))
 
 
+RE_NO_HEADER = re.compile(
+    r"^(.+?):\s*(?:No such file or directory|file not found)\s*$")
+
+
+def _missing_header(msg):
+	"""The header name out of a compiler's not-found diagnostic, or None.
+
+    gcc says `X: No such file or directory`, clang says `'X' file not
+    found`. Both put the name first, which is the only part worth quoting
+    back -- the rest of the line is the compiler repeating itself.
+    """
+	m = RE_NO_HEADER.match(msg.strip())
+	if not m:
+		return None
+	return m.group(1).strip().strip("'\"")
+
+
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
                   broken=None):
 	"""Compile what is stale. Returns True if anything was actually built.
@@ -2506,6 +2523,19 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			note(f"in {first_unit.rel}"
 			     + (f" and {len(hit) - 1} other file(s)" if len(hit) > 1
 			        else ""))
+			# A header that is not here is the symptom of two different
+			# things, and the compiler cannot tell them apart. One project
+			# spent an evaluation concluding "no flag fixes it, because the
+			# question is which files belong in this build" -- which was
+			# right, and the answer was four comments. Naming both causes
+			# beats naming the likelier one: fmake does not know which.
+			miss = _missing_header(msg)
+			if miss:
+				note(f"{miss} is on no include path here")
+				note(f"if it comes from a package, install it or name it "
+				     f"with @pkg")
+				note(f"if {first_unit.rel} belongs to another platform, "
+				     f"@os NAME or @arch NAME keeps it out of this build")
 			if VERBOSE or len(groups) == 1 and len(hit) == 1:
 				PROGRESS.write(first_err)
 			elif len(hit) > 1:
