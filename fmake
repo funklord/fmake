@@ -3677,6 +3677,17 @@ def _rel(path, root):
 	return path if r.startswith("..") else r
 
 
+def _col(text, width):
+	"""Left-justify into a column, but never let a long name touch its text.
+
+	A generated moc path is longer than the column, and `:<{W}}` simply
+	stops padding when it overflows -- so the filename and its explanation
+	run together with no separator. On a Qt tree that is most of the
+	report: one project counted 547 such lines.
+	"""
+	return text.ljust(width) if len(text) < width else text + " "
+
+
 def _show_cmd(cmd, root):
 	out = []
 	for a in cmd:
@@ -3702,7 +3713,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		named = "no @target"
 	print(f"{BOLD('target')} {BOLD(name)} ({t.kind})  {DIM('[' + named + ']')}")
 	if t.members is not None:
-		print(f"  {CYAN('membership'):<{W}}"
+		print(f"  {_col(CYAN('membership'), W)}"
 		      f"{DIM('declared, so the closure is not consulted')}")
 
 	# Directives are reported per file, because an unknown one is ignored in
@@ -3718,17 +3729,17 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 				head = f"@{d} {vals}"
 				if len(head) > W - 5:
 					head = head[:W - 8] + "..."
-				print(f"    {head:<{W-4}}"
+				print(f"    {_col(head, W-4)}"
 				      f"{DIM(rel + ':' + str(ann.line(d)))}")
 
 	if conf:
 		print(f"  {CYAN('configuration')}")
-		print(f"    {CONF_FILE:<{W-4}}"
+		print(f"    {_col(CONF_FILE, W-4)}"
 		      f"{DIM('profile: ' + (conf.profile_name or 'none'))}")
 		if cfg.os != host_os() or cfg.arch != host_arch():
-			print(f"    {'building for':<{W-4}}"
-			      f"{DIM(cfg.os + '/' + cfg.arch + '  (host is '
-			             + host_os() + '/' + host_arch() + ')')}")
+			where = (cfg.os + "/" + cfg.arch + "  (host is "
+			         + host_os() + "/" + host_arch() + ")")
+			print(f"    {_col('building for', W-4)}{DIM(where)}")
 
 	# Which moc, not just that one ran. Two Qt versions on one machine is
 	# ordinary, their moc output is not interchangeable, and the failure when
@@ -3736,12 +3747,12 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	if moc and moc.get("jobs"):
 		n = len(moc["jobs"])
 		print(f"  {CYAN('moc')}")
-		print(f"    {_rel(moc['exe'], root):<{W-4}}"
+		print(f"    {_col(_rel(moc['exe'], root), W-4)}"
 		      f"{DIM(f'{n} file(s) declare Q_OBJECT; found via pkg-config')}")
 	if uic and uic.get("jobs"):
 		n = len(uic["jobs"])
 		print(f"  {CYAN('uic')}")
-		print(f"    {_rel(uic['exe'], root):<{W-4}}"
+		print(f"    {_col(_rel(uic['exe'], root), W-4)}"
 		      f"{DIM(f'{n} ui_*.h header(s) included; found via pkg-config')}")
 	if rcc and rcc.get("jobs"):
 		linked = {u.rel for u in cl.link}
@@ -3750,28 +3761,28 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 			why = next((f"{w} in {f}" for f, w in sorted(j["users"].items())),
 			           "")
 			mark = why if j["out"] in linked else "not opened by this program"
-			print(f"    {j['src']:<{W-4}}{DIM(mark)}")
+			print(f"    {_col(j['src'], W-4)}{DIM(mark)}")
 
 	if excluded:
 		print(f"  {CYAN('excluded here')}")
 		for rel, why in sorted(excluded.items()):
-			print(f"    {rel:<{W-4}}{DIM(why)}")
+			print(f"    {_col(rel, W-4)}{DIM(why)}")
 	if t.members is not None:
 		how = f"[declared in {CONF_FILE}]"
 	elif t.kind != "exe":
 		how = "[every TU in the tree; a library is not pruned]"
 	else:
 		how = "[symbol closure from " + _rel(cl.root.obj, root) + "]"
-	print(f"  {CYAN('link set'):<{W}}{DIM(how)}")
+	print(f"  {_col(CYAN('link set'), W)}{DIM(how)}")
 	for u in cl.link:
 		if u is cl.root and t.kind == "exe":
-			print(f"    {u.rel:<{W-4}}{DIM('root: defines main()')}")
+			print(f"    {_col(u.rel, W-4)}{DIM('root: defines main()')}")
 		elif u is cl.root:
-			print(f"    {u.rel:<{W-4}}{DIM('part of the library')}")
+			print(f"    {_col(u.rel, W-4)}{DIM('part of the library')}")
 		else:
 			sym, by = cl.why.get(u.rel, ("?", "?"))
 			why = sym if not by else f"<- {sym}  ({by})"
-			print(f"    {u.rel:<{W-4}}{DIM(why)}")
+			print(f"    {_col(u.rel, W-4)}{DIM(why)}")
 
 	# Other programs' roots are compiled but obviously not part of this one;
 	# listing them as unreachable reads like a problem when it isn't.
@@ -3781,10 +3792,10 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	if spare:
 		print(f"  {CYAN('compiled, not linked')}")
 		for u in spare:
-			print(f"    {u.rel:<{W-4}}{DIM('defines nothing reachable')}")
+			print(f"    {_col(u.rel, W-4)}{DIM('defines nothing reachable')}")
 
 	if res and (res["chosen"] or res["unresolved"] or res["unused"]):
-		print(f"  {CYAN('libraries'):<{W}}"
+		print(f"  {_col(CYAN('libraries'), W)}"
 		      f"{DIM('[from the external symbols above]')}")
 		for lib in res["chosen"]:
 			syms = res["why"].get(lib, [])
@@ -3793,44 +3804,44 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 			tag = f"[also {src[2]} at {src[1]}]" if src else ""
 			print(f"    -l{lib:<{W-6}}{DIM(shown)}")
 			if tag:
-				print(f"    {'':<{W-4}}{DIM(tag)}")
+				print(f"    {_col('', W-4)}{DIM(tag)}")
 			for alt in res["alts"].get(lib, [])[:3]:
-				print(f"    {'':<{W-4}}{DIM('could also come from -l' + alt)}")
+				print(f"    {_col('', W-4)}{DIM('could also come from -l' + alt)}")
 		for lib, (module, where, header) in sorted(res["unused"].items()):
-			print(f"    {'(not linked)':<{W-4}}"
+			print(f"    {_col('(not linked)', W-4)}"
 			      f"{DIM(f'{header} at {where} suggests {module}, but no '
 			             f'symbol needs it')}")
 		for lib in res.get("declared", []):
-			print(f"    {'-l' + lib:<{W-4}}"
+			print(f"    {_col('-l' + lib, W-4)}"
 			      f"{DIM('declared with @libs / @pkg; linked regardless')}")
 		for w in res.get("wrap", []):
-			print(f"    {'-Wl,--wrap=' + w:<{W-4}}"
+			print(f"    {_col('-Wl,--wrap=' + w, W-4)}"
 			      f"{DIM('the link set defines __wrap_' + w)}")
 		if res["unresolved"]:
-			print(f"    {'(unresolved)':<{W-4}}"
+			print(f"    {_col('(unresolved)', W-4)}"
 			      f"{DIM(', '.join(res['unresolved'][:6]))}")
-			print(f"    {'':<{W-4}}"
-			      f"{DIM('no ' + describe_identity(res.get('ident'))
-			             + ' library exports these -- name it with --ldflags')}")
+			says = ("no " + describe_identity(res.get("ident"))
+			        + " library exports these -- name it with --ldflags")
+			print(f"    {_col('', W-4)}{DIM(says)}")
 
 	if VERBOSE:
-		print(f"  {CYAN('library search'):<{W}}"
+		print(f"  {_col(CYAN('library search'), W)}"
 		      f"{DIM(describe_identity((res or {}).get('ident')) + ' only')}")
 		for d in cfg.libdirs:
 			shown = os.path.normpath(_rel(d, root))
 			if len(shown) > W - 5:
 				shown = "..." + shown[-(W - 8):]
-			print(f"    {shown:<{W-4}}"
+			print(f"    {_col(shown, W-4)}"
 			      f"{DIM(str(len(linkable_libs([d]))) + ' linkable')}")
 
 	if cl.external:
 		implicit = len(res["implicit"]) if res else 0
 		named = sum(len(v) for v in (res["why"].values() if res else []))
-		print(f"  {CYAN('external symbols'):<{W}}"
+		print(f"  {_col(CYAN('external symbols'), W)}"
 		      f"{DIM(f'[{len(cl.external)} total, {implicit} in libc, '
 		             f'{named} from the libraries above]')}")
 		for sym in sorted(cl.external)[:12]:
-			print(f"    {sym:<{W-4}}"
+			print(f"    {_col(sym, W-4)}"
 			      f"{DIM('referenced by ' + cl.external[sym][0])}")
 		if len(cl.external) > 12:
 			print(f"    {DIM('... and %d more (-v for all)' % (len(cl.external) - 12))}")
@@ -5147,8 +5158,20 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("")
 
 	all_objs = sorted({f"$(OBJDIR)/{_eject_obj(rel)}.o" for rel in every})
+	# OBJDIR is an ordinary Make variable and overriding it is expected
+	# usage, so `make clean OBJDIR=` or a mistyped one turns this into an
+	# rm -rf of something else entirely. That is bad in a hand-written
+	# Makefile and worse here: this file is handed to people to edit and
+	# its own header tells them fmake is not needed to read it. Three
+	# projects reported this independently, two of them having written the
+	# same bug themselves and fixed it the same week.
 	a("clean:")
-	a(f"\trm -rf $(OBJDIR) {' '.join(t.filename for t in targets)}"
+	a("\t@case \"$(OBJDIR)\" in \\")
+	a("\t\"\") echo \"clean: OBJDIR is empty, refusing\" >&2; exit 1 ;; \\")
+	a("\t/*) echo \"clean: OBJDIR is absolute, refusing\" >&2; exit 1 ;; \\")
+	a("\t*..*) echo \"clean: OBJDIR escapes the tree, refusing\" >&2; exit 1 ;; \\")
+	a("\tesac")
+	a(f"\trm -rf -- $(OBJDIR) {' '.join(t.filename for t in targets)}"
 	  + (" $(GENERATED)" if gen_outs else ""))
 	a("")
 	a("# Depfiles the compiler writes as a side effect, so a changed header")

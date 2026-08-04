@@ -5096,6 +5096,52 @@ def the_packaged_script_has_an_absolute_interpreter(t):
 
 
 @case
+def the_source_runs_on_the_python_it_declares(t):
+	"""A syntax the declared interpreter cannot read is a package that
+	installs and then never starts.
+
+	fmake declares python3 (>= 3.11), which is where tomllib arrives. Two
+	f-strings had a replacement field spanning a line break -- PEP 701, new
+	in 3.12 -- so on Debian bookworm the package would install cleanly,
+	satisfy its dependency, configure, and then die with a SyntaxError
+	before reaching main. The failure lands at the far end of the chain from
+	the thing that caused it.
+
+	It cannot be caught by reading, and the obvious check is worse than
+	useless: ast.parse(..., feature_version=(3, 11)) *accepts* these,
+	because the change is in the tokeniser rather than the grammar. Running
+	fmake locally passes too. Only an old interpreter or a token-level check
+	sees it -- and the check has to run on 3.12+, since FSTRING_START does
+	not exist as a token type before then, which is the right way round.
+
+	Reported by apt-emerge, which hit the identical bug in its own CI."""
+	changelog = os.path.join(REPO, "debian/control")
+	if not os.path.exists(changelog):
+		raise Skip("no debian/ in this tree")
+	m = re.search(r"python3 \(>= (\d+)\.(\d+)\)", open(changelog).read())
+	check(m, "debian/control does not declare a python3 version")
+	floor = (int(m.group(1)), int(m.group(2)))
+	if floor >= (3, 12):
+		raise Skip(f"declares {floor[0]}.{floor[1]}, so PEP 701 is allowed")
+
+	# `fmake` only. It is the file the package installs and therefore the
+	# only one the declared dependency is a promise about; `selftest` is a
+	# development tool that runs on whatever the developer has, and holding
+	# it to a floor nobody declared would be inventing a rule.
+	import tokenize
+	start, bad = None, []
+	with open(FMAKE, "rb") as fh:
+		for tok in tokenize.tokenize(fh.readline):
+			if tok.type == tokenize.FSTRING_START:
+				start = tok.start[0]
+			elif tok.type == tokenize.FSTRING_END and tok.end[0] != start:
+				bad.append(start)
+	check(not bad,
+	      f"f-string spanning lines at {bad}, which needs 3.12 but "
+	      f"debian/control declares {floor[0]}.{floor[1]}")
+
+
+@case
 def the_manual_describes_every_option(t):
 	"""--man is generated from the parser, and has to stay that way.
 
@@ -5169,6 +5215,80 @@ def an_ejected_makefile_survives_a_deleted_header(t):
 	check(m.returncode == 0, f"the rebuild failed: {m.stdout}{m.stderr}")
 	check(_run_in(t.dir, "./" + os.path.basename(t.dir)).returncode == 0,
 	      "the rebuilt program is wrong")
+
+
+@case
+def an_ejected_clean_refuses_a_dangerous_objdir(t):
+	"""`make clean OBJDIR=` must not become `rm -rf /` with extra steps.
+
+	OBJDIR is an ordinary Make variable and overriding it is expected usage,
+	so an empty or mistyped one turns the clean target into a removal of
+	something else. build-and-commit.md names this exact shape. It is worse
+	in generated output than in a hand-written file, because the header
+	invites editing and tells the reader fmake is not needed to understand
+	it -- so nobody reviews it.
+
+	Reported independently by three projects, two of which had written the
+	same bug themselves and fixed it the same week."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "build failed")
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+
+	for bad in ("", "/", "../escape"):
+		got = _run_in(t.dir, "make", "clean", f"OBJDIR={bad}")
+		check(got.returncode != 0,
+		      f"clean accepted OBJDIR={bad!r}: {got.stdout}{got.stderr}")
+		check("refusing" in got.stdout + got.stderr,
+		      f"it should say why it refused OBJDIR={bad!r}: {got.stdout}{got.stderr}")
+
+	# And the ordinary case still works.
+	check(_run_in(t.dir, "make").returncode == 0, "rebuild failed")
+	check(os.path.isdir(os.path.join(t.dir, "build")), "no build dir to clean")
+	check(_run_in(t.dir, "make", "clean").returncode == 0, "plain clean failed")
+	check(not os.path.exists(os.path.join(t.dir, "build")),
+	      "plain clean did not remove the object directory")
+
+
+@case
+def explain_always_separates_a_name_from_its_message(t):
+	"""A generated moc path is longer than the report's column.
+
+	`:<{W}}` stops padding when it overflows, so the filename and its
+	explanation run together with no space at all. On a Qt tree that is most
+	of the report -- one project counted 547 such lines -- and it is the
+	output fmake is judged by."""
+	_need_qt()
+	t.write("a_rather_long_widget_name_for_the_column.h", """
+#pragma once
+#include <QObject>
+class LongNamedWidget : public QObject {
+	Q_OBJECT
+public:
+	void bump() { emit changed(1); }
+signals:
+	void changed(int);
+};
+""")
+	t.write("main.cpp", """
+#include <QCoreApplication>
+#include "a_rather_long_widget_name_for_the_column.h"
+int main(int argc, char **argv) {
+	QCoreApplication app(argc, argv);
+	LongNamedWidget w;
+	w.bump();
+	return 0;
+}
+""")
+	r = t.fmake("--explain")
+	check(r.returncode == 0, f"explain failed: {r.stderr}")
+	glued = [l for l in r.stdout.splitlines()
+	         if re.search(r"\S\.(cpp|h|c)(<-|defines|root:|\")", l)]
+	check(not glued, f"name and message ran together: {glued[:3]}")
 
 
 # ---------------------------------------------------------------------------

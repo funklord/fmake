@@ -69,7 +69,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [31. Advice that pointed the wrong way](#31-advice-that-pointed-the-wrong-way) ·
 [32. Two tracebacks from the command line](#32-two-tracebacks-reachable-from-the-command-line) ·
 [33. The file that was told to leave](#33-the-file-that-was-told-to-leave) ·
-[34. Packaging](#34-packaging)
+[34. Packaging](#34-packaging) ·
+[36. What five projects said](#36-what-five-projects-said-when-they-ran-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1669,6 +1670,25 @@ rather than code, and one lesson about testing.
 - **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
   `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
   are unhandled.
+- **The default build builds tests too.** Three projects raised it and
+  `build-and-commit.md` is explicit that the default target must not. There is
+  no annotation-free way to know `tests/` means tests; a directory convention
+  behind a flag is the obvious shape, and inventing one silently would break
+  the promise the tool is named for. See §36.
+- **No library-plus-consumers inference.** A tree with one `main()` needs no
+  build tool; the shape that does is a library, some programs, and tests
+  linking it. `netcfgd` declined on this alone. §36.
+- **Vendored subtrees are built like any other source.** A directory carrying
+  its own `Makefile`/`CMakeLists.txt`, or listed as a git submodule, almost
+  never is. §36.
+- **The include path lacks the common parent of the source directories**, so
+  a tree including its own headers subdirectory-qualified from the source root
+  — ordinary C++ — fails every such include. `beerssh` lost 84 files to it and
+  calls it the single highest-value change for that tree. §36.
+- **A file the build system excludes, rather than the file itself, cannot be
+  expressed**, and neither can an optional feature whose macro the build
+  system defines. `hydra` cannot build at all for the first and silently
+  builds less than it should for the second. §36.
 - **Ejected builds are a snapshot, not a translation.** They contain the plan
   fmake computed for the tree as it stood, with one explicit rule per object.
   Adding a source file means ejecting again — there is no pattern rule, and
@@ -1817,7 +1837,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 167, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 170, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -3248,3 +3268,109 @@ outright: a clean target is the one thing everybody runs without reading. It
 now names every file it deletes. The two directories it still removes
 wholesale are debhelper's staging trees, created by the build, relative, and
 named outright rather than matched — which is the one shape the rule allows.
+
+---
+
+## 36. What five projects said when they ran it
+
+`build-and-commit.md` carries a standing instruction that projects which
+could adopt fmake should say whether they would. Five did, in `suggestions/`,
+and the files are worth reading whole: `hydra`, `netcfgd`, `fuzzypickles`,
+`beerssh` and `apt-emerge`. Only one adopted anything, and the value was not
+in the verdicts.
+
+Three fixes came straight out of them and are in this commit.
+
+### The package installs and then never starts
+
+`apt-emerge` found it, on a tree fmake correctly refused for having no C in
+it. `debian/control` declares `python3 (>= 3.11)` — where `tomllib` arrives —
+and two f-strings put a replacement field across a line break, which is
+PEP 701 and needs **3.12**. On Debian bookworm the package installs, satisfies
+its dependency, configures, and then every invocation dies with a
+`SyntaxError` before reaching `main`.
+
+**It cannot be caught by reading, and the obvious check is worse than
+useless.** `ast.parse(..., feature_version=(3, 11))` *accepts* these, because
+the change is in the tokeniser rather than the grammar — verified here, it
+accepts. Running fmake locally passes too. Only an old interpreter or a
+token-level check sees it, and the check must run on 3.12+, since
+`FSTRING_START` does not exist as a token type before then.
+
+Both strings are rewritten and there is a gate, keyed to the version
+`debian/control` actually declares, so raising the floor to 3.12 relaxes it
+automatically. It checks `fmake` alone: that is the file the package installs
+and therefore the only one the declaration promises anything about.
+
+### The ejected clean target, reported by three projects independently
+
+`netcfgd`, `fuzzypickles` and `beerssh` all named it, and two of them had
+written the same bug into their own Makefiles and fixed it the same week —
+which is why they recognised it.
+
+```make
+clean:
+	rm -rf $(OBJDIR) prog
+```
+
+`OBJDIR` is an ordinary Make variable and overriding it is expected usage, so
+`make clean OBJDIR=` or a mistyped one removes something else. §34 fixed
+fmake's *own* Makefile after reading the same rule and did not think to look
+at the one fmake writes — which is the sharper version of the lesson: the
+output is where a guard is worth most, because its header tells the reader
+fmake is not needed to understand it, so nobody reviews it. It now refuses an
+empty, absolute or `..`-containing `OBJDIR`, and every refusal has a case.
+
+### A column that stopped separating
+
+`beerssh` counted **547** lines of `--explain` where a generated moc path
+overflowed the column and ran into its own explanation with no space:
+
+```
+.fmake/moc/src/input/moc_input_router.cppdefines nothing reachable
+```
+
+I had seen this myself on qView, in this document's own §30 transcript, and
+filed it as cosmetic and pre-existing. It is neither: it is most of the report
+on any Qt tree, and the report is what fmake is judged by. Every padded column
+now goes through one function that never lets the two touch.
+
+### What they said that is not fixed here
+
+These are design questions rather than defects, and are recorded in §15
+rather than answered in passing:
+
+- **Tests are built by the default build** — `netcfgd`, `fuzzypickles` and
+  `beerssh` all raise it, and `build-and-commit.md` is explicit that the
+  default target must not build tests. There is no annotation-free way to know
+  that `tests/` means tests; a directory convention behind a flag is the
+  obvious shape.
+- **No library-plus-consumers inference** — `netcfgd` declined on this alone.
+  A tree with one `main()` is already served by a two-line Makefile; the shape
+  where a build system is genuinely annoying is a library, some programs, and
+  tests linking the library.
+- **Vendored subtrees are built** — `fuzzypickles` (two submodules each with a
+  `test.c`, ten fuzzers sharing `LLVMFuzzerTestOneInput`) and `beerssh`
+  (libvterm's own tools). A directory carrying its own build system, or listed
+  as a submodule, is almost never something the outer tree wants built.
+- **The include path lacks the common parent** — `beerssh` failed 84 files on
+  it. The tree includes its own headers subdirectory-qualified from the source
+  root, which is ordinary C++, and fmake adds an `-I` for every directory that
+  *contains* sources but not for their shared parent.
+- **Platform-conditional and optional-feature sources** — `hydra` cannot build
+  at all, because four Android sources have no self-guard and CMake is what
+  excludes them; and two optional features vanish silently because the macros
+  that enable them are defined by the build system fmake replaced. Its own
+  summary is the sharpest sentence in the five files: *"it builds, and quietly
+  does less than it should — which is worse than refusing."*
+
+### What they said that was already true
+
+Worth recording, because agreement arrived at independently is evidence too.
+`fuzzypickles` and `beerssh` both checked the ejected Makefile against the
+three dependency rules and found the first satisfied and the other two
+inapplicable *by construction* — the emitted file is flat, so there is no
+recursion to need `FORCE` and no intermediate to need `.SECONDARY`.
+`netcfgd` noticed `OBJDIR` was the canonical name without being told, and
+`fuzzypickles` recognised the configuration-keyed object directory as the fix
+for a bug it had hit and worked around by hand.
