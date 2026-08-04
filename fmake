@@ -3468,6 +3468,29 @@ def scan_providers(cfg, externals, cache, jobs, want_ident=None):
 	return providers, paths
 
 
+def preprocessed_headers(cl):
+	"""Every header the compiler actually opened, keyed by source.
+
+    The scan reads text and cannot evaluate `#if`, so an include sitting in
+    a conditional that is false still looks like one. The depfile is the
+    compiler's answer to the same question and it is exact: `-MD` lists
+    every file the preprocessor opened, system headers included.
+
+    A source with no depfile is simply absent rather than empty. "Nobody
+    asked the compiler" and "the compiler opened nothing" would otherwise
+    read the same, and only one of them means anything.
+    """
+	out = {}
+	for u in cl.link:
+		# A prebuilt archive in the tree has no depfile because it has no
+		# preprocessor step -- `dep` is None for exactly that reason. It
+		# proposes no headers either, so it has nothing to say here.
+		if u.archive or not u.dep or not os.path.isfile(u.dep):
+			continue
+		out[u.rel] = {d.replace(os.sep, "/") for d in parse_depfile(u.dep)}
+	return out
+
+
 def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
                       want_ident=None, proj=None):
 	"""Turn one target's external symbols into link flags."""
@@ -3522,6 +3545,27 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			continue
 		seen_mod.add(v[0])
 		res["unused"][k] = v
+	# Two reasons a proposal is declined, and they are not the same finding.
+	# "This header suggested a library the code does not call into" is a note
+	# -- the symbol evidence disagreed with the include, which is §3 working.
+	# "This header sits behind a conditional the preprocessor did not take"
+	# is a different sentence: the code that would have called into it was
+	# removed before the compiler saw it, so there is no symbol to find and
+	# never was. Every step of the reasoning is right and the answer is
+	# wrong, which is the shape that gets shipped.
+	opened = preprocessed_headers(cl)
+	res["compiled_away"] = {}
+	for k, (module, where, header) in res["unused"].items():
+		deps = opened.get(where.rsplit(":", 1)[0])
+		if deps is None:
+			continue
+		# The proposal is an include *text*; the depfile holds resolved
+		# paths. Matching on the suffix is the -I search run backwards, and
+		# the leading separator is load-bearing: without it a local
+		# xzlib.h answers for <zlib.h> and the finding disappears.
+		tail = "/" + header.replace(os.sep, "/")
+		if not any(d.endswith(tail) for d in deps):
+			res["compiled_away"][k] = (module, where, header)
 	# Declared dependencies are not proposals to be weighed -- the author
 	# said the library is needed, so it is linked whether or not a symbol
 	# happens to require it. @ldflags propagates for the same reason @cflags
@@ -3882,9 +3926,13 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 			for alt in res["alts"].get(lib, [])[:3]:
 				print(f"    {_col('', W-4)}{DIM('could also come from -l' + alt)}")
 		for lib, (module, where, header) in sorted(res["unused"].items()):
-			print(f"    {_col('(not linked)', W-4)}"
-			      f"{DIM(f'{header} at {where} suggests {module}, but no '
-			             f'symbol needs it')}")
+			if lib in res.get("compiled_away", {}):
+				why = (f"{header} at {where} suggests {module}, but the "
+				       f"preprocessor never opened it")
+			else:
+				why = (f"{header} at {where} suggests {module}, but no "
+				       f"symbol needs it")
+			print(f"    {_col('(not linked)', W-4)}{DIM(why)}")
 		for lib in res.get("declared", []):
 			print(f"    {_col('-l' + lib, W-4)}"
 			      f"{DIM('declared with @libs / @pkg; linked regardless')}")
@@ -4835,6 +4883,23 @@ def build(args, _bootstrapping=False):
 			resolutions[t] = resolve_libraries(t, closures[t], cfg, pkg,
 			                                   hdr_store, providers, paths,
 			                                   target_ident, proj)
+
+		# Said outside --explain, because the build that needs to hear it is
+		# the one nobody is inspecting. A feature guarded by a macro fmake
+		# was not given compiles to nothing, needs no library, and links --
+		# so the program is built, is smaller than it should be, and says
+		# so nowhere. There is no error to notice and no symbol to miss.
+		told = set()
+		for t in wanted:
+			gone = resolutions[t].get("compiled_away") or {}
+			for lib, (module, where, header) in sorted(gone.items()):
+				if (where, header) in told:
+					continue
+				told.add((where, header))
+				warn(f"{where}: {header} is behind a conditional the "
+				     f"preprocessor did not take, so {module} was not "
+				     f"linked -- if a feature macro should have turned it "
+				     f"on, fmake was not told about it (--cflags)")
 
 	# ---- explain or link ----------------------------------------------
 	# What widening discovered, to start from next time -- but not what it

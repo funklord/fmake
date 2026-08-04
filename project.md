@@ -3493,3 +3493,92 @@ mutated too. Four cases, four mutations, each caught by a different one --
 and the fifth mutation, the wholesale-ignore design fuzzypickles asked for,
 is what proves the escape-hatch case is testing anything at all. A case that
 no mutation fails is not a case yet.
+
+## 40. The step where every part was right
+
+hydra's report, on a browser fmake built successfully:
+
+> `credential_store.cpp` is `#ifdef HYDRA_HAVE_SECRET` from top to bottom.
+> Both macros are defined by CMake *after* `pkg_check_modules` finds the
+> library. fmake does not know they exist, so it compiled both files with
+> them undefined, so the bodies vanished, so no symbol needed the libraries,
+> so fmake **correctly** declined to link them.
+>
+> Every step is right and the result is wrong: a browser with no keyring
+> integration and no desktop colour-scheme detection, built without a
+> warning [...] which is worse than refusing.
+
+That is the worst failure shape a build tool has, because there is nothing
+to notice: no error, no missing symbol, no unresolved reference. The
+program is built, is smaller than it should be, and says so nowhere.
+
+The two reasons a proposal gets declined had been reported with one
+sentence. They are different findings. *This header suggested a library the
+code does not call into* is §3 working -- the symbol evidence disagreed with
+the include and won. *This header sits behind a conditional the preprocessor
+did not take* means the code that would have called into it was removed
+before the compiler saw it, so there was no symbol to find and never could
+have been.
+
+Telling them apart needs no new machinery and no guessing. `-MD` is already
+passed, and a depfile lists every file the preprocessor actually opened,
+system headers included. A header the scan saw and the depfile does not name
+was inside a false conditional. That is the compiler's own answer to the
+question, not an inference about it -- the same shape as everything else
+here: the text proposes, the build decides.
+
+So the note stays a note, and the compiled-away case becomes a warning
+outside `--explain`, which is what hydra asked for. The build that needs to
+hear it is the one nobody is inspecting.
+
+### What mutation said about the first attempt
+
+Four cases were written; three of them were wrong in a way that reading
+would not have found.
+
+The first tried to be careful and returned three values -- yes, no, and
+"there was no depfile to read" -- with a case asserting that a dry run
+stays quiet. It does, and **not for that reason**: `-n` never resolves
+libraries at all, so the code was not reached. Deleting a depfile does not
+reach it either, because a missing depfile makes fmake recompile and the
+file comes back. The distinction was untestable through every route tried,
+so it is gone; what is left is a dict that simply lacks an entry for a
+source with no depfile, guarded by one `.get()`. That guard is the single
+branch here no case covers, and it is a guard rather than a claim: reaching
+it would otherwise be a crash, not a wrong answer.
+
+The second was the separator. Matching an include text against resolved
+depfile paths is a suffix test, and it is only correct if the match starts
+at a path component -- otherwise a local `xzlib.h` answers for `<zlib.h>`,
+the guarded include looks like it was read, and the silent build comes back
+by a second route. None of the three cases written first failed when the
+separator was removed, because none of them had a header that could collide.
+The mutation run named it, a case now covers it, and it is the same lesson
+as §39 and §38 from a third direction: **a case that no mutation fails is
+not a case yet.**
+
+The third is smaller and worth naming because it is §38 inverted. A case
+asserted that the word `conditional` was absent from the output, and it
+failed on a correct build -- because the scratch directory is named after
+the case, the case was called `a_dry_run_does_not_guess_about_conditionals`,
+and the path appears in the output. §38 was an assertion satisfied by the
+text of the failure it was looking for; this is one defeated by the text of
+its own name. The fix is the same both times: match the whole sentence the
+program prints, never a word that could arrive from anywhere else.
+
+### And one the existing cases caught
+
+Reading depfiles crashed on the one unit that has none by design. A vendored
+archive in the tree is a `Unit` like any other -- it provides symbols, it
+goes on the link line -- but it is never compiled, so §18 sets its `dep` to
+None deliberately. `os.path.isfile(None)` is a `TypeError`, and it took out
+eight cases at once, including the ejected-build comparison.
+
+Nothing about the new feature was wrong; it assumed every member of a link
+set went through a compiler, which had been true until §18 stopped being
+true and nothing recorded the connection. Same shape as the `other_roots`
+half of §39, one commit earlier, which is why it is worth writing down
+twice: **a change that reads a property of every element has to be checked
+against every kind of element**, and the kinds are not enumerated anywhere.
+
+The suite named it in one run. That is what the eight cases were for.

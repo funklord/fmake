@@ -5400,6 +5400,103 @@ def a_subdirectory_qualified_include_resolves(t):
 	      f"the source root should be on the include path: {flags[:300]}")
 
 
+def _optional_feature(t, guard):
+	"""A feature behind a macro the build system would have defined.
+
+	zlib because it is the one system library with a pkg-config file that
+	every machine running this suite already has; the shape is hydra's
+	keyring integration, not anything about compression.
+	"""
+	if not _have_pkg("zlib"):
+		raise Skip("zlib has no pkg-config file here")
+	t.write("main.c",
+	        "#include <stdio.h>\n"
+	        + (f"#ifdef {guard}\n" if guard else "")
+	        + "#include <zlib.h>\n"
+	        + ("#endif\n" if guard else "")
+	        + "int main(void){\n"
+	        + (f"#ifdef {guard}\n\tprintf(\"%s\\n\", zlibVersion());\n#endif\n"
+	           if guard else "\tprintf(\"none\\n\");\n")
+	        + "\treturn 0;\n}\n")
+
+
+@case
+def a_feature_compiled_away_is_not_silent(t):
+	"""The step where every part is right and the answer is wrong.
+
+	hydra: a file guarded top to bottom by a macro CMake defines after
+	pkg_check_modules finds the library. fmake did not know the macro, so
+	the body vanished, so no symbol needed the library, so it correctly
+	declined to link it -- and the result was a browser with no keyring
+	integration, built without a warning. Their verdict was that this is
+	worse than refusing.
+
+	The depfile settles it exactly. `-MD` lists every file the preprocessor
+	opened, so a header the scan saw and the compiler never read was inside
+	a conditional that was false."""
+	_optional_feature(t, "HAVE_ZLIB")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	# The whole phrase, not the word: this case's own name reaches the
+	# output as the scratch directory, and a bare "conditional" matched it.
+	# §38 in the harmless direction, which is the only reason it was cheap.
+	check("the preprocessor did not take" in out,
+	      f"a feature compiled away should be reported: {out}")
+
+
+@case
+def a_library_the_code_does_not_call_is_a_different_finding(t):
+	"""And must not be reported as the one above.
+
+	An include the preprocessor did read, whose library no symbol needs, is
+	§3 working -- the symbol evidence disagreed with the include and won.
+	Warning about it would put a warning on correct builds, which is how a
+	warning stops being read."""
+	_optional_feature(t, None)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	check("the preprocessor did not take" not in out,
+	      f"an include that was read is not a compiled-away one: {out}")
+	ex = t.fmake("--explain").stdout
+	check("no symbol needs it" in ex,
+	      f"--explain should still decline it, with the other reason: {ex}")
+
+
+@case
+def a_headers_name_must_match_a_whole_path_component(t):
+	"""`<zlib.h>` is not answered by a local `xzlib.h`.
+
+	The depfile holds resolved paths and the proposal holds include text, so
+	the two are matched on a suffix -- which is the -I search run backwards
+	and correct only if the match starts at a separator. Without one, any
+	header whose name merely *ends* with the proposal satisfies it, the
+	guarded include looks like it was read, and the finding vanishes: a
+	silent build again, by a second route.
+
+	Mutation found this. None of the three cases written first failed when
+	the separator was dropped, because none of them had a header that could
+	collide."""
+	if not _have_pkg("zlib"):
+		raise Skip("zlib has no pkg-config file here")
+	t.write("xzlib.h", "#pragma once\n")
+	t.write("main.c",
+	        '#include <stdio.h>\n#include "xzlib.h"\n'
+	        "#ifdef HAVE_ZLIB\n#include <zlib.h>\n#endif\n"
+	        "int main(void){\n"
+	        "#ifdef HAVE_ZLIB\n\tprintf(\"%s\\n\", zlibVersion());\n#endif\n"
+	        "\treturn 0;\n}\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	check("the preprocessor did not take" in out,
+	      f"xzlib.h must not answer for zlib.h: {out}")
+
+
 def _vendored_tree(t, marker):
 	"""Our program, a vendored library we use, and that library's own test."""
 	t.write("src/main.c",
