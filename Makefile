@@ -34,7 +34,7 @@ PYTHON  ?= /usr/bin/env python3
 BINDIR  = $(DESTDIR)$(PREFIX)/bin
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: all install uninstall check check-version deb lint clean
+.PHONY: all install uninstall check check-version deb lint clean test veryclean distclean style style-source style-docs
 
 all: fmake.1
 
@@ -52,8 +52,7 @@ install: fmake.1
 uninstall:
 	rm -f $(BINDIR)/fmake $(MANDIR)/fmake.1
 
-check: check-version
-	./selftest
+check: check-version style test
 
 # The version is written in two files and nothing else compares them. This
 # is what debian/rules runs in place of the suite: it needs no compiler, so
@@ -102,5 +101,25 @@ clean:
 # The shared style gate: one tool, copied verbatim from
 # ~/.claude/tools/style_gate.py into every private project. It refuses to
 # run against a collapsed file list, so a pass means it actually looked.
-style:
+style: style-source style-docs
+
+style-source:
 	$(PYTHON) tools/style_gate.py check
+
+# project.md is authoritative, so it is held to the tree: a heading
+# that appears twice means whichever one you find, the other is the
+# one with the answer.
+style-docs:
+	$(PYTHON) tools/style_gate.py docs
+
+# `test` is the suite alone; `check` is everything that must pass first.
+test:
+	./selftest
+
+# The clean ladder, matching the sibling projects.
+veryclean: clean
+	rm -rf $(BUILD_DIR)
+
+distclean: veryclean
+	find . -name '*~' -o -name '*.swp' -o -name '*.orig' | xargs -r rm -f
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +
