@@ -53,7 +53,8 @@ codebases, and the four things a 6-file project could not have exposed ·
 [14. The chains, checked](#14-the-chains-checked) — the same question asked of
 the design rather than of a sample, and the silent wrongness it found ·
 [15. Open questions](#15-open-questions) ·
-[18. Vendored archives](#18-vendored-archives)
+[18. Vendored archives](#18-vendored-archives) ·
+[19. The instantiation widening could not see](#19-the-instantiation-widening-could-not-see)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1584,9 +1585,11 @@ rather than code, and one lesson about testing.
   something big before assuming it is acceptable.
 - **The widening filter cannot see header definitions.** It looks for a
   definition in a `.c`/`.cpp`, so a symbol whose definition lives in a header
-  (any template instantiation) is invisible to it. Such files are found only if
-  something else pulls them in, or via `--widen-all`. Whether that matters in
-  practice for C++ projects is untested.
+  is invisible to it. Such files are found only if something else pulls them
+  in, or via `--widen-all`. Mostly harmless, because a definition in a header
+  is emitted weakly into every TU that uses one and needs no provider at all.
+  **The case where it did matter is closed** — see §19. What remains untested
+  is whether any other C++ shape reaches it.
 - **The widening filter cannot see a vtable either**, and this one is no
   longer theoretical: §17 found that `_ZTV4Base` is not a string any source
   spells, so nothing scanning for apparent definitions will ever propose the
@@ -1786,7 +1789,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 139, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 141, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2403,3 +2406,51 @@ and nothing said.
 - **The driver is not chosen by the archive.** A C++ archive linked into an
   otherwise-C program will not by itself select `c++`; the tree's own sources
   decide, and `@ldflags -lstdc++` covers the rest.
+
+---
+
+## 19. The instantiation widening could not see
+
+§15 recorded that the widening filter cannot see a definition living in a
+header, and that whether this mattered for real C++ was untested. It was, and
+it did.
+
+**The shape.** A header declares `extern template struct Box<int>;`, which
+leaves users with a plain undefined reference rather than the weak definition
+a template would normally emit into every translation unit. Exactly one file
+satisfies it, conventionally a `instantiations.cpp` that instantiates for the
+whole project — with no header of its own, so `sibling_source` never proposes
+it and the include graph never reaches it. Widening is the only route left.
+
+**Why widening missed it.** The filter matches symbol tokens against *apparent
+definitions*, deliberately, so that a file merely mentioning a name is not
+compiled on suspicion. Both definition shapes it knows are a name followed by
+a parameter list and a brace, or a name followed by `=` or `;`. An explicit
+instantiation is neither:
+
+```cpp
+template struct Box<int>;              // no parameter list, no initialiser
+template int Box<int>::twice() const;  // and no brace
+```
+
+Measured on that file, the scan reported it as defining **nothing at all**, so
+widening had nothing to match and the link failed on a symbol sitting in a
+file it had chosen not to compile.
+
+**The fix** is to recognise the shape, because it genuinely is a definition —
+not to loosen the filter to mentions, which would compile half a tree on
+suspicion and is the thing the filter exists to prevent. The negative
+lookahead is what separates an instantiation from the primary template
+(`template <class T> struct Box {` declares; `template struct Box<int>;`
+defines), and anchoring at the start of a line excludes `extern template`,
+which also only declares.
+
+Both spellings have a case, which is the point: a regex written for the class
+form passes its own test and silently misses instantiated member functions,
+and that is the kind of half-fix this suite exists to catch.
+
+Identifiers are taken from the whole instantiation and filtered against a
+list of declaration keywords, so `template struct Box<int>;` contributes
+`Box` rather than `struct` and `int`. Over-proposing here is cheap by
+construction — §5's rule is that being wrong about candidates costs a compile,
+never a wrong link set — so the list only has to catch the common noise.

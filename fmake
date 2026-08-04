@@ -291,6 +291,28 @@ RE_DATA_DEF = re.compile(
 
 RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
 
+# An explicit template instantiation is a definition and looks like neither
+# shape above: `template struct Box<int>;` has no parameter list and no
+# initialiser. It is how a project with `extern template` in its headers
+# keeps one copy of each instantiation, and the file holding them is
+# routinely reachable from nothing -- no header of its own, so the include
+# graph never proposes it and widening had nothing to match on.
+#
+# The negative lookahead is what separates an instantiation from the primary
+# template: `template <class T> struct Box {` declares, `template struct
+# Box<int>;` defines. Anchoring at the start of a line excludes `extern
+# template`, which declares too.
+RE_TEMPLATE_INST = re.compile(r'^[ \t]*template[ \t]+(?![<])([^;{]*)[;{]', re.M)
+
+# Words that turn up inside a declaration and are never what a symbol is
+# called. Over-proposing costs one compile the closure then ignores, so this
+# only has to catch the common noise, not every keyword there is.
+DECL_WORDS = {"if", "for", "while", "switch", "catch", "return", "sizeof",
+              "class", "struct", "union", "enum", "typename", "template",
+              "const", "constexpr", "inline", "static", "extern", "void",
+              "bool", "char", "short", "int", "long", "float", "double",
+              "signed", "unsigned", "auto", "operator"}
+
 # What makes a file Qt's meta-object compiler's business. Unlike everything
 # else scanned for here this is a token rather than a shape, because that is
 # what Qt made it: a macro whose whole job is to mark the class. It is the
@@ -323,7 +345,9 @@ def scan_source(path):
         incs.append([m.group(1), m.group(2), lineno])
 
     defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
-    defs -= {"if", "for", "while", "switch", "catch", "return", "sizeof"}
+    for m in RE_TEMPLATE_INST.finditer(code):
+        defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
+    defs -= DECL_WORDS
 
     return {
         "incs":     incs,

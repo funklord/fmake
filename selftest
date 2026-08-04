@@ -4203,6 +4203,64 @@ int main(void){ printf("%d\\n", helper()); return 0; }
           "the binary still carries the old archive")
 
 
+@case
+def widening_finds_an_explicit_template_instantiation(t):
+    """A file whose only definitions are template instantiations.
+
+    §15 recorded this as untested and it was broken. `extern template` in a
+    header leaves a plain undefined reference, satisfied by exactly one
+    translation unit -- conventionally a file that instantiates them for the
+    whole project, with no header of its own, so the include graph never
+    proposes it. Widening was the only route left, and it filters on apparent
+    *definitions*: `template struct Box<int>;` has no parameter list and no
+    initialiser, so the scan reported that file as defining nothing at all
+    and the build failed to link on a symbol that was right there."""
+    t.write("box.h", """
+#pragma once
+template <class T> struct Box {
+    T v;
+    T twice() const;
+};
+template <class T> T Box<T>::twice() const { return v + v; }
+extern template struct Box<int>;
+""")
+    t.write("instantiations.cpp", '#include "box.h"\ntemplate struct Box<int>;\n')
+    t.write("main.cpp", """
+#include <stdio.h>
+#include "box.h"
+int main(void){ Box<int> b{21}; printf("%d\\n", b.twice()); return b.twice() == 42 ? 0 : 1; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(any("instantiations.cpp" in c for c in compiled(r)),
+          f"the instantiation file was never compiled: {compiled(r)}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "the program failed")
+
+
+@case
+def widening_finds_an_instantiated_member_function(t):
+    """The other spelling: `template int Box<int>::twice() const;`
+
+    A different shape from the class form, and a regex written for one of
+    them is exactly the kind of fix that passes its own case and misses the
+    other half of the feature."""
+    t.write("box.h", """
+#pragma once
+template <class T> struct Box { T v; T twice() const; };
+template <class T> T Box<T>::twice() const { return v + v; }
+extern template int Box<int>::twice() const;
+""")
+    t.write("inst.cpp", '#include "box.h"\ntemplate int Box<int>::twice() const;\n')
+    t.write("main.cpp", """
+#include <stdio.h>
+#include "box.h"
+int main(void){ Box<int> b{21}; return b.twice() == 42 ? 0 : 1; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "the program failed")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):
