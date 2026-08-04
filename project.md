@@ -3582,3 +3582,57 @@ twice: **a change that reads a property of every element has to be checked
 against every kind of element**, and the kinds are not enumerated anywhere.
 
 The suite named it in one run. That is what the eight cases were for.
+
+## 41. Found means defined
+
+§40 made fmake say when a feature had been compiled away. It did not make
+the feature buildable, and hydra's request had a second half:
+
+> **A form for "found means defined".** Something like
+> `@pkg_optional libsecret-1 defines HYDRA_HAVE_SECRET`: one annotation
+> covering the pattern that every optional dependency in every C project
+> uses, and it stays a comment rather than becoming a build file.
+
+That is the whole directive, spelled as asked. What it adds is the **macro,
+not the library**. Once the macro is defined the guarded code is present and
+its symbols ask for the library on their own, so §3 still decides the link
+and the directive stays a statement about compilation. A package that is not
+installed adds nothing, which is the answer a configure step would have
+given.
+
+The keyword `defines` is required rather than inferred from the argument
+count. `@pkg_optional libsecret-1 HAVE_SECRET` reads as two packages to
+anyone who has not memorised the order, and a directive whose entire purpose
+is to stop a feature vanishing quietly must not have a spelling that makes
+it vanish quietly. So a missing package is tolerated and a malformed
+directive is fatal.
+
+Both answers are printed. "Built without keyring support" is the sentence
+hydra's browser needed and did not get -- but printing it only in the
+negative case makes its absence meaningless, so the affirmative goes out
+under `--verbose`. A reader who sees neither knows the file has no optional
+dependency, rather than guessing which of two silences this one is.
+
+The diagnostic from §40 now names this directive as the remedy, and the
+directive removes the diagnostic. That is the loop closing: fmake reports
+the thing it cannot see, and names the way to tell it.
+
+### The advice that pointed at a door that was not there
+
+`@pkg_optional` in `fmake.mk` is refused, correctly -- it is a fact about
+one file. The refusal said:
+
+    Put it in the source file it is about, or in fmake.toml under [target.*].
+
+There is no `[target.*]` key for it. The sentence was a fixed string shared
+by every directive that reaches that branch, and it had been right often
+enough that nobody checked. Following it produces a `fmake.toml` fmake then
+rejects, which is §31 exactly: a diagnostic whose remedy costs more than the
+error did.
+
+The message now consults the schema. And the case covering that branch
+**asserted the wrong version**: it required `fmake.toml` in the output for
+`@target`, `@os` and `@kind` alike, and `[target.*]` has keys for two of the
+three. The test had written §31 down as a requirement. It now asserts the
+distinction rather than the sentence, which is a better case than the one it
+replaced -- and it was found by the fix failing it, not by reading it.

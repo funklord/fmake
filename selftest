@@ -1008,16 +1008,25 @@ def mk_refuses_directives_that_need_a_file(t):
 	"""@target names an artifact and @os describes one translation unit.
 
     fmake.mk has neither, so accepting them there would mean inventing a
-    scope for them. Saying so beats guessing."""
+    scope for them. Saying so beats guessing.
+
+    Which remedy the message offers is per directive, not a fixed sentence.
+    [target.*] takes `kind` and `target`; it does not take `os`, and this
+    case asserted it did until the schema was consulted instead of assumed
+    -- §31 written into a test."""
 	t.write("main.c", "int main(void){ return 0; }\n")
-	for directive, expect in (("@target thing", "target"),
-	                          ("@os linux", "os"),
-	                          ("@kind static", "kind")):
+	for directive, expect, conf in (("@target thing", "target", True),
+	                                ("@os linux", "os", False),
+	                                ("@kind static", "kind", True)):
 		t.write("fmake.mk", directive + "\n")
 		r = t.fmake()
 		check(r.returncode != 0, f"{directive} should be refused here")
-		check(expect in r.stderr and "fmake.toml" in r.stderr,
-		      f"the message should say where it belongs: {r.stderr}")
+		check(expect in r.stderr,
+		      f"the message should name the directive: {r.stderr}")
+		check(("fmake.toml" in r.stderr) == conf,
+		      f"{directive}: [target.*] {'has' if conf else 'has no'} key "
+		      f"for it, so it {'should' if conf else 'should not'} be "
+		      f"offered: {r.stderr}")
 
 
 @case
@@ -5464,6 +5473,96 @@ def a_library_the_code_does_not_call_is_a_different_finding(t):
 	ex = t.fmake("--explain").stdout
 	check("no symbol needs it" in ex,
 	      f"--explain should still decline it, with the other reason: {ex}")
+
+
+def _optional_annotated(t, module):
+	"""hydra's shape: a feature that exists only if a package does."""
+	if not _have_pkg("zlib"):
+		raise Skip("zlib has no pkg-config file here")
+	t.write("main.c",
+	        "/**\n * @pkg_optional " + module + " defines HAVE_ZLIB\n */\n"
+	        "#include <stdio.h>\n"
+	        "#ifdef HAVE_ZLIB\n#include <zlib.h>\n#endif\n"
+	        "int main(void){\n"
+	        "#ifdef HAVE_ZLIB\n\tprintf(\"zlib %s\\n\", zlibVersion());\n"
+	        "#else\n\tprintf(\"none\\n\");\n#endif\n"
+	        "\treturn 0;\n}\n")
+
+
+@case
+def found_means_defined(t):
+	"""`@pkg_optional NAME defines MACRO`, which hydra asked for by name.
+
+	The pattern every optional dependency in every C project uses, and the
+	one thing fmake could not see. What the directive adds is the macro, not
+	the library: once the macro is defined the guarded code is there and its
+	symbols ask for the library themselves, so §3 still decides the link."""
+	_optional_annotated(t, "zlib")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = t.run(os.path.basename(t.dir)).stdout
+	check(out.startswith("zlib "),
+	      f"the feature should be compiled in: {out!r}")
+	check("the preprocessor did not take" not in r.stdout + r.stderr,
+	      "a feature that was turned on is not a compiled-away one")
+
+
+@case
+def a_missing_optional_package_is_said_out_loud(t):
+	"""The other half, and it is the half that matters.
+
+	"Built without keyring support" is the sentence hydra's browser needed
+	and did not get. Printing it only when the answer is no would make its
+	absence meaningless, so the yes case says so under --verbose."""
+	_optional_annotated(t, "libfmake-no-such-package-9")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	check("is not installed" in out and "HAVE_ZLIB is undefined" in out,
+	      f"a feature left out should be reported: {out}")
+	check(t.run(os.path.basename(t.dir)).stdout == "none\n",
+	      "the feature should not be compiled in")
+
+
+@case
+def a_malformed_pkg_optional_is_fatal(t):
+	"""Missing is tolerated; misspelt is not.
+
+	The directive exists because a feature can vanish quietly. One fmake
+	silently ignored because the keyword was left out would be that same
+	failure wearing the fix as a disguise."""
+	if not _have_pkg("zlib"):
+		raise Skip("zlib has no pkg-config file here")
+	t.write("main.c",
+	        "/**\n * @pkg_optional zlib HAVE_ZLIB\n */\n"
+	        "int main(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode != 0, f"should have refused: {r.stdout}{r.stderr}")
+	check("defines MACRO" in r.stdout + r.stderr,
+	      f"the error should show the form: {r.stdout}{r.stderr}")
+
+
+@case
+def advice_names_only_a_place_that_exists(t):
+	"""§31 again: a remedy that does not work is worse than none.
+
+	`@target` in fmake.mk is refused with an offer of [target.*], which is
+	real. `@pkg_optional` has no such key, and offering one would send the
+	reader to write something fmake then rejects."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.mk", "@pkg_optional zlib defines HAVE_ZLIB\n")
+
+	out = t.fmake().stdout + t.fmake().stderr
+	check("[target.*]" not in out,
+	      f"there is no [target.*] key for @pkg_optional: {out}")
+
+	t.write("fmake.mk", "@target foo\n")
+	out = t.fmake().stdout + t.fmake().stderr
+	check("[target.*]" in out,
+	      f"@target does have one, and should still be offered: {out}")
 
 
 @case

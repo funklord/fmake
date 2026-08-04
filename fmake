@@ -602,6 +602,11 @@ RE_MK_UNSUPPORTED = re.compile(
 # translation unit or one artifact, and there is no such context in fmake.mk.
 MK_PROJECT_DIRECTIVES = {"cflags", "ldflags", "define", "std", "libs", "pkg"}
 
+# What [target.*] actually accepts, so a diagnostic can offer it and be
+# right. Derived from the schema rather than restated, because a second copy
+# is a second thing to forget when a key is added.
+CONF_TARGET_DIRECTIVES = set(CONF_SCHEMA["target"]["*"]) | {"defines"}
+
 
 def parse_mk(path=None, text=None, origin=None, first_line=1,
              directives=None):
@@ -645,10 +650,16 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 				current = None
 				continue
 			if dname in DIRECTIVES:
+				# Only name a remedy that exists. @pkg_optional has no
+				# [target.*] key, so offering one sends the reader to write
+				# something fmake will then reject -- §31, and this is the
+				# message that would do it.
+				where_else = ("Put it in the source file it is about."
+				              if dname not in CONF_TARGET_DIRECTIVES else
+				              f"Put it in the source file it is about, or "
+				              f"in {CONF_FILE} under [target.*].")
 				die(f"{where}:{n}: @{dname} is a fact about one file or one "
-				    f"target, and {MK_FILE} has neither.\n"
-				    f"Put it in the source file it is about, or in "
-				    f"{CONF_FILE} under [target.*].")
+				    f"target, and {MK_FILE} has neither.\n{where_else}")
 			die(f"{where}:{n}: unknown directive @{dname}")
 
 		if RE_MK_UNSUPPORTED.search(line):
@@ -1538,8 +1549,9 @@ RE_DIRECTIVE = re.compile(r"^[@\\](\w+)\b[ \t]*(.*)$")
 # Replace whatever came before; last one wins.
 DIRECTIVE_SCALAR = {"target", "kind", "std"}
 # Accumulate across every comment and every file in the link set.
-DIRECTIVE_LIST = {"pkg", "libs", "cflags", "ldflags", "define", "defines",
-                  "os", "arch", "sources", "headers", "rule"}
+DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
+                  "define", "defines", "os", "arch", "sources", "headers",
+                  "rule"}
 
 # @define and @defines are the same directive. The config file spells it
 # plural because it holds a list; a comment spells it singular because it
@@ -1687,6 +1699,7 @@ DOXYGEN_ALIAS_TEXT = {
     "target":  "Build target",
     "kind":    "Artifact kind",
     "pkg":     "Package dependency",
+    "pkg_optional": "Optional package dependency",
     "libs":    "Libraries",
     "headers": "Public headers",
     "cflags":  "Compile flags",
@@ -2345,6 +2358,19 @@ class Unit:
 		self.archive = False
 
 
+def optional_pkg(group):
+	"""(module, macro) from `@pkg_optional NAME defines MACRO`, or None.
+
+    The keyword is required rather than inferred from the argument count.
+    `@pkg_optional libsecret-1 HAVE_SECRET` would read as two packages to
+    anyone who had not memorised the order, and the failure is silent in
+    exactly the way this directive exists to prevent.
+    """
+	if len(group) == 3 and group[1] == "defines":
+		return group[0], group[2]
+	return None
+
+
 def unit_cflags(u, pkg, store, sig):
 	"""Compile flags a TU asked for, in @std @define @cflags @pkg order.
 
@@ -2363,6 +2389,21 @@ def unit_cflags(u, pkg, store, sig):
 		got = pkg.for_module(group[0], store, sig)
 		if got:
 			out += [f for f in got[1] if f not in out]
+	# "Found means defined": the pattern every optional dependency in every
+	# C project uses, and the one thing fmake could not see. What it adds is
+	# the macro, not the library -- once the macro is defined the guarded
+	# code is there and its symbols ask for the library on their own, so §3
+	# still decides the link. A package that is not installed adds nothing,
+	# which is the same answer the configure step would have given.
+	for group in u.ann.groups("pkg_optional"):
+		spec = optional_pkg(group)
+		if not spec:
+			continue
+		got = pkg.for_module(spec[0], store, sig)
+		if got:
+			out += [f for f in got[1] if f not in out]
+			if "-D" + spec[1] not in out:
+				out.append("-D" + spec[1])
 	return out
 
 
@@ -4569,10 +4610,38 @@ def build(args, _bootstrapping=False):
 			if pkg.satisfies(group) is False:
 				die(f"{u.rel}:{u.ann.line('pkg')}: @pkg {' '.join(group)} is "
 				    f"not satisfied (installed: {pkg.version(group[0])})")
+		for group in u.ann.groups("pkg_optional"):
+			# Malformed is fatal where missing is not. The whole directive
+			# is about a feature that vanishes quietly, so one that fmake
+			# silently ignored because the keyword was misspelt would be
+			# the same failure wearing the fix as a disguise.
+			if optional_pkg(group) is None:
+				die(f"{u.rel}:{u.ann.line('pkg_optional')}: @pkg_optional "
+				    f"{' '.join(group)} is not "
+				    f"'@pkg_optional NAME defines MACRO'")
 		return unit_cflags(u, pkg, hdr_store, pkg_sig) + moc_own.get(u.rel, [])
 
 	for rel in sorted(units):
 		units[rel].own = own_flags(units[rel])
+
+	# Which optional features this build has, and which it does not. Said
+	# once per package rather than per file, and said whether the answer is
+	# yes or no: "built without keyring support" is the sentence hydra's
+	# browser needed and did not get, and it is only trustworthy if the
+	# other half is printed too.
+	optional = {}
+	for rel in sorted(units):
+		for group in units[rel].ann.groups("pkg_optional"):
+			spec = optional_pkg(group)
+			if spec:
+				optional.setdefault(spec, []).append(rel)
+	for (module, macro), users in sorted(optional.items()):
+		if pkg.for_module(module, hdr_store, pkg_sig):
+			vinfo(f"{module} found: -D{macro} for "
+			      f"{len(users)} file{'' if len(users) == 1 else 's'}")
+		else:
+			info(f"{module} is not installed, so {macro} is undefined and "
+			     f"whatever {users[0]} guards with it is not in this build")
 
 
 	vinfo(f"{len(srcs)} sources, {len(candidates)} candidates, "
@@ -4899,7 +4968,9 @@ def build(args, _bootstrapping=False):
 				warn(f"{where}: {header} is behind a conditional the "
 				     f"preprocessor did not take, so {module} was not "
 				     f"linked -- if a feature macro should have turned it "
-				     f"on, fmake was not told about it (--cflags)")
+				     f"on, say so next to the include with "
+				     f"'@pkg_optional {module} defines MACRO', or pass "
+				     f"-DMACRO with --cflags")
 
 	# ---- explain or link ----------------------------------------------
 	# What widening discovered, to start from next time -- but not what it

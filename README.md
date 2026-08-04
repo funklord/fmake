@@ -79,6 +79,7 @@ like `@brief` are ignored.
 | `@target NAME` | Name of the artifact this file roots |
 | `@kind exe\|shared\|static` | What to build; inferred from `main()` otherwise |
 | `@pkg NAME [OP VER]` | pkg-config dependency, version constraint optional |
+| `@pkg_optional NAME defines MACRO` | Define `MACRO` if pkg-config finds `NAME` |
 | `@libs NAME…` | Raw `-l`, for libraries with no `.pc` file |
 | `@cflags …` | Compile flags for this file |
 | `@ldflags …` | Link flags, propagated to anything containing this file |
