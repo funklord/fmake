@@ -1758,6 +1758,69 @@ def host_arch():
 	        "i686": "x86"}.get(m, m)
 
 
+# Suffixes that state which platform a file is for. Only spellings that
+# cannot plausibly mean anything else: `foo_win32.c` is Windows and nothing
+# else, while `foo_win.c` could be a window and `foo_mac.c` a MAC address.
+# `_posix` and `_unix` are families rather than platforms -- fmake's own
+# README uses `util_posix.c` as an example of a file it copes with -- and a
+# family needs a rule about membership that nothing here has.
+PLATFORM_SUFFIXES = {
+    "linux": ("os", "linux"),
+    "darwin": ("os", "darwin"), "macos": ("os", "darwin"),
+    "windows": ("os", "windows"), "win32": ("os", "windows"),
+    "win64": ("os", "windows"),
+    "freebsd": ("os", "freebsd"), "openbsd": ("os", "openbsd"),
+    "netbsd": ("os", "netbsd"), "solaris": ("os", "solaris"),
+    "android": ("os", "android"), "ios": ("os", "ios"),
+    "haiku": ("os", "haiku"),
+    "x86_64": ("arch", "x86_64"), "amd64": ("arch", "x86_64"),
+    "aarch64": ("arch", "aarch64"), "arm64": ("arch", "aarch64"),
+    "riscv64": ("arch", "riscv64"), "ppc64": ("arch", "ppc64"),
+    "ppc64le": ("arch", "ppc64le"), "i386": ("arch", "x86"),
+    "mips64": ("arch", "mips64"), "s390x": ("arch", "s390x"),
+}
+
+# Longest first: `foo_x86_64.c` ends with `_x86_64` and with `_64`, and only
+# one of those is a claim about anything.
+_PLATFORM_ORDER = sorted(PLATFORM_SUFFIXES, key=len, reverse=True)
+
+
+def filename_platform(rel):
+	"""(kind, value, suffix) the file's name claims, or None."""
+	stem = os.path.splitext(os.path.basename(rel))[0].lower()
+	for suffix in _PLATFORM_ORDER:
+		if stem.endswith("_" + suffix):
+			kind, value = PLATFORM_SUFFIXES[suffix]
+			return kind, value, suffix
+	return None
+
+
+def filename_excludes(rel, ann, want_os=None, want_arch=None):
+	"""Why the name says this TU belongs to another platform, or None.
+
+    The file is what CMake would have put inside `if(ANDROID)`. It carries
+    no self-guard, because the build system was what excluded it -- so
+    fmake compiles it and fails on a header that is not there, which is one
+    project's hard blocker and no flag fixes.
+
+    An explicit `@os` or `@arch` wins outright, including one that names
+    the platform being built for: the name is a convention and the
+    annotation is a statement, and a file that says both means the second.
+    """
+	if ann.items("os") or ann.items("arch"):
+		return None
+	got = filename_platform(rel)
+	if not got:
+		return None
+	kind, value, suffix = got
+	want = ((want_os or host_os()) if kind == "os"
+	        else (want_arch or host_arch()))
+	if value == want:
+		return None
+	return (f"named _{suffix}, so {value} only (building for {want}); "
+	        f"@{kind} overrides the name")
+
+
 def platform_excludes(ann, want_os=None, want_arch=None):
 	"""Why this TU is not built for the target platform, or None if it is.
 
@@ -4379,20 +4442,35 @@ def build(args, _bootstrapping=False):
 		return None
 
 	excluded = dict(unreadable)
+	by_name = []
 	for rel in list(srcs):
 		pat = exclude_pattern(rel)
 		if pat:
 			excluded[rel] = f"[project] exclude = {pat!r}"
 		else:
-			why = platform_excludes(Ann(scans[rel].get("dirs")),
-			                        cfg.os, cfg.arch)
+			ann = Ann(scans[rel].get("dirs"))
+			why = platform_excludes(ann, cfg.os, cfg.arch)
+			if not why:
+				why = filename_excludes(rel, ann, cfg.os, cfg.arch)
 			if not why:
 				continue
 			excluded[rel] = why
+			if "named _" in why:
+				by_name.append(rel)
 		srcs.remove(rel)
 	if not srcs:
 		die(f"every source file is excluded when building for "
 		    f"{cfg.os}/{cfg.arch}")
+	# Said out loud, because a file that stops being compiled is a file
+	# whose symbols stop existing, and the link error that follows names
+	# neither the file nor the reason. @os or @arch in the file overrides
+	# the name if it was wrong.
+	if by_name:
+		n = len(by_name)
+		info(f"{n} source{'' if n == 1 else 's'} named for another platform "
+		     f"({', '.join(os.path.basename(r) for r in sorted(by_name)[:3])}"
+		     f"{', ...' if n > 3 else ''}) not built for "
+		     f"{cfg.os}/{cfg.arch}")
 
 	# Headers under an excluded subtree are excluded too. srcs was filtered
 	# above; hdrs is not filtered in place because include resolution may

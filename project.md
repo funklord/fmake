@@ -4153,3 +4153,75 @@ paid for itself within the session.
   Without one the candidate set comes from the program's include graph and
   never reaches the tests, so the case passed whether the rule was there or
   not -- the same shape as §48's weak probes, and found the same way.
+
+## 50. A file named for a platform
+
+hydra's finding 1, the only thing across five reports called a hard blocker,
+and the second half of its answer. §43 made the failure say `@os NAME`
+excludes it; this is the rule that means nobody has to.
+
+> `src/` holds `android_view.cpp`, `android_downloads.cpp`,
+> `android_intents.cpp` and `android_dialogs.cpp`. CMake adds them only
+> inside `if(ANDROID)`. They carry no self-guard, because the build system
+> is what excludes them. [...] A documented suffix rule -- ignore
+> `*_<platform>.cpp` unless building for that platform -- would cover the
+> common case and stay inside the "no build file" premise. **Hydra would
+> rename four files to adopt it, cheerfully.**
+
+The rule feeds the machinery that already existed rather than duplicating
+it: a suffix is read as an implicit `@os` or `@arch`, and `platform_excludes`
+decides as before. So the name proposes and the existing matcher disposes,
+which is the same split as everywhere else here.
+
+### The narrowness is the design
+
+A naming convention is dangerous in a way an annotation is not: it acts on
+files whose authors never opted in, and the failure is a symbol that stops
+existing. So the table holds only spellings that cannot mean anything else.
+
+- `_win32`, `_windows`, `_android`, `_darwin`, `_aarch64` -- unambiguous.
+- **`_win` is not in it**, because that could be a window. Nor `_mac`,
+  because that could be a MAC address.
+- **`_posix` and `_unix` are not in it**, because a family is not a
+  platform -- and fmake's own README uses `util_posix.c` as an example of a
+  file it copes with, which would have made the feature contradict the
+  documentation on its first line.
+
+There is a case for exactly this, and it is the one that keeps the net
+narrow: four files named `util_posix.c`, `main_win.c`, `mac_address.c` and
+`frame_unix.c`, all of which must build. The cheapest wrong implementation
+accepts all four, and every other case here still passes under it.
+
+**Directories were considered and left out.** `platform/win32/foo.c` is a
+real convention, and nobody asked for it. Doubling the surface of a rule
+whose whole safety argument is narrowness, for a case no report mentioned,
+is how a convention stops being predictable.
+
+### Both directions, and only excluding
+
+`@os` and `@arch` override the name outright, **including when they name the
+platform being built for**: the name is a convention and the annotation is a
+statement, and a file carrying both means the second. Without that the rule
+would be inescapable for anyone whose filenames it reads wrongly, which is
+what separates an opinionated default from a trap.
+
+And the rule only ever *excludes*, and only a file naming somewhere else. A
+file named for the platform being built for is untouched -- `platform_linux.c`
+on Linux is simply compiled -- so on any given machine most trees see no
+change at all. That is what makes a default change of this kind survivable:
+the blast radius is exactly the files that could not have been building
+usefully anyway.
+
+It is said out loud, because a file that stops being compiled is a file
+whose symbols stop existing, and the link error that follows names neither
+the file nor the reason.
+
+### One thing not covered, said plainly
+
+The suffix table is searched longest-first so a shorter spelling can never
+win. No pair in it currently collides -- `_x86_64` does not end with any
+other entry -- so removing the sort fails nothing today. It stays as a guard
+against the next entry rather than as a claim, and the case says so instead
+of inventing a fixture that pretends otherwise. Same honesty as §40's
+unreachable `.get()`: a branch no case covers should be labelled, not
+decorated with a test that does not test it.

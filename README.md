@@ -119,6 +119,14 @@ is how a stale binary gets tested. `@test` and `@test no` in the source, or
 `test-args` under `[target.NAME]` gives a test its arguments. Ejected build
 files get a `test` target that `all` does not depend on.
 
+**A file named for a platform is built only on it.** `view_android.cpp`,
+`net_win32.c`, `blit_aarch64.c` — the files a build system would have put
+inside an `if(ANDROID)` and which carry no self-guard because the build
+system was what excluded them. The suffix is read only when it cannot mean
+anything else: `_win32` yes, `_win` no, because that could be a window;
+`_posix` and `_unix` never, because a family is not a platform. `@os` and
+`@arch` override the name in both directions.
+
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.
 
@@ -155,7 +163,7 @@ like `@brief` are ignored.
 | `@define NAME[=VAL]` | Convenience for `-D` |
 | `@std c17\|c++20\|…` | Language standard |
 | `@test` / `@test no` | This program is (or is not) a test |
-| `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms |
+| `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms; overrides a `_platform` suffix |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |
 | `@rule …` | A build rule, in Makefile syntax (below) |

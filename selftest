@@ -493,6 +493,111 @@ def a_library_does_not_drag_in_the_tests_it_cannot_use(t):
 
 
 @case
+def a_platform_suffix_keeps_a_file_out_of_the_build(t):
+	"""hydra's hard blocker, answered by a rename they offered to make.
+
+	`src/` held android_view.cpp and three siblings that CMake adds only
+	inside if(ANDROID). They carry no self-guard, because the build system
+	was what excluded them -- so fmake scheduled them and one failed on
+	QJniEnvironment. Their words: "no flag fixes it, because the question is
+	which files belong in this build rather than how to compile them", and
+	"hydra would rename four files to adopt it, cheerfully".
+
+	A file naming the platform being built for is untouched, which is why
+	this is safe on the machine it runs on: the rule only ever excludes, and
+	only a file that names somewhere else."""
+	t.write("main.c", "#include <stdio.h>\nint platform_id(void);\n"
+	        'int main(void){ printf("%d\\n", platform_id()); return 0; }\n')
+	t.write("platform_linux.c", "int platform_id(void){ return 1; }\n")
+	t.write("view_android.c", "#include <QJniEnvironment>\n"
+	        "int view_attach(void){ return 0; }\n")
+	t.write("net_win32.c", "#include <windows.h>\n"
+	        "int net_init(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the platform files should not be built: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1\n",
+	      "the program should build and run")
+	out = r.stdout + r.stderr
+	check("named for another platform" in out,
+	      f"skipping them should be said out loud: {out}")
+	# The one naming this platform is not "another platform".
+	check(re.search(r"CC\s+platform_linux\.c", out),
+	      f"a file named for the target platform is built: {out}")
+
+
+@case
+def a_platform_annotation_beats_the_filename(t):
+	"""The name is a convention; the annotation is a statement.
+
+	A file that says both means the second, including when the annotation
+	puts back a file the name would have excluded. Without this the rule
+	would be unescapable for anyone whose filenames it reads wrongly, which
+	is the thing that makes a naming convention dangerous rather than
+	merely opinionated."""
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper_aarch64.c",
+	        "/** @arch x86_64 aarch64 */\nint helper(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the annotated file should have been compiled and linked")
+	check("named for another platform" not in r.stdout + r.stderr,
+	      f"an annotated file is not excluded by its name: {r.stdout}")
+
+
+@case
+def a_name_that_merely_looks_like_a_platform_is_left_alone(t):
+	"""The net is narrow on purpose, and this is the case that keeps it so.
+
+	`foo_win.c` could be a window, `mac_address.c` a MAC address, and
+	`_posix` and `_unix` are families rather than platforms -- fmake's own
+	README uses util_posix.c as an example of a file it copes with. The
+	cheapest wrong version of this feature accepts all four, and every other
+	case here still passes under it."""
+	t.write("main.c", "int a(void); int b(void); int c(void); int d(void);\n"
+	        "int main(void){ return a() + b() + c() + d(); }\n")
+	t.write("util_posix.c", "int a(void){ return 0; }\n")
+	t.write("main_win.c", "int b(void){ return 0; }\n")
+	t.write("mac_address.c", "int c(void){ return 0; }\n")
+	t.write("frame_unix.c", "int d(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"none of these name a platform: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "every one of them should have been linked")
+
+
+@case
+def a_platform_suffix_matches_the_longest_name(t):
+	"""`blit_x86_64.c` ends with `_x86_64` and with `_64`, and only one of
+	those is a claim about anything.
+
+	The table is searched longest-first so a shorter suffix can never win.
+	No pair in it currently collides, so the ordering is defensive rather
+	than load-bearing -- said plainly because a mutation removing the sort
+	fails nothing today, and the honest record of that is worth more than a
+	contrived fixture that pretends otherwise."""
+	t.write("main.c", "int wide(void);\nint main(void){ return wide(); }\n")
+	t.write("blit_x86_64.c", "int wide(void){ return 0; }\n")
+	t.write("blit_aarch64.c", "int narrow(void){ return 1; }\n")
+
+	ex = t.fmake("--explain").stdout
+	# Host-independent on purpose: on an aarch64 machine the pair simply
+	# swaps. What must hold either way is that exactly one is excluded and
+	# the suffix named is the whole architecture, not a fragment of it.
+	one = "named _x86_64" in ex
+	other = "named _aarch64" in ex
+	check(one != other,
+	      f"exactly one of the two belongs to this host: {ex}")
+	check("named _64" not in ex,
+	      f"the suffix should be the whole arch name: {ex}")
+
+
+@case
 def each_convention_holds_a_test_back_on_its_own(t):
 	"""Two conventions, and a fixture satisfying both tests neither.
 
