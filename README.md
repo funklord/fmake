@@ -85,6 +85,14 @@ LD  client_test
 `@kind shared` builds a `.so` instead, with a soname; `--install` then uses
 `@headers` to know what to put in `include/`.
 
+**Objects are keyed by the whole configuration**, not just by timestamps:
+the compiler, its version, the target platform, and every flag — including
+`--cflags` and `[project] cflags`. Changing a flag is not changing a source
+file, and nothing in a file tree records that it happened, so a builder that
+keys on mtimes alone will happily link objects built with a sanitizer into a
+binary without one. Each configuration gets its own object directory, so
+switching between them costs a rebuild and never a wrong binary.
+
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.
 

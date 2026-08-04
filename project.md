@@ -4010,3 +4010,61 @@ the third time in this session -- §38, §43, here -- that an over-broad
 substring has cost a diagnosis. The rule has earned promotion from
 observation to practice: **assert the sentence the program prints, never a
 token that can arrive from somewhere else.**
+
+## 48. A guarantee nobody had asserted
+
+netcfgd asked a question rather than reporting a defect:
+
+> **A flag-stamp file.** `client/` has `.build-flags`, a file containing the
+> compiler and flags, which every object depends on. It exists because
+> `make SANITIZE=1 test` followed by a plain build in `gui/` linked a
+> sanitized archive into a binary with no sanitizer runtime -- forty lines
+> of `__asan_report_store1` at link time and no clue why. Changing flags is
+> not changing a source file, and nothing in the file tree records that it
+> happened.
+>
+> This is a general problem, not a local one: **any** builder that caches
+> objects has it. If fmake keys its object cache on flags already, say so --
+> it is a real advantage over a naive Makefile and nobody would guess it. If
+> it does not, that is a stale-object bug waiting in every project that
+> switches compilers or adds a sanitizer.
+
+It does, and the comment on the key says why: *"a flag that is not in it is
+a flag that silently reuses objects built without it."* Their incident
+cannot happen here.
+
+**It was not asserted anywhere.** The nearest case wiped `.fmake` between
+its two builds -- which is precisely the thing that must not be necessary,
+so the case was passing over the top of the guarantee rather than through
+it. A property documented and untested is a property that will be true until
+someone tidies the key.
+
+### Four components, and the first three probes were weak
+
+Writing the case was easy and writing a case that *tests* it took four
+attempts, each found by mutation rather than by thought.
+
+- **Plain build vs `--cflags` does not test the override.** Passing
+  `--cflags` at all replaces the default flags, so the two builds differ in
+  the key for that reason alone. Removing the override from the key entirely
+  left the case passing. The probe that works is two *different* `--cflags`
+  values, which are identical in every other component.
+- **`--cflags` on both sides does not test the configured flags.**
+  `[project] cflags` is a different field reached by a different route, and
+  with a command-line override in play it is empty on both sides. Editing
+  `fmake.toml` between two builds is what exercises it.
+- **The compiler was untestable as written, and then was not.** One
+  toolchain on the machine looked like the end of it -- until `cc` and
+  `gcc`, the same binary under two names, turned out to be exactly the
+  check: two different answers to "what built this", and a wrapper under a
+  different name is not obliged to behave like the thing it wraps. The
+  assertion is on the object directories rather than on behaviour, because
+  behaviour is identical and that is the point.
+
+The sanitizer half is its own case, at the size the bug actually occurs:
+build instrumented, rebuild plain, and require that `__asan` is gone. That
+one needed no cleverness and is the one somebody will read.
+
+The pattern across all four: **a case for a guarantee has to vary exactly
+the thing the guarantee is about**, and the natural way to write it varies
+two things at once. Mutation is the only reason any of that surfaced.

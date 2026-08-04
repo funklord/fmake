@@ -424,6 +424,113 @@ int main(void){
 
 
 @case
+def objects_are_not_shared_between_configurations(t):
+	"""netcfgd asked whether fmake keys its object cache on flags, and said
+	that if it does not, it is "a stale-object bug waiting in every project
+	that switches compilers or adds a sanitizer".
+
+	They have the incident: `make SANITIZE=1 test` followed by a plain build
+	elsewhere linked a sanitized archive into a binary with no sanitizer
+	runtime, and it surfaced as forty lines of `__asan_report_store1` at
+	link time with no clue why. Their Makefile grew a `.build-flags` stamp
+	file that every object depends on, because changing a flag is not
+	changing a source file and nothing in the tree records that it happened.
+
+	fmake keys the object directory on the whole configuration, so this is
+	answered by construction -- but it was never asserted, and a guarantee
+	worth documenting is worth a case. The existing --cflags case wipes
+	.fmake between builds, which is exactly the thing that must not be
+	necessary."""
+	t.write("main.c", "#include <stdio.h>\nint main(void){\n"
+	        "#ifdef FEATURE\n\tputs(\"with feature\");\n"
+	        "#else\n\tputs(\"without feature\");\n#endif\n"
+	        "\treturn 0;\n}\n")
+	prog = os.path.basename(t.dir)
+
+	check(t.fmake().returncode == 0, "first build failed")
+	check(t.run(prog).stdout == "without feature\n", "wrong first build")
+	# No wipe between any of these. That is the whole point.
+	check(t.fmake("--cflags", "-DFEATURE").returncode == 0, "second failed")
+	check(t.run(prog).stdout == "with feature\n",
+	      "a changed flag must not reuse objects built without it")
+	check(t.fmake().returncode == 0, "third build failed")
+	check(t.run(prog).stdout == "without feature\n",
+	      "going back must not reuse the objects built with the flag")
+
+	objdirs = os.path.join(t.dir, ".fmake", "obj")
+	kept = [d for d in os.listdir(objdirs)
+	        if os.path.isdir(os.path.join(objdirs, d))]
+	check(len(kept) >= 2,
+	      f"each configuration needs its own object directory: {kept}")
+
+	# Two *different* --cflags, which is the probe that actually tests the
+	# override. Passing --cflags at all replaces the default flags, so a
+	# plain build and a --cflags build differ in the key for that reason
+	# alone -- the check above passes even with the override left out of it.
+	# Mutation found that; the first version of this case was weaker than it
+	# looked.
+	t.write("main.c", "#include <stdio.h>\nint main(void){\n"
+	        "#ifdef A\n\tputs(\"A\");\n#elif defined(B)\n\tputs(\"B\");\n"
+	        "#else\n\tputs(\"neither\");\n#endif\n\treturn 0;\n}\n")
+	check(t.fmake("--cflags", "-DA").returncode == 0, "-DA build failed")
+	check(t.run(prog).stdout == "A\n", "wrong -DA build")
+	check(t.fmake("--cflags", "-DB").returncode == 0, "-DB build failed")
+	check(t.run(prog).stdout == "B\n",
+	      "two different --cflags must not share objects")
+
+	# And the same for flags that came from the config file rather than the
+	# command line. These are a different field, reached by a different
+	# route, and with --cflags in play on both sides of the check above they
+	# are not exercised at all -- mutation again.
+	t.write("fmake.toml", '[project]\ncflags = ["-DA"]\n')
+	check(t.fmake().returncode == 0, "[project] cflags build failed")
+	check(t.run(prog).stdout == "A\n", "wrong [project] cflags build")
+	t.write("fmake.toml", '[project]\ncflags = ["-DB"]\n')
+	check(t.fmake().returncode == 0, "changed [project] cflags failed")
+	check(t.run(prog).stdout == "B\n",
+	      "editing [project] cflags must not reuse the old objects")
+
+	# The compiler is part of the identity too, and the name is the part a
+	# machine with one compiler can still check: cc and gcc are the same
+	# binary here and two different answers to "what built this". A wrapper
+	# under a different name is not obliged to behave the same way.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	def objdir_set():
+		return {d for d in os.listdir(objdirs)
+		        if os.path.isdir(os.path.join(objdirs, d))}
+	if shutil.which("gcc") and shutil.which("cc"):
+		check(t.fmake(env={"CC": "cc"}).returncode == 0, "CC=cc failed")
+		before = objdir_set()
+		check(t.fmake(env={"CC": "gcc"}).returncode == 0, "CC=gcc failed")
+		check(objdir_set() - before,
+		      "a different compiler must not share objects")
+
+
+@case
+def a_sanitizer_does_not_survive_being_turned_off(t):
+	"""The same guarantee at the size it actually bit somebody.
+
+	A binary carrying instrumented objects and no sanitizer runtime is the
+	failure netcfgd hit, and it is invisible until the link."""
+	t.write("main.c", "int main(void){ int a[4]; a[0] = 1; return a[0] - 1; }\n")
+	prog = os.path.basename(t.dir)
+
+	r = t.fmake("--cflags", "-fsanitize=address",
+	            "--ldflags", "-fsanitize=address")
+	if r.returncode != 0:
+		raise Skip("no address sanitizer in this toolchain")
+	syms = subprocess.run(["nm", os.path.join(t.dir, prog)],
+	                      capture_output=True, text=True).stdout
+	check("__asan" in syms, "the sanitized build is not instrumented")
+
+	check(t.fmake().returncode == 0, "plain rebuild failed")
+	syms = subprocess.run(["nm", os.path.join(t.dir, prog)],
+	                      capture_output=True, text=True).stdout
+	check("__asan" not in syms,
+	      "instrumented objects survived into a plain build")
+
+
+@case
 def relinking_follows_the_command_not_just_mtimes(t):
 	"""Object mtimes miss every change that is not a recompile.
 
