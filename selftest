@@ -4782,6 +4782,51 @@ int main(void){ return helper() == 1 ? 0 : 1; }
           f"an edited file should be looked at afresh: {r.stdout}")
 
 
+@case
+def a_build_waits_for_a_lock_it_cannot_take(t):
+    """The mechanism, where one_fmake_at_a_time_per_tree tests the outcome.
+
+    That case starts two builds and checks the result is right, which is the
+    thing that actually matters -- but it only exercises anything if the two
+    overlap, and nothing makes them. Removing the lock does turn it red
+    today; whether it still would on a faster machine, or with a smaller
+    tree, is exactly the question a timing-dependent test cannot answer.
+
+    This one takes the lock itself and checks that fmake blocks on it, then
+    that releasing it lets the build through. No timing assumption, so no
+    machine on which it quietly stops testing anything."""
+    try:
+        import fcntl
+    except ImportError:
+        raise Skip("no fcntl on this platform")
+
+    t.write("main.c", "int main(void){ return 0; }\n")
+    check(t.fmake().returncode == 0, "first build failed")
+
+    lock = os.path.join(t.dir, ".fmake", "lock")
+    check(os.path.exists(lock), "no lock file was created")
+
+    held = open(lock, "w")
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        proc = subprocess.Popen([FMAKE, "-C", t.dir, "-B"],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        try:
+            proc.wait(timeout=3)
+            raise Failure("fmake built while another run held the lock")
+        except subprocess.TimeoutExpired:
+            pass                      # blocked, which is the point
+    finally:
+        fcntl.flock(held, fcntl.LOCK_UN)
+        held.close()
+
+    out, _ = proc.communicate(timeout=120)
+    check(proc.returncode == 0, f"the waiting build failed: {out}")
+    check("waiting for another fmake" in out,
+          f"it should say why it paused: {out}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

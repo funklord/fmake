@@ -63,7 +63,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [25. The cache remembered failures](#25-the-cache-remembered-the-failures-too) ·
 [26. An optimisation that was not](#26-an-optimisation-that-was-not-one) ·
 [27. Symlinks](#27-symlinks-and-a-count-that-named-the-wrong-reason) ·
-[28. The main that was not there](#28-the-main-that-was-not-there)
+[28. The main that was not there](#28-the-main-that-was-not-there) ·
+[29. A test that only tests sometimes](#29-a-test-that-only-tests-when-it-feels-like-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1804,7 +1805,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 156, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 157, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2902,3 +2903,36 @@ That is not the feature under test, but it is a real shape: §3 excludes other
 programs' roots when assembling a *library* and does not when closing over a
 program. The linker says `multiple definition of main` plainly, so it is loud
 rather than silent, and it is recorded in §15 rather than changed here.
+
+---
+
+## 29. A test that only tests when it feels like it
+
+The build lock had a case, and I wrote a second one because I could not find
+the first. Both facts are worth recording.
+
+**Why it was not found.** The existing case is called
+`one_fmake_at_a_time_per_tree`, and neither its name nor its docstring
+contains the word *lock* — searching for one matched only a comment inside
+its own body. A test named after the property rather than the mechanism reads
+better and is harder to find when the mechanism is what you are holding in
+your head.
+
+**Why the second one earns its place anyway.** The original starts two builds
+in threads and checks the result is right. That is the thing that actually
+matters, but it only exercises anything if the two overlap, and nothing makes
+them: no barrier, no wait, just the hope that starting them close together is
+enough. Removing the lock does turn it red today. Whether it still would on a
+faster machine, or with a smaller tree, or under a loaded runner, is exactly
+the question a timing-dependent test cannot answer about itself.
+
+The new one takes the lock from the test process, checks that fmake blocks on
+it, releases it, and checks the build then completes and says why it paused.
+There is no timing assumption in it, so there is no machine on which it
+quietly stops testing anything.
+
+Both are kept. One checks that concurrent builds produce a correct binary,
+which is the promise; the other checks that they are serialised, which is how.
+Measured beforehand rather than assumed: four fmakes launched at once on a
+cold 31-file tree all exited 0, three of them reported waiting, the binary was
+correct and the cache was still valid JSON.
