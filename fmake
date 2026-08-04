@@ -5101,8 +5101,13 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
         order_only = (" | " + " ".join(after)) if after else ""
         a(f"{obj}: {_eject_src(rel)}{order_only}")
         a("\t@mkdir -p $(@D)")
+        # -MP as well as -MD: it emits a phony target for every header, so
+        # deleting one leaves `No rule to make target` behind instead of a
+        # build. fmake's own depfiles are read by fmake, which simply skips a
+        # prerequisite that is gone; a Makefile has no such luxury, and an
+        # ejected Makefile is a Makefile someone will edit.
         a(f"\t$({var}) $({flags}){' ' + own if own else ''} $(CFLAGS_LAST) "
-          f"-c $< -o $@ -MD -MF $(@:.o=.d)")
+          f"-c $< -o $@ -MD -MP -MF $(@:.o=.d)")
         a("")
 
     a("# ---- targets " + "-" * 50)

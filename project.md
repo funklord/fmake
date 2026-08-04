@@ -1783,6 +1783,7 @@ survive being picked up cold.
 | `selftest` | the suite; one case per claim this document makes |
 | `README.md` | how to use it |
 | `project.md` | this: why it works the way it does |
+| `code-style.md` | the style rules, and what the ejected build files owe them |
 | `LICENSE` | GPL-2.0-or-later, matching the SPDX headers |
 | `Makefile` | not a build system: `install`, `deb`, `check`, `clean` |
 | `debian/` | native packaging; see §34 |
@@ -1816,7 +1817,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 166, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 167, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -3207,3 +3208,43 @@ job and took a moment to recognise.
 toolchain and several optional libraries; it is the right thing to run before
 a commit and the wrong thing to make a package build depend on. `make check`
 runs it.
+
+---
+
+## 35. What the ejected Makefile owed the conventions
+
+`code-style.md` holds an ejected `Makefile` to the same Make conventions as a
+hand-written one, on the grounds that it is a Makefile somebody will edit.
+Checked against them, one was not met.
+
+**`-MP` was missing.** The depfile names every header an object depended on,
+so deleting one — which is what a refactor that inlines a declaration does —
+leaves make with a prerequisite that has no rule:
+
+```
+make: *** No rule to make target 'util.h', needed by 'build/main.c.o'.  Stop.
+```
+
+It stops there, before reaching the compiler, over a file nothing needs any
+more. `-MP` emits a phony target for each header so a vanished one is simply
+absent. Measured both ways: without it the build stalls, with it the same
+tree rebuilds and runs.
+
+fmake's own compiles keep `-MD` alone, deliberately. It reads its own
+depfiles and skips a prerequisite that has gone, so it does not need the
+phony targets — and `parse_depfile` splits on the first colon, which `-MP`'s
+extra stanzas would feed bogus paths. The convention is about Makefiles, and
+that is where the flag goes.
+
+The other two rules in that group did not apply: nothing ejected recurses
+into a sibling library, so there is no `FORCE` prerequisite to get wrong, and
+nothing emits `.SECONDARY` at all. Both are recorded here as checked rather
+than left to look like oversights.
+
+### And the clean target
+
+`clean` had `rm -rf` over a wildcard, which the same conventions forbid
+outright: a clean target is the one thing everybody runs without reading. It
+now names every file it deletes. The two directories it still removes
+wholesale are debhelper's staging trees, created by the build, relative, and
+named outright rather than matched — which is the one shape the rule allows.

@@ -54,7 +54,10 @@ lint:
 	fi
 	@ls -1 ../fmake_*_all.deb | tail -1
 
+# Named targets only, and no wildcard sweeps: a clean target is the one
+# thing everybody runs without reading. The two directories are debhelper's
+# own staging trees -- created by the build, relative, and named outright.
 clean:
-	rm -f fmake.1
-	rm -rf debian/fmake debian/.debhelper debian/files \
-	       debian/debhelper-build-stamp debian/*.substvars debian/*.debhelper.log
+	rm -f fmake.1 debian/files debian/debhelper-build-stamp \
+	      debian/fmake.substvars debian/fmake.debhelper.log
+	rm -rf debian/fmake debian/.debhelper

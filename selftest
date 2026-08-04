@@ -5130,6 +5130,47 @@ def the_manual_describes_every_option(t):
             os.unlink(path)
 
 
+@case
+def an_ejected_makefile_survives_a_deleted_header(t):
+    """`-MP`, which code-style.md holds ejected Makefiles to.
+
+    A depfile names every header an object depended on. Delete one -- which
+    is what a refactor that inlines a declaration does -- and make finds a
+    prerequisite with no rule and stops, before it ever reaches the
+    compiler, saying `No rule to make target 'util.h'`. -MP emits a phony
+    target for each header so that a vanished one is simply not there any
+    more.
+
+    fmake's own builds do not need it: it reads its own depfiles and skips a
+    prerequisite that is gone. A Makefile has no such luxury, and an ejected
+    Makefile is a Makefile someone will edit."""
+    if not shutil.which("make"):
+        raise Skip("make not installed")
+    t.write("util.h", "#pragma once\nint helper(void);\n")
+    t.write("util.c", '#include "util.h"\nint helper(void){ return 7; }\n')
+    t.write("main.c", '#include "util.h"\nint main(void){ return helper() - 7; }\n')
+
+    check(t.fmake().returncode == 0, "first build failed")
+    r = t.fmake("--eject")
+    check(r.returncode == 0, f"eject failed: {r.stderr}")
+    with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+        fh.write(r.stdout)
+    shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+    check(_run_in(t.dir, "make").returncode == 0, "the ejected build failed")
+
+    # The refactor: the declaration moves into the caller, the header goes.
+    t.write("util.c", "int helper(void){ return 7; }\n")
+    t.write("main.c", "int helper(void);\nint main(void){ return helper() - 7; }\n")
+    os.remove(os.path.join(t.dir, "util.h"))
+
+    m = _run_in(t.dir, "make")
+    check("No rule to make target" not in m.stdout + m.stderr,
+          f"a deleted header stalled the build: {m.stdout}{m.stderr}")
+    check(m.returncode == 0, f"the rebuild failed: {m.stdout}{m.stderr}")
+    check(_run_in(t.dir, "./" + os.path.basename(t.dir)).returncode == 0,
+          "the rebuilt program is wrong")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):
