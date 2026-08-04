@@ -4933,6 +4933,57 @@ int main(void){ printf("tool\\n"); return 0; }
     check(t.run("tool").stdout.strip() == "tool", "tool is wrong")
 
 
+@case
+def a_mistyped_directory_is_not_a_traceback(t):
+    """`-C` naming a file, or nothing at all.
+
+    build() checked this and the lock did not, and the lock is taken first --
+    so creating .fmake under a path that is a file raised NotADirectoryError
+    from os.makedirs with a stack trace attached. A traceback is never the
+    right answer to a mistyped argument."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+
+    r = subprocess.run([FMAKE, "-C", os.path.join(t.dir, "main.c")],
+                       capture_output=True, text=True)
+    check(r.returncode != 0, "a file is not a tree")
+    check("Traceback" not in r.stdout + r.stderr,
+          f"it should not crash: {r.stdout}{r.stderr}")
+    check("not a directory" in r.stdout + r.stderr,
+          f"and it should say what is wrong: {r.stdout}{r.stderr}")
+
+    r = subprocess.run([FMAKE, "-C", os.path.join(t.dir, "nowhere")],
+                       capture_output=True, text=True)
+    check(r.returncode != 0, "a missing directory is not a tree")
+    check("Traceback" not in r.stdout + r.stderr,
+          f"it should not crash: {r.stdout}{r.stderr}")
+    check("no such directory" in r.stdout + r.stderr,
+          f"and it should say what is wrong: {r.stdout}{r.stderr}")
+
+
+@case
+def a_tree_it_cannot_write_to_says_so(t):
+    """fmake keeps its state beside the source, so a read-only checkout
+    cannot be built. That is a refusal, not a crash -- and it has to name
+    the directory and what to do, because "Permission denied" from
+    os.makedirs with a stack trace above it names neither."""
+    if os.geteuid() == 0:
+        raise Skip("root can write anywhere")
+    sub = os.path.join(t.dir, "ro")
+    os.makedirs(sub, exist_ok=True)
+    with open(os.path.join(sub, "main.c"), "w") as fh:
+        fh.write("int main(void){ return 0; }\n")
+    os.chmod(sub, 0o555)
+    try:
+        r = subprocess.run([FMAKE, "-C", sub], capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        check(r.returncode != 0, "it cannot have built anything")
+        check("Traceback" not in out, f"it should not crash: {out}")
+        check(".fmake" in out and "writable" in out,
+              f"it should name the state directory and the way out: {out}")
+    finally:
+        os.chmod(sub, 0o755)
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

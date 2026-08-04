@@ -66,7 +66,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [28. The main that was not there](#28-the-main-that-was-not-there) ·
 [29. A test that only tests sometimes](#29-a-test-that-only-tests-when-it-feels-like-it) ·
 [30. The library in an unusual place](#30-the-library-in-an-unusual-place) ·
-[31. Advice that pointed the wrong way](#31-advice-that-pointed-the-wrong-way)
+[31. Advice that pointed the wrong way](#31-advice-that-pointed-the-wrong-way) ·
+[32. Two tracebacks from the command line](#32-two-tracebacks-reachable-from-the-command-line)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1810,7 +1811,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 159, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 161, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -3028,3 +3029,35 @@ The case checks the fix as well as the message — moving the shared function
 into a file of its own, which is what the message recommends, and then that
 both programs build and run. A recommendation nobody has followed through is
 a guess with a confident tone.
+
+---
+
+## 32. Two tracebacks reachable from the command line
+
+Found by a sweep of the error paths — malformed `fmake.toml`, a rule with no
+recipe, an invalid `--eject` backend, a bad `-j`, an unknown target name. Most
+were already good: a named file and line, or argparse's own usage. Two were
+not, and both ended in a Python stack trace.
+
+**`-C` naming a file, or nothing.** `build()` checks that the tree exists and
+is a directory, and the lock is taken *before* `build()` runs — so creating
+`.fmake` under a path that is a file raised `NotADirectoryError` from
+`os.makedirs`, and a missing path raised `PermissionError` from trying to
+create it. The check now happens before the lock, and distinguishes the two
+cases, since *no such directory* and *not a directory* are different mistakes.
+
+**A tree fmake cannot write to.** A read-only checkout, a mounted source
+directory, someone else's copy. fmake keeps its cache and objects beside the
+source, so this is a genuine refusal rather than something to work around —
+but `Permission denied` from `os.makedirs` with a stack trace above it names
+neither the directory nor the way out. It now names both.
+
+The sweep is the point rather than the two fixes. Every one of these is
+reachable by typing something slightly wrong, which is how anyone meets a
+tool for the first time, and a traceback at that moment says the program did
+not expect to exist in the world it is running in. The rest of the paths
+checked out, which is worth recording too: this is the first time they have
+all been tried on purpose rather than met by accident.
+
+Both fixes have a case, and the read-only one skips under `root`, who can
+write anywhere and would see the test quietly pass while testing nothing.

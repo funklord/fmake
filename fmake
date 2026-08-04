@@ -2031,8 +2031,20 @@ class TreeLock:
     def __enter__(self):
         if fcntl is None:
             return self
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        self.fh = open(self.path, "w")
+        # The first thing any build writes, so it is where an unwritable
+        # tree is discovered -- a read-only checkout, a mounted source
+        # directory, someone else's copy. fmake keeps its state beside the
+        # source and cannot build without it, so this is a refusal rather
+        # than something to work around, but it has to read as one.
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            self.fh = open(self.path, "w")
+        except OSError as exc:
+            die(f"cannot create {STATE_DIR}/ in "
+                f"{os.path.dirname(os.path.dirname(self.path))}: "
+                f"{exc.strerror or exc}\nfmake keeps its cache and objects "
+                f"beside the source. Build a writable copy of the tree, or "
+                f"make the directory writable.")
         try:
             fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -5419,8 +5431,17 @@ def _locked_build(args):
     Only at the outermost level: the nested build a `uses` generator triggers
     runs inside this one and must not wait for it.
     """
-    state = os.path.join(os.path.abspath(args.directory), STATE_DIR)
-    with TreeLock(state):
+    # Checked here rather than in build(), which is where the same test used
+    # to live: the lock is taken first, and creating .fmake under a path that
+    # is a file -- or under a directory nobody may write to -- raised an
+    # OSError from os.makedirs with a traceback attached. A traceback is
+    # never the right answer to a mistyped argument.
+    root = os.path.abspath(args.directory)
+    if not os.path.exists(root):
+        die(f"no such directory: {args.directory}")
+    if not os.path.isdir(root):
+        die(f"not a directory: {args.directory}")
+    with TreeLock(os.path.join(root, STATE_DIR)):
         return build(args)
 
 
