@@ -60,7 +60,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [22. Shared library soname](#22-a-shared-library-that-did-not-say-its-own-name) ·
 [23. The wrong-architecture archive](#23-the-archive-that-was-the-wrong-architecture) ·
 [24. Checking the exit](#24-checking-the-exit-actually-is-one) ·
-[25. The cache remembered failures](#25-the-cache-remembered-the-failures-too)
+[25. The cache remembered failures](#25-the-cache-remembered-the-failures-too) ·
+[26. An optimisation that was not](#26-an-optimisation-that-was-not-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2550,10 +2551,11 @@ Measured now, on three trees.
 | **loose tree** (C) | 201 | 1 | 2 | 2 | **0** |
 
 Angband is the real answer: 327 `.c` files in the repository, 168 after the
-platform excludes, a clean `-j8` build in 67s and a no-op rebuild in 0.44s.
-(That last figure was first recorded here as 3.5s, which was measuring §25's
-bug rather than the build: the "no-op" was recompiling eleven files that
-could never compile.)
+platform excludes, a clean `-j8` build in 67s and a no-op rebuild of about
+0.3s (min 314ms, mean 431ms over fifteen runs — this machine is noisy enough
+that a single sample is not worth quoting). That figure was first recorded
+here as 3.5s, which was measuring §25's bug rather than the build: the
+"no-op" was recompiling eleven files that could never compile.
 The include graph finds 122 of the 150 files that end up linked — 81% — and
 widening supplies the remaining 28, overshooting by exactly one. `--widen-all`
 compiles 157 and takes 70s, so the whole apparatus buys about 4% of the build
@@ -2733,7 +2735,7 @@ Angband has such files by construction: `nds/`, `sdl2/`, `stats/db.c` and
 them, which is right. Every subsequent build re-reported them, which is not.
 
 ```
-no-op rebuild:  3.5s  ->  0.44s
+no-op rebuild:  3.5s  ->  ~0.3s
 ```
 
 **Forgetting is not hiding**, and the distinction is what makes this safe. A
@@ -2757,3 +2759,51 @@ proving it is not *retried* proves nothing; and a file the include graph
 reaches is retried correctly, so it cannot demonstrate the bug either. The
 shape that does is a file reachable only by widening, alongside another that
 supplies the same symbol and actually compiles.
+
+---
+
+## 26. An optimisation that was not one
+
+After §25 the no-op build was down to about 0.3s on a 168-file project, and
+the obvious next step was to find out where that went. The answer is worth
+recording because it is *nowhere in particular*, and because getting there
+took two wrong measurements.
+
+`cProfile` was unambiguous: `os.path.relpath` was the single largest cost,
+30,165 calls for 0.25s cumulative — the same system headers resolved once per
+depfile. Memoising it is a pure-function change with no staleness risk, so it
+went in.
+
+It made no difference. Nine runs each way, minimum taken, repeated three
+times: 338ms with, 400ms without, 465ms with. The ordering does not even hold
+across repetitions. The second candidate the profile suggested, the 660 KB
+JSON cache written on every build, was tested by removing the write
+altogether: 244ms against 247ms.
+
+**The profiler was measuring itself.** `cProfile` charges per-call overhead,
+so a cheap function called thirty thousand times looks like a bottleneck and
+an expensive one called once does not. For ranking *where time goes* in a
+program dominated by many tiny calls, it is the wrong instrument, and the
+right one is a stopwatch around the whole thing with enough repetitions to
+see past the noise.
+
+The memo came out again. It was harmless and it was unjustified, and this
+file already records two other cases — the redundant include-directory
+ordering in §19's neighbourhood, and rcc's dead prefix branch — where code
+that could not be shown to matter was removed rather than kept on the grounds
+that it might. An optimisation with no measurable effect is the same thing as
+a test that cannot fail.
+
+**Two measurement mistakes, both mine, both worth naming.** The benchmark
+loop was initialised with `best=99` in milliseconds rather than a large
+number, so every timing was greater than the initial value, `best` never
+updated, and three different builds all reported exactly 99ms — a number that
+should have been obviously impossible and was briefly believed. And the
+0.44s in §21 was a single sample of a noisy machine. Minimum-of-N is the only
+figure quoted here now.
+
+The conclusion for §8: at 168 sources the no-op costs a few hundred
+milliseconds, spread thinly across stat calls, hashing, JSON and the closure,
+with no single item worth attacking. If it ever needs to be faster the answer
+is to do less work rather than to do the same work quicker — which is what
+§25 turned out to be.
