@@ -2179,7 +2179,12 @@ bake a stale icon into every binary and never mention it.
 **The limit worth stating**: this is textual evidence, not a proof. A resource
 path assembled with no `":/..."` literal anywhere and no `Q_INIT_RESOURCE`
 leaves nothing to go on, and the resource will be missing at runtime rather
-than at the link. `--force-link` covers it. Everywhere else in fmake the
+than at the link — measured: the program builds and exits 2 asking for a file
+that is not there. The remedy is `Q_INIT_RESOURCE(name)`, one line and Qt's
+own mechanism. `--force-link` does **not** cover it, which was written here
+first and is wrong: with no evidence rcc never runs, so there is no generated
+source to force, and naming one is refused with *is not a source file in this
+tree*. Everywhere else in fmake the
 answer is derived from what the compiler and linker actually produced; here it
 is derived from what the source appears to say, and that difference should not
 be blurred.

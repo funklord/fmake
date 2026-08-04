@@ -280,18 +280,124 @@ A tool this opinionated has to be leaveable.
 
 ---
 
-## What it does not do
+## Where it fits
 
-- **No `fmake.py`.** There is deliberately nowhere to put logic. If something
-  genuinely needs code, a rule can call a script.
-- **C and C++ only.** C++20 modules are not handled.
-- **Qt means moc, uic and rcc**, not QML — see above. Exercised against Qt 6
-  on Debian; Qt 5 is coded for and untested.
-- **Static archive link order** is not solved; a cycle between two archives
-  needs the flags by hand.
-- **Cross-compiling** works, and library resolution answers for the target
-  machine — but it has been exercised against one toolchain family on Linux.
-- **macOS and Windows** are unhandled: the symbol scan is ELF-shaped.
+### What it is good at
+
+- **Trees it should not be able to work out.** The link set comes from object
+  symbol tables, not the `#include` graph, so one header implemented across
+  three files, a `util.h` implemented by `util_posix.c`, and code with no
+  header at all all resolve exactly. This is the thing most zero-config build
+  tools get wrong.
+- **Many small programs over one shared body of code.** Each translation unit
+  is compiled once and each program links its own closure, so a tree of
+  twenty test drivers over one library does not compile that library twenty
+  times. This is where it beats a hand-written CMake setup rather than merely
+  matching one.
+- **Linking what is actually called.** An undefined `SDL_Init` proves SDL is
+  used; `#include <SDL.h>` only proves a declaration was wanted. A header
+  whose library nothing calls is reported and not linked.
+- **Qt without a build file.** `Q_OBJECT`, `#include "ui_*.h"` and the
+  resource paths you open are the declarations; moc, uic and rcc follow from
+  them.
+- **Leaving.** `fmake --eject` writes a standalone Makefile or `build.ninja`
+  with nothing referring back to fmake, byte-stable and safe to commit.
+- **Explaining itself.** `fmake --explain` shows every decision and the
+  evidence for it, down to the command line.
+
+### What it is not for
+
+- **Anything that needs a configure step.** Symbol inference answers *what do
+  I link*; it cannot answer *what do I compile*. A project with
+  feature-detection — `#ifdef HAVE_SODIUM` deciding whether code exists at
+  all — needs those `-D`s supplied, because when the library is absent there
+  is no call to infer from.
+- **Fetching dependencies.** It builds what is there and finds libraries
+  already installed. It is not a package manager.
+- **C++20 modules**, `import std;` and friends.
+- **macOS and Windows.** The symbol scan is ELF-shaped.
+- **Languages other than C and C++.**
+- **Logic.** There is deliberately no `fmake.py` and nowhere to put code. If
+  something genuinely needs a program, a rule can call one.
+
+Cross-compiling works and answers for the target machine, but has been
+exercised against one toolchain family on Linux.
+
+---
+
+## Pitfalls
+
+Most of these announce themselves — a refusal or a link error naming the
+cause, which is the design intent. **Two do not**, and they are marked ⚠
+below: those are the ones that can produce a build that looks fine and is
+not.
+
+**A program named after a directory that already exists.**
+`tool/main.c` wants to be `tool`, and `tool/` is in the way.
+
+```
+!!! target 'tool' (from tool/main.c) would be written over a directory of that name.
+```
+Use `-o build` to put artifacts elsewhere, or `@target` to rename it.
+
+**Two programs in one tree defining the same class.** Three sibling examples
+each with their own `Window` gives `Window::Window()` three strong providers,
+and fmake refuses to guess which belongs to which program. It is right — the
+tree really is ambiguous — but you must say: `[target.NAME] sources = [...]`
+in `fmake.toml` declares membership and skips the closure.
+
+**Code nothing references.** Constructor-registered plugins, test cases
+registered by a macro. Nothing refers to them, so the closure correctly drops
+them — and says so: `not compiled: nothing reaches it`. `@sources` in a source
+file, or `--force-link`, asserts them into the build.
+
+**⚠ A Qt resource whose path is assembled with no literal.** rcc is decided by
+the `":/..."` paths your code names. If a path is built entirely at runtime
+(`base + "/" + name`, with `base` from a variable) and there is no
+`Q_INIT_RESOURCE` either, there is no evidence: the resource is left out, the
+program links cleanly, and it fails when it asks for the file.
+
+Add `Q_INIT_RESOURCE(app);` — one line, Qt's own mechanism, and the exact
+signal fmake wants. `--force-link` does *not* help here: with no evidence rcc
+never ran, so there is no generated source to force.
+
+This is the one place fmake reasons from what the source appears to say
+rather than from what the compiler produced, and it is the only pitfall in
+this list that can reach a user.
+
+**A vendored `.a` in the tree is not read.** fmake finds installed libraries,
+not prebuilt archives you ship. You get
+`no ... library exports: helper` with the archive sitting right there. Name
+it with `--ldflags` or `[project] ldflags`.
+
+**Static archive link order.** `-l` flags are emitted in cover order, which
+is fine for shared libraries and wrong for a cycle between two static
+archives. Pass `-Wl,--start-group ... -Wl,--end-group` yourself.
+
+**⚠ `--cflags` replaces the defaults, it does not add to them.**
+`--cflags -Os` builds with `-Os` alone — no `-g`, and no `-O2`. That is what
+makes it able to override a file's own `@cflags`, and it is not an error, so
+nothing will tell you the debug info went away. `$CFLAGS` replaces them too.
+Only `[project] cflags` in `fmake.toml` **adds** — with it, `-Wall` builds
+with `-O2 -g -Wall`.
+
+**Generated headers other than `ui_*.h`.** A header produced by your own
+generator has to be declared with a `[generate.*]` rule or a pattern rule in
+`fmake.mk`; the include scan cannot follow what does not exist yet.
+
+**Whitespace in paths.** `--eject` refuses to write a Makefile, because Make
+cannot express it. `--eject ninja` can.
+
+**The first build compiles more than `make` would.** Files the include graph
+missed are found by compiling and reading symbols, so a tree of
+loosely-coupled files with one small binary pays for translation units it
+turns out not to need. It is bounded by the tree, cached afterwards, and the
+resolved set is remembered for next time.
+
+**A big single Qt application builds slower than CMake.** CMake concatenates
+every moc output into one translation unit; fmake compiles one per class,
+which is what lets it drop the classes a program never constructs. On one
+binary that trade is a loss — measured at 39s against 27s on a 33-file app.
 
 ---
 
