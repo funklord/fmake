@@ -4654,6 +4654,69 @@ def widen_all_does_not_stay_switched_on(t):
           f"candidates afterwards against {plain} before")
 
 
+@case
+def a_symlinked_directory_is_part_of_the_tree(t):
+    """`src/common -> ../shared` is how sibling projects share code.
+
+    os.walk does not follow symlinked directories by default, so the whole
+    subtree was invisible and nothing said so: the build failed much later on
+    an undefined symbol, with no hint that a directory had been skipped."""
+    os.makedirs(os.path.join(t.dir, "elsewhere"), exist_ok=True)
+    t.write("elsewhere/thing.c", "int shared_thing(void){ return 5; }\n")
+    os.makedirs(os.path.join(t.dir, "app"), exist_ok=True)
+    os.symlink("../elsewhere", os.path.join(t.dir, "app/common"))
+    t.write("app/main.c", """
+int shared_thing(void);
+int main(void){ return shared_thing() == 5 ? 0 : 1; }
+""")
+    t.write("fmake.toml", '[project]\nexclude = ["elsewhere/**"]\n')
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(any("common/thing.c" in c for c in compiled(r)),
+          f"the symlinked directory was not walked: {compiled(r)}")
+
+
+@case
+def a_symlink_cycle_does_not_hang(t):
+    """Following symlinked directories means guarding against loops.
+
+    A link pointing at its own ancestor makes os.walk descend forever, which
+    is the reason the default is not to follow them at all."""
+    t.write("main.c", "int main(void){ return 0; }\n")
+    os.makedirs(os.path.join(t.dir, "sub"), exist_ok=True)
+    os.symlink("..", os.path.join(t.dir, "sub/up"))
+
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "program failed")
+
+
+@case
+def two_links_to_one_directory_are_walked_once(t):
+    """Otherwise every file in it has two names, and so two definitions.
+
+    The cycle guard is keyed on the real path rather than on the walked one
+    for exactly this: a diamond is not a loop, and walking it twice would
+    hand §3 a duplicate of every symbol in the directory and no way to
+    choose."""
+    os.makedirs(os.path.join(t.dir, "elsewhere"), exist_ok=True)
+    t.write("elsewhere/thing.c", "int shared_thing(void){ return 5; }\n")
+    os.symlink("elsewhere", os.path.join(t.dir, "one"))
+    os.symlink("elsewhere", os.path.join(t.dir, "two"))
+    t.write("main.c", """
+int shared_thing(void);
+int main(void){ return shared_thing() == 5 ? 0 : 1; }
+""")
+    t.write("fmake.toml", '[project]\nexclude = ["elsewhere/**"]\n')
+
+    r = t.fmake()
+    check(r.returncode == 0,
+          f"a directory reached two ways should not be a duplicate: "
+          f"{r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "program failed")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

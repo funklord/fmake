@@ -1720,12 +1720,36 @@ def doxygen_aliases():
 # Tree walk
 # ---------------------------------------------------------------------------
 
+def _walk(root):
+    """os.walk, following symlinked directories exactly once each.
+
+    Not following them means a tree laid out as `src/common -> ../shared` --
+    which is how a pair of sibling projects usually share code -- is missing
+    that whole subtree, and says nothing about it: the build fails much later
+    on an undefined symbol, with no hint that a directory was skipped.
+
+    Following them needs the cycle guard, because a link pointing at an
+    ancestor makes os.walk descend forever. Keyed on the real path, so two
+    links to one directory are walked once rather than producing two names
+    for every file in it -- which would be two definitions of every symbol,
+    and §3 refusing to choose between them.
+    """
+    seen = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        real = os.path.realpath(dirpath)
+        if real in seen:
+            dirnames[:] = []
+            continue
+        seen.add(real)
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not d.startswith(".")]
+        yield dirpath, dirnames, filenames
+
+
 def walk_tree(root):
     """Return (sources, headers) as root-relative paths."""
     srcs, hdrs = [], []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+    for dirpath, dirnames, filenames in _walk(root):
         for f in filenames:
             ext = os.path.splitext(f)[1]
             rel = os.path.relpath(os.path.join(dirpath, f), root)
@@ -2321,9 +2345,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 def find_archives(root):
     """Prebuilt .a files shipped in the tree, as relative paths."""
     out = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+    for dirpath, _dirnames, filenames in _walk(root):
         for f in filenames:
             if f.endswith(".a"):
                 out.append(os.path.relpath(os.path.join(dirpath, f), root))
@@ -4216,7 +4238,11 @@ def build(args, _bootstrapping=False):
 
     vinfo(f"{len(srcs)} sources, {len(candidates)} candidates, "
           f"{len(wanted)} target(s)"
-          + (f", {len(excluded)} excluded by platform" if excluded else ""))
+          # Not "by platform": this set also holds the files [project]
+          # exclude named and the ones that could not be read, and saying
+          # otherwise sends anyone looking for the reason to @os first.
+          # --explain gives the reason per file.
+          + (f", {len(excluded)} excluded" if excluded else ""))
 
     if args.always_make:
         # Links too, or -B recompiles everything, finds the objects came out

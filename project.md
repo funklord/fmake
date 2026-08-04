@@ -61,7 +61,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [23. The wrong-architecture archive](#23-the-archive-that-was-the-wrong-architecture) ·
 [24. Checking the exit](#24-checking-the-exit-actually-is-one) ·
 [25. The cache remembered failures](#25-the-cache-remembered-the-failures-too) ·
-[26. An optimisation that was not](#26-an-optimisation-that-was-not-one)
+[26. An optimisation that was not](#26-an-optimisation-that-was-not-one) ·
+[27. Symlinks](#27-symlinks-and-a-count-that-named-the-wrong-reason)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1796,7 +1797,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 151, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 154, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2807,3 +2808,43 @@ milliseconds, spread thinly across stat calls, hashing, JSON and the closure,
 with no single item worth attacking. If it ever needs to be faster the answer
 is to do less work rather than to do the same work quicker — which is what
 §25 turned out to be.
+
+---
+
+## 27. Symlinks, and a count that named the wrong reason
+
+Found by asking what fmake does with inputs it has never been shown: CRLF
+line endings, a UTF-8 BOM, and symlinks. The first two turned out fine and
+are worth recording as such — a Windows-authored tree with `\r\n` throughout
+and a BOM on `main.c` builds correctly, with `@target` and `@define` parsed
+through both. The regex scanner survives them because it never anchors on a
+bare `\n` where `\r` could intervene.
+
+Symlinks did not fare as well.
+
+**A symlinked directory was silently invisible.** `os.walk` does not follow
+them by default, so a tree laid out as `src/common -> ../shared` — which is
+how a pair of sibling projects usually share code — was missing that whole
+subtree. Nothing said so. The build failed much later on an undefined symbol,
+with no hint that a directory had been skipped, which is the worst kind of
+omission: the tool behaved as though the files did not exist.
+
+They are followed now, which needs a cycle guard, because a link pointing at
+its own ancestor makes `os.walk` descend forever — and that is precisely why
+the default is not to follow. The guard is keyed on the **real** path rather
+than the walked one, which matters for a case that is not a cycle at all: two
+links to one directory. Keyed on the walked path, every file in it would have
+two names and therefore two definitions of every symbol, and §3 would refuse
+to choose. Keyed on the real path, it is walked once.
+
+All three shapes have a case, including the one that hangs — the mutation run
+treats a timeout as a caught failure, since a build that never finishes is
+not a passing build.
+
+**And a count that named the wrong reason.** The summary line read
+`N excluded by platform`, but that set also holds the files `[project]
+exclude` named and the ones that could not be read. A dangling symlink was
+reported correctly as *unreadable* on one line and then counted as a platform
+exclusion on the next, which sends anyone looking for the cause to `@os`
+first. It now says `N excluded`, and `--explain` gives the reason per file,
+which it always did.
