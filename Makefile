@@ -11,7 +11,7 @@ DESTDIR ?=
 # projects side by side in ~/src, `make deb` in one drops files into the
 # directory holding the other. They are moved here afterwards, which also
 # lets clean name them.
-OBJDIR  ?= build
+BUILD_DIR  ?= build
 
 # Read rather than restated. Two hand-edited copies of a version number
 # drift, and the symptom is a package whose reported version disagrees with
@@ -20,9 +20,9 @@ VERSION     = $(shell sed -n 's/^VERSION *= *"\(.*\)"/\1/p' fmake)
 DEB_VERSION = $(shell sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
 DEB_ARCH    = $(shell dpkg-architecture -qDEB_HOST_ARCH 2>/dev/null)
 
-DEB         = $(OBJDIR)/fmake_$(VERSION)_all.deb
-DEB_EXTRA   = $(OBJDIR)/fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
-              $(OBJDIR)/fmake_$(VERSION)_$(DEB_ARCH).changes
+DEB         = $(BUILD_DIR)/fmake_$(VERSION)_all.deb
+DEB_EXTRA   = $(BUILD_DIR)/fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
+              $(BUILD_DIR)/fmake_$(VERSION)_$(DEB_ARCH).changes
 
 # The interpreter written into the installed copy. Debian Policy 10.4 wants
 # an absolute path, and every packaged Python script on a Debian system has
@@ -74,11 +74,11 @@ deb: lint
 # dependency of producing the thing.
 lint:
 	dpkg-buildpackage -b -us -uc
-	@mkdir -p $(OBJDIR)
+	@mkdir -p $(BUILD_DIR)
 	@for f in fmake_$(VERSION)_all.deb \
 	          fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
 	          fmake_$(VERSION)_$(DEB_ARCH).changes; do \
-		if [ -e "../$$f" ]; then mv -f "../$$f" $(OBJDIR)/; fi; \
+		if [ -e "../$$f" ]; then mv -f "../$$f" $(BUILD_DIR)/; fi; \
 	done
 	@test -f $(DEB) || { echo "deb: $(DEB) was not produced" >&2; exit 1; }
 	@echo
@@ -97,4 +97,10 @@ clean:
 	      debian/fmake.substvars debian/fmake.debhelper.log \
 	      $(DEB) $(DEB_EXTRA)
 	rm -rf debian/fmake debian/.debhelper
-	@rmdir $(OBJDIR) 2>/dev/null || :
+	@rmdir $(BUILD_DIR) 2>/dev/null || :
+
+# The shared style gate: one tool, copied verbatim from
+# ~/.claude/tools/style_gate.py into every private project. It refuses to
+# run against a collapsed file list, so a pass means it actually looked.
+style:
+	$(PYTHON) tools/style_gate.py check

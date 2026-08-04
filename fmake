@@ -5643,7 +5643,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"{P}LDFLAGS  = {' '.join(_eject_flags(cfg.ldflags, root))}")
 	else:
 		a(f"{P}LDFLAGS  =")
-	a(f"{P}OBJDIR   {assign} {EJECT_OBJDIR}")
+	a(f"{P}BUILD_DIR   {assign} {EJECT_OBJDIR}")
 	a("")
 	# The default target does not build tests, and a separate one builds
 	# and runs them. That is what three of the projects that read this
@@ -5784,7 +5784,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("")
 	for rel in sorted(every):
 		u = every[rel]
-		obj = f"$({P}OBJDIR)/{_eject_obj(rel)}.o"
+		obj = f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o"
 		# CC pairs with CFLAGS, not CCFLAGS. Getting this wrong expands to an
 		# undefined variable, so every compile silently loses its flags and
 		# only a project that actually needs an -I notices.
@@ -5808,7 +5808,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("")
 	for t in targets:
 		ident = _mk_ident(t.name).upper()
-		objs = [f"$({P}OBJDIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link
+		objs = [f"$({P}BUILD_DIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link
 		        if not u.archive]
 		a(f"{P}{ident}_OBJS = \\")
 		for i, o in enumerate(objs):
@@ -5840,8 +5840,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t$({driver}) -o $@ $({P}{ident}_OBJS){tail}")
 		a("")
 
-	all_objs = sorted({f"$({P}OBJDIR)/{_eject_obj(rel)}.o" for rel in every})
-	# Every file this build creates, named. Not `rm -rf $(OBJDIR)`: OBJDIR
+	all_objs = sorted({f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in every})
+	# Every file this build creates, named. Not `rm -rf $(BUILD_DIR)`: BUILD_DIR
 	# is an ordinary Make variable and overriding it is expected usage, so
 	# an empty or mistyped one removes something else entirely -- and this
 	# file is handed to people to edit, with a header telling them fmake is
@@ -5856,8 +5856,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# The directories are left behind. Removing them would mean removing
 	# something this rule did not name, which is the whole point.
 	a(f"{P}CLEAN = \\")
-	leavings = ([f"$({P}OBJDIR)/{_eject_obj(rel)}.o" for rel in sorted(every)]
-	            + [f"$({P}OBJDIR)/{_eject_obj(rel)}.d" for rel in sorted(every)]
+	leavings = ([f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in sorted(every)]
+	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d" for rel in sorted(every)]
 	            + [t.filename for t in targets]
 	            + [_eject_src(j["out"]) for j in uic_jobs]
 	            + [_eject_src(j["out"]) for j in moc_jobs]

@@ -2379,7 +2379,7 @@ def eject_writes_to_stdout_not_over_a_makefile(t):
 	with open(os.path.join(t.dir, "Makefile")) as fh:
 		check("hand written" in fh.read(),
 		      "the existing Makefile must survive")
-	check("$(OBJDIR)" in r.stdout, "the build file should be on stdout")
+	check("$(BUILD_DIR)" in r.stdout, "the build file should be on stdout")
 
 
 @case
@@ -6079,11 +6079,11 @@ def an_ejected_makefile_survives_a_deleted_header(t):
 def an_ejected_clean_names_what_it_removes(t):
 	"""No wildcards, no rm -rf, no directory removal: only named files.
 
-	The earlier version of this case checked that `make clean OBJDIR=/` was
+	The earlier version of this case checked that `make clean BUILD_DIR=/` was
 	*refused*. Refusing is the second-best answer. fmake listed every object
 	in the same file one line below, to -include their depfiles, so it knows
 	exactly what the build creates and can say so -- and a generator that
-	knows what it made has no reason to delete by pattern. `OBJDIR=/` now
+	knows what it made has no reason to delete by pattern. `BUILD_DIR=/` now
 	expands to `rm -f //main.c.o ...`, which names files that do not exist
 	and removes nothing.
 
@@ -6116,10 +6116,10 @@ def an_ejected_clean_names_what_it_removes(t):
 	left = [f for _d, _s, fs in os.walk(objs) for f in fs]
 	check(not left, f"clean left objects behind: {left[:4]}")
 
-	# And an overridden OBJDIR can no longer reach anything: it names files
+	# And an overridden BUILD_DIR can no longer reach anything: it names files
 	# under a path that does not exist rather than removing a directory.
 	check(t.fmake().returncode == 0, "rebuild for the abuse check failed")
-	dry = _run_in(t.dir, "make", "-n", "clean", "OBJDIR=/")
+	dry = _run_in(t.dir, "make", "-n", "clean", "BUILD_DIR=/")
 	check("rm -rf" not in dry.stdout, f"still an rm -rf: {dry.stdout}")
 	check(dry.stdout.strip().startswith("rm -f "),
 	      f"clean should be a named rm -f: {dry.stdout[:120]}")

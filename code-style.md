@@ -76,10 +76,14 @@ fails silently rather than loudly.
 be configured out of it. **Do not run either, not even ad hoc on a single
 file.**
 
-There is no mechanical indent gate in this repository. Indentation is
-therefore a review item here. The sibling Python project `situ` has
-`tools/lint_conventions.py` for exactly this; adopting it would be a
-harmonizing change, worth raising rather than doing in passing.
+This project runs the shared gate: `make style`, which is
+`tools/style_gate.py`, copied verbatim from `~/.claude/tools/style_gate.py`.
+`.style-gate.toml` says which files here it applies to, and the floor it
+carries makes it fail rather than pass when that file list collapses.
+
+It reaches `fmake` and `selftest` even though neither has a suffix: a
+shebang is the file saying it is a program, and scoping by suffix alone
+excluded precisely the two files that matter here.
 
 The conversion from spaces was mechanical, and is worth describing because
 the same job is waiting in the sibling projects. It is not a search and

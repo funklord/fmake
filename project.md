@@ -3311,16 +3311,16 @@ which is why they recognised it.
 
 ```make
 clean:
-	rm -rf $(OBJDIR) prog
+	rm -rf $(BUILD_DIR) prog
 ```
 
-`OBJDIR` is an ordinary Make variable and overriding it is expected usage, so
-`make clean OBJDIR=` or a mistyped one removes something else. §34 fixed
+`BUILD_DIR` is an ordinary Make variable and overriding it is expected usage, so
+`make clean BUILD_DIR=` or a mistyped one removes something else. §34 fixed
 fmake's *own* Makefile after reading the same rule and did not think to look
 at the one fmake writes — which is the sharper version of the lesson: the
 output is where a guard is worth most, because its header tells the reader
 fmake is not needed to understand it, so nobody reviews it. It now refuses an
-empty, absolute or `..`-containing `OBJDIR`, and every refusal has a case.
+empty, absolute or `..`-containing `BUILD_DIR`, and every refusal has a case.
 
 ### A column that stopped separating
 
@@ -3372,7 +3372,7 @@ Worth recording, because agreement arrived at independently is evidence too.
 three dependency rules and found the first satisfied and the other two
 inapplicable *by construction* — the emitted file is flat, so there is no
 recursion to need `FORCE` and no intermediate to need `.SECONDARY`.
-`netcfgd` noticed `OBJDIR` was the canonical name without being told, and
+`netcfgd` noticed `BUILD_DIR` was the canonical name without being told, and
 `fuzzypickles` recognised the configuration-keyed object directory as the fix
 for a bug it had hit and worked around by hand.
 
