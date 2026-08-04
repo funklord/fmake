@@ -1347,6 +1347,40 @@ def qrc_inputs(path, root):
     return out
 
 
+def prune_generated(root, subdir, keep):
+    """Delete generated files whose input is gone.
+
+    Generated output outlives its input, and for uic that is not merely
+    untidy. A ui_*.h is reached through an include path rather than by being
+    listed, so deleting foo.ui while another .ui keeps that -I alive leaves
+    the stale header answering `#include "ui_foo.h"` -- and since nothing it
+    depends on changed, the build reports itself up to date. That is a tree
+    which builds here and fails on a fresh checkout, which is the worst shape
+    a staleness bug can take.
+
+    moc and rcc output cannot go wrong the same way, because it reaches the
+    build only by being listed as a source and a stale one is never listed.
+    Swept anyway: the rule is easier to trust when it has no exceptions.
+    """
+    base = os.path.join(root, subdir)
+    if not os.path.isdir(base):
+        return
+    wanted = {os.path.join(root, k) for k in keep}
+    for dirpath, _dirnames, filenames in os.walk(base, topdown=False):
+        for f in filenames:
+            path = os.path.join(dirpath, f)
+            if path not in wanted:
+                vinfo(f"removing stale {os.path.relpath(path, root)}")
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+        try:
+            os.rmdir(dirpath)       # only succeeds once it is empty
+        except OSError:
+            pass
+
+
 def run_moc(root, jobs, moc, flags, cache, dry_run=False):
     """Run moc where its input changed. Returns the outputs that now exist.
 
@@ -3779,6 +3813,8 @@ def build(args, _bootstrapping=False):
     ui_jobs, ui_outs = [], []
     uic_exe = None
     ui_jobs = uic_plan(srcs + gen_hdrs, hdrs, scans, root)
+    if not args.dry_run:
+        prune_generated(root, UI_DIR, [j["out"] for j in ui_jobs])
     if ui_jobs:
         uic_exe = find_qt_tool("uic", cfg.uic, pkg)
         if not uic_exe:
@@ -3802,6 +3838,8 @@ def build(args, _bootstrapping=False):
     qrc_jobs, qrc_outs = [], []
     rcc_exe = None
     qrc_jobs = rcc_plan(srcs + gen_hdrs, scans, root)
+    if not args.dry_run:
+        prune_generated(root, QRC_DIR, [j["out"] for j in qrc_jobs])
     if qrc_jobs:
         rcc_exe = find_qt_tool("rcc", cfg.rcc, pkg)
         if not rcc_exe:
@@ -3824,13 +3862,18 @@ def build(args, _bootstrapping=False):
     moc_jobs, moc_outs, moc_flags, moc_own = [], [], [], {}
     moc_incflags, src_set = [], set(srcs)
     moc_exe = None
-    if any(scans[r].get("qobject") for r in srcs + gen_hdrs if r in scans):
+    moc_jobs = moc_plan(srcs, gen_hdrs, scans)
+    # Swept before the guard, not inside it: a tree that stops using Qt
+    # altogether is exactly the case where every moc output is stale, and a
+    # check for Q_OBJECT is the one thing that would skip it.
+    if not args.dry_run:
+        prune_generated(root, MOC_DIR, [j["out"] for j in moc_jobs])
+    if moc_jobs:
         moc_exe = find_qt_tool("moc", cfg.moc, pkg)
         if not moc_exe:
             die("this tree declares Q_OBJECT classes, which need Qt's moc.\n"
                 "Install the Qt development package, or name it with "
                 f"[toolchain] moc in {CONF_FILE}.")
-        moc_jobs = moc_plan(srcs, gen_hdrs, scans)
         moc_flags = moc_cflags(root, hdrs, conf)
         moc_outs = run_moc(root, moc_jobs, moc_exe, moc_flags, cache,
                            args.dry_run)

@@ -1786,7 +1786,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 137, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 139, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2355,6 +2355,35 @@ reverting the group turns it red.
 This closes §15's "untested and probably broken" for archives in the tree.
 Resolved `-l` flags are still emitted in cover order, so a cycle between two
 *installed* static libraries is unchanged and still wants the flags by hand.
+
+### Generated output must not outlive its input
+
+Found by asking what happens when things are *deleted*, which is the question
+that turns up staleness bugs and the one a feature is never tested against
+when it is written.
+
+Delete a `.ui` and its generated header stays on disk. For moc and rcc that
+is only untidy: their output reaches the build by being listed as a source,
+and a stale one is never listed. For uic it is not, because a `ui_*.h` is
+reached through an **include path**. A surviving sibling `.ui` keeps that
+`-I` alive, the orphaned header goes on answering `#include "ui_gone.h"`, and
+since nothing that object depends on changed, the build reports itself **up
+to date**. The result is a tree that builds here and fails on a fresh
+checkout, which is the worst shape this class of bug takes.
+
+Every generated directory is now swept against the jobs planned this run —
+uniformly, including moc and rcc where it is merely tidy, because the rule is
+easier to trust with no exceptions. The sweep runs before the "does this tree
+use Qt at all" guard, since a tree that has *stopped* using Qt is exactly the
+case where everything is stale and the guard is the one thing that would skip
+it.
+
+A related check came out clean: the contents of a vendored archive are
+already in the link's cache key, because `link_target` hashes everything in
+the link set and an archive is in it. Changing an archive relinks; leaving it
+alone does not. Verified rather than assumed, and now guarded, since keying
+on objects alone would leave the binary as it was with no recompile to notice
+and nothing said.
 
 ### Deliberate limits
 

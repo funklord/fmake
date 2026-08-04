@@ -4122,6 +4122,88 @@ def a_vendored_archive_survives_ejection(t):
 
 
 # ---------------------------------------------------------------------------
+# Staleness of generated and prebuilt inputs
+# ---------------------------------------------------------------------------
+
+
+def _ui_file(cls, text):
+    return (f'<?xml version="1.0" encoding="UTF-8"?>\n<ui version="4.0">\n'
+            f" <class>{cls}</class>\n"
+            f' <widget class="QWidget" name="{cls}">\n'
+            f'  <layout class="QVBoxLayout" name="v"><item>\n'
+            f'   <widget class="QLabel" name="label"><property name="text">'
+            f"<string>{text}</string></property></widget>\n"
+            f"  </item></layout>\n </widget>\n <resources/><connections/>\n</ui>\n")
+
+
+@case
+def a_generated_header_does_not_outlive_its_input(t):
+    """Deleting a .ui must delete the header it produced.
+
+    This is the worst shape a staleness bug takes: a ui_*.h is reached
+    through an include path rather than by being listed, so a surviving
+    sibling .ui keeps that -I alive and the orphaned header goes on answering
+    `#include "ui_gone.h"`. Nothing it depends on changed, so the build even
+    reports itself up to date -- and the tree then builds here and fails on a
+    fresh checkout, which is the one outcome no build tool should produce."""
+    _need_qt()
+    t.write("gone.ui", _ui_file("Gone", "gone-text"))
+    t.write("kept.ui", _ui_file("Kept", "kept-text"))
+    t.write("main.cpp", """
+#include <QApplication>
+#include <QWidget>
+#include "ui_gone.h"
+#include "ui_kept.h"
+int main(int argc, char **argv) {
+    QApplication app(argc, argv);
+    QWidget a; Ui_Gone g; g.setupUi(&a);
+    QWidget b; Ui_Kept k; k.setupUi(&b);
+    return 0;
+}
+""")
+    check(t.fmake().returncode == 0, "first build failed")
+    os.remove(os.path.join(t.dir, "gone.ui"))
+
+    r = t.fmake()
+    check(r.returncode != 0,
+          f"a deleted .ui left a usable header behind: {r.stdout}")
+    check("ui_gone.h" in r.stdout + r.stderr,
+          f"the missing header should be named: {r.stdout}{r.stderr}")
+    check(not os.path.exists(os.path.join(t.dir, ".fmake/ui/ui_gone.h")),
+          "the orphaned header is still on disk")
+    check(os.path.exists(os.path.join(t.dir, ".fmake/ui/ui_kept.h")),
+          "the sweep took a header that was still wanted")
+
+
+@case
+def a_changed_vendored_archive_relinks(t):
+    """An archive is an input to the link like an object, so its contents
+    belong in the link's cache key. Keying on the objects alone would leave
+    the binary as it was, with no recompile to notice and nothing said."""
+    def archive(value):
+        _vendor(t, "vendor/libhelper.a", "helper",
+                "int helper(void){ return %d; }\n" % value)
+
+    archive(42)
+    t.write("main.c", """
+#include <stdio.h>
+int helper(void);
+int main(void){ printf("%d\\n", helper()); return 0; }
+""")
+    check(t.fmake().returncode == 0, "first build failed")
+    check(t.run(os.path.basename(t.dir)).stdout.strip() == "42",
+          "first build gave the wrong answer")
+
+    check("LD" not in t.fmake().stdout, "an unchanged archive relinked")
+
+    archive(99)
+    r = t.fmake()
+    check("LD" in r.stdout, f"a changed archive did not relink: {r.stdout}")
+    check(t.run(os.path.basename(t.dir)).stdout.strip() == "99",
+          "the binary still carries the old archive")
+
+
+# ---------------------------------------------------------------------------
 
 def run_case(c):
     """Run one case in its own tree. Returns (status, detail)."""
