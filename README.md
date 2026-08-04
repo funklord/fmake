@@ -393,11 +393,14 @@ generator has to be declared with a `[generate.*]` rule or a pattern rule in
 **Whitespace in paths.** `--eject` refuses to write a Makefile, because Make
 cannot express it. `--eject ninja` can.
 
-**The first build compiles more than `make` would.** Files the include graph
-missed are found by compiling and reading symbols, so a tree of
-loosely-coupled files with one small binary pays for translation units it
-turns out not to need. It is bounded by the tree, cached afterwards, and the
-resolved set is remembered for next time.
+**The first build compiles a little more than `make` would.** Files the
+include graph missed are found by compiling them and reading their symbols,
+so some of that work is discovery. Measured on Angband — 168 sources — the
+include graph proposes 122, 151 are compiled and 150 are linked: **one wasted
+file**. A large tree of loosely-coupled files with one small binary, which
+sounds like the bad case, is the best one: 201 sources, two compiled. It is
+bounded by the tree, cached afterwards, and the resolved set is remembered
+for next time.
 
 **A big single Qt application builds slower than CMake.** CMake concatenates
 every moc output into one translation unit; fmake compiles one per class,

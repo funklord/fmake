@@ -55,7 +55,8 @@ the design rather than of a sample, and the silent wrongness it found ·
 [15. Open questions](#15-open-questions) ·
 [18. Vendored archives](#18-vendored-archives) ·
 [19. The instantiation widening could not see](#19-the-instantiation-widening-could-not-see) ·
-[20. Declared membership](#20-declared-membership-and-the-dead-end-before-it)
+[20. Declared membership](#20-declared-membership-and-the-dead-end-before-it) ·
+[21. What widening costs](#21-what-widening-actually-costs)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1573,17 +1574,13 @@ reasoning that closed them is part of the record. What remains divides into
 three kinds: things nobody has needed yet, things that need a design decision
 rather than code, and one lesson about testing.
 
-- **Cost of widening.** Less pressing than it looked: with §3's two fixes the
-  include graph identifies 248 of 292 files on a real project, so widening
-  covers a remainder rather than doing all the work. Still unmeasured on a tree
-  where the guess genuinely fails.
-  A project whose include graph is a poor guide pays for
-  compiling TUs that turn out to be irrelevant. Bounded by the size of the tree
-  and paid once thanks to caching — and the resolved unit set is now cached, so
-  later builds start from what widening found rather than re-deriving it. The
-  pathological case — a large repo of loosely-coupled files with a small binary
-  — still compiles more than Make would on the first build. Worth measuring on
-  something big before assuming it is acceptable.
+- ~~**Cost of widening.**~~ Measured; see §21. On Angband — 168 sources, a
+  real C project — the include graph proposes 122, widening adds 29, 151 are
+  compiled and 150 are linked. **The waste is one file.** The pathological
+  shape this entry named, a large tree of loosely-coupled files with a small
+  binary, turns out to be the *best* case rather than the worst: 201 sources,
+  two compiled. Guarded by a case, since a change loosening the filter to
+  mentions would pass every other test here.
 - **The widening filter cannot see header definitions.** It looks for a
   definition in a `.c`/`.cpp`, so a symbol whose definition lives in a header
   is invisible to it. Such files are found only if something else pulls them
@@ -1790,7 +1787,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 144, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 145, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -1821,7 +1818,7 @@ of this repository.
 | | |
 |---|---|
 | `xplore-c-example/udp-echo` | 6 files, cmocka tests. The working reference: builds, links, 13 tests pass. |
-| **Angband** | `github.com/angband/angband`. 327 files, 345k lines, curses only. Builds and runs with ten lines of `fmake.toml` — needs `@define USE_GCU` and an exclude list for `src/tests/**` and the non-Linux frontends. |
+| **Angband** | `github.com/angband/angband`. 327 files, 345k lines, curses only. Builds and runs from `src/` with a `fmake.toml` that is one `exclude` list for the frontends and extras this configure run turned off. It needs `./configure` run first, for `autoconf.h` — the plainest example there is of the thing §17 calls feature probing, which fmake does not do. The excludes must match what configure chose or the link fails on the frontends it enabled. It is the tree §21 was measured on. |
 | **dunelegacy** | `github.com/henricj/dunelegacy`. 292 files, C++/SDL3. **Cannot be linked here**: SDL3_mixer is not packaged for Debian at all. Everything up to and including compilation was exercised. |
 | **NetHack** | `github.com/NetHack/NetHack`. **Cannot be built here**: 3.7 vendors Lua as a separate download a shallow clone does not fetch. It is what motivated `uses`. |
 
@@ -2524,3 +2521,45 @@ question is not *what does this need* but *whose is it*.
 
 With that, all nine painting examples build from the configuration fmake
 suggested, and run.
+
+---
+
+## 21. What widening actually costs
+
+§15 carried this from the beginning: a tree whose include graph is a poor
+guide pays for compiling translation units it turns out not to need, the
+pathological case is a large repo of loosely-coupled files with a small
+binary, and it was **worth measuring before assuming it is acceptable**.
+Measured now, on three trees.
+
+| | sources | include graph proposes | compiled | linked | wasted |
+|---|---|---|---|---|---|
+| **Angband** (C) | 168 | 122 | 151 | 150 | **1** |
+| **qView** (C++/Qt) | 33 | 33 | 33 | 32 | 1 |
+| **loose tree** (C) | 201 | 1 | 2 | 2 | **0** |
+
+Angband is the real answer: 327 `.c` files in the repository, 168 after the
+platform excludes, a clean `-j8` build in 67s and a no-op rebuild in 3.5s.
+The include graph finds 122 of the 150 files that end up linked — 81% — and
+widening supplies the remaining 28, overshooting by exactly one. `--widen-all`
+compiles 157 and takes 70s, so the whole apparatus buys about 4% of the build
+and, more importantly, does not need to be right to be safe.
+
+**The pathological case is the opposite of pathological.** 201 unrelated
+files with a `main` calling one of them: the include graph proposes 1,
+widening proposes 1, two files are compiled, one second. The reason is the
+thing that looked like a weakness — widening filters on apparent
+*definitions* rather than on mentions, so an undefined `helper_7` proposes the
+one file that defines `helper_7` and nothing else. A tree that is loosely
+coupled is a tree where that filter is at its most precise.
+
+Where the cost would actually appear is the reverse shape: many files
+defining similarly-named things, so that the tokens of one undefined symbol
+match many candidates. C symbols are one-to-one with their tokens, so this
+needs C++, where a mangled `Foo::bar` yields `{Foo, bar}` and any file
+defining a `bar` matches. qView shows nothing of it at 33 files. Unmeasured
+at scale, and now the only part of this entry still open.
+
+The entry also predicted that caching would make this a first-build cost
+only, and that holds: the resolved unit set is remembered, so later builds
+start from what widening found rather than re-deriving it.

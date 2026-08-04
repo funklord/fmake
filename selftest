@@ -4371,6 +4371,36 @@ def an_ambiguous_symbol_suggests_the_owner(t):
     check('"one/win.c"' in out and '"two/win.c"' in out,
           f"each stanza should name that target's own file: {out}")
 
+@case
+def widening_does_not_compile_the_whole_tree(t):
+    """The shape §15 feared: many loose files, one small binary.
+
+    The worry was that a tree whose include graph is a poor guide would pay
+    for compiling translation units it turns out not to need. It does not,
+    because widening filters on apparent *definitions* rather than mentions:
+    one undefined symbol proposes the one file that defines it. Measured on
+    Angband -- 168 sources, 122 proposed by the include graph, 151 compiled,
+    150 linked -- the waste is a single file.
+
+    Guarded here because it is a property of the filter, and a future change
+    that loosened it to mentions would still pass every other case in this
+    suite while quietly compiling everything."""
+    for i in range(1, 61):
+        t.write(f"f{i}.c", f"int helper_{i}(void){{ return {i}; }}\n")
+    t.write("main.c", """
+int helper_7(void);
+int main(void){ return helper_7() == 7 ? 0 : 1; }
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    built = compiled(r)
+    check(len(built) <= 3,
+          f"widening compiled {len(built)} of 61 files: {built[:8]}")
+    check(any("f7.c" in c for c in built),
+          f"the one file that was needed is missing: {built}")
+    check(t.run(os.path.basename(t.dir)).returncode == 0, "the program failed")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):
