@@ -10,7 +10,7 @@ Homepage: https://github.com/funklord/fmake
 Package: fmake
 Architecture: all
 Depends: ${misc:Depends}, python3 (>= 3.11)
-Recommends: pkgconf | pkg-config, binutils
+Recommends: pkgconf, binutils
 Suggests: ninja-build, make
 Description: build tool for C and C++ that needs no build file
  fmake works out what to build by reading the source. A translation unit

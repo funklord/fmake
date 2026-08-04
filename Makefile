@@ -16,7 +16,7 @@ PYTHON  ?= /usr/bin/env python3
 BINDIR  = $(DESTDIR)$(PREFIX)/bin
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: all install uninstall check deb clean
+.PHONY: all install uninstall check deb lint clean
 
 all: fmake.1
 
@@ -39,9 +39,19 @@ check:
 
 # Builds ../fmake_<version>_all.deb. -b because there is no upstream tarball
 # to sign or ship: the packaging is native and the source is this directory.
-deb:
+deb: lint
+
+# Separated so `make lint` works on a package already built, and skipped
+# rather than fatal when lintian is absent -- it is a checker, not a
+# dependency of producing the thing.
+lint:
 	dpkg-buildpackage -b -us -uc
 	@echo
+	@if command -v lintian >/dev/null; then \
+		lintian --pedantic ../fmake_*_all.deb && echo "lintian: clean"; \
+	else \
+		echo "lintian not installed; package not checked"; \
+	fi
 	@ls -1 ../fmake_*_all.deb | tail -1
 
 clean:

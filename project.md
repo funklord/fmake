@@ -3168,9 +3168,33 @@ happening, so there is a case: it installs to a staging root, checks the
 shebang is the absolute one, and runs the installed copy.
 
 Found by looking at what every other packaged Python script on this machine
-does, rather than by lintian, which is not installed here. It is the kind of
-thing a policy checker exists to catch and the kind of thing a convention
-survey catches just as well.
+does, before lintian was available. It is the kind of thing a policy checker
+exists to catch and the kind of thing a convention survey catches just as
+well — and lintian, once installed, confirmed there was nothing left to find
+there.
+
+### What lintian said
+
+Clean at every level it reports — no errors, no warnings, no info, nothing
+pedantic — on both the `.deb` and the `.changes`. `make deb` runs it now, and
+says so, rather than leaving it as something to remember.
+
+It found exactly one thing the hand-checks had not:
+
+```
+I: fmake: ored-depends-on-obsolete-package Recommends: pkg-config => pkgconf
+```
+
+`Recommends: pkgconf | pkg-config` was written to be generous to older
+systems. It is the wrong kind of generous: `pkg-config` on Debian is now a
+transitional package whose only content is `Depends: pkgconf (>= 1.8.1-4)`,
+so anybody who has it already has `pkgconf`, and naming both only preserves
+an alternative that resolves to the same thing. `Recommends: pkgconf`.
+
+Worth recording that the fifteen hand-checks agreed with the tool on
+everything else — the value was in the one tag nobody would think to check
+by hand, which is a fact about a *package archive's* history rather than
+about this package.
 
 ### Two things worth knowing
 
