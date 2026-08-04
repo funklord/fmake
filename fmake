@@ -4049,9 +4049,9 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	if cl.external:
 		implicit = len(res["implicit"]) if res else 0
 		named = sum(len(v) for v in (res["why"].values() if res else []))
-		print(f"  {_col(CYAN('external symbols'), W)}"
-		      f"{DIM(f'[{len(cl.external)} total, {implicit} in libc, '
-		             f'{named} from the libraries above]')}")
+		tally = (f"[{len(cl.external)} total, {implicit} in libc, "
+		         f"{named} from the libraries above]")
+		print(f"  {_col(CYAN('external symbols'), W)}{DIM(tally)}")
 		for sym in sorted(cl.external)[:12]:
 			print(f"    {_col(sym, W-4)}"
 			      f"{DIM('referenced by ' + cl.external[sym][0])}")

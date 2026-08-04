@@ -5260,17 +5260,43 @@ def the_source_runs_on_the_python_it_declares(t):
 	# only one the declared dependency is a promise about; `selftest` is a
 	# development tool that runs on whatever the developer has, and holding
 	# it to a floor nobody declared would be inventing a rule.
+	# A stack, not a variable. f-strings nest -- a replacement field can
+	# hold another f-string -- and a single `start` is overwritten by the
+	# inner one, so the outer f-string's span gets measured from the inner
+	# one's opening quote and a multi-line outer reads as single-line. That
+	# is how this check passed on a file python3.11 refuses to parse.
 	import tokenize
-	start, bad = None, []
+	stack, bad = [], []
 	with open(FMAKE, "rb") as fh:
 		for tok in tokenize.tokenize(fh.readline):
 			if tok.type == tokenize.FSTRING_START:
-				start = tok.start[0]
-			elif tok.type == tokenize.FSTRING_END and tok.end[0] != start:
-				bad.append(start)
+				stack.append(tok.start[0])
+			elif tok.type == tokenize.FSTRING_END:
+				begin = stack.pop() if stack else tok.end[0]
+				if tok.end[0] != begin:
+					bad.append(begin)
 	check(not bad,
 	      f"f-string spanning lines at {bad}, which needs 3.12 but "
 	      f"debian/control declares {floor[0]}.{floor[1]}")
+
+	# And if the declared interpreter is actually here, run it. The token
+	# check is an inference about what an old Python would say; this is the
+	# old Python saying it, and it covers every syntax added since rather
+	# than the one that bit us. The first version of the check above passed
+	# on a file 3.11 could not parse, so the inference has already been
+	# wrong once.
+	old_python = shutil.which(f"python{floor[0]}.{floor[1]}")
+	if not old_python:
+		raise Skip(f"python{floor[0]}.{floor[1]} is not installed, so only "
+		           f"the token check ran")
+	r = subprocess.run([old_python, FMAKE, "--version"],
+	                   capture_output=True, text=True)
+	check(r.returncode == 0,
+	      f"python{floor[0]}.{floor[1]} cannot run fmake: {r.stderr}")
+	r = subprocess.run([old_python, FMAKE, "--help"],
+	                   capture_output=True, text=True)
+	check(r.returncode == 0,
+	      f"python{floor[0]}.{floor[1]} cannot run fmake --help: {r.stderr}")
 
 
 @case

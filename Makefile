@@ -6,6 +6,24 @@
 PREFIX  ?= /usr/local
 DESTDIR ?=
 
+# Where build products land. dpkg-buildpackage writes to the parent
+# directory, which is not this build's to write to: with two of these
+# projects side by side in ~/src, `make deb` in one drops files into the
+# directory holding the other. They are moved here afterwards, which also
+# lets clean name them.
+OBJDIR  ?= build
+
+# Read rather than restated. Two hand-edited copies of a version number
+# drift, and the symptom is a package whose reported version disagrees with
+# the one that installed it.
+VERSION     = $(shell sed -n 's/^VERSION *= *"\(.*\)"/\1/p' fmake)
+DEB_VERSION = $(shell sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
+DEB_ARCH    = $(shell dpkg-architecture -qDEB_HOST_ARCH 2>/dev/null)
+
+DEB         = $(OBJDIR)/fmake_$(VERSION)_all.deb
+DEB_EXTRA   = $(OBJDIR)/fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
+              $(OBJDIR)/fmake_$(VERSION)_$(DEB_ARCH).changes
+
 # The interpreter written into the installed copy. Debian Policy 10.4 wants
 # an absolute path, and every packaged Python script on a Debian system has
 # one. The file in the repository keeps /usr/bin/env, because copying it
@@ -16,7 +34,7 @@ PYTHON  ?= /usr/bin/env python3
 BINDIR  = $(DESTDIR)$(PREFIX)/bin
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: all install uninstall check deb lint clean
+.PHONY: all install uninstall check check-version deb lint clean
 
 all: fmake.1
 
@@ -34,8 +52,18 @@ install: fmake.1
 uninstall:
 	rm -f $(BINDIR)/fmake $(MANDIR)/fmake.1
 
-check:
+check: check-version
 	./selftest
+
+# The version is written in two files and nothing else compares them. This
+# is what debian/rules runs in place of the suite: it needs no compiler, so
+# the package build itself refuses to produce a mismatched pair.
+check-version:
+	@test -n "$(VERSION)" || { echo "no VERSION in fmake" >&2; exit 1; }
+	@test -n "$(DEB_VERSION)" || { echo "no version in debian/changelog" >&2; exit 1; }
+	@test "$(VERSION)" = "$(DEB_VERSION)" || { \
+		echo "version mismatch: fmake says $(VERSION), debian/changelog says $(DEB_VERSION)" >&2; \
+		exit 1; }
 
 # Builds ../fmake_<version>_all.deb. -b because there is no upstream tarball
 # to sign or ship: the packaging is native and the source is this directory.
@@ -46,18 +74,27 @@ deb: lint
 # dependency of producing the thing.
 lint:
 	dpkg-buildpackage -b -us -uc
+	@mkdir -p $(OBJDIR)
+	@for f in fmake_$(VERSION)_all.deb \
+	          fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
+	          fmake_$(VERSION)_$(DEB_ARCH).changes; do \
+		if [ -e "../$$f" ]; then mv -f "../$$f" $(OBJDIR)/; fi; \
+	done
+	@test -f $(DEB) || { echo "deb: $(DEB) was not produced" >&2; exit 1; }
 	@echo
 	@if command -v lintian >/dev/null; then \
-		lintian --pedantic ../fmake_*_all.deb && echo "lintian: clean"; \
+		lintian --pedantic $(DEB) && echo "lintian: clean"; \
 	else \
 		echo "lintian not installed; package not checked"; \
 	fi
-	@ls -1 ../fmake_*_all.deb | tail -1
+	@echo $(DEB)
 
 # Named targets only, and no wildcard sweeps: a clean target is the one
 # thing everybody runs without reading. The two directories are debhelper's
 # own staging trees -- created by the build, relative, and named outright.
 clean:
 	rm -f fmake.1 debian/files debian/debhelper-build-stamp \
-	      debian/fmake.substvars debian/fmake.debhelper.log
+	      debian/fmake.substvars debian/fmake.debhelper.log \
+	      $(DEB) $(DEB_EXTRA)
 	rm -rf debian/fmake debian/.debhelper
+	@rmdir $(OBJDIR) 2>/dev/null || :

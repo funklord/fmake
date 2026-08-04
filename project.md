@@ -3766,3 +3766,59 @@ being told". It would work, and it is a **default change** -- a file called
 project that never opted in. That is a convention change and belongs to
 whoever owns the convention, not to whoever is in the file. Recorded here,
 unbuilt, with the same standing as the tests question in §36.
+
+## 44. The gate that could not see what it was built for
+
+apt-emerge's evaluation ended in *not applicable* -- no C or C++ in the tree
+-- and found a bug anyway. `debian/control` declared `python3 (>= 3.11)`;
+two f-strings used PEP 701, which is 3.12. On bookworm the package installs,
+satisfies its dependency, configures, and then dies with a `SyntaxError`
+before reaching `main`. They also supplied the detector, because the obvious
+check is worse than useless: `ast.parse(..., feature_version=(3, 11))`
+*accepts* these, the change being in the tokeniser rather than the grammar.
+
+That became a case. This section is about the case being wrong.
+
+A third such f-string was written after it -- in `--explain`'s external
+symbol tally -- and **the gate passed on a file `python3.11` refuses to
+parse**. The suite was green at 188 while the declared interpreter could not
+read the program.
+
+The reason is one variable:
+
+```python
+if tok.type == tokenize.FSTRING_START:
+    start = tok.start[0]
+elif tok.type == tokenize.FSTRING_END and tok.end[0] != start:
+    bad.append(start)
+```
+
+f-strings **nest**: a replacement field can contain another f-string. The
+inner one's `FSTRING_START` overwrites `start`, so when the outer one's
+`FSTRING_END` arrives, its span is measured from the inner one's opening
+quote. The outer f-string spanned lines 4053 to 4054; the inner opened on
+4054; `4054 != 4054` is false; the file passed. A stack fixes it, and the
+mutation confirms the single variable misses exactly this shape.
+
+Nesting is not an exotic case here -- it is what `DIM(f'...')` inside an
+f-string is, and that is the house style for every coloured line in
+`--explain`. The gate was blind to the most common way this file writes
+f-strings.
+
+### Two checks, and the second is the one that is evidence
+
+The token check is an *inference* about what an old interpreter would say.
+Where the declared interpreter is actually installed, the case now runs it:
+`--version` and `--help` under `python3.11`. That covers every syntax added
+since 3.11 rather than the one that bit us, and it needs no cleverness to
+stay correct.
+
+This is `working-practice.md`'s rule with a concrete face. A passing check
+is not evidence until you know it checked something -- and here the check
+was not vacuous, not misconfigured, not skipped. It ran, it examined the
+right file, it used the right token type, and it was wrong about a case
+nobody had thought of. The only thing that would have caught it earlier is
+the thing that caught it now: running the old interpreter.
+
+It surfaced by accident, while correcting a README sentence about which
+Python version the package requires.

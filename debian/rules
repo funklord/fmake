@@ -3,11 +3,17 @@
 %:
 	dh $@
 
-# Nothing to build: fmake is a script. dh_auto_test would run the suite,
-# which needs a compiler, a linker and several optional libraries -- fine on
-# a developer's machine and not something a package build should depend on.
+# Nothing to build: fmake is a script.
 override_dh_auto_build:
+
+# The suite needs a compiler, a linker and several optional libraries --
+# fine on a developer's machine and not something a package build should
+# depend on. The version check needs none of that, and it is the one thing
+# a package build must not get wrong: fmake and debian/changelog each name
+# a version, both are hand-edited, and a mismatch ships a package whose
+# reported version disagrees with the one that installed it.
 override_dh_auto_test:
+	$(MAKE) check-version
 
 # The Makefile defaults to /usr/local, which is right for `make install` by
 # hand and forbidden in a package.
