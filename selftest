@@ -3491,6 +3491,33 @@ OFFSCREEN = {"QT_QPA_PLATFORM": "offscreen"}
 
 
 @case
+def a_module_umbrella_header_resolves_to_its_own_module(t):
+    """`#include <QtWidgets>` must find Qt6Widgets, not a sibling.
+
+    Qt keeps every module under one parent directory with a directory per
+    module, so testing the parent for a path called QtWidgets finds the
+    *directory*. Matching on existence rather than on a file therefore
+    attributed the header to whichever .pc happened to claim the parent --
+    alphabetically Qt6Concurrent -- whose flags do not carry the module's own
+    -I, so the include did not resolve at all. Six of Qt's own examples are
+    written this way."""
+    _need_qt()
+    t.write("main.cpp", """
+#include <QtWidgets>
+int main(int argc, char **argv) {
+    QApplication app(argc, argv);
+    QWidget w;
+    w.resize(320, 240);
+    return w.width() == 320 ? 0 : 1;
+}
+""")
+    r = t.fmake()
+    check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+    check(t.run(os.path.basename(t.dir), OFFSCREEN).returncode == 0,
+          "the program built but did not run")
+
+
+@case
 def uic_runs_because_a_source_includes_its_header(t):
     """The include is the declaration, not the file extension.
 

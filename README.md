@@ -220,8 +220,18 @@ the same 7 ui headers, and embedded the resource. It is slower on a clean
 build (39s against 27s) because CMake concatenates all moc output into one
 translation unit where fmake compiles one per class.
 
+Also run over **Qt's own widgets examples — 74 programs, 201 sources**, each
+built with no configuration: 66 built. Of the rest, five share a helper in a
+sibling directory (build the parent instead), two need Qt private headers, and
+one is QNX-only.
+
 The case this is best at is a tree of many small programs over one shared body
 of Qt code — each TU compiled once, each program linked to its own closure.
+On Qt's `painting` examples that is exactly what happens: `arthurwidgets.cpp`
+is compiled once and linked into every program reaching it. The limit is a
+tree whose sibling programs reuse a class name — three of those examples each
+define a `Window`, which is genuinely ambiguous, and needs
+`[target.*] sources`.
 
 ---
 

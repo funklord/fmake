@@ -2917,7 +2917,16 @@ class PkgConfig:
                 real = inc
                 if self.sysroot and not inc.startswith(self.sysroot):
                     real = os.path.join(self.sysroot, inc.lstrip("/"))
-                if os.path.exists(os.path.join(real, name)):
+                # A file, not merely something that exists. Qt keeps every
+                # module under one parent directory with a directory per
+                # module, so <QtWidgets> tested against that parent finds the
+                # *directory* QtWidgets and stops -- attributing the header
+                # to whichever .pc happened to claim the parent, whose flags
+                # do not carry the module's own -I. The include then does not
+                # resolve at all, which is a strange way to be told a package
+                # was misidentified. Six of Qt's own examples are written
+                # this way.
+                if os.path.isfile(os.path.join(real, name)):
                     module = mod
                     break
         got = self.flags(module) if module else None

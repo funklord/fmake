@@ -1611,6 +1611,12 @@ rather than code, and one lesson about testing.
 - ~~**Cross-compilation is started, not finished.**~~ Closed; see §5. Library
   resolution answers for the target machine, verified end to end against a real
   aarch64 toolchain.
+- **A tree whose sibling programs reuse class names cannot be built at
+  once.** Three of Qt's painting examples each define a class `Window`, so the
+  symbol has three strong providers and §3 refuses. Correct, and a real limit
+  of one-project-per-tree: `[target.*] sources` is the escape. Whether the
+  include graph should break such a tie -- it proposed the right file in every
+  case -- is a change to §3 and has not been made.
 - **Cross builds are verified on one toolchain, on Linux.** The architecture
   check is architecture-agnostic by construction, but sysroot handling, the
   pkg-config variables and the tool-prefix derivation have only been exercised
@@ -1777,7 +1783,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 129, because the cases added
+It was ~50s at 79 cases and is ~3 minutes at 130, because the cases added
 since are the expensive kind: cross compiles, ejecting a build and running
 `make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
 headers. Filtering by name is the way to work — `./selftest rcc` is seven
@@ -2198,3 +2204,86 @@ TU per class against CMake's single concatenated one.
 Both remaining lines are the kind §17 said they would be: exclusions and
 feature defines, which symbol inference answers nothing about because they
 decide *what is compiled* rather than what is linked.
+
+### A sweep: Qt's own examples
+
+qView is one program. The claim that matters is the other one — many small
+programs over shared code — so the next test was Qt's own widgets examples,
+which have no dependency but Qt: **74 programs, 201 sources**, built one at a
+time with no configuration at all.
+
+**66 of 74 built.** The eight that did not divide as follows, and only the
+first was fmake's fault:
+
+- **6 — `#include <QtWidgets>` did not resolve.** A real bug, below.
+- **5 — `painting/*` share a helper library** in a sibling directory, so
+  pointing fmake at one example puts the shared code outside the tree. Not a
+  defect; the wrong invocation. Covered separately below.
+- **2 — `rhi/*` need `rhi/qrhi.h`**, a Qt private header that is not on the
+  public include path.
+- **1 — `qnx/foreignwindows`** needs `screen/screen.h`, which exists only on
+  QNX.
+
+(An earlier run scored 54 of 73 against the `dev` branch, where a dozen
+examples use Qt 6.10 APIs that Qt 6.8 does not have. That number measured my
+choice of branch, not fmake, and is recorded here only so the improvement is
+not mistaken for a larger one than it was.)
+
+### The bug the sweep found
+
+`#include <QtWidgets>` — the module umbrella header, which six of Qt's own
+examples use — did not resolve, and the reason was one word.
+
+Header-to-package resolution walks the include directories every `.pc` file
+declares and asks whether the header is there. It asked with `os.path.exists`.
+Qt keeps every module under one parent directory with a *directory* per
+module, so `<qt6>/QtWidgets` exists — as a directory. The parent is listed by
+every Qt `.pc` file, and the first one to claim it wins, which alphabetically
+is `Qt6Concurrent`. So `<QtWidgets>` was attributed to Qt6Concurrent, whose
+flags carry `-I<qt6>` and `-I<qt6>/QtConcurrent` but not
+`-I<qt6>/QtWidgets` — and the header then did not resolve at all. A
+misidentified package that announces itself as a missing file.
+
+The fix is `os.path.isfile`: a directory is not a header.
+
+**Two other changes were tried and removed**, which is the more useful part of
+the record. Iterating the include directories longest-first, and a rule giving
+a qualified include to the module whose directory it names, both looked
+reasonable and both turned out to be redundant — with `isfile` in place
+neither changed any observable behaviour, so no mutation could make their
+tests fail. A test that cannot fail is worse than no test, and §16 already
+records two of those. They came out, and the one line that carries the fix is
+mutation-checked on its own.
+
+### Shared code across many programs, on real code
+
+`examples/widgets/painting` is the shape the whole feature was argued for:
+nine programs over one `shared/` helper. Pointed at that directory, fmake
+compiles `shared/arthurwidgets.cpp` **once** and links it into every program
+that reaches it — verified by counting objects on disk (one) against link sets
+(four targets, six shared files each, including the shared moc output and
+`shared.qrc`). The programs run.
+
+Two things had to be said to get there, and both are honest:
+
+- `-o out`, because a program named after its directory cannot be written
+  where a directory of that name already is. fmake refuses rather than
+  clobbering it, which is the right answer and a good message.
+- The nine cannot all be built at once. `basicdrawing`, `painterpaths` and
+  `transformations` each define a class called `Window`, so `Window::Window()`
+  has three strong providers and §3 refuses to guess. That is correct — the
+  tree really is ambiguous — but it is a real limit of treating a tree as one
+  project, and `[target.*] sources` is the answer.
+
+### The two projects that could not be tried here
+
+- **smplayer** — 194 sources. fmake's discovery was exactly right:
+  **126 moc, 43 uic, 3 rcc**, matching the project's own counts. It cannot
+  compile here because 32 files use `QRegExp`, which needs the
+  `Qt6Core5Compat` headers (`qt6-5compat-dev`, not installed).
+- **KeePassXC** — 390 sources, 252 `Q_OBJECT` headers, 72 `.ui`. Needs
+  botan-3, argon2, qrencode and minizip, none of which are installed.
+
+Both are packaging gaps rather than findings, but the smplayer number is worth
+keeping: the generator discovery scales to a 194-file project and agrees with
+qmake exactly.
