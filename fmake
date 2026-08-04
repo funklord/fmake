@@ -114,6 +114,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tomllib
@@ -403,6 +404,7 @@ def scan_source(path):
 CONF_FILE = "fmake.toml"
 
 S, L = "str", "list"      # scalar string, list of strings
+B = "bool"                # true/false, for a fact with two answers
 
 CONF_SCHEMA = {
     "project": {
@@ -419,6 +421,7 @@ CONF_SCHEMA = {
     "target": {"*": {
         "name": S, "target": S, "kind": S, "root": S,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
+        "test": B, "test-args": L,
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
@@ -460,6 +463,9 @@ def _conf_check(table, spec, where, out):
 			if not (isinstance(value, list)
 			        and all(isinstance(v, str) for v in value)):
 				out.append(f"{where}.{key}: expected a list of strings")
+		elif kind is B:
+			if not isinstance(value, bool):
+				out.append(f"{where}.{key}: expected true or false")
 
 
 def load_conf(root):
@@ -855,6 +861,67 @@ def phony_rules(root):
 			for target in r["outputs"]:
 				out[target] = r
 	return out
+
+
+def describe_exit(rc):
+	"""What a non-zero status was.
+
+    A test killed by SIGSEGV and one that returned 1 are different findings
+    and Python reports both as a negative or positive number. Saying which
+    is the difference between "the assertion failed" and "it crashed", and
+    the second is not something to go looking through test output for.
+    """
+	if rc < 0:
+		try:
+			return f"killed by {signal.Signals(-rc).name}"
+		except ValueError:
+			return f"killed by signal {-rc}"
+	return f"exit {rc}"
+
+
+def run_tests_now(targets, root, outdir, dry_run=False):
+	"""Build step done; now run them. Returns a process exit status.
+
+    Sequentially and in name order, because a test suite that passes only
+    on an idle machine is a test suite that will fail in CI and nowhere
+    else, and because interleaved output from parallel binaries is unusable
+    for the one thing anybody wants it for.
+
+    From the project root, since that is where a test's relative paths were
+    written to work -- `./tests/client_test ../docs/schema/socket.json` is
+    one project's real command line, and `test-args` exists for it.
+    """
+	failed = []
+	for t in sorted(targets, key=lambda x: x.name):
+		exe = os.path.join(outdir, t.filename)
+		argv = [exe] + list(t.conf.get("test-args", []))
+		if dry_run:
+			say(f"{CYAN('RUN')} {_show_cmd(argv, root)}")
+			continue
+		say(f"{CYAN('RUN')} {t.name}")
+		# Ours is buffered and the child's is not, so without this the test
+		# output arrives above the line naming the test that produced it --
+		# and with several tests, above the wrong one.
+		PROGRESS.flush()
+		try:
+			rc = subprocess.run(argv, cwd=root).returncode
+		except OSError as exc:
+			warn(f"{t.name}: {exc}")
+			failed.append(t.name)
+			continue
+		if rc:
+			failed.append(t.name)
+			warn(f"{t.name} failed ({describe_exit(rc)})")
+	if dry_run:
+		return 0
+	say()
+	if failed:
+		warn(f"{len(failed)} of {len(targets)} failed: "
+		     f"{', '.join(failed)}")
+		return 1
+	n = len(targets)
+	info(f"{n} test{'' if n == 1 else 's'} passed")
+	return 0
 
 
 def run_phony(name, rule, root, built, dry_run):
@@ -1561,7 +1628,7 @@ RE_DOXY_OPEN = re.compile(r"^\s*(?://[/!]|/\*[*!])")
 RE_DIRECTIVE = re.compile(r"^[@\\](\w+)\b[ \t]*(.*)$")
 
 # Replace whatever came before; last one wins.
-DIRECTIVE_SCALAR = {"target", "kind", "std"}
+DIRECTIVE_SCALAR = {"target", "kind", "std", "test"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
@@ -1720,6 +1787,7 @@ DOXYGEN_ALIAS_TEXT = {
     "ldflags": "Link flags",
     "define":  "Defines",
     "std":     "Language standard",
+    "test":    "Test program",
     "os":      "Operating systems",
     "arch":    "Architectures",
     "sources": "Extra sources",
@@ -3731,10 +3799,44 @@ def default_name(rel, root):
 	return os.path.basename(os.path.abspath(root)) or "a.out"
 
 
+TEST_DIRS = {"test", "tests"}
+
+
+def looks_like_a_test(rel):
+	"""Why this file roots a test program, or None.
+
+    Two conventions, both named by the projects that asked for this: a
+    directory called `test` or `tests`, and a file called `foo_test.c` or
+    `test_foo.c`. Nothing else -- a guess that a program is a test costs it
+    its place in the default build, which is a worse failure than the one
+    this feature exists to fix, so the net is deliberately narrow and the
+    reason is reported rather than assumed.
+    """
+	parts = rel.replace(os.sep, "/").split("/")
+	for p in parts[:-1]:
+		if p.lower() in TEST_DIRS:
+			return f"{p}/ is a test directory"
+	stem = os.path.splitext(parts[-1])[0].lower()
+	if stem.startswith("test_") or stem.endswith(("_test", "_tests")):
+		return f"{parts[-1]} is named as a test"
+	return None
+
+
+def _ann_test(ann):
+	"""@test, @test no, or absent.
+
+    Present with no argument means yes, which is how anyone writes it.
+    """
+	if "test" not in ann.raw:
+		return None
+	return str(ann.scalar("test", "yes")).lower() not in ("no", "false", "0")
+
+
 class Target:
 	"""One artifact: what roots it, what it is called, and what kind it is."""
 
-	__slots__ = ("rel", "name", "kind", "ann", "conf", "members")
+	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
+	             "test", "test_why")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
@@ -3748,6 +3850,13 @@ class Target:
 		# file belongs to which, and that is a fact about the project rather
 		# than about any file in it.
 		self.members = None
+		# A role, not a kind. A test is still an ordinary exe -- what
+		# changes is only whether a plain build produces it.
+		said = _ann_test(ann)
+		found = looks_like_a_test(rel) if rel else None
+		self.test = said if said is not None else bool(found)
+		self.test_why = (f"@test in {rel}" if said is not None
+		                 else found or "")
 		self.apply_conf(conf or {})
 
 	def apply_conf(self, section):
@@ -3757,6 +3866,9 @@ class Target:
 		self.conf = section
 		self.kind = section.get("kind", self.kind)
 		self.name = section.get("target", section.get("name", self.name))
+		if "test" in section:
+			self.test = bool(section["test"])
+			self.test_why = f"[target.*] test = {str(self.test).lower()}"
 		if section.get("sources"):
 			self.members = list(section["sources"])
 
@@ -3933,6 +4045,10 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	else:
 		how = "nothing here defines main()"
 	print(f"  {_col(CYAN('kind'), W)}{DIM(f'{t.kind}: {how}')}")
+	if t.test:
+		role = (f"{t.test_why}; not built by default, "
+		        f"`fmake test` builds and runs it")
+		print(f"  {_col(CYAN('test'), W)}{DIM(role)}")
 
 	if t.members is not None:
 		print(f"  {_col(CYAN('membership'), W)}"
@@ -4569,7 +4685,21 @@ def build(args, _bootstrapping=False):
 	phony = phony_rules(root)
 	asked_phony = [n for n in args.targets if n in phony]
 
-	wanted = targets
+	# A plain build produces the library and the programs; `fmake test`
+	# produces and runs the test binaries. The convention buys a fast
+	# default build, and it is paid for by the object cache being keyed on
+	# the whole configuration -- otherwise "build only what you asked for"
+	# is how a stale binary gets tested. Naming a test outright still builds
+	# it: the rule is about what a bare `fmake` does, not about permission.
+	held = [t for t in targets if t.test]
+	wanted = [t for t in targets if not t.test]
+	run_tests = False
+	if args.eject:
+		# An ejected build file describes the project, not this invocation.
+		# Leaving the tests out would produce a Makefile that cannot build
+		# them at all, which is a worse answer than the one the convention
+		# is about: there, `test` is a target that `all` does not depend on.
+		held, wanted = [], targets
 	if args.targets:
 		by_name = {}
 		for t in targets:
@@ -4583,12 +4713,31 @@ def build(args, _bootstrapping=False):
 				wanted += [by_name[p] for p in phony[name]["inputs"]
 				           if p in by_name]
 				continue
-			if name not in by_name:
-				die(f"no target {name!r}. Available: "
-				    f"{', '.join(sorted(set(list(by_name) + list(phony)))) or '(none)'}")
-			wanted.append(by_name[name])
+			if name in by_name:
+				wanted.append(by_name[name])
+				continue
+			# Last, so a project that has its own `test` -- a phony rule in
+			# fmake.mk, or a program actually called that -- keeps it.
+			if name == "test":
+				run_tests = True
+				wanted += [t for t in held if t not in wanted]
+				continue
+			known = set(by_name) | set(phony)
+			if held:
+				known.add("test")
+			die(f"no target {name!r}. Available: "
+			    f"{', '.join(sorted(known)) or '(none)'}")
 		if not wanted and asked_phony:
 			wanted = []         # an action with nothing of ours to build
+		if run_tests and not held:
+			warn("no test programs here: nothing is in a test directory, "
+			     "named as a test, or marked @test")
+			return 0
+	elif held:
+		n = len(held)
+		info(f"{n} test program{'' if n == 1 else 's'} not built by "
+		     f"default ({', '.join(sorted(t.name for t in held)[:3])}"
+		     f"{', ...' if n > 3 else ''}); `fmake test` builds and runs them")
 
 	# ---- candidate set from the include graph -------------------------
 	units = {}
@@ -4671,6 +4820,15 @@ def build(args, _bootstrapping=False):
 		# A library with no declared membership is everything, so there is
 		# nothing to narrow down to.
 		candidates = set(srcs)
+
+	# Last, because a library with no declared membership resets the set to
+	# the whole tree and would otherwise put these back. A held-back test's
+	# root is not worth compiling for somebody else's sake: without this the
+	# objects for thirty-five test binaries are still built on a plain build
+	# and merely not linked, which is most of the cost the convention was
+	# traded for. They cannot be used either way -- an exe root is excluded
+	# from every library closure by construction.
+	candidates -= {t.rel for t in held} - {t.rel for t in wanted}
 
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in sorted(proj.incdirs | {"."})]
@@ -5144,7 +5302,11 @@ def build(args, _bootstrapping=False):
 		if changed:
 			# Only worth saying when something was actually rebuilt; on a
 			# no-op build it is the same notice every time.
-			ignored = sorted(set(srcs) - set(units))
+			# A held-back test is not unreachable, it was not asked
+			# for, and saying the wrong one of those sends the reader to
+			# --force-link for a file that needs `fmake test`.
+			ignored = sorted(set(srcs) - set(units)
+			                 - {t.rel for t in held})
 			for rel in ignored[:5]:
 				note(f"{rel} not compiled: nothing reaches it "
 				     f"(--force-link if it is needed anyway)")
@@ -5168,6 +5330,18 @@ def build(args, _bootstrapping=False):
 			if rc:
 				return rc
 		return 0
+
+	# After the build, and only if the build produced them. A test binary
+	# that did not relink is a test binary that answers a question about
+	# some earlier version of the code, which is the failure this whole
+	# convention was traded against.
+	if run_tests and not failed:
+		if broken:
+			say()
+			warn(f"{len(broken)} file(s) did not compile; not running tests")
+			return 1
+		say()
+		return run_tests_now(wanted, root, outdir, args.dry_run)
 
 	if broken:
 		say()
@@ -5393,16 +5567,35 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"{P}LDFLAGS  =")
 	a(f"{P}OBJDIR   {assign} {EJECT_OBJDIR}")
 	a("")
-	names = " ".join(t.filename for t in targets)
+	# The default target does not build tests, and a separate one builds
+	# and runs them. That is what three of the projects that read this
+	# output already do by hand, and what their conventions require of any
+	# Makefile -- including a generated one, since a generated Makefile is
+	# still a Makefile someone will edit.
+	tests = [t for t in targets if t.test]
+	names = " ".join(t.filename for t in targets if not t.test)
+	test_names = " ".join(t.filename for t in tests)
 	if fragment:
 		a(f"FM_TARGETS = {names}")
+		if tests:
+			a(f"FM_TEST_TARGETS = {test_names}")
 		a("")
-		a(".PHONY: fmake-all fmake-clean")
+		a(".PHONY: fmake-all fmake-clean" + (" fmake-test" if tests else ""))
 		a("fmake-all: $(FM_TARGETS)")
 	else:
-		a(".PHONY: all clean")
+		a(".PHONY: all clean" + (" test" if tests else ""))
 		a(f"all: {names}")
+		if tests:
+			a(f"TEST_TARGETS = {test_names}")
 	a("")
+	if tests:
+		a("fmake-test: $(FM_TEST_TARGETS)" if fragment
+		  else "test: $(TEST_TARGETS)")
+		for t in sorted(tests, key=lambda x: x.name):
+			argv = " ".join(shlex.quote(x)
+			                for x in t.conf.get("test-args", []))
+			a(f"\t./{t.filename}" + (f" {argv}" if argv else ""))
+		a("")
 
 	gen_rules = gen_rules if gen_rules is not None else {}
 	gen_outs = [o for n in _gen_order(gen_rules)
@@ -5779,7 +5972,25 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			if res and res["ldflags"]:
 				a(f"  libs = {' '.join(_eject_flags(res['ldflags'], root))}")
 	a("")
-	a(f"default {' '.join(_ninja(t.filename) for t in targets)}")
+	# Same split as the Makefile: `ninja` builds the programs, `ninja test`
+	# builds and runs the test binaries. Ninja has no recipe for a phony
+	# beyond its inputs, so running them is a rule of its own.
+	tests = [t for t in targets if t.test]
+	plain = [t for t in targets if not t.test]
+	a(f"default {' '.join(_ninja(t.filename) for t in plain)}")
+	if tests:
+		a("")
+		cmds = " && ".join(
+		    "./" + " ".join(shlex.quote(x) for x in [t.filename]
+		                    + list(t.conf.get("test-args", [])))
+		    for t in sorted(tests, key=lambda x: x.name))
+		a("rule runtests")
+		a(f"  command = {cmds}")
+		a("  description = RUN tests")
+		a("  pool = console")
+		a(f"build run-tests: runtests | "
+		  f"{' '.join(_ninja(t.filename) for t in tests)}")
+		a("build test: phony run-tests")
 	return "\n".join(L) + "\n"
 
 # ---------------------------------------------------------------------------

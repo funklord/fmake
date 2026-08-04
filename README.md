@@ -93,6 +93,32 @@ keys on mtimes alone will happily link objects built with a sanitizer into a
 binary without one. Each configuration gets its own object directory, so
 switching between them costs a rebuild and never a wrong binary.
 
+**Tests are not built by the default build.** A `main()` under `test/` or
+`tests/`, or in a file called `foo_test.c` or `test_foo.c`, roots a test
+program — and a plain `fmake` builds the library and the programs without
+it. `fmake test` builds and runs them, reporting a failed assertion and a
+crash as the different things they are:
+
+```
+$ fmake
+* 1 test program not built by default (client_test); `fmake test` builds and runs them
+[1/3] CC  main.c
+LD  myapp
+
+$ fmake test
+[1/1] CC  tests/client_test.c
+LD  client_test
+RUN client_test
+* 1 test passed
+```
+
+That buys a fast default build, and it is paid for by the object cache above
+being keyed on the configuration — otherwise "build only what you asked for"
+is how a stale binary gets tested. `@test` and `@test no` in the source, or
+`test = true` / `false` under `[target.NAME]`, override the guess;
+`test-args` under `[target.NAME]` gives a test its arguments. Ejected build
+files get a `test` target that `all` does not depend on.
+
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.
 
@@ -128,6 +154,7 @@ like `@brief` are ignored.
 | `@ldflags …` | Link flags, propagated to anything containing this file |
 | `@define NAME[=VAL]` | Convenience for `-D` |
 | `@std c17\|c++20\|…` | Language standard |
+| `@test` / `@test no` | This program is (or is not) a test |
 | `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |
@@ -184,6 +211,9 @@ defines = ["NDEBUG=1"]
 [target.alpha]                  # two libraries from one overlapping tree
 kind    = "static"
 sources = ["src/alpha.c", "src/shared.c"]
+
+[target.client_test]            # `fmake test` runs it with an argument
+test-args = ["docs/schema/socket.json"]
 
 [install]
 prefix = "/usr/local"

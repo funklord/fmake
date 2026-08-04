@@ -423,6 +423,218 @@ int main(void){
 	      "without the flag, the file's own flags still apply")
 
 
+def _suite(t):
+	"""A library, a program, and a test beside them -- netcfgd's tree."""
+	t.write("ncfg_client.h", "#pragma once\nint ncfg_connect(const char *);\n")
+	t.write("ncfg_client.c", '#include "ncfg_client.h"\n'
+	        "int ncfg_connect(const char *s){ return s && *s ? 1 : 0; }\n")
+	t.write("main.c", '#include <stdio.h>\n#include "ncfg_client.h"\n'
+	        'int main(void){ printf("app %d\\n", ncfg_connect("{}")); '
+	        "return 0; }\n")
+	t.write("tests/client_test.c", '#include <stdio.h>\n'
+	        '#include "../ncfg_client.h"\n'
+	        'int main(void){ if (ncfg_connect("{}") != 1) return 1;\n'
+	        '\tputs("ok"); return 0; }\n')
+
+
+@case
+def the_default_build_does_not_build_tests(t):
+	"""Three of five projects reported this, and it is the one genuine
+	conflict with what these projects require of a build system: the default
+	target produces the library and the programs, and a separate one builds
+	and runs the tests.
+
+	It buys a fast default build, which is why not compiling the test
+	sources matters as much as not linking them -- a static target takes the
+	whole tree as candidates, so the objects for every test binary were
+	still being built and merely not used."""
+	_suite(t)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(not os.path.exists(os.path.join(t.dir, "client_test")),
+	      f"a test must not be in the default build: {os.listdir(t.dir)}")
+	check(os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
+	      "the program should still be built")
+	check(not re.search(r"CC\s+tests/client_test\.c", r.stdout),
+	      f"a held-back test should not even compile: {r.stdout}")
+	check("not built by default" in r.stdout + r.stderr,
+	      f"holding it back should be said out loud: {r.stdout}{r.stderr}")
+	# And not reported as unreachable, which sends the reader to
+	# --force-link for a file that needs `fmake test`.
+	check("client_test.c not compiled" not in r.stdout,
+	      f"a held test is not an unreachable file: {r.stdout}")
+
+
+@case
+def a_library_does_not_drag_in_the_tests_it_cannot_use(t):
+	"""The compile half of the convention, and the part that needed work.
+
+	A static target with no declared membership takes the whole tree as
+	candidates, so the objects for every test binary were still built on a
+	plain build and merely never linked -- most of the cost the convention
+	was traded for. They cannot be used either way: an exe root is excluded
+	from every library closure by construction.
+
+	Needs a library in the tree to exercise at all. Without one the
+	candidate set comes from the program's include graph and never reaches
+	the tests, so the case passes whether the rule is there or not."""
+	_suite(t)
+	t.write("ncfg_client.c", "/** @kind static @target ncfg_client */\n"
+	        '#include "ncfg_client.h"\n'
+	        "int ncfg_connect(const char *s){ return s && *s ? 1 : 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "libncfg_client.a")),
+	      f"the library should still be built: {os.listdir(t.dir)}")
+	check(not re.search(r"CC\s+tests/client_test\.c", r.stdout),
+	      f"a library must not compile a test it cannot contain: {r.stdout}")
+
+
+@case
+def each_convention_holds_a_test_back_on_its_own(t):
+	"""Two conventions, and a fixture satisfying both tests neither.
+
+	Every case here put its test in tests/ *and* named it foo_test.c, so
+	removing either rule from fmake failed nothing. Mutation found that;
+	these are one file each."""
+	t.write("main.c", "int lib_value(void);\n"
+	        "int main(void){ return lib_value() - 4; }\n")
+	t.write("lib.c", "int lib_value(void){ return 4; }\n")
+	# Directory only: nothing in the name says test.
+	t.write("tests/runner.c", "int main(void){ return 0; }\n")
+	# Name only: at the root, nowhere near a test directory.
+	t.write("smoke_test.c", "int main(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(not os.path.exists(os.path.join(t.dir, "runner")),
+	      f"tests/ alone should hold a program back: {os.listdir(t.dir)}")
+	check(not os.path.exists(os.path.join(t.dir, "smoke_test")),
+	      f"a _test name alone should hold a program back: "
+	      f"{os.listdir(t.dir)}")
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "runner"))
+	      and os.path.exists(os.path.join(t.dir, "smoke_test")),
+	      f"both should build under `fmake test`: {os.listdir(t.dir)}")
+	check("2 tests passed" in r.stdout, f"and both run: {r.stdout}")
+
+
+@case
+def fmake_test_builds_and_runs_them(t):
+	"""`make test` builds *and* runs, per the convention this implements.
+
+	Running matters as much as building: the rule these projects pair it
+	with is never to conclude a test passed from a binary the build step did
+	not rebuild."""
+	_suite(t)
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "client_test")),
+	      "fmake test should build the test binary")
+	check("ok" in r.stdout, f"it should have been run: {r.stdout}")
+	check("1 test passed" in r.stdout, f"and summarised: {r.stdout}")
+
+
+@case
+def a_failing_test_fails_the_command(t):
+	"""And a crash is reported as a crash.
+
+	An assertion returning 1 and a SIGSEGV are different findings, and
+	Python reports both as a number."""
+	_suite(t)
+	t.write("tests/bad_test.c", "int main(void){ return 3; }\n")
+	t.write("tests/crash_test.c", "int main(void){ __builtin_trap(); }\n")
+
+	r = t.fmake("test")
+	check(r.returncode != 0, "a failing test must fail the command")
+	out = r.stdout + r.stderr
+	check("exit 3" in out, f"the exit status should be named: {out}")
+	check("SIG" in out, f"a crash should be named as one: {out}")
+	check("2 of 3 failed" in out, f"and counted: {out}")
+
+
+@case
+def a_test_can_be_named_or_denied(t):
+	"""The guess is narrow and both directions have to be available.
+
+	Naming a test outright still builds it -- the rule is about what a bare
+	`fmake` does, not about permission."""
+	_suite(t)
+
+	r = t.fmake("client_test")
+	check(r.returncode == 0, f"naming a test should build it: {r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "client_test")),
+	      "asking for a test by name should build it")
+
+	t.write("tests/client_test.c", '/** @test no */\n#include <stdio.h>\n'
+	        '#include "../ncfg_client.h"\n'
+	        'int main(void){ puts("ok"); return ncfg_connect("{}") != 1; }\n')
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "client_test")),
+	      "@test no should put it back in the default build")
+
+	t.write("smoke.c", "/** @test */\nint main(void){ return 0; }\n")
+	r = t.fmake("-B")
+	check(not os.path.exists(os.path.join(t.dir, "smoke")),
+	      f"@test should hold back a file nothing would guess: "
+	      f"{os.listdir(t.dir)}")
+
+
+@case
+def a_test_is_given_its_arguments(t):
+	"""netcfgd runs `./tests/client_test ../docs/schema/socket.json`: the
+	test reads the daemon's frozen protocol witness, which is the entire
+	reason it exists. A runner that can only invoke a binary bare cannot
+	express it."""
+	_suite(t)
+	t.write("tests/arg_test.c", "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){\n"
+	        "\tif (argc < 2) return 1;\n"
+	        '\tprintf("got %s\\n", argv[1]); return 0; }\n')
+	t.write("fmake.toml",
+	        '[target.arg_test]\ntest-args = ["schema.json"]\n')
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check("got schema.json" in r.stdout,
+	      f"test-args should reach the binary: {r.stdout}")
+
+
+@case
+def an_ejected_build_keeps_tests_out_of_all(t):
+	"""`build-and-commit.md` requires this of a hand-written Makefile, and
+	an ejected one is a Makefile someone will edit.
+
+	Ejecting also has to describe the whole project: leaving the tests out
+	entirely would produce a build file that cannot build them at all, which
+	is a worse answer than the one the convention is about."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	_suite(t)
+
+	e = t.fmake("--eject")
+	check(e.returncode == 0, f"eject failed: {e.stderr}")
+	t.write("Makefile", e.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+
+	r = subprocess.run(["make", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"default build failed: {r.stdout}{r.stderr}")
+	check(not os.path.exists(os.path.join(t.dir, "client_test")),
+	      "the ejected default target must not build tests")
+
+	r = subprocess.run(["make", "-C", t.dir, "test"],
+	                   capture_output=True, text=True)
+	check(r.returncode == 0, f"make test failed: {r.stdout}{r.stderr}")
+	check("ok" in r.stdout,
+	      f"the ejected test target should run them: {r.stdout}")
+
+
 @case
 def objects_are_not_shared_between_configurations(t):
 	"""netcfgd asked whether fmake keys its object cache on flags, and said
@@ -819,16 +1031,21 @@ def a_broken_file_does_not_sink_other_targets(t):
 
     A real game had a test binary needing a library that was not installed;
     dying on that would have stopped the game itself from building, which is
-    the same argument that makes link failures per-target."""
+    the same argument that makes link failures per-target.
+
+    The original fixture put the broken file in tests/, which now means
+    "not built by default" -- so it stopped exercising this at all and
+    started passing for the wrong reason. Two ordinary programs instead:
+    the property is per-target failure, not anything about tests."""
 	t.write("main.c", '#include <stdio.h>\nint main(void){ puts("fine"); return 0; }\n')
-	t.write("tests/testmain.c", "#include <nonexistent_library_header.h>\n"
+	t.write("tools/dumper.c", "#include <nonexistent_library_header.h>\n"
 	        "int main(void){ return 0; }\n")
 
 	r = t.fmake()
 	check(r.returncode != 0, "the failure should still be reported")
 	check(os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
 	      f"the healthy target should still have been built: {r.stdout}")
-	check("testmain skipped" in r.stdout,
+	check("dumper skipped" in r.stdout,
 	      f"the broken target should be named: {r.stdout}")
 
 
@@ -2733,15 +2950,23 @@ def an_app_and_its_tests_build_with_no_configuration(t):
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	app = os.path.basename(t.dir)
 	check(t.run(app).stdout == "app 7\n", "the app did not build")
-	check(t.run(f"{app}_tests").stdout == "test 7\n",
-	      f"the test binary did not build: {os.listdir(t.dir)}")
 	# Announced, because a name fmake picked is a name the reader did not.
 	check("calling it" in r.stdout + r.stderr,
 	      f"the rename should be said out loud: {r.stdout}{r.stderr}")
 
+	# tests/ means two things now and they compose: the name is qualified
+	# because `tests` is a directory, and the program is held back because
+	# `tests` is where tests live. Both are true at once.
+	check(not os.path.exists(os.path.join(t.dir, f"{app}_tests")),
+	      "a program under tests/ is not in the default build")
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check(t.run(f"{app}_tests").stdout == "test 7\n",
+	      f"the test binary did not build: {os.listdir(t.dir)}")
+
 	# A name somebody chose is still theirs.
 	t.write("fmake.toml", '[target.tests]\nname = "beerssh_test"\n')
-	r = t.fmake("-B")
+	r = t.fmake("-B", "test")
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	check(t.run("beerssh_test").stdout == "test 7\n",
 	      "an explicit name should win over the qualified one")
@@ -2821,7 +3046,12 @@ def a_library_and_its_consumers_coexist(t):
 	                         capture_output=True, text=True).stdout.split()
 	check(sorted(members) == ["ncfg_client.c.o", "ncfg_json.c.o"],
 	      f"the archive should hold the library, not the test: {members}")
-	# The test binary is unaffected by the archive existing.
+	# The consumer is a test, so it is not in the default build -- and the
+	# archive existing must not change that either way.
+	check(not os.path.exists(os.path.join(t.dir, "client_test")),
+	      "a consumer under tests/ is not in the default build")
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
 	check(t.run("client_test").stdout == "1\n",
 	      "the consumer should still build and run")
 
@@ -2834,11 +3064,11 @@ def explain_says_what_decided_the_kind(t):
 	inferred one names the alternative -- that is the whole point: a reader
 	asking "why is there no archive" gets the answer rather than a fact."""
 	t.write("lib.c", "int helper(void){ return 1; }\n")
-	t.write("tests/prog.c",
+	t.write("tools/prog.c",
 	        "int helper(void);\nint main(void){ return helper() - 1; }\n")
 
 	ex = t.fmake("--explain").stdout
-	check("tests/prog.c defines main()" in ex and "@kind static" in ex,
+	check("tools/prog.c defines main()" in ex and "@kind static" in ex,
 	      f"an inferred exe should say so and name the alternative: {ex}")
 
 	t.write("lib.c", "//! @kind static\n//! @target helper\n"
@@ -2847,7 +3077,7 @@ def explain_says_what_decided_the_kind(t):
 	check("static: @kind in lib.c" in ex,
 	      f"a declared kind should name the file that declared it: {ex}")
 
-	os.unlink(os.path.join(t.dir, "tests/prog.c"))
+	os.unlink(os.path.join(t.dir, "tools/prog.c"))
 	t.write("lib.c", "int helper(void){ return 1; }\n")
 	ex = t.fmake("-B", "--explain").stdout
 	check("nothing here defines main()" in ex,
@@ -3503,7 +3733,10 @@ def a_qtest_main_roots_a_program(t):
 	        "};\nQTEST_MAIN(CounterTest)\n"
 	        '#include "counter_test.moc"\n')
 
-	r = t.fmake()
+	# Under tests/ and named _test, so it is held back -- which is right,
+	# and orthogonal to the finding this case is about. `fmake test` is how
+	# a QtTest binary gets built and run, and it has to do both.
+	r = t.fmake("test")
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	check(os.path.exists(os.path.join(t.dir, "counter_test")),
 	      f"the QtTest binary should be a target: {r.stdout}{r.stderr}")
@@ -3521,7 +3754,7 @@ def a_qtest_main_roots_a_program(t):
 	        "private slots:\n\tvoid trivial() { QCOMPARE(1 + 1, 2); }\n"
 	        "};\nQTEST_APPLESS_MAIN(PlainTest)\n"
 	        '#include "plain_test.moc"\n')
-	r = t.fmake()
+	r = t.fmake("test")
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	check(os.path.exists(os.path.join(t.dir, "plain_test")),
 	      f"QTEST_APPLESS_MAIN should root a program too: {os.listdir(t.dir)}")
@@ -3539,7 +3772,7 @@ def a_macro_main_the_preprocessor_removes_is_settled_by_the_object(t):
 	wrong guess costs one compile, once, and the tree still builds."""
 	t.write("main.cpp", "#include <cstdio>\nint helper();\n"
 	        'int main(){ std::printf("%d\\n", helper()); return 0; }\n')
-	t.write("maybe_test.cpp",
+	t.write("maybe.cpp",
 	        "#if 0\n#include <QtTest>\nQTEST_MAIN(T)\n#endif\n"
 	        "int helper(){ return 5; }\n")
 
@@ -3549,7 +3782,7 @@ def a_macro_main_the_preprocessor_removes_is_settled_by_the_object(t):
 	      f"the object should settle it: {r.stdout}{r.stderr}")
 	check(t.run(os.path.basename(t.dir)).stdout == "5\n",
 	      "the program should still build from the same file")
-	check(not os.path.exists(os.path.join(t.dir, "maybe_test")),
+	check(not os.path.exists(os.path.join(t.dir, "maybe")),
 	      "nothing should have been built from the mirage")
 
 	# And remembered. Without the cache the file roots a target again on
@@ -6185,7 +6418,10 @@ def a_vendored_program_can_be_asked_for(t):
 	_vendored_tree(t, _as_submodule_file)
 	t.write("fmake.toml", '[target.flogtest]\nroot = "flog/tests/test.c"\n')
 
-	r = t.fmake()
+	# Named outright, because the file it roots is under tests/ and is a
+	# test as well as vendored: two independent reasons not to build it by
+	# default, and one way to ask for it anyway.
+	r = t.fmake("flogtest")
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	check(t.run("flogtest").returncode == 0,
 	      f"asked-for vendored program did not build: {r.stdout}{r.stderr}")

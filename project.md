@@ -4068,3 +4068,88 @@ one needed no cleverness and is the one somebody will read.
 The pattern across all four: **a case for a guarantee has to vary exactly
 the thing the guarantee is about**, and the natural way to write it varies
 two things at once. Mutation is the only reason any of that surfaced.
+
+## 49. Tests are built by the test target
+
+Three of the five evaluations reported this, and it was the only finding any
+of them called a genuine conflict rather than a configuration gap.
+fuzzypickles: *"fmake compiled all ~35 test binaries along with everything
+else [...] this is the one finding that is a genuine conflict, and I could
+not see a way to express 'these `main()`s are tests' other than enumerating
+them."* netcfgd and beerssh said the same, and `build-and-commit.md` is
+explicit: the default target does not build tests, and a separate one builds
+and runs them.
+
+It was left unbuilt for several rounds because it is a **default change** --
+a tree that builds a test binary today stops doing so -- and that is a
+convention decision rather than one to make while working on something else.
+Approved, so: built.
+
+**Two conventions, both named by the projects that asked**: a directory
+called `test` or `tests`, and a file called `foo_test.c` or `test_foo.c`.
+Nothing else. The net is deliberately narrow because a wrong guess here
+costs a program its place in the default build, which is a worse failure
+than the one this fixes -- so the reason is reported (`--explain` names it)
+rather than assumed, and `@test` / `@test no` in the source and
+`test = true` / `false` under `[target.NAME]` decide it outright.
+
+**A role, not a kind.** A test is still an ordinary `exe`; what changes is
+only whether a plain build produces it. Naming one on the command line still
+builds it: the rule is about what a bare `fmake` does, not about permission.
+
+**`fmake test` builds and runs.** Running is half the convention -- the rule
+it is paired with is never to conclude a test passed from a binary the build
+step did not rebuild -- and a failed assertion and a crash are reported as
+the different things they are, since Python renders both as a number.
+`test-args` under `[target.NAME]` covers netcfgd's
+`./tests/client_test ../docs/schema/socket.json`, which was their third
+finding and is a test whose whole purpose is the file it is handed.
+
+**Ejected build files get it too**, because an ejected Makefile is a
+Makefile someone will edit, and these projects would judge it by the same
+rule. `all` does not depend on `test`; `test` builds and runs. Ejecting also
+had to stop honouring the hold-back: a build file that cannot build the
+tests *at all* is a worse answer than the one the convention is about.
+
+### Not compiling them is most of the point
+
+Holding a test back from the *link* is easy and buys almost nothing. A
+static target with no declared membership takes the whole tree as
+candidates, so all thirty-five test binaries' objects were still built and
+merely never used -- which is most of the cost the convention was traded
+for. Held-back roots are subtracted from the candidate set, and it has to
+happen **after** the library branch resets that set to everything, which is
+the sort of ordering that looks arbitrary until it is wrong.
+
+The subtraction is safe by construction rather than by care: an exe root is
+already excluded from every library closure, so nothing wanted could have
+used it.
+
+### What the suite said about the change
+
+Nine cases failed, and eight of them were fixtures using `tests/` or a
+`_test` name for reasons that had nothing to do with tests -- the per-target
+compile-failure case, the kind-explanation case, the macro-main case. Each
+was passing for a new and wrong reason, or failing for one. That is what a
+convention change looks like from inside a suite: the convention is now
+*meaningful*, so every incidental use of it became a statement.
+
+Four of them got stronger for it. The two-binaries case now asserts that
+`tests/` means two things at once -- the target's name is qualified because
+`tests` is a directory, and the program is held back because `tests` is
+where tests live -- and that both hold together.
+
+The ninth was mine: a multi-line f-string in the new `--explain` line, PEP
+701, caught by the gate repaired in §44 two commits earlier. It would have
+shipped a package that installs on bookworm and dies on startup. The repair
+paid for itself within the session.
+
+### And three mutations the first cases missed
+
+- **A fixture in `tests/foo_test.c` satisfies both conventions**, so
+  deleting either rule failed nothing. They are one file each now:
+  `tests/runner.c` and `smoke_test.c`.
+- **The candidate subtraction needs a library in the tree to exist at all.**
+  Without one the candidate set comes from the program's include graph and
+  never reaches the tests, so the case passed whether the rule was there or
+  not -- the same shape as §48's weak probes, and found the same way.
