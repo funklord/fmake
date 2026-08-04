@@ -3367,6 +3367,100 @@ int main(int argc, char **argv) {
 
 
 @case
+def a_qtest_main_roots_a_program(t):
+	"""Qt declares a test's entry point with a macro.
+
+	So a QtTest translation unit has no main() in its text, rooted nothing,
+	and then nothing reached it -- fmake reported "defines nothing
+	reachable" and moved on. One project saw 547 such lines and concluded
+	that symbol reachability does not work for a Qt program.
+
+	The macro is a proposal that the file is a program; the object settles
+	it, exactly as a textual main() is settled. Everything downstream is
+	unchanged: Qt6Test is linked because QTest::qExec is undefined in the
+	object, not because the file looked like a test."""
+	_need_qt()
+	if not _have_pkg("Qt6Test"):
+		raise Skip("Qt6Test not installed")
+	t.write("src/counter.h",
+	        "#pragma once\n#include <QObject>\n"
+	        "class Counter : public QObject {\n\tQ_OBJECT\npublic:\n"
+	        "\texplicit Counter(QObject *p = nullptr) : QObject(p) {}\n"
+	        "\tint value() const { return n; }\npublic slots:\n"
+	        "\tvoid bump() { ++n; }\nprivate:\n\tint n = 0;\n};\n")
+	t.write("tests/counter_test.cpp",
+	        '#include <QtTest>\n#include "../src/counter.h"\n'
+	        "class CounterTest : public QObject {\n\tQ_OBJECT\n"
+	        "private slots:\n"
+	        "\tvoid bumps() { Counter c; c.bump(); QCOMPARE(c.value(), 1); }\n"
+	        "};\nQTEST_MAIN(CounterTest)\n"
+	        '#include "counter_test.moc"\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "counter_test")),
+	      f"the QtTest binary should be a target: {r.stdout}{r.stderr}")
+	env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+	run = t.run("counter_test", env=env)
+	check(run.returncode == 0,
+	      f"the test binary did not pass: {run.stdout}{run.stderr}")
+
+	# The family, not the one spelling. QTEST_APPLESS_MAIN and
+	# QTEST_GUILESS_MAIN are the same declaration for tests that want no
+	# QApplication, and a test suite picks whichever it needs per file.
+	t.write("tests/plain_test.cpp",
+	        "#include <QtTest>\n"
+	        "class PlainTest : public QObject {\n\tQ_OBJECT\n"
+	        "private slots:\n\tvoid trivial() { QCOMPARE(1 + 1, 2); }\n"
+	        "};\nQTEST_APPLESS_MAIN(PlainTest)\n"
+	        '#include "plain_test.moc"\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "plain_test")),
+	      f"QTEST_APPLESS_MAIN should root a program too: {os.listdir(t.dir)}")
+	check(t.run("plain_test", env=env).returncode == 0,
+	      "the APPLESS test binary did not pass")
+
+
+@case
+def a_macro_main_the_preprocessor_removes_is_settled_by_the_object(t):
+	"""The proposal has to be cheap to be wrong, and it is.
+
+	QTEST_MAIN behind a false conditional is text fmake reads and the
+	compiler does not. The file becomes a candidate, compiles, exports no
+	main(), and the existing mirage cache drops it and remembers -- so a
+	wrong guess costs one compile, once, and the tree still builds."""
+	t.write("main.cpp", "#include <cstdio>\nint helper();\n"
+	        'int main(){ std::printf("%d\\n", helper()); return 0; }\n')
+	t.write("maybe_test.cpp",
+	        "#if 0\n#include <QtTest>\nQTEST_MAIN(T)\n#endif\n"
+	        "int helper(){ return 5; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("does not export it" in r.stdout + r.stderr,
+	      f"the object should settle it: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "5\n",
+	      "the program should still build from the same file")
+	check(not os.path.exists(os.path.join(t.dir, "maybe_test")),
+	      "nothing should have been built from the mirage")
+
+	# And remembered. Without the cache the file roots a target again on
+	# every build, gets compiled again, and is dropped again -- the same
+	# answer for the same cost, forever. The disagreement depends only on
+	# the file and the configuration, so it is settled once.
+	# Remembered, so the disagreement is reported once rather than every
+	# build. Not "not recompiled" -- the object cache already prevents that,
+	# so an assertion about compiling would pass with the memory removed.
+	# What the memory buys is silence on every later build.
+	again = t.fmake()
+	check(again.returncode == 0, f"rebuild failed: {again.stdout}")
+	check("does not export it" not in again.stdout + again.stderr,
+	      f"the mirage should be reported once, not every build: "
+	      f"{again.stdout}{again.stderr}")
+
+
+@case
 def moc_runs_because_a_class_says_q_object(t):
 	"""Q_OBJECT in a header is the whole declaration Qt needs.
 

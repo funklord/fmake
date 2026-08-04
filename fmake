@@ -291,6 +291,19 @@ RE_DATA_DEF = re.compile(
 
 RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
 
+# Qt writes a test's entry point with a macro, so a QtTest translation unit
+# has no main() in its text at all -- which made it root nothing, and then
+# nothing reached it, and fmake reported it as defining nothing reachable
+# and moved on. One project saw 547 such lines and concluded that symbol
+# reachability does not work for Qt.
+#
+# This is the usual split, not an exception to it: the macro is a *proposal*
+# that the file is a program, and the object settles it. A file whose object
+# turns out to export no main() is already handled -- see the mirage cache
+# in the target loop -- so a wrong guess here costs one compile.
+RE_MACRO_MAIN = re.compile(
+    r"(?:^|[;}\s])QTEST_(?:APPLESS_|GUILESS_)?MAIN[ \t]*\(", re.M)
+
 # An explicit template instantiation is a definition and looks like neither
 # shape above: `template struct Box<int>;` has no parameter list and no
 # initialiser. It is how a project with `extern template` in its headers
@@ -351,7 +364,8 @@ def scan_source(path):
 
 	return {
 	    "incs":     incs,
-	    "has_main": bool(RE_MAIN.search(code)),
+	    "has_main": bool(RE_MAIN.search(code)
+	                     or RE_MACRO_MAIN.search(code)),
 		# Against the stripped text, for the same reason main() is: the word
 		# in a comment or a string is not a declaration.
 	    "qobject":  bool(RE_QOBJECT.search(code)),
