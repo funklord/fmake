@@ -4445,8 +4445,19 @@ def build(args, _bootstrapping=False):
 		rel = section.get("root")
 		if rel is None:
 			if not section.get("sources"):
+				# A section is keyed by the target's *default* name, which
+				# is not always the directory it came from -- src/main.cpp
+				# is called after the project, since `src` names nothing. So
+				# [target.src] is the obvious guess and the wrong one, and
+				# the message that only says "declares no root" sends the
+				# reader to add a root rather than to fix the key.
+				found = sorted(t.name for t in targets)
+				hint = (f"\nTargets discovered here: {', '.join(found)}. A "
+				        f"section is keyed by the name a target already has;"
+				        f" `name = ...` inside it renames one."
+				        if found else "")
 				die(f"{CONF_FILE}: [target.{name}] declares no root and no "
-				    f"sources, so fmake cannot tell what is in it")
+				    f"sources, so fmake cannot tell what is in it{hint}")
 			rel = None
 		elif rel not in proj.src_set:
 			die(f"{CONF_FILE}: [target.{name}] root = {rel!r} is not a "
@@ -4498,6 +4509,33 @@ def build(args, _bootstrapping=False):
 		targets.append(t)
 		vinfo(f"no main() anywhere; building the tree as {t.filename}")
 
+	# tests/main.cpp wants to be called `tests`, which is the directory it
+	# came from. Two of five projects hit this on their first run and both
+	# had to write a config file for it. `src` is already skipped as a name
+	# that names nothing, but skipping `tests` too would land on the project
+	# name and collide with the program.
+	#
+	# So a name nobody chose gets qualified rather than refused. This cannot
+	# change a build that worked: the only trees affected are the ones that
+	# stopped with an error. A name somebody *did* choose is still refused,
+	# because renaming what an author asked for is worse than declining.
+	project_name = conf.project.get("name") or os.path.basename(root) or ""
+	for t in targets:
+		if not os.path.isdir(os.path.join(outdir, t.filename)):
+			continue
+		chosen = (t.ann.scalar("target") or t.conf.get("name")
+		          or t.conf.get("target"))
+		if chosen or not project_name or t.name.startswith(project_name):
+			continue
+		alt = f"{project_name}_{t.name}"
+		if os.path.isdir(os.path.join(outdir, alt)):
+			continue
+		was = t.filename
+		t.name = alt
+		info(f"{t.rel} would be built as {was}, which is a directory; "
+		     f"calling it {t.filename} instead (@target or {CONF_FILE} "
+		     f"picks the name)")
+
 	clash = {}
 	for t in targets:
 		clash.setdefault(t.filename, []).append(t.rel or f"[target.{t.name}]")
@@ -4511,7 +4549,8 @@ def build(args, _bootstrapping=False):
 		if os.path.isdir(os.path.join(outdir, t.filename)):
 			die(f"target {t.filename!r} (from {t.rel}) would be written over "
 			    f"a directory of that name.\n"
-			    f"name it with @target, or with a name in {CONF_FILE}.")
+			    f"name it with @target, or with "
+			    f"[target.{t.name}] name = \"...\" in {CONF_FILE}.")
 
 	phony = phony_rules(root)
 	asked_phony = [n for n in args.targets if n in phony]

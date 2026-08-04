@@ -2599,6 +2599,88 @@ def an_unrelated_error_gets_no_platform_advice(t):
 
 
 @case
+def an_app_and_its_tests_build_with_no_configuration(t):
+	"""src/main.cpp and tests/main.cpp, which two of five projects had.
+
+	`src` is skipped as a directory name that names nothing, so the app is
+	called after the project. `tests` is not skipped -- skipping it would
+	land on the project name too and collide with the app -- so it wants to
+	be called `tests`, which is the directory it came from, and fmake
+	refused. Both projects wrote a config file for this on their first run.
+
+	A name nobody chose is qualified instead. That cannot change a build
+	that worked, because the only trees affected are the ones that stopped
+	with an error."""
+	t.write("src/session.h", "#pragma once\nint session_open(const char *);\n")
+	t.write("src/session.cpp", '#include "session.h"\n'
+	        "int session_open(const char *s){ return s && *s ? 7 : 0; }\n")
+	t.write("src/main.cpp", '#include <cstdio>\n#include "session.h"\n'
+	        'int main(){ std::printf("app %d\\n", session_open("x")); '
+	        "return 0; }\n")
+	t.write("tests/main.cpp", '#include <cstdio>\n'
+	        '#include "../src/session.h"\n'
+	        'int main(){ std::printf("test %d\\n", session_open("y")); '
+	        "return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	app = os.path.basename(t.dir)
+	check(t.run(app).stdout == "app 7\n", "the app did not build")
+	check(t.run(f"{app}_tests").stdout == "test 7\n",
+	      f"the test binary did not build: {os.listdir(t.dir)}")
+	# Announced, because a name fmake picked is a name the reader did not.
+	check("calling it" in r.stdout + r.stderr,
+	      f"the rename should be said out loud: {r.stdout}{r.stderr}")
+
+	# A name somebody chose is still theirs.
+	t.write("fmake.toml", '[target.tests]\nname = "beerssh_test"\n')
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run("beerssh_test").stdout == "test 7\n",
+	      "an explicit name should win over the qualified one")
+
+
+@case
+def a_name_the_author_chose_is_refused_not_renamed(t):
+	"""Qualifying applies to a name nobody picked, and only that.
+
+	Renaming what an author asked for is worse than declining: they would
+	get a binary under a name they did not choose and no reason to look. The
+	refusal names the section that would fix it."""
+	t.write("lib/helper.c", "int helper(void){ return 0; }\n")
+	t.write("prog.c", "//! @target lib\nint main(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode != 0,
+	      f"a chosen name over a directory should be refused: {r.stdout}")
+	out = r.stdout + r.stderr
+	check("would be written over" in out,
+	      f"the refusal should say why: {out}")
+	check("[target.lib]" in out,
+	      f"the refusal should name the section that fixes it: {out}")
+
+
+@case
+def a_target_section_that_matches_nothing_says_what_exists(t):
+	"""§31: name a place that exists.
+
+	A [target.*] section is keyed by the name a target already has, and that
+	is not always the directory -- src/main.cpp is called after the project,
+	since `src` names nothing. So [target.src] is the obvious guess and the
+	wrong one, and an error that only says "declares no root" sends the
+	reader to add a root rather than to fix the key. Found by making that
+	exact mistake."""
+	t.write("src/main.cpp", "int main(){ return 0; }\n")
+	t.write("fmake.toml", '[target.src]\nname = "app"\n')
+
+	r = t.fmake()
+	check(r.returncode != 0, "an unmatched section should be refused")
+	out = r.stdout + r.stderr
+	check("Targets discovered here" in out and os.path.basename(t.dir) in out,
+	      f"the message should name the sections that would work: {out}")
+
+
+@case
 def a_library_and_its_consumers_coexist(t):
 	"""netcfgd's shape, and the reason they declined.
 

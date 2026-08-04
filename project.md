@@ -3892,3 +3892,59 @@ they would judge it by, which is the review nobody else was going to do.
 
 That last one is the same failure as §40 in a different place: a build that
 succeeds while doing less than it should, with nothing to notice.
+
+## 46. The first thing two projects hit
+
+fuzzypickles' finding 2 and beerssh's finding 1 are the same one, and it is
+the very first thing each of them ran into:
+
+> `cli/main.c` wants to be a program named `cli`, which is a directory. This
+> tree names each program's directory after the program: `cli/main.c`,
+> `daemon/main.c`, `tui/main.c`. All three collide with their own directory
+> when output goes to the project root.
+
+> `tests/main.cpp` wants a target called `tests`, which is a directory. Same
+> collision fuzzypickles reported.
+
+`src/main.cpp` does not have this problem, because `src` is already skipped
+as a directory name that names nothing -- the target takes the project's
+name instead. `tests` is not skipped, and cannot be: skipping it lands on
+the project name too, which is what the app is already called.
+
+So the name is genuinely undecidable and the refusal was right. What was
+wrong is that it refused a shape common enough that two of five projects met
+it before anything else, and both had to write a config file to get past the
+first run of a tool whose premise is not needing one.
+
+A name **nobody chose** is now qualified with the project's: `tests` becomes
+`beerssh_tests`. A name somebody chose -- `@target`, or `name` in
+`fmake.toml` -- is still refused, because renaming what an author asked for
+gives them a binary under a name they did not pick and no reason to look.
+
+This cannot break a build that works. The only trees it affects are the ones
+that stopped with an error, and it says what it did rather than doing it
+quietly.
+
+### The section key is not the directory, and the error did not say so
+
+Reproducing beerssh's tree, the obvious `fmake.toml` was:
+
+```toml
+[target.src]
+name = "beerssh"
+```
+
+which is wrong, and the error said only *"declares no root and no sources,
+so fmake cannot tell what is in it"* -- which reads as an instruction to add
+a root. The real problem is the key: a `[target.*]` section is keyed by the
+name the target **already has**, and `src/main.cpp`'s target is called after
+the project precisely because `src` names nothing. `[target.src]` matches
+nothing and never could.
+
+The message now lists the target names that exist. It was found by making
+the mistake, which is the only way this one was going to be found -- the
+behaviour is correct, documented, and still surprising, and no test would
+have been written for a message nobody suspected.
+
+That is three findings in a row (§42, §43, this) where the tool was right
+and the way it said so was not.
