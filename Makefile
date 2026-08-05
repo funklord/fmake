@@ -66,12 +66,14 @@ check-version:
 
 # Builds ../fmake_<version>_all.deb. -b because there is no upstream tarball
 # to sign or ship: the packaging is native and the source is this directory.
-deb: lint
 
 # Separated so `make lint` works on a package already built, and skipped
 # rather than fatal when lintian is absent -- it is a checker, not a
 # dependency of producing the thing.
-lint:
+# The package. dpkg-buildpackage drives debian/rules, which is three lines
+# of dh; everything the package declares is in debian/control.
+deb: check-version
+	@test -n "$(BUILD_DIR)" || { echo "deb: BUILD_DIR is empty, refusing" >&2; exit 1; }
 	dpkg-buildpackage -b -us -uc
 	@mkdir -p $(BUILD_DIR)
 	@for f in fmake_$(VERSION)_all.deb \
@@ -80,13 +82,17 @@ lint:
 		if [ -e "../$$f" ]; then mv -f "../$$f" $(BUILD_DIR)/; fi; \
 	done
 	@test -f $(DEB) || { echo "deb: $(DEB) was not produced" >&2; exit 1; }
-	@echo
+	@echo $(DEB)
+
+# Lint the package, having built it. These were the other way round: `lint`
+# built the .deb and `deb` merely depended on it, so the target that says it
+# checks was the one doing the work.
+lint: deb
 	@if command -v lintian >/dev/null; then \
 		lintian --pedantic $(DEB) && echo "lintian: clean"; \
 	else \
-		echo "lintian not installed; package not checked"; \
+		echo "lintian: not installed; package not checked"; \
 	fi
-	@echo $(DEB)
 
 # Named targets only, and no wildcard sweeps: a clean target is the one
 # thing everybody runs without reading. The two directories are debhelper's
