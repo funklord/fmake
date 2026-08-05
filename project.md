@@ -709,9 +709,8 @@ libraries, where things install, and what toolchain to build with.
 cflags  = ["-Wall"]
 exclude = ["vendor/**"]
 
-[profile.release]
-cflags  = ["-O2"]
-defines = ["NDEBUG=1"]
+[profile.debug]
+cflags  = ["-Og"]        # -Os is the default; -Og is for debugging
 
 [target.alpha]
 kind    = "static"

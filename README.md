@@ -312,9 +312,8 @@ For facts that belong to no single file and need tables.
 cflags  = ["-Wall"]
 exclude = ["vendor/**"]
 
-[profile.release]
-cflags  = ["-O2"]
-defines = ["NDEBUG=1"]
+[profile.debug]
+cflags  = ["-Og"]        # -Os is the default; -Og is for debugging
 
 [target.alpha]                  # two libraries from one overlapping tree
 kind    = "static"
@@ -450,7 +449,7 @@ fmake --clean            remove .fmake/
 | `-p NAME` | build profile from `[profile.NAME]` |
 | `-n` | print commands, run nothing |
 | `-B` | ignore the cache and rebuild |
-| `--cflags 'FLAGS'` | replace the default `-O2 -g`; overrides file directives |
+| `--cflags 'FLAGS'` | replace the default `-Os -g`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
 | `--eject [make\|make-fragment\|ninja]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile |
 | `--force-link SRC` | link a file no symbol reaches |
@@ -612,11 +611,11 @@ a cycle between two installed static ones. Pass
 handled — see below.
 
 **⚠ `--cflags` replaces the defaults, it does not add to them.**
-`--cflags -Os` builds with `-Os` alone — no `-g`, and no `-O2`. That is what
+`--cflags -O0` builds with `-O0` alone — no `-g`, and no `-Os`. That is what
 makes it able to override a file's own `@cflags`, and it is not an error, so
 nothing will tell you the debug info went away. `$CFLAGS` replaces them too.
 Only `[project] cflags` in `fmake.toml` **adds** — with it, `-Wall` builds
-with `-O2 -g -Wall`.
+with `-Os -g -Wall`.
 
 **Generated headers other than `ui_*.h`.** A header produced by your own
 generator has to be declared with a `[generate.*]` rule or a pattern rule in
