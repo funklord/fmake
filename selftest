@@ -3571,6 +3571,107 @@ def a_missing_header_names_the_platform_escape(t):
 
 
 @case
+def a_c_file_runs_as_a_script(t):
+	"""`--run` builds a C file and becomes it.
+
+	The form with no shebang is the binfmt_misc one, where the kernel is
+	told that a .c file is executable and hands it to fmake: the file stays
+	pure C and there is nothing to strip. Arguments after the file are the
+	program's, and the exit status is the program's -- fmake execs rather
+	than waits, so it is not sitting between the program and the shell."""
+	t.write("hello.c", "#include <stdio.h>\n"
+	        'int main(int c, char **v){ printf("%s|%d\\n", v[0], c - 1);\n'
+	        "\treturn c - 1; }\n")
+
+	# An absolute path, because --run resolves its file against the
+	# caller's working directory like any file argument -- a shebang always
+	# hands it one -- while -C only says where the build root is.
+	r = t.fmake("--run", os.path.join(t.dir, "hello.c"), "one", "two")
+	check(r.stdout == f"{os.path.join(t.dir, 'hello.c')}|2\n",
+	      f"argv[0] is the script and the arguments are its own: {r.stdout!r}")
+	check(r.returncode == 2,
+	      f"the program's exit status is the command's: {r.returncode}")
+
+
+@case
+def a_shebang_is_stripped_and_the_diagnostics_still_fit(t):
+	"""`#!` on line 1 is not C: gcc calls it an invalid preprocessing
+	directive, and so does g++. So a file carrying one is copied with that
+	line replaced -- by `#line`, not by a blank, so a compiler error still
+	names the file the author wrote and the line they wrote it on. A blank
+	would keep the numbering and lose the name; deleting the line would
+	lose both."""
+	t.write("bad.c", "#!/usr/bin/env -S fmake --run\n"
+	        "#include <stdio.h>\n"
+	        "int main(void){ return oops; }\n")
+
+	r = t.fmake("--run", os.path.join(t.dir, "bad.c"))
+	check(r.returncode != 0, "it does not compile, so it does not run")
+	out = r.stdout + r.stderr
+	check("bad.c:3" in out,
+	      f"the error should name the original file and line: {out}")
+	check(".fmake" not in out.split("bad.c:3")[0][-80:],
+	      f"and not the copy fmake compiled: {out}")
+
+	# And a shebang that does compile runs.
+	t.write("ok.c", "#!/usr/bin/env -S fmake --run\n"
+	        '#include <stdio.h>\nint main(void){ puts("ran"); return 0; }\n')
+	r = t.fmake("--run", os.path.join(t.dir, "ok.c"))
+	check(r.stdout == "ran\n", f"the shebang form should run: {r.stdout!r}")
+
+
+@case
+def a_run_leaves_nothing_beside_the_script(t):
+	"""The answer to "does it clean up" is that it never dirties.
+
+	A script may sit in a directory that is not the author's to litter, and
+	the binary belongs with the objects. Putting both under the state
+	directory is also what makes the second run instant instead of a
+	rebuild, which is the property that makes a compiled language usable as
+	a scripting one at all."""
+	t.write("hello.c", '#include <stdio.h>\nint main(void){ puts("hi");'
+	        " return 0; }\n")
+
+	before = set(os.listdir(t.dir))
+	run = os.path.join(t.dir, "hello.c")
+	check(t.fmake("--run", run).stdout == "hi\n", "it should run")
+	after = set(os.listdir(t.dir)) - before
+	check(after <= {".fmake"},
+	      f"nothing should appear beside the script: {sorted(after)}")
+
+	# The second run must not rebuild, which is the whole point of a cache.
+	r = t.fmake("--run", run)
+	check(r.stdout == "hi\n", "it should run again")
+	check("CC " not in r.stdout + r.stderr,
+	      f"the second run should not compile: {r.stdout}{r.stderr}")
+
+
+@case
+def a_run_builds_what_the_script_needs(t):
+	""""A collection of them", which needs no special case at all.
+
+	The script is a program like any other, so its closure reaches the
+	siblings that define what it calls -- and its stdin and stdout are its
+	own, since fmake has execed and is no longer there."""
+	t.write("util.h", "#pragma once\nint shout(const char *);\n")
+	t.write("util.c", "#include <stdio.h>\n#include <ctype.h>\n"
+	        '#include "util.h"\n'
+	        "int shout(const char *s){ for (; *s; s++)\n"
+	        "\t\tputchar(toupper((unsigned char)*s)); return 0; }\n")
+	t.write("up.c", "#include <stdio.h>\n#include \"util.h\"\n"
+	        "int main(void){ char b[128];\n"
+	        "\twhile (fgets(b, sizeof b, stdin)) shout(b); return 0; }\n")
+
+	r = subprocess.run([FMAKE, "-C", t.dir, "--run",
+	                    os.path.join(t.dir, "up.c")],
+	                   input="hello there\n", capture_output=True, text=True)
+	check(r.returncode == 0, f"failed: {r.stdout}{r.stderr}")
+	check(r.stdout == "HELLO THERE\n",
+	      f"the sibling should be linked and stdin should reach it: "
+	      f"{r.stdout!r}")
+
+
+@case
 def the_tree_never_stands_in_for_a_standard_header(t):
 	"""fuzzypickles vendors thorvg, which vendors rapidjson, which ships an
 	MSVC-only stdint.h.

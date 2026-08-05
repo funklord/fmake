@@ -1224,6 +1224,9 @@ MOC_DIR = os.path.join(STATE_DIR, "moc")
 # two foo.ui in one tree are ambiguous in the C++ rather than merely awkward
 # on disk; mirroring the tree would hide that instead of reporting it.
 UI_DIR = os.path.join(STATE_DIR, "ui")
+# Staging and output for --run, so a script leaves nothing beside
+# itself and a second run finds the binary already built.
+RUN_DIR = os.path.join(STATE_DIR, "run")
 
 # rcc output is a compiled translation unit, not an include, so it mirrors
 # the tree like moc's -- two resources.qrc in different directories are an
@@ -2081,6 +2084,42 @@ def _walk(root):
 		yield dirpath, dirnames, filenames
 
 
+def stage_run_source(root, path):
+	"""The source to build for `--run`, and the target it roots.
+
+    A shebang is not C: gcc rejects `#!` on line 1 as an invalid
+    preprocessing directive, and so does g++. So a file that carries one is
+    copied with that line replaced -- by a `#line` directive rather than by
+    a blank, so every diagnostic still names the original file and the right
+    line number. A file with no shebang is left exactly where it is and
+    nothing is copied; that is the binfmt_misc form, where the kernel runs
+    a pure C file and there is nothing to strip.
+    """
+	rel = os.path.relpath(os.path.abspath(path), root)
+	try:
+		with open(path, "rb") as fh:
+			first = fh.readline()
+	except OSError as exc:
+		die(f"--run: {exc}")
+	if not first.startswith(b"#!"):
+		return rel
+	staged = os.path.join(RUN_DIR, os.path.basename(path))
+	full = os.path.join(root, staged)
+	os.makedirs(os.path.dirname(full), exist_ok=True)
+	with open(path, "rb") as fh:
+		body = fh.read()
+	cut = body.index(b"\n") + 1 if b"\n" in body else len(body)
+	# The path is quoted for the compiler, so a quote or backslash in it
+	# would end the directive early and take the rest of the line with it.
+	shown = os.path.abspath(path).replace("\\", "\\\\").replace('"', '\\"')
+	head = f'#line 2 "{shown}"\n'.encode()
+	new = head + body[cut:]
+	if not os.path.exists(full) or open(full, "rb").read() != new:
+		with open(full, "wb") as fh:
+			fh.write(new)
+	return staged
+
+
 def walk_tree(root):
 	"""Return (sources, headers) as root-relative paths."""
 	srcs, hdrs = [], []
@@ -2717,7 +2756,7 @@ def _header_in_tree(name, headers):
 
 
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
-                  broken=None, tree_headers=()):
+                  broken=None, tree_headers=(), quiet=False):
 	"""Compile what is stale. Returns True if anything was actually built.
 
     `broken` collects the files that would not compile, so the caller can
@@ -2764,9 +2803,11 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			tag = "CXX" if u.cxx else "CC "
 			if rc != 0:
 				failures.append((u, err))
-				say(f"[{done[0]:>{width}}/{len(todo)}] {RED(tag)} {u.rel}")
+				if not quiet:
+					say(f"[{done[0]:>{width}}/{len(todo)}] {RED(tag)} {u.rel}")
 			elif not dry_run:
-				say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {u.rel}")
+				if not quiet:
+					say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {u.rel}")
 				if err.strip():
 					PROGRESS.write(err)
 
@@ -4237,7 +4278,7 @@ def archive_flags(cl):
 
 
 def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
-                root=None):
+                root=None, quiet=False):
 	name, objs = t.filename, [u.obj for u in cl.link]
 	out = os.path.join(outdir, name)
 	cmd = link_cmd(t, cl, cfg, outdir, libflags)
@@ -4270,7 +4311,8 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 
 	if t.kind == "static" and os.path.exists(out):
 		os.remove(out)          # ar appends; a stale member would survive
-	say(f"{GREEN('AR ' if t.kind == 'static' else 'LD ')} {BOLD(name)}")
+	if not quiet:
+		say(f"{GREEN('AR ' if t.kind == 'static' else 'LD ')} {BOLD(name)}")
 	r = subprocess.run(cmd, capture_output=True, text=True)
 	if r.stderr.strip():
 		# A missing library produces one linker line per call site, which
@@ -4550,6 +4592,13 @@ def build(args, _bootstrapping=False):
 	# where moc lives.
 	pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet)
 	outdir = os.path.abspath(args.output) if args.output else root
+	if args.run and not args.output:
+		# Nothing appears beside the script. The answer to "does it clean
+		# up" is that it never dirties: the binary and its objects live
+		# under the state directory, which is also what makes the second
+		# run of a script instant rather than a rebuild.
+		outdir = os.path.join(root, RUN_DIR)
+		os.makedirs(outdir, exist_ok=True)
 	jobs   = args.jobs or (os.cpu_count() or 4)
 
 	bootstrapped = []
@@ -4623,6 +4672,21 @@ def build(args, _bootstrapping=False):
 	# unnecessary turns out to be exactly what putting rules in comments
 	# costs.
 	srcs, hdrs = walk_tree(root)
+	if args.run:
+		# Staged like a generated source, and for the same reason: from
+		# here on it is an ordinary source that the include graph, the
+		# closure and the symbol tables see with no special case.
+		run_rel = stage_run_source(root, args.run)
+		if run_rel not in srcs:
+			srcs.append(rel_ := run_rel)
+			srcs.sort()
+		# The original carries the shebang the copy exists to remove, so it
+		# must not also be compiled -- two mains, and one of them will not
+		# parse.
+		original = os.path.relpath(os.path.abspath(args.run), root)
+		if run_rel != original and original in srcs:
+			srcs.remove(original)
+		args.targets = [default_name(run_rel, root)]
 	scan_all(srcs + hdrs)
 
 	generated = run_generators(root, conf, cache, args.dry_run,
@@ -5340,7 +5404,7 @@ def build(args, _bootstrapping=False):
 	while True:
 		pool = [units[r] for r in sorted(units)]
 		compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
-		              broken, tree_headers=hdrs)
+		              broken, tree_headers=hdrs, quiet=args.quiet)
 		# The architecture to require is whatever fmake just compiled. Asking
 		# the objects avoids having to know anything about toolchain
 		# triplets, and is right by construction -- but it means waiting
@@ -5713,7 +5777,7 @@ def build(args, _bootstrapping=False):
 		out, did, ok = link_target(t, closures[t], cfg, outdir,
 		                           args.dry_run,
 		                           res["ldflags"] if res else [],
-		                           cache, root)
+		                           cache, root, quiet=args.quiet)
 		changed = changed or did
 		(built if ok else failed).append((t.filename, closures[t], res))
 
@@ -6638,6 +6702,10 @@ def parse_args(argv):
 	               help="build the tree rooted here (default: .)")
 	p.add_argument("-j", "--jobs", type=int, default=0,
 	               help="parallel compile jobs (default: cpu count)")
+	p.add_argument("--run", default=None, metavar="FILE",
+	               help="build FILE and run it, passing everything after it "
+	                    "as its arguments; for a C or C++ file used as a "
+	                    "script, by shebang or binfmt_misc")
 	p.add_argument("-o", "--output", default=None,
 	               help="where to put the binaries (default: project root)")
 	p.add_argument("--explain", action="store_true",
@@ -6698,6 +6766,18 @@ def parse_args(argv):
 	# argparse refuses a value that looks like an option, so `--ldflags -lm`
 	# fails where `--ldflags=-lm` works. Since -l is exactly what anyone will
 	# type, rewrite the separated form into the joined one first.
+	# Everything after `--run FILE` belongs to the program, not to fmake.
+	# An interpreter is invoked as `fmake --run script.c a b -c`, and -c is
+	# the script's business. So the split is positional and the rule is
+	# simple to state: fmake's own options come before --run.
+	run_args = []
+	if "--run" in argv:
+		at = argv.index("--run")
+		if at + 1 >= len(argv):
+			die("--run needs a file")
+		run_args = argv[at + 2:]
+		argv = argv[:at] + ["--run", argv[at + 1]]
+
 	joined, i = [], 0
 	while i < len(argv):
 		a = argv[i]
@@ -6723,6 +6803,7 @@ def parse_args(argv):
 	args.ldflags    = flags(args.ldflags, "LDFLAGS")
 	args.force_link = [f for chunk in args.force_link
 	                   for f in shlex.split(chunk)]
+	args.run_args = run_args
 	return args
 
 
@@ -6758,10 +6839,38 @@ def main(argv):
 	if args.man:
 		sys.stdout.write(man_page(parse_args.parser))
 		return 0
+	if args.run:
+		# The script's own directory, so its siblings are in the tree and
+		# the closure can reach them: `--run` builds a program, not a file.
+		if args.directory == ".":
+			args.directory = os.path.dirname(os.path.abspath(args.run)) or "."
+		# A script's output is the script's. Progress belongs on stderr at
+		# most, and only when asked for.
+		if not args.verbose:
+			args.quiet = True
 	root = os.path.abspath(args.directory)
 	if args.clean:
 		return do_clean(root)
 	ensure_gitignore(root)
+	if args.run:
+		if not os.path.isfile(args.run):
+			die(f"--run: no such file: {args.run}")
+		PROGRESS = sys.stderr
+		rc = _locked_build(args)
+		if rc:
+			return rc
+		exe = os.path.join(root, RUN_DIR,
+		                   default_name(stage_run_source(root, args.run),
+		                                root))
+		if not os.path.exists(exe):
+			die(f"--run: {args.run} built nothing to run")
+		# exec rather than run: the program inherits this process, so its
+		# exit status, its signals and its terminal are its own, and fmake
+		# is not sitting between it and the shell.
+		try:
+			os.execv(exe, [args.run] + args.run_args)
+		except OSError as exc:
+			die(f"--run: {exc}")
 	return _locked_build(args)
 
 

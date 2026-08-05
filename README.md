@@ -146,6 +146,38 @@ it that way. A project that hand-writes its man page finds out it has
 drifted when somebody reads it; generating it means the question never
 arises, and every packaged CLI has this problem.
 
+**`fmake --run FILE [ARGS...]` builds a C or C++ file and becomes it**, so a
+program can be a script:
+
+```c
+#!/usr/bin/env -S fmake --run
+#include <stdio.h>
+int main(int argc, char **argv) { printf("%d args\n", argc - 1); return 0; }
+```
+
+```sh
+$ chmod +x hello.c && ./hello.c one two
+2 args
+```
+
+`env -S` is needed because Linux passes everything after the interpreter as
+a single argument. A `#!` line is not valid C, so fmake compiles a copy with
+that line replaced by `#line` — a compiler error still names your file and
+your line number.
+
+Cleaner still is `binfmt_misc`, where the kernel is told that `.c` means
+this and the file stays pure C with no shebang at all:
+
+```sh
+sudo sh -c 'echo ":fmake-c:E::c::/usr/bin/fmake:OC" > /proc/sys/fs/binfmt_misc/register'
+```
+
+The build goes under `.fmake/`, so nothing appears beside the script and the
+second run is a cache hit rather than a rebuild. Everything after the file
+belongs to the program, its exit status is the command's, and its stdin and
+terminal are its own — fmake `exec`s rather than waits. A script that needs
+more than one file just has them: the closure reaches whatever it calls.
+
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.
 

@@ -5198,3 +5198,51 @@ the project whose report was about this shape. It had a case, the case
 passed, and the case was about a tree with a program in it. **A convention
 changes what an absent thing means, and the trees that have nothing else
 are where that shows.**
+
+## 71. A C file as a script
+
+`--run FILE [ARGS...]` builds a C or C++ file and becomes it. Two forms, and
+the second is the better one:
+
+**A shebang.** `#!/usr/bin/env -S fmake --run` needs `env -S` because Linux
+passes everything after the interpreter as a single argument, so the plain
+form hands `env` one argument called `fmake --run` and fails.
+
+**binfmt_misc**, where the kernel is told that `.c` means this. The file
+then stays pure C with no shebang at all, which is the form that costs the
+source nothing.
+
+### Three things that had to be got right
+
+**A shebang is not C.** gcc rejects `#!` on line 1 as an invalid
+preprocessing directive, and so does g++ -- established by trying it rather
+than assumed. So a file carrying one is compiled from a copy, and what
+replaces that line matters: a blank keeps the line numbering and loses the
+filename; deleting it loses both; `#line 2 "<original>"` keeps both, and an
+error in such a script names the file the author wrote and the line they
+wrote it on. The case asserts that, and mutation confirms a blank fails it.
+
+**The output goes under the state directory.** The question in the request
+was whether it cleans up, and the better answer is that it never dirties:
+nothing appears beside the script. The same choice is what makes a second
+run a cache hit rather than a rebuild -- 0.19s against a compile -- which is
+the property that makes a compiled language usable as a scripting one at
+all.
+
+**It execs rather than waits.** The program's exit status is the command's,
+its signals are its own, and its stdin and terminal are not filtered through
+a parent. A script reading from a pipe works because fmake is no longer
+there by the time it runs.
+
+"A collection of them" needed no work: the script is a program like any
+other, so the closure reaches the siblings defining what it calls. The
+feature is `--run`; the behaviour is section 3.
+
+### What it changed elsewhere
+
+`-q` gated one summary line and left every compile and link line printing,
+which is not what a quiet flag means and mattered here: a script's first run
+must not narrate a build to a terminal expecting output. It now suppresses
+progress, and `--run` sets it unless `-v`. fmake's own output goes to stderr
+for a run, so a script's stdout stays the script's even when something is
+said.
