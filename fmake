@@ -933,6 +933,10 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
     depend on the order they run in.
     """
 	default = conf.project.get("test-timeout", DEFAULT_TEST_TIMEOUT)
+	# What was built is not what is run. `fmake test myapp` builds the
+	# program and the tests, and running the program as a test would report
+	# its exit status as a test result -- which it did, and counted it.
+	targets = [t for t in targets if t.test]
 	failed = []
 	for t in sorted(targets, key=lambda x: x.name):
 		exe = os.path.join(outdir, t.filename)
@@ -4900,7 +4904,7 @@ def build(args, _bootstrapping=False):
 	# it: the rule is about what a bare `fmake` does, not about permission.
 	held = [t for t in targets if t.test]
 	wanted = [t for t in targets if not t.test]
-	run_tests = False
+	run_tests, named = False, []
 	if args.eject:
 		# An ejected build file describes the project, not this invocation.
 		# Leaving the tests out would produce a Makefile that cannot build
@@ -4922,18 +4926,25 @@ def build(args, _bootstrapping=False):
 				continue
 			if name in by_name:
 				wanted.append(by_name[name])
+				named.append(by_name[name])
 				continue
 			# Last, so a project that has its own `test` -- a phony rule in
 			# fmake.mk, or a program actually called that -- keeps it.
 			if name == "test":
 				run_tests = True
-				wanted += [t for t in held if t not in wanted]
 				continue
 			known = set(by_name) | set(phony)
 			if held:
 				known.add("test")
 			die(f"no target {name!r}. Available: "
 			    f"{', '.join(sorted(known)) or '(none)'}")
+		# `fmake test foo bar` runs those and no others -- re-running one
+		# test out of sixty-six is the commonest thing anybody does with a
+		# suite, and naming it on its own only ever built it. Naming
+		# something that is not a test alongside `test` still builds it and
+		# does not make it a test.
+		if run_tests and not [t for t in named if t.test]:
+			wanted += [t for t in held if t not in wanted]
 		if not wanted and asked_phony:
 			wanted = []         # an action with nothing of ours to build
 		if run_tests and not held:

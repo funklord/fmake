@@ -112,8 +112,9 @@ RUN client_test
 * 1 test passed
 ```
 
-Each test gets sixty seconds, because one that hangs should not suspend the
-suite -- `test-timeout` under `[project]` or `[target.NAME]` changes it, and
+`fmake test NAME...` runs only the tests named, which is what re-running one
+out of sixty-six wants. Each test gets sixty seconds, because one that hangs
+should not suspend the suite -- `test-timeout` under `[project]` or `[target.NAME]` changes it, and
 `0` removes the limit. A test that times out is reported as having timed
 out, which is a different finding from one that returned non-zero and from
 one that crashed. The deadline reaches whatever the test started, not just

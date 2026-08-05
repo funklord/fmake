@@ -744,6 +744,51 @@ def a_timeout_that_is_not_a_number_is_refused(t):
 
 
 @case
+def only_tests_are_run_as_tests(t):
+	"""`fmake test myapp` built the program and then ran it as a test.
+
+	The runner was handed the build set rather than the test set, so the
+	application's exit status was reported as a test result and counted in
+	the total. Building it is right -- it was asked for -- and running it is
+	not."""
+	t.write("main.c", '#include <stdio.h>\n'
+	        'int main(void){ puts("the application"); return 0; }\n')
+	t.write("tests/a_test.c", "int main(void){ return 0; }\n")
+	t.write("tests/b_test.c", "int main(void){ return 0; }\n")
+	app = os.path.basename(t.dir)
+
+	r = t.fmake("test", app)
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, app)),
+	      "naming the program should still build it")
+	check("the application" not in r.stdout,
+	      f"the program must not be run as a test: {r.stdout}")
+	check("2 tests passed" in r.stdout,
+	      f"only the tests count: {r.stdout}")
+
+
+@case
+def naming_tests_after_test_runs_only_those(t):
+	"""Re-running one test out of sixty-six is the commonest thing anybody
+	does with a suite, and naming it on its own only ever built it."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/a_test.c", '#include <stdio.h>\n'
+	        'int main(void){ puts("ran a"); return 0; }\n')
+	t.write("tests/b_test.c", '#include <stdio.h>\n'
+	        'int main(void){ puts("ran b"); return 0; }\n')
+
+	r = t.fmake("test", "a_test")
+	check(r.returncode == 0, f"failed: {r.stdout}{r.stderr}")
+	check("ran a" in r.stdout and "ran b" not in r.stdout,
+	      f"only the named test should run: {r.stdout}")
+	check("1 test passed" in r.stdout, f"and be counted alone: {r.stdout}")
+
+	r = t.fmake("test")
+	check("ran a" in r.stdout and "ran b" in r.stdout,
+	      f"bare `test` still runs them all: {r.stdout}")
+
+
+@case
 def a_failing_test_fails_the_command(t):
 	"""And a crash is reported as a crash.
 

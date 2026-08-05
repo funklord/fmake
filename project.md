@@ -4479,3 +4479,47 @@ It is recorded rather than explained, and rather than quietly forgotten.
 Section 29 is in this document because a flake dismissed once cost a session
 later; the honest state of this one is *seen once, cause unknown, three
 clean runs since*.
+
+## 55. What is built and what is run are different sets
+
+`fmake test myapp` built the program and then **ran it as a test**, printed
+its output among the test output, and counted its exit status in the total.
+Found by asking what happens when `test` is named alongside something else,
+which is an ordinary thing to type and which no case covered.
+
+The cause is one line: the runner was handed `wanted`, the set that was
+*built*. Building the program was right -- it was asked for. Running it was
+not. The runner takes the tests out of that set now.
+
+This is the same shape as the `other_roots` half of section 39 and the
+vendored-archive crash of section 40: a set that was correct for the
+question it was assembled to answer, reused for a different question a few
+hundred lines away. Three times in this document now, which makes it a
+pattern rather than an accident: **when a set crosses a boundary, say which
+question it answers.**
+
+### And the thing it made obvious
+
+Naming a test only ever built it, while `fmake test` ran all of them, so
+there was no way to run one. On hydra that means sixty-six tests to re-run
+one, and six of them fail in this environment for reasons having nothing to
+do with the code. `fmake test NAME...` runs those and no others.
+
+Naming something that is not a test alongside `test` still builds it and
+still does not make it a test, which is the case above and the reason both
+changes belong together.
+
+### Still open, and deliberately not built
+
+`tests/` cannot separate a unit test from a live driver. hydra keeps them
+apart -- 26 of its 66 -- and a directory name cannot say which is which.
+`fmake test NAME...` makes the split *expressible* by hand, and a timeout
+stops a live driver suspending the suite, so neither remaining cost is
+severe.
+
+A real answer means test groups: `@test live` putting a target in a group
+that `fmake test` does not run, and `fmake live` running it. That is a
+fourth convention in a tool that has just gained three, and
+`harmonization.md` is explicit that a change setting a pattern the other
+projects should follow is raised rather than made in passing. Raised here,
+not built.
