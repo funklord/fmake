@@ -4358,3 +4358,68 @@ The style gate then found two `section` signs in comments -- introduced by
 this session, hours before the ASCII rule that forbids them existed. A rule
 written down after the fact still applies to what is in the tree, and a gate
 is how that stops being a matter of memory.
+
+## 53. hydra, built
+
+The second hydra trial, on the whole tree rather than `src/` alone. Three
+things that were open are now measured, and two are new.
+
+**The ejected Makefile builds hydra, and produces the same binary.** 1126
+lines, moc rules driven by `Q_OBJECT` rather than a list, `make -j8` in 36
+seconds with no fmake on the machine -- and 17,314 defined symbols against
+fmake's own build, **none differing**. The equivalence claim had been
+checked on qView at 2,562 symbols; this is the same claim on a tree with 47
+moc'd headers and Qt WebEngine in the link.
+
+**The tests convention holds at scale.** Pointed at `src/` and `tests/`
+together, a plain build produces the browser and holds back **66 test
+programs**; `fmake test` builds all 66 and runs them. That is the step
+hydra's report listed as *what would finish it* -- "point fmake at the tests
+and compare its closure against the 28 binaries CMake builds" -- and it is
+answered.
+
+**And the crash/exit distinction earns itself immediately.** Of 47 that ran,
+nine failed: six `exit 1`, one `exit 2`, and **two killed by SIGSEGV**.
+Those two are a different finding from the other seven, and a runner that
+printed "failed" for all nine would have buried them.
+
+### Two findings, both about running rather than building
+
+**`fmake test` has no timeout, and hydra has 26 live drivers.** The run
+stopped at 47 of 66 because a test binary was still fetching a real website
+several minutes in. Nothing is wrong with the test -- it is a live driver
+and doing what it says -- but a runner with no timeout means one network
+test suspends the suite indefinitely, and the useful signal is the 47
+results already collected. A per-test timeout is the obvious answer and it
+is a design decision: what the default should be, whether it is per test or
+per suite, and whether a project can raise it.
+
+**`tests/` cannot distinguish a unit test from a live driver.** hydra
+separates them; the convention does not, so `fmake test` runs both. The
+convention is doing exactly what it was asked to and the tree wants a
+finer cut than a directory name -- which is the same shape as the
+`_platform` suffix rule, and the same answer applies: an annotation states
+what a name can only suggest.
+
+Both are recorded rather than built. Neither is a defect in what exists.
+
+### The flag list that was one line
+
+Ejecting hydra prints a `CXXFLAGS` of about eighteen hundred characters,
+because Qt WebEngine contributes some thirty `-I` and `-D` flags. The file's
+header invites hand-editing, which is the argument beerssh made about the
+`-include` line naming every object; it applies with more force here. Long
+values wrap now, at continuations aligned under the value with spaces --
+alignment rather than indentation, rule 2.
+
+Make joins a continuation with a space, so the value is unchanged, and the
+proof is not the wrapping case: it is the symbol-for-symbol comparison,
+which was re-run afterwards and still reports zero differing symbols out of
+17,314.
+
+Mutation caught the wrapping case twice. Asserting "some line ends with a
+backslash" passes with the continuation removed, because `CLEAN` and `OBJS`
+are backslash-continued lists elsewhere in the file. And the fixture used
+`--cflags`, which is an *override* and lands in `CFLAGS_LAST`, so it never
+exercised the line the finding is about. Both are the same error as the
+three before them: assert the thing, not something the thing resembles.

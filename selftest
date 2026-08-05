@@ -1770,6 +1770,45 @@ def an_ejected_build_uses_the_canonical_directory_variable(t):
 
 
 @case
+def an_ejected_makefile_wraps_a_long_flag_list(t):
+	"""A Qt project's CXXFLAGS is eighteen hundred characters on one line.
+
+	The file's header invites hand-editing, which is the argument one
+	evaluation made about the `-include` line naming every object; it
+	applies with more force to a flag list twenty times longer. Make joins a
+	continuation with a space, so the value is unchanged -- and the
+	symbol-for-symbol case is what proves that rather than this one."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	# [project] cflags, not --cflags: the command-line form is an override
+	# and lands in CFLAGS_LAST, so it never exercises the line that is
+	# eighteen hundred characters long in a real Qt build.
+	many = ", ".join(f'"-DLONG_ENOUGH_TO_WRAP_{n}=1"' for n in range(20))
+	t.write("fmake.toml", f"[project]\ncflags = [{many}]\n")
+
+	out = t.fmake("--eject").stdout
+	longest = max(len(l) for l in out.splitlines())
+	check(longest < 200,
+	      f"no line should be a wall of flags, longest was {longest}")
+	# The CFLAGS line specifically. CLEAN and OBJS are lists that end with
+	# a backslash too, so "some line is continued" passes with the
+	# continuation removed from the value that needed it.
+	cflags = next(l for l in out.splitlines() if l.startswith("CFLAGS "))
+	check(cflags.endswith(" \\"),
+	      f"a long value should be continued: {cflags}")
+	# Alignment, not indentation: a continuation lines up under the value.
+	check(all(l.startswith(" ") for l in out.splitlines()
+	          if l.strip().startswith("-DLONG_ENOUGH_TO_WRAP")),
+	      f"continuations should be space-aligned: {out[:600]}")
+	# And it still has to be a Makefile that works.
+	if shutil.which("make"):
+		t.write("Makefile", out)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = subprocess.run(["make", "-C", t.dir], capture_output=True,
+		                   text=True)
+		check(r.returncode == 0, f"the wrapped Makefile failed: {r.stderr}")
+
+
+@case
 def an_ejected_makefile_aligns_its_assignments(t):
 	"""Alignment computed from the names, not counted once by hand.
 

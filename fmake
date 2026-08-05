@@ -5755,19 +5755,31 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# end at the same one. Aligning on the name alone puts every plain
 		# assignment a column left of every conditional, which is only
 		# invisible in a file that has one kind or the other.
-		return (f"{(P if own else '') + name:<{width}} "
-		        f"{how:>2} {value}").rstrip()
+		head = f"{(P if own else '') + name:<{width}} {how:>2} "
+		if not isinstance(value, list):
+			return (head + str(value)).rstrip()
+		# Wrapped, because a Qt project's CXXFLAGS is eighteen hundred
+		# characters on one line and this file's header invites editing it.
+		# Make joins a continuation with a space, so the value is unchanged
+		# -- which the symbol-for-symbol comparison is what proves.
+		lines, cur = [], head
+		for item in value:
+			if cur != head and len(cur) + len(item) + 3 > 78:
+				lines.append(cur + " \\")
+				cur = " " * (width + 4)
+			cur += ("" if cur.endswith(" ") or cur == head else " ") + item
+		lines.append(cur)
+		return "\n".join(lines).rstrip() if lines else head.rstrip()
 
 	a(var("CC", cfg.cc, assign, own=False))
 	a(var("CXX", cfg.cxx, assign, own=False))
 	a(var("AR", cfg.ar_name, assign, own=False))
-	a(var("CFLAGS", " ".join(common)))
-	a(var("CXXFLAGS", " ".join(common)))
+	a(var("CFLAGS", common))
+	a(var("CXXFLAGS", common))
 	# Emitted separately so it stays after each file's own flags, which is
 	# what makes it an override rather than just another default.
-	a(var("CFLAGS_LAST", " ".join(override)))
-	a(var("LDFLAGS", " ".join(_eject_flags(cfg.ldflags, root))
-	      if cfg.ldflags else ""))
+	a(var("CFLAGS_LAST", override))
+	a(var("LDFLAGS", _eject_flags(cfg.ldflags, root)))
 	a(var("BUILD_DIR", EJECT_BUILD_DIR, assign))
 	a("")
 	# The default target does not build tests, and a separate one builds
