@@ -4973,3 +4973,25 @@ Every entry in that list was chosen by running the suite in a container and
 watching what stopped being skipped. That is the same rule the suite holds
 its own cases to: **a green run is only worth what it actually exercised**,
 and the number of skips is part of the result rather than a footnote to it.
+
+## 65. Two groups, one variable
+
+`@test slow-net` and `@test slow_net` are two groups by every rule this tool
+applies, and one Make variable by the rule Make applies: `-` is not legal in
+an identifier, so it is replaced, and both become `SLOW_NET_TARGETS`.
+
+The ejected Makefile assigned that variable twice. Both rules then expanded
+to whichever group came last, so one group's tests were built by nothing --
+and it said so nowhere, which is the part that matters. A Makefile with two
+assignments to one name is valid; Make simply takes the second.
+
+It is refused now, naming both spellings and the variable they share. fmake
+refuses two targets with one name and two definitions of one symbol, and
+this is that shape a third time: **two things a user distinguishes and a
+downstream format does not.** The general rule is worth stating, since it
+will happen again the moment a name is passed to a system with a narrower
+alphabet than the one it was written in.
+
+Found by asking what the sanitising in `_mk_ident` could collide, rather
+than by anything failing -- the sort of question worth asking of every
+place a name is rewritten to suit a consumer.

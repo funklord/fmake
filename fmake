@@ -4976,6 +4976,20 @@ def build(args, _bootstrapping=False):
 		if not RE_TEST_GROUP.match(g):
 			die(f"test group {g!r} is not a name: lowercase, starting with "
 			    f"a letter, then letters, digits, - or _")
+	# A group becomes a Make variable, and `-` is not legal in one, so it is
+	# replaced -- which makes `slow-net` and `slow_net` two groups sharing
+	# one variable. The ejected Makefile then assigns it twice and every
+	# rule builds whichever group came last, silently. fmake refuses two
+	# targets with one name and two definitions of one symbol; this is the
+	# same ambiguity and gets the same answer.
+	spelt = {}
+	for g in groups:
+		spelt.setdefault(_mk_ident(g).upper(), []).append(g)
+	for ident, names in sorted(spelt.items()):
+		if len(names) > 1:
+			die(f"test groups {' and '.join(repr(n) for n in names)} are "
+			    f"the same Make variable ({ident}_TARGETS): give one of "
+			    f"them a different name")
 	run_groups, named = [], []
 	if args.eject:
 		# An ejected build file describes the project, not this invocation.

@@ -899,6 +899,38 @@ def an_ejected_build_gets_a_rule_per_group(t):
 
 
 @case
+def two_groups_that_are_one_make_variable_are_refused(t):
+	"""`slow-net` and `slow_net` are two groups and one Make variable.
+
+	A group becomes a variable and `-` is not legal in one, so it is
+	replaced. The ejected Makefile then assigned SLOW_NET_TARGETS twice and
+	every rule built whichever group came last -- silently, which is the
+	part that matters. fmake refuses two targets with one name and two
+	definitions of one symbol; this is the same ambiguity."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/a_test.c", "/** @test slow-net */\n"
+	        "int main(void){ return 0; }\n")
+	t.write("tests/b_test.c", "/** @test slow_net */\n"
+	        "int main(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode != 0, "the collision should be refused")
+	out = r.stdout + r.stderr
+	check("slow-net" in out and "slow_net" in out,
+	      f"both spellings should be named: {out}")
+	check("SLOW_NET_TARGETS" in out,
+	      f"and the variable they share: {out}")
+
+	# Distinct groups are untouched.
+	t.write("tests/b_test.c", "/** @test quick */\n"
+	        "int main(void){ return 0; }\n")
+	e = t.fmake("--eject")
+	check(e.returncode == 0, f"distinct groups should eject: {e.stderr}")
+	check("SLOW_NET_TARGETS" in e.stdout and "QUICK_TARGETS" in e.stdout,
+	      f"each group gets its own variable: {e.stdout[:400]}")
+
+
+@case
 def a_group_name_that_is_not_a_name_is_refused(t):
 	"""A group becomes a command-line word and a Make target, so it has to
 	be spellable as both. Refusing early beats emitting a Makefile that
