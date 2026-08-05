@@ -14,3 +14,9 @@ floor = 8
 
 # No user-facing Unicode here and nothing that needs it.
 ascii_only = true
+
+# Workflow files get the text checks -- trailing space, final newline,
+# ASCII. Not the tab rule: YAML forbids a tab for indentation outright, so
+# the shared tool leaves .yml out of indent_suffixes and this only widens
+# what is checked, never what is required.
+text_suffixes = [".md", ".json", ".toml", ".cfg", ".map", ".yml", ".yaml"]

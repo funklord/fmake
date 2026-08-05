@@ -1,0 +1,97 @@
+# The job that would have caught the bug this file exists for.
+#
+# fmake declares python3 (>= 3.11). Two f-strings once used PEP 701, which
+# is 3.12, so the package installed cleanly on bookworm, satisfied its
+# dependency, configured, and died with a SyntaxError before reaching main.
+# Building the package proves nothing about that: a .deb with entirely wrong
+# paths builds perfectly, and so does one that will not start on the
+# interpreter it declares. Only installing it and running it does.
+#
+# So the container is debian:bookworm on purpose -- the interpreter it ships
+# is the one the bug is about. Do not "modernise" it to trixie without
+# leaving a job that still tests the declared floor.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  package:
+    name: build, install and run the package
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      # build-essential is implicit for any Debian build; the rest is what
+      # debian/control declares, installed explicitly rather than through
+      # build-dep because the container has no deb-src lists.
+      - name: build dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            build-essential debhelper dpkg-dev make python3 lintian
+
+      - name: the declared build dependencies are enough
+        run: dpkg-checkbuilddeps
+
+      - name: build the package
+        run: make deb
+
+      # apt, not dpkg: dpkg does not resolve dependencies, so on a machine
+      # missing the required python3 it leaves the package unpacked and
+      # unconfigured, and the reader has to know to run apt-get -f install.
+      - name: install it the way the README says to
+        run: apt-get install -y ./build/fmake_*_all.deb
+
+      - name: run the installed binary
+        run: |
+          fmake --version
+          fmake --help > /dev/null
+
+      # Debian Policy 10.4 wants an absolute interpreter path, and the
+      # repository copy deliberately keeps /usr/bin/env for the other half
+      # of what fmake is -- copy it into $PATH and run it anywhere. So the
+      # rewrite happens at install time and is worth checking there.
+      - name: the installed copy has a policy-compliant shebang
+        run: head -1 /usr/bin/fmake | grep -qx '#!/usr/bin/python3'
+
+      - name: the manual page is installed
+        run: test -f /usr/share/man/man1/fmake.1.gz
+
+      - name: it builds something
+        run: |
+          apt-get install -y --no-install-recommends gcc libc6-dev
+          mkdir -p /tmp/smoke
+          printf '#include <stdio.h>\nint main(void){ puts("ok"); return 0; }\n' \
+            > /tmp/smoke/main.c
+          cd /tmp/smoke && fmake && ./smoke
+
+      - name: removing it leaves nothing behind
+        run: |
+          apt-get purge -y fmake
+          test ! -e /usr/bin/fmake
+          test ! -e /usr/share/man/man1/fmake.1.gz
+
+  test:
+    name: suite and style gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The suite needs a compiler, a linker and several optional libraries,
+      # which is why the package build does not run it -- see debian/rules.
+      - name: test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkgconf binutils ninja-build zlib1g-dev
+
+      - name: suite
+        run: make check
+
+      - name: style gate
+        run: |
+          python3 tools/style_gate.py check
+          python3 tools/style_gate.py docs

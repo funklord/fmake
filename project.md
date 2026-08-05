@@ -4886,3 +4886,50 @@ target takes everything except `src/main.cpp`". The shape they needed works
 without it now, so this is no longer blocking anything; it would still be
 the honest answer for a target whose membership is declared by glob and
 needs one file out. Nothing has asked for it twice, which is the usual bar.
+
+## 63. The job that found something before it ran
+
+apt-emerge's argument for CI was exact: *"Building proves very little -- a
+`.deb` with entirely wrong paths builds perfectly, and so does one that will
+not start on the Python it declares."* One job, on `debian:bookworm`,
+because the interpreter that image ships is the one their bug was about.
+
+Writing it found a defect in ninety seconds, which is the argument
+restated. **`debian/control` did not declare `python3` as a build
+dependency**, and the build needs it: `make deb` generates the manual page
+with `./fmake --man`. Nothing local ever noticed, because every machine that
+builds this package has python3 installed for other reasons.
+
+The fix earns its place by a test rather than by argument. Without the
+declaration `dpkg-checkbuilddeps` **passes**, the build proceeds, and it
+fails later at `./fmake --man` -- so a builder resolving dependencies
+properly would install too little and be told so at the wrong moment. With
+it, the problem is named up front.
+
+Every step of the job was run in a real container before it was written
+down: the package builds, `apt-get install ./build/fmake_*_all.deb` works
+from a local path, the installed binary runs, the shebang is
+`/usr/bin/python3` as Policy 10.4 wants while the repository copy keeps
+`/usr/bin/env`, the manual page is where it belongs, the installed fmake
+builds a C program, and purging leaves nothing. The YAML asserts what was
+observed rather than what ought to happen.
+
+Two things it does not do. It does not run the suite inside the package
+build -- `debian/rules` declines that deliberately, since the suite wants a
+compiler and several optional libraries -- so a second job runs `make check`
+and the style gate on an ordinary runner. And the container is pinned to
+bookworm on purpose: moving it to trixie without leaving a job on the
+declared floor would delete the only thing this job is for.
+
+### The gate's floor, doing exactly what it says
+
+Adding `.yml` to the gate's `text_suffixes` so the new file is checked at
+all, the list was written without leading dots. Every `.md` stopped
+matching, the file count fell from nine to five, and the gate refused:
+*"this reads as a clean tree but is a collapsed file list."*
+
+That is the one failure mode a style gate cannot afford, and the shared tool
+carries a floor because someone had already been bitten by it. It caught a
+config edit made while adding a job whose whole purpose is catching things
+locally invisible, which is a tidy demonstration of why the floor is not
+paranoia.
