@@ -3745,7 +3745,7 @@ def compiled_away_includes(cl, opened, incdirs):
 	"""System includes the scan saw, the preprocessor never opened, and the
 	machine actually has. Returns [(where, header)].
 
-    §40 reported this only for headers it could attribute to a package,
+    section 40 reported this only for headers it could attribute to a package,
     because the report was keyed on a *proposal*, and a proposal comes from
     pkg-config. A package whose headers sit in a default include directory
     emits no `-I`, so nothing attributes it, so nothing was proposed and
@@ -5584,7 +5584,7 @@ def build(args, _bootstrapping=False):
 # tool that eats build files is not a good neighbour.
 # ---------------------------------------------------------------------------
 
-EJECT_OBJDIR = "build"
+EJECT_BUILD_DIR = "build"
 # Where fmake's generated trees land inside an ejected build's object
 # directory. A standalone build file should not write into the bookkeeping of
 # the tool it no longer needs, and `fmake --clean` must not be able to delete
@@ -5610,7 +5610,7 @@ def _eject_gen(rel):
 def _eject_src(rel):
 	"""Where a source file lives in an ejected build."""
 	sub = _eject_gen(rel)
-	return os.path.join(EJECT_OBJDIR, sub) if sub else rel
+	return os.path.join(EJECT_BUILD_DIR, sub) if sub else rel
 
 
 def _eject_obj(rel):
@@ -5739,19 +5739,36 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	  + (f"    profile: {conf.profile_name}" if conf.profile_name else ""))
 	a("")
 	assign = "?=" if fragment else "="
-	a(f"CC       {assign} {cfg.cc}")
-	a(f"CXX      {assign} {cfg.cxx}")
-	a(f"AR       {assign} {cfg.ar_name}")
-	a(f"{P}CFLAGS   = {' '.join(common)}")
-	a(f"{P}CXXFLAGS = {' '.join(common)}")
+	# Aligned on the longest name rather than on a column somebody counted
+	# once. BUILD_DIR replacing OBJDIR is two characters longer and put
+	# three assignments out of line, which is what a hand-spaced table does
+	# the first time a name changes.
+	width = len(P) + len("CFLAGS_LAST")
+
+	def var(name, value, how="=", own=True):
+		"""One assignment, padded to the widest name this file emits.
+
+        `own` is false for the three the parent controls: they keep their
+        conventional spellings in a fragment, so FM_ must not reach them.
+        """
+		# The operator is right-aligned in two columns so that `=` and `?=`
+		# end at the same one. Aligning on the name alone puts every plain
+		# assignment a column left of every conditional, which is only
+		# invisible in a file that has one kind or the other.
+		return (f"{(P if own else '') + name:<{width}} "
+		        f"{how:>2} {value}").rstrip()
+
+	a(var("CC", cfg.cc, assign, own=False))
+	a(var("CXX", cfg.cxx, assign, own=False))
+	a(var("AR", cfg.ar_name, assign, own=False))
+	a(var("CFLAGS", " ".join(common)))
+	a(var("CXXFLAGS", " ".join(common)))
 	# Emitted separately so it stays after each file's own flags, which is
 	# what makes it an override rather than just another default.
-	a(f"{P}CFLAGS_LAST = {' '.join(override)}")
-	if cfg.ldflags:
-		a(f"{P}LDFLAGS  = {' '.join(_eject_flags(cfg.ldflags, root))}")
-	else:
-		a(f"{P}LDFLAGS  =")
-	a(f"{P}BUILD_DIR   {assign} {EJECT_OBJDIR}")
+	a(var("CFLAGS_LAST", " ".join(override)))
+	a(var("LDFLAGS", " ".join(_eject_flags(cfg.ldflags, root))
+	      if cfg.ldflags else ""))
+	a(var("BUILD_DIR", EJECT_BUILD_DIR, assign))
 	a("")
 	# The default target does not build tests, and a separate one builds
 	# and runs them. That is what three of the projects that read this
@@ -6015,7 +6032,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(f"cflags = {common}")
 	a(f"cflags_last = {override}")
 	a(f"ldflags = {' '.join(_eject_flags(cfg.ldflags, root))}")
-	a(f"objdir = {EJECT_OBJDIR}")
+	a(f"build_dir = {EJECT_BUILD_DIR}")
 	a("")
 	# `deps = gcc` lets ninja read the depfile and then discard it, which is
 	# what makes header dependencies free here too.
@@ -6128,14 +6145,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	after = (" || " + " ".join(_ninja(g) for g in gen_outs)) if gen_outs else ""
 	for rel in sorted(every):
 		u = every[rel]
-		a(f"build $objdir/{_ninja(_eject_obj(rel))}.o: "
+		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.o: "
 		  f"{'cxx' if u.cxx else 'cc'} {_ninja(_eject_src(rel))}{after}")
 		if u.own:
 			a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
 	a("")
 
 	for t in targets:
-		objs = " ".join(f"$objdir/{_ninja(_eject_obj(u.rel))}.o"
+		objs = " ".join(f"$build_dir/{_ninja(_eject_obj(u.rel))}.o"
 		                for u in closures[t].link if not u.archive)
 		arcs = [] if t.kind == "static" else \
 		       [u.rel for u in closures[t].link if u.archive]

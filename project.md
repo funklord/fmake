@@ -4294,3 +4294,67 @@ mechanism only sees what that mechanism sees.** §40 was keyed on
 pkg-config's view of the world and inherited its blind spot silently,
 because a report that does not fire looks exactly like a tree with nothing
 to report.
+
+## 52. BUILD_DIR, and a table that was aligned once
+
+The canonical name for a build output directory moved from `OBJDIR` to
+`BUILD_DIR`, chosen across the workspace by counting spellings rather than
+by taste. Two projects had praised fmake for emitting `OBJDIR` -- it was the
+canonical name when they looked -- so the rename costs that agreement and
+buys the current one.
+
+`OBJDIR` survives in one place and deliberately: fmake's own Python
+variable for `.fmake/obj/<key>`, which holds object files and nothing else.
+The two names are not synonyms -- object files versus the whole build tree
+-- and the convention governs the variable a build script exposes, not an
+internal identifier for a directory of `.o` files.
+
+**It is emitted in four places and one was missed.** The standalone
+Makefile, the fragment's `FM_` copy, ninja's declaration, and ninja's
+*rules*, which reference `$objdir` a hundred lines below where it is
+declared. Renaming the first three produces a `build.ninja` that parses
+perfectly and cannot build anything. There is a case for all four now.
+
+### The alignment the rename broke
+
+The variable block was hand-spaced to a column that fitted `OBJDIR`:
+
+    CC       = cc
+    CFLAGS_LAST =
+    BUILD_DIR   = build
+
+Three columns, from a table that had one. That is what a hand-counted
+column does the first time a name changes, and the fix is to compute the
+width from the longest name the file actually emits.
+
+Then mutation found a second alignment fault the first fix did not: `?=` is
+two characters and `=` is one, so a fragment -- which uses both -- had every
+plain assignment a column left of every conditional one. The operator is
+right-aligned in two columns now. Neither fault is visible in a file that
+uses one spelling or the other, which is why the fragment was where it
+showed.
+
+Alignment is rule 2 of `code-style.md` applied to the file fmake *writes*
+rather than the file it is. A generator that emits misaligned tables is
+teaching its own convention to everyone who ejects.
+
+### Two sessions, one repository
+
+This work was mostly already done when it was started. A concurrent session
+had installed `tools/style_gate.py`, `tools/hooks/commit-msg`,
+`.style-gate.toml`, `make style` and `make hooks`, and renamed the
+Makefile's own variable -- and had committed four times on top of this
+session's last commit.
+
+Copying `style_gate.py` from `~/.claude/tools/` over the project's copy
+removed the two-line provenance header the project copy carries and the
+source does not, which `git diff` caught before it was committed. The lesson
+is the one the global guidelines already state and this session had to learn
+by doing: **look at what is there before writing, because another session
+may have been here since the file was last read.** `git status` before a
+commit is not paperwork.
+
+The style gate then found two `section` signs in comments -- introduced by
+this session, hours before the ASCII rule that forbids them existed. A rule
+written down after the fact still applies to what is in the tree, and a gate
+is how that stops being a matter of memory.
