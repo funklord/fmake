@@ -4988,10 +4988,34 @@ assignments to one name is valid; Make simply takes the second.
 It is refused now, naming both spellings and the variable they share. fmake
 refuses two targets with one name and two definitions of one symbol, and
 this is that shape a third time: **two things a user distinguishes and a
-downstream format does not.** The general rule is worth stating, since it
-will happen again the moment a name is passed to a system with a narrower
-alphabet than the one it was written in.
+downstream format does not.**
 
 Found by asking what the sanitising in `_mk_ident` could collide, rather
-than by anything failing -- the sort of question worth asking of every
-place a name is rewritten to suit a consumer.
+than by anything failing. The sentence that stood here said it would happen
+again the moment a name met a narrower alphabet -- and asking the same
+question of the *other* caller found it had already happened. Target names
+become `{IDENT}_OBJS`, so `my-app` and `my_app` shared `MY_APP_OBJS`, the
+ejected file assigned it twice, and one program linked the other's objects.
+Older than the groups code, and never noticed.
+
+So one function refuses both, rather than two copies of a check that will
+be wanted a third time. The rule generalises and the code should: **any
+name rewritten to suit a consumer can collide, and the rewriting is where
+to look.**
+
+## 66. The flake, six clean runs later
+
+Section 54 recorded a single failure of `environment_beats_the_config_file`
+that never reproduced, and said plainly that the mechanism was not
+understood. The container built for CI is a better place to ask: clean,
+identical every time, and nothing else running in it.
+
+Six full runs: **227 passed, 4 skipped, six times.** Together with the runs
+on this machine that is ten clean full suites since the one failure.
+
+That is not an explanation and is not recorded as one. What it is worth is
+a bound: whatever it was, it is rare enough that ten runs do not show it,
+and it is not something the clean environment reproduces. The entry stays
+open. A flake dismissed because it stopped happening is how section 29 got
+written, and the difference between that and this is that this one has a
+number attached.

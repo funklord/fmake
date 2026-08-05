@@ -4953,6 +4953,7 @@ def build(args, _bootstrapping=False):
 			    + "\n    ".join(rels) + "\n"
 			    f"give one of them a different @target, or a name in "
 			    f"{CONF_FILE}.")
+	refuse_ident_collisions("targets", [t.name for t in targets])
 	for t in targets:
 		if os.path.isdir(os.path.join(outdir, t.filename)):
 			die(f"target {t.filename!r} (from {t.rel}) would be written over "
@@ -4982,14 +4983,7 @@ def build(args, _bootstrapping=False):
 	# rule builds whichever group came last, silently. fmake refuses two
 	# targets with one name and two definitions of one symbol; this is the
 	# same ambiguity and gets the same answer.
-	spelt = {}
-	for g in groups:
-		spelt.setdefault(_mk_ident(g).upper(), []).append(g)
-	for ident, names in sorted(spelt.items()):
-		if len(names) > 1:
-			die(f"test groups {' and '.join(repr(n) for n in names)} are "
-			    f"the same Make variable ({ident}_TARGETS): give one of "
-			    f"them a different name")
+	refuse_ident_collisions("test groups", groups)
 	run_groups, named = [], []
 	if args.eject:
 		# An ejected build file describes the project, not this invocation.
@@ -5792,6 +5786,28 @@ def _eject_flags(flags, root):
 
 def _mk_ident(name):
 	return re.sub(r"[^A-Za-z0-9_]", "_", name)
+
+
+def refuse_ident_collisions(what, names):
+	"""Refuse names a Make identifier cannot tell apart.
+
+    `-` is not legal in a Make variable, so `my-app` and `my_app` both
+    become MY_APP. The emitted file then assigns MY_APP_OBJS twice and every
+    rule using it takes the second, so one artifact is built from another's
+    objects and nothing says so. Valid Makefile, wrong program.
+
+    Two callers and the same failure, which is why this is one function: any
+    name rewritten to suit a consumer with a narrower alphabet can collide,
+    and the next one will too.
+    """
+	spelt = {}
+	for name in names:
+		spelt.setdefault(_mk_ident(name).upper(), []).append(name)
+	for ident, clashing in sorted(spelt.items()):
+		if len(clashing) > 1:
+			die(f"{what} {' and '.join(repr(c) for c in sorted(clashing))} "
+			    f"are the same Make variable ({ident}_...): give one of "
+			    f"them a different name")
 
 
 RE_NINJA_ESCAPE = re.compile(r"([ :$])")

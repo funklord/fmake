@@ -899,6 +899,33 @@ def an_ejected_build_gets_a_rule_per_group(t):
 
 
 @case
+def two_targets_that_are_one_make_variable_are_refused(t):
+	"""The same collision, in the older half of the same emitter.
+
+	Target names become `{IDENT}_OBJS`, so `my-app` and `my_app` shared
+	MY_APP_OBJS: the ejected file assigned it twice and one program linked
+	the other's objects. Found by asking what else `_mk_ident` rewrites
+	rather than by anything failing, which is why one function refuses both
+	-- the next name rewritten for a narrower alphabet will collide too."""
+	t.write("a.c", '/** @target my-app */\n#include <stdio.h>\n'
+	        'int main(void){ puts("A"); return 0; }\n')
+	t.write("b.c", '/** @target my_app */\n#include <stdio.h>\n'
+	        'int main(void){ puts("B"); return 0; }\n')
+
+	r = t.fmake()
+	check(r.returncode != 0, "the collision should be refused")
+	out = r.stdout + r.stderr
+	check("my-app" in out and "my_app" in out,
+	      f"both names should be given: {out}")
+
+	# Names a Make identifier can tell apart are untouched.
+	t.write("b.c", '/** @target other_app */\n#include <stdio.h>\n'
+	        'int main(void){ puts("B"); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"distinct names should build: {r.stderr}")
+
+
+@case
 def two_groups_that_are_one_make_variable_are_refused(t):
 	"""`slow-net` and `slow_net` are two groups and one Make variable.
 
@@ -918,8 +945,7 @@ def two_groups_that_are_one_make_variable_are_refused(t):
 	out = r.stdout + r.stderr
 	check("slow-net" in out and "slow_net" in out,
 	      f"both spellings should be named: {out}")
-	check("SLOW_NET_TARGETS" in out,
-	      f"and the variable they share: {out}")
+	check("SLOW_NET" in out, f"and the variable they share: {out}")
 
 	# Distinct groups are untouched.
 	t.write("tests/b_test.c", "/** @test quick */\n"
