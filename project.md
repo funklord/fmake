@@ -4676,3 +4676,69 @@ equally consistent with silence. The distinguishing experiment is never the
 one that reproduces the symptom; it is the one that separates the two
 explanations, and it is worth finding before writing the paragraph rather
 than after.
+
+## 59. hydra's report, folded in
+
+`suggestions/hydra.md` was written from the tree rather than about it, and
+every claim in it has now been measured. This section takes its substance
+into the record so the report itself is no longer the only place it lives.
+
+Their findings, and what the trials found:
+
+**1. Platform-conditional sources -- called a hard blocker.** Four Android
+sources CMake adds only inside `if(ANDROID)`, carrying no self-guard,
+failing on `QJniEnvironment`. Their words: *"fmake cannot build hydra's
+`src/` today, and no flag fixes it."*
+
+Answered twice. Section 43 made the failure name `@os` as the remedy;
+section 50 reads a `_platform` suffix so nothing need be written at all --
+though **hydra's own names are `android_view.cpp`, platform in front**, so
+the suffix rule never fires on them and the rename they offered is still a
+rename. And it turned out not to be a blocker at all: the files compile
+here, and section 3 leaves them out of the link because nothing reaches
+them. What blocked the build was the include-path defect of section 37,
+found from a different report entirely.
+
+**2. Optional features vanish silently.** `credential_store.cpp` and
+`theme.cpp` guarded by macros CMake defines after `pkg_check_modules`.
+Their verdict: *"it builds, and quietly does less than it should -- which is
+worse than refusing."*
+
+Sections 40 and 41 answered it, and the trial found the answer incomplete.
+There were never two silent features: there are **five**. libtorrent, lz4
+and libsodium are guarded the same way, and the first version of the
+diagnostic could not see any of them, because it was keyed on a pkg-config
+proposal and those packages ship headers in a default include directory.
+Keyed on the include instead, all five are reported; five comments turn all
+five on.
+
+**3. The binary is named after the directory.** Section 46, from two other
+projects reporting the same thing, and now a name nobody chose is qualified
+rather than refused.
+
+**And the question they said was open.** Section 17 claimed fmake would make
+hydra's static library unnecessary -- compile each translation unit once,
+link the closure per program -- and their report said flatly that the claim
+was **unverified**, since the build failed before reaching a link.
+
+It is verified now, and it holds. Building the app and 38 unit binaries from
+one tree costs **172 compiles**. Recompiling the app sources per binary
+would have cost about 2546. `theme.cpp.o` exists once and is linked into
+everything that reaches it. The archive is unnecessary.
+
+Their step 3 -- *"point fmake at the tests and compare its closure against
+the 28 binaries CMake builds"* -- is done, and the tree has moved since they
+counted: 38 unit binaries and 31 live drivers, all 69 built, all 69 run,
+both groups bounded.
+
+### What the report was worth
+
+Two of its three findings were real and are now features. The third was
+already answered and unfindable, which is section 42's lesson and the reason
+three separate diagnostics were rewritten rather than three features built.
+
+The part that mattered most was not a finding at all. It was the sentence
+about a browser built without keyring integration and no warning -- *worse
+than refusing* -- which is the standard the whole optional-feature diagnosis
+was written against, and which found three more instances than the report
+knew about.
