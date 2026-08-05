@@ -5491,3 +5491,32 @@ Both were first reported as MISSED during a run where the disk was full,
 which produced five unrelated failures at the same time. **A mutation result
 from a broken environment is not a result**, and both were re-run once there
 was room; one changed its answer.
+
+## 77. The gate that stopped running
+
+`make deb` used to build the package and lint it, because `deb` depended on
+`lint` and `lint` did the building. That is backwards as a name -- the
+target that says it checks was the one doing the work -- and it was
+inverted: `lint: deb`, so `deb` builds and `lint` checks what `deb` built.
+
+The rename is right. What it changed is that **`make deb` no longer lints**,
+and the CI job written before the rename runs `make deb`. So the job that
+exists to prove the package is sound stopped checking it, silently, fifteen
+commits ago. Every run since has been green about something it was not
+looking at.
+
+Nothing failed. It was found by running the package job in a container and
+noticing that **no lintian line was printed at all** -- neither "clean" nor
+"not installed", when the recipe has a branch for each. A missing line is
+weaker evidence than a wrong one and easy to read past; what made it
+suspicious was that both branches print something, so silence was
+impossible.
+
+The workflow runs `make lint` now, verified in a bookworm container to
+print `lintian: clean`.
+
+This is the same failure as section 76 one level up: a rule that quietly
+does not run. There it was a generator whose output nobody had declared;
+here it is a gate whose caller was never updated. **A dependency edge
+reversed for a good reason still changes what every caller gets**, and the
+callers are not all in the file being edited.

@@ -39,6 +39,15 @@ jobs:
       - name: build the package
         run: make deb
 
+      # `make lint` rather than `make deb`: the two were the other way round
+      # until `lint: deb` made the checking target the one that depends on
+      # the building one. A workflow still calling `deb` builds a package
+      # and never lints it, silently -- which is what this job did for
+      # fifteen commits, and which the container found by printing no
+      # lintian line at all.
+      - name: lint the package
+        run: make lint
+
       # apt, not dpkg: dpkg does not resolve dependencies, so on a machine
       # missing the required python3 it leaves the package unpacked and
       # unconfigured, and the reader has to know to run apt-get -f install.
