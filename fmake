@@ -2159,6 +2159,27 @@ def is_cxx(rel):
 # extra compilation or a widening pass, never a wrong link set.
 # ---------------------------------------------------------------------------
 
+# Headers the toolchain owns. A tree that happens to contain a file with
+# one of these names must not have it stand in for the system's: fmake
+# resolves an unmatched include by basename when exactly one file in the
+# tree has that name, which is a useful guess for a vendored <vterm.h> and
+# a catastrophic one for <stdint.h>.
+#
+# fuzzypickles vendors thorvg, which vendors rapidjson, which ships an
+# MSVC-only stdint.h. That was the only stdint.h in the tree, so it won the
+# basename match, its directory went on the include path for every compile,
+# and 54 files failed on `#error "Use this header only with Microsoft
+# Visual C++ compilers!"` -- including moc output with no connection to
+# thorvg. One vendored file four levels down redefined a standard header
+# for the whole build.
+STANDARD_HEADERS = frozenset("""
+assert.h complex.h ctype.h errno.h fenv.h float.h inttypes.h iso646.h
+limits.h locale.h math.h setjmp.h signal.h stdalign.h stdarg.h stdatomic.h
+stdbit.h stdbool.h stdckdint.h stddef.h stdint.h stdio.h stdlib.h
+stdnoreturn.h string.h tgmath.h threads.h time.h uchar.h wchar.h wctype.h
+""".split())
+
+
 class Project:
 	def __init__(self, root, srcs, hdrs, scans):
 		self.root  = root
@@ -2209,6 +2230,10 @@ class Project:
 		if os.path.isfile(os.path.join(self.root, cand)):
 			self.incdirs.add(".")
 			return cand
+		# The basename fallback is a guess, and it must not be made about a
+		# name the toolchain owns. See STANDARD_HEADERS.
+		if os.path.basename(inc_name) in STANDARD_HEADERS:
+			return None
 		matches = self.hdr_by_name.get(os.path.basename(inc_name), [])
 		if len(matches) == 1:
 			self.incdirs.add(self.incdir_for(matches[0], inc_name))
@@ -4932,16 +4957,30 @@ def build(args, _bootstrapping=False):
 		if t.members is not None and t.conf.get("sources"):
 			t.members = _expand_sources(t.conf["sources"], root, proj, t.name)
 
-	whole_tree_library = not targets
+	# A tree whose only programs are tests is a library with tests beside
+	# it, and a plain build should produce the library. Before tests were
+	# held back the test binary was the only target and got built, so
+	# nothing noticed; afterwards the default build had nothing left and
+	# said "no target could be built" about a directory whose whole purpose
+	# is an archive. Found by running fmake on the project that declined
+	# over exactly this shape.
+	library_only = targets and all(t.test for t in targets)
+	whole_tree_library = not targets or library_only
 	if whole_tree_library:
 		ann = Ann()
 		name = conf.project.get("name") or os.path.basename(root) or "lib"
-		t = Target(srcs[0], root, ann, conf.target(name))
-		t.rel = srcs[0]
+		# Not srcs[0]: a test's own source must not root the library, and
+		# with tests present srcs[0] may well be one.
+		body = [r for r in srcs
+		        if r not in {t.rel for t in targets if t.test}]
+		t = Target(body[0] if body else srcs[0], root, ann,
+		           conf.target(name))
+		t.rel = body[0] if body else srcs[0]
 		t.kind = t.conf.get("kind", "static")
 		t.name = t.conf.get("name", name)
 		targets.append(t)
-		vinfo(f"no main() anywhere; building the tree as {t.filename}")
+		vinfo(f"{'only tests define' if library_only else 'no main() anywhere;'}"
+		      f" building the tree as {t.filename}")
 
 	# tests/main.cpp wants to be called `tests`, which is the directory it
 	# came from. Two of five projects hit this on their first run and both

@@ -3571,6 +3571,46 @@ def a_missing_header_names_the_platform_escape(t):
 
 
 @case
+def the_tree_never_stands_in_for_a_standard_header(t):
+	"""fuzzypickles vendors thorvg, which vendors rapidjson, which ships an
+	MSVC-only stdint.h.
+
+	fmake resolves an include it cannot place by basename when exactly one
+	file in the tree has that name -- a useful guess for a vendored
+	<vterm.h>, and a catastrophic one here. That file was the only stdint.h
+	in the tree, so it won, its directory went on the include path for every
+	compile, and 54 files failed on the #error inside it, including moc
+	output with no connection to thorvg. One vendored file four levels down
+	redefined a standard header for the whole build."""
+	t.write("vendor/msinttypes/stdint.h",
+	        '#error "Use this header only with Microsoft Visual C++"\n')
+	t.write("main.c", "#include <stdint.h>\n#include <stdio.h>\n"
+	        'int main(void){ uint32_t n = 1; printf("%u\\n", n); return 0; }\n')
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the system stdint.h must win: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1\n",
+	      "the program should build and run")
+	flags = t.fmake("-B", "-n").stdout
+	check("msinttypes" not in flags,
+	      f"that directory must not reach the include path: {flags[:400]}")
+
+	# A name the toolchain does not own is still resolved this way, which
+	# is what makes the guess worth keeping. Included from the root, not
+	# from a file reached by widening -- that second shape is the open
+	# ordering question of section 68, and asserting it here would be
+	# asserting something fmake does not do.
+	os.remove(os.path.join(t.dir, "vendor/msinttypes/stdint.h"))
+	t.write("vendor/include/vt.h", "#pragma once\nint vt(void);\n")
+	t.write("vendor/vt.c", "int vt(void){ return 0; }\n")
+	t.write("main.c", "#include <vt.h>\nint main(void){ return vt(); }\n")
+	r = t.fmake("-B")
+	check(r.returncode == 0,
+	      f"a vendored header is still found by name: {r.stdout}{r.stderr}")
+
+
+@case
 def a_header_the_tree_already_holds_is_named(t):
 	"""beerssh vendors libvterm and includes it as <vterm.h>.
 
@@ -3726,6 +3766,52 @@ def a_target_section_that_matches_nothing_says_what_exists(t):
 	out = r.stdout + r.stderr
 	check("Targets discovered here" in out and os.path.basename(t.dir) in out,
 	      f"the message should name the sections that would work: {out}")
+
+
+@case
+def a_tree_whose_only_program_is_a_test_still_builds_its_library(t):
+	"""netcfgd's `client/`: library sources, and a test beside them.
+
+	Before tests were held back from the default build the test binary was
+	the only target and got built, so nothing noticed that the library was
+	never a target at all. Afterwards the default build had nothing left and
+	said "no target could be built" -- about a directory whose whole purpose
+	is an archive.
+
+	A tree whose only programs are tests is a library with tests beside it.
+	Found by running fmake on the project that declined over exactly this
+	shape, which is why it is here and not in a fixture invented first."""
+	# The test sorts first on purpose. Whatever roots the library is taken
+	# from the sources in order, so a test named later in the alphabet
+	# leaves the bug invisible -- which is how the first version of this
+	# fixture passed with the guard removed.
+	t.write("zz_client.h", "#pragma once\nint ncfg_connect(const char *);\n")
+	t.write("zz_client.c", '#include "zz_client.h"\n'
+	        "int ncfg_connect(const char *s){ return s && *s ? 1 : 0; }\n")
+	t.write("zz_json.c", "int ncfg_json_ok(void){ return 1; }\n")
+	t.write("aa_client_test.c", '#include <stdio.h>\n'
+	        '#include "zz_client.h"\n'
+	        'int main(void){ if (ncfg_connect("x") != 1) return 1;\n'
+	        '\tputs("passed"); return 0; }\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	lib = os.path.join(t.dir, f"lib{os.path.basename(t.dir)}.a")
+	check(os.path.exists(lib),
+	      f"the library is what a plain build produces: {os.listdir(t.dir)}")
+	check(not os.path.exists(os.path.join(t.dir, "aa_client_test")),
+	      "the test is still held back")
+
+	# The test's own source must not end up in the archive, and must not
+	# root it either -- with tests present it can be the first source.
+	members = subprocess.run(["ar", "t", lib],
+	                         capture_output=True, text=True).stdout.split()
+	check("aa_client_test.c.o" not in members,
+	      f"a test does not belong in the library: {members}")
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check("passed" in r.stdout, f"and it runs: {r.stdout}")
 
 
 @case

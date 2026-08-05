@@ -5129,3 +5129,72 @@ whole-component rule failed nothing. Both were caught by mutation, both are
 the same error, and the count for this session is now high enough that the
 rule is worth stating as a habit rather than a lesson: **write the fixture
 that fails first, then the fix.**
+
+## 69. One vendored file redefined a standard header
+
+Cloning fuzzypickles and running fmake on it found the worst defect of the
+session, and it was invisible on every tree tried before because it needs a
+particular thing to be present.
+
+fuzzypickles vendors thorvg, which vendors rapidjson, which ships an
+**MSVC-only `stdint.h`** four directories down. It was the only file named
+`stdint.h` in the tree, so it won fmake's basename fallback -- the rule that
+resolves an include fmake cannot otherwise place when exactly one file in
+the tree has that name. Its directory went on the include path for *every*
+compile, and **54 files failed** on the `#error` inside it, including moc
+output with no connection to thorvg.
+
+A vendored file four levels down redefined a standard header for the whole
+build. The failure named a Microsoft compiler on a Linux tree, which is a
+long way from the cause.
+
+The basename fallback is worth keeping: it is what finds a vendored
+`<vterm.h>`, which is the beerssh case of section 68. What it must never do
+is make that guess about a name the toolchain owns, so the C standard
+headers are excluded from it by name.
+
+This is the shadowing hazard flagged one section earlier as a reason not to
+resolve `<>` includes sooner -- and it was already reachable through the
+rule that existed. **A risk identified while declining to add one thing is
+worth checking against what is already there**, which is not what happened;
+it was found by running the tool on a real tree, and the tree was cloned
+rather than copied so nothing local hid it.
+
+### The rest of fuzzypickles
+
+Their four findings are handled with no configuration. Six vendored
+submodules keep their 51 programs -- their findings 1 and 4, which had
+needed `[project] exclude` and a name in `fmake.toml`. Four directory-name
+collisions are qualified rather than refused: `fp_cli`, `fp_daemon`,
+`fp_gui`, `fp_tui`, which is their finding 2 and had needed three names in
+a config file.
+
+It still does not link. thorvg and quirc are large vendored C++ libraries
+whose own sources are not reached, so their symbols are unresolved, and
+fmake asks for `--ldflags` because that is what an unresolved symbol usually
+means. That is their verdict standing: adoption needs a build file for the
+parts that are not compile-and-link. It is a smaller build file than the one
+their report described.
+
+## 70. netcfgd's client, and a regression the convention introduced
+
+`client/` is library sources and a test. Running fmake there produced **no
+target could be built** -- because holding tests back left nothing, and the
+library was never a target at all. Before the tests convention the test
+binary was the only target and got built, so nothing noticed.
+
+A tree whose only programs are tests is a library with tests beside it, and
+a plain build should produce the library. It does now: `libclient.a` by
+default, `fmake test` builds and runs the test, which passes.
+
+Two details the fix needed. Whatever roots the library is taken from the
+sources in order, so a test sorting first would root it and put its own
+object in the archive -- the case names its test `aa_client_test.c` for
+exactly that reason, because the first fixture sorted the test last and the
+guard could be removed without failing anything.
+
+This is a regression introduced by section 49 and found by running fmake on
+the project whose report was about this shape. It had a case, the case
+passed, and the case was about a tree with a program in it. **A convention
+changes what an absent thing means, and the trees that have nothing else
+are where that shows.**
