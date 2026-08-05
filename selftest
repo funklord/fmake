@@ -481,7 +481,7 @@ def a_library_does_not_drag_in_the_tests_it_cannot_use(t):
 	candidate set comes from the program's include graph and never reaches
 	the tests, so the case passes whether the rule is there or not."""
 	_suite(t)
-	t.write("ncfg_client.c", "/** @kind static @target ncfg_client */\n"
+	t.write("ncfg_client.c", "/**\n * @kind static\n * @target ncfg_client\n */\n"
 	        '#include "ncfg_client.h"\n'
 	        "int ncfg_connect(const char *s){ return s && *s ? 1 : 0; }\n")
 
@@ -3943,6 +3943,106 @@ def a_target_section_that_matches_nothing_says_what_exists(t):
 	out = r.stdout + r.stderr
 	check("Targets discovered here" in out and os.path.basename(t.dir) in out,
 	      f"the message should name the sections that would work: {out}")
+
+
+@case
+def a_scalar_directive_takes_one_word(t):
+	"""`@kind static @target chosen` on one line silently built `liba.a`.
+
+	The parser hands a scalar directive the rest of the line, so the second
+	directive became an argument of the first and the target name vanished.
+	Two directives on one line is a reasonable thing to try, and being wrong
+	about it should not be quiet -- the same reasoning that makes `@test`
+	refuse two words and `@pkg_optional` require its keyword.
+
+	Found while writing a fixture, by writing it the way anyone would."""
+	t.write("a.c", "/** @kind static @target chosen */\n"
+	        "int f(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode != 0, "two directives on one line should be refused")
+	out = r.stdout + r.stderr
+	check("takes one word" in out and "own line" in out,
+	      f"and should say how to write it: {out}")
+
+	t.write("a.c", "/**\n * @kind static\n * @target chosen\n */\n"
+	        "int f(void){ return 0; }\n")
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"one per line is fine: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "libchosen.a")),
+	      f"and the target name applies: {os.listdir(t.dir)}")
+
+
+@case
+def only_a_program_can_be_a_test(t):
+	"""A support library under tests/ is not a test.
+
+	`@kind static` on a file in tests/ -- a helper library the test binaries
+	link, which is an ordinary thing to have -- was classified as a test by
+	its directory, held out of the default build, and then *run*: fmake
+	tried to execute the archive and reported `Permission denied` on it. An
+	errno blaming a file for not being executable, which it never claimed to
+	be.
+
+	Found by asking what a mutation left uncovered, on a tree that had just
+	shipped a generated test file inside its library."""
+	# One directive per line: the parser hands a scalar directive the rest
+	# of the line, so both on one line is refused rather than half-read.
+	t.write("tests/support.c", "/**\n * @kind static\n"
+	        " * @target testsupport\n */\n"
+	        "int helper(void){ return 7; }\n")
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 7; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "libtestsupport.a")),
+	      f"a library is built by default: {os.listdir(t.dir)}")
+
+	# And nothing tries to run it.
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check("Permission denied" not in out,
+	      f"an archive must not be executed: {out}")
+	check("RUN testsupport" not in out,
+	      f"and must not be listed as a test: {out}")
+
+
+@case
+def test_material_stays_out_of_the_library(t):
+	"""situ shipped a generated test codec inside libsitu.a.
+
+	A tree whose only programs are tests is built as one library, and the
+	tests convention classifies *programs* -- so a source under tests/ that
+	defines no main() was neither a test nor excluded, and went into the
+	archive. The archive is what that project ships.
+
+	The convention already knows where tests live. It asked only about
+	programs."""
+	t.write("runtime/situ.h", "#pragma once\nint situ_pack(int);\n")
+	t.write("runtime/situ.c", '#include "situ.h"\n'
+	        "int situ_pack(int n){ return n + 1; }\n")
+	# Not a program: no main. Test material all the same.
+	t.write("tests/generated/codec_impl.c",
+	        '#include "../../runtime/situ.h"\n'
+	        "int codec_roundtrip(int n){ return situ_pack(n); }\n")
+	t.write("tests/pack_test.c", '#include "../runtime/situ.h"\n'
+	        "int codec_roundtrip(int);\n"
+	        "int main(void){ return situ_pack(1) == 2 ? 0 : 1; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	lib = os.path.join(t.dir, f"lib{os.path.basename(t.dir)}.a")
+	check(os.path.exists(lib), f"the library is the deliverable: {os.listdir(t.dir)}")
+	members = subprocess.run(["ar", "t", lib],
+	                         capture_output=True, text=True).stdout.split()
+	check("situ.c.o" in members, f"the runtime belongs in it: {members}")
+	check("codec_impl.c.o" not in members,
+	      f"generated test material does not: {members}")
+
+	# And the test that needs it still builds and passes.
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
 
 
 @case

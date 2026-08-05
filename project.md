@@ -5326,3 +5326,51 @@ The orphan was mine, not fmake's. The rule that would have prevented it is
 the one fmake already follows for tests: **kill the group, not the parent,
 and wait for what you killed.** A background job whose child is doing the
 work is not stopped by stopping the job.
+
+## 73. situ, and three defects behind one archive
+
+The seventh private project, and the last to run fmake. Its report is in
+`suggestions/situ.md`, uncommitted. The trial itself was short -- one line
+of configuration builds the library -- and pulling on what it found took
+three fixes.
+
+**A generated test file was in the shipped archive.** `libsitu.a` held
+`situ.c.o` and `tests/generated/codec_impl.c.o`. The reasoning was visible
+and wrong: a tree whose only `main()`s are tests is built as one library,
+and the tests convention classifies *programs*. `codec_impl.c` defines no
+`main`, so it was not a test; it was a source, and the whole tree is the
+library. Test sources are out of a library computed from the tree now.
+
+The guard on that started as "only the whole-tree library", which failed no
+mutation, so it went: test material does not belong in any library the
+closure assembles, and a library declared with `sources` never reaches that
+branch anyway.
+
+**A library was held back as a test, and then run.** Probing what the
+mutation had left uncovered meant writing `@kind static` on a file under
+`tests/` -- a support library for test binaries, an ordinary thing to have.
+It was classified as a test by its directory, kept out of the default build,
+and then **executed**: `Permission denied` on the archive, an errno blaming
+a file for not being executable when it never claimed to be. Only a program
+can be a test now, asked after `fmake.toml` has settled `kind`.
+
+**And the fixture that found it was itself misread.** The archive came out
+as `libsupport.a` rather than `libtestsupport.a`, because
+`@kind static @target testsupport` was written on one line -- and the parser
+hands a scalar directive the rest of the line, so `@target` became an
+argument of `@kind` and vanished. Silently. A scalar directive with more
+than one word is refused now, which is the rule `@test` and `@pkg_optional`
+already had, generalised.
+
+That third one broke an existing case, written the same way months of
+habit made natural. Nothing had caught it because nothing had needed the
+second directive to take effect.
+
+### The shape of the afternoon
+
+One trial, on a small tree, with one visible symptom. Behind it: a
+convention that classified the wrong noun, a role that should never have
+applied to a library, and a parser that reads a line more greedily than
+anyone writing one expects. None was reachable from the others by reasoning
+-- each appeared only because the previous fix made the next thing possible
+to write.

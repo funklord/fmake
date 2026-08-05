@@ -4223,6 +4223,17 @@ class Target:
 		self.members = None
 		# A role, not a kind. A test is still an ordinary exe -- what
 		# changes is only whether a plain build produces it.
+		# A scalar directive takes one word, and the parser hands it the
+		# rest of the line -- so `@kind static @target chosen` set kind and
+		# swallowed the target, silently, producing an archive named after
+		# the file. Two directives on one line is a reasonable thing to
+		# try; being wrong about it should not be quiet.
+		for name in sorted(DIRECTIVE_SCALAR - {"test"}):
+			entries = ann.raw.get(name) or []
+			for line, words in entries:
+				if len(words) > 1:
+					die(f"{rel}:{line}: @{name} {' '.join(words)} takes one "
+					    f"word. Put each directive on its own line.")
 		said = _ann_test(ann, rel)
 		found = looks_like_a_test(rel) if rel else None
 		if said is False:
@@ -4254,8 +4265,18 @@ class Target:
 
 	@property
 	def test(self):
-		"""Whether a plain build skips this, whatever group it is in."""
-		return self.test_group is not None
+		"""Whether a plain build skips this, whatever group it is in.
+
+        Only a program can be one. A `@kind static` under `tests/` -- a
+        support library for the test binaries, which is an ordinary thing to
+        have -- was held back like a test and then *run* like one, and the
+        failure was `Permission denied` on the archive: an errno blaming the
+        file for not being executable, which it never claimed to be.
+
+        Asked here rather than where the group is set, because `kind` is not
+        final until fmake.toml has had its say.
+        """
+		return self.kind == "exe" and self.test_group is not None
 
 	@property
 	def filename(self):
@@ -5065,6 +5086,9 @@ def build(args, _bootstrapping=False):
 	# said "no target could be built" about a directory whose whole purpose
 	# is an archive. Found by running fmake on the project that declined
 	# over exactly this shape.
+	# Sources that are test material rather than a program: a helper, a
+	# fixture, or something a generator wrote for the tests to compile.
+	test_material = {r for r in srcs if looks_like_a_test(r)}
 	library_only = targets and all(t.test for t in targets)
 	whole_tree_library = not targets or library_only
 	if whole_tree_library:
@@ -5548,6 +5572,21 @@ def build(args, _bootstrapping=False):
 			else:
 				members = [u for u in pool
 				           if u.rel == t.rel or u.rel not in other_roots]
+				# Test sources are not part of a library. situ shipped a
+				# generated codec from tests/generated/ inside libsitu.a,
+				# because the tests convention classifies programs and
+				# this asked about files; it knows where tests live
+				# either way.
+				#
+				# Every library computed from the tree, not only the
+				# whole-tree one: a `whole_tree_library and` here failed
+				# no case, and a guard nothing justifies is a guess about
+				# a situation nobody has. A library declared with
+				# `sources` never reaches this branch, so naming a test
+				# file outright still works.
+				if t.rel not in test_material:
+					members = [u for u in members
+					           if u.rel not in test_material]
 				closures[t] = close_over_library(members, units[t.rel])
 
 		unresolved = set()
