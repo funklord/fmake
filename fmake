@@ -140,7 +140,7 @@ HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
 SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
                "__pycache__", "CMakeFiles"}
 
-DEFAULT_CFLAGS = ["-O2", "-g"]
+DEFAULT_CFLAGS = ["-Os", "-g"]
 LINK_ERR_LINES = 8              # linker output shown before truncating
 
 # nm symbol type letters. Uppercase is global, lowercase is file-local.
