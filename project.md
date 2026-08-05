@@ -5290,3 +5290,40 @@ says so: with a shebang the copy happens anyway, and with none the escaping
 the invariant that every source fmake builds is inside the build root, which
 nothing else in the tool breaks, and "it worked once" is not a reason to
 start. Recorded here rather than defended by a test that does not exist.
+
+## 72. What a test runner owes the machine it runs on
+
+Running hydra's suite, and then its 31 live drivers, left processes behind
+on this machine -- and one of them was found six and a half hours later,
+still fetching a website. It was orphaned by a `kill -9` sent to the *shell*
+that started it: killing a parent does not kill its child, it reparents it
+to init.
+
+That is a lesson about running things, and fmake now runs things by design,
+so the same question applies to the tool. Two answers, one already right and
+one not.
+
+**Right already.** A test gets its own session and the deadline signals the
+**group**, so a driver that hangs with a helper alive takes the helper with
+it. Mutation confirms it: signalling the process instead of the group leaves
+the suite hanging, which is the defect wearing a green run's clothes.
+
+**Not right.** After SIGTERM and then SIGKILL, `_kill_group` returned
+without reaping if both waits timed out. A child nobody waits on is a
+zombie for the rest of the run, and the loop simply fell out of the bottom
+and moved to the next test. It reaps whatever can be reaped now, and says
+so when a process genuinely cannot be stopped -- after SIGKILL that means
+stuck in the kernel, and a test in that state is worth a line rather than a
+silent abandonment.
+
+The path is not reachable by a test written here: a process that ignores
+SIGTERM and forks is killed within the grace period, so the case asserts
+the reaping that does happen and the branch beyond it is labelled rather
+than covered. Same treatment as the guards in sections 40 and 50.
+
+### And the habit
+
+The orphan was mine, not fmake's. The rule that would have prevented it is
+the one fmake already follows for tests: **kill the group, not the parent,
+and wait for what you killed.** A background job whose child is doing the
+work is not stopped by stopping the job.

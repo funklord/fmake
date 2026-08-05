@@ -892,6 +892,14 @@ def _kill_group(proc):
 			return
 		except subprocess.TimeoutExpired:
 			continue
+	# Both deadlines passed and it is still there, which after SIGKILL means
+	# it is stuck in the kernel rather than ignoring us. Reap what can be
+	# reaped and say the rest out loud: a child nobody waits on is a zombie
+	# for the rest of the run, and a test that cannot be killed is worth a
+	# line rather than a silent abandonment.
+	if proc.poll() is None:
+		warn(f"a test could not be stopped (pid {proc.pid}); it is left "
+		     f"running and may still hold a terminal or a port")
 
 
 def describe_exit(rc):

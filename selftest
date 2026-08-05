@@ -745,6 +745,36 @@ def a_test_deadline_reaches_what_the_test_started(t):
 
 
 @case
+def a_stubborn_test_leaves_nothing_behind(t):
+	"""A test that ignores SIGTERM and forks is the shape that leaks.
+
+	The deadline sends SIGTERM to the group, then SIGKILL, and waits after
+	each -- the waiting is what reaps, and a child nobody waits on is a
+	zombie for the rest of the run. The forked grandchild is in the group,
+	so it goes too; killing only the process fmake launched would leave it
+	holding whatever it holds."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/stubborn_test.c",
+	        "#include <signal.h>\n#include <unistd.h>\n"
+	        "int main(void){\n"
+	        "\tsignal(SIGTERM, SIG_IGN);\n"
+	        "\tif (fork() == 0) { signal(SIGTERM, SIG_IGN); for (;;) pause(); }\n"
+	        "\tfor (;;) pause(); }\n")
+	t.write("fmake.toml", "[project]\ntest-timeout = 1\n")
+
+	r = t.fmake("test")
+	check("timed out" in r.stdout + r.stderr, "the deadline should fire")
+	time.sleep(1)
+	alive = subprocess.run(["ps", "-eo", "stat,args"],
+	                       capture_output=True, text=True).stdout
+	mine = [l for l in alive.splitlines()
+	        if os.path.join(t.dir, "stubborn_test") in l]
+	check(not mine, f"nothing of the test may outlive it: {mine}")
+	check(not [l for l in mine if l.startswith("Z")],
+	      f"and nothing may be left unreaped: {mine}")
+
+
+@case
 def a_test_under_the_limit_is_untouched(t):
 	"""The deadline must not become a second way for a test to fail.
 
