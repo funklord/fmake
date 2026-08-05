@@ -4576,3 +4576,53 @@ An earlier step in the same case had built `fetch_test`, and a rebuild does
 not unlink what it does not make, so the file was there for reasons that had
 nothing to do with the assertion. Section 38 in miniature, and the reason
 every one of these cases now removes what it is about to prove absent.
+
+## 57. hydra's suite, finished
+
+The third hydra trial, and the one that closes the loop opened in section
+53. Then, `fmake test` on hydra stopped at 47 of 66 with a live driver still
+fetching a website. Now, with `@test live` on the 31 drivers under
+`tests/live/`:
+
+- a plain build produces the browser and holds back **69 test programs**,
+  naming both groups: *`fmake live` or `fmake test` builds and runs them*;
+- `fmake test` builds **38 unit binaries and runs all 38**, and exits.
+
+Nine failed, and the four outcomes are all distinct in the output: five
+`exit 1`, one `exit 2`, **two killed by SIGSEGV**, and **one timed out after
+60s**. Every distinction in the runner was earned by a real result on this
+tree rather than by an argument about what might happen.
+
+The timeout is the one that mattered. `test_live_model` is the test that
+suspended the previous run; it is cut off at sixty seconds now, the message
+names the key that would raise it, and the suite goes on to the remaining
+nineteen.
+
+### What the tree said about the convention
+
+`test_live_model` and `test_helpers_live` are live drivers that are **not**
+under `tests/live/`. hydra's own layout does not put all of them in the
+directory that names them -- which is the argument for the group being an
+annotation rather than a third naming rule, made by the tree rather than by
+me. A directory says where a file is. Only the file can say what it needs.
+
+### One thing this trial found in fmake
+
+The failure summary was the only list in the program with no cap. Nine names
+already wrap a terminal; a suite where forty fail would print the one line
+nobody can read, and the count is the part that matters. It caps at six and
+says how many it dropped, like everything else here.
+
+### One thing it found in me
+
+Two checks thirty seconds apart showed the compile count frozen at 125, and
+I reached for an explanation -- Python block-buffering a redirected stream --
+that fitted, was plausible, and was **not tested**. The reproduction written
+to confirm it proved nothing: the build finished inside four tenths of a
+second, so the flush at exit hid the question entirely. The real explanation
+was almost certainly duller, a few slow Qt template files under `-j8`.
+
+A plausible mechanism is not a finding. The rule this document keeps
+restating for tests applies to diagnosis too: **a check that could not have
+failed has not confirmed anything**, and the honest move is to drop the
+claim rather than to keep it because it sounded right.

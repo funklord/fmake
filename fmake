@@ -977,8 +977,13 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 		return 0
 	say()
 	if failed:
-		warn(f"{len(failed)} of {len(targets)} failed: "
-		     f"{', '.join(failed)}")
+		# Capped like every other list here. Nine names already wrap a
+		# terminal; a suite where forty fail prints the one thing nobody
+		# can read, and the count is the part that matters.
+		shown = ", ".join(failed[:6])
+		if len(failed) > 6:
+			shown += f", and {len(failed) - 6} more"
+		warn(f"{len(failed)} of {len(targets)} failed: {shown}")
 		return 1
 	n = len(targets)
 	info(f"{n} test{'' if n == 1 else 's'} passed")

@@ -647,6 +647,24 @@ def fmake_test_builds_and_runs_them(t):
 
 
 @case
+def a_long_list_of_failures_is_capped(t):
+	"""hydra fails nine of thirty-eight in this environment, and nine names
+	already wrap a terminal. A suite where forty fail would print the one
+	line nobody can read, and the count is the part that matters. Every
+	other list in fmake caps; this one did not."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	for n in range(8):
+		t.write(f"tests/bad{n}_test.c", "int main(void){ return 1; }\n")
+
+	r = t.fmake("test")
+	check(r.returncode != 0, "they all fail")
+	line = next(l for l in (r.stdout + r.stderr).splitlines()
+	            if " failed: " in l)
+	check("and 2 more" in line, f"the list should cap: {line}")
+	check("8 of 8 failed" in line, f"the count should be whole: {line}")
+
+
+@case
 def a_hanging_test_is_stopped_and_the_suite_continues(t):
 	"""hydra's suite stopped at 47 of 66 because one live driver was still
 	fetching a real website minutes in.
