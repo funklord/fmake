@@ -34,7 +34,7 @@ PYTHON  ?= /usr/bin/env python3
 BINDIR  = $(DESTDIR)$(PREFIX)/bin
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: all install uninstall check check-version deb lint clean test veryclean distclean style style-source style-docs
+.PHONY: all install uninstall check check-version deb lint clean test veryclean distclean style style-source style-docs hooks
 
 all: fmake.1
 
@@ -123,3 +123,12 @@ veryclean: clean
 distclean: veryclean
 	find . -name '*~' -o -name '*.swp' -o -name '*.orig' | xargs -r rm -f
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+
+# The commit-msg hook lives in the tree so it is reviewable, survives a
+# clone, and can be kept in sync. .git/hooks is untracked, so a hook that
+# exists only there enforces a rule nobody can see and vanishes silently on
+# a fresh clone.
+hooks:
+	@test -d .git || { echo "hooks: not a git repository" >&2; exit 1; }
+	@install -m 0755 tools/hooks/commit-msg .git/hooks/commit-msg
+	@echo "hooks: commit-msg installed from tools/hooks/"
