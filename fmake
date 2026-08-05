@@ -745,6 +745,18 @@ def expand_mk_rules(rules, root, src_set):
 		if not any("%" in i for i in r["inputs"]):
 			die(f"{r['origin']}:{r['line']}: a pattern target needs a pattern "
 			    f"prerequisite to take its stem from")
+		# The stem is the text between the fixed halves of the prerequisite,
+		# taken by position. A `*` beside the `%` makes those halves a
+		# pattern rather than text, so the slice lands in the wrong place
+		# and the stem comes out as a fragment of a path -- `p/bmp` from
+		# `schemas/*/%.msg`, which then failed by saying that
+		# `schemas/*/p/bmp.msg` matched nothing, a path nobody wrote.
+		for i in r["inputs"]:
+			if "%" in i and any(c in i for c in "*?["):
+				die(f"{r['origin']}:{r['line']}: {i} mixes % with a glob. "
+				    f"The stem is taken by position, so the two cannot "
+				    f"share a prerequisite -- write one rule per directory, "
+				    f"or a rule whose fixed part is literal.")
 
 		src = next(i for i in r["inputs"] if "%" in i)
 		head, _, tail = src.partition("%")

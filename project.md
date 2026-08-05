@@ -5406,3 +5406,41 @@ that was relying on the misread, so the question was whether any exists:
 none of the six private projects contains the pattern. A rule that costs
 nothing to enforce is worth enforcing, and the way to know is to look rather
 than to argue about likelihood.
+
+## 75. The rule anyone would write
+
+situ needs ten near-identical `[generate.*]` rules, one per schema, because
+its schemas live one to a directory: `examples/bmp/bmp.situ`,
+`examples/icmp/icmp.situ`, and so on. Asking why one rule could not cover
+them found a defect rather than a missing feature.
+
+The rule anyone writes for that shape is
+
+    gen/%.c: schemas/*/%.msg
+
+and fmake accepted it, globbed correctly, and then computed the stem wrong.
+The stem is the text between the fixed halves of the prerequisite, taken
+**by position** -- so a `*` beside the `%` makes those halves a pattern
+rather than literal text, the slice lands in the wrong place, and the stem
+came out as `p/bmp`. The failure that followed said
+`schemas/*/p/bmp.msg` matched nothing: a path nobody had written, blaming
+the input for the tool's arithmetic.
+
+It refuses the form now and says which two things cannot share a
+prerequisite. Not silent corruption -- it failed loudly before -- but a
+loud failure about the wrong thing costs the same afternoon as a quiet one.
+
+The underlying limitation stands: one `%` per rule, and no way to say "the
+stem appears twice in the path". That is why situ needs ten rules, and it is
+recorded rather than fixed, because a second wildcard is a language change
+in a file whose whole premise is being a small subset of Make.
+
+### Where it came from
+
+Nothing failed. The trial had already finished, the report was written, and
+the question was only *why does this tree need ten of something*. The answer
+was a defect in the thing that would have reduced it to one.
+
+**A number that looks larger than it should be is worth one question**, and
+the question is not always answered by the feature you expected to be
+missing.

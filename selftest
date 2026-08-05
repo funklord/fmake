@@ -1903,6 +1903,41 @@ int main(void){ printf("%.0f\\n", sqrt((double)(n()*SCALE*5))); return 0; }
 
 
 @case
+def a_pattern_rule_may_not_mix_a_stem_with_a_glob(t):
+	"""`gen/%.c: schemas/*/%.msg` is the rule anyone writes for a tree that
+	keeps one schema per directory, and it cannot work.
+
+	The stem is the text between the fixed halves of the prerequisite, taken
+	by position -- so a `*` beside the `%` makes those halves a pattern
+	rather than text, the slice lands in the wrong place, and the stem comes
+	out as a fragment of a path. It produced `p/bmp` from `schemas/*/%.msg`
+	and then failed by saying `schemas/*/p/bmp.msg` matched nothing, naming
+	a path nobody had written.
+
+	Found while asking why situ needs ten near-identical generate rules
+	rather than one."""
+	t.write("schemas/bmp/bmp.msg", "x\n")
+	t.write("main.c", "int made_bmp(void);\n"
+	        "int main(void){ return made_bmp(); }\n")
+	t.write("fmake.mk", "gen/%.c: schemas/*/%.msg\n"
+	        '\t@mkdir -p gen && echo "int made_$*(void){ return 0; }" > $@\n')
+
+	r = t.fmake()
+	check(r.returncode != 0, "the mixed form should be refused")
+	out = r.stdout + r.stderr
+	check("mixes % with a glob" in out, f"and say why: {out}")
+	check("matched nothing" not in out,
+	      f"not by blaming a path nobody wrote: {out}")
+
+	# The ordinary form is untouched.
+	t.write("schemas/bmp.msg", "x\n")
+	t.write("fmake.mk", "gen/%.c: schemas/%.msg\n"
+	        '\t@mkdir -p gen && echo "int made_$*(void){ return 0; }" > $@\n')
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"a plain pattern rule still works: {r.stderr}")
+
+
+@case
 def mk_refuses_directives_that_need_a_file(t):
 	"""@target names an artifact and @os describes one translation unit.
 
