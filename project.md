@@ -5430,10 +5430,23 @@ It refuses the form now and says which two things cannot share a
 prerequisite. Not silent corruption -- it failed loudly before -- but a
 loud failure about the wrong thing costs the same afternoon as a quiet one.
 
-The underlying limitation stands: one `%` per rule, and no way to say "the
-stem appears twice in the path". That is why situ needs ten rules, and it is
-recorded rather than fixed, because a second wildcard is a language change
-in a file whose whole premise is being a small subset of Make.
+The underlying limitation of `fmake.mk` stands: one `%` per rule, and no
+way to say "the stem appears twice in the path". A second wildcard is a
+language change in a file whose whole premise is being a small subset of
+Make, so it is recorded rather than added.
+
+**But the sentence that stood here -- "that is why situ needs ten rules" --
+was wrong, and was written without trying the alternative.** A single
+`[generate.*]` in `fmake.toml` takes a glob in `inputs` and a command that
+loops, so situ needs *one* rule naming 31 schemas and 62 outputs, not ten.
+Seven lines. It reaches exactly where ten rules reached: the
+`situ_header_validate` ambiguity, which needs two `[target.*] sources`
+sections because three schemas declare a type of the same name.
+
+The defect above is real either way -- `%` beside a `*` computed a stem by
+slicing at the wrong offset -- and the fix stands. What was wrong was the
+justification attached to it, which reached for a limitation to explain a
+number nobody had checked.
 
 ### Where it came from
 
