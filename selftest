@@ -3788,6 +3788,48 @@ def the_tree_never_stands_in_for_a_standard_header(t):
 
 
 @case
+def every_include_directory_the_tree_could_supply_is_named_at_once(t):
+	"""A vendored library with its own include layout fails a group per
+	header.
+
+	thorvg gave ten, spread over three directories, and each line named one
+	-- so the reader collects them by hand and re-runs to find the next.
+	fmake already knows all of them when it prints the first, so it says so
+	in one line. Following it took that tree from 48 files failing to 11."""
+	t.write("vendor/a/one.h", "#pragma once\nint one(void);\n")
+	t.write("vendor/b/two.h", "#pragma once\nint two(void);\n")
+	t.write("vendor/a/one.c", '#include "one.h"\nint one(void){ return 1; }\n')
+	t.write("vendor/b/two.c", '#include "two.h"\nint two(void){ return 2; }\n')
+	# Reached by widening, which is where the directory is not yet known.
+	# A third header in a directory already named, so the list has to
+	# collapse duplicates -- without that it repeats vendor/a, and a fixture
+	# with one header per directory never notices.
+	t.write("vendor/a/three.h", "#pragma once\nint three(void);\n")
+	t.write("vendor/a/three.c", '#include "three.h"\n'
+	        "int three(void){ return 0; }\n")
+	t.write("src/use_one.c", "#include <one.h>\nint u1(void){ return one(); }\n")
+	t.write("src/use_two.c", "#include <two.h>\nint u2(void){ return two(); }\n")
+	t.write("src/use_three.c", "#include <three.h>\n"
+	        "int u3(void){ return three(); }\n")
+	t.write("src/main.c", "int u1(void); int u2(void); int u3(void);\n"
+	        "int main(void){ return u1() + u2() + u3() - 3; }\n")
+
+	out = t.fmake().stdout + t.fmake().stderr
+	line = [l for l in out.splitlines() if "all of those together" in l]
+	check(line, f"both directories should be offered at once: {out}")
+	check("vendor/a" in line[0] and "vendor/b" in line[0],
+	      f"and both should be in it: {line}")
+	check(line[0].count("vendor/a") == 1,
+	      f"a directory needed twice is named once: {line}")
+
+	# One missing directory needs no summary: the per-group line said it.
+	t.write("src/use_two.c", "int u2(void){ return 2; }\n")
+	out = t.fmake("-B").stdout + t.fmake().stderr
+	check(not [l for l in out.splitlines() if "all of those together" in l],
+	      f"one directory is not a list: {out}")
+
+
+@case
 def a_header_the_tree_already_holds_is_named(t):
 	"""beerssh vendors libvterm and includes it as <vterm.h>.
 

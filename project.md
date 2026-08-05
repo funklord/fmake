@@ -5374,3 +5374,35 @@ applied to a library, and a parser that reads a line more greedily than
 anyone writing one expects. None was reachable from the others by reasoning
 -- each appeared only because the previous fix made the next thing possible
 to write.
+
+## 74. Ten lines that were one answer
+
+Re-running the five projects after section 73 found no regressions -- the
+one new-looking failure was checked against the previous commit and was
+identical, 48 files either way, which is the sort of thing worth measuring
+rather than reasoning about. But fuzzypickles showed something the earlier
+runs had not, because they had never got far enough to see it.
+
+thorvg vendors its own include layout, so a missing header failed a group at
+a time: ten groups, each naming one directory, each requiring the reader to
+note it down and run again. fmake knew all ten when it printed the first.
+
+It offers them together now. Following the combined line takes that tree
+from **48 files failing to 11**, in one step rather than three, and the next
+line names what the new directories then exposed. Some rounds are inherent
+-- a new `-I` reveals includes nothing could see before -- but the round
+trip per *directory* was not.
+
+The dedup in that list needed its own fixture. Two headers in two
+directories never exercises it; the case has a third header in a directory
+already named, because a list that repeats an entry is the obvious failure
+and the obvious fixture misses it.
+
+### What the re-run was actually for
+
+Today's strictest change refuses a scalar directive given more than one
+word, turning a silent misread into a hard stop. That can only break a tree
+that was relying on the misread, so the question was whether any exists:
+none of the six private projects contains the pattern. A rule that costs
+nothing to enforce is worth enforcing, and the way to know is to look rather
+than to argue about likelihood.

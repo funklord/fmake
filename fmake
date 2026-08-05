@@ -2851,7 +2851,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		# One missing system header fails every file that includes it, and
 		# printing the same diagnostic hundreds of times buries anything
 		# else. Group by the message, not by the file.
-		groups = {}
+		groups, need_dirs = {}, []
 		for u, err in failures:
 			first = ""
 			for line in err.splitlines():
@@ -2886,6 +2886,9 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					note(f"it is in this tree, at {here}")
 					note(f"[project] include-dirs = "
 					     f"[{os.path.dirname(here)!r}] would find it")
+					want = os.path.dirname(here)
+					if want not in need_dirs:
+						need_dirs.append(want)
 				else:
 					note(f"if it comes from a package, install it or name "
 					     f"it with @pkg")
@@ -2898,6 +2901,13 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					note(f"   {u.rel}")
 				if len(hit) > 4:
 					note(f"   ... and {len(hit) - 4} more")
+		# One line for all of them. A vendored library with its own include
+		# layout produces a group per header -- thorvg gave ten -- and
+		# collecting them by hand to re-run is work fmake has already done.
+		if len(need_dirs) > 1:
+			shown = ", ".join(repr(d) for d in need_dirs)
+			note(f"all of those together: [project] include-dirs = "
+			     f"[{shown}]")
 		if not VERBOSE:
 			note("-v for the full compiler output")
 		say()
