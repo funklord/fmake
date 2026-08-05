@@ -4225,3 +4225,72 @@ against the next entry rather than as a claim, and the case says so instead
 of inventing a fixture that pretends otherwise. Same honesty as §40's
 unreachable `.get()`: a branch no case covers should be labelled, not
 decorated with a test that does not test it.
+
+## 51. What the hydra trial found
+
+hydra was the tree that produced §17, §40, §41 and §43, always at second
+hand -- from a report. Running fmake on it settles three things and finds a
+fourth.
+
+**It builds.** hydra's report said *"fmake cannot build hydra's `src/`
+today, and no flag fixes it"*. 112 sources, 47 headers moc'd, no
+configuration, no annotation, no `fmake.toml`: one binary, and `ldd -r`
+reports zero undefined symbols. The Android sources compile and are left out
+of the link because nothing reaches them, which is §3 rather than anything
+platform-specific -- the `_android` suffix rule of §50 never fires, because
+hydra's files are named `android_view.cpp` with the platform in *front*.
+That is worth knowing: the convention they asked for and the names they
+already have do not meet, and the rename they offered is still a rename.
+
+**The link set is smaller than CMake's and complete.** CMake names
+`liblz4`, `libsodium` and `libxxhash`; fmake links none of them, because no
+symbol in hydra needs them -- they are libtorrent's own dependencies, and
+the dynamic linker finds them through it. Zero undefined symbols is the
+proof, and it is the same result hydra reported the first time.
+
+**The two silent features are now loud**, by file and line, and two
+`@pkg_optional` comments turn both back on. That is §40 and §41 verified on
+the tree that motivated them rather than on a fixture.
+
+### And the fourth thing, which is why trials are run
+
+There were never two silent features. There are **five**.
+
+`torrent_download_source.cpp`, `session_import.cpp` and `box_crypto.cpp`
+guard libtorrent, lz4 and libsodium the same way, and **fmake said nothing
+about any of them.** The browser built without torrent support, without
+compressed session import, and without box crypto, exactly as before §40 --
+which is the failure §40 exists to prevent, arriving by a route §40 cannot
+see.
+
+The reason is structural. §40 keyed the finding on a *proposal*, and a
+proposal comes from pkg-config attributing a header to a module. That
+attribution works by matching include directories -- so a package whose
+headers sit in a default include directory emits no `-I`, is attributed to
+nothing, proposes nothing, and cannot be reported. `pkg-config --cflags
+libtorrent-rasterbar` prints eight `-D` flags and not one `-I`.
+
+So the report is no longer keyed on the proposal. Any `<>` include the scan
+saw, the depfile shows the preprocessor never opened, **and the machine
+actually has** is reported -- with the module named where one is known, and
+without where it is not.
+
+Three details, each of which the trial or a mutation forced:
+
+- **Existence is what keeps it quiet.** `#ifdef _WIN32` guarding
+  `<windows.h>` names a header this machine does not have, so nothing was
+  lost and nothing is said. Without that check every portable C file
+  produces a warning.
+- **`<>` only.** `#ifdef DEBUG` guarding `"debug_helpers.h"` is the project
+  deciding about its own code; there is no package and nothing missing.
+- **One line per file.** hydra's guarded block opens with fourteen
+  libtorrent headers, and fourteen identical lines is how a real finding
+  gets skimmed past. A file already named with its package is not named
+  again without one -- `theme.cpp` was reported twice, once each way, which
+  reads as two problems.
+
+The general lesson is the one §42 started: **a diagnostic keyed on a
+mechanism only sees what that mechanism sees.** §40 was keyed on
+pkg-config's view of the world and inherited its blind spot silently,
+because a report that does not fire looks exactly like a tree with nothing
+to report.

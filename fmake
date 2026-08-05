@@ -3071,6 +3071,17 @@ def _stdout(cmd):
 		return ""
 
 
+def _stderr(cmd):
+	"""Some questions are only answered on stderr. `cpp -Wp,-v` prints its
+	search path there and exits non-zero doing nothing else, so the status
+	is not evidence about the output.
+	"""
+	try:
+		return subprocess.run(cmd, capture_output=True, text=True).stderr
+	except OSError:
+		return ""
+
+
 # e_machine values worth naming. Only for messages -- the comparison is on the
 # raw triple, so an architecture missing from here still works.
 ELF_MACHINES = {
@@ -3303,6 +3314,29 @@ def find_providers(cfg, wanted, jobs, want_ident=None):
 			for s in hits:
 				found.setdefault(s, []).append(name)
 	return found, libs
+
+
+def default_include_dirs(cfg):
+	"""Where the preprocessor already looks.
+
+    Same shape as default_link_dirs and for the same reason: the compiler
+    is the authority on its own search path, and hardcoding /usr/include is
+    wrong on every cross build. The list arrives on stderr between two
+    marker lines, which is the only interface cpp offers for it.
+    """
+	out, inside = [], False
+	txt = _stderr([cfg.driver(True), "-E", "-Wp,-v", "-xc++", os.devnull])
+	for line in txt.splitlines():
+		if line.startswith("#include <...>"):
+			inside = True
+			continue
+		if inside:
+			if not line.startswith(" "):
+				break
+			d = line.strip().split(" (")[0]
+			if os.path.isdir(d):
+				out.append(d)
+	return out
 
 
 def default_link_dirs(cfg):
@@ -3704,6 +3738,45 @@ def preprocessed_headers(cl):
 		if u.archive or not u.dep or not os.path.isfile(u.dep):
 			continue
 		out[u.rel] = {d.replace(os.sep, "/") for d in parse_depfile(u.dep)}
+	return out
+
+
+def compiled_away_includes(cl, opened, incdirs):
+	"""System includes the scan saw, the preprocessor never opened, and the
+	machine actually has. Returns [(where, header)].
+
+    §40 reported this only for headers it could attribute to a package,
+    because the report was keyed on a *proposal*, and a proposal comes from
+    pkg-config. A package whose headers sit in a default include directory
+    emits no `-I`, so nothing attributes it, so nothing was proposed and
+    nothing was said -- and hydra's third optional feature was exactly that
+    shape: libtorrent, found by pkg-config, headers in /usr/include, and a
+    browser silently built without torrent support.
+
+    Existence is what keeps this quiet. `#ifdef _WIN32` guarding
+    `<windows.h>` names a header this machine does not have, so there is
+    nothing to report; a header that *is* here and was compiled out is a
+    feature that could have been on.
+    """
+	out, seen = [], set()
+	for u in cl.link:
+		deps = opened.get(u.rel)
+		if deps is None:
+			continue
+		for kind, name, line in (u.scan.get("incs") or []):
+			if kind != "<":
+				continue
+			key = (u.rel, name)
+			if key in seen:
+				continue
+			tail = "/" + name.replace(os.sep, "/")
+			if any(d.endswith(tail) for d in deps):
+				continue
+			if not any(os.path.isfile(os.path.join(d, name))
+			           for d in incdirs):
+				continue
+			seen.add(key)
+			out.append((f"{u.rel}:{line}", name))
 	return out
 
 
@@ -5296,19 +5369,54 @@ def build(args, _bootstrapping=False):
 		# was not given compiles to nothing, needs no library, and links --
 		# so the program is built, is smaller than it should be, and says
 		# so nowhere. There is no error to notice and no symbol to miss.
-		told = set()
+		told, told_files = set(), set()
 		for t in wanted:
 			gone = resolutions[t].get("compiled_away") or {}
 			for lib, (module, where, header) in sorted(gone.items()):
 				if (where, header) in told:
 					continue
 				told.add((where, header))
+				told_files.add(where.rsplit(":", 1)[0])
 				warn(f"{where}: {header} is behind a conditional the "
 				     f"preprocessor did not take, so {module} was not "
 				     f"linked -- if a feature macro should have turned it "
 				     f"on, say so next to the include with "
 				     f"'@pkg_optional {module} defines MACRO', or pass "
 				     f"-DMACRO with --cflags")
+
+		# The same finding for a header no package could be attributed to.
+		# Reported second and worded differently, because there is no
+		# module name to offer: the reader knows which package ships the
+		# header and fmake does not.
+		incdirs = [f[2:] for f in incflags if f.startswith("-I")]
+		incdirs += default_include_dirs(cfg)
+		# One line per file, not per include. A guarded block opens with
+		# fourteen headers from the same package in hydra's case, and
+		# fourteen lines saying the same thing is how a real finding gets
+		# skimmed past.
+		grouped = {}
+		for t in wanted:
+			for where, header in compiled_away_includes(
+			        closures[t], preprocessed_headers(closures[t]), incdirs):
+				# A file already named with its package is the same
+				# finding said better; saying it twice in two wordings
+				# reads as two problems.
+				src = where.rsplit(":", 1)[0]
+				if (where, header) in told or src in told_files:
+					continue
+				told.add((where, header))
+				grouped.setdefault(src, []).append((where, header))
+		for src in sorted(grouped):
+			hits = grouped[src]
+			where, header = hits[0]
+			more = (f" and {len(hits) - 1} other header"
+			        f"{'' if len(hits) == 2 else 's'}" if len(hits) > 1
+			        else "")
+			warn(f"{where}: {header}{more} on this machine but behind a "
+			     f"conditional the preprocessor did not take -- if a "
+			     f"feature macro should have turned it on, say so with "
+			     f"'@pkg_optional PACKAGE defines MACRO', or pass "
+			     f"-DMACRO with --cflags")
 
 	# ---- explain or link ----------------------------------------------
 	# What widening discovered, to start from next time -- but not what it

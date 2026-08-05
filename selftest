@@ -6305,6 +6305,109 @@ def a_feature_compiled_away_is_not_silent(t):
 
 
 @case
+def a_compiled_away_header_with_no_package_is_still_reported(t):
+	"""The gap the hydra trial found in the report that fixed hydra.
+
+	§40 keyed the finding on a *proposal*, and a proposal comes from
+	pkg-config attributing a header to a module. A package whose headers sit
+	in a default include directory emits no `-I`, so nothing attributes it,
+	so nothing was proposed and nothing was said. Three of hydra's five
+	optional features were that shape -- libtorrent, lz4, libsodium -- and
+	the browser was built without any of them while the diagnostic that
+	exists for exactly this stayed quiet.
+
+	`dlfcn.h` is the stand-in because no `.pc` file claims it and every
+	machine that can run this suite has it. Using a header pkg-config *can*
+	attribute tests the old path and passes either way, which is how the
+	first version of this case was written."""
+	t.write("main.c", "#include <stdio.h>\n"
+	        "#ifdef HAVE_DL\n#include <dlfcn.h>\n#endif\n"
+	        'int main(void){ puts("built"); return 0; }\n')
+
+	out = t.fmake().stdout + t.fmake().stderr
+	check("dlfcn.h" in out and "on this machine" in out,
+	      f"a compiled-away header with no package should still be "
+	      f"reported: {out}")
+
+
+@case
+def a_header_this_machine_does_not_have_is_not_reported(t):
+	"""Existence is what keeps the new half quiet.
+
+	`#ifdef _WIN32` guarding `<windows.h>` is the commonest conditional
+	include there is, and here the header is simply absent -- nothing was
+	lost, so there is nothing to say. Without the existence check every
+	portable C file in the world produces a warning, and the feature becomes
+	noise on first contact with real code."""
+	t.write("main.c", "#include <stdio.h>\n"
+	        "#ifdef _WIN32\n#include <fmake_no_such_platform_header.h>\n"
+	        "#endif\n"
+	        'int main(void){ puts("built"); return 0; }\n')
+
+	out = t.fmake().stdout + t.fmake().stderr
+	check("the preprocessor did not take" not in out,
+	      f"an absent header is not a lost feature: {out}")
+
+
+@case
+def one_line_per_file_not_per_include(t):
+	"""hydra's guarded block opens with fourteen headers from one package,
+	and fourteen lines saying the same thing is how a real finding gets
+	skimmed past."""
+	t.write("main.c", "#include <stdio.h>\n#ifdef HAVE_DL\n"
+	        "#include <dlfcn.h>\n#include <fcntl.h>\n#endif\n"
+	        'int main(void){ puts("built"); return 0; }\n')
+
+	out = t.fmake().stdout + t.fmake().stderr
+	hits = [l for l in out.splitlines()
+	        if "the preprocessor did not take" in l]
+	check(len(hits) == 1, f"one file, one line: {hits}")
+	check("1 other header" in hits[0],
+	      f"and it should say how many it stands for: {hits[0]}")
+
+
+@case
+def a_projects_own_header_behind_a_conditional_is_not_a_lost_feature(t):
+	"""Only `<>` includes are read this way, and the distinction is the
+	whole point of the report.
+
+	A missing feature is a package this machine has and the build did not
+	use. `#ifdef DEBUG` guarding `"debug_helpers.h"` is the project's own
+	code deciding about itself, and there is no package, no dependency and
+	nothing lost -- reporting it would put a warning on every debug-guarded
+	include in every tree."""
+	t.write("debug_helpers.h", "#pragma once\nint debug_hook(void);\n")
+	t.write("main.c", '#include <stdio.h>\n#ifdef DEBUG\n'
+	        '#include "debug_helpers.h"\n#endif\n'
+	        'int main(void){ puts("built"); return 0; }\n')
+
+	out = t.fmake().stdout + t.fmake().stderr
+	check("the preprocessor did not take" not in out,
+	      f"a project header is not a missing dependency: {out}")
+
+
+@case
+def a_named_package_beats_the_generic_report_for_one_file(t):
+	"""Same finding, two wordings, reads as two problems.
+
+	hydra's theme.cpp guards QDBusConnection -- which pkg-config attributes
+	to Qt6DBus -- and three more Qt DBus headers it cannot. Before this the
+	file was reported twice, once with the module named and once without."""
+	if not _have_pkg("zlib"):
+		raise Skip("zlib has no pkg-config file here")
+	t.write("main.c", "#include <stdio.h>\n#ifdef HAVE_ZLIB\n"
+	        "#include <zlib.h>\n#include <dlfcn.h>\n#endif\n"
+	        'int main(void){ puts("built"); return 0; }\n')
+
+	out = t.fmake().stdout + t.fmake().stderr
+	hits = [l for l in out.splitlines()
+	        if "the preprocessor did not take" in l]
+	check(len(hits) == 1, f"one file, one line: {hits}")
+	check("zlib" in hits[0],
+	      f"the line kept should be the one that names the package: {hits}")
+
+
+@case
 def a_library_the_code_does_not_call_is_a_different_finding(t):
 	"""And must not be reported as the one above.
 
