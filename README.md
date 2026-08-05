@@ -140,6 +140,12 @@ anything else: `_win32` yes, `_win` no, because that could be a window;
 `_posix` and `_unix` never, because a family is not a platform. `@os` and
 `@arch` override the name in both directions.
 
+**`fmake --man` writes the manual page from the parser**, so the packaged
+manual cannot drift from the options argparse accepts. `make deb` generates
+it that way. A project that hand-writes its man page finds out it has
+drifted when somebody reads it; generating it means the question never
+arises, and every packaged CLI has this problem.
+
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.
 

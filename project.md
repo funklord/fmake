@@ -4794,3 +4794,95 @@ skipped four files without a word.
 It records which branch decided, now. A message is for the reader; using it
 as a control signal makes every rewording a behaviour change, and this one
 was found only because a case asserted the summary rather than the exclusion.
+
+## 61. The other four reports, folded in
+
+Same treatment as section 59, and shorter because most of what these four
+found already has a section of its own. What follows is where each finding
+landed, so the reports themselves are no longer the only record.
+
+### netcfgd
+
+Declined over one thing, and the thing was there. `@kind static` on the
+source that heads the library produces `libncfg_client.a` beside the test
+binary, from one comment and no build file -- section 42, and the first of
+three findings where fmake was right and the way it said so was not.
+
+Their remaining four are all built: `test-args` for a test that takes the
+daemon's frozen protocol witness as an argument (section 49); the object
+cache keyed on the whole configuration, which they asked about rather than
+reported, now asserted rather than merely true (section 48); the ejected
+`clean` naming what it removes; tests out of the default build.
+
+Their addendum was the most useful part of any of the five reports:
+**`--eject` is the adoption path for the projects most likely to say no**,
+and nothing said so. That became section 45 and a README section.
+
+### beerssh
+
+Six findings, five fixed and one dissolved. The include-path defect that
+cost them 84 files is section 37. The `tests` name collision is section 46.
+The vendored submodule's four programs are section 39. Tests in the default
+build is section 49. The `--explain` column that ran into its own text was
+routed through one padding helper.
+
+The dissolved one is their finding 3, *two binaries over one source tree
+minus one file cannot be expressed*. It can: `src/main.cpp` and
+`tests/main.cpp` build as two programs with no configuration at all, which
+section 46 shows. What made it look impossible was findings 1 and 2 -- the
+name collision stopped the app being built, and 84 files failed to compile
+-- so the shape was never reached. **Two defects can make a third thing look
+like a design limit.**
+
+Their fifth, *symbol reachability does not work for a Qt program*, was
+right about the symptom and wrong about the cause, and the cause was one
+line of Qt API. Section 47.
+
+### fuzzypickles
+
+Four findings, all fixed, and one of them by not doing what they asked.
+They proposed ignoring vendored subtrees wholesale; beerssh's report
+disproves it in the same paragraph as its own complaint, since both projects
+*build a library* out of the subtree they vendor. What is unwanted is the
+vendored **decisions**, not the vendored code -- section 39.
+
+Their third suggestion is the one that mattered: an ejected file a
+hand-written Makefile can `include`, which they said would make their
+verdict obsolete because scope stops being the objection. Section 45.
+
+### apt-emerge
+
+The only report from a project fmake correctly refused -- no C or C++ in
+the tree -- and it found more than some that could use it.
+
+The PEP 701 bug is section 44, and the detector they supplied is the case
+that caught the same bug again, twice, in this session. Their three
+packaging findings are all fixed: products in `../`, `dpkg -i` where
+`apt install` is meant, and a version written in two files with nothing
+comparing them. `--man` is advertised properly now, which they asked for
+after their own hand-written manual drifted the same week.
+
+## 62. What the reports left that is not fixed
+
+Two things, both decisions rather than defects, recorded here because the
+files that held them are gone.
+
+**A CI job that installs the package and runs it.** apt-emerge's case is
+exact: *"Building proves very little -- a `.deb` with entirely wrong paths
+builds perfectly, and so does one that will not start on the Python it
+declares."* One job -- `make deb`, install it in a `debian:bookworm`
+container, run `fmake --version` and `--help` -- would have caught the bug
+that report is mostly about. It would have caught it **again** in this
+session, when a multi-line f-string was reintroduced and only a repaired
+gate found it.
+
+Not built, because there is no CI here at all and adding the first one sets
+a pattern the sibling projects would follow, which `harmonization.md` says
+is raised rather than done in passing. The repository has a GitHub remote,
+so it is available whenever it is wanted.
+
+**A per-target source exclusion.** beerssh asked for a way to say "this
+target takes everything except `src/main.cpp`". The shape they needed works
+without it now, so this is no longer blocking anything; it would still be
+the honest answer for a target whose membership is declared by glob and
+needs one file out. Nothing has asked for it twice, which is the usual bar.
