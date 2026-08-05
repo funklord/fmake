@@ -43,6 +43,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 FMAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fmake")
 
@@ -643,6 +644,103 @@ def fmake_test_builds_and_runs_them(t):
 	      "fmake test should build the test binary")
 	check("ok" in r.stdout, f"it should have been run: {r.stdout}")
 	check("1 test passed" in r.stdout, f"and summarised: {r.stdout}")
+
+
+@case
+def a_hanging_test_is_stopped_and_the_suite_continues(t):
+	"""hydra's suite stopped at 47 of 66 because one live driver was still
+	fetching a real website minutes in.
+
+	Nothing was wrong with that test -- it is a live driver doing what it
+	says -- but a runner with no limit lets one of them suspend the suite
+	and throw away the results already collected. Timing out is its own
+	finding, worded as one: not "failed", which is what a test that returned
+	1 did."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/hang_test.c",
+	        "#include <unistd.h>\nint main(void){ for(;;) sleep(60); }\n")
+	t.write("tests/quick_test.c",
+	        '#include <stdio.h>\nint main(void){ puts("quick"); return 0; }\n')
+	t.write("fmake.toml", "[project]\ntest-timeout = 1\n")
+
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a timed-out test must fail the command: {out}")
+	check("timed out after 1s" in out,
+	      f"the limit should be named: {out}")
+	check("quick" in out,
+	      f"the suite must go on to the next test: {out}")
+
+
+@case
+def a_test_deadline_reaches_what_the_test_started(t):
+	"""A test that hangs on the network usually hangs with a helper alive.
+
+	Killing only the process fmake launched leaves that helper holding the
+	terminal, so the test gets its own process group and the signal goes to
+	the group."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/fork_test.c",
+	        "#include <unistd.h>\n"
+	        "int main(void){ if (fork() == 0) { for(;;) sleep(60); }\n"
+	        "\tfor(;;) sleep(60); }\n")
+	t.write("fmake.toml", "[project]\ntest-timeout = 1\n")
+
+	r = t.fmake("test")
+	check("timed out" in r.stdout + r.stderr, "the deadline should fire")
+	time.sleep(2)
+	alive = subprocess.run(["ps", "-eo", "args"],
+	                       capture_output=True, text=True).stdout
+	check(os.path.join(t.dir, "fork_test") not in alive,
+	      "nothing the test started should outlive it")
+
+
+@case
+def a_test_under_the_limit_is_untouched(t):
+	"""The deadline must not become a second way for a test to fail.
+
+	A test that takes a second under a default of sixty is an ordinary
+	passing test, and the cheapest wrong implementation -- passing the
+	limit as the wait rather than as a deadline -- makes every test that
+	runs at all report a timeout."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/slow_test.c",
+	        "#include <unistd.h>\n#include <stdio.h>\n"
+	        'int main(void){ sleep(1); puts("done"); return 0; }\n')
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"it should pass: {r.stdout}{r.stderr}")
+	check("1 test passed" in r.stdout, f"and be counted: {r.stdout}")
+
+
+@case
+def a_zero_timeout_removes_the_limit(t):
+	"""A project with a genuinely long test needs a way to say so, and
+	`0` is that way rather than a number large enough to look like one."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/long_test.c",
+	        "#include <unistd.h>\n#include <stdio.h>\n"
+	        'int main(void){ sleep(2); puts("finished"); return 0; }\n')
+	t.write("fmake.toml", "[project]\ntest-timeout = 1\n\n"
+	        "[target.long_test]\ntest-timeout = 0\n")
+
+	r = t.fmake("test")
+	check(r.returncode == 0,
+	      f"0 should mean no limit: {r.stdout}{r.stderr}")
+	check("finished" in r.stdout, f"it should run to the end: {r.stdout}")
+
+
+@case
+def a_timeout_that_is_not_a_number_is_refused(t):
+	"""`true` is an int in Python and would pass a plain isinstance check,
+	which is how `test-timeout = true` becomes a one-second deadline."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	for bad in ("true", "-5", '"30"'):
+		t.write("fmake.toml", f"[project]\ntest-timeout = {bad}\n")
+		r = t.fmake()
+		check(r.returncode != 0, f"test-timeout = {bad} should be refused")
+		check("test-timeout" in r.stdout + r.stderr,
+		      f"the key should be named: {r.stdout}{r.stderr}")
 
 
 @case

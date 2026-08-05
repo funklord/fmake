@@ -112,6 +112,13 @@ RUN client_test
 * 1 test passed
 ```
 
+Each test gets sixty seconds, because one that hangs should not suspend the
+suite -- `test-timeout` under `[project]` or `[target.NAME]` changes it, and
+`0` removes the limit. A test that times out is reported as having timed
+out, which is a different finding from one that returned non-zero and from
+one that crashed. The deadline reaches whatever the test started, not just
+the process fmake launched.
+
 That buys a fast default build, and it is paid for by the object cache above
 being keyed on the configuration — otherwise "build only what you asked for"
 is how a stale binary gets tested. `@test` and `@test no` in the source, or
@@ -221,7 +228,8 @@ kind    = "static"
 sources = ["src/alpha.c", "src/shared.c"]
 
 [target.client_test]            # `fmake test` runs it with an argument
-test-args = ["docs/schema/socket.json"]
+test-args    = ["docs/schema/socket.json"]
+test-timeout = 300              # seconds; 0 removes the limit
 
 [install]
 prefix = "/usr/local"

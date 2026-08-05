@@ -4423,3 +4423,59 @@ are backslash-continued lists elsewhere in the file. And the fixture used
 `--cflags`, which is an *override* and lands in `CFLAGS_LAST`, so it never
 exercised the line the finding is about. Both are the same error as the
 three before them: assert the thing, not something the thing resembles.
+
+## 54. A deadline for each test
+
+hydra's suite stopped at 47 of 66 because one live driver was still fetching
+a real website several minutes in. Nothing was wrong with that test -- it is
+a live driver doing what it says -- but a runner with no limit lets one of
+them suspend the suite and throw away the 47 results already collected.
+
+**Per test, not per suite.** A shared budget makes one slow test steal from
+the others and makes the outcome depend on the order they run in, which is
+the property a test runner exists to remove.
+
+**Sixty seconds by default**, `test-timeout` under `[project]` or
+`[target.NAME]` to change it, and `0` to remove the limit rather than a
+number large enough to look like one.
+
+**Timing out is its own finding.** Not "failed", which is what a test that
+returned 1 did, and not a crash -- the same argument as the SIGSEGV
+distinction, which hydra's real suite had already justified twice over.
+
+### The deadline has to reach what the test started
+
+A test that hangs on the network usually hangs with a helper alive, and
+killing only the process fmake launched leaves that helper holding the
+terminal. So the test is given its own session and the signal goes to the
+group: SIGTERM first, because a test with a handler may want to unlink a
+temporary file, then SIGKILL, because one that ignores TERM is exactly the
+kind that needed a deadline.
+
+Two of the seven mutations here were caught by the **suite hanging** rather
+than by an assertion -- removing `start_new_session`, and signalling the
+process instead of the group. That is a legitimate catch and an awkward one:
+it needs the mutation runner to bound its own subprocess, or the run that
+proves the feature works is the run that never ends.
+
+### Two things this cost, both worth writing down
+
+**A mutation script that dies leaves the mutation in place.** The first
+attempt at this batch used one `pkill -f` pattern broad enough to kill the
+script running it, so the `finally` that restores `fmake` never ran and the
+tree was left carrying "a timeout does not fail the command". `git diff`
+found it. The batch runner now takes one mutation per invocation, bounds the
+suite with its own timeout, and never signals by pattern.
+
+**One full-suite failure was observed and has not reproduced.**
+`environment_beats_the_config_file` failed once in a run immediately after
+this feature landed, and passed in three subsequent full runs and in
+isolation. The mechanism is not understood. The plausible story -- that
+`killpg` on a recycled pid signals an unrelated group -- does not hold up:
+`Popen` has not reaped the leader at that point, so the pid is a zombie, and
+a zombie's pid is not reissued.
+
+It is recorded rather than explained, and rather than quietly forgotten.
+Section 29 is in this document because a flake dismissed once cost a session
+later; the honest state of this one is *seen once, cause unknown, three
+clean runs since*.

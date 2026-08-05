@@ -405,12 +405,14 @@ CONF_FILE = "fmake.toml"
 
 S, L = "str", "list"      # scalar string, list of strings
 B = "bool"                # true/false, for a fact with two answers
+N = "int"                 # a whole number, for a count or a duration
 
 CONF_SCHEMA = {
     "project": {
         "name": S, "std": S, "profile": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
         "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
+        "test-timeout": N,
     },
     "profile": {"*": {
         "std": S, "cflags": L, "ldflags": L, "defines": L, "define": L,
@@ -421,7 +423,7 @@ CONF_SCHEMA = {
     "target": {"*": {
         "name": S, "target": S, "kind": S, "root": S,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
-        "test": B, "test-args": L,
+        "test": B, "test-args": L, "test-timeout": N,
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
@@ -466,6 +468,14 @@ def _conf_check(table, spec, where, out):
 		elif kind is B:
 			if not isinstance(value, bool):
 				out.append(f"{where}.{key}: expected true or false")
+		elif kind is N:
+			# bool is an int in Python and would pass silently, which is
+			# how `test-timeout = true` becomes a one-second timeout.
+			if isinstance(value, bool) or not isinstance(value, int):
+				out.append(f"{where}.{key}: expected a whole number")
+			elif value < 0:
+				out.append(f"{where}.{key}: expected 0 or more "
+				           f"(0 means no limit)")
 
 
 def load_conf(root):
@@ -863,6 +873,26 @@ def phony_rules(root):
 	return out
 
 
+def _kill_group(proc):
+	"""Stop a test and everything it started, politely then not.
+
+    SIGTERM first, because a test that installed a handler may want to
+    unlink a temporary file; SIGKILL after a moment, because one that
+    ignores TERM is exactly the kind that needed a deadline. The signal
+    goes to the group, which is why the child was given its own.
+    """
+	for sig, grace in ((signal.SIGTERM, 3), (signal.SIGKILL, 3)):
+		try:
+			os.killpg(proc.pid, sig)
+		except (ProcessLookupError, PermissionError, OSError):
+			proc.kill()
+		try:
+			proc.wait(timeout=grace)
+			return
+		except subprocess.TimeoutExpired:
+			continue
+
+
 def describe_exit(rc):
 	"""What a non-zero status was.
 
@@ -879,7 +909,10 @@ def describe_exit(rc):
 	return f"exit {rc}"
 
 
-def run_tests_now(targets, root, outdir, dry_run=False):
+DEFAULT_TEST_TIMEOUT = 60
+
+
+def run_tests_now(targets, root, outdir, conf, dry_run=False):
 	"""Build step done; now run them. Returns a process exit status.
 
     Sequentially and in name order, because a test suite that passes only
@@ -890,11 +923,21 @@ def run_tests_now(targets, root, outdir, dry_run=False):
     From the project root, since that is where a test's relative paths were
     written to work -- `./tests/client_test ../docs/schema/socket.json` is
     one project's real command line, and `test-args` exists for it.
+
+    Each test gets a deadline. hydra has 26 live drivers, and running its
+    suite stopped at 47 of 66 because one of them was still fetching a real
+    website several minutes in -- nothing wrong with the test, but a runner
+    with no limit lets one of them suspend the whole suite and throw away
+    the results already collected. Per test rather than per suite: a shared
+    budget makes one slow test steal from the others and makes the outcome
+    depend on the order they run in.
     """
+	default = conf.project.get("test-timeout", DEFAULT_TEST_TIMEOUT)
 	failed = []
 	for t in sorted(targets, key=lambda x: x.name):
 		exe = os.path.join(outdir, t.filename)
 		argv = [exe] + list(t.conf.get("test-args", []))
+		limit = t.conf.get("test-timeout", default) or None
 		if dry_run:
 			say(f"{CYAN('RUN')} {_show_cmd(argv, root)}")
 			continue
@@ -904,10 +947,23 @@ def run_tests_now(targets, root, outdir, dry_run=False):
 		# and with several tests, above the wrong one.
 		PROGRESS.flush()
 		try:
-			rc = subprocess.run(argv, cwd=root).returncode
+			# Its own process group, so the deadline reaches whatever the
+			# test started. A test that hangs on the network usually hangs
+			# with a helper alive, and killing only the process fmake
+			# launched leaves that helper holding the terminal.
+			proc = subprocess.Popen(argv, cwd=root, start_new_session=True)
 		except OSError as exc:
 			warn(f"{t.name}: {exc}")
 			failed.append(t.name)
+			continue
+		try:
+			rc = proc.wait(timeout=limit)
+		except subprocess.TimeoutExpired:
+			_kill_group(proc)
+			failed.append(t.name)
+			warn(f"{t.name} timed out after {limit}s "
+			     f"([target.{t.name}] test-timeout raises it, "
+			     f"0 removes the limit)")
 			continue
 		if rc:
 			failed.append(t.name)
@@ -5527,7 +5583,7 @@ def build(args, _bootstrapping=False):
 			warn(f"{len(broken)} file(s) did not compile; not running tests")
 			return 1
 		say()
-		return run_tests_now(wanted, root, outdir, args.dry_run)
+		return run_tests_now(wanted, root, outdir, conf, args.dry_run)
 
 	if broken:
 		say()
