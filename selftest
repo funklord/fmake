@@ -3647,6 +3647,52 @@ def a_run_leaves_nothing_beside_the_script(t):
 
 
 @case
+def a_script_runs_from_a_directory_nobody_may_write_to(t):
+	"""An installed script is the case a scripting front end must handle.
+
+	fmake keeps its cache beside the source, which is right for a project
+	and impossible for a script in /usr/local/bin or a read-only checkout:
+	the first attempt refused to run at all, saying it could not create
+	.fmake there. It falls back to a cache of its own, keyed on the script's
+	path, and builds the file alone -- a script somewhere unwritable is
+	almost certainly self-contained, and if it is not, the missing symbol
+	says so in the ordinary way."""
+	if os.geteuid() == 0:
+		raise Skip("running as root, so a read-only directory proves nothing")
+	t.write("here/s.c", "#!/usr/bin/env -S fmake --run\n#include <stdio.h>\n"
+	        'int main(void){ puts("ran"); return 0; }\n')
+	here = os.path.join(t.dir, "here")
+	script = os.path.join(here, "s.c")
+	os.chmod(here, 0o555)
+	try:
+		r = subprocess.run([FMAKE, "--run", script],
+		                   capture_output=True, text=True)
+		check(r.returncode == 0, f"it should still run: {r.stdout}{r.stderr}")
+		check(r.stdout == "ran\n", f"and produce its output: {r.stdout!r}")
+		check(os.listdir(here) == ["s.c"],
+		      f"nothing may be written beside it: {os.listdir(here)}")
+	finally:
+		os.chmod(here, 0o755)
+
+	# And with no shebang, which is the case the copy is not otherwise made
+	# for: a shebang forces one anyway, so a fixture that has one leaves the
+	# read-only path untested. Found by mutation, which removed the copy and
+	# broke nothing.
+	t.write("here/plain.c", '#include <stdio.h>\n'
+	        'int main(void){ puts("plain"); return 0; }\n')
+	plain = os.path.join(here, "plain.c")
+	os.chmod(here, 0o555)
+	try:
+		r = subprocess.run([FMAKE, "--run", plain],
+		                   capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"a file with no shebang should run too: {r.stdout}{r.stderr}")
+		check(r.stdout == "plain\n", f"and produce its output: {r.stdout!r}")
+	finally:
+		os.chmod(here, 0o755)
+
+
+@case
 def a_run_builds_what_the_script_needs(t):
 	""""A collection of them", which needs no special case at all.
 

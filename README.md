@@ -161,22 +161,23 @@ $ chmod +x hello.c && ./hello.c one two
 ```
 
 `env -S` is needed because Linux passes everything after the interpreter as
-a single argument. A `#!` line is not valid C, so fmake compiles a copy with
-that line replaced by `#line` — a compiler error still names your file and
-your line number.
+a single argument. A `#!` line is not valid C — gcc calls it an invalid
+preprocessing directive and no compiler here has a flag to overlook one — so
+fmake compiles a copy with that line replaced by `#line`. A compiler error
+still names your file and your line number.
 
-Cleaner still is `binfmt_misc`, where the kernel is told that `.c` means
-this and the file stays pure C with no shebang at all:
-
-```sh
-sudo sh -c 'echo ":fmake-c:E::c::/usr/bin/fmake:OC" > /proc/sys/fs/binfmt_misc/register'
-```
+The shebang is the whole mechanism, deliberately. Registering `.c` with
+`binfmt_misc` would make every C file in every project executable, and
+almost none of them are programs; the shebang marks the few that are, which
+is what a shebang is for.
 
 The build goes under `.fmake/`, so nothing appears beside the script and the
 second run is a cache hit rather than a rebuild. Everything after the file
 belongs to the program, its exit status is the command's, and its stdin and
 terminal are its own — fmake `exec`s rather than waits. A script that needs
-more than one file just has them: the closure reaches whatever it calls.
+more than one file just has them: the closure reaches whatever it calls. A
+script in a directory nobody may write to builds in a cache of its own
+instead, since that is the one place a scripting front end has to work.
 
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.

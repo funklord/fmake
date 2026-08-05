@@ -2084,35 +2084,63 @@ def _walk(root):
 		yield dirpath, dirnames, filenames
 
 
-def stage_run_source(root, path):
+def run_root(path):
+	"""Where to build a `--run` script, and whether its siblings come too.
+
+    Beside the script when that directory is writable: its siblings are then
+    in the tree, so a script that grew into several files keeps working, and
+    the cache lives next to what it caches.
+
+    A script in a directory nobody may write to -- installed in
+    /usr/local/bin, or a checkout mounted read-only -- would otherwise not
+    run at all, which is the one place a scripting front end has to work. So
+    it falls back to a cache of its own, keyed on the script's path, and
+    builds the file alone.
+    """
+	here = os.path.dirname(os.path.abspath(path)) or "."
+	if os.access(here, os.W_OK):
+		return here, True
+	base = (os.environ.get("XDG_CACHE_HOME")
+	        or os.path.join(os.path.expanduser("~"), ".cache"))
+	return os.path.join(base, "fmake", "run",
+	                    sha(os.path.abspath(path))[:16]), False
+
+
+def stage_run_source(root, path, alone=False):
 	"""The source to build for `--run`, and the target it roots.
 
     A shebang is not C: gcc rejects `#!` on line 1 as an invalid
-    preprocessing directive, and so does g++. So a file that carries one is
-    copied with that line replaced -- by a `#line` directive rather than by
-    a blank, so every diagnostic still names the original file and the right
-    line number. A file with no shebang is left exactly where it is and
-    nothing is copied; that is the binfmt_misc form, where the kernel runs
-    a pure C file and there is nothing to strip.
+    preprocessing directive, and so does g++, and no compiler here has a
+    flag to overlook it. So a file that carries one is compiled from a copy
+    with that line replaced -- by a `#line` directive rather than by a
+    blank, so every diagnostic still names the original file and the right
+    line number.
+
+    `alone` is the read-only case: the copy is the whole tree, so it is made
+    whether or not there is a shebang to remove.
     """
-	rel = os.path.relpath(os.path.abspath(path), root)
 	try:
 		with open(path, "rb") as fh:
 			first = fh.readline()
 	except OSError as exc:
 		die(f"--run: {exc}")
-	if not first.startswith(b"#!"):
-		return rel
-	staged = os.path.join(RUN_DIR, os.path.basename(path))
+	if not alone:
+		rel = os.path.relpath(os.path.abspath(path), root)
+		if not first.startswith(b"#!"):
+			return rel
+	staged = (os.path.basename(path) if alone
+	          else os.path.join(RUN_DIR, os.path.basename(path)))
 	full = os.path.join(root, staged)
-	os.makedirs(os.path.dirname(full), exist_ok=True)
+	os.makedirs(os.path.dirname(full) or root, exist_ok=True)
 	with open(path, "rb") as fh:
 		body = fh.read()
-	cut = body.index(b"\n") + 1 if b"\n" in body else len(body)
+	cut = (body.index(b"\n") + 1 if first.startswith(b"#!") and b"\n" in body
+	       else 0)
 	# The path is quoted for the compiler, so a quote or backslash in it
 	# would end the directive early and take the rest of the line with it.
 	shown = os.path.abspath(path).replace("\\", "\\\\").replace('"', '\\"')
-	head = f'#line 2 "{shown}"\n'.encode()
+	head = (f'#line 2 "{shown}"\n'.encode() if cut else
+	        f'#line 1 "{shown}"\n'.encode())
 	new = head + body[cut:]
 	if not os.path.exists(full) or open(full, "rb").read() != new:
 		with open(full, "wb") as fh:
@@ -4676,7 +4704,8 @@ def build(args, _bootstrapping=False):
 		# Staged like a generated source, and for the same reason: from
 		# here on it is an ordinary source that the include graph, the
 		# closure and the symbol tables see with no special case.
-		run_rel = stage_run_source(root, args.run)
+		run_rel = stage_run_source(root, args.run,
+		                           alone=not args.run_with_siblings)
 		if run_rel not in srcs:
 			srcs.append(rel_ := run_rel)
 			srcs.sort()
@@ -6842,8 +6871,12 @@ def main(argv):
 	if args.run:
 		# The script's own directory, so its siblings are in the tree and
 		# the closure can reach them: `--run` builds a program, not a file.
+		# Unless nobody may write there, in which case a cache of its own.
 		if args.directory == ".":
-			args.directory = os.path.dirname(os.path.abspath(args.run)) or "."
+			args.directory, args.run_with_siblings = run_root(args.run)
+			os.makedirs(args.directory, exist_ok=True)
+		else:
+			args.run_with_siblings = True
 		# A script's output is the script's. Progress belongs on stderr at
 		# most, and only when asked for.
 		if not args.verbose:
@@ -6860,8 +6893,11 @@ def main(argv):
 		if rc:
 			return rc
 		exe = os.path.join(root, RUN_DIR,
-		                   default_name(stage_run_source(root, args.run),
-		                                root))
+		                   default_name(
+		                       stage_run_source(
+		                           root, args.run,
+		                           alone=not args.run_with_siblings),
+		                       root))
 		if not os.path.exists(exe):
 			die(f"--run: {args.run} built nothing to run")
 		# exec rather than run: the program inherits this process, so its

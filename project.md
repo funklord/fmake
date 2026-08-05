@@ -5201,16 +5201,17 @@ are where that shows.**
 
 ## 71. A C file as a script
 
-`--run FILE [ARGS...]` builds a C or C++ file and becomes it. Two forms, and
-the second is the better one:
+`--run FILE [ARGS...]` builds a C or C++ file and becomes it, and the
+mechanism is a shebang: `#!/usr/bin/env -S fmake --run`. `env -S` is needed
+because Linux passes everything after the interpreter as a single argument,
+so the plain form hands `env` one argument called `fmake --run` and fails.
 
-**A shebang.** `#!/usr/bin/env -S fmake --run` needs `env -S` because Linux
-passes everything after the interpreter as a single argument, so the plain
-form hands `env` one argument called `fmake --run` and fails.
-
-**binfmt_misc**, where the kernel is told that `.c` means this. The file
-then stays pure C with no shebang at all, which is the form that costs the
-source nothing.
+**`binfmt_misc` was written up here as the better form and it is not one.**
+Registering `.c` with the kernel makes every C file on the system
+executable, and almost none of them are programs -- a project has hundreds
+of translation units and one `main`. The shebang marks the few files that
+are meant to be run, which is exactly what a shebang is for, and it marks
+them one at a time in the file itself rather than globally in the kernel.
 
 ### Three things that had to be got right
 
@@ -5246,3 +5247,46 @@ must not narrate a build to a terminal expecting output. It now suppresses
 progress, and `--run` sets it unless `-v`. fmake's own output goes to stderr
 for a run, so a script's stdout stays the script's even when something is
 said.
+
+### The shebang is the mechanism, and there is no other
+
+`binfmt_misc` was written up in the first draft of this section as the
+better form. It is not one, and the correction is worth keeping: registering
+`.c` with the kernel makes **every C file on the system executable**, and
+almost none of them are programs -- a project has hundreds of translation
+units and one `main`. A shebang marks the few files meant to be run, in the
+file itself, one at a time. That is what a shebang is for.
+
+The alternatives all fail for reasons worth recording so they are not
+retried:
+
+- **No compiler flag overlooks the line.** gcc and g++ both reject `#!` as
+  an invalid preprocessing directive and neither has an option to skip it.
+- **The `//usr/bin/env` comment trick** -- a first line that is both a C++
+  comment and a shell command -- depends on the *shell* executing the file,
+  not the kernel, so it works only when invoked from a shell that falls
+  back to `sh`.
+- **Stripping to a pipe** would compile from stdin and lose the per-file
+  depfile and object path the cache is keyed on.
+
+So a copy with `#line` it is, and the honest position is that this is a
+workaround for something the language does not provide. If C front ends
+ever learn to ignore a first line beginning `#!`, as several other
+ecosystems' do, the copy becomes unnecessary and the feature gets simpler.
+Until then the copy is where the cost is paid, and `#line` is what keeps
+the user from paying it in confusing diagnostics.
+
+### A script nobody may write next to
+
+fmake keeps its cache beside the source, which is right for a project and
+impossible for a script installed in `/usr/local/bin` or living in a
+read-only checkout: the first version refused to run at all. It falls back
+to a cache of its own, keyed on the script's path, and builds the file
+alone.
+
+The fallback is covered by a case. The *copy* it makes is not, and mutation
+says so: with a shebang the copy happens anyway, and with none the escaping
+`../..` path to the original happens to compile. It stays because it keeps
+the invariant that every source fmake builds is inside the build root, which
+nothing else in the tool breaks, and "it worked once" is not a reason to
+start. Recorded here rather than defended by a test that does not exist.
