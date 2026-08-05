@@ -529,6 +529,37 @@ def a_platform_suffix_keeps_a_file_out_of_the_build(t):
 
 
 @case
+def a_platform_word_in_front_counts_too(t):
+	"""hydra names its four Android sources `android_view.cpp`.
+
+	The suffix rule was written from their report and did not fire on their
+	tree, which is the sort of thing only running it finds. The same words
+	in front, with one exception: `ios_utils.cpp` is an ordinary file to
+	write about C++ iostreams, and a rule whose safety argument is that a
+	word cannot mean anything else does not get to keep a word that can. So
+	`ios` stays a suffix only."""
+	t.write("main.c", "#include <stdio.h>\nint platform_id(void);\n"
+	        'int main(void){ printf("%d\\n", platform_id()); return 0; }\n')
+	t.write("platform_linux.c", "int platform_id(void){ return 1; }\n")
+	t.write("android_view.cpp", "#include <QJniEnvironment>\n"
+	        "int android_view(void){ return 0; }\n")
+	t.write("windows_shell.cpp", "#include <windows.h>\n"
+	        "int windows_shell(void){ return 0; }\n")
+	t.write("ios_utils.cpp", "int ios_helper(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1\n",
+	      "the program should build and run")
+	ex = t.fmake("--explain").stdout
+	for name in ("android_view.cpp", "windows_shell.cpp"):
+		check(name in ex and "named for" in ex,
+		      f"{name} should be excluded by its prefix: {ex}")
+	check("ios_utils.cpp" not in ex.split("excluded here")[-1][:400],
+	      f"ios_ is not a platform prefix: {ex}")
+
+
+@case
 def a_platform_annotation_beats_the_filename(t):
 	"""The name is a convention; the annotation is a statement.
 
@@ -590,12 +621,12 @@ def a_platform_suffix_matches_the_longest_name(t):
 	# Host-independent on purpose: on an aarch64 machine the pair simply
 	# swaps. What must hold either way is that exactly one is excluded and
 	# the suffix named is the whole architecture, not a fragment of it.
-	one = "named _x86_64" in ex
-	other = "named _aarch64" in ex
+	one = "blit_x86_64.c" in ex and "named for x86_64" in ex
+	other = "blit_aarch64.c" in ex and "named for aarch64" in ex
 	check(one != other,
 	      f"exactly one of the two belongs to this host: {ex}")
-	check("named _64" not in ex,
-	      f"the suffix should be the whole arch name: {ex}")
+	check("named for 64" not in ex,
+	      f"the word matched should be the whole arch name: {ex}")
 
 
 @case
@@ -1270,15 +1301,22 @@ def one_target_does_not_drag_in_the_other(t):
 
 @case
 def duplicate_definitions_are_refused(t):
-	"""Two files defining the same symbol is ambiguity, not a coin flip."""
+	"""Two files defining the same symbol is ambiguity, not a coin flip.
+
+    The fixture used to be win32_sys.c and posix_sys.c, which stopped being
+    ambiguous once the filename rule learned to read `win32_`: the Windows
+    half is excluded on Linux and one definition is left. That is the rule
+    working, and it means this case has to pick names that claim no
+    platform, because what it tests is the refusal rather than the
+    convention that now removes the need for it."""
 	t.write("sys.h", "void sys_init(void);\n")
-	t.write("win32_sys.c", '#include <stdio.h>\n#include "sys.h"\nvoid sys_init(void){ puts("win32"); }\n')
-	t.write("posix_sys.c", '#include <stdio.h>\n#include "sys.h"\nvoid sys_init(void){ puts("posix"); }\n')
+	t.write("sys_alpha.c", '#include <stdio.h>\n#include "sys.h"\nvoid sys_init(void){ puts("alpha"); }\n')
+	t.write("sys_beta.c", '#include <stdio.h>\n#include "sys.h"\nvoid sys_init(void){ puts("beta"); }\n')
 	t.write("main.c", '#include "sys.h"\nint main(void){ sys_init(); return 0; }\n')
 
 	r = t.fmake()
 	check(r.returncode != 0, "should have refused to guess")
-	check("win32_sys.c" in r.stderr and "posix_sys.c" in r.stderr,
+	check("sys_alpha.c" in r.stderr and "sys_beta.c" in r.stderr,
 	      f"both candidates should be named: {r.stderr}")
 
 
@@ -3380,16 +3418,21 @@ def a_missing_header_names_the_platform_escape(t):
 	Both causes are named because fmake cannot tell them apart. A header
 	that is not on any include path is equally the symptom of a package
 	nobody installed."""
-	t.write("android_view.h", "#pragma once\nint android_view_attach(void);\n")
+	# Deliberately not platform-named. This case is about a header that is
+	# not there, and once the filename rule learned prefixes as well as
+	# suffixes, a fixture called android_view.c was excluded by name before
+	# it could fail to compile -- so the case stopped testing anything and
+	# said so.
+	t.write("jni_bridge.h", "#pragma once\nint jni_attach(void);\n")
 	t.write("main.c",
 	        "#include <stdio.h>\n#ifdef ANDROID\n"
-	        '#include "android_view.h"\n#endif\n'
+	        '#include "jni_bridge.h"\n#endif\n'
 	        "int platform_id(void);\n"
 	        'int main(void){ printf("%d\\n", platform_id()); return 0; }\n')
 	t.write("platform_linux.c", "int platform_id(void){ return 1; }\n")
-	t.write("android_view.c",
-	        '#include "android_view.h"\n#include <fmake_no_such_header.h>\n'
-	        "int android_view_attach(void){ return 0; }\n")
+	t.write("jni_bridge.c",
+	        '#include "jni_bridge.h"\n#include <fmake_no_such_header.h>\n'
+	        "int jni_attach(void){ return 0; }\n")
 
 	out = t.fmake().stdout + t.fmake().stderr
 	check("fmake_no_such_header.h is on no include path here" in out,
@@ -3400,10 +3443,10 @@ def a_missing_header_names_the_platform_escape(t):
 	      f"the other cause should be offered too: {out}")
 
 	# And it is a real escape, not just advice.
-	t.write("android_view.c",
-	        '/** @os android */\n#include "android_view.h"\n'
+	t.write("jni_bridge.c",
+	        '/** @os android */\n#include "jni_bridge.h"\n'
 	        "#include <fmake_no_such_header.h>\n"
-	        "int android_view_attach(void){ return 0; }\n")
+	        "int jni_attach(void){ return 0; }\n")
 	r = t.fmake("-B")
 	check(r.returncode == 0, f"@os should settle it: {r.stdout}{r.stderr}")
 	check(t.run(os.path.basename(t.dir)).stdout == "1\n",

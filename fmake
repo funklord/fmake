@@ -1850,14 +1850,30 @@ PLATFORM_SUFFIXES = {
 # one of those is a claim about anything.
 _PLATFORM_ORDER = sorted(PLATFORM_SUFFIXES, key=len, reverse=True)
 
+# The same words in front, which is the other half of the same convention:
+# hydra names its four Android sources `android_view.cpp`, and the rule
+# written for that report did not fire on the tree that asked for it.
+#
+# `ios` is excluded here and kept only as a suffix. `ios_utils.cpp` about
+# C++ iostreams is an ordinary file to write, and a rule whose safety
+# argument is that a word cannot mean anything else does not get to keep a
+# word that can.
+PLATFORM_PREFIX_UNSAFE = {"ios"}
+
 
 def filename_platform(rel):
-	"""(kind, value, suffix) the file's name claims, or None."""
+	"""(kind, value, word) the file's name claims, or None."""
 	stem = os.path.splitext(os.path.basename(rel))[0].lower()
-	for suffix in _PLATFORM_ORDER:
-		if stem.endswith("_" + suffix):
-			kind, value = PLATFORM_SUFFIXES[suffix]
-			return kind, value, suffix
+	for word in _PLATFORM_ORDER:
+		if stem.endswith("_" + word):
+			kind, value = PLATFORM_SUFFIXES[word]
+			return kind, value, word
+	for word in _PLATFORM_ORDER:
+		if word in PLATFORM_PREFIX_UNSAFE:
+			continue
+		if stem.startswith(word + "_"):
+			kind, value = PLATFORM_SUFFIXES[word]
+			return kind, value, word
 	return None
 
 
@@ -1883,7 +1899,7 @@ def filename_excludes(rel, ann, want_os=None, want_arch=None):
 	        else (want_arch or host_arch()))
 	if value == want:
 		return None
-	return (f"named _{suffix}, so {value} only (building for {want}); "
+	return (f"named for {value} only (building for {want}); "
 	        f"@{kind} overrides the name")
 
 
@@ -4628,12 +4644,18 @@ def build(args, _bootstrapping=False):
 		else:
 			ann = Ann(scans[rel].get("dirs"))
 			why = platform_excludes(ann, cfg.os, cfg.arch)
+			from_name = False
 			if not why:
 				why = filename_excludes(rel, ann, cfg.os, cfg.arch)
+				from_name = bool(why)
 			if not why:
 				continue
 			excluded[rel] = why
-			if "named _" in why:
+			# Which branch decided, recorded rather than read back out of
+			# the sentence. Sniffing the message for "named _" tied the
+			# summary to a wording, and rewording it -- which happened one
+			# commit later -- silently stopped the summary being printed.
+			if from_name:
 				by_name.append(rel)
 		srcs.remove(rel)
 	if not srcs:

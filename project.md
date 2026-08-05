@@ -4690,11 +4690,12 @@ sources CMake adds only inside `if(ANDROID)`, carrying no self-guard,
 failing on `QJniEnvironment`. Their words: *"fmake cannot build hydra's
 `src/` today, and no flag fixes it."*
 
-Answered twice. Section 43 made the failure name `@os` as the remedy;
-section 50 reads a `_platform` suffix so nothing need be written at all --
-though **hydra's own names are `android_view.cpp`, platform in front**, so
-the suffix rule never fires on them and the rename they offered is still a
-rename. And it turned out not to be a blocker at all: the files compile
+Answered three times, the third because the first two missed. Section 43
+made the failure name `@os` as the remedy; section 50 read a `_platform`
+suffix so nothing need be written -- and **hydra's own names put the
+platform in front**, `android_view.cpp`, so the rule written from their
+report did not fire on their tree. It reads a leading word now, and their
+four files are excluded unrenamed. And it turned out not to be a blocker at all: the files compile
 here, and section 3 leaves them out of the link because nothing reaches
 them. What blocked the build was the include-path defect of section 37,
 found from a different report entirely.
@@ -4742,3 +4743,54 @@ about a browser built without keyring integration and no warning -- *worse
 than refusing* -- which is the standard the whole optional-feature diagnosis
 was written against, and which found three more instances than the report
 knew about.
+
+## 60. The word in front
+
+Section 50 read a platform out of a filename suffix, because that is what
+hydra's report asked for: *ignore `*_<platform>.cpp` unless building for
+that platform*. hydra's four files are `android_view.cpp`,
+`android_downloads.cpp`, `android_intents.cpp`, `android_dialogs.cpp`.
+
+**The rule written from their report did not fire on their tree.** Only
+running it on the tree found that, which is the argument for running it on
+the tree.
+
+The same words in front now, with one word held back. `ios_utils.cpp` about
+C++ iostreams is an ordinary file to write, and a rule whose entire safety
+argument is that a word cannot mean anything else does not get to keep a
+word that can -- so `ios` stays a suffix. Everything else is unambiguous
+leading a filename: `android_`, `win32_`, `windows_`, `darwin_`, `linux_`,
+`aarch64_`.
+
+### What it broke, and both were right to break
+
+**A case whose fixture was the convention.** `duplicate_definitions_are_refused`
+used `win32_sys.c` and `posix_sys.c` -- two implementations of one symbol,
+which fmake refuses to choose between. On Linux the Windows half is now
+excluded by its name, one definition is left, and there is nothing to
+refuse. The case picks names claiming no platform now, because what it tests
+is the refusal.
+
+That is a **capability**, not a casualty: a tree with `win32_sys.c` and
+`posix_sys.c` used to need `@os` on one of them and now builds unaided. The
+case that exists for the `@os` remedy still passes, so the older answer is
+intact for the trees whose names say nothing.
+
+**A case whose fixture was named `android_view.c`.** Section 43's, about a
+missing header naming `@os` as an escape. Its file is excluded by name
+before it can fail to compile, so the case stopped testing anything --
+loudly, which is the only reason it was noticed. Its fixture is
+`jni_bridge.c` now: the case is about a header that is not there, and the
+filename should not be doing half the work.
+
+### And a summary that read its own wording
+
+The line reporting how many sources were skipped by name decided whether to
+print by looking for `"named _"` **inside the message it was about to
+print**. Rewording the message one commit later -- `named _android` became
+`named for android only` -- silently stopped it printing, and the build
+skipped four files without a word.
+
+It records which branch decided, now. A message is for the reader; using it
+as a control signal makes every rewording a behaviour change, and this one
+was found only because a case asserted the summary rather than the exclusion.
