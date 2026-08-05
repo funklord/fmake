@@ -5499,6 +5499,34 @@ def build(args, _bootstrapping=False):
 		          + " settles it too."]
 		die("\n".join(lines))
 
+	# Two .qrc files with the same stem, in one program. rcc namespaces the
+	# *file* it writes by directory, so a/res.qrc and b/res.qrc do not
+	# overwrite each other -- and it derives the *symbols* from the stem, so
+	# both define qInitResources_res and the link fails with a multiple
+	# definition. The paths are distinct and the names are not, which is the
+	# collision of sections 65 and 66 one level down, in a rewriting rcc
+	# does rather than fmake.
+	#
+	# Reported here for the same reason the block above exists: left to the
+	# linker it arrives as an error about generated paths under the state
+	# directory, and fmake's own summary then offers to name the missing
+	# libraries when nothing is missing.
+	by_out = {j["out"]: j for j in qrc_jobs}
+	for t, cl in closures.items():
+		seen = {}
+		for u in cl.link:
+			job = by_out.get(u.rel)
+			if job:
+				seen.setdefault(job["name"], []).append(job["src"])
+		for name, srcs_with_name in sorted(seen.items()):
+			if len(srcs_with_name) > 1:
+				die(f"{t.name} links resources that would define the same "
+				    f"symbols:\n    "
+				    + "\n    ".join(sorted(srcs_with_name))
+				    + f"\nrcc names them after the file, so each defines "
+				    f"qInitResources_{name}(). Rename one so the stems "
+				    f"differ.")
+
 	# ---- resolve external symbols to libraries ------------------------
 	resolutions = {}
 	if not args.no_libs and not args.dry_run:

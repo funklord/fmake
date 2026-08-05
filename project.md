@@ -5019,3 +5019,55 @@ and it is not something the clean environment reproduces. The entry stays
 open. A flake dismissed because it stopped happening is how section 29 got
 written, and the difference between that and this is that this one has a
 number attached.
+
+## 67. The audit the last two findings suggested
+
+Sections 65 and 66 were both the same shape -- two names a user
+distinguishes and a consumer does not -- and both were found by asking what
+a rewriting could collide rather than by anything failing. That question is
+worth asking everywhere a name is rewritten, so it was.
+
+Most of the answers were reassuring, which is worth recording as much as
+the failure was:
+
+- **uic already refuses it**, and says so well: two `settings.ui` in
+  different directories would both produce `ui_settings.h`, an unqualified
+  include cannot say which, and fmake names both files and stops.
+- **moc and rcc namespace their output by directory**, so
+  `.fmake/qrc/a/qrc_res.cpp` and `.fmake/qrc/b/qrc_res.cpp` do not collide
+  as files.
+
+### The one that was not reassuring
+
+rcc namespaces the file it writes and **not the symbols inside it**. Both
+of those generated files define `qInitResources_res()`, because rcc derives
+the symbol from the stem, so a program using both fails to link with a
+multiple definition naming paths under the state directory -- and fmake's
+summary then offered to name the missing libraries, when nothing was
+missing. That is the misleading advice of section 31, and the block
+directly above the fix in the source exists for the identical reason with a
+comment saying so.
+
+It is reported per program rather than per tree, because two resources with
+one stem in two different programs is fine and refusing it would be wrong.
+
+The general form is now three deep: **a name is safe only in the namespace
+you can see, and a generator hands names to namespaces you cannot.** rcc's
+file names are namespaced by fmake and its symbol names are namespaced by
+nobody.
+
+### Two fixtures wrong in one case
+
+Writing the case for it went wrong twice, both times by resembling the
+thing rather than being it.
+
+The helper was called `_qrc`, and `selftest` already had a `_qrc` with a
+different signature two thousand lines further down, which silently won.
+The same collision as the finding, in Python's module scope, while writing
+the test for it.
+
+Then the fixture opened only one of the two resources. A `.qrc` is compiled
+only when a source opens a path in it -- which is fmake being right -- so
+the second was never built, there was no second object, and the case
+asserted a collision that could not occur. It opens both now, and the
+positive half runs the program to prove both resources are really there.

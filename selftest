@@ -898,6 +898,59 @@ def an_ejected_build_gets_a_rule_per_group(t):
 	      f"ninja needs a phony per group: {nj[-500:]}")
 
 
+def _qrc_file(t, path, prefix, note):
+	t.write(note, "hello\n")
+	t.write(path, f'<RCC><qresource prefix="/{prefix}">'
+	              f"<file>{os.path.basename(note)}</file></qresource></RCC>\n")
+
+
+@case
+def two_resources_with_one_stem_are_reported_not_left_to_the_linker(t):
+	"""rcc namespaces the file it writes and not the symbols in it.
+
+	a/res.qrc and b/res.qrc land in different directories, so neither
+	overwrites the other -- and both define qInitResources_res(), so the
+	link fails with a multiple definition naming generated paths under the
+	state directory. fmake's own summary then offered to name the missing
+	libraries, when nothing was missing.
+
+	Same collision as two target names sharing a Make variable, one level
+	down, in a rewriting rcc does rather than fmake."""
+	_need_qt()
+	if not _have_pkg("Qt6Core"):
+		raise Skip("Qt6Core not installed")
+	_qrc_file(t, "a/res.qrc", "a", "a/note.txt")
+	_qrc_file(t, "b/res.qrc", "b", "b/note.txt")
+	# Both paths, because a resource is compiled only when a source opens
+	# something in it. Naming one leaves the other unbuilt -- correctly --
+	# and the first version of this case did exactly that and then asserted
+	# a collision that could not happen.
+	t.write("main.cpp",
+	        "#include <QFile>\n#include <QCoreApplication>\n"
+	        "int main(int c, char **v){ QCoreApplication app(c, v);\n"
+	        '\treturn QFile(":/a/note.txt").exists()\n'
+	        '\t    && QFile(":/b/note.txt").exists() ? 0 : 1; }\n')
+
+	r = t.fmake()
+	check(r.returncode != 0, "the collision should be reported")
+	out = r.stdout + r.stderr
+	check("a/res.qrc" in out and "b/res.qrc" in out,
+	      f"both resources should be named: {out}")
+	check("qInitResources_res" in out,
+	      f"and the symbol they share: {out}")
+	check("--ldflags" not in out,
+	      f"nothing is missing, so do not offer to name libraries: {out}")
+
+	# Distinct stems are untouched.
+	os.remove(os.path.join(t.dir, "b/res.qrc"))
+	_qrc_file(t, "b/other.qrc", "b", "b/note.txt")
+	r = t.fmake("-B")
+	check(r.returncode == 0,
+	      f"distinct stems should link: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "both resources should be present at run time")
+
+
 @case
 def two_targets_that_are_one_make_variable_are_refused(t):
 	"""The same collision, in the older half of the same emitter.
