@@ -4619,10 +4619,60 @@ Two checks thirty seconds apart showed the compile count frozen at 125, and
 I reached for an explanation -- Python block-buffering a redirected stream --
 that fitted, was plausible, and was **not tested**. The reproduction written
 to confirm it proved nothing: the build finished inside four tenths of a
-second, so the flush at exit hid the question entirely. The real explanation
-was almost certainly duller, a few slow Qt template files under `-j8`.
+second, so the flush at exit hid the question entirely.
 
 A plausible mechanism is not a finding. The rule this document keeps
 restating for tests applies to diagnosis too: **a check that could not have
-failed has not confirmed anything**, and the honest move is to drop the
-claim rather than to keep it because it sounded right.
+failed has not confirmed anything.**
+
+(The guess at a duller explanation that stood here -- a few slow Qt template
+files -- was itself untested, and section 58 is what happened when the
+question was pursued properly.)
+
+## 58. The live group, and a claim that would not stay proved
+
+`fmake live` on hydra: **31 drivers built, 31 run, and the command
+returned.** Seven failed -- three timed out at sixty seconds, three exited
+1, one exited 2 -- and the run ended on its own. Before the deadline existed
+this suite could not finish at all: one driver waiting on a website held the
+rest indefinitely, which is how the first trial stopped at 47 of 66.
+
+Together with section 57 that is the whole convention demonstrated on the
+tree that asked for it. A plain build gives the browser. `fmake test` gives
+38 unit binaries and 38 results. `fmake live` gives 31 drivers and 31
+results, bounded. Nothing in the tree needed changing except 31 comments.
+
+### The buffering claim, three times
+
+Section 57 recorded a guess about why a redirected log sat still, and
+recorded that the guess was untested. Pursuing it properly is worth
+recording, because the answer changed direction twice and landed on
+nothing.
+
+1. **Evidence that looked conclusive.** The live build's log held **0 bytes
+   for fifty seconds** with nine compilers running, then 9820 at once --
+   just past Python's 8192-byte block. That reads as block buffering, and it
+   was written up as such.
+2. **A direct test that contradicted it.** Reading fmake's stdout through a
+   pipe, the first line arrived after 0.24 seconds *with the fix removed*.
+   Whatever the log was doing, output was not being withheld. The sampling
+   in (1) could not tell "produced but buffered" from "not produced yet" --
+   fmake scans before it compiles, and a scan prints nothing.
+3. **The test that should have decided it decided against the fix.**
+   Killing a redirected build after six seconds leaves the same log either
+   way: 10 lines, 788 bytes. Whatever justification line-buffering has, it
+   is not one this tree can show.
+
+So the change was reverted. Python does block-buffer a redirected stream --
+`line_buffering` is False, which was verified -- and no measurement here
+finds any behaviour that changes when it is turned off. **A fix that cannot
+be shown to fix anything does not ship**, which is the same rule that
+removed the two redundant include-resolution fixes and the tri-state in
+section 40, applied to a change of my own that I wanted to be right.
+
+What went wrong twice was the same thing: reading a *symptom consistent with*
+a mechanism as evidence *of* it. Zero bytes is consistent with buffering and
+equally consistent with silence. The distinguishing experiment is never the
+one that reproduces the symptom; it is the one that separates the two
+explanations, and it is worth finding before writing the paragraph rather
+than after.
