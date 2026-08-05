@@ -82,11 +82,26 @@ jobs:
 
       # The suite needs a compiler, a linker and several optional libraries,
       # which is why the package build does not run it -- see debian/rules.
+      # python3 is named even though the runner image ships one. Relying on
+      # what a runner happens to preinstall is the same implicit dependency
+      # that left python3 out of debian/control, where the build needed it
+      # and no local machine ever noticed.
+      # Every entry earns its place by un-skipping cases, measured in a
+      # container rather than guessed: without them the suite skips 49 of
+      # 231, including all 32 that exercise moc, uic and rcc -- the hardest
+      # thing fmake does, and the thing a green run would then be silent
+      # about. With them, 227 run.
+      #
+      # libc6-dev-arm64-cross is not optional garnish. The cross compiler
+      # without a target libc turns ten clean skips into seven failures,
+      # which is worse than not installing it at all.
       - name: test dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkgconf binutils ninja-build zlib1g-dev
+            build-essential pkgconf binutils ninja-build python3 \
+            zlib1g-dev libxml2-dev libncurses-dev qt6-base-dev \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
       - name: suite
         run: make check

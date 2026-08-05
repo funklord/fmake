@@ -2701,9 +2701,15 @@ int main(void){ printf("%d\\n", twice(21)); return 0; }
 	check(_run_in(t.dir, "./tool").stdout == "42\n",
 	      "the ejected program does not work")
 
-	kind = subprocess.run(["file", "-b", os.path.join(t.dir, "libgreet.so")],
+	# readelf rather than `file`: binutils is already required -- fmake
+	# reads symbol tables with nm -- and `file` is not, so asking it turned
+	# a missing utility into an error rather than a skip. Found by running
+	# the suite in a container with only what CI installs.
+	head = subprocess.run(["readelf", "-h",
+	                       os.path.join(t.dir, "libgreet.so")],
 	                      capture_output=True, text=True).stdout
-	check("shared object" in kind, f"libgreet.so is not one: {kind!r}")
+	check("DYN (Shared object file)" in head,
+	      f"libgreet.so is not a shared object: {head!r}")
 
 
 @case

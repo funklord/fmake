@@ -4933,3 +4933,43 @@ carries a floor because someone had already been bitten by it. It caught a
 config edit made while adding a job whose whole purpose is catching things
 locally invisible, which is a tidy demonstration of why the floor is not
 paranoia.
+
+## 64. The half of the job that had not been run
+
+Section 63 verified the package job in a real bookworm container before
+writing it down. The second job -- suite and style gate on an ordinary
+runner -- was not verified at all, and a dependency list nobody has run is a
+guess with YAML around it. Running it the same way found three things.
+
+**Ubuntu's base image ships no python3**, so `make check` died before the
+suite started. On a GitHub runner it would have worked, because that image
+preinstalls one -- which is the same implicit dependency that left `python3`
+out of `debian/control`, where every local machine had it for other
+reasons. It is named now. Relying on what a runner happens to preinstall is
+relying on something nobody declared.
+
+**A case called `file` and nothing installs it.** `eject_handles_libraries_too`
+verified `libgreet.so` really is a shared object by shelling out to `file`,
+which turned a missing utility into an **error** rather than a skip -- the
+one case in 231 that could not degrade. `readelf -h` answers the same
+question and binutils is already required, since fmake reads symbol tables
+with `nm`. No new dependency, and the check still happens.
+
+**The green run was skipping 49 cases, 32 of them Qt.** A job that passes
+while silent about moc, uic and rcc is testing the easy half of the tool.
+Adding the libraries those cases want takes the run from 182 passed and 49
+skipped to **227 and 4**.
+
+### The entry that had to be measured
+
+`gcc-aarch64-linux-gnu` alone makes it worse. The cross cases skip cleanly
+when there is no cross compiler; install one without a target libc and ten
+skips become **seven failures**, because a cross build needs
+`libc6-dev-arm64-cross` to link anything. A dependency list assembled by
+reading names would have stopped at the compiler and produced a permanently
+red job.
+
+Every entry in that list was chosen by running the suite in a container and
+watching what stopped being skipped. That is the same rule the suite holds
+its own cases to: **a green run is only worth what it actually exercised**,
+and the number of skips is part of the result rather than a footnote to it.
