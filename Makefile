@@ -16,7 +16,11 @@ BUILD_DIR  ?= build
 # Read rather than restated. Two hand-edited copies of a version number
 # drift, and the symptom is a package whose reported version disagrees with
 # the one that installed it.
-VERSION     = $(shell sed -n 's/^VERSION *= *"\(.*\)"/\1/p' fmake)
+# The one place the version is stated. The script carries a literal rather
+# than reading this file: fmake is one file and stdlib only, so it cannot
+# depend on something beside it at runtime. check-version holds the three in
+# step instead.
+VERSION     = $(shell cat VERSION)
 DEB_VERSION = $(shell sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
 DEB_ARCH    = $(shell dpkg-architecture -qDEB_HOST_ARCH 2>/dev/null)
 
@@ -57,12 +61,19 @@ check: check-version style test
 # The version is written in two files and nothing else compares them. This
 # is what debian/rules runs in place of the suite: it needs no compiler, so
 # the package build itself refuses to produce a mismatched pair.
+# Three statements of one number: the VERSION file, which is the source; the
+# literal in the script, which cannot read a file because fmake ships as one
+# file; and debian/changelog, which dpkg reads and nothing else can supply.
 check-version:
-	@test -n "$(VERSION)" || { echo "no VERSION in fmake" >&2; exit 1; }
+	@test -n "$(VERSION)" || { echo "VERSION file is empty or missing" >&2; exit 1; }
 	@test -n "$(DEB_VERSION)" || { echo "no version in debian/changelog" >&2; exit 1; }
+	@script=$$(sed -n 's/^VERSION *= *"\(.*\)"/\1/p' fmake); \
+	 test "$(VERSION)" = "$$script" || { \
+		echo "version-check: VERSION says $(VERSION), fmake says $$script" >&2; exit 1; }
 	@test "$(VERSION)" = "$(DEB_VERSION)" || { \
-		echo "version mismatch: fmake says $(VERSION), debian/changelog says $(DEB_VERSION)" >&2; \
+		echo "version-check: VERSION says $(VERSION), debian/changelog says $(DEB_VERSION)" >&2; \
 		exit 1; }
+	@echo "check-version: $(VERSION), in step"
 
 # Builds ../fmake_<version>_all.deb. -b because there is no upstream tarball
 # to sign or ship: the packaging is native and the source is this directory.
