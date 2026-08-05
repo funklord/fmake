@@ -1112,6 +1112,7 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	rules = all_generate_rules(root, conf, srcs, scans)
 	if not rules:
 		return []
+	before, ran = set(sum(walk_tree(root), [])), False
 
 	for name, r in sorted(rules.items()):
 		if not (r.get("command") or r.get("commands")):
@@ -1206,6 +1207,31 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 		if missing:
 			die(f"[generate.{name}] did not produce {', '.join(missing)}")
 		store[name] = key
+		ran = True
+
+	# A generator that writes more than it declared. The extra file is
+	# picked up by the re-walk and compiles, so the first build is fine --
+	# and the rule's freshness is keyed on the outputs it named, so once
+	# that file goes missing nothing re-runs the generator. The build then
+	# fails on an undefined symbol, and fmake offers to name the missing
+	# library, which is the wrong end of the problem entirely.
+	#
+	# Only after something ran. This is an optimisation and not a
+	# correctness guard -- on a cached build no file appears, so the
+	# comparison would find nothing either way, and no case fails without
+	# it. What it buys is not walking the tree on every no-op build.
+	if ran:
+		after = set(sum(walk_tree(root), []))
+		declared = {o for r in rules.values() for o in r["outputs"]}
+		extra = sorted(after - before - declared)
+		if extra:
+			shown = ", ".join(extra[:4])
+			if len(extra) > 4:
+				shown += f", and {len(extra) - 4} more"
+			warn(f"a [generate.*] rule wrote {shown} without naming "
+			     f"{'them' if len(extra) > 1 else 'it'} in outputs; add "
+			     f"{'them' if len(extra) > 1 else 'it'}, or a missing one "
+			     f"will not re-run the rule")
 
 	return produced
 

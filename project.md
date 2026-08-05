@@ -5457,3 +5457,37 @@ was a defect in the thing that would have reduced it to one.
 **A number that looks larger than it should be is worth one question**, and
 the question is not always answered by the feature you expected to be
 missing.
+
+## 76. A generator that writes more than it declared
+
+A `[generate.*]` rule names its outputs, and fmake keys the rule's freshness
+on them. A generator that writes a file it did not name is invisible: the
+re-walk picks the file up and compiles it, so the first build is right.
+
+Then delete that file. The rule's declared outputs are all present, so
+nothing re-runs it, and the build fails with an undefined symbol -- and
+fmake, seeing an unresolved symbol, offers to name the missing library with
+`--ldflags`. The wrong end of the problem entirely, on a tree where the
+answer was that a generator had not run.
+
+That is the failure class `build-and-commit.md` names first: a rule that
+quietly does not run, producing a stale artifact and a confusing symptom
+somewhere else. It is warned about now -- the file is named, and the reason
+given is the one that matters, that a missing one will not re-run the rule.
+
+### Two mutations, and why the disk mattered
+
+The first attempt at the case declared the outputs and rebuilt, and the
+subtraction of declared outputs could be removed without failing it. The
+files already existed from the run before, so nothing was *new* and the
+comparison was empty either way. The case removes the directory first now.
+
+The other mutation stands: the check runs only when a generator actually
+ran, and no case fails without that condition, because a cached build
+creates no files to compare. It is an optimisation -- not walking the tree
+on every no-op build -- and is labelled as one rather than defended.
+
+Both were first reported as MISSED during a run where the disk was full,
+which produced five unrelated failures at the same time. **A mutation result
+from a broken environment is not a result**, and both were re-run once there
+was room; one changed its answer.

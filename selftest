@@ -2376,6 +2376,55 @@ def an_ejected_makefile_warns_off_the_two_helpful_edits(t):
 
 
 @case
+def a_generator_that_writes_more_than_it_declared_is_reported(t):
+	"""The extra file builds, and then stops rebuilding.
+
+	An undeclared output is picked up by the re-walk and compiles, so the
+	first build is fine. But a rule's freshness is keyed on the outputs it
+	named, so once that file goes missing nothing re-runs the generator --
+	the build fails on an undefined symbol, and fmake offers to name the
+	missing library, which is the wrong end of the problem entirely.
+
+	`build-and-commit.md` calls this failure class by name: a rule that
+	quietly does not run, producing a stale artifact and a confusing symptom
+	somewhere else."""
+	t.write("in.txt", "x\n")
+	t.write("fmake.toml", "[generate.pair]\n"
+	        'command = "mkdir -p gen; '
+	        "echo 'int a(void){return 1;}' > gen/a.c; "
+	        "echo 'int b(void){return 2;}' > gen/b.c\"\n"
+	        'inputs  = ["in.txt"]\n'
+	        'outputs = ["gen/a.c"]\n')
+	t.write("main.c", "int a(void); int b(void);\n"
+	        "int main(void){ return a() + b() - 3; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"it should still build: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	check("gen/b.c" in out and "without naming" in out,
+	      f"the undeclared output should be named: {out}")
+
+	# Declaring it silences the warning and makes the rule re-run when the
+	# file goes missing, which is the property the warning is about.
+	t.write("fmake.toml",
+	        open(os.path.join(t.dir, "fmake.toml")).read().replace(
+	            'outputs = ["gen/a.c"]', 'outputs = ["gen/a.c", "gen/b.c"]'))
+	# From a clean tree. The files already exist after the run above, so a
+	# rebuild sees nothing new and the check passes whether or not the
+	# declared outputs are subtracted -- which is what mutation reported.
+	shutil.rmtree(os.path.join(t.dir, "gen"), ignore_errors=True)
+	r = t.fmake("-B")
+	check("without naming" not in r.stdout + r.stderr,
+	      f"a declared output is not a surprise: {r.stdout}")
+	os.unlink(os.path.join(t.dir, "gen/b.c"))
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the rule should re-run and rebuild it: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "gen/b.c")),
+	      "the missing output should be back")
+
+
+@case
 def generated_sources_survive_ejection(t):
 	"""The exit has to carry the generators, or it is not an exit."""
 	if not shutil.which("make"):
