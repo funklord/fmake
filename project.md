@@ -5071,3 +5071,61 @@ only when a source opens a path in it -- which is fmake being right -- so
 the second was never built, there was no second object, and the case
 asserted a collision that could not occur. It opens both now, and the
 positive half runs the program to prove both resources are really there.
+
+## 68. beerssh, built
+
+beerssh's verdict was *"Not viable for beerssh today, and (2) is most of the
+reason"*, with *"worth re-testing if the include-path rule changes."* It
+changed, so it was re-tested -- on their tree rather than on a
+reproduction.
+
+Four of their findings are handled with no configuration at all, and the
+run says so in four lines: the two Android sources excluded by name, the
+vendored `vterm` submodule's four programs left to it, `tests/main.cpp`
+qualified to `bs_tests` rather than refused, and the test binary held back
+from the default build.
+
+It builds. What it needs is three lines of `fmake.toml`, and both entries
+are things fmake cannot know rather than things it gets wrong: a version
+string their Makefile computes, and which directory holds the vendored
+library's headers.
+
+### The advice that was wrong about a header in the tree
+
+`emulator_vterm.cpp` has `#include <vterm.h>`, and the file is at
+`vterm/include/vterm.h` -- inside the tree fmake had just walked. The
+failure said the header was on no include path, then offered to install a
+package or exclude the file by platform. **Being told to install something
+that is already present is worse than being told nothing**, and it is the
+misleading-advice failure of section 31 arriving in the message written to
+avoid it.
+
+fmake knows every header in the tree, so when the missing one is among them
+it now says where, and what would find it. That is exact rather than a
+guess, which is why it replaces the two speculative remedies instead of
+joining them -- and following it builds the tree.
+
+### What is understood about the cause, and what is not
+
+A dry run offers `-Ivterm/include`, so the directory is discoverable; the
+compile that needs it happens first. The including file is reached by
+widening rather than through the root's include graph, which is what the
+case reproduces deterministically.
+
+**Why the ordering falls that way is not pinned down**, and it is not
+claimed here. Resolving `<>` includes against the tree earlier would make
+this build with no `include-dirs` line at all, and it would also let a
+tree header shadow a system one of the same name, which is a real risk and
+not one to take late in a session on a hunch. Section 57 is in this
+document because a plausible mechanism was written up as a finding; the
+mechanism here stays an open question with a reproduction attached.
+
+### Two fixtures, again
+
+The first fixture put the include in `main.c`, where fmake resolves it --
+so it built, and the case had nothing to test. The second omitted any
+header that could falsely match, so dropping the separator from the
+whole-component rule failed nothing. Both were caught by mutation, both are
+the same error, and the count for this session is now high enough that the
+rule is worth stating as a habit rather than a lesson: **write the fixture
+that fails first, then the fix.**

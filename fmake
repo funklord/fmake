@@ -2677,8 +2677,22 @@ def _missing_header(msg):
 	return m.group(1).strip().strip("'\"")
 
 
+def _header_in_tree(name, headers):
+	"""Where this tree holds the header the compiler could not find.
+
+    Matched on whole path components, the same rule as everywhere else
+    here: `time.h` must not be answered by `datetime.h`. Shortest path
+    wins, so a header at the root beats one buried under a vendored copy
+    of itself.
+    """
+	want = "/" + name.replace(os.sep, "/")
+	hits = [h for h in headers
+	        if h == name or h.replace(os.sep, "/").endswith(want)]
+	return min(hits, key=lambda h: (h.count("/"), len(h))) if hits else None
+
+
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
-                  broken=None):
+                  broken=None, tree_headers=()):
 	"""Compile what is stale. Returns True if anything was actually built.
 
     `broken` collects the files that would not compile, so the caller can
@@ -2758,11 +2772,23 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			# beats naming the likelier one: fmake does not know which.
 			miss = _missing_header(msg)
 			if miss:
+				# The third remedy, and the only exact one when it applies:
+				# the header is in this tree and nothing put its directory
+				# on the include path. A vendored library included as
+				# <vterm.h> from vterm/include is not a missing package and
+				# not a file for another platform, and being told to
+				# install something is worse than being told nothing.
+				here = _header_in_tree(miss, tree_headers)
 				note(f"{miss} is on no include path here")
-				note(f"if it comes from a package, install it or name it "
-				     f"with @pkg")
-				note(f"if {first_unit.rel} belongs to another platform, "
-				     f"@os NAME or @arch NAME keeps it out of this build")
+				if here:
+					note(f"it is in this tree, at {here}")
+					note(f"[project] include-dirs = "
+					     f"[{os.path.dirname(here)!r}] would find it")
+				else:
+					note(f"if it comes from a package, install it or name "
+					     f"it with @pkg")
+					note(f"if {first_unit.rel} belongs to another platform, "
+					     f"@os NAME or @arch NAME keeps it out of this build")
 			if VERBOSE or len(groups) == 1 and len(hit) == 1:
 				PROGRESS.write(first_err)
 			elif len(hit) > 1:
@@ -5275,7 +5301,7 @@ def build(args, _bootstrapping=False):
 	while True:
 		pool = [units[r] for r in sorted(units)]
 		compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
-		              broken)
+		              broken, tree_headers=hdrs)
 		# The architecture to require is whatever fmake just compiled. Asking
 		# the objects avoids having to know anything about toolchain
 		# triplets, and is right by construction -- but it means waiting

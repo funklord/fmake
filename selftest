@@ -3571,6 +3571,63 @@ def a_missing_header_names_the_platform_escape(t):
 
 
 @case
+def a_header_the_tree_already_holds_is_named(t):
+	"""beerssh vendors libvterm and includes it as <vterm.h>.
+
+	The file is at vterm/include/vterm.h -- inside the tree fmake just
+	walked -- and the advice offered to install a package or exclude the
+	file by platform. Neither is right, and being told to install something
+	that is already there is worse than being told nothing.
+
+	fmake knows every header in the tree, so when the missing one is among
+	them it says where and what would find it. That is exact rather than a
+	guess, which is why it replaces the two speculative remedies instead of
+	joining them."""
+	# The including file has to be one fmake reaches by widening rather
+	# than through the root's include graph -- which is beerssh's shape,
+	# and the first version of this fixture put the include in main.c,
+	# where fmake resolves it and the case had nothing to test.
+	t.write("vendor/include/thing.h", "#pragma once\nint thing(void);\n")
+	t.write("vendor/thing.c", "int thing(void){ return 0; }\n")
+	t.write("src/emu.c", "#include <thing.h>\n"
+	        "int emu_start(void){ return thing(); }\n")
+	t.write("src/main.c", "int emu_start(void);\n"
+	        "int main(void){ return emu_start(); }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("thing.h is on no include path here" in out,
+	      f"the missing header should be named: {out}")
+	check("vendor/include/thing.h" in out,
+	      f"and where the tree holds it: {out}")
+	check("include-dirs" in out,
+	      f"and what would find it: {out}")
+	check("install it or name it with @pkg" not in out,
+	      f"it is not a missing package: {out}")
+
+	# And the advice works when followed.
+	t.write("fmake.toml", "[project]\ninclude-dirs = ['vendor/include']\n")
+	r = t.fmake("-B")
+	check(r.returncode == 0,
+	      f"following the advice should build: {r.stdout}{r.stderr}")
+
+	# A header that is genuinely absent still gets the other two remedies.
+	# A header that is genuinely absent still gets the other two remedies --
+	# and must not be answered by one whose name merely ends the same way.
+	# `xtimer.h` does not satisfy `<timer.h>`, which is the whole-component
+	# rule this tree applies everywhere a name is matched against a path.
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("vendor/include/xtimer.h", "#pragma once\n")
+	t.write("src/emu.c", "#include <timer.h>\n"
+	        "int emu_start(void){ return 0; }\n")
+	out = t.fmake("-B").stdout + t.fmake().stderr
+	check("install it or name it with @pkg" in out,
+	      f"an absent header is still a missing package: {out}")
+	check("xtimer.h" not in out,
+	      f"a longer name is not the header that was asked for: {out}")
+
+
+@case
 def an_unrelated_error_gets_no_platform_advice(t):
 	"""A wrong remedy costs more than none -- section 31, and this is where it
 	would land, since a compile failure is read by someone already stuck."""
