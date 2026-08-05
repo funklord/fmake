@@ -743,6 +743,136 @@ def a_timeout_that_is_not_a_number_is_refused(t):
 		      f"the key should be named: {r.stdout}{r.stderr}")
 
 
+def _grouped(t):
+	"""A unit test and a live driver, which is hydra's shape."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/unit_test.c",
+	        '#include <stdio.h>\nint main(void){ puts("unit ok"); return 0; }\n')
+	t.write("tests/live/fetch_test.c",
+	        "/** @test live */\n#include <stdio.h>\n"
+	        'int main(void){ puts("live ok"); return 0; }\n')
+
+
+@case
+def a_test_group_is_not_run_by_the_default_group(t):
+	"""hydra has 66 test programs of which 26 are live drivers.
+
+	A directory name cannot say which is which -- `tests/` holds both,
+	correctly, because both are tests. What separates them is what they
+	need, not what they check, and that is something only the source can
+	state. `@test live` states it; `fmake live` runs them."""
+	_grouped(t)
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"failed: {r.stdout}{r.stderr}")
+	check("unit ok" in r.stdout and "live ok" not in r.stdout,
+	      f"`fmake test` runs the default group only: {r.stdout}")
+
+	r = t.fmake("live")
+	check(r.returncode == 0, f"failed: {r.stdout}{r.stderr}")
+	check("live ok" in r.stdout and "unit ok" not in r.stdout,
+	      f"`fmake live` runs that group only: {r.stdout}")
+
+	r = t.fmake("test", "live")
+	check("live ok" in r.stdout and "unit ok" in r.stdout,
+	      f"naming both runs both: {r.stdout}")
+
+	# Two filters stand between a group name and a test running: which
+	# targets get built, and which of those get run. Each masks the other's
+	# removal, so both need an assertion that the other cannot satisfy.
+	#
+	# Built: `fmake test` must not produce the live binary at all. The
+	# earlier step in this case built it, and a rebuild does not unlink
+	# what it does not make -- so the file has to go first or the check
+	# passes on a leftover.
+	os.unlink(os.path.join(t.dir, "fetch_test"))
+	t.fmake("-B", "test")
+	check(not os.path.exists(os.path.join(t.dir, "fetch_test")),
+	      f"`fmake test` should not build the live group: "
+	      f"{os.listdir(t.dir)}")
+
+	# Run: name a live test alongside `test`. It is asked for, so it is
+	# built; it is not in the group asked for, so it is not run.
+	r = t.fmake("test", "fetch_test")
+	check(os.path.exists(os.path.join(t.dir, "fetch_test")),
+	      "naming it should build it")
+	check("unit ok" in r.stdout and "live ok" not in r.stdout,
+	      f"a test outside the group asked for is built, not run: "
+	      f"{r.stdout}")
+
+
+@case
+def a_plain_build_holds_back_every_group(t):
+	"""Whatever group it is in, a test is still a test.
+
+	And the message has to name every group, because with more than one
+	`fmake test` is no longer the whole answer."""
+	_grouped(t)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"failed: {r.stdout}{r.stderr}")
+	for name in ("unit_test", "fetch_test"):
+		check(not os.path.exists(os.path.join(t.dir, name)),
+		      f"{name} should not be in the default build")
+	out = r.stdout + r.stderr
+	check("`fmake test`" in out and "`fmake live`" in out,
+	      f"both groups should be named: {out}")
+
+
+@case
+def an_ejected_build_gets_a_rule_per_group(t):
+	"""One rule per group, and `all` depends on none of them."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	_grouped(t)
+
+	mk = t.fmake("--eject").stdout
+	t.write("Makefile", mk)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+
+	r = subprocess.run(["make", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"default build failed: {r.stderr}")
+	for name in ("unit_test", "fetch_test"):
+		check(not os.path.exists(os.path.join(t.dir, name)),
+		      f"`all` must not build {name}")
+
+	for rule, want, other in (("test", "unit ok", "live ok"),
+	                          ("live", "live ok", "unit ok")):
+		r = subprocess.run(["make", "-C", t.dir, rule],
+		                   capture_output=True, text=True)
+		check(r.returncode == 0, f"make {rule} failed: {r.stderr}")
+		check(want in r.stdout and other not in r.stdout,
+		      f"make {rule} ran the wrong group: {r.stdout}")
+
+	nj = t.fmake("--eject", "ninja").stdout
+	check("build test: phony" in nj and "build live: phony" in nj,
+	      f"ninja needs a phony per group: {nj[-500:]}")
+
+
+@case
+def a_group_name_that_is_not_a_name_is_refused(t):
+	"""A group becomes a command-line word and a Make target, so it has to
+	be spellable as both. Refusing early beats emitting a Makefile that
+	will not parse."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/odd_test.c", "/** @test live! */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "a group with punctuation should be refused")
+	check("is not a name" in r.stdout + r.stderr,
+	      f"and say why: {r.stdout}{r.stderr}")
+
+	# And more than one word, which the scalar form would silently reduce
+	# to the first: `@test Live Drivers` becoming the group `live` is the
+	# misclassification this directive exists to prevent.
+	t.write("tests/odd_test.c", "/** @test live drivers */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "two words should be refused")
+	check("takes one word" in r.stdout + r.stderr,
+	      f"and say why: {r.stdout}{r.stderr}")
+
+
 @case
 def only_tests_are_run_as_tests(t):
 	"""`fmake test myapp` built the program and then ran it as a test.

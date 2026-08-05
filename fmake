@@ -423,7 +423,8 @@ CONF_SCHEMA = {
     "target": {"*": {
         "name": S, "target": S, "kind": S, "root": S,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
-        "test": B, "test-args": L, "test-timeout": N,
+        "test": B, "test-group": S, "test-args": L,
+        "test-timeout": N,
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
@@ -935,8 +936,8 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 	default = conf.project.get("test-timeout", DEFAULT_TEST_TIMEOUT)
 	# What was built is not what is run. `fmake test myapp` builds the
 	# program and the tests, and running the program as a test would report
-	# its exit status as a test result -- which it did, and counted it.
-	targets = [t for t in targets if t.test]
+	# its exit status as a test result -- which it did, and counted it. The
+	# caller has already narrowed this to the groups asked for.
 	failed = []
 	for t in sorted(targets, key=lambda x: x.name):
 		exe = os.path.join(outdir, t.filename)
@@ -4018,21 +4019,46 @@ def looks_like_a_test(rel):
 	return None
 
 
-def _ann_test(ann):
-	"""@test, @test no, or absent.
+DEFAULT_TEST_GROUP = "test"
 
-    Present with no argument means yes, which is how anyone writes it.
+RE_TEST_GROUP = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+
+def _ann_test(ann, rel=""):
+	"""What `@test` said: None if absent, False if no, else a group name.
+
+    A group is how a tree separates tests that differ in what they need
+    rather than in what they check. hydra has 66 test programs of which 26
+    are live drivers wanting a network, and a directory name cannot say
+    which is which -- `tests/` holds both, correctly, because both are
+    tests.
+
+    Present with no argument means the default group, which is how anyone
+    writes it when there is only one.
     """
 	if "test" not in ann.raw:
 		return None
-	return str(ann.scalar("test", "yes")).lower() not in ("no", "false", "0")
+	# One word, because the scalar form takes the first and would drop the
+	# rest -- so `@test Live Drivers` would quietly become the group `live`.
+	# A directive whose whole purpose is to classify must not classify
+	# differently from how it reads.
+	line, args = ann.raw["test"][-1]
+	if len(args) > 1:
+		die(f"{rel}:{line}: @test {' '.join(args)} takes one word: a group "
+		    f"name, or `no`")
+	value = str(ann.scalar("test", "yes")).lower()
+	if value in ("no", "false", "0"):
+		return False
+	if value in ("yes", "true", "1"):
+		return DEFAULT_TEST_GROUP
+	return value
 
 
 class Target:
 	"""One artifact: what roots it, what it is called, and what kind it is."""
 
 	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
-	             "test", "test_why")
+	             "test_group", "test_why")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
@@ -4048,11 +4074,16 @@ class Target:
 		self.members = None
 		# A role, not a kind. A test is still an ordinary exe -- what
 		# changes is only whether a plain build produces it.
-		said = _ann_test(ann)
+		said = _ann_test(ann, rel)
 		found = looks_like_a_test(rel) if rel else None
-		self.test = said if said is not None else bool(found)
-		self.test_why = (f"@test in {rel}" if said is not None
-		                 else found or "")
+		if said is False:
+			self.test_group, self.test_why = None, ""
+		elif said:
+			self.test_group, self.test_why = said, f"@test in {rel}"
+		elif found:
+			self.test_group, self.test_why = DEFAULT_TEST_GROUP, found
+		else:
+			self.test_group, self.test_why = None, ""
 		self.apply_conf(conf or {})
 
 	def apply_conf(self, section):
@@ -4063,10 +4094,19 @@ class Target:
 		self.kind = section.get("kind", self.kind)
 		self.name = section.get("target", section.get("name", self.name))
 		if "test" in section:
-			self.test = bool(section["test"])
-			self.test_why = f"[target.*] test = {str(self.test).lower()}"
+			on = bool(section["test"])
+			self.test_group = DEFAULT_TEST_GROUP if on else None
+			self.test_why = f"[target.*] test = {str(on).lower()}"
+		if section.get("test-group"):
+			self.test_group = section["test-group"]
+			self.test_why = f"[target.*] test-group = {self.test_group!r}"
 		if section.get("sources"):
 			self.members = list(section["sources"])
+
+	@property
+	def test(self):
+		"""Whether a plain build skips this, whatever group it is in."""
+		return self.test_group is not None
 
 	@property
 	def filename(self):
@@ -4243,7 +4283,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	print(f"  {_col(CYAN('kind'), W)}{DIM(f'{t.kind}: {how}')}")
 	if t.test:
 		role = (f"{t.test_why}; not built by default, "
-		        f"`fmake test` builds and runs it")
+		        f"`fmake {t.test_group}` builds and runs it")
 		print(f"  {_col(CYAN('test'), W)}{DIM(role)}")
 
 	if t.members is not None:
@@ -4904,7 +4944,12 @@ def build(args, _bootstrapping=False):
 	# it: the rule is about what a bare `fmake` does, not about permission.
 	held = [t for t in targets if t.test]
 	wanted = [t for t in targets if not t.test]
-	run_tests, named = False, []
+	groups = sorted({t.test_group for t in held})
+	for g in groups:
+		if not RE_TEST_GROUP.match(g):
+			die(f"test group {g!r} is not a name: lowercase, starting with "
+			    f"a letter, then letters, digits, - or _")
+	run_groups, named = [], []
 	if args.eject:
 		# An ejected build file describes the project, not this invocation.
 		# Leaving the tests out would produce a Makefile that cannot build
@@ -4930,8 +4975,8 @@ def build(args, _bootstrapping=False):
 				continue
 			# Last, so a project that has its own `test` -- a phony rule in
 			# fmake.mk, or a program actually called that -- keeps it.
-			if name == "test":
-				run_tests = True
+			if name in groups:
+				run_groups.append(name)
 				continue
 			known = set(by_name) | set(phony)
 			if held:
@@ -4943,19 +4988,22 @@ def build(args, _bootstrapping=False):
 		# suite, and naming it on its own only ever built it. Naming
 		# something that is not a test alongside `test` still builds it and
 		# does not make it a test.
-		if run_tests and not [t for t in named if t.test]:
-			wanted += [t for t in held if t not in wanted]
+		picked = [t for t in named if t.test_group in run_groups]
+		if run_groups and not picked:
+			wanted += [t for t in held
+			           if t.test_group in run_groups and t not in wanted]
 		if not wanted and asked_phony:
 			wanted = []         # an action with nothing of ours to build
-		if run_tests and not held:
+		if run_groups and not held:
 			warn("no test programs here: nothing is in a test directory, "
 			     "named as a test, or marked @test")
 			return 0
 	elif held:
 		n = len(held)
+		how = " or ".join(f"`fmake {g}`" for g in groups)
 		info(f"{n} test program{'' if n == 1 else 's'} not built by "
 		     f"default ({', '.join(sorted(t.name for t in held)[:3])}"
-		     f"{', ...' if n > 3 else ''}); `fmake test` builds and runs them")
+		     f"{', ...' if n > 3 else ''}); {how} builds and runs them")
 
 	# ---- candidate set from the include graph -------------------------
 	units = {}
@@ -5588,13 +5636,15 @@ def build(args, _bootstrapping=False):
 	# that did not relink is a test binary that answers a question about
 	# some earlier version of the code, which is the failure this whole
 	# convention was traded against.
-	if run_tests and not failed:
+	if run_groups and not failed:
 		if broken:
 			say()
 			warn(f"{len(broken)} file(s) did not compile; not running tests")
 			return 1
 		say()
-		return run_tests_now(wanted, root, outdir, conf, args.dry_run)
+		return run_tests_now([t for t in wanted
+		                      if t.test_group in run_groups],
+		                     root, outdir, conf, args.dry_run)
 
 	if broken:
 		say()
@@ -5855,25 +5905,37 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# Makefile -- including a generated one, since a generated Makefile is
 	# still a Makefile someone will edit.
 	tests = [t for t in targets if t.test]
+	by_group = {}
+	for t in tests:
+		by_group.setdefault(t.test_group, []).append(t)
+	group_names = sorted(by_group)
 	names = " ".join(t.filename for t in targets if not t.test)
-	test_names = " ".join(t.filename for t in tests)
+
+	def group_var(g):
+		return ("FM_" if fragment else "") + _mk_ident(g).upper() + "_TARGETS"
+
+	def group_rule(g):
+		return ("fmake-" + g) if fragment else g
+
 	if fragment:
 		a(f"FM_TARGETS = {names}")
-		if tests:
-			a(f"FM_TEST_TARGETS = {test_names}")
-		a("")
-		a(".PHONY: fmake-all fmake-clean" + (" fmake-test" if tests else ""))
+	for g in group_names:
+		a(f"{group_var(g)} = "
+		  + " ".join(t.filename for t in sorted(by_group[g],
+		                                        key=lambda x: x.name)))
+	a("")
+	phonies = " ".join(group_rule(g) for g in group_names)
+	if fragment:
+		a(".PHONY: fmake-all fmake-clean"
+		  + (" " + phonies if phonies else ""))
 		a("fmake-all: $(FM_TARGETS)")
 	else:
-		a(".PHONY: all clean" + (" test" if tests else ""))
+		a(".PHONY: all clean" + (" " + phonies if phonies else ""))
 		a(f"all: {names}")
-		if tests:
-			a(f"TEST_TARGETS = {test_names}")
 	a("")
-	if tests:
-		a("fmake-test: $(FM_TEST_TARGETS)" if fragment
-		  else "test: $(TEST_TARGETS)")
-		for t in sorted(tests, key=lambda x: x.name):
+	for g in group_names:
+		a(f"{group_rule(g)}: $({group_var(g)})")
+		for t in sorted(by_group[g], key=lambda x: x.name):
 			argv = " ".join(shlex.quote(x)
 			                for x in t.conf.get("test-args", []))
 			a(f"\t./{t.filename}" + (f" {argv}" if argv else ""))
@@ -6257,22 +6319,26 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# Same split as the Makefile: `ninja` builds the programs, `ninja test`
 	# builds and runs the test binaries. Ninja has no recipe for a phony
 	# beyond its inputs, so running them is a rule of its own.
-	tests = [t for t in targets if t.test]
 	plain = [t for t in targets if not t.test]
+	by_group = {}
+	for t in targets:
+		if t.test:
+			by_group.setdefault(t.test_group, []).append(t)
 	a(f"default {' '.join(_ninja(t.filename) for t in plain)}")
-	if tests:
+	for g in sorted(by_group):
+		members = sorted(by_group[g], key=lambda x: x.name)
 		a("")
 		cmds = " && ".join(
 		    "./" + " ".join(shlex.quote(x) for x in [t.filename]
 		                    + list(t.conf.get("test-args", [])))
-		    for t in sorted(tests, key=lambda x: x.name))
-		a("rule runtests")
+		    for t in members)
+		a(f"rule run_{_mk_ident(g)}")
 		a(f"  command = {cmds}")
-		a("  description = RUN tests")
+		a(f"  description = RUN {g}")
 		a("  pool = console")
-		a(f"build run-tests: runtests | "
-		  f"{' '.join(_ninja(t.filename) for t in tests)}")
-		a("build test: phony run-tests")
+		a(f"build run-{g}: run_{_mk_ident(g)} | "
+		  f"{' '.join(_ninja(t.filename) for t in members)}")
+		a(f"build {g}: phony run-{g}")
 	return "\n".join(L) + "\n"
 
 # ---------------------------------------------------------------------------

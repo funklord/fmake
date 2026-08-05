@@ -112,6 +112,11 @@ RUN client_test
 * 1 test passed
 ```
 
+`@test live` puts a test in a group of its own, which `fmake test` does not
+run and `fmake live` does -- for the tests that differ in what they *need*
+rather than in what they check, like the ones wanting a network. Ejected
+build files get a rule per group, and `all` depends on none of them.
+
 `fmake test NAME...` runs only the tests named, which is what re-running one
 out of sixty-six wants. Each test gets sixty seconds, because one that hangs
 should not suspend the suite -- `test-timeout` under `[project]` or `[target.NAME]` changes it, and
@@ -170,7 +175,7 @@ like `@brief` are ignored.
 | `@ldflags …` | Link flags, propagated to anything containing this file |
 | `@define NAME[=VAL]` | Convenience for `-D` |
 | `@std c17\|c++20\|…` | Language standard |
-| `@test` / `@test no` | This program is (or is not) a test |
+| `@test [GROUP]` / `@test no` | This program is (or is not) a test; `GROUP` puts it in a group `fmake test` skips |
 | `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms; overrides a `_platform` suffix |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |

@@ -4523,3 +4523,56 @@ fourth convention in a tool that has just gained three, and
 `harmonization.md` is explicit that a change setting a pattern the other
 projects should follow is raised rather than made in passing. Raised here,
 not built.
+
+## 56. Groups, for tests that differ in what they need
+
+hydra has 66 test programs and 26 of them are live drivers. `tests/` holds
+both and is right to: both are tests. What separates them is not what they
+check but **what they need** -- a network, a display, a tool that may not be
+installed -- and no directory name says that, because it is a fact about the
+test rather than about where it lives.
+
+So `@test live` puts a target in a group, `fmake live` runs that group, and
+`fmake test` does not. The default group is `test`, which is why everything
+written before this still works: a bare `@test`, or a name the conventions
+recognised, means the default group.
+
+The mechanism is the one already there. A group name is a word you can ask
+for, exactly like a target name, and it resolves after phony rules and after
+real targets -- so a project with its own `live` target keeps it. Ejected
+Makefiles get a rule per group and `all` depends on none of them; ninja gets
+a phony per group.
+
+### One word, and a name
+
+`@test Live Drivers` would have become the group `live`, because the scalar
+form takes the first argument and drops the rest. A directive whose whole
+purpose is to classify must not classify differently from how it reads, so
+more than one word is refused -- the same reasoning as `@pkg_optional`'s
+required keyword in section 41, and the same failure it prevents.
+
+The name is checked too, because a group becomes a command-line word and a
+Make target and has to be spellable as both. Refusing it early beats
+emitting a Makefile that will not parse.
+
+### Two filters, each hiding the other
+
+Between a group name and a test running there are two of them: which
+targets get **built**, and which of those get **run**. Removing either one
+left every case passing, because the other still did the job.
+
+That is a new shape in this document. The earlier misses were assertions
+that matched something they resembled; this is two correct filters where one
+would do, and a test suite cannot see the difference from the outside
+without asking a question that separates them. Two now do:
+
+- `fmake test` must not **build** the live binary at all -- which only the
+  build-side filter can achieve.
+- Naming a live test alongside `test` builds it and does not run it --
+  which only the run-side filter can achieve.
+
+Writing the first of those exposed a third thing: it passed on a leftover.
+An earlier step in the same case had built `fetch_test`, and a rebuild does
+not unlink what it does not make, so the file was there for reasons that had
+nothing to do with the assertion. Section 38 in miniature, and the reason
+every one of these cases now removes what it is about to prove absent.
