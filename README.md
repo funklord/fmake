@@ -58,6 +58,104 @@ called; `#include <SDL.h>` only proves a declaration was wanted. Includes
 supply the `-I` flags, symbols decide the `-l` flags, and a header whose
 library nothing calls is reported and not linked.
 
+**A file named for a platform is built only on it.** `view_android.cpp`,
+`net_win32.c`, `blit_aarch64.c` — the files a build system would have put
+inside an `if(ANDROID)` and which carry no self-guard because the build
+system was what excluded them. The suffix is read only when it cannot mean
+anything else: `_win32` yes, `_win` no, because that could be a window;
+`_posix` and `_unix` never, because a family is not a platform. `@os` and
+`@arch` override the name in both directions.
+
+Run `fmake --explain` to see every decision, down to the exact command line
+— including which kind each target is and what decided it.
+
+---
+
+## Three ways to use it
+
+### Build in the tree
+
+`fmake` in a directory with source in it. Objects and cache go under
+`.fmake/`, binaries next to the source, and `fmake --explain` says why.
+
+### Eject the build and commit it
+
+`fmake --eject > Makefile` writes a standalone Makefile — `--eject ninja`
+a `build.ninja` — containing everything fmake worked out, with nothing
+referring back to fmake. **Your users then need `make` and nothing else.**
+
+That is a smaller thing to agree to than adopting a build tool, and for many
+projects it is the whole of what they want: run fmake when the file list
+changes, commit the result, and the generated file is the build system.
+
+`--eject make-fragment` goes further in the other direction, writing rules
+for an existing Makefile to `include` — so a project keeps whatever its own
+build does, and stops maintaining object rules:
+
+```make
+.PHONY: all
+all: myapp package          # your default goal, kept
+
+include compile.mk          # fmake --eject make-fragment > compile.mk
+```
+
+**What comes out is a Makefile that gets the hard parts right.** Every object
+is compiled with `-MD -MP -MF` and every depfile is `-include`d back, so a
+changed header rebuilds exactly what includes it — including test objects,
+which is the omission that produces a struct with one layout in a library
+and another in the binary linked against it. There are no pattern rules, so
+nothing is an intermediate and `.SECONDARY` has nothing to do. `clean`
+removes files it names, one by one, rather than `rm -rf` on a variable
+somebody may override.
+
+The output is byte-stable, so committing it produces no diff until the build
+genuinely changes, and it links the same binary fmake does — checked on a Qt
+browser at 17,845 defined symbols, none differing.
+
+**Diff the flags first.** Ejecting over an existing build system adopts
+fmake's defaults in place of whatever that one passed — a language standard,
+a warning set. Neither is an error and neither shows up anywhere but the
+diff.
+
+### Run a C or C++ file as a script
+
+**`fmake --run FILE [ARGS...]` builds a C or C++ file and becomes it**, so a
+program can be a script:
+
+```c
+#!/usr/bin/env -S fmake --run
+#include <stdio.h>
+int main(int argc, char **argv) { printf("%d args\n", argc - 1); return 0; }
+```
+
+```sh
+$ chmod +x hello.c && ./hello.c one two
+2 args
+```
+
+`env -S` is needed because Linux passes everything after the interpreter as
+a single argument. A `#!` line is not valid C — gcc calls it an invalid
+preprocessing directive and no compiler here has a flag to overlook one — so
+fmake compiles a copy with that line replaced by `#line`. A compiler error
+still names your file and your line number.
+
+The shebang is the whole mechanism, deliberately. Registering `.c` with
+`binfmt_misc` would make every C file in every project executable, and
+almost none of them are programs; the shebang marks the few that are, which
+is what a shebang is for.
+
+The build goes under `.fmake/`, so nothing appears beside the script and the
+second run is a cache hit rather than a rebuild. Everything after the file
+belongs to the program, its exit status is the command's, and its stdin and
+terminal are its own — fmake `exec`s rather than waits. A script that needs
+more than one file just has them: the closure reaches whatever it calls. A
+script in a directory nobody may write to builds in a cache of its own
+instead, since that is the one place a scripting front end has to work.
+
+---
+
+## Libraries, programs and tests
+
 **A library and the things that link it is one comment.** The shape most
 worth a build system — library sources, one or more programs, tests linking
 the library — needs no build file either. With nothing said, the library
@@ -84,14 +182,6 @@ LD  client_test
 
 `@kind shared` builds a `.so` instead, with a soname; `--install` then uses
 `@headers` to know what to put in `include/`.
-
-**Objects are keyed by the whole configuration**, not just by timestamps:
-the compiler, its version, the target platform, and every flag — including
-`--cflags` and `[project] cflags`. Changing a flag is not changing a source
-file, and nothing in a file tree records that it happened, so a builder that
-keys on mtimes alone will happily link objects built with a sanitizer into a
-binary without one. Each configuration gets its own object directory, so
-switching between them costs a rebuild and never a wrong binary.
 
 **Tests are not built by the default build.** A `main()` under `test/` or
 `tests/`, or in a file called `foo_test.c` or `test_foo.c`, roots a test
@@ -132,55 +222,13 @@ is how a stale binary gets tested. `@test` and `@test no` in the source, or
 `test-args` under `[target.NAME]` gives a test its arguments. Ejected build
 files get a `test` target that `all` does not depend on.
 
-**A file named for a platform is built only on it.** `view_android.cpp`,
-`net_win32.c`, `blit_aarch64.c` — the files a build system would have put
-inside an `if(ANDROID)` and which carry no self-guard because the build
-system was what excluded them. The suffix is read only when it cannot mean
-anything else: `_win32` yes, `_win` no, because that could be a window;
-`_posix` and `_unix` never, because a family is not a platform. `@os` and
-`@arch` override the name in both directions.
-
-**`fmake --man` writes the manual page from the parser**, so the packaged
-manual cannot drift from the options argparse accepts. `make deb` generates
-it that way. A project that hand-writes its man page finds out it has
-drifted when somebody reads it; generating it means the question never
-arises, and every packaged CLI has this problem.
-
-**`fmake --run FILE [ARGS...]` builds a C or C++ file and becomes it**, so a
-program can be a script:
-
-```c
-#!/usr/bin/env -S fmake --run
-#include <stdio.h>
-int main(int argc, char **argv) { printf("%d args\n", argc - 1); return 0; }
-```
-
-```sh
-$ chmod +x hello.c && ./hello.c one two
-2 args
-```
-
-`env -S` is needed because Linux passes everything after the interpreter as
-a single argument. A `#!` line is not valid C — gcc calls it an invalid
-preprocessing directive and no compiler here has a flag to overlook one — so
-fmake compiles a copy with that line replaced by `#line`. A compiler error
-still names your file and your line number.
-
-The shebang is the whole mechanism, deliberately. Registering `.c` with
-`binfmt_misc` would make every C file in every project executable, and
-almost none of them are programs; the shebang marks the few that are, which
-is what a shebang is for.
-
-The build goes under `.fmake/`, so nothing appears beside the script and the
-second run is a cache hit rather than a rebuild. Everything after the file
-belongs to the program, its exit status is the command's, and its stdin and
-terminal are its own — fmake `exec`s rather than waits. A script that needs
-more than one file just has them: the closure reaches whatever it calls. A
-script in a directory nobody may write to builds in a cache of its own
-instead, since that is the one place a scripting front end has to work.
-
-Run `fmake --explain` to see every decision, down to the exact command line
-— including which kind each target is and what decided it.
+**Objects are keyed by the whole configuration**, not just by timestamps:
+the compiler, its version, the target platform, and every flag — including
+`--cflags` and `[project] cflags`. Changing a flag is not changing a source
+file, and nothing in a file tree records that it happened, so a builder that
+keys on mtimes alone will happily link objects built with a sanitizer into a
+binary without one. Each configuration gets its own object directory, so
+switching between them costs a rebuild and never a wrong binary.
 
 ---
 
@@ -418,44 +466,45 @@ the config file.
 
 ## The exit
 
-`fmake --eject` writes a standalone Makefile — or `--eject ninja` a
-`build.ninja` — containing everything fmake worked out, with nothing referring
-back to fmake. The output is byte-stable, so it is safe to commit, and it
-produces binaries matching fmake's symbol for symbol — checked by a test that
-builds a tree both ways and diffs the two symbol tables, and by hand on qView
-(2562 symbols, none differing).
+A tool this opinionated has to be leaveable, which is what `--eject` above
+is for. The fragment form sets no default goal, names its aggregate rules
+`fmake-all` and `fmake-clean`, and prefixes every variable it owns with
+`FM_`, so your `CFLAGS` cannot silently replace the flags fmake worked out;
+`CC`, `CXX` and `AR` stay yours and are set with `?=`.
 
-A tool this opinionated has to be leaveable.
+---
 
-### Ejecting is also a way in
+## Why you might keep your Makefile
 
-Adoption does not have to be a switch. `--eject make-fragment` writes the
-same rules for an existing Makefile to `include`, so a project keeps whatever
-its own build does — patching a vendored submodule, cross-building for two
-Android ABIs, packaging — and stops maintaining object rules:
+The honest answer, from projects that evaluated fmake against real trees and
+said no.
 
-```make
-.PHONY: all
-all: myapp package          # your default goal, kept
+**Compiling is often the easy part.** One project's top-level Makefile
+applies four patches to a vendored submodule and fails loudly if any stops
+applying, cross-builds for two Android ABIs, stages fonts into an APK,
+builds two `.deb`s with dependencies derived by `dpkg-shlibdeps`, and runs
+six gates. fmake replacing the compile step would leave all of that in
+place. That is a fair trade only if the compile step is where the trouble
+is — and there, it was not.
 
-include compile.mk          # fmake --eject make-fragment > compile.mk
+**Conventions a generator cannot know.** A project whose `DEBUG` and
+`SANITIZE` are tested for being *set*, never for a value, and given no
+default anywhere, because a default would make them permanently on. That
+agreement is shared across sibling projects so moving between them costs
+nothing, and `CFLAGS=...` on a command line is not the same affordance.
 
-package: myapp
-        ...
-```
+**Flags that are load-bearing.** Nine warning flags described in a
+Makefile's own comments as *"not decoration: this code parses bytes from a
+socket into indices, and every one of them has caught something in code
+shaped like this."* fmake will not invent those. Put them in
+`[project] cflags` and they are yours again, but the moment to notice is
+when you eject, not later.
 
-The fragment sets no default goal, names its aggregate rules `fmake-all` and
-`fmake-clean`, and prefixes every variable it owns with `FM_` — so your
-`CFLAGS` cannot silently replace the flags fmake worked out. `CC`, `CXX` and
-`AR` are yours, set with `?=`.
-
-Committing the output is a real option in itself: your users then need no
-fmake at all, only `make`.
-
-**Diff the flags first.** Ejecting over an existing build system adopts
-fmake's defaults in place of whatever that one passed — a language standard,
-a warning set. Neither is an error, and neither shows up anywhere but the
-diff.
+Two things on that list used to be here and are not any more. A stamp file
+recording the flags every object depends on is unnecessary: the object cache
+is keyed on the whole configuration. A test that needs an argument is
+`test-args`. Both were reported as reasons to keep a hand-written build, and
+both were reasonable ones.
 
 ---
 
