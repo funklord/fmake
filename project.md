@@ -1860,6 +1860,38 @@ explicit "not implemented / known limits" list for anything substantial. The
 limits sections are where most of §15 came from. No AI attribution or
 trailers of any kind.
 
+Subjects carry a subsystem prefix, imperative, at 75 columns, as
+`build-and-commit.md` requires. The whole history was reformatted to that
+shape in one pass, so the vocabulary below is what the log actually uses and
+a synonym introduced now reads as a second concept:
+
+| prefix | what it covers |
+|---|---|
+| `core` | the scan, `main()` detection, the symbol closure, widening, the link step |
+| `libs` | library resolution: symbols to `-l`, pkg-config, vendored archives, search prefixes |
+| `annotations` | the `@` directives of §4, including the platform-suffix rule |
+| `config` | `fmake.toml` and `fmake.mk` |
+| `cross` | the two toolchains and everything that follows from having a target |
+| `cache` | what is remembered between builds, and what keys it |
+| `gen` | generated sources and the rules that produce them |
+| `qt` | moc, uic, rcc |
+| `eject` | the exit, both backends |
+| `diag` | what fmake says when it refuses or cannot decide |
+| `run` | `--run`, the script mode |
+| `test` | fmake building and running a tree's tests |
+| `cli` | the command-line surface itself: `-V`, `--man`, the completion |
+| `selftest` | the suite in this repository |
+| `build` | this project's own Makefile and CI |
+| `tools` | `tools/`, the shared style gate and hooks |
+| `packaging` | `debian/`, and the version |
+| `docs` | `README.md`, `project.md`, `code-style.md` |
+
+`test` and `selftest` are the pair worth being careful with: the first is a
+feature of the tool, the second is this repository's own suite, and the log
+was ambiguous about it until the reformatting pass separated them. A change
+that genuinely spans the tree -- a reindent, a release of three unrelated
+fixes -- takes no prefix rather than an invented one.
+
 ### The reference projects
 
 None are vendored; they are fetched into scratch directories and are not part
@@ -5581,8 +5613,8 @@ Measured on hydra -- 112 sources, Qt, a warm cache -- a no-op rebuild across
 three points 35 commits apart:
 
 ```
-fdf18eb (35 back)   2374 ms
-5724e3f (8 back)    2322 ms
+0648010 (35 back)   2374 ms
+8c623ef (5 back)    2322 ms
 HEAD                2361 ms
 ```
 
@@ -5665,3 +5697,88 @@ scrub was checked against it: it fails, printing make's leaked line.
 The near-miss is worth naming. The suite was reported as passing several
 times this session on the strength of `./selftest` runs, and one of those
 250 was answering a different question than the one `make check` asks.
+
+---
+
+## 81. Reformatting the whole log, and what the proofs caught
+
+The history was written before this tree adopted the commit format in
+`build-and-commit.md`, and it showed: of 125 commits, **82 carried no
+subsystem prefix at all**, and the 42 that did were not drawn from one set.
+`fix:` and `feature:` say what a change *does* rather than where it lands,
+and `test:` was serving both fmake's test running and this repository's own
+suite, which are different things that a log filter cannot tell apart. All
+125 were reformatted in one pass -- prefix, imperative, 75-column subject,
+bodies rewrapped to the same width. The vocabulary that settled is in §16
+rather than here, because it is a convention rather than a finding.
+
+### The method, and why it is safe
+
+Every commit was recreated with `git commit-tree` over **the same tree
+object the original pointed at**. That is the whole safety argument: a
+commit object names a tree, and reusing the name means no blob, no subtree
+and no mode can have moved, whatever the script did with the message. The
+check afterwards is one line per commit -- old tree equals new tree -- and
+it came back 124 of 124, with the final tree equal to the one before.
+
+Rewrapping the bodies needed its own proof, since that text really is
+rewritten. The tool refuses to write a block whose whitespace-separated
+tokens are not exactly the tokens it read, in the same order. Author and
+committer identity and dates are carried across verbatim, and every
+resulting message was put through this tree's own `tools/hooks/commit-msg`
+rather than through a checker invented for the occasion.
+
+### Two defects, and only one of them was caught by the proof aimed at it
+
+**A list can be swallowed without losing a word.** Bodies here often
+introduce a list on the line above it, with no blank line between:
+
+```
+Not implemented / known limits:
+  * One % per rule, and a pattern target needs a pattern prerequisite
+```
+
+The rewrapper split blocks on blank lines, so it read that as one
+paragraph, and reflowed the bullets into running prose in 17 commits. **The
+token check passed on every one of them**, because merging a list into the
+paragraph above it moves no word and loses none -- the invariant was chosen
+to catch text being changed, and structure is not text. It was found by
+reading the output. That is the same lesson as §78 arriving somewhere new:
+a check that cannot fail for the reason you care about has not checked it.
+
+**`commit-tree` stores exactly the bytes it is handed**, including the
+absence of a trailing newline, and the first pass handed it a message built
+by concatenation with none. All 124 rewritten commits ended without one,
+where all 125 originals had ended with exactly one. Nothing complained:
+`git log` renders both identically, and the message is well-formed either
+way. It surfaced only because a *later* pass compared messages byte for
+byte and reported 0 of 125 matching -- a check aimed at something else
+entirely, failing loudly enough to be worth reading rather than silencing.
+Both the normalisation and a census of the three possible shapes are in the
+verification now.
+
+### One squash, and the four that were deliberately left
+
+A report was committed under the reviewing tool's name and renamed to the
+evaluating project's three minutes later. That is a slip rather than a
+change, the rename was pure, and the pair is now one commit.
+
+**The add-then-remove pairs were left alone, and the reason is in their own
+messages.** Each commits an evaluation report, folds its findings into this
+document, and deletes it in a later commit that says the report *stays in
+the history, one commit back*. Squashing those would make that sentence
+false and throw away the primary source the pair exists to preserve -- the
+document quotes those reports rather than replacing them. `--no-docs-only`
+is a judgement in `build-and-commit.md`, not a gate, and this is what
+judging it looks like.
+
+### A swap file, removed from four trees
+
+`.project.md.swp` was committed by accident and deleted four commits later,
+so it sat in four historical trees and in no working copy. It is a
+root-level entry, which is what made it cheap: each affected tree was
+listed, that one entry dropped, and the list written back with `mktree`, so
+every other blob and subtree object is the original rather than a copy. The
+check is the same shape as the one above -- for all 125 commits, the old
+listing minus that path equals the new listing -- plus the count of trees
+that changed, which had to be 4 and was.
