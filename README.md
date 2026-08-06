@@ -496,6 +496,12 @@ Every flag the program accepts, which is the same list `--man` and
 `$CC`, `$CXX`, `$AR`, `$NM`, `$CFLAGS` and `$LDFLAGS` are honoured and win over
 the config file.
 
+**Project-wide compile flags go on the link line too**, which is what makes
+`--coverage`, `-pg` and `-fopenmp` work — each is an instrumentation *and* a
+runtime, and the compiler links the runtime only if it sees the flag again
+at link time. Per-file `@cflags` are not on it, and must not be: those
+belong to one translation unit, which is why `@ldflags` exists separately.
+
 **Two switches, spelled as the sibling projects spell them:**
 
 | | |
@@ -543,9 +549,17 @@ make install DESTDIR=$PWD/stage PREFIX=/usr
 `PREFIX`, `BINDIR`, `LIBDIR`, `INCLUDEDIR` and `DESTDIR` are the GNU names
 and are yours to set, like `CC` — all `?=`, so a parent Makefile or a
 package build wins without editing the file. Anything you put in
-`[install]` becomes the default they start from. It installs the same set
-as `fmake --install`, to the same paths with the same modes, because both
-read one list rather than two.
+`[install]` becomes the default they start from.
+
+`--eject ninja` has one too. Ninja cannot set a variable on the command
+line, so the recipe reads the same five names from the environment:
+
+```sh
+DESTDIR=$PWD/stage PREFIX=/usr ninja install
+```
+
+All three install the same set, to the same paths with the same modes,
+because all three read one list rather than three.
 
 ---
 

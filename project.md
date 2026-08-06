@@ -130,7 +130,8 @@ that had been green about nothing for five commits ·
 [85. Leaving with the install as well](#85-leaving-with-the-install-as-well) ·
 [86. `-g` was in the default and should not have been](#86--g-was-in-the-default-and-should-not-have-been) ·
 [87. `SANITIZE`, and a variable that means two things](#87-sanitize-and-a-variable-that-means-two-things) ·
-[88. The switches had to survive the exit too](#88-the-switches-had-to-survive-the-exit-too)
+[88. The switches had to survive the exit too](#88-the-switches-had-to-survive-the-exit-too) ·
+[89. The flags that have to be on both lines](#89-the-flags-that-have-to-be-on-both-lines)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6086,9 +6087,9 @@ under it rather than inventing a stricter one it would have to weaken later.
 
 `--eject ninja` emits no install rule. Ninja has no convention for one --
 no phony `install`, no `DESTDIR` -- and every project that wants it wraps
-ninja in something else. Inventing a convention here would be fmake having
-an opinion about a file format rather than about a build, so it is recorded
-rather than added.
+ninja in something else. **That reasoning was wrong and §89 has it**: ninja
+passes the environment through to a command, which is all a `DESTDIR` needs,
+and the rule exists now.
 
 Uninstall, a manifest, generated `.pc` files and the shared-library symlink
 chain are all still missing from both callers, and they are one item in §15
@@ -6304,7 +6305,81 @@ runs -- found by writing it the obvious way first and having Make refuse.
 which is what forcing them means, and the `DEBUG` block is simply not
 emitted in that case -- there is no default left for it to switch between.
 
-`--eject ninja` bakes both, because ninja has no conditionals. That is the
-second thing on ninja's list after the install rule, and both are the same
-answer: ninja is a format for generated files with the decisions already
-made, so the honest place for a switch is the generator.
+`--eject ninja` bakes both, because ninja has no conditionals -- and unlike
+the install rule, which §89 found a way to do after all, there is no
+environment trick here: these change the compile line of every object, and
+a ninja file's whole premise is that those are already decided. The honest
+place for that switch is the generator.
+
+---
+
+## 89. The flags that have to be on both lines
+
+`--coverage` in `[project] cflags` did not link:
+
+```
+undefined reference to `__gcov_exit'
+```
+
+and that is the *lucky* case, because it says something. `-pg` linked, ran,
+and wrote no `gmon.out` at all -- a profiler that silently does nothing.
+`-fopenmp` would go the same way the moment a pragma appeared. `-flto`
+survives only because GCC's fat objects let the linker plugin cope.
+
+**A whole family of flags is an instrumentation and a runtime**, and the
+compiler links the runtime half only if it sees the flag again at link
+time. fmake put the project's compile flags on the compile line only.
+
+### Why the special case was the wrong shape
+
+The sanitizers were already handled -- §87 added them to `ldflags`
+explicitly, after netcfgd hit exactly this in §76. That fix was right about
+the symptom and wrong about the class. Adding `-fsanitize` by name, then
+`--coverage` by name, then `-pg` by name, builds a fourth of the
+hand-written lists §15 already warns about three of, and each entry arrives
+only after somebody has been bitten.
+
+The sibling Makefiles answer it in one line, `LDFLAGS ?= $(CFLAGS)`, and
+that answer needs no list. `link_flags()` is that: the project-wide compile
+flags, plus the link-only ones. The sanitizer special case is gone, because
+it is now an instance rather than an exception.
+
+**The asymmetry is the whole argument.** `-I`, `-std=` and `-Wall` on a
+link line are accepted and do nothing; passing too much costs a longer
+command. Passing too little costs a binary that is wrong in a way nothing
+reports. Those are not comparable, so the default should not be the one
+that fails quietly.
+
+Per-file `@cflags` stay off the link line, and that is not an oversight:
+they belong to one translation unit, which is §4's asymmetry and the reason
+`@ldflags` exists as a separate directive. The case checks both halves,
+because a fix that put *everything* on the link line would pass a test that
+only checked the first.
+
+### `--coverage` rather than `-pg` in the case
+
+`-pg` is the more interesting failure and the worse test: it *passes*
+before the fix, because the link succeeds. Only running the binary and
+finding no `gmon.out` shows anything, and a case that has to notice an
+absent file is a case that can quietly stop noticing. `--coverage` fails
+the link outright, so the case fails for the reason it is about.
+
+### Ninja got the install rule after all
+
+§85 recorded that `--eject ninja` would not get one, on the grounds that
+ninja has no `install` convention and no way to set a variable on the
+command line. The first half is true and the second was the wrong thing to
+look at. **Ninja passes the environment through to a command**, so the
+recipe reads `PREFIX`, `BINDIR`, `LIBDIR`, `INCLUDEDIR` and `DESTDIR` from
+there with the same defaults, and
+
+    DESTDIR=$PWD/stage PREFIX=/usr ninja install
+
+means what the Makefile means by the same words. `${VAR:=default}` supplies
+the default only when the caller left it unset.
+
+So there are three callers of `install_plan` now and they are checked
+against each other rather than against a description. The ninja case is its
+own rather than a second half of the Makefile one, so a machine without
+ninja skips it and still checks the Makefile -- the first version returned
+early instead, which is a silent reduction in coverage wearing a pass.

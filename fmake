@@ -2630,7 +2630,6 @@ class Config:
 		# the end by length, so anything appended after them would be
 		# removed instead.
 		self.cflags += self.sanitize_flags
-		self.ldflags += self.sanitize_flags
 
 		if not shutil.which(self.cc):
 			die(f"C compiler {self.cc!r} not found "
@@ -2656,6 +2655,39 @@ class Config:
 		# separate object directory rather than invalidating the old one.
 		self._libdirs = None
 		self.refresh_key()
+
+	def link_flags(self):
+		"""The project-wide compile flags, plus the link-only ones.
+
+        **The compile flags belong on the link line**, and leaving them off
+        was a real defect rather than a tidiness. A whole family of flags is
+        an instrumentation *and* a runtime, and the compiler only links the
+        runtime if it sees the flag again at link time:
+
+          --coverage   undefined reference to `__gcov_exit' -- a hard
+                       failure, which is the lucky case
+          -pg          links, runs, and writes no gmon.out at all: the
+                       profiler silently does nothing
+          -fopenmp     undefined GOMP_* the moment a pragma is used
+          -flto        works here only because GCC's fat objects let the
+                       linker plugin cope
+
+        The sanitizers were special-cased for exactly this reason after
+        netcfgd hit it (section 76), and special-casing them one at a time
+        is a hand-written list of the kind section 15 already warns about
+        three of. Passing the project's compile flags is what the sibling
+        Makefiles do -- `LDFLAGS ?= $(CFLAGS)` -- and it needs no list.
+
+        Harmless in the other direction: `-I`, `-std=` and `-Wall` at a
+        link line are accepted and do nothing. That asymmetry is the whole
+        argument -- passing too much costs a longer command, passing too
+        little costs a binary that is wrong in a way nothing reports.
+
+        Per-file `@cflags` are not here, and must not be: they belong to
+        one translation unit, which is section 4's asymmetry and the reason
+        `@ldflags` exists separately.
+        """
+		return self.cflags + self.override + self.ldflags
 
 	def base_cflags(self):
 		"""cflags with the two switchable bands taken back off.
@@ -4512,7 +4544,7 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
 	        + (["-shared", "-Wl,-soname," + t.filename]
 	           if t.kind == "shared" else [])
 	        + ["-o", out] + objs + archive_flags(cl)
-	        + list(libflags) + cfg.ldflags)
+	        + list(libflags) + cfg.link_flags())
 
 
 def archive_flags(cl):
@@ -4791,7 +4823,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		if len(cl.external) > 12:
 			print(f"    {DIM('... and %d more (-v for all)' % (len(cl.external) - 12))}")
 
-	ldflags = (res["ldflags"] if res else []) + cfg.ldflags
+	ldflags = (res["ldflags"] if res else []) + cfg.link_flags()
 	print(f"  {CYAN('flags')}")
 	print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) if f.startswith('-I') else f for f in incflags] + cfg.override)}")
 	if ldflags:
@@ -6389,8 +6421,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# Emitted separately so it stays after each file's own flags, which is
 	# what makes it an override rather than just another default.
 	a(var("CFLAGS_LAST", override))
-	ldflags = cfg.ldflags[:len(cfg.ldflags) - len(cfg.sanitize_flags)]
-	a(var("LDFLAGS", _eject_flags(ldflags, root)))
+	# `$(CFLAGS)' rather than a snapshot of them, which is what the sibling
+	# Makefiles mean by `LDFLAGS ?= $(CFLAGS)'. It is what carries --coverage
+	# and -pg and -fopenmp to the link, and it is also what makes the DEBUG
+	# and SANITIZE conditionals below reach the link without being written
+	# out a second time -- a recursive `=' expands when the recipe runs, by
+	# which point every conditional in this file has been decided.
+	a(var("LDFLAGS", [f"$({P}CFLAGS)", f"$({P}CFLAGS_LAST)"]
+	      + _eject_flags(cfg.ldflags, root)))
 	a(var("BUILD_DIR", EJECT_BUILD_DIR, assign))
 	a("")
 
@@ -6437,7 +6475,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	san = " ".join(_eject_flags(SANITIZE_CFLAGS, root))
 	a(var("CFLAGS", san, "+="))
 	a(var("CXXFLAGS", san, "+="))
-	a(var("LDFLAGS", san, "+="))
+	# No LDFLAGS line: it is defined as $(CFLAGS) above, so adding one here
+	# would put the sanitizer on the link twice.
 	a("endif")
 	a("")
 	# The default target does not build tests, and a separate one builds
@@ -6756,7 +6795,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(f"ar = {cfg.ar_name}")
 	a(f"cflags = {common}")
 	a(f"cflags_last = {override}")
-	a(f"ldflags = {' '.join(_eject_flags(cfg.ldflags, root))}")
+	# Ninja has no conditionals, so this is baked -- but it is baked from
+	# link_flags(), so --coverage and friends reach the link here too.
+	a(f"ldflags = {' '.join(_eject_flags(cfg.link_flags(), root))}")
 	a(f"build_dir = {EJECT_BUILD_DIR}")
 	a("")
 	# `deps = gcc` lets ninja read the depfile and then discard it, which is
@@ -6923,6 +6964,52 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"build run-{g}: run_{_mk_ident(g)} | "
 		  f"{' '.join(_ninja(t.filename) for t in members)}")
 		a(f"build {g}: phony run-{g}")
+
+	# ---- install
+	#
+	# Ninja has no `install' convention and no way to set a variable on the
+	# command line, which is why this was recorded as not worth inventing.
+	# It does pass the environment through to a command, and that is enough:
+	# the recipe reads PREFIX, BINDIR, LIBDIR, INCLUDEDIR and DESTDIR from
+	# the environment with the same defaults the Makefile uses, so
+	#
+	#     DESTDIR=$PWD/stage PREFIX=/usr ninja install
+	#
+	# means what the Makefile means by the same words. `:=' in the parameter
+	# expansions supplies the default only when the caller left it unset.
+	#
+	# The plan is install_plan, the same list --install and the Makefile
+	# read, so all three install the same set.
+	plan = install_plan(targets, closures, root)
+	if plan:
+		defaults = dict(INSTALL_DEFAULTS)
+		defaults.update({k: v for k, v in conf.install.items() if v})
+		steps = ["set -e", f': "$${{PREFIX:={defaults["prefix"]}}}"']
+		for key in ("bindir", "libdir", "includedir"):
+			sub = defaults[key]
+			value = sub if os.path.isabs(sub) else f"$$PREFIX/{sub}"
+			steps.append(f': "$${{{key.upper()}:={value}}}"')
+		for directory in ("bindir", "libdir", "includedir"):
+			items = [p for p in plan if p[2] == directory]
+			if not items:
+				continue
+			var = f'"$$DESTDIR$${directory.upper()}"'
+			steps.append(f"install -d {var}")
+			for origin, source, _, name, mode in items:
+				src = source if origin == "built" else _eject_src(source)
+				# Shell-quoted rather than ninja-escaped: this is a command
+				# line, and ninja can express a path with a space in it, so
+				# one can reach here.
+				steps.append(f"install -m {mode:o} -- {shlex.quote(src)} "
+				             f'"$$DESTDIR$${directory.upper()}/"'
+				             f"{shlex.quote(name)}")
+		a("")
+		a("rule install")
+		a("  command = " + "; ".join(steps))
+		a("  description = INSTALL")
+		a("  pool = console")
+		deps = " ".join(sorted({_ninja(t.filename) for t in targets}))
+		a(f"build install: install | {deps}")
 	return "\n".join(L) + "\n"
 
 # ---------------------------------------------------------------------------
