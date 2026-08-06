@@ -140,7 +140,30 @@ HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
 SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
                "__pycache__", "CMakeFiles"}
 
-DEFAULT_CFLAGS = ["-Os", "-g"]
+# Size, not speed, and no debug info unless it is asked for. -Os is the
+# shared build convention and the property these projects actually care
+# about; -g was in the default for a long time and should not have been,
+# because it is paid by everybody -- a fatter binary and a slower link on
+# every build -- to serve the one run in a hundred that is under a
+# debugger.
+#
+# DEBUG turns it on, and turns -Os off with it: the same convention says
+# -Og is the right answer while debugging and -Os gets in the way, so a
+# debug build is not a release build carrying symbols, it is a different
+# build. Any non-empty value counts except "0", which is set-but-off
+# rather than an argument about what `ifdef` means in Make.
+DEFAULT_CFLAGS = ["-Os"]
+DEBUG_CFLAGS   = ["-Og", "-g"]
+
+
+def debug_wanted(env=None):
+	"""Whether $DEBUG asks for a debuggable build."""
+	value = (env if env is not None else os.environ).get("DEBUG", "")
+	return bool(value) and value != "0"
+
+
+def default_cflags(env=None):
+	return list(DEBUG_CFLAGS if debug_wanted(env) else DEFAULT_CFLAGS)
 LINK_ERR_LINES = 8              # linker output shown before truncating
 
 # nm symbol type letters. Uppercase is global, lowercase is file-local.
@@ -2541,7 +2564,7 @@ class Config:
 		# the compiler, so the command line has to come last or --cflags -O0
 		# cannot override a file that asked for -O2 -- which is exactly what
 		# anyone reaching for the flag is trying to do.
-		self.cflags   = ([] if args.cflags else list(DEFAULT_CFLAGS))
+		self.cflags   = [] if args.cflags else default_cflags()
 		self.cflags  += conf.cflags()
 		self.override = list(args.cflags)
 		self.ldflags = conf.ldflags() + list(args.ldflags)
@@ -6972,8 +6995,10 @@ def parse_args(argv):
 	# with a dash are not mistaken for fmake's own options. $CFLAGS and
 	# $LDFLAGS are honoured too, as make does.
 	p.add_argument("--cflags", action="append", default=[], metavar="'FLAGS'",
-	               help=f"replace the default compile flags "
-	                    f"({' '.join(DEFAULT_CFLAGS)}); also read from $CFLAGS")
+	               help="replace the default compile flags "
+	                    f"({' '.join(DEFAULT_CFLAGS)}, or "
+	                    f"{' '.join(DEBUG_CFLAGS)} when $DEBUG is set); "
+	                    "also read from $CFLAGS")
 	p.add_argument("--ldflags", action="append", default=[], metavar="'FLAGS'",
 	               help="extra link flags, e.g. --ldflags='-lm -lcmocka'; "
 	                    "also read from $LDFLAGS")

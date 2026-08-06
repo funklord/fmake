@@ -80,6 +80,10 @@ class Tree:
 		e = dict(os.environ)
 		e.pop("CFLAGS", None)
 		e.pop("LDFLAGS", None)
+		# DEBUG for the same reason, and it is the section 80 shape: a
+		# suite launched with it set would build every case differently
+		# from one launched without, and no case says so.
+		e.pop("DEBUG", None)
 		e.update(env or {})
 		r = subprocess.run([FMAKE, "-C", self.dir, *args],
 		                   capture_output=True, text=True, env=e)
@@ -3515,6 +3519,52 @@ int main(void){ printf("%s %d\n", LABEL, SCALE * 7); return 0; }
 	      "the defines did not reach the compiler")
 	e = t.fmake("--explain").stdout
 	check("-std=c17" in e and "-DSCALE=6" in e, f"flags missing: {e}")
+
+
+@case
+def debug_info_is_asked_for_rather_than_default(t):
+	"""-g is paid by everyone and wanted by almost nobody.
+
+	The default carried `-Os -g` for a long time. `-Os` is the shared build
+	convention and right; `-g` was not, because every build paid a fatter
+	binary and a slower link to serve the one run in a hundred that is under
+	a debugger, and nothing said so.
+
+	`$DEBUG` asks for it, and turns `-Os` off with it -- the same convention
+	says `-Og` is the answer while debugging and `-Os` gets in the way, so a
+	debug build is a different build rather than a release carrying symbols.
+
+	The half worth guarding hardest is the cache. Debug and non-debug
+	objects must not be interchangeable: handing a `-Os` object to a build
+	that asked for `-Og -g` is the stale-object failure of section 48,
+	arriving through a variable nothing else in the tree mentions."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	plain = t.fmake("-n")
+	check(plain.returncode == 0, f"dry run failed: {plain.stderr}")
+	check("-Os" in plain.stdout, f"the default lost -Os: {plain.stdout}")
+	check(" -g" not in plain.stdout,
+	      f"-g is in the default and should not be: {plain.stdout}")
+
+	dbg = t.fmake("-n", env={"DEBUG": "1"})
+	check("-Og" in dbg.stdout and " -g" in dbg.stdout,
+	      f"$DEBUG did not ask for a debug build: {dbg.stdout}")
+	check("-Os" not in dbg.stdout,
+	      f"a debug build should not also be a size build: {dbg.stdout}")
+
+	# Set-but-off, so that DEBUG=0 means what anyone would read it to mean.
+	off = t.fmake("-n", env={"DEBUG": "0"})
+	check("-Os" in off.stdout and " -g" not in off.stdout,
+	      f"DEBUG=0 should be off: {off.stdout}")
+	empty = t.fmake("-n", env={"DEBUG": ""})
+	check("-Os" in empty.stdout, f"DEBUG= should be off: {empty.stdout}")
+
+	# The two builds must not share objects.
+	check(t.fmake().returncode == 0, "plain build failed")
+	check(t.fmake(env={"DEBUG": "1"}).returncode == 0, "debug build failed")
+	objdirs = os.listdir(os.path.join(t.dir, ".fmake", "obj"))
+	check(len(objdirs) == 2,
+	      f"debug and plain objects shared a directory: {objdirs}")
 
 
 @case

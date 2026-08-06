@@ -127,7 +127,8 @@ that had been green about nothing for five commits ·
 [82. The README is a third copy](#82-the-readme-is-a-third-copy-of-the-option-list) ·
 [83. The index that stopped at 38](#83-the-index-that-stopped-at-38) ·
 [84. situ's report, folded in](#84-situs-report-folded-in) ·
-[85. Leaving with the install as well](#85-leaving-with-the-install-as-well)
+[85. Leaving with the install as well](#85-leaving-with-the-install-as-well) ·
+[86. `-g` was in the default and should not have been](#86--g-was-in-the-default-and-should-not-have-been)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -765,7 +766,7 @@ cflags  = ["-Wall"]
 exclude = ["vendor/**"]
 
 [profile.debug]
-cflags  = ["-Og"]        # -Os is the default; -Og is for debugging
+cflags  = ["-Og", "-pg"] # -Os is the default; DEBUG=1 gives -Og -g
 
 [target.alpha]
 kind    = "static"
@@ -6091,3 +6092,88 @@ Uninstall, a manifest, generated `.pc` files and the shared-library symlink
 chain are all still missing from both callers, and they are one item in §15
 rather than four: `--install` is minimal, and the ejected rule is now
 exactly as minimal, which is the right relationship between them.
+
+---
+
+## 86. `-g` was in the default and should not have been
+
+The default compile flags were `-Os -g`. Half of that is the shared build
+convention and right: size is the property these projects care about, and
+it is the instruction cache that is scarce rather than the arithmetic. The
+other half was never argued for. **`-g` is paid by everybody** -- a fatter
+object, a fatter binary, a slower link, on every build anyone ever runs --
+**to serve the run in a hundred that is under a debugger**, and nothing in
+the tool or the documentation had ever said why it was there.
+
+It is now `-Os`, with `$DEBUG` asking for the other build.
+
+### A debug build is a different build, not a release with symbols
+
+`DEBUG` gives `-Og -g`, and the `-Os` goes away with it. That is not a
+flourish: `build-and-commit.md` says `-Og` is the right answer while
+debugging and that `-Os` gets in the way, which is the same reason `-g`
+should not have been in the default. Adding symbols to a size-optimised
+build produces the artifact nobody wanted -- big, and still stepping
+through code the optimiser rearranged.
+
+`DEBUG=0` is off. Make's `ifdef` would call it set, which is a real
+convention and a well-known footgun, and this is a variable a person types
+on a command line rather than one a Makefile computes; **the reading that
+matters is the one the person typing it has**. Empty is off for the same
+reason. Any other value is on.
+
+### Measured rather than deferred to
+
+`-Og` is what `build-and-commit.md` prescribes, which is a reason to use it
+and not evidence that it works. On this machine, gcc 14.2, one deliberately
+small C function with a loop and three locals:
+
+| flags | line-table rows | entities with `DW_AT_location` | object |
+|---|---|---|---|
+| `-O0 -g` | 16 | 6 | 4264 |
+| `-Og -g` | 27 | 8 | 4976 |
+| `-Os -g` | 7 | 2 | 4328 |
+| `-O2 -g` | 7 | 2 | 4344 |
+
+The column that answers the question is the middle one, because a variable
+with no location is the one a debugger prints as `<optimized out>`. **`-Os`
+keeps a quarter of what `-Og` does**, which is the concrete cost of
+debugging a size build and the reason a debug build has to stop being one.
+
+The line-row column is the one not to read too quickly: `-Og` has *more*
+rows than `-O0`, and more rows is not automatically better -- it can mean
+one source line maps to several scattered instruction ranges, which is what
+makes stepping jump about. It is offered as a measurement, not as a second
+argument, and the program is seven lines, so the numbers show the shape
+rather than what a real tree would give.
+
+Two things this did not establish, named rather than assumed. `-O0` was not
+chosen despite tying on the column that matters, on the strength of the
+convention rather than of anything measured here; it remains available as
+`--cflags -O0` or a `[profile.debug]`. And **clang is not installed on this
+machine**, so the fact that it treats `-Og` as roughly `-O1` is untested
+here rather than confirmed -- it accepts the flag, which is all that is
+known.
+
+### The cache is the half worth guarding
+
+Debug and non-debug objects must never be interchangeable. Handing a `-Os`
+object to a build that asked for `-Og -g` is the stale-object failure §48
+is about, arriving through a variable nothing else in the tree mentions --
+and it would look like a debugger that cannot find line numbers rather than
+like a build bug.
+
+It works already, and by construction rather than by luck: §76 keys the
+object cache on the whole configuration including the compile flags, so two
+sets of flags are two object directories without anything being added here.
+The case asserts it anyway, because "it falls out of the design" is exactly
+the claim §14 exists to distrust.
+
+### The suite was reading the environment it was launched from
+
+`t.fmake()` scrubbed `CFLAGS` and `LDFLAGS` and now scrubs `DEBUG` too.
+Without it a suite run by someone with `DEBUG` exported would build every
+case differently from one run without, and no case would say so -- which is
+§80 exactly, a check whose answer depends on how it was started. Found
+while writing the case rather than by it, which is the cheaper of the two
+ways.
