@@ -125,7 +125,8 @@ that had been green about nothing for five commits ·
 [80. A check that depended on how it was started](#80-a-check-that-depended-on-how-it-was-started) ·
 [81. Reformatting the whole log](#81-reformatting-the-whole-log-and-what-the-proofs-caught) ·
 [82. The README is a third copy](#82-the-readme-is-a-third-copy-of-the-option-list) ·
-[83. The index that stopped at 38](#83-the-index-that-stopped-at-38)
+[83. The index that stopped at 38](#83-the-index-that-stopped-at-38) ·
+[84. situ's report, folded in](#84-situs-report-folded-in)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -5425,9 +5426,9 @@ work is not stopped by stopping the job.
 ## 73. situ, and three defects behind one archive
 
 The seventh private project, and the last to run fmake. Its report is in
-`suggestions/situ.md`, uncommitted. The trial itself was short -- one line
-of configuration builds the library -- and pulling on what it found took
-three fixes.
+the history, one commit before §84 folded it in. The trial itself was short
+-- one line of configuration builds the library -- and pulling on what it
+found took three fixes.
 
 **A generated test file was in the shipped archive.** `libsitu.a` held
 `situ.c.o` and `tests/generated/codec_impl.c.o`. The reasoning was visible
@@ -5922,3 +5923,87 @@ hand-kept list of what something contains needs a case holding the two
 together.** There are now four such lists -- the manual page, the shell
 completion, the README's option table and this index -- and all four are
 guarded.
+
+---
+
+## 84. situ's report, folded in
+
+The seventh evaluation, and the last. Its three defects are §73 and its
+generator findings are §§75 and 76; what is left is the verdict, what the
+trial got right, and two observations about the report itself that are
+worth more than either.
+
+### The verdict, and why it is not about fmake
+
+**Not a switch today, for a reason about situ rather than about fmake.**
+The C here is one library and eleven test binaries, which is perhaps a
+fifth of what situ's `Makefile` does; the rest is Python packaging, `mypy`
+runs, the schema compiler's own test suite, a version-consistency gate and
+the `.deb`. fmake would own the small part well and leave the Makefile in
+place for the rest, which is two build systems where there is one.
+
+That is the same objection fuzzypickles raised in §45 and it has the same
+answer available -- `--eject make-fragment`, which §45 built for exactly
+this. Worth stating plainly that **the fragment was not offered here**: the
+trial predates nothing, the option existed, and the report reached its
+verdict without it. Whether it changes the answer for situ is untested, and
+guessing would repeat the mistake the report itself records below.
+
+**What would change the answer is not a feature.** If the C side grows --
+more runtime translation units, more codecs, per-platform variants -- the
+compile-and-link layer becomes worth delegating and the verdict flips with
+fmake unchanged. That is the honest shape of a "no" and it is worth
+distinguishing from the kind that names a missing capability.
+
+### The boundary, named exactly
+
+`test_kernels` does not link, wanting `situ_base16_encode` and its
+neighbours: declared in a generated `kernels.h`, defined by no
+schema-to-C step the trial found. That is situ's own build knowledge --
+which generator or which hand-written file supplies the codec kernels --
+and it is the boundary rather than a defect. **A tree that is only complete
+after another program has run is annotated by definition**, which is what
+`[generate.*]` exists to say and what nothing can infer.
+
+### What it got right
+
+- **The include-path diagnosis**, which is §68's message doing the whole
+  job: it named the missing header, said the tree already contained it,
+  said where, and printed the line to paste. A dead end became a one-line
+  fix with no search.
+- **Tests out of the default build**, which is what this family's
+  conventions require and what situ's `Makefile` does by hand.
+- **`--eject` produced 168 lines** that build the same thing with no fmake
+  present. For a project whose own pitch is that generated sources are
+  committed so its users need no `situc`, that is the same bargain in the
+  same words -- which is the most useful thing an evaluation can find,
+  because it is an argument the reader already accepts.
+
+### Two things about the report rather than the tool
+
+**The first evaluation where the diagnostics did more work than the
+inference.** The inference was never in question: two objects, one archive,
+eleven test programs, all correct with nothing configured. Every step after
+that was fmake naming what it needed and the report pasting it back -- the
+include directory, the two ambiguous source lists, and one at a time, which
+schema was missing next. Six evaluations found things fmake could not do;
+this one mostly found things it said clearly, and that is a different kind
+of result.
+
+**And the first to catch itself.** The paragraph recommending `[generate.*]`
+called it "a handful of lines", written before anything was tried; trying it
+said sixty. The report says so about itself rather than quietly correcting
+the number. That is the same rule §14 is built on, arriving from outside:
+**a report that guesses at the cost of the work it recommends is worth less
+than one that stops and measures**, and this one nearly shipped the guess.
+It is also why §75 exists -- asking why the number was ten found the defect
+behind it.
+
+### Removed, and where it went
+
+The file is deleted for the reason the other six were: a report is a
+snapshot of one run against a tree that has since changed, and this one is
+already wrong in one place -- it records the archive defect as open in the
+body and fixed in the verdict, because it was fixed while being written.
+Leaving it beside a corrected account invites reading the stale one. It
+stays in the history, one commit back.
