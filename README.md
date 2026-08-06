@@ -464,6 +464,9 @@ fmake --eject > Makefile leave, taking the build with you
 fmake --clean            remove .fmake/
 ```
 
+Every flag the program accepts, which is the same list `--man` and
+`--completion` are generated from:
+
 | Flag | |
 |---|---|
 | `-C DIR` | build the tree rooted here |
@@ -474,11 +477,20 @@ fmake --clean            remove .fmake/
 | `-B` | ignore the cache and rebuild |
 | `--cflags 'FLAGS'` | replace the default `-Os -g`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
+| `--explain` | print every decision and why, and build nothing |
 | `--eject [make\|make-fragment\|ninja]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile |
 | `--force-link SRC` | link a file no symbol reaches |
 | `--widen-all` | compile the whole tree before deciding the link set |
 | `--no-libs` | resolve no libraries; pass every `-l` yourself |
+| `--run FILE` | build FILE and run it, passing what follows as its arguments |
+| `--install` | build, then install the artifacts and their `@headers` |
 | `--prefix` / `--destdir` | install paths |
+| `--clean` | remove `.fmake/` |
+| `--man` | write the manual page as roff, for packaging |
+| `--completion [bash]` | write a shell completion |
+| `--doxygen-aliases` | write an ALIASES block, so Doxygen renders the directives instead of warning about them |
+| `-V` | print the version |
+| `-h` | the same list as this table, from the program |
 | `-v` / `-q` | more / less output |
 
 `$CC`, `$CXX`, `$AR`, `$NM`, `$CFLAGS` and `$LDFLAGS` are honoured and win over

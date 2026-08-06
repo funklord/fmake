@@ -5782,3 +5782,43 @@ every other blob and subtree object is the original rather than a copy. The
 check is the same shape as the one above -- for all 125 commits, the old
 listing minus that path equals the new listing -- plus the count of trees
 that changed, which had to be 4 and was.
+
+---
+
+## 82. The README is a third copy of the option list
+
+`--man` and `--completion` are generated from the parser, and §16 of the
+README explains why: a hand-kept copy of the option list goes stale in the
+one place a user trusts without checking. Two cases guard exactly that.
+
+**The README's own Commands table is a third copy, and nothing guarded it.**
+It had drifted: `--run`, `--man`, `--completion`, `--doxygen-aliases`, `-V`
+and `-h` were all absent. Four of the six are discussed in prose elsewhere
+in the file, which is how it went unnoticed -- the flag is *documented*, so
+searching finds it, while the table a reader consults as the reference does
+not have it. The other two, `-V` and `-h`, appeared nowhere in the file at
+all.
+
+**This matters more here than it would in most trees**, because of what the
+manual page is. `fmake.1` is generated at build time and git-ignored, so it
+does not exist in a checkout -- and `project.md` opens by saying that for
+using the tool you read `README.md`. There is no separate manual to be the
+reference. The README is it, and a reference missing a quarter of its
+subject is a reference that sends the reader to `--help` and teaches them
+not to come back.
+
+`the_readme_documents_every_option` closes it, alongside the two cases that
+already do this for the generated page and the completion. It reads the
+table out of `README.md`, compares it against what argparse advertises, and
+refuses to pass when the table cannot be found at all -- the vacuous case
+being the one that matters, since a check that silently stops locating its
+input reports success exactly as loudly as a real pass. Checked three ways:
+dropping a long flag's row, dropping `-h`, and renaming the table's header
+so the split misses it, each of which fails the case with the right reason
+named.
+
+Section 78 is the same defect from the other side, where a `--man`
+paragraph went missing in a README restructure and nothing noticed. The
+pattern is worth stating plainly: **the README is documentation of record
+in this project, not a summary**, and anything it lists that the program
+also knows needs a case holding the two together.

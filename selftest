@@ -7183,6 +7183,55 @@ def the_manual_describes_every_option(t):
 
 
 @case
+def the_readme_documents_every_option(t):
+	"""The README is the manual, so its option table is a third copy.
+
+	project.md says "for using the tool, read README.md", and the manual
+	page is generated and git-ignored -- so it exists only after a build,
+	and the README is what a reader of the repository actually has. That
+	makes its Commands table documentation of record rather than a summary,
+	and a hand-written list is exactly the thing --man and --completion are
+	generated to avoid.
+
+	It had already drifted when this case was written: --run, --man,
+	--completion, --doxygen-aliases, -V and -h were all absent from the
+	table, four of them discussed elsewhere in the file and two documented
+	nowhere at all. Section 78 records the same failure from the other
+	direction, where a --man paragraph went missing in a restructure and
+	nothing noticed."""
+	with open(os.path.join(REPO, "README.md")) as fh:
+		readme = fh.read()
+
+	marker = "| Flag | |"
+	check(marker in readme, "the README has no Commands flag table")
+	table = readme.split(marker, 1)[1].split("\n\n", 1)[0]
+	rows = [line for line in table.splitlines() if line.startswith("| `")]
+	# A table this check could not fail against is not a check. If the
+	# split above ever stops finding the rows, say so rather than passing.
+	check(len(rows) > 10, f"only {len(rows)} rows found; the split is wrong")
+
+	helped = subprocess.run([FMAKE, "--help"], capture_output=True, text=True)
+	check(helped.returncode == 0, f"--help failed: {helped.stderr}")
+	usage = helped.stdout.split("positional arguments:")[0]
+	opts = set(re.findall(r"(?<![\w-])(--[a-z][a-z-]+)", usage))
+	check(len(opts) > 10, f"suspiciously few options found: {opts}")
+
+	# argparse prints a short and long spelling as one entry; the README
+	# lists whichever is the one people type.
+	same = {"--directory": "-C", "--jobs": "-j", "--output": "-o",
+	        "--profile": "-p", "--dry-run": "-n", "--always-make": "-B",
+	        "--version": "-V", "--verbose": "-v", "--quiet": "-q"}
+	documented = set(re.findall(r"`(--?[A-Za-z][\w-]*)", "\n".join(rows)))
+	missing = [o for o in sorted(opts)
+	           if o not in documented and same.get(o) not in documented]
+	check(not missing, f"the README's table does not document: {missing}")
+
+	# -h earns its place separately: argparse never prints it in the usage
+	# line, so the loop above cannot reach it.
+	check("-h" in documented, "the README's table does not document: ['-h']")
+
+
+@case
 def an_ejected_makefile_survives_a_deleted_header(t):
 	"""`-MP`, which code-style.md holds ejected Makefiles to.
 
