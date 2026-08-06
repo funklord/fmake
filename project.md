@@ -5520,3 +5520,9 @@ does not run. There it was a generator whose output nobody had declared;
 here it is a gate whose caller was never updated. **A dependency edge
 reversed for a good reason still changes what every caller gets**, and the
 callers are not all in the file being edited.
+
+The workflow was one caller. The README was the other, promising that
+`make deb` "runs `lintian` if you have it, and passes clean" -- a sentence
+that was true when written and false the moment the edge turned round. Both
+were found by asking the same question twice, which is the argument for
+asking it about every caller rather than the one that broke.
