@@ -39,6 +39,7 @@ import glob
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -7097,6 +7098,41 @@ def the_source_runs_on_the_python_it_declares(t):
 	                   capture_output=True, text=True)
 	check(r.returncode == 0,
 	      f"python{floor[0]}.{floor[1]} cannot run fmake --help: {r.stderr}")
+
+
+@case
+def the_completion_offers_every_option(t):
+	"""--completion is generated from the parser, for the same reason --man
+	is, and needs the same guard.
+
+	A stale completion offers a flag the program no longer accepts and omits
+	the one you wanted, and neither is an error -- it is wrong in the one
+	place a user trusts without checking. Generating it removes the question
+	only as long as nothing hand-maintains a second list."""
+	comp = subprocess.run([FMAKE, "--completion", "bash"],
+	                      capture_output=True, text=True)
+	check(comp.returncode == 0, f"--completion failed: {comp.stderr}")
+	helped = subprocess.run([FMAKE, "--help"], capture_output=True, text=True)
+
+	opts = set(re.findall(r"(?<![\w-])(--[a-z][a-z-]+)", helped.stdout))
+	check(len(opts) > 10, f"suspiciously few options found: {opts}")
+	missing = [o for o in sorted(opts) if o not in comp.stdout]
+	check(not missing, f"the completion does not offer: {missing}")
+
+	# It has to be a script bash will accept, and one that completes.
+	if not shutil.which("bash"):
+		raise Skip("bash not installed")
+	t.write("fmake.bash", comp.stdout)
+	script = os.path.join(t.dir, "fmake.bash")
+	r = subprocess.run(["bash", "-n", script], capture_output=True, text=True)
+	check(r.returncode == 0, f"the completion is not valid bash: {r.stderr}")
+
+	probe = (f'source {shlex.quote(script)}\n'
+	         'COMP_WORDS=(fmake --eject ""); COMP_CWORD=2; _fmake\n'
+	         'echo "${COMPREPLY[*]}"\n')
+	r = subprocess.run(["bash", "-c", probe], capture_output=True, text=True)
+	check("make-fragment" in r.stdout and "ninja" in r.stdout,
+	      f"an option with fixed values should complete to them: {r.stdout!r}")
 
 
 @case

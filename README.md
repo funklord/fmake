@@ -157,6 +157,26 @@ instead, since that is the one place a scripting front end has to work.
 
 ---
 
+## Two things generated from the parser
+
+**`fmake --man` writes the manual page**, so the packaged manual cannot
+drift from the options argparse accepts. `make deb` generates it that way.
+A project that hand-writes its man page finds out it has drifted when
+somebody reads it; generating it means the question never arises, and every
+packaged CLI has this problem.
+
+**`fmake --completion bash` writes a shell completion**, for the same
+reason and with a sharper edge: a stale completion offers a flag the program
+no longer accepts and omits the one you wanted, and neither is an error. It
+is wrong in the one place a user trusts without checking. The package
+installs one; from a checkout:
+
+```sh
+source <(fmake --completion bash)
+```
+
+---
+
 ## Libraries, programs and tests
 
 **A library and the things that link it is one comment.** The shape most

@@ -5526,3 +5526,42 @@ The workflow was one caller. The README was the other, promising that
 that was true when written and false the moment the edge turned round. Both
 were found by asking the same question twice, which is the argument for
 asking it about every caller rather than the one that broke.
+
+## 78. A completion, and a paragraph that went missing
+
+fmake is packaged, versioned 1.0, with a manual page and a CI job. What it
+lacked was a shell completion, which for a tool whose options have grown to
+twenty-odd is the difference between remembering `--eject make-fragment` and
+looking it up.
+
+`--completion bash` writes one, generated from the parser for the same
+reason `--man` is. The edge is sharper here: a stale manual is read by
+someone who can see it is old, while **a stale completion offers a flag the
+program no longer accepts and omits the one you wanted, and neither is an
+error.** It is wrong in the one place a user trusts without checking.
+
+Options carrying a fixed set of values complete to those values -- `--eject`
+offers `make make-fragment ninja` -- and everything else falls back to
+filenames, which is right for a tool whose arguments are targets,
+directories and source files. The package installs it at the standard path,
+and the case checks three things: every option `--help` lists appears in the
+script, `bash -n` accepts it, and sourcing it really does complete `--eject`.
+
+### The paragraph the restructure lost
+
+Adding this found that the README's `--man` paragraph -- added because
+apt-emerge asked for that flag to be advertised more prominently -- **was no
+longer there.** It went missing in the restructure of section "the README",
+in a block that was cut and reassembled.
+
+The check made at the time was a diff of every code-formatted token before
+and after, and it reported nothing dropped. It was satisfied because
+`` `fmake --man` `` still appeared elsewhere, in the packaging paragraph. A
+token that survives somewhere is not a paragraph that survives, and the
+check could not tell the difference.
+
+Both paragraphs now live together under a heading that says what they have
+in common. The lesson is the session's oldest one arriving in a new place:
+**a check that cannot fail for the reason you care about has not checked
+it**, and comparing sets of tokens across a document restructure is exactly
+such a check.
