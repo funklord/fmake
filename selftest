@@ -3292,6 +3292,84 @@ const char *greet(void){ return "hello"; }
 
 
 @case
+def an_ejected_build_installs_what_fmake_installs(t):
+	"""The exit has to include the install, or it is only half an exit.
+
+	Section 12 says a tool this opinionated has to be leaveable, and a
+	project that leaves takes the Makefile with it. Until this rule existed
+	that Makefile could build the tree and not put it anywhere, so the one
+	step between adoption and packaging was hand-written -- which the
+	packaging evaluation named as the thing standing between it and a
+	switch.
+
+	What is checked is not that an install rule exists. It is that the two
+	install the *same set*: same paths under the staging root, same modes.
+	That is the property worth guarding, because the failure it prevents is
+	silent -- an ejected build that installs a slightly different set goes
+	on working, and the difference surfaces as a package missing a header.
+	The plan comes from one function for exactly that reason, and this case
+	is what says so."""
+	if not shutil.which("make") or not shutil.which("install"):
+		raise Skip("make or install(1) not installed")
+	t.write("greet.h", "#pragma once\nconst char *greet(void);\n")
+	t.write("greet.c", """
+/*! @file
+ *  @target  greet
+ *  @kind    static
+ *  @headers greet.h
+ */
+#include "greet.h"
+const char *greet(void){ return "hello"; }
+""")
+	t.write("tool.c", '/*! @file\n *  @target tool\n */\n'
+	        '#include <stdio.h>\n#include "greet.h"\n'
+	        "int main(void){ puts(greet()); return 0; }\n")
+
+	check(t.fmake().returncode == 0, "build failed")
+	by_fmake = os.path.join(t.dir, "by-fmake")
+	r = t.fmake("--install", "--destdir", by_fmake)
+	check(r.returncode == 0, f"--install failed: {r.stdout}{r.stderr}")
+
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+	# From a clean tree, so the ejected build genuinely rebuilds and the
+	# rule cannot pass by installing what fmake had already left behind.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	by_make = os.path.join(t.dir, "by-make")
+	r = _run_in(t.dir, "make", "install", "DESTDIR=" + by_make)
+	check(r.returncode == 0, f"the ejected install failed: {r.stdout}{r.stderr}")
+
+	def staged(root):
+		out = {}
+		for base, _dirs, files in os.walk(root):
+			for f in files:
+				p = os.path.join(base, f)
+				out[os.path.relpath(p, root)] = os.stat(p).st_mode & 0o777
+		return out
+
+	mine, theirs = staged(by_fmake), staged(by_make)
+	check(mine, "fmake installed nothing, so this case checked nothing")
+	check(mine == theirs,
+	      "the ejected install differs from --install:\n"
+	      f"  only --install: {sorted(set(mine) - set(theirs))}\n"
+	      f"  only ejected:   {sorted(set(theirs) - set(mine))}\n"
+	      f"  modes: {[(k, oct(mine[k]), oct(theirs[k])) for k in mine
+	                  if k in theirs and mine[k] != theirs[k]]}")
+	# The three kinds must each be present, or an agreement between two
+	# empty halves would pass.
+	for want in ("bin/tool", "lib/libgreet.a", "include/greet.h"):
+		check(any(p.endswith(want) for p in mine),
+		      f"{want} was not installed at all: {sorted(mine)}")
+
+	# It installs what was built, rather than whatever happens to be there.
+	body = "\n".join(l for l in r.stdout.splitlines())
+	check("install: all" in open(os.path.join(t.dir, "Makefile")).read(),
+	      "the install rule does not depend on the build")
+
+
+@case
 def install_does_not_publish_headers_for_programs(t):
 	"""A program has no public API to publish.
 

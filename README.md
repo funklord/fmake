@@ -506,6 +506,22 @@ is for. The fragment form sets no default goal, names its aggregate rules
 `FM_`, so your `CFLAGS` cannot silently replace the flags fmake worked out;
 `CC`, `CXX` and `AR` stay yours and are set with `?=`.
 
+**You leave with the install too.** The ejected Makefile carries an
+`install` target — `fmake-install` in the fragment — putting programs in
+`$(BINDIR)`, libraries in `$(LIBDIR)` and your `@headers` in
+`$(INCLUDEDIR)`, all under `$(DESTDIR)`:
+
+```sh
+make install DESTDIR=$PWD/stage PREFIX=/usr
+```
+
+`PREFIX`, `BINDIR`, `LIBDIR`, `INCLUDEDIR` and `DESTDIR` are the GNU names
+and are yours to set, like `CC` — all `?=`, so a parent Makefile or a
+package build wins without editing the file. Anything you put in
+`[install]` becomes the default they start from. It installs the same set
+as `fmake --install`, to the same paths with the same modes, because both
+read one list rather than two.
+
 ---
 
 ## Why you might keep your Makefile

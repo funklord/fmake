@@ -6164,6 +6164,13 @@ def _refuse_whitespace(targets, closures, root):
 		for u in closures[t].link:
 			if any(c.isspace() for c in u.rel):
 				bad.add(u.rel)
+	# The install rule names @headers, which no other part of the emitted
+	# file mentions -- so a header with a space in it would slip past a
+	# check that only looked at sources and reach the recipe as two
+	# arguments to install(1).
+	for _, source, _, name, _ in install_plan(targets, closures, root):
+		if any(c.isspace() for c in source) or any(c.isspace() for c in name):
+			bad.add(source)
 	if bad:
 		die("cannot eject a Makefile for paths containing whitespace:\n    "
 		    + "\n    ".join(sorted(bad)[:5])
@@ -6493,6 +6500,49 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t$({driver}) -o $@ $({P}{ident}_OBJS){tail}")
 		a("")
 
+	# ---- install
+	#
+	# An ejected build that cannot install is only half an exit. A project
+	# adopting fmake and then leaving with the Makefile still had to
+	# hand-write this one rule, which is the gap the packaging evaluation
+	# named as the thing standing between it and adoption.
+	#
+	# The plan comes from install_plan, the same function --install uses, so
+	# the two cannot disagree about what a project publishes. What differs
+	# is only that a directory stays a variable here.
+	plan = install_plan(targets, closures, root)
+	if plan:
+		a("# ---- install " + "-" * 46)
+		a("")
+		a("# GNU names, and yours to set exactly as CC and AR are: a")
+		a("# distribution sets DESTDIR and PREFIX and the rest follow. `?='")
+		a("# throughout, so setting one on the command line or in a parent")
+		a("# Makefile wins without editing this file.")
+		defaults = dict(INSTALL_DEFAULTS)
+		defaults.update({k: v for k, v in conf.install.items() if v})
+		a(f"PREFIX ?= {defaults['prefix']}")
+		for key in ("bindir", "libdir", "includedir"):
+			sub = defaults[key]
+			a(f"{key.upper()} ?= "
+			  + (sub if os.path.isabs(sub) else f"$(PREFIX)/{sub}"))
+		a("")
+		rule = "fmake-install" if fragment else "install"
+		# Depends on the build: installing what was not built is how a
+		# stale artifact reaches a package, and fmake's own --install
+		# refuses for the same reason.
+		a(f".PHONY: {rule}")
+		a(f"{rule}: {'fmake-all' if fragment else 'all'}")
+		for directory in ("bindir", "libdir", "includedir"):
+			items = [p for p in plan if p[2] == directory]
+			if not items:
+				continue
+			var = f"$(DESTDIR)$({directory.upper()})"
+			a(f"\tinstall -d {var}")
+			for origin, source, _, name, mode in items:
+				src = source if origin == "built" else _eject_src(source)
+				a(f"\tinstall -m {mode:o} {src} {var}/{name}")
+		a("")
+
 	all_objs = sorted({f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in every})
 	# Every file this build creates, named. Not `rm -rf $(BUILD_DIR)`: BUILD_DIR
 	# is an ordinary Make variable and overriding it is expected usage, so
@@ -6756,17 +6806,31 @@ def install_paths(conf, args):
 	return out
 
 
-def do_install(targets, closures, root, outdir, conf, args):
-	paths = install_paths(conf, args)
-	planned = []
+def install_plan(targets, closures, root):
+	"""What this project installs, and into which of the three directories.
 
+    Shared by `--install` and by the install rule `--eject` emits, and the
+    sharing is the point rather than a tidiness. Two implementations of
+    "what does this project install" is precisely the pair that drifts
+    silently: the ejected build would go on working while installing a
+    different set, and nothing would look wrong until somebody's package was
+    missing a header.
+
+    Only the last step differs between the callers, and it is the one step
+    that has to. fmake resolves a directory to a path; the Makefile leaves
+    it as a variable, because a build file with its install paths baked in
+    is not one a distribution can package.
+
+    Returns `(origin, source, directory, name, mode)`, deduplicated on where
+    each file lands. `origin` is "built" for something this build produces
+    and "tree" for a file that was already there -- the difference between
+    looking in the output directory and looking in the source.
+    """
+	planned = []
 	for t in targets:
-		built = os.path.join(outdir, t.filename)
-		if not os.path.exists(built):
-			die(f"{t.filename} has not been built")
-		where = paths["bindir"] if t.kind == "exe" else paths["libdir"]
-		planned.append((built, os.path.join(where, t.filename),
-		                0o755 if t.kind != "static" else 0o644))
+		planned.append(("built", t.filename,
+		                "bindir" if t.kind == "exe" else "libdir",
+		                t.filename, 0o755 if t.kind != "static" else 0o644))
 
 		# @headers is gathered only for libraries: a program does not
 		# publish an API, and the file carrying the directive is often
@@ -6779,19 +6843,30 @@ def do_install(targets, closures, root, outdir, conf, args):
 			for u in closures[t].link:
 				heads += u.ann.items("headers")
 		for h in dict.fromkeys(heads):
-			src = os.path.join(root, h)
-			if not os.path.isfile(src):
+			if not os.path.isfile(os.path.join(root, h)):
 				die(f"@headers {h!r} does not exist (named for {t.name})")
-			planned.append((src,
-			                os.path.join(paths["includedir"],
-			                             os.path.basename(h)), 0o644))
+			planned.append(("tree", h, "includedir",
+			                os.path.basename(h), 0o644))
 
 	seen, unique = set(), []
 	for item in planned:
-		if item[1] not in seen:
-			seen.add(item[1])
+		lands = (item[2], item[3])
+		if lands not in seen:
+			seen.add(lands)
 			unique.append(item)
-	planned = unique
+	return unique
+
+
+def do_install(targets, closures, root, outdir, conf, args):
+	paths = install_paths(conf, args)
+	planned = []
+
+	for origin, source, directory, name, mode in install_plan(
+			targets, closures, root):
+		src = os.path.join(outdir if origin == "built" else root, source)
+		if origin == "built" and not os.path.exists(src):
+			die(f"{source} has not been built")
+		planned.append((src, os.path.join(paths[directory], name), mode))
 
 	if not planned:
 		info("nothing to install")

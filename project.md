@@ -126,7 +126,8 @@ that had been green about nothing for five commits ·
 [81. Reformatting the whole log](#81-reformatting-the-whole-log-and-what-the-proofs-caught) ·
 [82. The README is a third copy](#82-the-readme-is-a-third-copy-of-the-option-list) ·
 [83. The index that stopped at 38](#83-the-index-that-stopped-at-38) ·
-[84. situ's report, folded in](#84-situs-report-folded-in)
+[84. situ's report, folded in](#84-situs-report-folded-in) ·
+[85. Leaving with the install as well](#85-leaving-with-the-install-as-well)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1757,8 +1758,12 @@ rather than code, and one lesson about testing.
   there cannot be one, because per-file `@cflags` is the whole point. Nor does
   the ejected build know how to re-run the closure, so a new symbol dependency
   is invisible to it.
-- **`--eject` emits no install rule**, and the `clean` rule removes only what
-  it knows about.
+- ~~**`--eject` emits no install rule.**~~ Closed; see §85. It emits one for
+  both Make forms, from the same plan `--install` uses, guarded by a case
+  that compares the two staged trees rather than the presence of a rule.
+  Still true that the ejected `clean` removes only what it knows about, and
+  that is deliberate rather than pending — see the `CLEAN` comment. `--eject
+  ninja` still has no install rule, since ninja has no convention for one.
 - **Install is minimal.** No uninstall, no manifest, no pkg-config `.pc`
   generation, no shared-library versioning or `SONAME`, no symlink chain
   (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain name, which
@@ -6007,3 +6012,82 @@ already wrong in one place -- it records the archive defect as open in the
 body and fixed in the verdict, because it was fixed while being written.
 Leaving it beside a corrected account invites reading the stale one. It
 stays in the history, one commit back.
+
+---
+
+## 85. Leaving with the install as well
+
+`--eject` is the promise in principle 5 made good: a tool this opinionated
+has to be leaveable, so it writes a build file that owes fmake nothing. It
+wrote one that could build the tree and not put it anywhere. Every project
+that left had to hand-write the one rule that turns a built tree into an
+installed one, which is the step a packager cares about most and the step
+fmake already knew the whole answer to.
+
+`suggestions/packaging.md` named it exactly, under a heading that is its
+own argument: **the real gap is that an ejected Makefile has no `install`
+target**. That evaluation was otherwise a "no" -- packaging metadata is not
+in the tree, `dpkg-shlibdeps` has better evidence than fmake does, and
+`debian/rules` is three lines -- and it was right about all of it. This was
+the one thing it asked for.
+
+### One plan, two callers
+
+The obvious implementation is a second walk over the targets, emitting
+`install` lines. That is the version that rots. `--install` and the ejected
+rule would each carry their own idea of what a project publishes, and the
+day they diverged nothing would look wrong: the ejected build still builds,
+still installs, still succeeds. The difference surfaces much later as a
+package missing a header, in a project that has by then stopped using
+fmake and cannot be told.
+
+So `install_plan` is one function and both callers read it. It answers
+which files go to which of the three directories, with what mode,
+deduplicated on where each lands. **What it deliberately does not answer is
+the path**, because that is the one thing the two callers must disagree
+about: fmake resolves `bindir` against the prefix and `DESTDIR`, while the
+Makefile leaves `$(DESTDIR)$(BINDIR)` standing, since a build file with its
+install paths baked in is not one a distribution can package.
+
+The variables follow `CC` and `AR` rather than the `FM_` rule: `PREFIX`,
+`BINDIR`, `LIBDIR`, `INCLUDEDIR` and `DESTDIR` are unprefixed and `?=` in
+both forms, including the fragment, because they are exactly the knobs a
+parent Makefile or a packaging run *should* own. Whatever `[install]` says
+becomes the default they start from, so a tree that configured its layout
+keeps it after ejecting. An absolute `libdir` stays absolute rather than
+being glued under `$(PREFIX)`, which is the same rule `install_paths`
+applies and the reason it is read from one place.
+
+### What the case checks, and what it refuses to check
+
+`an_ejected_build_installs_what_fmake_installs` does not check that an
+install rule exists. It installs the tree both ways into two staging roots
+and compares **the set of paths and their modes**, having deleted `.fmake/`
+first so the ejected build genuinely rebuilds rather than installing what
+fmake left behind.
+
+Two guards against the comparison being vacuous, which is the failure mode
+of every equality check: it refuses to pass if fmake installed nothing, and
+it requires all three kinds -- a program, an archive and a header -- to be
+present, since two empty halves agree perfectly. Checked by mutation three
+ways: dropping headers from the emitted rule, emitting the wrong mode, and
+removing the rule's dependency on the build.
+
+Byte equality is deliberately *not* checked. The two builds compile into
+different object directories and `ar` is not deterministic without `D`, so
+the artifacts differ in bytes while defining the same symbols -- which is
+the standard §24 already set for the ejected build, and this case installs
+under it rather than inventing a stricter one it would have to weaken later.
+
+### What is still open
+
+`--eject ninja` emits no install rule. Ninja has no convention for one --
+no phony `install`, no `DESTDIR` -- and every project that wants it wraps
+ninja in something else. Inventing a convention here would be fmake having
+an opinion about a file format rather than about a build, so it is recorded
+rather than added.
+
+Uninstall, a manifest, generated `.pc` files and the shared-library symlink
+chain are all still missing from both callers, and they are one item in §15
+rather than four: `--install` is minimal, and the ejected rule is now
+exactly as minimal, which is the right relationship between them.
