@@ -155,11 +155,39 @@ SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
 DEFAULT_CFLAGS = ["-Os"]
 DEBUG_CFLAGS   = ["-Og", "-g"]
 
+# AddressSanitizer and UndefinedBehaviorSanitizer together, which is how
+# every sibling Makefile in this workspace spells it -- fuzzypickles has it
+# in six of them, with the frame pointer kept so a report has a usable
+# stack. The name is theirs too: there is no agreed variable name for this
+# across the C ecosystem, and SANITIZE names what it does.
+#
+# Independent of DEBUG, deliberately and for the same reason they made it
+# so: a sanitized build of the *release* flags is a real thing to want,
+# because that is the build being shipped. SANITIZE=1 alone, DEBUG=1
+# SANITIZE=1, either.
+SANITIZE_CFLAGS = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+
+
+def _switch(name, env=None):
+	"""An on/off environment variable, read the way a person means it.
+
+    Make's `ifdef` calls any set variable true, so `DEBUG=0` enables it --
+    which the sibling Makefiles document as a footgun they cannot avoid,
+    because `ifdef` genuinely cannot tell "0" from "on". Nothing forces
+    that here, and `0` meaning off is what the person typing it means.
+    """
+	value = (env if env is not None else os.environ).get(name, "")
+	return bool(value) and value != "0"
+
 
 def debug_wanted(env=None):
 	"""Whether $DEBUG asks for a debuggable build."""
-	value = (env if env is not None else os.environ).get("DEBUG", "")
-	return bool(value) and value != "0"
+	return _switch("DEBUG", env)
+
+
+def sanitize_wanted(env=None):
+	"""Whether $SANITIZE asks for the address and UB sanitizers."""
+	return _switch("SANITIZE", env)
 
 
 def default_cflags(env=None):
@@ -2568,6 +2596,22 @@ class Config:
 		self.cflags  += conf.cflags()
 		self.override = list(args.cflags)
 		self.ldflags = conf.ldflags() + list(args.ldflags)
+
+		# $SANITIZE goes to both sides, and the link side is the one that
+		# matters. A sanitizer is a runtime as well as an instrumentation:
+		# compiled but not linked leaves every __asan_report_* undefined,
+		# which is the failure netcfgd reported in section 76 and arrives
+		# as a wall of link errors naming none of this.
+		#
+		# Appended after the bands above rather than inside them, so that
+		# --cflags cannot drop it: replacing the defaults is what that flag
+		# is for, and asking for a sanitized build and silently not getting
+		# one is the shape this exists to avoid. A file's own @cflags still
+		# wins, because a `-fno-sanitize=` written next to the code is
+		# somebody saying they know about that file.
+		if sanitize_wanted():
+			self.cflags += list(SANITIZE_CFLAGS)
+			self.ldflags += list(SANITIZE_CFLAGS)
 		if self.sysroot:
 			self.cflags.append("--sysroot=" + self.sysroot)
 			self.ldflags.insert(0, "--sysroot=" + self.sysroot)

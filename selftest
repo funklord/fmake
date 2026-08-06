@@ -84,6 +84,7 @@ class Tree:
 		# suite launched with it set would build every case differently
 		# from one launched without, and no case says so.
 		e.pop("DEBUG", None)
+		e.pop("SANITIZE", None)
 		e.update(env or {})
 		r = subprocess.run([FMAKE, "-C", self.dir, *args],
 		                   capture_output=True, text=True, env=e)
@@ -3565,6 +3566,95 @@ def debug_info_is_asked_for_rather_than_default(t):
 	objdirs = os.listdir(os.path.join(t.dir, ".fmake", "obj"))
 	check(len(objdirs) == 2,
 	      f"debug and plain objects shared a directory: {objdirs}")
+
+
+@case
+def sanitize_reaches_the_link_and_actually_catches_something(t):
+	"""$SANITIZE, spelled as the sibling projects spell it.
+
+	`-fsanitize=address,undefined -fno-omit-frame-pointer`, the name and the
+	flags both taken from fuzzypickles, which has them in six Makefiles.
+	Independent of DEBUG for the reason they give: a sanitized build of the
+	*release* flags is a real thing to want, because that is the build being
+	shipped.
+
+	**The link is the half that matters.** A sanitizer is a runtime as well
+	as an instrumentation, so compiling with it and linking without leaves
+	every `__asan_report_*` undefined -- which is the failure netcfgd
+	reported in section 76, and it arrives as a wall of link errors naming
+	none of this.
+
+	So the case does not check that a flag was passed. It builds a program
+	that reads past the end of a heap allocation and checks that the
+	sanitized binary *says so* and the plain one does not, which is the only
+	evidence that the whole chain works."""
+	# Named for the program rather than main.c, which would take its name
+	# from the temporary directory instead.
+	t.write("overflow.c", """
+#include <stdlib.h>
+int main(void) {
+	int *p = malloc(4 * sizeof(int));
+	p[4] = 1;
+	free(p);
+	return 0;
+}
+""")
+	plain = t.fmake("-n")
+	check("fsanitize" not in plain.stdout,
+	      f"sanitizers are on by default: {plain.stdout}")
+
+	san = t.fmake("-n", env={"SANITIZE": "1"})
+	check(san.returncode == 0, f"dry run failed: {san.stderr}")
+	compiles = [l for l in san.stdout.splitlines() if " -c " in l]
+	links = [l for l in san.stdout.splitlines()
+	         if " -o " in l and " -c " not in l]
+	check(compiles and links, f"expected a compile and a link: {san.stdout}")
+	check(all("fsanitize" in l for l in compiles),
+	      f"a compile went unsanitized: {compiles}")
+	check(all("fsanitize" in l for l in links),
+	      f"the LINK went unsanitized, which is the section 76 failure: "
+	      f"{links}")
+
+	off = t.fmake("-n", env={"SANITIZE": "0"})
+	check("fsanitize" not in off.stdout, f"SANITIZE=0 should be off: {off.stdout}")
+
+	both = t.fmake("-n", env={"DEBUG": "1", "SANITIZE": "1"})
+	check("fsanitize" in both.stdout and "-Og" in both.stdout,
+	      f"DEBUG and SANITIZE should compose: {both.stdout}")
+
+	# --cflags replaces the defaults; it must not be able to drop the
+	# sanitizer, because asking for a sanitized build and quietly not
+	# getting one is the whole failure this feature exists to avoid.
+	forced = t.fmake("-n", "--cflags", "-O0", env={"SANITIZE": "1"})
+	check("fsanitize" in forced.stdout,
+	      f"--cflags dropped the sanitizer: {forced.stdout}")
+
+	# The evidence: it has to catch the bug.
+	check(t.fmake().returncode == 0, "plain build failed")
+	quiet = t.run("overflow")
+	check("runtime error" not in quiet.stderr and "AddressSanitizer"
+	      not in quiet.stderr,
+	      f"the unsanitized build already reported it, so this proves "
+	      f"nothing: {quiet.stderr}")
+
+	check(t.fmake(env={"SANITIZE": "1"}).returncode == 0, "sanitized build failed")
+	loud = t.run("overflow", env={"ASAN_OPTIONS": "exitcode=0"})
+	check("runtime error" in loud.stderr or "AddressSanitizer" in loud.stderr,
+	      f"the sanitized build did not catch a heap overflow: "
+	      f"{loud.stdout}{loud.stderr}")
+
+	# Two flavours of object must never be interchangeable. Counting the
+	# directories would be wrong -- this case has built several
+	# configurations by now -- so compare the two that matter directly.
+	def objdir(dry):
+		for line in dry.stdout.splitlines():
+			m = re.search(r"\.fmake/obj/([0-9a-f]+)/", line)
+			if m:
+				return m.group(1)
+		raise AssertionError(f"no object path in: {dry.stdout}")
+
+	check(objdir(plain) != objdir(san),
+	      f"sanitized and plain objects share a directory: {objdir(plain)}")
 
 
 @case

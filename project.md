@@ -128,7 +128,8 @@ that had been green about nothing for five commits ·
 [83. The index that stopped at 38](#83-the-index-that-stopped-at-38) ·
 [84. situ's report, folded in](#84-situs-report-folded-in) ·
 [85. Leaving with the install as well](#85-leaving-with-the-install-as-well) ·
-[86. `-g` was in the default and should not have been](#86--g-was-in-the-default-and-should-not-have-been)
+[86. `-g` was in the default and should not have been](#86--g-was-in-the-default-and-should-not-have-been) ·
+[87. `SANITIZE`, and a variable that means two things](#87-sanitize-and-a-variable-that-means-two-things)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6177,3 +6178,71 @@ case differently from one run without, and no case would say so -- which is
 §80 exactly, a check whose answer depends on how it was started. Found
 while writing the case rather than by it, which is the cheaper of the two
 ways.
+
+---
+
+## 87. `SANITIZE`, and a variable that means two things
+
+`$SANITIZE` adds `-fsanitize=address,undefined -fno-omit-frame-pointer`.
+The name, the flag list and the independence from `DEBUG` are all taken
+from fuzzypickles rather than invented: it has them in six Makefiles, with
+the reasoning written down, and **the point of harmonizing is that a habit
+learned in one project is correct in the next**.
+
+Their note on the name is worth keeping: there is no agreed variable for
+this across the C ecosystem, and `SANITIZE` was chosen to name what it
+does. Their note on independence is worth keeping too -- `SANITIZE=1` alone
+sanitizes a *release* build, which is the build being shipped, so tying it
+to `DEBUG` would remove the case most worth having.
+
+### The link is the half that matters
+
+A sanitizer is a runtime as well as an instrumentation. Compiling with it
+and linking without leaves every `__asan_report_*` undefined, which is
+exactly what netcfgd reported in §76 -- forty lines of link errors that
+mention no flag anyone set. So the flags go to `cflags` and `ldflags` both,
+and the case does not check that a flag was passed: it builds a program
+that writes past the end of a heap allocation and requires the sanitized
+binary to say so and the plain one not to. That is the only evidence the
+whole chain works.
+
+`--cflags` cannot drop it, because replacing the defaults is what that flag
+is for and this is not a default. A file's own `@cflags` still can, which
+is deliberate: a `-fno-sanitize=` written beside the code is somebody
+saying they know about that file.
+
+### What fmake gets for free that the Makefiles warn about
+
+fuzzypickles' `common/Makefile` carries this, and it is the honest kind of
+documentation:
+
+> In the default in-place layout, object files are not segregated by these
+> flags -- run `make clean` when changing DEBUG/SANITIZE, or build into a
+> per-flavour BUILD_DIR [...] or you'll silently relink against whichever
+> flavour's `.o` happens to be lying around.
+
+**That failure cannot happen here**, and not because anything was added for
+it: §76 keys the object cache on the whole configuration including the
+compile flags, so each flavour lands in its own directory and switching is
+a rebuild rather than a hazard. It is the clearest example so far of the
+model paying for itself somewhere nobody designed it to -- the same
+property that makes a cross build and a profile safe to interleave.
+
+### A deliberate divergence, recorded because it is one
+
+The sibling Makefiles use Make's `ifdef`, so `DEBUG=0` **enables** the
+debug build. Their comment says why they cannot avoid it: `ifdef` cannot
+distinguish `0` from on, which is also why those variables are never given
+a `?=` default anywhere in that tree.
+
+fmake reads `0` and empty as off. Nothing here forces the `ifdef`
+behaviour, and the reading that matters for a variable a person types on a
+command line is the one that person has. **This was raised rather than
+decided in passing**, and the answer was to keep it -- so the divergence is
+known, is one row of a table, and is written here rather than discovered by
+someone whose `DEBUG=0` did the opposite of what they meant.
+
+| | `DEBUG=1` | `DEBUG=0` | `DEBUG=` | unset |
+|---|---|---|---|---|
+| fmake | on | **off** | off | off |
+| the sibling Makefiles | on | **on** | off | off |

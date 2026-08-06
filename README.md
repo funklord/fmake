@@ -496,6 +496,24 @@ Every flag the program accepts, which is the same list `--man` and
 `$CC`, `$CXX`, `$AR`, `$NM`, `$CFLAGS` and `$LDFLAGS` are honoured and win over
 the config file.
 
+**Two switches, spelled as the sibling projects spell them:**
+
+| | |
+|---|---|
+| `DEBUG=1` | `-Og -g` instead of `-Os`. A debug build rather than a release carrying symbols. |
+| `SANITIZE=1` | adds `-fsanitize=address,undefined -fno-omit-frame-pointer`, to the compile **and the link** |
+
+They are independent — `SANITIZE=1` alone sanitizes a release build, which
+is the build you ship. `0` and empty mean off. `--cflags` cannot drop the
+sanitizer, though a file's own `@cflags` still can, since a
+`-fno-sanitize=` written next to the code is someone saying they know about
+that file.
+
+You do not have to clean between them. Objects are keyed on the whole
+configuration, so each flavour gets its own directory and a sanitized
+object can never be linked into a plain build — the failure that makes
+hand-written Makefiles tell you to `make clean` when you change these.
+
 ---
 
 ## The exit
