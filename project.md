@@ -1724,24 +1724,32 @@ rather than code, and one lesson about testing.
 - **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
   `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
   are unhandled.
-- **The default build builds tests too.** Three projects raised it and
-  `build-and-commit.md` is explicit that the default target must not. There is
-  no annotation-free way to know `tests/` means tests; a directory convention
-  behind a flag is the obvious shape, and inventing one silently would break
-  the promise the tool is named for. See §36.
-- **No library-plus-consumers inference.** A tree with one `main()` needs no
-  build tool; the shape that does is a library, some programs, and tests
-  linking it. `netcfgd` declined on this alone. §36.
-- **Vendored subtrees are built like any other source.** A directory carrying
-  its own `Makefile`/`CMakeLists.txt`, or listed as a git submodule, almost
-  never is. §36.
+- ~~**The default build builds tests too.**~~ Closed; see §49. The directory
+  convention is `test`/`tests` and the two filename shapes, nothing else, and
+  it decides only what the *default* target builds rather than what exists —
+  so the promise the tool is named for survives. Guarded by
+  `the_default_build_does_not_build_tests`.
+- ~~**No library-plus-consumers inference.**~~ Closed; see §42, where the
+  premise turned out to be wrong — the shape already worked, and what was
+  missing was any way to find that out. `netcfgd`'s own tree builds from one
+  `@kind static` comment, and its client was built here in §70. §73 added the
+  rule that keeps test material out of the archive and the archive out of the
+  tests. Guarded by `a_library_and_its_consumers_coexist`.
+- ~~**Vendored subtrees are built like any other source.**~~ Closed. A
+  subtree carrying its own build file, or named in `.gitmodules`, keeps its
+  own programs; guarded by `a_submodules_own_programs_are_left_to_it` and
+  `gitmodules_marks_a_subtree_as_vendored_too`.
 - ~~**The include path lacks the common parent of the source directories.**~~
   Closed; see §37. The answer was not the common parent but the include text
   itself.
-- **A file the build system excludes, rather than the file itself, cannot be
-  expressed**, and neither can an optional feature whose macro the build
-  system defines. `hydra` cannot build at all for the first and silently
-  builds less than it should for the second. §36.
+- ~~**A file the build system excludes, rather than the file itself, cannot
+  be expressed**, and neither can an optional feature whose macro the build
+  system defines.~~ Closed, both halves. The platform word is read from the
+  filename, at either end and beaten by an explicit annotation — see §50 and
+  §60, guarded by five cases. The second half is `@pkg_optional NAME defines
+  MACRO` from §41, which defines the macro when pkg-config finds the package
+  and says so out loud when it does not, so a feature can no longer vanish in
+  silence. Guarded by `a_missing_optional_package_is_said_out_loud`.
 - **Ejected builds are a snapshot, not a translation.** They contain the plan
   fmake computed for the tree as it stood, with one explicit rule per object.
   Adding a source file means ejecting again — there is no pattern rule, and
@@ -4960,10 +4968,12 @@ that report is mostly about. It would have caught it **again** in this
 session, when a multi-line f-string was reintroduced and only a repaired
 gate found it.
 
-Not built, because there is no CI here at all and adding the first one sets
-a pattern the sibling projects would follow, which `harmonization.md` says
-is raised rather than done in passing. The repository has a GitHub remote,
-so it is available whenever it is wanted.
+**Built, one section later.** It was recorded here as not built, on the
+grounds that adding the first CI job sets a pattern the sibling projects
+would follow, which `harmonization.md` says is raised rather than done in
+passing. It was raised, and then done: §63 is that job, and it found
+something before it ever ran. What stands is the reasoning about why it was
+worth having, which is why the entry is kept rather than deleted.
 
 **A per-target source exclusion.** beerssh asked for a way to say "this
 target takes everything except `src/main.cpp`". The shape they needed works
