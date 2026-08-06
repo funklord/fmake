@@ -41,15 +41,13 @@ obvious answer is wrong ·
 [17. Qt and moc](#17-qt-and-what-moc-costs) — the one framework named in the
 source, and why it fits §3 rather than fighting it
 
-**Picking it up.** [16. Working on this](#16-working-on-this) — the
-conventions, how the verification is reproduced, and where the reference
-projects come from.
+**Picking it up.** [16. Working on this](#16-working-on-this) — the conventions,
+how the verification is reproduced, and where the reference projects come from
 
-**What happened when it met reality.**
-[11. Build order](#11-build-order) — what was built, in what order, and what
-each phase turned up ·
-[13. What real projects showed](#13-what-real-projects-showed) — four
-codebases, and the four things a 6-file project could not have exposed ·
+**What happened when it met reality.** [11. Build order](#11-build-order) — what
+was built, in what order, and what each phase turned up ·
+[13. What real projects showed](#13-what-real-projects-showed) — four codebases,
+and the four things a 6-file project could not have exposed ·
 [14. The chains, checked](#14-the-chains-checked) — the same question asked of
 the design rather than of a sample, and the silent wrongness it found ·
 [15. Open questions](#15-open-questions) ·
@@ -57,7 +55,7 @@ the design rather than of a sample, and the silent wrongness it found ·
 [19. The instantiation widening could not see](#19-the-instantiation-widening-could-not-see) ·
 [20. Declared membership](#20-declared-membership-and-the-dead-end-before-it) ·
 [21. What widening costs](#21-what-widening-actually-costs) ·
-[22. Shared library soname](#22-a-shared-library-that-did-not-say-its-own-name) ·
+[22. A shared library that did not say its own name](#22-a-shared-library-that-did-not-say-its-own-name) ·
 [23. The wrong-architecture archive](#23-the-archive-that-was-the-wrong-architecture) ·
 [24. Checking the exit](#24-checking-the-exit-actually-is-one) ·
 [25. The cache remembered failures](#25-the-cache-remembered-the-failures-too) ·
@@ -70,9 +68,64 @@ the design rather than of a sample, and the silent wrongness it found ·
 [32. Two tracebacks from the command line](#32-two-tracebacks-reachable-from-the-command-line) ·
 [33. The file that was told to leave](#33-the-file-that-was-told-to-leave) ·
 [34. Packaging](#34-packaging) ·
-[36. What five projects said](#36-what-five-projects-said-when-they-ran-it) ·
-[37. Where an include points](#37-where-an-include-actually-points) ·
-[38. A test that passed on the crash](#38-a-test-that-passed-on-the-crash-it-was-looking-for)
+[35. What the ejected Makefile owed the conventions](#35-what-the-ejected-makefile-owed-the-conventions)
+
+**What five sibling projects reported, and what it fixed.**
+[36. What five projects said](#36-what-five-projects-said-when-they-ran-it) —
+five private projects were asked whether they would adopt it ·
+[37. Where an include actually points](#37-where-an-include-actually-points) ·
+[38. A test that passed on the crash](#38-a-test-that-passed-on-the-crash-it-was-looking-for) ·
+[39. Whose program is it](#39-whose-program-is-it) ·
+[40. The step where every part was right](#40-the-step-where-every-part-was-right) ·
+[41. Found means defined](#41-found-means-defined) ·
+[42. The feature that was there](#42-the-feature-that-was-there) ·
+[43. The blocker that was a comment, again](#43-the-blocker-that-was-a-comment-again) ·
+[44. The gate that could not see its own subject](#44-the-gate-that-could-not-see-what-it-was-built-for) ·
+[45. A way in, not only a way out](#45-a-way-in-not-only-a-way-out) ·
+[46. The first thing two projects hit](#46-the-first-thing-two-projects-hit) ·
+[47. The entry point that was a macro](#47-the-entry-point-that-was-a-macro) ·
+[48. A guarantee nobody had asserted](#48-a-guarantee-nobody-had-asserted) ·
+[49. Tests are built by the test target](#49-tests-are-built-by-the-test-target)
+— the convention that pays for a fast default build ·
+[50. A file named for a platform](#50-a-file-named-for-a-platform)
+
+**Building them: hydra, beerssh, netcfgd, situ.**
+[51. What the hydra trial found](#51-what-the-hydra-trial-found) ·
+[52. `BUILD_DIR`, and a table aligned once](#52-build_dir-and-a-table-that-was-aligned-once) ·
+[53. hydra, built](#53-hydra-built) ·
+[54. A deadline for each test](#54-a-deadline-for-each-test) ·
+[55. Built and run are different sets](#55-what-is-built-and-what-is-run-are-different-sets) ·
+[56. Groups, for tests that differ in what they need](#56-groups-for-tests-that-differ-in-what-they-need) ·
+[57. hydra's suite, finished](#57-hydras-suite-finished) ·
+[58. The live group, and a claim that would not stay proved](#58-the-live-group-and-a-claim-that-would-not-stay-proved) ·
+[59. hydra's report, folded in](#59-hydras-report-folded-in) ·
+[60. The word in front](#60-the-word-in-front) ·
+[61. The other four reports, folded in](#61-the-other-four-reports-folded-in) ·
+[62. What the reports left that is not fixed](#62-what-the-reports-left-that-is-not-fixed) ·
+[63. The job that found something before it ran](#63-the-job-that-found-something-before-it-ran) ·
+[64. The half of the job that had not been run](#64-the-half-of-the-job-that-had-not-been-run) ·
+[65. Two groups, one variable](#65-two-groups-one-variable) ·
+[66. The flake, six clean runs later](#66-the-flake-six-clean-runs-later) ·
+[67. The audit the last two findings suggested](#67-the-audit-the-last-two-findings-suggested) ·
+[68. beerssh, built](#68-beerssh-built) ·
+[69. One vendored file redefined a standard header](#69-one-vendored-file-redefined-a-standard-header) ·
+[70. netcfgd's client, and a regression the convention introduced](#70-netcfgds-client-and-a-regression-the-convention-introduced) ·
+[71. A C file as a script](#71-a-c-file-as-a-script) ·
+[72. What a test runner owes its machine](#72-what-a-test-runner-owes-the-machine-it-runs-on) ·
+[73. situ, and three defects behind one archive](#73-situ-and-three-defects-behind-one-archive) ·
+[74. Ten lines that were one answer](#74-ten-lines-that-were-one-answer) ·
+[75. The rule anyone would write](#75-the-rule-anyone-would-write) ·
+[76. A generator that writes more than it declared](#76-a-generator-that-writes-more-than-it-declared)
+
+**The same questions, turned on the tooling itself.**
+[77. The gate that stopped running](#77-the-gate-that-stopped-running) — a gate
+that had been green about nothing for five commits ·
+[78. A completion, and a paragraph that went missing](#78-a-completion-and-a-paragraph-that-went-missing) ·
+[79. A performance check that found nothing](#79-a-performance-check-that-found-nothing) ·
+[80. A check that depended on how it was started](#80-a-check-that-depended-on-how-it-was-started) ·
+[81. Reformatting the whole log](#81-reformatting-the-whole-log-and-what-the-proofs-caught) ·
+[82. The README is a third copy](#82-the-readme-is-a-third-copy-of-the-option-list) ·
+[83. The index that stopped at 38](#83-the-index-that-stopped-at-38)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -5822,3 +5875,40 @@ paragraph went missing in a README restructure and nothing noticed. The
 pattern is worth stating plainly: **the README is documentation of record
 in this project, not a summary**, and anything it lists that the program
 also knows needs a case holding the two together.
+
+---
+
+## 83. The index that stopped at 38
+
+The Contents block covered 34 of 82 sections. It had last been extended
+somewhere around §38 and then simply stopped, and it had skipped §35 inside
+the range it did cover -- so it was neither complete nor complete-up-to-a-
+point, which is the shape that misleads rather than merely omits.
+
+**An index that stops is worse than no index**, because it reads as a
+complete list. A reader looking for what fmake did with `netcfgd` finds
+nothing under N or under 70, and concludes the document does not cover it
+rather than scrolling for §70. The sections were all there; the way in was
+not.
+
+Rebuilt from the headings rather than by hand, since hand-maintaining 82
+links is the defect being fixed. The grouping and the short link text are
+editorial and stayed that way -- a generator cannot decide that §§51 to 76
+are the era of building the sibling projects -- but every anchor is
+computed from the heading it points at, and the tool refuses to write
+unless each section appears exactly once and every anchor resolves. The
+slug rule was calibrated against the 34 anchors already in the file, all of
+which it reproduces, which is what makes it trustworthy for the other 48.
+
+`the_contents_index_lists_every_section` guards both halves. The one that
+rots quietly is the second: a heading reworded without its anchor updated
+leaves a link that looks right and goes nowhere, and nothing short of
+clicking it would say so. Checked by mutation three ways -- add a section
+and do not index it, reword a heading, and truncate the index back to §38
+the way it actually was -- each failing with the right sections named.
+
+This is §82's rule applied to this document instead of the README: **a
+hand-kept list of what something contains needs a case holding the two
+together.** There are now four such lists -- the manual page, the shell
+completion, the README's option table and this index -- and all four are
+guarded.

@@ -7232,6 +7232,47 @@ def the_readme_documents_every_option(t):
 
 
 @case
+def the_contents_index_lists_every_section(t):
+	"""project.md's index is a fourth hand-kept list, and it had stopped.
+
+	The document runs to 82 numbered sections; the index covered 34 of
+	them, having last been extended around section 38, and it had also
+	skipped section 35 within the range it did cover. An index that stops
+	is worse than no index: it reads as complete, so a reader concludes the
+	section they want does not exist rather than scrolling for it.
+
+	Two properties, and the second is the one that rots quietly. Every
+	section must be listed, and every link must resolve -- a heading
+	reworded without its anchor being updated leaves a link that looks
+	right and goes nowhere, which nothing but a click would reveal."""
+	with open(os.path.join(REPO, "project.md")) as fh:
+		doc = fh.read()
+
+	head = doc.index("## Contents")
+	index = doc[head:doc.index("\n---\n", head)]
+	headings = [line[3:].strip() for line in doc.split("\n")
+	            if line.startswith("## ") and line[3:].strip() != "Contents"]
+	check(len(headings) > 20, f"only {len(headings)} sections found")
+
+	def anchor(heading):
+		slug = re.sub(r"[^\w\s-]", "", heading.lower())
+		return "#" + re.sub(r"\s+", "-", slug.strip())
+
+	links = re.findall(r"\]\((#[^)]+)\)", index)
+	check(len(links) > 20, f"only {len(links)} links found; the split is wrong")
+
+	known = {anchor(h) for h in headings}
+	broken = sorted(set(links) - known)
+	check(not broken, f"the index links to no such heading: {broken}")
+
+	unlisted = sorted(h for h in headings if anchor(h) not in links)
+	check(not unlisted, f"the index does not list: {unlisted}")
+
+	repeated = sorted({a for a in links if links.count(a) > 1})
+	check(not repeated, f"the index lists a section twice: {repeated}")
+
+
+@case
 def an_ejected_makefile_survives_a_deleted_header(t):
 	"""`-MP`, which code-style.md holds ejected Makefiles to.
 
