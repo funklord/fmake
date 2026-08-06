@@ -5565,3 +5565,103 @@ in common. The lesson is the session's oldest one arriving in a new place:
 **a check that cannot fail for the reason you care about has not checked
 it**, and comparing sets of tokens across a document restructure is exactly
 such a check.
+
+---
+
+## 79. A performance check that found nothing
+
+This session added work to every build: test classification, platform-suffix
+naming, a tree walk for undeclared generator outputs, ident-collision checks
+across targets and test groups, and several header lookups. All of it is
+per-build, none of it was measured when it went in, and the accumulation is
+exactly the shape that makes a tool slowly get slower without any single
+commit being to blame.
+
+Measured on hydra -- 112 sources, Qt, a warm cache -- a no-op rebuild across
+three points 35 commits apart:
+
+```
+fdf18eb (35 back)   2374 ms
+5724e3f (8 back)    2322 ms
+HEAD                2361 ms
+```
+
+**Flat.** The 2% spread is noise, and it does not even order consistently
+with age. Every addition above is either off the no-op path or too cheap to
+see. That is a negative result and it is worth the same amount as a positive
+one: the question "did this session make it slower" now has an answer, and
+the answer is no.
+
+Worth naming that 2.4s is not fast in absolute terms -- section 26 got a
+168-file tree to 0.3s, and hydra is smaller than that and takes eight times
+longer, because Qt means moc scanning and a much larger symbol closure. That
+is a real gap and this measurement did not attempt to explain it.
+
+### A lead, deliberately left unverified
+
+`cProfile` points at `close_over_symbols`: 2.85s cumulative, of which 2.64s
+is 76,010 calls to `builtins.any` -- the shape of a linear scan per symbol
+that could be a dict lookup. `object_key` is second, 2.30s over 166 calls.
+
+**That is recorded as a suspicion, not a finding**, because section 26 is
+about this precise instrument pointing this precisely at the wrong thing.
+`cProfile` charges per-call overhead, so a cheap function called 76,010
+times is what it is built to over-report. The memo it justified last time
+made no difference at all and was taken out again.
+
+So the lead is written down and nothing has been changed on the strength of
+it. Confirming it means short-circuiting the suspected work and timing the
+whole program with a stopwatch and enough repetitions to see past the noise
+-- the instrument section 26 concluded was the right one. Until that is
+done, the honest statement is that nobody knows where the 2.4s goes.
+
+---
+
+## 80. A check that depended on how it was started
+
+Folding section 79 in meant running the suite, and it failed -- one case of
+250, `an_ejected_clean_names_what_it_removes`. Nothing in that commit could
+reach it: the working tree held a `.gitignore` line and a documentation
+section. The case had been passing all session.
+
+It failed because of how it was run. `make` exports `MAKEFLAGS` and
+`MAKELEVEL` to every process it starts, so the suite's own `make` is a
+*sub*-make of whichever `make` launched the suite. Inheriting `-w` that way
+makes it announce the directory before its first recipe:
+
+```
+make[1]: Entering directory '/tmp/fmake-an_ejected_...'
+rm -f //main.c.o //sub/util.c.o
+```
+
+The case asserts `stdout` *starts with* `rm -f`, because the point is that
+`clean` names its files rather than sweeping a directory. It got make's
+bookkeeping instead.
+
+**So the case passed as `./selftest` and failed as `make check`**, and that
+is the worst way for a check to be wrong. It is not a flake -- both results
+are perfectly reproducible -- it is a check whose answer depends on how it
+was invoked, with no indication that the two invocations differ. Anyone
+seeing it fail would reach for the case, the ejected Makefile, or the clean
+rule, and all three are correct.
+
+The fix belongs in `_run_in`, not in the case: the suite should not behave
+differently for having been started by a build system, and any future case
+reading a recipe line would have inherited the same trap. It now strips
+`MAKEFLAGS`, `MAKELEVEL` and `MFLAGS` before running anything.
+
+### Guarding it took a second case
+
+The bug's own reproduction is not a regression test, because it only fails
+when the suite happens to be run from make -- which is exactly the condition
+that let it through in the first place. A guard that requires the harness to
+be launched a particular way is the same defect wearing a different hat.
+
+`a_case_reading_make_output_is_not_a_sub_make` therefore sets `MAKEFLAGS`
+itself and asserts the scrubbing directly, so it fails whenever `_run_in`
+stops stripping, regardless of how the suite was started. Reverting the
+scrub was checked against it: it fails, printing make's leaked line.
+
+The near-miss is worth naming. The suite was reported as passing several
+times this session on the strength of `./selftest` runs, and one of those
+250 was answering a different question than the one `make check` asks.
