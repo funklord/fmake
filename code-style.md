@@ -25,6 +25,10 @@ own and never ours to correct.
 2. **Tabs for indentation, spaces for alignment.**
 3. **Lowercase filenames,** unless a tool demands otherwise.
 
+Everything below is those three rules in detail, plus the exceptions that
+are already settled. An exception not listed is not yet settled: raise it
+rather than deciding it in passing.
+
 ## 1. Naming
 
 `snake_case` for functions, variables and attributes; the tool is one file
@@ -39,6 +43,12 @@ prefix is used.
   for the directive set, and it is the same rule. The word in the directive
   is the word in the config key is the word in the diagnostic.
 - Prefer the plain descriptive name over the decorated one.
+- **A leading underscore is the private marker.** Python's `_name` is what
+  stands in for the source's "module-private symbols are left unprefixed",
+  since there is no linker here to collide with and therefore no prefix.
+
+Naming and filename rules are review items rather than automated ones; the
+gate checks indentation and text, not what things are called.
 
 ## 2. Indentation and alignment
 
@@ -53,8 +63,33 @@ not be *ambiguous* across tab widths, and tabs-then-spaces is unambiguous
 at every width. Continuation lines inside brackets are not
 indentation-significant at all.
 
-**Markdown is exempt** -- list continuation and code fences are
-space-indented by specification.
+### Settled exceptions
+
+Every one of these exists in this tree, and each has a technical reason
+rather than a preference behind it:
+
+- **Markdown** -- list continuation and code fences are space-indented by
+  specification. Exempt.
+- **YAML** -- the spec forbids tabs for indentation outright, so
+  `.github/workflows/ci.yml` is space-indented. `.style-gate.toml` puts
+  `.yml` in `text_suffixes` and leaves it out of the indent check for that
+  reason, which widens what is checked without demanding what the format
+  forbids.
+- **Debian packaging files** -- exempt, and the two halves for different
+  reasons. `debian/changelog` has a fixed layout that a tab is not part of:
+  `dpkg-parsechangelog` calls a tab-indented change line "unrecognized" and
+  loses the trailer outright if a tab precedes `--`. A deb822 continuation
+  in `control` or `copyright` is the opposite case -- `deb822(5)` allows a
+  leading space *or* tab and dpkg round-trips either, but that leading
+  whitespace is field syntax rather than indentation, so the rule has
+  nothing to say about it and everything past it is alignment. Both
+  measured against dpkg rather than read off the manual.
+- **Makefile recipe lines** -- `make` requires a literal tab, so they are
+  compliant by construction. Where that matters here is the ejected output,
+  below.
+
+Anything else that seems to need spaces: raise it, get it settled, and add
+it to the source rather than to this copy.
 
 ### Ejected build files
 
