@@ -514,6 +514,13 @@ configuration, so each flavour gets its own directory and a sanitized
 object can never be linked into a plain build — the failure that makes
 hand-written Makefiles tell you to `make clean` when you change these.
 
+**They survive `--eject`.** The emitted Makefile carries both switches, so
+`make DEBUG=1` and `make SANITIZE=1` mean there what they mean here — `0`
+and empty included. The emitted test is `$(filter-out 0,$(DEBUG))` rather
+than `ifdef DEBUG`, which is the idiom everyone reaches for and would make
+`DEBUG=0` mean *on*. The ejected file is the same either way, so ejecting
+while sanitizing does not bake a sanitizer into it.
+
 ---
 
 ## The exit

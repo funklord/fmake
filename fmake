@@ -2592,7 +2592,20 @@ class Config:
 		# the compiler, so the command line has to come last or --cflags -O0
 		# cannot override a file that asked for -O2 -- which is exactly what
 		# anyone reaching for the flag is trying to do.
-		self.cflags   = [] if args.cflags else default_cflags()
+		# The two switchable bands are kept nameable rather than being
+		# stirred into cflags and lost, because --eject has to emit them as
+		# Make conditionals instead of baking them in. An ejected build that
+		# ignores DEBUG is worse than one that never offered it: `make
+		# DEBUG=1' reports success and quietly builds a release.
+		#
+		# opt_flags is empty when --cflags replaced the defaults, which is
+		# also the right answer for the ejected file -- somebody who forced
+		# the flags gets them baked, because that is what forcing them means.
+		self.opt_flags = [] if args.cflags else default_cflags()
+		self.sanitize_flags = (list(SANITIZE_CFLAGS) if sanitize_wanted()
+		                       else [])
+
+		self.cflags   = list(self.opt_flags)
 		self.cflags  += conf.cflags()
 		self.override = list(args.cflags)
 		self.ldflags = conf.ldflags() + list(args.ldflags)
@@ -2609,12 +2622,15 @@ class Config:
 		# one is the shape this exists to avoid. A file's own @cflags still
 		# wins, because a `-fno-sanitize=` written next to the code is
 		# somebody saying they know about that file.
-		if sanitize_wanted():
-			self.cflags += list(SANITIZE_CFLAGS)
-			self.ldflags += list(SANITIZE_CFLAGS)
 		if self.sysroot:
 			self.cflags.append("--sysroot=" + self.sysroot)
 			self.ldflags.insert(0, "--sysroot=" + self.sysroot)
+
+		# Last, and it has to stay last: base_cflags() takes these back off
+		# the end by length, so anything appended after them would be
+		# removed instead.
+		self.cflags += self.sanitize_flags
+		self.ldflags += self.sanitize_flags
 
 		if not shutil.which(self.cc):
 			die(f"C compiler {self.cc!r} not found "
@@ -2640,6 +2656,22 @@ class Config:
 		# separate object directory rather than invalidating the old one.
 		self._libdirs = None
 		self.refresh_key()
+
+	def base_cflags(self):
+		"""cflags with the two switchable bands taken back off.
+
+        What is left is what is genuinely a property of this tree -- the
+        config file's flags, a sysroot, the language standard -- as opposed
+        to what DEBUG and SANITIZE chose on this particular run. `--eject`
+        wants that split, because those two have to come out the far side
+        as Make conditionals rather than as baked-in text.
+
+        Sliced by length rather than matched by value, so a project that
+        legitimately writes `-Os` in its own cflags does not have somebody
+        else's flag removed from it.
+        """
+		end = len(self.cflags) - len(self.sanitize_flags)
+		return self.cflags[len(self.opt_flags):end]
 
 	def refresh_key(self):
 		"""Recompute the configuration identity.
@@ -6270,7 +6302,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
     """
 	P = "FM_" if fragment else ""
 	_refuse_whitespace(targets, closures, root)
-	common = _eject_flags(cfg.cflags + incflags, root)
+	common = _eject_flags(cfg.base_cflags() + incflags, root)
 	override = _eject_flags(cfg.override, root)
 	L = []
 	a = L.append
@@ -6357,8 +6389,56 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# Emitted separately so it stays after each file's own flags, which is
 	# what makes it an override rather than just another default.
 	a(var("CFLAGS_LAST", override))
-	a(var("LDFLAGS", _eject_flags(cfg.ldflags, root)))
+	ldflags = cfg.ldflags[:len(cfg.ldflags) - len(cfg.sanitize_flags)]
+	a(var("LDFLAGS", _eject_flags(ldflags, root)))
 	a(var("BUILD_DIR", EJECT_BUILD_DIR, assign))
+	a("")
+
+	# DEBUG and SANITIZE survive the exit.
+	#
+	# Baking them in would leave a Makefile that answers `make DEBUG=1' by
+	# building a release and saying nothing, which is worse than never
+	# having offered the switch -- and it would hand back something less
+	# capable than the hand-written Makefile it replaced, since the sibling
+	# projects all carry these.
+	#
+	# They are the *plan* in no sense: which files, which link sets and
+	# which libraries are all unchanged by them, so nothing here needs
+	# re-ejecting to switch. That is what separates them from the snapshot
+	# limit in section 15.
+	#
+	# `$(filter-out 0,$(VAR))' rather than `ifdef VAR', which is the idiom
+	# everyone reaches for and is wrong here: ifdef calls DEBUG=0 set, so
+	# the emitted file would contradict the tool that emitted it. filter-out
+	# is empty for unset, for empty and for exactly 0, and non-empty for
+	# anything else, which is fmake's rule exactly.
+	if cfg.opt_flags:
+		a("# Set DEBUG=1 for a debug build. 0 and empty are off, matching")
+		a("# the tool this came from -- note that is not what ifdef would do.")
+		a("#")
+		a("# `:=' and not `=': these prepend to the variable they assign, and")
+		a("# a recursive assignment referring to itself is an error Make")
+		a("# reports rather than a loop it runs.")
+		a("ifeq ($(filter-out 0,$(DEBUG)),)")
+		for name in ("CFLAGS", "CXXFLAGS"):
+			a(var(name, _eject_flags(DEFAULT_CFLAGS, root)
+			      + [f"$({P}{name})"], ":="))
+		a("else")
+		for name in ("CFLAGS", "CXXFLAGS"):
+			a(var(name, _eject_flags(DEBUG_CFLAGS, root)
+			      + [f"$({P}{name})"], ":="))
+		a("endif")
+		a("")
+	a("# Set SANITIZE=1 for AddressSanitizer and UndefinedBehaviorSanitizer.")
+	a("# Both sides: a sanitizer is a runtime as well as an instrumentation,")
+	a("# so compiling with it and linking without leaves __asan_report_*")
+	a("# undefined and the link fails naming none of this.")
+	a(f"ifneq ($(filter-out 0,$(SANITIZE)),)")
+	san = " ".join(_eject_flags(SANITIZE_CFLAGS, root))
+	a(var("CFLAGS", san, "+="))
+	a(var("CXXFLAGS", san, "+="))
+	a(var("LDFLAGS", san, "+="))
+	a("endif")
 	a("")
 	# The default target does not build tests, and a separate one builds
 	# and runs them. That is what three of the projects that read this

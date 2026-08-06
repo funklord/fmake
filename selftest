@@ -3569,6 +3569,82 @@ def debug_info_is_asked_for_rather_than_default(t):
 
 
 @case
+def an_ejected_build_keeps_the_debug_and_sanitize_switches(t):
+	"""Leaving should not cost you the switches you just gained.
+
+	Baking the flags in leaves a Makefile that answers `make DEBUG=1' by
+	building a release and saying nothing -- worse than never offering the
+	switch, and it hands back something less capable than the hand-written
+	Makefile it replaced, since every sibling project carries these.
+
+	They are not the plan in any sense. Which files, which link sets, which
+	libraries are all unchanged by them, so nothing needs re-ejecting to
+	switch -- which is what separates this from the snapshot limit in
+	section 15, where adding a source genuinely does mean ejecting again.
+
+	The emitted test is `$(filter-out 0,$(VAR))` rather than `ifdef VAR`.
+	ifdef is the idiom everyone reaches for and is wrong here: it calls
+	DEBUG=0 set, so the file would contradict the tool that emitted it.
+	Section 87 has that table."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("prog.c", "#include <stdlib.h>\n"
+	        "int main(void){ int *p = malloc(16); p[4] = 1; free(p); "
+	        "return 0; }\n")
+	check(t.fmake().returncode == 0, "build failed")
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+
+	def flags(*spec):
+		out = _run_in(t.dir, "make", "-n", *spec)
+		compile_line = next((l for l in out.stdout.splitlines()
+		                     if " -c " in l), "")
+		link_line = next((l for l in out.stdout.splitlines()
+		                  if " -o prog" in l and " -c " not in l), "")
+		return compile_line, link_line
+
+	# Every row of section 87's table, checked against the emitted file.
+	plain, _ = flags()
+	check("-Os" in plain and "-Og" not in plain, f"default is not -Os: {plain}")
+	dbg, _ = flags("DEBUG=1")
+	check("-Og" in dbg and " -g" in dbg, f"DEBUG=1 did nothing: {dbg}")
+	for off in ("DEBUG=0", "DEBUG="):
+		line, _ = flags(off)
+		check("-Og" not in line,
+		      f"{off} enabled the debug build, which is what ifdef would "
+		      f"have done and is not what fmake does: {line}")
+
+	san_c, san_l = flags("SANITIZE=1")
+	check("fsanitize" in san_c, f"SANITIZE=1 did not reach the compile: {san_c}")
+	check("fsanitize" in san_l,
+	      f"SANITIZE=1 did not reach the LINK: {san_l}")
+	off_c, _ = flags("SANITIZE=0")
+	check("fsanitize" not in off_c, f"SANITIZE=0 should be off: {off_c}")
+	both_c, _ = flags("DEBUG=1", "SANITIZE=1")
+	check("-Og" in both_c and "fsanitize" in both_c,
+	      f"the two should compose: {both_c}")
+
+	# The emitted file must not depend on the environment it was emitted
+	# from -- ejecting under SANITIZE=1 used to bake it in permanently.
+	under = t.fmake("--eject", env={"SANITIZE": "1", "DEBUG": "1"})
+	check(under.returncode == 0, f"eject under the switches failed: {under.stderr}")
+	check(under.stdout == r.stdout,
+	      "the ejected Makefile changed with the ambient DEBUG/SANITIZE, so "
+	      "the switches were baked in rather than emitted")
+
+	# And it has to work, not merely say the right words.
+	check(_run_in(t.dir, "make", "SANITIZE=1").returncode == 0,
+	      "the sanitized ejected build failed")
+	run = subprocess.run([os.path.join(t.dir, "prog")], capture_output=True,
+	                     text=True, env=dict(os.environ,
+	                                         ASAN_OPTIONS="exitcode=0"))
+	check("runtime error" in run.stderr or "AddressSanitizer" in run.stderr,
+	      f"the sanitized ejected build caught nothing: {run.stderr}")
+
+
+@case
 def sanitize_reaches_the_link_and_actually_catches_something(t):
 	"""$SANITIZE, spelled as the sibling projects spell it.
 

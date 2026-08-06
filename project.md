@@ -129,7 +129,8 @@ that had been green about nothing for five commits ·
 [84. situ's report, folded in](#84-situs-report-folded-in) ·
 [85. Leaving with the install as well](#85-leaving-with-the-install-as-well) ·
 [86. `-g` was in the default and should not have been](#86--g-was-in-the-default-and-should-not-have-been) ·
-[87. `SANITIZE`, and a variable that means two things](#87-sanitize-and-a-variable-that-means-two-things)
+[87. `SANITIZE`, and a variable that means two things](#87-sanitize-and-a-variable-that-means-two-things) ·
+[88. The switches had to survive the exit too](#88-the-switches-had-to-survive-the-exit-too)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6246,3 +6247,64 @@ someone whose `DEBUG=0` did the opposite of what they meant.
 |---|---|---|---|---|
 | fmake | on | **off** | off | off |
 | the sibling Makefiles | on | **on** | off | off |
+
+---
+
+## 88. The switches had to survive the exit too
+
+`--eject` baked `DEBUG` and `SANITIZE` into the flags it wrote. So a
+project could adopt fmake, gain both switches, eject -- and get a Makefile
+that answers `make DEBUG=1` by building a release and saying nothing.
+
+That is worse than never having offered the switch. It is also a
+*regression against what the project left behind*, since the hand-written
+Makefiles being replaced all carry these -- fuzzypickles in six files. The
+exit is supposed to hand back everything fmake worked out; here it handed
+back less than the thing it displaced, and silently, which is the shape
+§85 had just fixed for install.
+
+### Why this is not the snapshot limit
+
+§15 says ejected builds are a snapshot rather than a translation, and that
+adding a source file means ejecting again. That is right and it does not
+cover this. **These two change no part of the plan** -- not which files are
+compiled, not the link sets, not the libraries, not a single rule -- they
+change flags, and Make switches flags without re-deriving anything. The
+snapshot argument applies to what fmake computed; it does not apply to a
+knob that was never computed.
+
+The evidence is that the emitted file is now *identical* whether or not
+`SANITIZE` was set when it ran. Before, ejecting while sanitizing wrote a
+Makefile that was permanently sanitized with nothing saying so, which is
+the same silent-wrongness from the other direction.
+
+### `filter-out`, not `ifdef`
+
+The idiom everyone reaches for is `ifdef DEBUG`, and it is wrong here for
+the reason §87 records: `ifdef` calls `DEBUG=0` set, so the emitted file
+would contradict the tool that emitted it. One row of that table would
+differ depending on whether you ran fmake or the Makefile fmake wrote,
+which is the worst possible place for a divergence.
+
+    ifeq ($(filter-out 0,$(DEBUG)),)
+
+is empty for unset, for empty and for exactly `0`, and non-empty for
+anything else -- fmake's rule exactly, in one line, with no nested
+conditionals. The sibling Makefiles cannot use it because they never gave
+those variables a `?=` default and rely on `ifdef` for that reason; nothing
+here has that constraint.
+
+`:=` rather than `=` on the assignments that prepend, because a recursive
+variable referring to itself is an error Make reports rather than a loop it
+runs -- found by writing it the obvious way first and having Make refuse.
+
+### What is still baked
+
+`--cflags` still bakes. Somebody who forced the flags gets them frozen,
+which is what forcing them means, and the `DEBUG` block is simply not
+emitted in that case -- there is no default left for it to switch between.
+
+`--eject ninja` bakes both, because ninja has no conditionals. That is the
+second thing on ninja's list after the install rule, and both are the same
+answer: ninja is a format for generated files with the decisions already
+made, so the honest place for a switch is the generator.
