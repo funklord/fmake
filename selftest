@@ -7592,20 +7592,28 @@ def a_symlinked_directory_is_part_of_the_tree(t):
     os.walk does not follow symlinked directories by default, so the whole
     subtree was invisible and nothing said so: the build failed much later on
     an undefined symbol, with no hint that a directory had been skipped."""
-	os.makedirs(os.path.join(t.dir, "elsewhere"), exist_ok=True)
-	t.write("elsewhere/thing.c", "int shared_thing(void){ return 5; }\n")
-	os.makedirs(os.path.join(t.dir, "app"), exist_ok=True)
-	os.symlink("../elsewhere", os.path.join(t.dir, "app/common"))
-	t.write("app/main.c", """
+	# The shared tree lives *outside* this one, which is the arrangement
+	# the docstring describes and the only one with a single answer. An
+	# earlier version put it inside and excluded it, so the case passed
+	# only when the walk happened to reach the link before the directory
+	# it points at -- readdir order, which differs by filesystem. It
+	# passed here and failed on CI for eleven hours.
+	sibling = tempfile.mkdtemp(prefix="fmake-sibling-")
+	try:
+		with open(os.path.join(sibling, "thing.c"), "w") as fh:
+			fh.write("int shared_thing(void){ return 5; }\n")
+		os.makedirs(os.path.join(t.dir, "app"), exist_ok=True)
+		os.symlink(sibling, os.path.join(t.dir, "app/common"))
+		t.write("app/main.c", """
 int shared_thing(void);
 int main(void){ return shared_thing() == 5 ? 0 : 1; }
 """)
-	t.write("fmake.toml", '[project]\nexclude = ["elsewhere/**"]\n')
-
-	r = t.fmake()
-	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
-	check(any("common/thing.c" in c for c in compiled(r)),
-	      f"the symlinked directory was not walked: {compiled(r)}")
+		r = t.fmake()
+		check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+		check(any("common/thing.c" in c for c in compiled(r)),
+		      f"the symlinked directory was not walked: {compiled(r)}")
+	finally:
+		shutil.rmtree(sibling, ignore_errors=True)
 
 
 @case
@@ -7639,12 +7647,21 @@ def two_links_to_one_directory_are_walked_once(t):
 int shared_thing(void);
 int main(void){ return shared_thing() == 5 ? 0 : 1; }
 """)
-	t.write("fmake.toml", '[project]\nexclude = ["elsewhere/**"]\n')
 
+	# Counted, not inferred from an exclusion. The earlier version excluded
+	# the real directory and required the build to succeed, which only held
+	# when the walk reached a link before the directory itself -- so it was
+	# asserting the tie-break rather than the property, and the tie-break is
+	# readdir order. What this is about is that thing.c is compiled once,
+	# whichever of its three names it ends up with.
 	r = t.fmake()
 	check(r.returncode == 0,
 	      f"a directory reached two ways should not be a duplicate: "
 	      f"{r.stdout}{r.stderr}")
+	hits = [c for c in compiled(r) if c.endswith("thing.c")]
+	check(len(hits) == 1,
+	      f"one file reached by three names was compiled {len(hits)} "
+	      f"times: {hits}")
 	check(t.run(os.path.basename(t.dir)).returncode == 0, "program failed")
 
 

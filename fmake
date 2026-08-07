@@ -2305,8 +2305,21 @@ def _walk(root):
 			dirnames[:] = []
 			continue
 		seen.add(real)
-		dirnames[:] = [d for d in dirnames
-		               if d not in SKIP_DIRS and not d.startswith(".")]
+		# Sorted, and it is not cosmetic. When a directory is reachable
+		# twice -- once directly and once through a link -- the guard above
+		# keeps whichever the walk reached *first*, and os.walk descends in
+		# readdir order, which is the filesystem's hash order and differs
+		# between machines. So the same tree gave its files different names
+		# on different machines: a different `exclude' match, a different
+		# object path, and a different ejected build file. Section 12 claims
+		# that file is byte-stable, and for a tree with a linked directory
+		# in it that was true only per-machine.
+		#
+		# Sorting does not make the choice principled -- it is still the
+		# first name in walk order -- but it makes it the same everywhere,
+		# which is the part anybody can rely on.
+		dirnames[:] = sorted(d for d in dirnames
+		                     if d not in SKIP_DIRS and not d.startswith("."))
 		yield dirpath, dirnames, filenames
 
 

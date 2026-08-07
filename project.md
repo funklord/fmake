@@ -136,7 +136,8 @@ that had been green about nothing for five commits ·
 [91. Sweeping the two paths that had not been swept](#91-sweeping-the-two-paths-that-had-not-been-swept) ·
 [92. Auditing every remedy the tool offers](#92-auditing-every-remedy-the-tool-offers) ·
 [93. Uninstall, and the manifest that was not written](#93-uninstall-and-the-manifest-that-was-not-written) ·
-[94. `-MD` for generators, and a check that answered two ways](#94--md-for-generators-and-a-check-that-answered-two-ways)
+[94. `-MD` for generators, and a check that answered two ways](#94--md-for-generators-and-a-check-that-answered-two-ways) ·
+[95. CI was red, and the tool was the reason](#95-ci-was-red-and-the-tool-was-the-reason)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6763,3 +6764,70 @@ copied its files out of the tree above -- which by then had been edited
 three times, including one edit that added an include the control never
 received. It writes its own content now. **Copying live state into a
 control is how a control stops testing what it was built to test.**
+
+---
+
+## 95. CI was red, and the tool was the reason
+
+The suite passed here and failed on GitHub, on two cases, for eleven hours
+before anybody looked -- across the history rewrite, so the first instinct
+was that the rewrite had done it. It had not: the same two cases failed on
+the run *before* it, on the original tip.
+
+```
+FAIL a_symlinked_directory_is_part_of_the_tree
+FAIL two_links_to_one_directory_are_walked_once
+2 of 251 failed
+```
+
+### The tie-break nobody chose
+
+`_walk` follows symlinked directories and guards against walking one twice
+by remembering real paths -- §27. When a directory is reachable both
+directly and through a link, the guard keeps **whichever the walk reached
+first**, and `os.walk` descends in `readdir` order, which is the
+filesystem's hash order.
+
+So the same tree gave its files *different names on different machines*.
+Both cases were built with the real directory excluded and the link not,
+and they passed exactly when the link happened to be reached first. Here it
+was; on the runner it was not.
+
+**The consequence is much larger than two cases.** Which name a file gets
+decides whether `[project] exclude` matches it, which `@sources` globs
+reach it, what its object path is, and what the ejected build file
+contains. §12 claims that file is byte-stable; for any tree with a linked
+directory in it, that was true only per-machine.
+
+`dirnames` is sorted now. That does not make the choice *principled* -- it
+is still whichever name comes first -- but it makes it the same everywhere,
+which is the part anybody can build on.
+
+### Both cases were asserting the tie-break
+
+Sorting alone would have left them failing, deterministically, which is
+what made it worth looking at what they were actually for.
+
+- **The symlinked directory case** describes `src/common -> ../shared`,
+  "how a pair of sibling projects share code" -- and a sibling project is
+  *outside* the tree. The fixture had put it inside and excluded it, which
+  invents a second path and a tie-break the real scenario does not have.
+  It links to a directory outside the tree now: one path, one answer, no
+  order to depend on.
+- **The two-links case** is about a diamond being walked once. It asserted
+  that by excluding the real directory and requiring the build to succeed,
+  which is true only if the winner is one of the links. It counts the
+  compilations of `thing.c` now and requires exactly one -- the property
+  itself, whichever of the three names it ends up with.
+
+That is §94's rule again, one section later and from a third direction:
+**assert the property, never a side effect that happens to correlate with
+it.** A fixture that arranges for one arbitrary outcome and checks a
+consequence of it is a fixture that passes on the machine it was written on.
+
+### What CI was worth
+
+This is the first defect the CI job has caught that the suite could not,
+and it caught it by being a second machine rather than by testing anything
+extra. §63 recorded that the job found something before it ever ran; this
+is it finding something only a different filesystem could show.
