@@ -13,7 +13,7 @@ override_dh_auto_build:
 # a version, both are hand-edited, and a mismatch ships a package whose
 # reported version disagrees with the one that installed it.
 override_dh_auto_test:
-	$(MAKE) check-version
+	$(MAKE) version-check
 
 # The Makefile defaults to /usr/local, which is right for `make install` by
 # hand and forbidden in a package.

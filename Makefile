@@ -2,6 +2,31 @@
 # `make install` and `make deb` mean what everyone expects them to, and so
 # debhelper has the target it looks for. The program is a single script; all
 # `install` does is copy it and its manual page into place.
+#
+# TARGETS
+#   make               -- write the manual page and the bash completion, both
+#                         produced by fmake itself so neither can go stale
+#   make test          -- ./selftest: build real trees and check what fmake
+#                         decided about them
+#   make check         -- version-check, style and test; the one to run
+#                         before a commit
+#   make style         -- the shared source gate, plus project.md held to the
+#                         tree it describes
+#   make version-check -- VERSION, the literal in the script and
+#                         debian/changelog all state one number; hold them to
+#                         each other
+#   make install       -- install the script, its manual page and its
+#                         completion under PREFIX
+#   make uninstall     -- remove what install put there
+#   make deb           -- build the .deb into BUILD_DIR
+#   make lint          -- build it, then run lintian over it where lintian
+#                         is installed
+#   make hooks         -- install the git hooks from tools/hooks/
+#   make clean         -- remove the generated files and the package
+#   make veryclean     -- clean, plus the build directory
+#   make distclean     -- veryclean, plus stray editor files
+#   make help          -- this list
+#
 
 PREFIX  ?= /usr/local
 DESTDIR ?=
@@ -18,7 +43,7 @@ BUILD_DIR  ?= build
 # the one that installed it.
 # The one place the version is stated. The script carries a literal rather
 # than reading this file: fmake is one file and stdlib only, so it cannot
-# depend on something beside it at runtime. check-version holds the three in
+# depend on something beside it at runtime. version-check holds the three in
 # step instead.
 VERSION     = $(shell cat VERSION)
 DEB_VERSION = $(shell sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
@@ -39,7 +64,7 @@ BINDIR  = $(DESTDIR)$(PREFIX)/bin
 COMPDIR = $(DESTDIR)$(PREFIX)/share/bash-completion/completions
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: all install uninstall check check-version deb lint clean test veryclean distclean style style-source style-docs hooks
+.PHONY: all install uninstall check version-check deb lint clean test veryclean distclean style style-source style-docs hooks help
 
 all: fmake.1 fmake.bash
 
@@ -65,7 +90,7 @@ install: fmake.1 fmake.bash
 uninstall:
 	rm -f $(BINDIR)/fmake $(MANDIR)/fmake.1 $(COMPDIR)/fmake
 
-check: check-version style test
+check: version-check style test
 
 # The version is written in two files and nothing else compares them. This
 # is what debian/rules runs in place of the suite: it needs no compiler, so
@@ -73,7 +98,7 @@ check: check-version style test
 # Three statements of one number: the VERSION file, which is the source; the
 # literal in the script, which cannot read a file because fmake ships as one
 # file; and debian/changelog, which dpkg reads and nothing else can supply.
-check-version:
+version-check:
 	@test -n "$(VERSION)" || { echo "VERSION file is empty or missing" >&2; exit 1; }
 	@test -n "$(DEB_VERSION)" || { echo "no version in debian/changelog" >&2; exit 1; }
 	@script=$$(sed -n 's/^VERSION *= *"\(.*\)"/\1/p' fmake); \
@@ -82,7 +107,7 @@ check-version:
 	@test "$(VERSION)" = "$(DEB_VERSION)" || { \
 		echo "version-check: VERSION says $(VERSION), debian/changelog says $(DEB_VERSION)" >&2; \
 		exit 1; }
-	@echo "check-version: $(VERSION), in step"
+	@echo "version-check: $(VERSION), in step"
 
 # Builds ../fmake_<version>_all.deb. -b because there is no upstream tarball
 # to sign or ship: the packaging is native and the source is this directory.
@@ -92,7 +117,7 @@ check-version:
 # dependency of producing the thing.
 # The package. dpkg-buildpackage drives debian/rules, which is three lines
 # of dh; everything the package declares is in debian/control.
-deb: check-version
+deb: version-check
 	@test -n "$(BUILD_DIR)" || { echo "deb: BUILD_DIR is empty, refusing" >&2; exit 1; }
 	dpkg-buildpackage -b -us -uc
 	@mkdir -p $(BUILD_DIR)
@@ -158,3 +183,14 @@ hooks:
 	@test -d .git || { echo "hooks: not a git repository" >&2; exit 1; }
 	@install -m 0755 tools/hooks/commit-msg .git/hooks/commit-msg
 	@echo "hooks: commit-msg installed from tools/hooks/"
+
+# The TARGETS block in the header is the one statement of what the targets
+# are, and `help` reads it back rather than repeating it: a list written
+# twice is a list that disagrees with itself eventually.
+#
+# Defined last on purpose. Make takes the first non-special target in the
+# file as the default goal, so a `help` rule placed above `all` makes plain
+# `make` print the help instead of building -- which is exactly what
+# happened when this was first added here.
+help:
+	@sed -n '/^# TARGETS/,/^#$$/p' $(firstword $(MAKEFILE_LIST)) | sed 's/^# \{0,1\}//'
