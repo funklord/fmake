@@ -5512,6 +5512,16 @@ def build(args, _bootstrapping=False):
 			known = set(by_name) | set(phony)
 			if held:
 				known.add("test")
+			# `--run` names its target after the file, so a file with no
+			# main() reaches here as a target nobody declared. Answering
+			# with a list of other targets is the wrong conversation
+			# entirely: the reader asked to run one file, and the fact
+			# fmake has -- and was discarding -- is that the file is not a
+			# program. This is the front end a newcomer meets first.
+			if args.run and name == default_name(run_rel, root):
+				die(f"--run: {_rel(args.run, root)} defines no main() at "
+				    f"file scope, so there is nothing to run.\n"
+				    f"A file used as a script has to be a program.")
 			die(f"no target {name!r}. Available: "
 			    f"{', '.join(sorted(known)) or '(none)'}")
 		# `fmake test foo bar` runs those and no others -- re-running one
@@ -5570,10 +5580,19 @@ def build(args, _bootstrapping=False):
 			hits = (glob.glob(os.path.join(root, os.path.dirname(rel), pat),
 			                  recursive=True)
 			        or glob.glob(os.path.join(root, pat), recursive=True))
-			got = [os.path.relpath(h, root) for h in sorted(hits)]
-			got = [g for g in got if g in proj.src_set]
+			matched = [os.path.relpath(h, root) for h in sorted(hits)]
+			got = [g for g in matched if g in proj.src_set]
 			if not got:
-				die(f"{rel}: @sources {pat!r} matched no source file")
+				# "matched no source file" about a pattern that matched a
+				# file, which is what happens when the platform rules or a
+				# [project] exclude took it out. Reading that as a typo
+				# costs somebody the afternoon, and the glob already knows
+				# the difference: `matched' is what is on disk, `got' is
+				# what survived. The [target.*] sibling of this message
+				# carries the same warning.
+				die(f"{rel}: @sources {pat!r} matched no source file"
+				    + (f" ({', '.join(matched[:3])} matched but is not "
+				       f"in the build)" if matched else ""))
 			for g in got:
 				forced_why[g] = f"@sources in {rel}:{ann_s.line('sources')}"
 			forced_rels += got

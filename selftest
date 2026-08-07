@@ -3521,6 +3521,66 @@ def an_ejected_ninja_installs_what_fmake_installs(t):
 
 
 @case
+def advice_distinguishes_an_excluded_file_from_a_typo(t):
+	"""Two failures that read alike and mean opposite things.
+
+	`@sources 'net_win32.c' matched no source file` about a file sitting
+	right there is read as a typo, and the reader goes looking for a
+	misspelling that is not there. The glob already knows the difference --
+	what is on disk against what survived the platform rules -- and the
+	`[target.*]` form of the same message already carried a warning about
+	it, so the two spellings of one situation disagreed.
+
+	The half that matters is that a genuine typo must stay a typo: adding
+	the note to both cases would trade one misreading for another."""
+	t.write("main.c", "/*! @file\n *  @sources net_win32.c\n */\n"
+	        "int main(void){ return 0; }\n")
+	t.write("net_win32.c", "int helper(void){ return 1; }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "@sources naming nothing buildable should fail")
+	said = r.stdout + r.stderr
+	check("net_win32.c matched" in said,
+	      f"the file is there and the message says it matched nothing: "
+	      f"{said}")
+
+	# A name that matches nothing at all must not gain the note.
+	t.write("main.c", "/*! @file\n *  @sources ghost.c\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("matched but is not in the build" not in said,
+	      f"a real typo was excused as an exclusion: {said}")
+
+
+@case
+def run_says_a_file_is_not_a_program(t):
+	"""`--run` is the front end a newcomer meets first.
+
+	It names its target after the file, so a file with no `main()` arrives
+	at target selection as a name nobody declared, and the answer was `no
+	target 'nomain'. Available: ...` -- a list of other targets, to someone
+	who asked to run one file. The fact fmake had and was discarding is
+	that the file is not a program."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("nomain.c", "int helper(void){ return 1; }\n")
+	r = t.fmake("--run", os.path.join(t.dir, "nomain.c"))
+	check(r.returncode != 0, "a file with no main() cannot be run")
+	said = r.stdout + r.stderr
+	check("main()" in said and "nomain.c" in said,
+	      f"the reason is not given: {said}")
+	check("Available:" not in said,
+	      f"still answering with a list of other targets: {said}")
+
+	# A file that IS a program still runs, so the check above is not simply
+	# refusing --run.
+	t.write("hello.c", "#include <stdio.h>\n"
+	        'int main(void){ puts("ran"); return 0; }\n')
+	r = t.fmake("--run", os.path.join(t.dir, "hello.c"))
+	check(r.returncode == 0, f"--run failed on a real program: {r.stderr}")
+	check("ran" in r.stdout, f"the program did not run: {r.stdout}")
+
+
+@case
 def an_exclusion_that_empties_the_tree_names_what_did_it(t):
 	"""`@os windwos` is a platform problem for about a minute.
 

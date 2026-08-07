@@ -133,7 +133,8 @@ that had been green about nothing for five commits ·
 [88. The switches had to survive the exit too](#88-the-switches-had-to-survive-the-exit-too) ·
 [89. The flags that have to be on both lines](#89-the-flags-that-have-to-be-on-both-lines) ·
 [90. Two directives that were read and then discarded quietly](#90-two-directives-that-were-read-and-then-discarded-quietly) ·
-[91. Sweeping the two paths that had not been swept](#91-sweeping-the-two-paths-that-had-not-been-swept)
+[91. Sweeping the two paths that had not been swept](#91-sweeping-the-two-paths-that-had-not-been-swept) ·
+[92. Auditing every remedy the tool offers](#92-auditing-every-remedy-the-tool-offers)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6572,3 +6573,71 @@ The negative direction is what keeps it a diagnosis rather than a guess,
 and the case asserts it: an ordinary unresolved symbol in a C program with
 no Qt anywhere still gets the ordinary advice, and a mutation that blames
 every file in the link set fails on exactly that.
+
+---
+
+## 92. Auditing every remedy the tool offers
+
+§91 ended by naming the shape rather than just the instance: §31's failure
+-- advice that points the wrong way -- kept arriving in *summaries*. The
+code that knows the answer runs early, the code that prints the last line
+does not ask it, and the reader acts on the last line.
+
+So the remedies were enumerated rather than waited for. Twenty-five
+messages in the tool offer one: a flag, a config key, a directive. Most are
+exact, naming the file, the line and the key. Two were not.
+
+### One situation, two messages, only one of them warned
+
+```
+!!! fmake.toml: [target.app] sources 'net_win32.c' matched no source file
+    (excluded ones do not count)
+!!! main.c: @sources 'net_win32.c' matched no source file
+```
+
+The same situation and the same file, and the second reads as a typo --
+which sends somebody looking for a misspelling in a name that is spelled
+correctly and sitting in the directory. **The glob already knew**: what the
+pattern matched on disk, and what survived the platform rules, are two
+lists it computes one after the other and then throws the first away.
+
+It says which file matched and did not make it. Better than the sibling's
+parenthetical, which is a general warning where this is a specific fact, so
+the note now names the file rather than hinting at a category.
+
+The half worth the work is the negative one. A pattern matching nothing at
+all must stay a plain "matched no source file", or the fix trades one
+misreading for another -- and the case asserts that as hard as the rest.
+
+### `--run` answered a question nobody asked
+
+```
+$ fmake --run nomain.c
+!!! no target 'nomain'. Available: adv
+```
+
+The reader asked to run one file. They were told about targets, given a
+list containing something else entirely, and never told the thing fmake
+knew: the file defines no `main()`, so it is not a program. `--run` names
+its target after the file, so a file that is not a program arrives at
+target selection as a name nobody declared, and the general message for
+that case is the wrong conversation.
+
+**This is the front end a newcomer meets first** -- the shebang, the C file
+as a script -- which makes it the worst place in the tool to answer a
+question with a list.
+
+```
+!!! --run: nomain.c defines no main() at file scope, so there is nothing
+    to run.
+    A file used as a script has to be a program.
+```
+
+### What the audit says about the shape
+
+Three of the four instances found this session were in code that prints a
+*conclusion*: the link failure's closing advice, the exclusion summary, and
+this. The pattern is not that fmake lacks the fact -- it had it every time,
+computed a few hundred lines earlier and dropped on the way to the
+sentence. Worth remembering when adding a message: **the question is not
+"what do I know here", it is "what did something already know".**
