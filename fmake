@@ -3168,13 +3168,14 @@ def check_object_arch(u, cfg):
 
 
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
-                  broken=None, tree_headers=(), quiet=False):
+                  broken=None, tree_headers=(), quiet=False, origins=None):
 	"""Compile what is stale. Returns True if anything was actually built.
 
     `broken` collects the files that would not compile, so the caller can
     drop the targets that depended on them and build the rest.
     """
 	broken = set() if broken is None else broken
+	origins = origins or {}
 	todo = []
 	for u in units:
 		if u.compiled:
@@ -3249,6 +3250,22 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			# question is which files belong in this build" -- which was
 			# right, and the answer was four comments. Naming both causes
 			# beats naming the likelier one: fmake does not know which.
+			# A generated file is not a file anybody can annotate. moc,
+			# uic and rcc outputs land under .fmake/, and the remedy below
+			# -- @os or @arch on the file -- is an instruction to edit
+			# something fmake wrote and will overwrite. Reported from a
+			# hydra build, where the advice named
+			# .fmake/moc/src/moc_qtwebengine_interceptor.cpp and the file
+			# to act on was src/qtwebengine_interceptor.cpp, listed
+			# further down among the others.
+			#
+			# fmake knows where every generated file came from -- the moc,
+			# uic and rcc plans are built from exactly that -- so it says
+			# so, and blames the source.
+			blame = origins.get(first_unit.rel, first_unit.rel)
+			if blame != first_unit.rel:
+				note(f"generated from {blame}")
+
 			miss = _missing_header(msg)
 			if miss:
 				# The third remedy, and the only exact one when it applies:
@@ -3269,7 +3286,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				else:
 					note(f"if it comes from a package, install it or name "
 					     f"it with @pkg")
-					note(f"if {first_unit.rel} belongs to another platform, "
+					note(f"if {blame} belongs to another platform, "
 					     f"@os NAME or @arch NAME keeps it out of this build")
 			if VERBOSE or len(groups) == 1 and len(hit) == 1:
 				PROGRESS.write(first_err)
@@ -5333,6 +5350,17 @@ def build(args, _bootstrapping=False):
 		srcs.sort()
 		scan_all(srcs)
 
+	# Where each generated file came from, so a compile error in one can
+	# name a file somebody is able to edit. Built from the plans rather
+	# than derived from the paths: the plans are what actually decided,
+	# and a rule guessing `moc_x.cpp' came from `x.h' is wrong for the
+	# `Q_OBJECT in a .cpp' shape and for anything ejected elsewhere.
+	generated_from = {}
+	for job in ui_jobs:
+		generated_from[job["out"]] = job["src"]
+	for job in qrc_jobs:
+		generated_from[job["out"]] = job["src"]
+
 	# ---- moc ----------------------------------------------------------
 	# After the generators, so a generated header carrying Q_OBJECT is moc'd
 	# like any other, and before everything else, so what moc writes is an
@@ -5343,6 +5371,8 @@ def build(args, _bootstrapping=False):
 	moc_incflags, src_set = [], set(srcs)
 	moc_exe = None
 	moc_jobs, moc_unreachable = moc_plan(srcs, gen_hdrs, scans)
+	for job in moc_jobs:
+		generated_from[job["out"]] = job["src"]
 	# Swept before the guard, not inside it: a tree that stops using Qt
 	# altogether is exactly the case where every moc output is stale, and a
 	# check for Q_OBJECT is the one thing that would skip it.
@@ -5919,7 +5949,8 @@ def build(args, _bootstrapping=False):
 	while True:
 		pool = [units[r] for r in sorted(units)]
 		compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
-		              broken, tree_headers=hdrs, quiet=args.quiet)
+		              broken, tree_headers=hdrs, quiet=args.quiet,
+		              origins=generated_from)
 		# The architecture to require is whatever fmake just compiled. Asking
 		# the objects avoids having to know anything about toolchain
 		# triplets, and is right by construction -- but it means waiting

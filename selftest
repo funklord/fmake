@@ -6436,6 +6436,67 @@ int main(int argc, char **argv) {
 
 
 @case
+def advice_about_a_generated_file_names_its_source(t):
+	"""You cannot put `@os` on a file fmake wrote.
+
+	A compile error in moc, uic or rcc output was blamed on the output:
+	`if .fmake/moc/src/moc_qtwebengine_interceptor.cpp belongs to another
+	platform, @os NAME ... keeps it out of this build`. That is an
+	instruction to edit a file under .fmake/ which fmake will overwrite,
+	and the file to act on -- src/qtwebengine_interceptor.cpp -- was listed
+	further down among the others, unremarked.
+
+	Reported from a hydra build. Section 31's shape once more, and the
+	sharpest version of it: the advice is not merely unhelpful, it cannot
+	be followed.
+
+	fmake knows where every generated file came from, because the moc, uic
+	and rcc plans are built from exactly that. The map is taken from the
+	plans rather than derived from the paths, since `moc_x.cpp came from
+	x.h' is wrong for a Q_OBJECT declared in a .cpp."""
+	_need_qt()
+	t.write("src/thing.h", """#pragma once
+#include <QObject>
+#include <NoSuchQtHeader>
+class Thing : public QObject { Q_OBJECT public: int n = 0; };
+""")
+	t.write("src/main.cpp", '/*! @file\n *  @pkg Qt6Core\n */\n'
+	        '#include "thing.h"\nint main(){ Thing t; return t.n; }\n')
+
+	r = t.fmake()
+	check(r.returncode != 0, "a missing header should fail the build")
+	said = r.stdout + r.stderr
+	advice = [l for l in said.splitlines() if "belongs to another platform" in l]
+	check(advice, f"the platform advice was not offered at all: {said}")
+	check("src/thing.h" in advice[0],
+	      f"the advice names something other than the source: {advice[0]}")
+	check(".fmake" not in advice[0],
+	      f"the advice still names a generated file, which cannot be "
+	      f"annotated: {advice[0]}")
+	check("generated from src/thing.h" in said,
+	      f"nothing said where the generated file came from: {said}")
+
+	# An error in an ordinary source still blames that source: the map has
+	# to be empty for files nobody generated, or every failure would start
+	# claiming to come from somewhere.
+	u = Tree("plain")
+	try:
+		u.write("app.c", "#include <NoSuchHeaderAtAll>\n"
+		        "int main(void){ return 0; }\n")
+		r = u.fmake()
+		check(r.returncode != 0, "a missing header should fail the build")
+		said = r.stdout + r.stderr
+		advice = [l for l in said.splitlines()
+		          if "belongs to another platform" in l]
+		check(advice and "app.c" in advice[0],
+		      f"an ordinary source lost its own name: {advice}")
+		check("generated from" not in said,
+		      f"a file nobody generated was said to be generated: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def qt_code_is_compiled_position_independent(t):
 	"""Reported from a build of hydra: 113 moc outputs failed at once.
 

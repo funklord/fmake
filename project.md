@@ -6999,3 +6999,29 @@ program, which resolves no package at all, so the code deciding this was
 never reached and a version handing `-fPIC` to *every* module passed
 against it. It resolves zlib now. **A negative case has to reach the code
 it is negating**, which is §96 one section later and in a smaller room.
+
+### The second error in that report
+
+`QWebEngineUrlRequestInterceptor: No such file or directory` is a package
+that machine does not have, and the diagnostic was right about it. What was
+wrong was the sentence after:
+
+```
+if .fmake/moc/src/moc_qtwebengine_interceptor.cpp belongs to another
+platform, @os NAME or @arch NAME keeps it out of this build
+```
+
+**That is an instruction to edit a file fmake wrote and will overwrite**,
+and the file to act on -- `src/qtwebengine_interceptor.cpp` -- was listed
+further down among the others, unremarked. §31's shape in its sharpest
+form: the advice is not merely unhelpful, it cannot be followed.
+
+fmake knows where every generated file came from, because the moc, uic and
+rcc plans are built from exactly that. The map is taken from the plans
+rather than derived from the paths, since "`moc_x.cpp` came from `x.h`" is
+wrong for a `Q_OBJECT` declared in a `.cpp`. The failure now says
+`generated from src/thing.h` and blames that file.
+
+The negative half is that a file nobody generated must keep its own name
+and gain no "generated from" line -- a mutation claiming every failure came
+from somewhere fails on it.
