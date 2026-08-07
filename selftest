@@ -6923,6 +6923,70 @@ class Thing : public QObject { Q_OBJECT public: int n = 0; };
 
 
 @case
+def the_qt_fpic_fix_actually_silences_qts_error(t):
+	"""Section 98 said this could not be checked here. It can.
+
+	That section verified the flag was *passed* -- on both routes to a
+	module and into the ejected build -- and recorded that whether it
+	silences Qt's #error was untestable, because it needs a Qt configured
+	with `-reduce-relocations` and this machine's is not.
+
+	Both halves of the condition can be supplied. `QT_REDUCE_RELOCATIONS`
+	is an ordinary macro, so `@define` sets it; and a compiler that does
+	not default to PIE -- which is the only thing different about the
+	machine that reported this -- is a three-line shim putting `-fno-pie`
+	before fmake's own flags. That is faithful rather than approximate:
+	the reporting machine's gcc puts it there too, and fmake's `-fPIC`
+	comes later and wins.
+
+	The order is the whole mechanism and is worth stating, because it also
+	corrects section 98. `-fPIC` and `-fno-pie` are last-wins:
+
+	    -fPIC            __PIC__=2
+	    -fno-pie         neither
+	    -fPIC -fno-pie   neither      <- cancelled
+	    -fno-pie -fPIC   __PIC__=2
+
+	So `--cflags -fno-pie` still defeats it, because `--cflags` is emitted
+	last by design. Section 98 said `--cflags` could not drop the flag;
+	what it cannot do is remove it from the *list*, which is not the same
+	as leaving it in effect."""
+	_need_qt()
+	shim = os.path.join(t.dir, "nopie-c++")
+	with open(shim, "w") as fh:
+		fh.write("#!/bin/sh\nexec c++ -fno-pie \"$@\"\n")
+	os.chmod(shim, 0o755)
+	t.write("app.cpp", """
+/*! @file
+ *  @pkg    Qt6Core
+ *  @define QT_REDUCE_RELOCATIONS
+ */
+#include <QtCore/qglobal.h>
+int main(){ return 0; }
+""")
+	r = t.fmake(env={"CXX": shim})
+	check(r.returncode == 0,
+	      f"a Qt build that declares -reduce-relocations did not compile, "
+	      f"which is the failure the -fPIC exists to prevent: "
+	      f"{r.stdout}{r.stderr}")
+
+	# The fixture has to be able to fail, or it says nothing. Without the
+	# shim there is no condition at all -- Debian's gcc defaults to PIE,
+	# __PIC__ is defined, and Qt is happy whatever fmake passes.
+	plain = t.fmake("-B")
+	check(plain.returncode == 0, "the ordinary build should still work")
+	probe = subprocess.run(["c++"] + subprocess.run(
+	    ["pkg-config", "--cflags", "Qt6Core"], capture_output=True,
+	    text=True).stdout.split()
+	    + ["-DQT_REDUCE_RELOCATIONS", "-fno-pie", "-c",
+	       os.path.join(t.dir, "app.cpp"), "-o", os.devnull],
+	    capture_output=True, text=True)
+	check(probe.returncode != 0 and "reduce-relocations" in probe.stderr,
+	      "the same compile without -fPIC succeeded, so this case cannot "
+	      f"fail and proves nothing: {probe.stderr[:300]}")
+
+
+@case
 def qt_code_is_compiled_position_independent(t):
 	"""Reported from a build of hydra: 113 moc outputs failed at once.
 

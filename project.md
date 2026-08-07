@@ -153,7 +153,8 @@ that had been green about nothing for five commits ·
 [108. Asking git the question it had already answered](#108-asking-git-the-question-it-had-already-answered) ·
 [109. The packaging report, folded in and removed](#109-the-packaging-report-folded-in-and-removed) ·
 [110. The same question as §79, and a method that answered the order](#110-the-same-question-as-79-and-a-method-that-answered-the-order) ·
-[111. The second list in the same file](#111-the-second-list-in-the-same-file)
+[111. The second list in the same file](#111-the-second-list-in-the-same-file) ·
+[112. Verifying the fix that could not be verified](#112-verifying-the-fix-that-could-not-be-verified)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -7019,13 +7020,14 @@ the module, not of how it was named, so it goes where both paths meet --
 and the case checks both, because putting it in one of them looks exactly
 like putting it in both until somebody uses the other.
 
-### What the case cannot check
+### What the case cannot check -- or so this said; §112 shows it can
 
-That this fixes the #error. That needs a Qt configured with
-`-reduce-relocations`, and this machine's is not -- verified rather than
-assumed, by compiling a probe against `QT_REDUCE_RELOCATIONS`. So the case
-checks the flag is passed, on both routes, into the ejected build as well,
-and **not** to a non-Qt module.
+That this fixes the #error was left unverified, on the grounds that it
+needs a Qt configured with `-reduce-relocations` and this machine's is not
+-- checked rather than assumed, by compiling a probe against
+`QT_REDUCE_RELOCATIONS`. So the case here checks the flag is passed, on
+both routes, into the ejected build as well, and **not** to a non-Qt
+module. §112 supplies the missing condition instead of accepting it.
 
 That last one took a second attempt. The first negative case was a plain C
 program, which resolves no package at all, so the code deciding this was
@@ -7798,3 +7800,63 @@ This is the same distinction the documentation gate draws between a path in
 prose and a path in a table (§44): **an inventory has to be complete and an
 illustration does not**, and forcing fifteen keys into a snippet would make
 it useless at the job it actually does.
+
+---
+
+## 112. Verifying the fix that could not be verified
+
+§98 fixed the Qt `-fPIC` reported from another machine, checked that the
+flag was passed on both routes to a module and into the ejected build, and
+recorded that whether it *silences Qt's #error* could not be checked here:
+that needs a Qt configured with `-reduce-relocations`, and this one is not.
+
+Both halves of the condition can be supplied.
+
+**`QT_REDUCE_RELOCATIONS` is an ordinary macro**, so `@define` sets it and
+Qt's guard behaves exactly as it does on a Qt built that way -- the guard
+reads the macro, not the build.
+
+**A compiler that does not default to PIE is a three-line shim.**
+
+```sh
+#!/bin/sh
+exec c++ -fno-pie "$@"
+```
+
+That is the only thing different about the reporting machine, and the shim
+is faithful rather than approximate: its gcc puts `-fno-pie` before the
+project's flags too, and fmake's `-fPIC` comes later and wins.
+
+With both, the exact reported failure reproduces here -- and removing
+fmake's `-fPIC` is what produces it:
+
+```
+* #error "You must build your code with position independent code if Qt
+  was configured with -reduce-relocations."
+```
+
+### The order is the mechanism, and it corrects §98
+
+```
+-fPIC            __PIC__=2
+-fno-pie         neither
+-fPIC -fno-pie   neither      <- cancelled
+-fno-pie -fPIC   __PIC__=2
+```
+
+Last wins. §98 said `--cflags` could not drop the flag; what `--cflags`
+cannot do is remove it from the *list*, and it is emitted last by design,
+so `--cflags -fno-pie` leaves `-fPIC` in the command and cancels it.
+
+**Surviving in a flag list is not the same as taking effect**, and that
+distinction is the one this document spends most of its length insisting
+on. It was got wrong in the section that introduced the flag, by a check
+that looked for `-fPIC` in a string.
+
+### What made it testable was asking what was actually different
+
+Not "we need a Qt built the other way" -- which is true and stops the
+conversation -- but "what does that machine do that this one does not".
+Two things, and both are things a test can arrange. **An untestable
+condition is worth restating as a list of differences before it is
+accepted**, because the differences are usually smaller than the label.
