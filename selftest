@@ -10455,6 +10455,75 @@ def a_vendored_main_stays_out_of_a_library(t):
 
 
 @case
+def an_ejected_clean_does_not_delete_outside_the_tree(t):
+	"""fmake's clean refused this and the Makefile it writes did not.
+
+	A generate rule may name an output anywhere, and one naming it outside
+	the tree is still *built* -- that is the author's instruction, and the
+	command is arbitrary shell either way. Deleting is a different
+	promise. `--clean' already refused to remove anything above the root,
+	with the reason written beside it: a rule could name anything, and
+	nothing else there deletes.
+
+	The ejected Makefile listed the same outputs in CLEAN unfiltered, so
+	`make clean' removed a file two directories up that `fmake --clean'
+	would not touch. The comment on fmake's side calls the two consistent,
+	which is what made this worth looking for rather than reasoning about.
+
+	The case asserts both halves in the same tree: the rule that builds it
+	survives, and neither clean removes it."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	outside = os.path.join(os.path.dirname(t.dir),
+	                       f"victim-{os.path.basename(t.dir)}.txt")
+	with open(outside, "w") as fh:
+		fh.write("PRECIOUS\n")
+	rel = os.path.relpath(outside, t.dir)
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.toml",
+	        "[generate.inside]\ninputs = [\"seed.txt\"]\n"
+	        "outputs = [\"made.txt\"]\ncommand = \"cp seed.txt made.txt\"\n\n"
+	        "[generate.outside]\ninputs = [\"seed.txt\"]\n"
+	        f"outputs = [\"{rel}\"]\ncommand = \"cp seed.txt {rel}\"\n")
+	try:
+		r = t.fmake("--eject")
+		check(r.returncode == 0, f"eject failed: {r.stdout}{r.stderr}")
+		mk = os.path.join(t.dir, "Makefile")
+		with open(mk, "w") as fh:
+			fh.write(r.stdout)
+
+		# The rule that builds it must survive; only the deleting stops.
+		check(f"{rel}: seed.txt" in r.stdout,
+		      f"the rule that builds the outside output was dropped, which "
+		      f"is not what this guards: {r.stdout}")
+		clean = r.stdout.split("CLEAN = ")[1].split("\n\n")[0]
+		check("made.txt" in clean,
+		      f"an in-tree generated file left the clean list: {clean}")
+		check(rel not in clean,
+		      f"the ejected clean would remove a file outside the tree: "
+		      f"{clean}")
+
+		_run_in(t.dir, "make")
+		check(os.path.exists(outside), "the fixture removed its own victim")
+		_run_in(t.dir, "make", "clean")
+		check(os.path.exists(outside),
+		      "make clean deleted a file outside the tree")
+		check(not os.path.exists(os.path.join(t.dir, "made.txt")),
+		      "make clean did not remove the in-tree generated file, so "
+		      "the guard is refusing too much")
+
+		# And fmake's own clean, which is the behaviour being matched.
+		t.fmake()
+		t.fmake("--clean")
+		check(os.path.exists(outside),
+		      "fmake --clean deleted a file outside the tree")
+	finally:
+		if os.path.exists(outside):
+			os.unlink(outside)
+
+
+@case
 def something_that_is_not_a_file_is_not_a_source(t):
 	"""Both ways this went wrong were hangs, which is why it is a guard.
 

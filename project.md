@@ -162,7 +162,8 @@ that had been green about nothing for five commits ·
 [117. A toolchain with no prefix to derive anything from](#117-a-toolchain-with-no-prefix-to-derive-anything-from) ·
 [118. Defensive on one side of the same rule](#118-defensive-on-one-side-of-the-same-rule) ·
 [119. A name in a comment stays a name](#119-a-name-in-a-comment-stays-a-name) ·
-[120. Two ways to never return](#120-two-ways-to-never-return)
+[120. Two ways to never return](#120-two-ways-to-never-return) ·
+[121. The clean that agreed with itself in only one direction](#121-the-clean-that-agreed-with-itself-in-only-one-direction)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -8438,3 +8439,53 @@ and applies to all 303.
 deliberately stupid input at the tool, and none of them came from thinking
 about the code. A traceback, an escape from `DESTDIR`, and two hangs --
 **the sweep was cheap and found what reading would not.**
+
+---
+
+## 121. The clean that agreed with itself in only one direction
+
+The hostile sweep kept going, and after `@target` the question was whether
+any *other* field naming a path could escape. Four were checked, and three
+are sound -- worth recording so nobody re-derives them:
+
+| | |
+|---|---|
+| `@headers ../outside.h` | installs, but by **basename**, so nothing leaves `$INCLUDEDIR`. Staged into a `DESTDIR` and listed: five files, all inside it. |
+| a generator writing outside | it is arbitrary shell, exactly as a Makefile recipe is. Same trust class as make, by design. |
+| `fmake --clean` | already refuses anything above the root, and refuses to follow a symlink out. The reason is written beside the code. |
+| an interrupted build | the cache is written only after a compile succeeds *and* `nm` reads it, so a kill leaves no entry and the next build recompiles. Checked with `SIGTERM` mid-compile. |
+| two builds at once | `.fmake/lock`; one waits and then reports up to date, cache consistent. |
+
+**The ejected Makefile was the odd one out.** It listed every generated
+output in `CLEAN` unfiltered, so:
+
+```make
+clean:
+	rm -f build/main.c.o build/main.c.d tree made.txt ../victim.txt
+```
+
+`make clean` removed a file two directories up that `fmake --clean` would
+not touch. Both halves of that sentence were already true and nobody had
+put them side by side -- and the comment on fmake's own clean *asserts*
+the two are consistent, which is what made this worth going to look at
+rather than reasoning about.
+
+### What is guarded is deleting, not building
+
+The rule that builds an outside output stays. A generate rule naming one is
+an instruction, and refusing it would be a different decision than the one
+being made here. What does not survive is the `rm`, and the asymmetry is
+the point: `build-and-commit.md` calls a clean target "the one thing
+everybody runs without reading", and this file is handed to people with a
+header telling them fmake is not needed to read it.
+
+### The method, four sections running
+
+§118 to §121 all came from the same afternoon of pointing deliberately
+stupid input at the tool. Three bugs and a list of things now known to be
+fine -- and **the negative results are half the value**, because the next
+person to wonder about `@headers` and `DESTDIR` has the answer and the
+command that produced it.
+
+The one that generalises: **a comment claiming two things agree is a place
+to test, not a place to trust.** This one had been true when written.

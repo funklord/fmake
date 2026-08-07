@@ -7583,6 +7583,16 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	#
 	# The directories are left behind. Removing them would mean removing
 	# something this rule did not name, which is the whole point.
+	# A generate rule may name an output anywhere, and one that names it
+	# outside the tree is still built -- that is the author's instruction.
+	# It does not get *deleted*, which is a different promise: --clean
+	# already refuses to remove anything above the root, and an ejected
+	# clean that removed what fmake's would not is the two disagreeing
+	# about the one rule everybody runs without reading.
+	def _within(rel):
+		full = os.path.normpath(os.path.join(root, rel))
+		return full.startswith(os.path.join(root, ""))
+
 	a(f"{P}CLEAN = \\")
 	leavings = ([f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in sorted(every)]
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d" for rel in sorted(every)]
@@ -7591,7 +7601,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	            + [_eject_src(j["out"]) for j in uic_jobs]
 	            + [_eject_src(j["out"]) for j in moc_jobs]
 	            + [_eject_src(j["out"]) for j in rcc_jobs]
-	            + list(gen_outs))
+	            + [o for o in gen_outs if _within(o)])
 	for i, item in enumerate(leavings):
 		a(f"\t{item}" + (" \\" if i < len(leavings) - 1 else ""))
 	a("")
