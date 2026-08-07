@@ -145,7 +145,8 @@ that had been green about nothing for five commits ·
 [100. The archives the cover put in the wrong order](#100-the-archives-the-cover-put-in-the-wrong-order) ·
 [101. The prebuilt object, and the version of it that would have been wrong](#101-the-prebuilt-object-and-the-version-of-it-that-would-have-been-wrong) ·
 [102. The library fmake could install and then not find](#102-the-library-fmake-could-install-and-then-not-find) ·
-[103. The soname chain, for the price of a rule](#103-the-soname-chain-for-the-price-of-a-rule)
+[103. The soname chain, for the price of a rule](#103-the-soname-chain-for-the-price-of-a-rule) ·
+[104. The hand-written list nobody had checked](#104-the-hand-written-list-nobody-had-checked)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1738,9 +1739,11 @@ rather than code, and one lesson about testing.
   `AS_NEEDED` are read for filenames and `-l` flags; anything else in the ld
   script language is ignored. That covers glibc and ncurses, which is what
   exists in practice, but it is pattern-matching rather than understanding.
-- **The linker-symbol list is hand-written.** `_GLOBAL_OFFSET_TABLE_`, `_end`
-  and friends are filtered by name. A toolchain providing something not on the
-  list would report it as a missing dependency.
+- **The linker-symbol list is hand-written**, and now checked: §104 has the
+  suite derive what `ld` actually provides and requires the list to cover
+  it. It found six gaps the first time it ran. Still a list -- a toolchain
+  whose `ld` prints no default script is unexamined -- but no longer an
+  unexamined one.
 - **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
   `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
   are unhandled.
@@ -7309,3 +7312,60 @@ That is the whole point of the exercise, and it is the one thing a
 directory listing cannot show. An unversioned library still installs one
 plain `libq.so` and no chain -- checked too, since giving every shared
 library a chain would be the same feature done wrong.
+
+---
+
+## 104. The hand-written list nobody had checked
+
+§15 names three lists as load-bearing, and says a fourth would be the
+signal that the provider model wants a real predicate. It says nothing
+about whether the three are *right*, and one of them was not.
+
+`LINKER_SYMBOLS` is the set of names the linker supplies -- undefined in
+every object, exported by no library, and not missing dependencies. It had
+twenty-two entries and had never been compared with a linker.
+
+```
+$ ld --verbose | grep PROVIDE
+```
+
+says this one provides six that fmake did not know: `end` and `edata` --
+the oldest names on the list and still referenced by real code -- plus
+`__etext`, `__tdata_start`, and the two `__rela_iplt_*` bounds a static PIE
+walks.
+
+The symptom is the one §15 predicted, and it is §31's shape:
+
+```
+no x86_64/64le library exports: __rela_iplt_start, end, genuinely_missing
+```
+
+**Two of those three are not missing at all.** The reader is sent looking
+for packages that do not exist, and the one symbol that is actually the
+problem is a third of a list. Afterwards the same build says
+`genuinely_missing` and nothing else.
+
+### The suite probes; the tool does not
+
+The obvious repair is to have fmake read the default linker script. That is
+a subprocess on every build for a question whose answer changes when
+binutils does, and §17 is explicit that fmake does not probe features --
+which is a rule about the *tool*, not about its tests.
+
+So the check lives in the suite. `ld --verbose` is parsed there, and the
+list must cover what it names. A toolchain that provides something new
+fails the suite rather than somebody's build, and the failure says which
+symbol.
+
+**That is the general move for a hand-written list**: not "replace it with
+detection", which trades a stale list for a slow build, but "make something
+that runs regularly compare it against reality". The list stays a list. It
+stops being unexamined.
+
+### What it still does not cover
+
+An `ld` that prints no default script -- lld, or a cross toolchain that
+answers differently -- skips the case rather than failing it, so the list
+is checked against the linker the suite happens to run on. The other two
+lists in §15, interposer libraries and the builtin header table, are
+untouched and remain as they were.

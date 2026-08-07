@@ -3761,6 +3761,26 @@ INTERPOSER_LIBS = {
 # them as unresolved dependencies is a false alarm -- and on a PIC build
 # _GLOBAL_OFFSET_TABLE_ can be the only thing listed, which makes the whole
 # report read as a failure when nothing is wrong.
+# Symbols nothing in the tree defines and no library exports, because the
+# linker itself supplies them. Undefined references to these are not
+# missing dependencies, and reporting them as such sends the reader looking
+# for a package that does not exist.
+#
+# Hand-written, which section 15 names as a load-bearing list -- so
+# `linker_symbols_cover_what_the_linker_provides` checks it against `ld
+# --verbose` on the machine running the suite. It found six missing the
+# first time it was run, `end` and `edata` among them, which are the
+# oldest names on the list and still referenced by real code.
+#
+# The suite probes and the tool does not, deliberately. Reading the default
+# linker script on every build is a subprocess for a question whose answer
+# changes when binutils does, and section 17 is explicit that fmake does not
+# probe features. A checked list is the middle: still a list, no longer
+# unexamined.
+#
+# The last six on it came from that check rather than from anybody reading:
+# the bare BSD-era `edata` and `end`, the second spelling of etext, the
+# IRELATIVE relocation bounds a static PIE walks, and the TLS start.
 LINKER_SYMBOLS = {
     "_GLOBAL_OFFSET_TABLE_", "_DYNAMIC", "__dso_handle", "__ehdr_start",
     "_edata", "_end", "__bss_start", "etext", "_etext", "__data_start",
@@ -3768,6 +3788,8 @@ LINKER_SYMBOLS = {
     "__init_array_end", "__fini_array_start", "__fini_array_end",
     "__preinit_array_start", "__preinit_array_end", "__executable_start",
     "__start___libc_atexit", "__stop___libc_atexit",
+    "edata", "end", "__etext", "__rela_iplt_start", "__rela_iplt_end",
+    "__tdata_start",
 }
 
 

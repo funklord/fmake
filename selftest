@@ -7594,6 +7594,80 @@ def a_stray_object_beside_its_source_is_ignored(t):
 
 
 @case
+def linker_symbols_cover_what_the_linker_provides(t):
+	"""A hand-written list, checked against the toolchain that has to match.
+
+	Section 15 names this as one of the load-bearing lists: symbols the
+	linker supplies, which nothing in the tree defines and no library
+	exports. An undefined reference to one is not a missing dependency, and
+	reporting it as such sends the reader looking for a package that does
+	not exist.
+
+	It had six gaps when this case was first run -- `end`, `edata`,
+	`__etext`, `__tdata_start` and the two `__rela_iplt_*` bounds -- and
+	the symptom was exactly what section 15 predicted:
+
+	    no x86_64/64le library exports: __rela_iplt_start, end,
+	                                    genuinely_missing
+
+	Two of those three are not missing at all, and the one that is sits in
+	a list of three.
+
+	**The suite probes and the tool does not.** Reading the default linker
+	script on every build is a subprocess for a question whose answer
+	changes when binutils does, and section 17 is explicit that fmake does
+	not probe features. Checking the list here is the middle: still a
+	list, no longer unexamined, and a toolchain that provides something new
+	fails the suite rather than somebody's build."""
+	if not shutil.which("ld"):
+		raise Skip("ld not installed")
+	script = subprocess.run(["ld", "--verbose"], capture_output=True,
+	                        text=True).stdout
+	if "PROVIDE" not in script:
+		raise Skip("this ld does not print a default linker script")
+
+	provided = set(re.findall(
+	    r"PROVIDE(?:_HIDDEN)?\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)", script))
+	# Plain assignments in the script are linker-provided too.
+	provided |= set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^=]",
+	                           script, re.M))
+	check(len(provided) > 5,
+	      f"only {len(provided)} symbols parsed out of the linker script, "
+	      f"so this case is not reading it properly")
+
+	with open(FMAKE) as fh:
+		src = fh.read()
+	block = src[src.index("LINKER_SYMBOLS = {"):src.index("def _stdout")]
+	known = set(re.findall(r'"([^"]+)"', block))
+	check(len(known) > 20, f"only {len(known)} names read out of fmake")
+
+	missing = sorted(provided - known)
+	check(not missing,
+	      f"this linker provides symbols fmake would report as missing "
+	      f"dependencies: {missing}")
+
+	# And the whole point, end to end: a link that fails for one real
+	# reason must name one symbol, not three.
+	t.write("main.c", """
+extern char end[];
+extern char __rela_iplt_start[];
+int genuinely_missing(void);
+int main(void){ return genuinely_missing() + (end != __rela_iplt_start); }
+""")
+	r = t.fmake()
+	check(r.returncode != 0, "the build should fail on the missing symbol")
+	said = r.stdout + r.stderr
+	blamed = [l for l in said.splitlines() if "library exports" in l]
+	check(blamed, f"no report of the unresolved symbol: {said}")
+	check("genuinely_missing" in blamed[0],
+	      f"the real symbol is not named: {blamed[0]}")
+	for supplied in ("end", "__rela_iplt_start"):
+		check(supplied not in blamed[0].split(":")[-1],
+		      f"a linker-provided symbol was reported as missing: "
+		      f"{blamed[0]}")
+
+
+@case
 def two_resolved_archives_are_grouped(t):
 	"""ld searches an archive only for what is undefined when it reaches it.
 
