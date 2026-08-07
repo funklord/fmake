@@ -6545,7 +6545,30 @@ not run.
 One false alarm, and it was mine: a `Q_OBJECT` class in a `.cpp` with no
 `#include "app.moc"` appeared undiagnosed, contradicting §17. It is
 diagnosed, on the first line of the output, and the probe had truncated to
-the last four. The warning is followed by ten lines of linker noise and
-then a summary offering `--ldflags`, which is §31's shape again in a mild
-form -- the final advice does not know the first line was printed. Recorded
-rather than fixed.
+the last four.
+
+What the false alarm did turn up is real, and it is §31's shape again. The
+warning is printed, then ten lines of linker noise, and then a summary
+offering `--ldflags` -- **advice about a missing library, for a meta-object
+this tree was supposed to generate**. The first line diagnoses it and the
+last line, which is the one a reader acts on, contradicts that. Fixed:
+
+```
+* app did not link
+  no x86_64/64le library exports: _ZTV5Local
+  app.cpp declares a Q_OBJECT class and does not #include "app.moc", so its
+  meta-object was never generated
+  add the missing #include of the .moc file above; if that is not it, name
+  the missing libraries with --ldflags
+```
+
+**Matched on the link set, not on the symbol.** Tying `_ZTV5Local` back to
+a class means demangling, and the connection is exact without it: this
+program links a source that declares a `Q_OBJECT` class whose moc output
+was never generated. That is a fact fmake already had and was throwing
+away between the warning and the failure.
+
+The negative direction is what keeps it a diagnosis rather than a guess,
+and the case asserts it: an ordinary unresolved symbol in a C program with
+no Qt anywhere still gets the ordinary advice, and a mutation that blames
+every file in the link set fails on exactly that.

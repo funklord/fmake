@@ -5457,6 +5457,57 @@ def _moc_path():
 	return shutil.which("moc")
 
 
+@case
+def a_missing_moc_include_is_blamed_when_the_link_fails(t):
+	"""The warning is printed first; the failure is what gets read.
+
+	A Q_OBJECT class in a .cpp needs `#include "foo.moc"`, and fmake says
+	so before compiling. Then the link fails on a mangled vtable, ten lines
+	of linker noise go past, and the last line -- the one a reader acts on
+	-- offered to name the missing libraries with --ldflags. A meta-object
+	this tree was supposed to generate is not a missing library, and that
+	advice sends somebody to install something.
+
+	Section 31's shape, arriving in the summary printed after the message
+	written to avoid it. The connection is matched on the link set rather
+	than on the symbol: tying a mangled name to a class means demangling,
+	and this is exact without it -- the program links a source that
+	declares a Q_OBJECT class whose moc output was never generated."""
+	_need_qt()
+	t.write("app.cpp", """
+/*! @file
+ *  @pkg Qt6Core
+ */
+#include <QObject>
+class Local : public QObject { Q_OBJECT public: int n = 0; };
+int main() { Local l; return l.n; }
+""")
+	r = t.fmake()
+	check(r.returncode != 0, "a class with no meta-object should not link")
+	said = r.stdout + r.stderr
+	check("app.moc" in said.split("did not link")[-1],
+	      f"the failure does not mention the missing include: {said}")
+	tail = said.strip().splitlines()[-1]
+	check("--ldflags" not in tail or ".moc" in tail,
+	      f"the last line still offers --ldflags for a meta-object: {tail}")
+
+	# The negative direction, which is what keeps this a diagnosis rather
+	# than a guess: an ordinary unresolved symbol still gets the ordinary
+	# advice, and no Qt is involved at all.
+	u = Tree("plain")
+	try:
+		u.write("prog.c", "extern int mystery_symbol(void);\n"
+		        "int main(void){ return mystery_symbol(); }\n")
+		r = u.fmake()
+		check(r.returncode != 0, "an undefined symbol should not link")
+		said = r.stdout + r.stderr
+		check("--ldflags" in said,
+		      f"a genuine missing library lost its advice: {said}")
+		check(".moc" not in said, f"blamed moc for a C program: {said}")
+	finally:
+		u.cleanup()
+
+
 def _need_qt():
 	if not _moc_path():
 		raise Skip("Qt development files not installed")

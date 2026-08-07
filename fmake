@@ -1389,7 +1389,7 @@ def moc_plan(srcs, hdrs, scans):
 		for _kind, name, _line in scans[rel]["incs"]:
 			includers.setdefault(os.path.basename(name), []).append(rel)
 
-	jobs = []
+	jobs, unreachable = [], {}
 	for rel in sorted(hdrs):
 		if not scans.get(rel, {}).get("qobject"):
 			continue
@@ -1419,11 +1419,17 @@ def moc_plan(srcs, hdrs, scans):
 			# the bug and naming it here beats an undefined symbol later.
 			warn(f'{rel} declares a Q_OBJECT class but does not #include '
 			     f'"{name}", so moc cannot reach it')
+			# Remembered, not just said. The link failure that follows is
+			# where people actually look, and it used to offer --ldflags --
+			# advice for a missing library, about a meta-object this tree
+			# was supposed to generate. Section 31's shape, in the summary
+			# printed after the message written to avoid it.
+			unreachable[rel] = name
 			continue
 		jobs.append({"src": rel, "inline": True, "includers": [rel],
 		             "out": os.path.normpath(
 		                 os.path.join(MOC_DIR, os.path.dirname(rel), name))})
-	return jobs
+	return jobs, unreachable
 
 
 def moc_cflags(root, hdrs, conf):
@@ -5207,7 +5213,7 @@ def build(args, _bootstrapping=False):
 	moc_jobs, moc_outs, moc_flags, moc_own = [], [], [], {}
 	moc_incflags, src_set = [], set(srcs)
 	moc_exe = None
-	moc_jobs = moc_plan(srcs, gen_hdrs, scans)
+	moc_jobs, moc_unreachable = moc_plan(srcs, gen_hdrs, scans)
 	# Swept before the guard, not inside it: a tree that stops using Qt
 	# altogether is exactly the case where every moc output is stale, and a
 	# check for Q_OBJECT is the one thing that would skip it.
@@ -6246,8 +6252,27 @@ def build(args, _bootstrapping=False):
 				if toks.intersection(scans.get(rel, {}).get("defs") or []):
 					note(f"{rel} is excluded ({why}) and appears to define "
 					     f"one of them")
+			# A meta-object this tree was supposed to generate is not a
+			# missing library, and offering --ldflags for one sends the
+			# reader to install something. The warning above already said
+			# it; the failure is what gets read, so it says it too.
+			#
+			# Matched on the link set rather than on the symbol, because
+			# tying a mangled name to a class means demangling and the
+			# connection is exact without it: this program links a source
+			# that declares a Q_OBJECT class whose moc output was never
+			# generated.
+			blamed = [u.rel for u in cl.link if u.rel in moc_unreachable]
+			for rel in blamed:
+				note(f"{rel} declares a Q_OBJECT class and does not "
+				     f'#include "{moc_unreachable[rel]}", so its '
+				     f"meta-object was never generated")
 		note("name the missing libraries with --ldflags, or build only the "
-		     "targets you want")
+		     "targets you want"
+		     if not any(u.rel in moc_unreachable
+		                for _n, c, _r in failed for u in c.link)
+		     else 'add the missing #include of the .moc file above; if that '
+		          "is not it, name the missing libraries with --ldflags")
 		return 1
 	return 1 if broken else 0
 
