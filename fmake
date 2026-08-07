@@ -413,6 +413,7 @@ def scan_source(path):
 	for m in RE_TEMPLATE_INST.finditer(code):
 		defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
 	defs -= DECL_WORDS
+	_dirs_and_typos = parse_directives(comments)
 
 	return {
 	    "incs":     incs,
@@ -424,7 +425,12 @@ def scan_source(path):
 	    "qrc":      sorted(set(RE_QRC_PATH.findall(code))),
 	    "qrc_init": sorted(set(RE_QRC_INIT.findall(code))),
 	    "defs":     sorted(defs),
-	    "dirs":     parse_directives(comments),
+	    "dirs":     _dirs_and_typos[0],
+	    # Recorded with the scan rather than warned about while
+	    # scanning, because a scan is cached: a warning printed here
+	    # would appear once and never again, which is worse than not
+	    # printing it. Reported at build time from this.
+	    "typos":    _dirs_and_typos[1],
 	}
 
 # ---------------------------------------------------------------------------
@@ -1913,9 +1919,55 @@ def _uncomment(line):
 	return re.sub(r"\*/\s*$", "", line).rstrip()
 
 
+def _one_edit_apart(a, b):
+	"""True when one insertion, deletion or substitution turns a into b."""
+	if a == b or abs(len(a) - len(b)) > 1:
+		return False
+	if len(a) == len(b):
+		return sum(x != y for x, y in zip(a, b)) == 1
+	short, long = (a, b) if len(a) < len(b) else (b, a)
+	return any(long[:i] + long[i + 1:] == short for i in range(len(long)))
+
+
+def near_directive(name):
+	"""The directive `name` was probably meant to be, or None.
+
+    `@lib` for `@libs` does nothing and says nothing, because an unknown
+    command has to be ignored -- the comment is shared with Doxygen, and
+    warning about `@brief` would make the integration unusable. So the
+    question is not "is this unknown" but "is this unknown *and* almost one
+    of ours", which is answerable without knowing anything about Doxygen.
+
+    Two conditions: one edit away, and the same first three characters.
+
+    Measured rather than argued. Against Doxygen's 161 documented commands,
+    **the edit distance alone is already enough** -- not one of them is a
+    single edit from any directive here, so the prefix rule is not what
+    keeps `@brief` quiet. An earlier version of this comment claimed `@par`
+    was one edit from `@pkg`; it is two, and the claim was invented rather
+    than checked.
+
+    What the prefix buys is the suggestion being *useful* rather than the
+    check being safe. Doxygen is not the only thing that writes `@word` in
+    a comment, and one edit is a wide net over arbitrary words: `@bind` is
+    one edit from `@kind`, and answering it with "did you mean @kind?" is
+    worse than saying nothing, because it is confident and wrong.
+
+    It also means `@os` -- two characters -- proposes nothing. That is the
+    right trade: a rule loose enough to guess at two-letter words guesses
+    badly.
+    """
+	if len(name) < 3:
+		return None
+	hits = {DIRECTIVE_ALIAS.get(d, d) for d in DIRECTIVES
+	        if name[:3] == d[:3] and _one_edit_apart(name, d)}
+	return sorted(hits)[0] if len(hits) == 1 else None
+
+
 def parse_directives(comments):
-	"""Directives found in Doxygen comments: {name: [[line, [args]], ...]}."""
-	found = {}
+	"""Directives found in Doxygen comments: {name: [[line, [args]], ...]},
+    and the near misses worth mentioning: [[line, written, meant], ...]."""
+	found, typos = {}, []
 	for lineno, body in comments:
 		if not RE_DOXY_OPEN.match(body):
 			continue
@@ -1927,6 +1979,9 @@ def parse_directives(comments):
 			name, rest = m.group(1), m.group(2).strip()
 			name = DIRECTIVE_ALIAS.get(name, name)
 			if name not in DIRECTIVES:
+				meant = near_directive(name)
+				if meant:
+					typos.append([lineno + offset, name, meant])
 				continue          # @brief, @param and friends
 
 			if name == "rule":
@@ -1952,7 +2007,7 @@ def parse_directives(comments):
 			except ValueError:
 				args = rest.split()
 			found.setdefault(name, []).append([lineno + offset, args])
-	return found
+	return found, typos
 
 
 class Ann:
@@ -5349,6 +5404,15 @@ def build(args, _bootstrapping=False):
 				srcs.append(rel)
 		srcs.sort()
 		scan_all(srcs)
+
+	# A directive one letter away from a real one, said out loud. Read from
+	# the scan records rather than warned about while scanning, so it
+	# survives the scan cache -- and sorted, so the order is the tree's
+	# rather than the walk's.
+	for rel in sorted(scans):
+		for line, written, meant in scans[rel].get("typos", []):
+			warn(f"{rel}:{line}: @{written} is not a directive; "
+			     f"did you mean @{meant}?")
 
 	# Where each generated file came from, so a compile error in one can
 	# name a file somebody is able to edit. Built from the plans rather

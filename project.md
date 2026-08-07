@@ -140,7 +140,8 @@ that had been green about nothing for five commits ·
 [95. CI was red, and the tool was the reason](#95-ci-was-red-and-the-tool-was-the-reason) ·
 [96. The byte-stability check was passing by luck](#96-the-byte-stability-check-was-passing-by-luck) ·
 [97. The clean that left a build behind](#97-the-clean-that-left-a-build-behind) ·
-[98. The Qt flag every other build system supplies](#98-the-qt-flag-every-other-build-system-supplies)
+[98. The Qt flag every other build system supplies](#98-the-qt-flag-every-other-build-system-supplies) ·
+[99. The typo that could be named after all](#99-the-typo-that-could-be-named-after-all)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1796,10 +1797,11 @@ rather than code, and one lesson about testing.
 - ~~**`@kind` is per TU but describes an artifact.**~~ Closed by
   `[target.*] sources` in §7: membership is declared where it is known, and the
   closure is not consulted for those targets.
-- **Directive typos are silently inert.** `@lib` for `@libs` does nothing and
-  says nothing, because unknown commands must be ignored for the Doxygen
-  integration to work at all. `--explain` listing what was recognised is the only
-  mitigation, and it requires the user to go looking.
+- ~~**Directive typos are silently inert.**~~ Closed; see §99. An unknown
+  command is still ignored -- that constraint was real -- but one that is a
+  single edit from a directive *and* shares its first three characters is
+  named. `--explain` still lists what was recognised, for the cases the
+  rule declines to guess at.
 - **Symbol-invisible dependencies generally.** §3 lists the constructor-plugin
   case, but the family is larger: anything reached only through `dlopen`, a
   linker script, or a function pointer table built at runtime. All need
@@ -7025,3 +7027,57 @@ wrong for a `Q_OBJECT` declared in a `.cpp`. The failure now says
 The negative half is that a file nobody generated must keep its own name
 and gain no "generated from" line -- a mutation claiming every failure came
 from somewhere fails on it.
+
+---
+
+## 99. The typo that could be named after all
+
+§15 carried this as unfixable, and the reasoning was sound as far as it
+went: `@lib` for `@libs` does nothing and says nothing, because an unknown
+command has to be ignored -- the comment is shared with Doxygen, and
+warning about `@brief` would make the integration unusable.
+
+**The question was never "is this unknown".** It is "is this unknown *and*
+almost one of ours", and that is answerable without knowing anything about
+Doxygen at all. Two conditions: one edit away, and the same first three
+characters.
+
+```
+* main.c:4: @lib is not a directive; did you mean @libs?
+* main.c:5: @cflag is not a directive; did you mean @cflags?
+```
+
+### A justification that was invented
+
+The first version of this said the prefix rule was what kept Doxygen quiet,
+with `@par` being one edit from `@pkg` as the example. **`@par` is two
+edits from `@pkg`, and the example was made up rather than checked.**
+
+Measuring it says something better and different. Against Doxygen's 161
+documented commands, **the edit distance alone already suffices** -- not
+one of them is a single edit from any directive here. The prefix rule keeps
+nothing quiet that would otherwise have spoken.
+
+What it actually buys is the suggestion being *useful*. Doxygen is not the
+only thing that writes `@word` in a comment, and one edit is a wide net over
+arbitrary words: `@bind` is one edit from `@kind`, and answering it with
+"did you mean @kind?" is worse than silence, because it is confident and
+wrong. The case pins that with `@bind` -- and nothing else in it reaches
+that half of the rule, which is why the mutation dropping the prefix
+survived until it was added.
+
+### Warned from the record, not from the scan
+
+A scan is cached. A warning printed while scanning appears on the first
+build and never again, which is worse than not printing it -- the reader
+sees it once, in the noise of a first build, and every build afterwards is
+silent about a directive that is still doing nothing.
+
+So the near misses are stored in the scan record and reported at build time
+from there. The case builds twice for exactly this, and a mutation that
+warns at scan time instead fails on the second build.
+
+One consequence, named rather than left: a file scanned into an existing
+cache before this change has no near misses recorded, so it stays quiet
+until something makes it rescan. Bumping the cache version would fix that
+and cost every user a full rebuild for a warning, which is the wrong trade.

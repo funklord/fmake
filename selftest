@@ -6436,6 +6436,87 @@ int main(int argc, char **argv) {
 
 
 @case
+def a_directive_one_letter_wrong_is_named(t):
+	"""`@lib` for `@libs` did nothing and said nothing.
+
+	An unknown command has to be ignored -- the comment is shared with
+	Doxygen, and warning about `@brief` would make the integration
+	unusable, which is why section 15 carried this as unfixable. But the
+	question was never "is this unknown". It is "is this unknown *and*
+	almost one of ours", and that is answerable without knowing anything
+	about Doxygen.
+
+	One edit away, and the same first three characters. Measured, not
+	argued: against Doxygen's 161 documented commands the edit distance
+	alone already suffices -- none is a single edit from any directive
+	here -- so the prefix is not what keeps `@brief` quiet. What it buys is
+	the suggestion being useful, since Doxygen is not the only thing that
+	writes `@word` in a comment and one edit is a wide net over arbitrary
+	words. `@bind` is one edit from `@kind`, and "did you mean @kind?" is
+	worse than silence: confident and wrong.
+
+	Read from the scan record rather than warned about while scanning,
+	because a scan is cached -- a warning printed at scan time appears once
+	and never again, which is worse than not printing it. The case builds
+	twice for that reason."""
+	t.write("main.c", """
+/*! @file
+ *  @brief  a program
+ *  @param  ignored
+ *  @lib    m
+ *  @cflag  -DX=1
+ */
+#include <math.h>
+int main(void){ return (int)sqrt(4.0) - 2; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	said = r.stdout + r.stderr
+	check("@lib is not a directive" in said and "@libs" in said,
+	      f"a one-letter typo was silent: {said}")
+	check("@cflag is not a directive" in said,
+	      f"the second typo was silent: {said}")
+
+	# Doxygen's own commands must stay silent, or the integration is
+	# unusable and the reason section 15 gave for leaving this alone comes
+	# back.
+	for quiet in ("@brief", "@param", "@file"):
+		check(f"{quiet} is not a directive" not in said,
+		      f"warned about a Doxygen command: {said}")
+
+	# Cached scans must not swallow it. This is the half that decides
+	# whether anyone ever sees the message.
+	again = t.fmake()
+	check("@lib is not a directive" in again.stdout + again.stderr,
+	      f"the warning did not survive the scan cache: "
+	      f"{again.stdout}{again.stderr}")
+
+	# A word that is one edit from a directive but shares no prefix gets no
+	# suggestion, because the suggestion would be wrong. This is what the
+	# prefix half of the rule is for, and nothing else in this case
+	# reaches it.
+	t.write("other.c", "/*! @file\n *  @bind something\n */\n"
+	        "int helper(void){ return 0; }\n")
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("@bind" not in said,
+	      f"guessed @kind for @bind, which is confident and wrong: {said}")
+
+	# A correctly spelled directive says nothing at all.
+	u = Tree("correct")
+	try:
+		u.write("main.c", "/*! @file\n *  @libs m\n */\n"
+		        "#include <math.h>\n"
+		        "int main(void){ return (int)sqrt(4.0) - 2; }\n")
+		r = u.fmake()
+		check(r.returncode == 0, f"the correct build failed: {r.stderr}")
+		check("not a directive" not in r.stdout + r.stderr,
+		      f"warned about a directive that is spelled right: {r.stdout}")
+	finally:
+		u.cleanup()
+
+
+@case
 def advice_about_a_generated_file_names_its_source(t):
 	"""You cannot put `@os` on a file fmake wrote.
 
