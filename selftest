@@ -10439,6 +10439,78 @@ def a_vendored_main_stays_out_of_a_library(t):
 	      f"the archive carries the vendored main(): {syms}")
 
 
+def _unrunnable(path):
+	"""An executable file no binfmt handler will claim.
+
+    An aarch64 binary is the obvious way to write "cannot run here" and is
+    wrong on this machine: qemu is registered in binfmt_misc, so a target
+    binary executes rather than failing. Bytes that are no format at all
+    are refused everywhere, which is what the case needs.
+    """
+	with open(path, "wb") as fh:
+		fh.write(b"\x01\x02\x03\x04not any executable format\n")
+	os.chmod(path, 0o755)
+	return path
+
+
+@case
+def a_moc_that_cannot_run_says_who_chose_it(t):
+	"""Section 17 listed this as reported-but-untested. It is testable.
+
+	On a cross build the moc pkg-config names may be a target binary that
+	cannot execute on the build machine. The failure was handled and the
+	message named `[toolchain] moc' -- which is right when pkg-config
+	found it, and wrong the rest of the time: a reader who set
+	`[toolchain] moc' was told to set `[toolchain] moc'. Section 31's
+	pattern, in advice rather than in a summary.
+
+	All three routes to a moc are reachable here. Neither named route
+	needs a cross toolchain: a file that is no executable format is
+	refused by every kernel, which is what "cannot run here" means to
+	`subprocess`. The unnamed route needs pkg-config to name the broken
+	one, and a `.pc` on `PKG_CONFIG_PATH` whose `libexecdir` points at it
+	does that -- so the branch that keeps the original advice is checked
+	too, rather than left as the one nothing reaches."""
+	_need_qt()
+	t.write("app.h", "#pragma once\n#include <QtCore/QObject>\n"
+	        "class App : public QObject { Q_OBJECT public: App(); };\n")
+	t.write("app.cpp", "/*! @file\n *  @pkg Qt6Core\n */\n"
+	        '#include "app.h"\nApp::App() {}\nint main(){ App a; return 0; }\n')
+	broken = _unrunnable(os.path.join(t.dir, "fake-moc"))
+
+	t.write("fmake.toml", f'[toolchain]\nmoc = "{broken}"\n')
+	r = t.fmake()
+	check(r.returncode != 0, "a moc that cannot run should stop the build")
+	out = r.stdout + r.stderr
+	check("[toolchain] moc in fmake.toml and cannot execute" in out,
+	      f"the message does not say that the configured moc is the one "
+	      f"that failed, which is the whole correction: {out}")
+
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	r = t.fmake(env={"MOC": broken})
+	check("comes from $MOC" in (r.stdout + r.stderr),
+	      f"$MOC is not named as the source: {r.stdout}{r.stderr}")
+
+	# The branch that keeps the original advice, which is the one a real
+	# cross build hits. Nothing else here reaches it.
+	os.makedirs(os.path.join(t.dir, "bin"), exist_ok=True)
+	shutil.copy(broken, os.path.join(t.dir, "bin/moc"))
+	os.chmod(os.path.join(t.dir, "bin/moc"), 0o755)
+	os.makedirs(os.path.join(t.dir, "pc"), exist_ok=True)
+	real = subprocess.run(["pkg-config", "--cflags", "--libs", "Qt6Core"],
+	                      capture_output=True, text=True).stdout.strip()
+	t.write("pc/Qt6Core.pc",
+	        f"prefix=/usr\nlibexecdir={t.dir}/bin\n"
+	        f"Name: Qt6Core\nDescription: shadowed for a test\n"
+	        f"Version: 6.8.0\nCflags: {real}\nLibs: {real}\n")
+	r = t.fmake(env={"PKG_CONFIG_PATH": os.path.join(t.dir, "pc")})
+	out = r.stdout + r.stderr
+	check("moc pkg-config names is the target's" in out,
+	      f"the unnamed route lost the advice that is right for it: {out}")
+	check("comes from" not in out,
+	      f"the unnamed route claims somebody chose this moc: {out}")
+
+
 def _clang():
 	"""clang, including the versioned install that is not on $PATH."""
 	found = shutil.which("clang")

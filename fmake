@@ -1425,6 +1425,21 @@ RE_UI_HEADER = re.compile(r"^ui_(.+)\.h$")
 QT_CORE_MODULES = ("Qt6Core", "Qt5Core")
 
 
+def tool_origin(name, configured):
+	"""Where a named tool came from, or None if nobody named it.
+
+    Advice about a tool has to know whether the reader chose it. Telling
+    somebody to set [toolchain] moc when [toolchain] moc is what named the
+    broken tool is the same defect as section 31: the code printing the
+    advice had not asked the code that knows.
+    """
+	if os.environ.get(name.upper()):
+		return f"${name.upper()}"
+	if configured:
+		return f"[toolchain] {name} in {CONF_FILE}"
+	return None
+
+
 def find_qt_tool(name, configured, pkg):
 	"""Locate one of Qt's generators, matching the Qt about to be linked.
 
@@ -1441,9 +1456,8 @@ def find_qt_tool(name, configured, pkg):
 	if named:
 		got = shutil.which(named) or (named if os.path.isfile(named) else None)
 		if not got:
-			where = (f"${name.upper()}" if os.environ.get(name.upper())
-			         else f"{CONF_FILE} [toolchain]")
-			die(f"{name} {named!r} (from {where}) not found")
+			die(f"{name} {named!r} (from {tool_origin(name, configured)}) "
+			    f"not found")
 		return got
 	for mod in QT_CORE_MODULES:
 		for var in ("libexecdir", "host_bins", "bindir"):
@@ -1755,7 +1769,7 @@ def prune_generated(root, subdir, keep):
 			pass
 
 
-def run_moc(root, jobs, moc, flags, cache, dry_run=False):
+def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
 	"""Run moc where its input changed. Returns the outputs that now exist.
 
     Keyed on content like everything else, so touching a header re-mocs it
@@ -1792,9 +1806,19 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False):
 		try:
 			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
 		except OSError as exc:
+			# Who chose this moc decides the advice. Where pkg-config found
+			# it, naming one is the fix; where the reader named it, saying so
+			# is, and repeating the instruction they already followed is not.
+			if origin:
+				die(f"could not run moc ({moc}): {exc.strerror or exc}\n"
+				    f"That moc comes from {origin} and cannot execute on "
+				    f"this machine.\n"
+				    f"On a cross build moc must be the build machine's, not "
+				    f"the target's.")
 			die(f"could not run moc ({moc}): {exc.strerror or exc}\n"
-			    f"On a cross build moc must be the build machine's, which is "
-			    f"what [toolchain] moc in {CONF_FILE} is for.")
+			    f"On a cross build the moc pkg-config names is the target's "
+			    f"and cannot run here; name the build machine's with "
+			    f"[toolchain] moc in {CONF_FILE}.")
 		if res.returncode != 0:
 			if res.stderr.strip():
 				PROGRESS.write(res.stderr)
@@ -5613,7 +5637,7 @@ def build(args, _bootstrapping=False):
 			    f"[toolchain] moc in {CONF_FILE}.")
 		moc_flags = moc_cflags(root, hdrs, conf)
 		moc_outs = run_moc(root, moc_jobs, moc_exe, moc_flags, cache,
-		                   args.dry_run)
+		                   args.dry_run, tool_origin("moc", cfg.moc))
 		done = set(moc_outs)
 		for j in moc_jobs:
 			if j["out"] not in done:

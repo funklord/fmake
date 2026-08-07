@@ -155,7 +155,8 @@ that had been green about nothing for five commits ·
 [110. The same question as §79, and a method that answered the order](#110-the-same-question-as-79-and-a-method-that-answered-the-order) ·
 [111. The second list in the same file](#111-the-second-list-in-the-same-file) ·
 [112. Verifying the fix that could not be verified](#112-verifying-the-fix-that-could-not-be-verified) ·
-[113. Clang, LTO, and a wrong reason for not checking](#113-clang-lto-and-a-wrong-reason-for-not-checking)
+[113. Clang, LTO, and a wrong reason for not checking](#113-clang-lto-and-a-wrong-reason-for-not-checking) ·
+[114. Who chose the tool decides the advice](#114-who-chose-the-tool-decides-the-advice)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2180,7 +2181,9 @@ added to `HEADER_PKG`.
 - Exercised against Qt 6.8 on Debian only. Qt 5 is coded for and untested.
 - On a cross build the moc that pkg-config names may be a target binary that
   cannot execute here; `[toolchain] moc` is the answer and the failure is
-  reported with that pointer, but the case is untested.
+  reported with that pointer. ~~The case is untested.~~ Tested; see §114,
+  which also found the pointer was given to readers who had already
+  followed it.
 - moc's include path is best effort. It runs its own preprocessor but does not
   fail on an include it cannot resolve, so a missing `-I` costs an unexpanded
   macro rather than an error — which is what makes it safe to settle these
@@ -7934,3 +7937,60 @@ writes bitcode magic and an `nm` that refuses it are the entire condition,
 and both are four-line shims. **A condition worth testing is often smaller
 than the toolchain that produces it** -- the same lesson as §112, arrived
 at from the other end.
+
+---
+
+## 114. Who chose the tool decides the advice
+
+§17 listed a Qt limit as handled-but-untested: on a cross build the moc
+pkg-config names may be a target binary that cannot execute on the build
+machine, and `[toolchain] moc` is the answer. Following §112 and §113, the
+question is not whether the condition is exotic but **what is actually
+different about the machine that would hit it**.
+
+Almost nothing. "Cannot execute here" is a property `subprocess` reports,
+and reaching it needs no cross toolchain at all.
+
+### An aarch64 binary is the wrong way to write it
+
+The obvious fixture -- compile a real aarch64 moc -- is wrong on this
+machine and would have passed for the wrong reason if it had been used
+carelessly, or failed to fail if it had been used honestly:
+
+```
+qemu-aarch64 is registered in /proc/sys/fs/binfmt_misc
+    an aarch64 binary RUNS here; no OSError at all
+```
+
+**Bytes that are no executable format** are refused by every kernel with
+`ENOEXEC`, which is exactly what the code is reacting to. Four junk bytes
+and a `chmod` are the whole condition -- smaller, and true everywhere.
+
+### What the test found
+
+The message was right for one of the three routes to a moc and wrong for
+the other two:
+
+```
+That moc comes from [toolchain] moc in fmake.toml -- advice: set [toolchain] moc
+That moc comes from $MOC                          -- advice: set [toolchain] moc
+pkg-config found it                               -- advice: set [toolchain] moc
+```
+
+Two of those tell the reader to do the thing they have already done. It is
+§31's pattern once more, in advice rather than in a summary, and the same
+cause: `run_moc` was handed the path and not who chose it, so the line
+printing the instruction could not ask.
+
+`tool_origin()` answers that once, and `find_qt_tool`'s not-found message
+uses it too -- it was already distinguishing `$MOC` from the config file
+with its own copy of the logic.
+
+### The branch nothing would otherwise reach
+
+The route that keeps the original advice is the one a real cross build
+hits, and it is the only one needing pkg-config to name the broken tool.
+A `.pc` on `PKG_CONFIG_PATH` whose `libexecdir` points at the junk file
+does it, so all three branches are checked rather than two plus an
+assumption. **The branch left unexercised is the one the change is most
+likely to break**, because it is the one that was already correct.
