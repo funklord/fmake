@@ -160,7 +160,8 @@ that had been green about nothing for five commits ·
 [115. The direction of the disagreement that matters](#115-the-direction-of-the-disagreement-that-matters) ·
 [116. The lead §79 declined to act on was real](#116-the-lead-79-declined-to-act-on-was-real) ·
 [117. A toolchain with no prefix to derive anything from](#117-a-toolchain-with-no-prefix-to-derive-anything-from) ·
-[118. Defensive on one side of the same rule](#118-defensive-on-one-side-of-the-same-rule)
+[118. Defensive on one side of the same rule](#118-defensive-on-one-side-of-the-same-rule) ·
+[119. A name in a comment stays a name](#119-a-name-in-a-comment-stays-a-name)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -8311,3 +8312,52 @@ The rule was known. It was written down five times, in the code, on the
 file side -- and the process side was never asked the same question.
 **A defence applied to one class of input is not a defence; it is a habit
 that happened to cover the case somebody thought of.**
+
+---
+
+## 119. A name in a comment stays a name
+
+§118 came out of pointing hostile input at fmake -- empty trees, binary
+sources, broken TOML, symlink loops, absurd filenames -- and asking only
+whether it *reported* rather than tracebacked. Twelve shapes, one
+traceback. The same sweep asked a second question of the directives, and
+that one was worse.
+
+`@target NAME` is documented as a name in both README and §7, and `-o` is
+how output moves elsewhere. Nothing checked it.
+
+```
+@target ../../ESCAPED        built outside the tree
+@target /tmp/ABSOLUTE        built at an absolute path, tree ignored
+```
+
+Surprising, and no worse than surprising -- until the install side, where
+the name is joined onto the destination exactly as written:
+
+```make
+install -m 755 ../../ESCAPED $(DESTDIR)$(BINDIR)/../../ESCAPED
+```
+
+That leaves the prefix, and **leaves a staging root**. `DESTDIR` is the
+mechanism every Debian build depends on to keep an install inside the
+package being built, and this walks out of it from a comment in a source
+file.
+
+### What is and is not being claimed
+
+Not a security boundary. `@rule` runs recipes, exactly as make does, so a
+tree you build is a tree you have already trusted to run commands, and
+pretending otherwise would be theatre.
+
+**The property is smaller and worth having anyway**: what a comment says
+is a name is a name. fmake already refused a target that would overwrite a
+directory, from the same instinct; this is the same guard on the same
+field, and it goes beside it.
+
+### The half of the case that matters most
+
+A guard that refuses too much passes every assertion about refusing. So
+the case ends by building an ordinary `@target myapp` and requiring it to
+work -- and the mutation that makes the guard fire on everything is caught
+there and nowhere else. **When the change is a refusal, the test that
+earns its keep is the one that checks what still gets through.**

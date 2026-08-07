@@ -276,7 +276,7 @@ like `@brief` are ignored.
 
 | Directive | Means |
 |---|---|
-| `@target NAME` | Name of the artifact this file roots |
+| `@target NAME` | Name of the artifact this file roots — a name, not a path; `-o` moves output |
 | `@kind exe\|shared\|static` | Build an archive or `.so` from this file's closure; `exe` is inferred from `main()` |
 | `@pkg NAME [OP VER]` | pkg-config dependency, version constraint optional |
 | `@pkg_optional NAME defines MACRO` | Define `MACRO` if pkg-config finds `NAME` |

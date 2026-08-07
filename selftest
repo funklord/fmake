@@ -10440,6 +10440,63 @@ def a_vendored_main_stays_out_of_a_library(t):
 
 
 @case
+def a_target_name_that_is_a_path_is_refused(t):
+	"""A comment could move a build, and an install, out of its own tree.
+
+	`@target NAME' is documented as a name, and `-o' is how output moves
+	elsewhere -- but nothing checked it, so a path went through as one.
+	`@target ../../thing' built outside the tree; an absolute one ignored
+	the tree entirely.
+
+	The install side is where it stops being merely surprising, because
+	the name is joined onto the destination as written:
+
+	    install -m 755 ../../thing $(DESTDIR)$(BINDIR)/../../thing
+
+	which leaves the prefix, and leaves a staging root that packaging
+	depends on. A build tool cannot promise much about a tree it was
+	pointed at -- `@rule' runs recipes, as make does -- but it can promise
+	that a name in a comment stays a name.
+
+	Both routes to a name are checked, and an ordinary name still builds:
+	a guard that refused too much would be caught by the last part rather
+	than by the parts that look like the point."""
+	t.write("main.c", "/*! @file\n *  @target ../../escaped\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "a path as a target name should be refused")
+	check("is a path" in (r.stdout + r.stderr),
+	      f"the refusal does not say why: {r.stdout}{r.stderr}")
+	outside = os.path.join(os.path.dirname(os.path.dirname(t.dir)), "escaped")
+	check(not os.path.exists(outside),
+	      f"a file was written outside the tree at {outside}")
+
+	t.write("main.c", "/*! @file\n *  @target /tmp/fmake-absolute-escape\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake("-B")
+	check(r.returncode != 0, "an absolute target name should be refused")
+	check(not os.path.exists("/tmp/fmake-absolute-escape"),
+	      "an absolute target name wrote outside the tree")
+
+	# The config file reaches the same field by another road.
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", f'[target.{os.path.basename(t.dir)}]\n'
+	        f'name = "../../conf-escaped"\n')
+	r = t.fmake("-B")
+	check(r.returncode != 0, "a path in [target.*] name should be refused")
+
+	# And the guard must not refuse a name.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	t.write("main.c", "/*! @file\n *  @target myapp\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake("-B")
+	check(r.returncode == 0,
+	      f"an ordinary @target was refused, so the guard is too wide: "
+	      f"{r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "myapp")), "myapp was not built")
+
+
+@case
 def a_source_that_is_not_utf8_reports_rather_than_tracebacks(t):
 	"""fmake read every file defensively and every subprocess naively.
 

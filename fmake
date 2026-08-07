@@ -5940,6 +5940,31 @@ def build(args, _bootstrapping=False):
 		     f"calling it {t.filename} instead (@target or {CONF_FILE} "
 		     f"picks the name)")
 
+	# A target is a name, which is what @target and [target.*] name are
+	# documented to take -- `-o' is how output moves elsewhere. Nothing
+	# checked it, and a path went through as one: `@target ../../thing'
+	# built outside the tree, and an absolute one ignored the tree
+	# entirely. The install side is where it stops being merely surprising,
+	# because the path is joined onto the destination as written --
+	#
+	#     install -m 755 ../../thing $(DESTDIR)$(BINDIR)/../../thing
+	#
+	# -- so a comment in a source file relocates an install out of its own
+	# prefix, and out of a staging root that packaging depends on. A build
+	# tool cannot promise much about a tree it was pointed at, but it can
+	# promise that a name in a comment stays a name.
+	for t in targets:
+		name = t.conf.get("name") or t.ann.scalar("target") or ""
+		if not name or (os.sep not in name and not os.path.isabs(name)
+		                and name not in (os.curdir, os.pardir)):
+			continue
+		die(f"target name {name!r} (from {t.rel or f'[target.{t.name}]'}) "
+		    f"is a path, and a target is a name.\n"
+		    f"    it would be built at that path rather than in the tree, "
+		    f"and installed to it as written\n"
+		    f"    use -o to put artifacts somewhere else, and keep the "
+		    f"name a name")
+
 	clash = {}
 	for t in targets:
 		clash.setdefault(t.filename, []).append(t.rel or f"[target.{t.name}]")
