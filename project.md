@@ -151,7 +151,8 @@ that had been green about nothing for five commits ·
 [106. Section 76's claim, enumerated](#106-section-76s-claim-enumerated) ·
 [107. Running the five projects again, and three defects in one message](#107-running-the-five-projects-again-and-three-defects-in-one-message) ·
 [108. Asking git the question it had already answered](#108-asking-git-the-question-it-had-already-answered) ·
-[109. The packaging report, folded in and removed](#109-the-packaging-report-folded-in-and-removed)
+[109. The packaging report, folded in and removed](#109-the-packaging-report-folded-in-and-removed) ·
+[110. The same question as §79, and a method that answered the order](#110-the-same-question-as-79-and-a-method-that-answered-the-order)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -7664,3 +7665,49 @@ A report is a snapshot of one run against a tree that has since changed.
 Every ask in this one is either implemented or recorded above, and the
 `suggestions/` directory goes with it -- for the second time, which is what
 its own note predicted. It stays in the history, one commit back.
+
+---
+
+## 110. The same question as §79, and a method that answered the order
+
+§79 asked whether a session's additions had made fmake slower and found it
+flat. Forty-one commits later the same question was worth re-asking, and
+this time several of the additions are on the build path rather than off
+it: a sorted walk, an architecture check on the first object, a `.pc`
+written beside the artifacts, a depfile read back per generator rule.
+
+**Still flat.** On the same hydra tree, no-op rebuilds:
+
+```
+rev        min   median   max
+0648010   1412     1722  1968
+8c623ef   1199     1450  1598
+5ce1544   1232     1813  2103
+HEAD      1155     1812  2076
+```
+
+Each version's own spread is 600 to 900 ms, which is wider than any
+difference between versions. Nothing here orders with age.
+
+### The first two attempts measured the order, not the versions
+
+Running the four versions one after another in one tree gave a clean,
+confident answer: **HEAD fastest, by 18% on the median.** Running them in
+the reverse order gave the opposite answer, equally cleanly: HEAD slowest,
+by about the same margin.
+
+The cause is that switching fmake versions in a tree makes the next run
+re-resolve, so every measurement was dominated by which version had gone
+before it. The maxima said so out loud and were nearly missed: **80 to 97
+seconds** against medians of 1.7, exactly once per version, on whichever
+version had just been displaced.
+
+Each version has its own copy of the tree now, warmed with itself. The
+outliers vanish -- which also settles what they were: an artifact of the
+experiment, not something anybody building a project ever meets.
+
+**A measurement whose answer reverses when you reverse the order is
+measuring the order.** It is worth running the second direction before
+believing the first, and that costs one repetition of something already
+written -- against a result that would otherwise have been recorded here as
+a fact.
