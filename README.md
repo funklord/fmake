@@ -346,6 +346,12 @@ sources = ["src/alpha.c", "src/shared.c"]
 test-args    = ["docs/schema/socket.json"]
 test-timeout = 300              # seconds; 0 removes the limit
 
+[generate.proto]                # a generator, and what it read
+command = "protoc --dependency_out=gen/proto.d --c_out=gen $in"
+inputs  = ["proto/*.msg"]
+outputs = ["gen/msg.c"]
+depfile = "gen/proto.d"         # re-runs when anything it opened changes
+
 [install]
 prefix = "/usr/local"
 
@@ -356,6 +362,14 @@ arch = "aarch64"
 [build-toolchain]               # tools that must run on *this* machine
 cc = "cc"
 ```
+
+`depfile` is `-MD` for generators. A `.y` that `%include`s another file, or
+a schema that includes a shared one, re-runs only when the file *named in
+`inputs`* changes — everything else has to go in `depends` by hand, and a
+hand-kept list is one somebody has to keep right. If your generator can
+write a Make-style depfile, name it and fmake reads it back: the tool that
+did the reading is the only thing that knows what it read. Declaring one
+the command never writes is an error, not an empty list.
 
 Unknown keys are an error, with the valid ones named.
 

@@ -479,7 +479,7 @@ CONF_SCHEMA = {
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
-        "uses": S, "description": S,
+        "uses": S, "description": S, "depfile": S,
     }},
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
@@ -1173,6 +1173,10 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 				die(f"{_gen_where(r, name)} needs {key}")
 
 	store = cache.data.setdefault("generated", {})
+	# Kept beside the keys rather than inside them: a cache written before
+	# this existed simply has none, and every rule that declares a depfile
+	# regenerates once to record its own.
+	gen_deps = cache.data.setdefault("generated_deps", {})
 	produced = []
 
 	for name in _gen_order(rules):
@@ -1200,12 +1204,38 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 
 		# Rerun when an input's contents change or the command does, not on
 		# mtime, so the rest of the build stays hash-driven too.
-		parts = list(r.get("commands") or [r.get("command", "")])
-		parts.append(r.get("uses") or "")
-		for path in ins + deps:
-			rel = os.path.relpath(path, root)
-			parts.append(rel + ":" + (cache.hash_of(path, rel) or "?"))
-		key = sha("|".join(parts))
+		# What the generator itself said it read last time. `depends` is
+		# the hand-written half of this and stays; a .y that %includes
+		# another file can now say so once, in the generator's own
+		# depfile, instead of being listed by somebody who has to
+		# remember.
+		recorded = [d for d in gen_deps.get(name, [])
+		            if os.path.exists(os.path.join(root, d))]
+
+		def gen_key(extra):
+			"""The rule's identity: its commands, and every file it reads.
+
+            Over a *sorted set* of paths, so the key cannot depend on the
+            order they were collected in. The first version appended the
+            depfile's contents to a list already built from `inputs` and
+            `depends`, which put the same files in a different order on the
+            run that recorded them than on the run that checked them -- and
+            a rule that never matches its own stored key regenerates on
+            every build, for ever, saying GEN each time.
+            """
+			parts = list(r.get("commands") or [r.get("command", "")])
+			parts.append(r.get("uses") or "")
+			# Named in the key, so declaring a depfile on an existing rule
+			# regenerates once rather than staying fresh on a key computed
+			# before anything was being recorded.
+			parts.append("depfile:" + (r.get("depfile") or ""))
+			for rel in sorted(set(extra)):
+				full = os.path.join(root, rel)
+				parts.append(rel + ":" + (cache.hash_of(full, rel) or "?"))
+			return sha("|".join(parts))
+
+		read_paths = [os.path.relpath(p, root) for p in ins + deps]
+		key = gen_key(read_paths + recorded)
 
 		fresh = (store.get(name) == key
 		         and all(os.path.exists(o) for o in outs))
@@ -1230,11 +1260,25 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			# catching early with a good message. Anything with shell syntax
 			# in it is the shell's business to report.
 			words = shlex.split(line)
+			# Resolved against the tree as well as $PATH, because that is
+			# where the command will run: recipes execute with cwd=root, so
+			# `./mk.sh' means the script in the project, not one beside
+			# whoever typed the command.
+			#
+			# Without this, `cd tree && fmake' accepted a build that
+			# `fmake -C tree' refused, which is section 80's shape -- a
+			# check whose answer depends on how it was invoked -- with
+			# advice pointing at `uses', for a script sitting right there.
+			here = os.path.join(root, words[0]) if words else ""
+			reachable = words and (shutil.which(words[0])
+			                       or (os.path.isfile(here)
+			                           and os.access(here, os.X_OK)))
 			if (len(words) == len(line.split()) and words
 			        and not any(c in line for c in "|&;<>()$`")
-			        and not shutil.which(words[0])):
-				die(f"{_gen_where(r, name)} needs {words[0]!r}, which is not "
-				    f"installed (build it from this tree with `uses`)")
+			        and not reachable):
+				die(f"{_gen_where(r, name)} needs {words[0]!r}, which is "
+				    f"neither installed nor an executable file in this "
+				    f"tree (build it from this tree with `uses`)")
 
 		label = r.get("description") or name
 		if dry_run:
@@ -1257,6 +1301,36 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 		           if not os.path.exists(o)]
 		if missing:
 			die(f"[generate.{name}] did not produce {', '.join(missing)}")
+
+		# Read back what the generator said it opened. Same shape as the
+		# compiler's -MD, and for the same reason: the tool that did the
+		# reading is the only thing that knows, and a hand-written list is
+		# a list somebody has to keep right.
+		if r.get("depfile"):
+			where = os.path.join(root, r["depfile"])
+			if not os.path.exists(where):
+				die(f"{_gen_where(r, name)} declares depfile "
+				    f"{r['depfile']!r}, which it did not write. The command "
+				    f"has to be the one asked to produce it -- bison wants "
+				    f"nothing, protoc wants --dependency_out, and a script "
+				    f"has to write it itself.")
+			found = []
+			for dep in parse_depfile(where):
+				rel = os.path.relpath(os.path.join(root, dep), root)
+				# Outside the tree is somebody else's business: a system
+				# header changing is not this rule going stale, and
+				# hashing /usr/include on every build is not free.
+				if not rel.startswith("..") and rel not in r["outputs"]:
+					found.append(rel)
+			gen_deps[name] = sorted(set(found))
+			vinfo(f"{name} reads {len(gen_deps[name])} file(s) "
+			      f"by its own account")
+			# Recomputed, because the key above was built from what the
+			# *previous* run recorded and this run may read more. Without
+			# this the first build after a new include is stale-clean:
+			# fresh on a key that predates it.
+			key = gen_key(read_paths + gen_deps[name])
+
 		store[name] = key
 		ran = True
 

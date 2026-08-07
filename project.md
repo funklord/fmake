@@ -135,7 +135,8 @@ that had been green about nothing for five commits ·
 [90. Two directives that were read and then discarded quietly](#90-two-directives-that-were-read-and-then-discarded-quietly) ·
 [91. Sweeping the two paths that had not been swept](#91-sweeping-the-two-paths-that-had-not-been-swept) ·
 [92. Auditing every remedy the tool offers](#92-auditing-every-remedy-the-tool-offers) ·
-[93. Uninstall, and the manifest that was not written](#93-uninstall-and-the-manifest-that-was-not-written)
+[93. Uninstall, and the manifest that was not written](#93-uninstall-and-the-manifest-that-was-not-written) ·
+[94. `-MD` for generators, and a check that answered two ways](#94--md-for-generators-and-a-check-that-answered-two-ways)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1804,9 +1805,11 @@ rather than code, and one lesson about testing.
   generator wrote into the tree stay, because fmake did not create the
   directory and will not guess what else is in it. The ejected Makefile does
   remove them, which is an inconsistency.
-- **A generator's own dependencies are not tracked.** A `.y` that `%include`s
-  another file re-runs only when the `.y` itself changes; the rest must be
-  listed in `depends` by hand. There is no depfile equivalent for generators.
+- ~~**A generator's own dependencies are not tracked.**~~ Closed for
+  generators that can write a depfile; see §94. `[generate.*] depfile` is
+  read back into the freshness key, the same bargain the compile side
+  makes. `depends` stays for the ones that cannot -- flex cannot, and a
+  shell script only can if somebody makes it.
 - **A build with a permanently broken file never reaches a fixed point.**
   A file that failed to compile is retried on every build, because the fix
   might be outside it — an installed header, a corrected include path — and a
@@ -6696,3 +6699,67 @@ asked for, and the same would have made `--uninstall -n` print the compile
 lines and stop -- silently doing nothing where a person was checking what
 was about to be deleted. That is the one dry run in this tool that somebody
 should always do first, so it is the one that most had to work.
+
+---
+
+## 94. `-MD` for generators, and a check that answered two ways
+
+§15 has carried this since the beginning: *a generator's own dependencies
+are not tracked. A `.y` that `%include`s another file re-runs only when the
+`.y` itself changes; the rest must be listed in `depends` by hand. There is
+no depfile equivalent for generators.*
+
+There is now, for generators that can write one. `[generate.*] depfile`
+names a Make-style depfile, and what it lists joins the rule's freshness
+key -- the same bargain the compile side has made since phase 1, and for
+the same reason: **the tool that did the reading is the only thing that
+knows what it read.** `depends` stays for the ones that cannot; flex cannot,
+and a shell script only can if somebody makes it.
+
+A declared depfile the command never wrote is an error rather than an empty
+list. Treating it as "read nothing" would leave a rule that looks tracked
+and behaves exactly as it did before, which is the failure the feature
+exists to remove.
+
+### Two defects found by writing the case, not by the case
+
+**The key was order-sensitive.** The first version appended the depfile's
+contents to a list already built from `inputs` and `depends`. The run that
+*recorded* the deps therefore ordered them differently from the run that
+*checked* them, so the stored key never matched the computed one and the
+rule regenerated on every build, saying `GEN` each time, for ever. It is a
+sorted set of paths now, so collection order cannot reach the hash.
+
+**A generator's own script was not found from outside its tree.** The check
+that catches a command naming an uninstalled program asked `shutil.which`,
+which resolves a relative path against *this process's* directory. Recipes
+run with `cwd` set to the tree, so `./mk.sh` means the script in the
+project -- and `cd tree && fmake` accepted a build that `fmake -C tree`
+refused, telling the reader their own script was not installed and pointing
+at `uses`. §80's shape exactly: a check whose answer depends on how it was
+invoked, and the two answers disagree. The case builds the same tree both
+ways and requires them to agree, which is the property rather than either
+answer.
+
+### A case that pinned a wording
+
+`generated_missing_tool_is_reported` checked for the words "not installed"
+and broke when the message learned to say "neither installed nor an
+executable file in this tree" -- which says strictly more. **A case that
+pins phrasing fails on an improvement and passes on a message that says the
+right words about the wrong thing.** It checks that the program is named
+and that `uses` is offered, which is what it was always about.
+
+The same trap is recorded at §50 from the other direction, where sniffing a
+message for "named _" tied a summary to a wording and rewording it silently
+stopped the summary being printed. Twice now, in opposite directions, which
+is enough to call it a rule: **assert the property, never the sentence.**
+
+### The control that copied live state
+
+The case proves the feature does something by building the same tree
+*without* `depfile` and requiring it to stay stale. That control originally
+copied its files out of the tree above -- which by then had been edited
+three times, including one edit that added an include the control never
+received. It writes its own content now. **Copying live state into a
+control is how a control stops testing what it was built to test.**
