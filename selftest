@@ -10440,6 +10440,95 @@ def a_vendored_main_stays_out_of_a_library(t):
 
 
 @case
+def a_cross_toolchain_that_prefixes_nothing_works(t):
+	"""Section 15 called this untried, and only one shape of it is.
+
+	Cross builds were verified against `aarch64-linux-gnu-*', where the
+	compiler's name carries the triplet and `nm' and `ar' are derived from
+	it. The entry records that "a toolchain that names its tools
+	differently is untried" -- and clang is exactly that: one binary for
+	every target, chosen by `--target', with no prefix to derive anything
+	from and the host's binutils reading the objects.
+
+	It works, end to end, and this checks the artifact rather than the
+	exit status: what comes out is a real aarch64 ELF built by an
+	unprefixed toolchain. The one thing that does not work is naming the
+	compiler as a command line, which is the next case."""
+	clang = _clang()
+	if not clang:
+		raise Skip("clang not installed")
+	probe = subprocess.run([clang, "--target=aarch64-linux-gnu", "-c",
+	                        "-xc", "-", "-o", os.devnull],
+	                       input="int main(void){return 0;}\n",
+	                       capture_output=True, text=True)
+	if probe.returncode != 0:
+		raise Skip("clang cannot target aarch64 here")
+	t.write("helper.c", "int helper(void){ return 7; }\n")
+	t.write("main.c", "int helper(void);\nint main(void){ "
+	        "return helper() - 7; }\n")
+	t.write("fmake.toml", f'[toolchain]\ncc = "{clang}"\narch = "aarch64"\n'
+	        f'\n[project]\ncflags = ["--target=aarch64-linux-gnu"]\n')
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"an unprefixed cross toolchain did not build: {r.stdout}{r.stderr}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	check(_elf_machine(prog) == 183,
+	      f"the binary is not aarch64, so this checked the exit status "
+	      f"rather than the artifact: machine={_elf_machine(prog)}")
+
+	# Undeclare the target and the arch guard fires -- correctly, since
+	# from where it stands a compiler cross-compiling by flag is
+	# indistinguishable from the wrong compiler. What it must not do is
+	# offer only one of the two fixes: this build needs `arch', not a
+	# different cc, and being told to name the right compiler when the
+	# compiler is right is the advice sending the reader the wrong way.
+	t.write("fmake.toml", f'[toolchain]\ncc = "{clang}"\n'
+	        f'\n[project]\ncflags = ["--target=aarch64-linux-gnu"]\n')
+	r = t.fmake("-B")
+	check(r.returncode != 0, "an undeclared cross build should be refused")
+	out = r.stdout + r.stderr
+	check("[toolchain] arch = 'aarch64'" in out,
+	      f"the message does not offer the fix this build actually needs, "
+	      f"only the one it does not: {out}")
+
+
+@case
+def a_compiler_named_as_a_command_line_says_so(t):
+	"""`CC="clang --target=..."' is how everyone spells this, and fails.
+
+	Autotools and make both treat CC as a word list, so naming a compiler
+	with its flags is the ordinary idiom for a toolchain that has no
+	prefix. fmake takes a program: a flag like `--target' changes what
+	`-print-search-dirs' and `-print-multiarch' answer, and those are asked
+	as separate commands, so a compiler that is really a command line would
+	have to be a list everywhere it is used.
+
+	That is a design change and is raised rather than made in passing. What
+	is not acceptable is the failure it produced -- `not found', naming the
+	whole string, which reads as a missing program and says nothing about
+	the space in it. The route that does work is named instead, and section
+	117 checks that it works before recommending it."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", '[toolchain]\ncc = "cc --target=aarch64-linux-gnu"\n')
+	r = t.fmake()
+	check(r.returncode != 0, "a command line is not a program")
+	out = r.stdout + r.stderr
+	check("that is a command line" in out,
+	      f"the message does not say what is wrong with it: {out}")
+	check("[project] cflags" in out,
+	      f"the message does not name the route that works: {out}")
+
+	# A plain typo must keep the plain message, or this has traded one
+	# misleading answer for another.
+	t.write("fmake.toml", '[toolchain]\ncc = "cc-that-is-not-here"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("command line" not in out,
+	      f"a missing compiler is now reported as a command line: {out}")
+
+
+@case
 def a_symbol_the_root_itself_defines_is_not_an_ambiguity(t):
 	"""Nothing guarded this, and section 116 is what made it matter.
 

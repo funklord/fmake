@@ -369,6 +369,18 @@ arch = "aarch64"
 cc = "cc"
 ```
 
+**`cc` is a program, not a command line.** A toolchain that targets by flag
+rather than by name — clang's `--target`, and any unprefixed cross compiler
+— puts the flag in `[project] cflags`, which reaches the compile and the
+link alike. `cc = "clang --target=..."` is refused, and says so: fmake asks
+that compiler separate questions (`-print-search-dirs`, `-print-multiarch`)
+whose answers the flag changes, so a name with a flag hidden in it would
+answer for the host while compiling for the target.
+
+Declare `arch` whenever the compiler targets by flag. Without it the build
+is refused — from fmake's side, a compiler cross-compiling by flag looks
+exactly like the wrong compiler.
+
 **A `version` also versions a shared library.** `libgreet.so.1.2.3` is
 installed, with `libgreet.so.1` and `libgreet.so` pointing at it, and the
 `SONAME` becomes the major alone — so a consumer records `libgreet.so.1`

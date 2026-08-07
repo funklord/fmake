@@ -158,7 +158,8 @@ that had been green about nothing for five commits ·
 [113. Clang, LTO, and a wrong reason for not checking](#113-clang-lto-and-a-wrong-reason-for-not-checking) ·
 [114. Who chose the tool decides the advice](#114-who-chose-the-tool-decides-the-advice) ·
 [115. The direction of the disagreement that matters](#115-the-direction-of-the-disagreement-that-matters) ·
-[116. The lead §79 declined to act on was real](#116-the-lead-79-declined-to-act-on-was-real)
+[116. The lead §79 declined to act on was real](#116-the-lead-79-declined-to-act-on-was-real) ·
+[117. A toolchain with no prefix to derive anything from](#117-a-toolchain-with-no-prefix-to-derive-anything-from)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1729,8 +1730,9 @@ rather than code, and one lesson about testing.
 - **Cross builds are verified on one toolchain, on Linux.** The architecture
   check is architecture-agnostic by construction, but sysroot handling, the
   pkg-config variables and the tool-prefix derivation have only been exercised
-  against `aarch64-linux-gnu-*`. A toolchain that names its tools differently,
-  or a bare-metal one with no libc at all, is untried.
+  against `aarch64-linux-gnu-*`. ~~A toolchain that names its tools
+  differently~~ is tried now and works -- clang targets by flag and prefixes
+  nothing; see §117. A bare-metal one with no libc at all is still untried.
 - ~~**Header-only libraries.**~~ Correctly need no link, and signal 2
   naturally produces no external symbols for them. The remaining case — one
   needing `-I` somewhere non-standard — was closed by §30 as a side effect:
@@ -8183,3 +8185,75 @@ sound; what changed is that the claim was settled with the instrument that
 can settle it. **A suspicion recorded honestly as a suspicion is what made
 this cheap to finish** -- the alternative is not "act on the profiler", it
 is "the lead is lost".
+
+---
+
+## 117. A toolchain with no prefix to derive anything from
+
+§15 records cross builds as verified against `aarch64-linux-gnu-*` and
+notes that "a toolchain that names its tools differently is untried".
+Clang is precisely that toolchain, and it is the interesting case rather
+than an exotic one: **one binary for every target**, chosen with
+`--target`, no triplet in the name, nothing for `_prefixed()` to derive,
+and the host's binutils reading the objects.
+
+It works, end to end. The case checks the artifact rather than the exit
+status -- `e_machine` 183, a real aarch64 ELF -- because "the build
+succeeded" is what a cross build says when it has quietly produced a host
+binary, which is the failure §5 was written about.
+
+### What does not work is how everyone spells it
+
+```
+CC="clang --target=aarch64-linux-gnu"
+```
+
+Autotools and make both treat `CC` as a word list, so naming a compiler
+with its flags is the ordinary idiom for a toolchain with no prefix.
+fmake takes a *program*, and the failure was:
+
+```
+!!! C compiler 'clang --target=aarch64-linux-gnu' not found
+```
+
+Which reads as a missing program and says nothing about the space. The
+route that does work is `[project] cflags`, because those reach the
+compile **and the link** -- and a `--target` needs both.
+
+### Why it is a program and not a command line
+
+Not an oversight worth quietly fixing. `self.cc` is invoked on its own in
+eight places, and three of them are questions whose answers `--target`
+changes:
+
+```
+cc -print-multiarch        the triplet
+cc -print-search-dirs      where libraries are
+cc -E -Wp,-v               the builtin include path
+```
+
+A compiler that is really a command line has to be a **list** everywhere,
+including those probes, or it answers for the host while compiling for the
+target -- which is the exact class of silent wrongness this tool exists to
+refuse. That is a design change, so it is raised here rather than made in
+passing. What is not acceptable is a message that misdescribes the
+failure, and that is fixed: the space is recognised and the working route
+named. A plain typo keeps the plain message, checked, because trading one
+misleading answer for another is not a fix.
+
+### The guard that fires, and the fix it did not name
+
+Leave `[toolchain] arch` out and the architecture check catches it, which
+is correct -- from where that check stands, a compiler cross-compiling by
+flag is indistinguishable from the wrong compiler. But it offered one fix:
+
+```
+    name the right one with [toolchain] cc, or $CC
+```
+
+Here the compiler is right and the *declaration* is missing, so the only
+advice given was the one that does not apply. It offers both now, with the
+architecture filled in from what was actually read out of the object. Same
+lesson as §114 and, by this point, unmistakable: **where two fixes are
+possible, naming one is not brevity, it is a guess presented as a
+diagnosis.**

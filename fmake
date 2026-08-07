@@ -2875,6 +2875,19 @@ class Config:
 		self.cflags += self.sanitize_flags
 
 		if not shutil.which(self.cc):
+			# `CC="clang --target=aarch64-linux-gnu"' is how a toolchain
+			# that does not prefix its tools is normally named, and it is
+			# one string with a space in it -- so the failure is "no such
+			# program" and looks nothing like the cause. fmake takes a
+			# program here rather than a command line, because a flag like
+			# --target changes what -print-search-dirs and -print-multiarch
+			# answer and those are asked separately.
+			if len(shlex.split(self.cc)) > 1:
+				die(f"C compiler {self.cc!r} not found -- that is a command "
+				    f"line, and fmake takes a program.\n"
+				    f"Name the compiler alone, and put its flags in "
+				    f"[project] cflags: they reach the compile and the link "
+				    f"alike, which is what a --target needs.")
 			die(f"C compiler {self.cc!r} not found "
 			    f"(set $CC, or [toolchain] cc in {CONF_FILE})")
 		self.ar     = (os.environ.get("AR") or tool.get("ar")
@@ -3298,12 +3311,20 @@ def check_object_arch(u, cfg):
 		return
 	_ARCH_CHECKED.add(want)
 	if ident[2] != want:
+		# Two fixes, and which one is right depends on what was intended.
+		# Naming only the compiler reads as "you chose the wrong one",
+		# which is wrong for the cross build that is going fine and simply
+		# has not said so: a compiler told to target another machine by a
+		# flag rather than by its name -- clang's --target, and every
+		# unprefixed toolchain -- looks exactly like a mistake from here.
 		die(f"{u.rel} compiled for {describe_identity(ident)}, but this "
 		    f"tree is being built for {cfg.os}/{cfg.arch}\n"
 		    f"    the compiler used was {cfg.driver(u.cxx)!r}\n"
 		    f"    name the right one with [toolchain] "
 		    f"{'cxx' if u.cxx else 'cc'}, or $"
-		    f"{'CXX' if u.cxx else 'CC'}")
+		    f"{'CXX' if u.cxx else 'CC'}\n"
+		    f"    or, if a cross build is what was wanted, declare it: "
+		    f"[toolchain] arch = {describe_identity(ident).split('/')[0]!r}")
 
 
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
