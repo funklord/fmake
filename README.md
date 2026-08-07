@@ -530,6 +530,12 @@ Every flag the program accepts, which is the same list `--man` and
 `$CC`, `$CXX`, `$AR`, `$NM`, `$CFLAGS` and `$LDFLAGS` are honoured and win over
 the config file.
 
+**`-flto` works with both compilers**, and the closure is unaffected —
+symbols are symbols. GCC's LTO objects are ordinary ELF; clang's are pure
+bitcode, which `nm` reads only where `LLVMgold.so` is installed as a BFD
+plugin. Where it is not, fmake says so and names `llvm-nm` rather than
+letting a file that reads as defining nothing quietly drop out of the link.
+
 **Project-wide compile flags go on the link line too**, which is what makes
 `--coverage`, `-pg` and `-fopenmp` work — each is an instrumentation *and* a
 runtime, and the compiler links the runtime only if it sees the flag again

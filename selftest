@@ -10439,6 +10439,111 @@ def a_vendored_main_stays_out_of_a_library(t):
 	      f"the archive carries the vendored main(): {syms}")
 
 
+def _clang():
+	"""clang, including the versioned install that is not on $PATH."""
+	found = shutil.which("clang")
+	if found:
+		return found
+	cands = sorted(glob.glob("/usr/lib/llvm-*/bin/clang"))
+	return cands[-1] if cands else None
+
+
+@case
+def clang_lto_emits_bitcode_and_the_closure_still_works(t):
+	"""Section 15 called this untested because clang was not installed.
+
+	It is, at /usr/lib/llvm-19/bin/clang -- not on $PATH, which is the
+	whole reason the entry said otherwise. The concern it recorded was
+	specific and worth checking rather than assuming: `clang -flto` emits
+	pure bitcode where gcc emits an ELF object with extra sections, and an
+	object nm reads nothing from defines nothing, so *every* file would
+	look like it provides nothing and the closure would link an empty
+	program.
+
+	It does not happen. The objects really are bitcode -- the fixture
+	checks the magic rather than trusting the flag -- and the closure is
+	exactly right: the file reached by symbol is compiled, the file
+	reached by nothing is not."""
+	clang = _clang()
+	if not clang:
+		raise Skip("clang not installed")
+	t.write("fmake.toml", f'[toolchain]\ncc = "{clang}"\n')
+	t.write("helper.c", "int helper(void){ return 7; }\n")
+	t.write("unused.c", "int unused_file(void){ return 1; }\n")
+	t.write("main.c", "int helper(void);\nint main(void){ "
+	        "return helper() - 7; }\n")
+
+	r = t.fmake("--cflags", "-flto -Os")
+	check(r.returncode == 0, f"clang -flto build failed: {r.stdout}{r.stderr}")
+
+	objs = glob.glob(os.path.join(t.dir, ".fmake/obj/*/helper.c.o"))
+	check(objs, "no object for helper.c")
+	with open(objs[0], "rb") as fh:
+		magic = fh.read(4)
+	check(magic == b"BC\xc0\xde",
+	      f"the fixture did not produce bitcode, so it checks nothing about "
+	      f"reading bitcode: magic is {magic!r}")
+
+	check("unused.c" not in r.stdout.split("LD")[0],
+	      f"unused.c was compiled, so the closure is not being computed "
+	      f"from these symbols: {r.stdout}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	check(_run_in(t.dir, "./" + os.path.basename(t.dir)).returncode == 0,
+	      f"the linked binary does not run, so nm read the bitcode but "
+	      f"something downstream did not: {prog}")
+
+
+@case
+def an_unreadable_bitcode_object_says_it_is_bitcode(t):
+	"""The right advice needs the file, not the error text.
+
+	nm reads bitcode only because LLVMgold.so is installed as a BFD plugin
+	-- a property of the machine, not of the tree -- so the failure section
+	15 feared is real on a machine without it. fmake already dies rather
+	than silently linking nothing, which is the important half.
+
+	The advice was the wrong half. `elf_identity` returns None for a file
+	that is not ELF, so the message asked for an nm understanding
+	`unknown` objects and named [toolchain] nm -- sending a reader to look
+	for a cross-toolchain problem they do not have, when the first four
+	bytes say LLVM bitcode and the fix is llvm-nm. The file knew; the line
+	printing the advice had not asked it.
+
+	No clang needed: a compiler that writes bitcode magic and an nm that
+	refuses it are the whole condition, and both are shims."""
+	cc = os.path.join(t.dir, "cc-bitcode")
+	with open(cc, "w") as fh:
+		fh.write("#!/bin/sh\n"
+		         "# Writes bitcode magic to whatever -o names.\n"
+		         "out=\n"
+		         "while [ $# -gt 0 ]; do\n"
+		         "\t[ \"$1\" = -o ] && { out=$2; shift 2; continue; }\n"
+		         "\tshift\n"
+		         "done\n"
+		         "printf 'BC\\300\\336' > \"$out\"\n")
+	nm = os.path.join(t.dir, "nm-noplugin")
+	with open(nm, "w") as fh:
+		fh.write("#!/bin/sh\n"
+		         "# A binutils nm with no LLVM plugin: bitcode is a format\n"
+		         "# it does not recognise.\n"
+		         "echo \"nm: file format not recognized\" >&2\n"
+		         "exit 1\n")
+	for path in (cc, nm):
+		os.chmod(path, 0o755)
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	r = t.fmake(env={"CC": cc, "NM": nm})
+	check(r.returncode != 0, "an unreadable object should stop the build")
+	out = r.stdout + r.stderr
+	check("bitcode" in out.lower(),
+	      f"the message does not say what the file is: {out}")
+	check("llvm-nm" in out,
+	      f"the message does not name the nm that would read it: {out}")
+	check("unknown" not in out,
+	      f"the message still describes bitcode as an unknown object "
+	      f"identity, which is the advice this case exists to remove: {out}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):

@@ -154,7 +154,8 @@ that had been green about nothing for five commits ·
 [109. The packaging report, folded in and removed](#109-the-packaging-report-folded-in-and-removed) ·
 [110. The same question as §79, and a method that answered the order](#110-the-same-question-as-79-and-a-method-that-answered-the-order) ·
 [111. The second list in the same file](#111-the-second-list-in-the-same-file) ·
-[112. Verifying the fix that could not be verified](#112-verifying-the-fix-that-could-not-be-verified)
+[112. Verifying the fix that could not be verified](#112-verifying-the-fix-that-could-not-be-verified) ·
+[113. Clang, LTO, and a wrong reason for not checking](#113-clang-lto-and-a-wrong-reason-for-not-checking)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1697,13 +1698,14 @@ rather than code, and one lesson about testing.
   that distinction is the whole finding. The guess that it would fall out
   naturally was right for the symbols and wrong about where such a file
   comes from.
-- **LTO and `-ffunction-sections`.** `-flto` with GCC works and is now
-  checked by hand: its objects still carry a symbol table `nm` can read, the
-  closure is unaffected, and the binary runs. Clang emits pure bitcode where
-  `nm` may read nothing, which would make every file appear to define nothing
-  — untested, because clang is not installed here. `-ffunction-sections` only
-  changes what the linker discards, which is downstream of everything fmake
-  decides.
+- ~~**LTO and `-ffunction-sections`.**~~ Closed; see §113. GCC's `-flto`
+  was already checked by hand. Clang was called untested "because clang is
+  not installed here" — it is, just not on `$PATH`, and the entry is what
+  a wrong reason for not checking something looks like. It works: the
+  objects really are bitcode, `nm` reads them via the LLVM BFD plugin, and
+  the closure is unaffected. Guarded by two cases, one of which needs no
+  clang. `-ffunction-sections` only changes what the linker discards,
+  which is downstream of everything fmake decides.
 - **C++ modules.** `import std;` breaks the include-graph candidate heuristic,
   and module dependency scanning needs a real compiler pass
   (`clang-scan-deps`). Note that the *closure* is unaffected — symbols are
@@ -7860,3 +7862,75 @@ conversation -- but "what does that machine do that this one does not".
 Two things, and both are things a test can arrange. **An untestable
 condition is worth restating as a list of differences before it is
 accepted**, because the differences are usually smaller than the label.
+
+---
+
+## 113. Clang, LTO, and a wrong reason for not checking
+
+§15 recorded a specific fear about link-time optimisation, and it was a
+good one. `clang -flto` emits **pure bitcode** where GCC emits an ELF
+object carrying extra sections. An object `nm` reads nothing from defines
+nothing, and a file that defines nothing is invisible to the closure --
+so every file in the tree would look like it provides nothing, and the
+link set would be empty.
+
+It was left untested "because clang is not installed here".
+
+**Clang is installed here.** It is at `/usr/lib/llvm-19/bin/clang`, which
+is not on `$PATH` -- and `which clang` was the whole investigation. The
+entry is not wrong about the risk; it is wrong about why it could not
+look, which is the same failure as §112 one section earlier and worth
+saying twice.
+
+### What actually happens
+
+It works, and the fixture checks the magic rather than trusting the flag:
+
+```
+BC c0 de     the object really is bitcode, not ELF
+helper.c     compiled -- reached by symbol
+unused.c     not compiled -- reached by nothing
+7            the binary runs
+```
+
+`nm` reads bitcode because **`LLVMgold.so` is installed as a BFD plugin**,
+in `/usr/lib/bfd-plugins`. That is a property of the machine, not of the
+tree or the compiler, so the feared failure is real on a machine without
+it -- and mutating `read_symbols` to return nothing for bitcode produces
+it exactly:
+
+```
+* main.c looked like it defined main() but the object does not export it
+!!! no target could be built
+```
+
+Which is fmake reporting the condition rather than silently linking an
+empty program. That half was already right.
+
+### The advice was the wrong half
+
+`read_symbols` dies when `nm` exits non-zero, and told the reader:
+
+> Set `[toolchain] nm` in fmake.toml, or `$NM`, to one that understands
+> **unknown** objects.
+
+`elf_identity` returns `None` for a file that is not ELF, and
+`describe_identity(None)` is `"unknown"`. So a clang LTO build without the
+plugin sent its reader looking for a cross-toolchain problem they did not
+have, when the first four bytes of the file say LLVM bitcode and the fix
+is `llvm-nm` -- verified to work, not assumed.
+
+**The file knew. The line printing the advice had not asked it.** That is
+§31's pattern again, in the fifth place it has been found, and the fix is
+the same shape: `bitcode_object()` reads the magic, and the message names
+the format, the reader that handles it, and the plugin that would let the
+existing one handle it.
+
+### The case that needs no clang
+
+The end-to-end case skips where clang is absent, which makes it the weaker
+of the two. The diagnostic case does not skip anywhere: a compiler that
+writes bitcode magic and an `nm` that refuses it are the entire condition,
+and both are four-line shims. **A condition worth testing is often smaller
+than the toolchain that produces it** -- the same lesson as §112, arrived
+at from the other end.

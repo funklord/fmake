@@ -3489,8 +3489,24 @@ def read_symbols(units, cfg, jobs):
 		# file would compile, appear in the build, and simply be absent from
 		# the result. A cross toolchain with the wrong nm gets here.
 		if r.returncode != 0:
+			said = (r.stderr.strip().splitlines()[0] if r.stderr.strip()
+			        else "no output")
+			# What the file actually is decides the advice. A cross build
+			# with a host nm wants a different nm; -flto with clang wants
+			# llvm-nm or the LLVM plugin, and telling that reader to name an
+			# nm that understands "unknown" objects sends them looking for a
+			# toolchain problem they do not have.
+			if bitcode_object(u.obj):
+				die(f"{cfg.nm} could not read {u.rel}'s object:\n"
+				    f"    {said}\n"
+				    f"That object is LLVM bitcode, which -flto with clang "
+				    f"emits instead of ELF.\n"
+				    f"Set [toolchain] nm in {CONF_FILE}, or $NM, to "
+				    f"llvm-nm -- or install LLVMgold.so into "
+				    f"/usr/lib/bfd-plugins, which teaches binutils nm to "
+				    f"read it.")
 			die(f"{cfg.nm} could not read {u.rel}'s object:\n"
-			    f"    {r.stderr.strip().splitlines()[0] if r.stderr.strip() else 'no output'}\n"
+			    f"    {said}\n"
 			    f"Set [toolchain] nm in {CONF_FILE}, or $NM, to one that "
 			    f"understands {describe_identity(elf_identity(u.obj))} "
 			    f"objects.")
@@ -3846,6 +3862,26 @@ def elf_identity(path):
 		return None
 	order = "little" if head[5] == 1 else "big"
 	return (head[4], head[5], int.from_bytes(head[18:20], order))
+
+
+def bitcode_object(path):
+	"""True if this is LLVM bitcode rather than an object file.
+
+    `clang -flto` emits bitcode where gcc -flto emits an ELF object carrying
+    extra sections, so a file that is not ELF is not necessarily a file that
+    went wrong. Whether binutils nm can read it depends on LLVMgold.so being
+    installed as a BFD plugin, which is a property of the machine and not of
+    the tree -- so this exists to tell the two failures apart rather than to
+    reject anything.
+
+    Two spellings: raw bitcode, and the wrapper Darwin uses.
+    """
+	try:
+		with open(path, "rb") as fh:
+			head = fh.read(4)
+	except OSError:
+		return False
+	return head in (b"BC\xc0\xde", b"\xde\xc0\x17\x0b")
 
 
 def describe_identity(ident):
