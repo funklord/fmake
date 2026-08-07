@@ -368,6 +368,11 @@ arch = "aarch64"
 cc = "cc"
 ```
 
+**A `version` also versions a shared library.** `libgreet.so.1.2.3` is
+installed, with `libgreet.so.1` and `libgreet.so` pointing at it, and the
+`SONAME` becomes the major alone — so a consumer records `libgreet.so.1`
+and a later 1.2.4 can replace it underneath.
+
 **A `version` asks for a pkg-config file.** fmake resolves libraries
 *through* pkg-config — a header proposes a module, the module's `.pc`
 supplies the flags — so a library it installs should be findable the same

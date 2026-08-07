@@ -3568,6 +3568,107 @@ def an_ejected_build_uninstalls_what_it_installed(t):
 
 
 @case
+def a_versioned_shared_library_installs_a_soname_chain(t):
+	"""What makes a `.so` publishable rather than merely private.
+
+	Section 22 gave shared libraries a soname and section 15 recorded the
+	rest as missing: a `.so` installed under its plain name, which is right
+	for a library shipping beside the thing that uses it and wrong for one
+	anybody else links against.
+
+	The `version` that section 102 added for pkg-config is the same
+	declaration, so the chain costs a rule rather than a concept:
+
+	    libgreet.so       -> libgreet.so.1        what -lgreet finds
+	    libgreet.so.1     -> libgreet.so.1.2.3    what NEEDED records
+	    libgreet.so.1.2.3                         the file
+
+	The soname is the *major* only, which is the promise it makes -- and
+	the reason a distribution can replace 1.2.3 with 1.2.4 underneath a
+	program linked years ago. The check is a consumer: what a program
+	actually records, not what the link line said."""
+	if not shutil.which("readelf"):
+		raise Skip("readelf not installed")
+	t.write("greet.h", "#pragma once\nconst char *greet(void);\n")
+	t.write("greet.c", """
+/*! @file
+ *  @kind    shared
+ *  @target  greet
+ *  @headers greet.h
+ *  @version 1.2.3
+ */
+#include "greet.h"
+const char *greet(void){ return "hi"; }
+""")
+	check(t.fmake().returncode == 0, "build failed")
+	so = os.path.join(t.dir, "libgreet.so")
+	dyn = subprocess.run(["readelf", "-d", so], capture_output=True, text=True)
+	check("libgreet.so.1" in dyn.stdout and "1.2.3" not in dyn.stdout,
+	      f"the soname is not the major version alone: {dyn.stdout}")
+
+	stage = os.path.join(t.dir, "stage")
+	check(t.fmake("--install", "--destdir", stage).returncode == 0,
+	      "install failed")
+	lib = os.path.join(stage, "usr", "local", "lib")
+	real = os.path.join(lib, "libgreet.so.1.2.3")
+	check(os.path.isfile(real) and not os.path.islink(real),
+	      "the versioned file is missing or is a link")
+	for link, points_at in (("libgreet.so.1", "libgreet.so.1.2.3"),
+	                        ("libgreet.so", "libgreet.so.1")):
+		path = os.path.join(lib, link)
+		check(os.path.islink(path), f"{link} is not a symlink")
+		check(os.readlink(path) == points_at,
+		      f"{link} points at {os.readlink(path)!r}, not {points_at!r}")
+		# Bare, so the chain survives the prefix moving -- which is what a
+		# staged install is, and what every distribution does.
+		check(not os.path.isabs(os.readlink(path)),
+		      f"{link} points at an absolute path into the build tree")
+
+	# The point of all of it: a consumer records the soname.
+	if shutil.which("cc"):
+		use = os.path.join(t.dir, "use.c")
+		with open(use, "w") as fh:
+			fh.write('#include "greet.h"\nint main(void){ return greet()[0] '
+			         "!= 'h'; }\n")
+		out = os.path.join(t.dir, "use")
+		r = subprocess.run(["cc", use, "-I" + t.dir, "-L" + lib, "-lgreet",
+		                    "-o", out], capture_output=True, text=True)
+		check(r.returncode == 0, f"a consumer could not link: {r.stderr}")
+		dyn = subprocess.run(["readelf", "-d", out], capture_output=True,
+		                     text=True)
+		check("libgreet.so.1" in dyn.stdout,
+		      f"the consumer did not record the soname: {dyn.stdout}")
+		ran = subprocess.run([out], env=dict(os.environ,
+		                                     LD_LIBRARY_PATH=lib))
+		check(ran.returncode == 0, "the consumer did not run against it")
+
+	check(t.fmake("--uninstall", "--destdir", stage).returncode == 0,
+	      "uninstall failed")
+	for gone in ("libgreet.so", "libgreet.so.1", "libgreet.so.1.2.3"):
+		p = os.path.join(lib, gone)
+		check(not os.path.exists(p) and not os.path.islink(p),
+		      f"uninstall left {gone}")
+
+	# An unversioned shared library keeps the plain name and gets no chain,
+	# which is right for one that ships beside its consumer.
+	u = Tree("plain")
+	try:
+		u.write("q.h", "#pragma once\nint q(void);\n")
+		u.write("q.c", "/*! @file\n *  @kind shared\n *  @target q\n"
+		        " *  @headers q.h\n */\n"
+		        '#include "q.h"\nint q(void){ return 1; }\n')
+		check(u.fmake().returncode == 0, "the plain build failed")
+		st = os.path.join(u.dir, "stage")
+		check(u.fmake("--install", "--destdir", st).returncode == 0,
+		      "the plain install failed")
+		got = glob.glob(os.path.join(st, "usr", "local", "lib", "libq.so*"))
+		check([os.path.basename(g) for g in got] == ["libq.so"],
+		      f"an unversioned library got a chain: {sorted(got)}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_versioned_library_gets_a_pkgconfig_file(t):
 	"""fmake resolves through pkg-config and published nothing it could read.
 

@@ -144,7 +144,8 @@ that had been green about nothing for five commits ·
 [99. The typo that could be named after all](#99-the-typo-that-could-be-named-after-all) ·
 [100. The archives the cover put in the wrong order](#100-the-archives-the-cover-put-in-the-wrong-order) ·
 [101. The prebuilt object, and the version of it that would have been wrong](#101-the-prebuilt-object-and-the-version-of-it-that-would-have-been-wrong) ·
-[102. The library fmake could install and then not find](#102-the-library-fmake-could-install-and-then-not-find)
+[102. The library fmake could install and then not find](#102-the-library-fmake-could-install-and-then-not-find) ·
+[103. The soname chain, for the price of a rule](#103-the-soname-chain-for-the-price-of-a-rule)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1782,10 +1783,10 @@ rather than code, and one lesson about testing.
   that is deliberate rather than pending — see the `CLEAN` comment. `--eject
   ninja` still has no install rule, since ninja has no convention for one.
 - **Install is minimal.** ~~No uninstall~~ (§93), ~~no pkg-config `.pc`
-  generation~~ (§102), no manifest, no shared-library versioning — `SONAME`
-  itself was added by §22 and this entry was stale about it — no symlink
-  chain (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain
-  name, which is right for a private library and wrong for a published one.
+  generation~~ (§102), ~~no shared-library versioning or symlink chain~~
+  (§103, and `SONAME` itself was §22). What is left is a manifest, which
+  §93 argues is a much larger promise than the rest and is declined rather
+  than pending.
 - **Per-TU flags are per TU, not per target.** Two binaries sharing 90% of their
   TUs compile those once, and `@cflags`/`@define` belong to the *file*, so there
   is exactly one object per file and no conflict. What is impossible is the same
@@ -7250,3 +7251,61 @@ pkg-config file however much it looks like one. And the paths are required
 to be relative to `${prefix}`, because a package built with one prefix and
 installed under another is what staging and every distribution do; baked
 paths pass a substring check and are wrong the moment they are relocated.
+
+---
+
+## 103. The soname chain, for the price of a rule
+
+§22 gave shared libraries a soname. §15 recorded the rest as missing: a
+`.so` installed under its plain name, which is right for a library shipping
+beside the thing that uses it and wrong for one anybody else links against.
+
+The `version` §102 added for pkg-config is the same declaration, so this
+cost a rule rather than a concept:
+
+```
+libgreet.so        -> libgreet.so.1        what -lgreet finds
+libgreet.so.1      -> libgreet.so.1.2.3    what NEEDED records
+libgreet.so.1.2.3                          the file
+```
+
+**The soname is the major alone**, which is the promise a soname makes --
+"anything with this number will do" -- and the reason a distribution can
+put 1.2.4 under a program linked years ago.
+
+### Built plain, installed versioned
+
+The artifact in the tree stays `libgreet.so`. Renaming it would mean
+teaching `clean`, the link rules and both emitters a second name for one
+thing, and the tree has no use for a chain: nothing there resolves a
+soname. Only the install grows.
+
+The symlink targets are **bare names**. An absolute one points into
+whichever tree happened to build the library, which is gone by the time
+anybody installs the package -- and a staged install has a different prefix
+from the final one by definition. The case checks that specifically,
+because an absolute link works perfectly on the machine that made it.
+
+### One new idea in the plan, and it earns its place
+
+`install_plan` grew a third origin: `built`, `tree`, and now `symlink`,
+whose "source" is what the link points at rather than a file to copy. That
+is the first thing in the plan that is not a copy, and it goes through all
+four callers unchanged in shape -- fmake, `--uninstall`, the ejected
+Makefile and the ejected ninja each learned one line. The chain is
+identical from all three that produce it, which is the property §85's case
+already checks.
+
+### What the case asks
+
+Not that three files exist. It links a **consumer** against the installed
+library and reads what that program recorded:
+
+```
+0x0000000000000001 (NEEDED)   Shared library: [libgreet.so.1]
+```
+
+That is the whole point of the exercise, and it is the one thing a
+directory listing cannot show. An unversioned library still installs one
+plain `libq.so` and no chain -- checked too, since giving every shared
+library a chain would be the same feature done wrong.

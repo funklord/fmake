@@ -4851,6 +4851,21 @@ class Target:
 			return "lib%s.a" % self.name
 		return self.name
 
+	@property
+	def soname(self):
+		"""What consumers record as NEEDED.
+
+        Unversioned, it is the file's own name -- section 22, and right for
+        a library that ships beside the thing using it. Versioned, it is
+        the *major* only: that is the promise a soname makes, which is
+        "anything with this number will do", and it is why a distribution
+        can replace 1.2.3 with 1.2.4 underneath a program that was linked
+        years ago.
+        """
+		if self.kind != "shared" or not self.version:
+			return self.filename
+		return "%s.%s" % (self.filename, self.version.split(".")[0])
+
 
 def link_cmd(t, cl, cfg, outdir, libflags=()):
 	"""The exact command that produces this artifact.
@@ -4878,7 +4893,7 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
 	# Resolved libraries first, then whatever the user named, so an explicit
 	# --ldflags always has the last word.
 	return ([cfg.driver(cxx)]
-	        + (["-shared", "-Wl,-soname," + t.filename]
+	        + (["-shared", "-Wl,-soname," + t.soname]
 	           if t.kind == "shared" else [])
 	        + ["-o", out] + objs + archive_flags(cl)
 	        + list(libflags) + cfg.link_flags())
@@ -7146,7 +7161,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a("\trm -f $@")
 			a("\t$(AR) rcs $@ $^")
 		elif t.kind == "shared":
-			a(f"\t$({driver}) -shared -Wl,-soname,{t.filename} -o $@ {objs_txt}{tail}")
+			a(f"\t$({driver}) -shared -Wl,-soname,{t.soname} -o $@ {objs_txt}{tail}")
 		else:
 			a(f"\t$({driver}) -o $@ {objs_txt}{tail}")
 		a("")
@@ -7211,6 +7226,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			var = f"$(DESTDIR)$({directory.upper()})"
 			a(f"\tinstall -d {var}")
 			for origin, source, _, name, mode in items:
+				if origin == "symlink":
+					a(f"\tln -sf {source} {var}/{name}")
+					continue
 				src = source if origin == "built" else _eject_src(source)
 				a(f"\tinstall -m {mode:o} {src} {var}/{name}")
 		a("")
@@ -7438,7 +7456,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		if t.kind != "static":
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
 			if t.kind == "shared":
-				a(f"  soname = {t.filename}")
+				a(f"  soname = {t.soname}")
 			if arcs:
 				txt = " ".join(arcs)
 				if len(arcs) > 1:
@@ -7505,6 +7523,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			var = f'"$$DESTDIR$${directory.upper()}"'
 			steps.append(f"install -d {var}")
 			for origin, source, _, name, mode in items:
+				if origin == "symlink":
+					steps.append(f"ln -sf {shlex.quote(source)} "
+					             f'"$$DESTDIR$${directory.upper()}/"'
+					             f"{shlex.quote(name)}")
+					continue
 				src = source if origin == "built" else _eject_src(source)
 				# Shell-quoted rather than ninja-escaped: this is a command
 				# line, and ninja can express a path with a space in it, so
@@ -7649,9 +7672,24 @@ def install_plan(targets, closures, root):
     """
 	planned = []
 	for t in targets:
-		planned.append(("built", t.filename,
-		                "bindir" if t.kind == "exe" else "libdir",
-		                t.filename, 0o755 if t.kind != "static" else 0o644))
+		where = "bindir" if t.kind == "exe" else "libdir"
+		mode = 0o755 if t.kind != "static" else 0o644
+		if t.kind == "shared" and t.version:
+			# The chain every distribution ships. The real file carries the
+			# full version; the soname link is what consumers recorded and
+			# what the loader opens; the plain name is what `-lfoo` finds at
+			# link time and is the one a development package adds.
+			#
+			# Built as lib<name>.so in the tree and installed under the
+			# versioned name. The tree does not need the chain, and renaming
+			# the artifact would mean teaching clean, the link rules and both
+			# emitters a second name for one thing.
+			real = "%s.%s" % (t.filename, t.version)
+			planned.append(("built", t.filename, where, real, mode))
+			planned.append(("symlink", real, where, t.soname, None))
+			planned.append(("symlink", t.soname, where, t.filename, None))
+		else:
+			planned.append(("built", t.filename, where, t.filename, mode))
 
 		# @headers is gathered only for libraries: a program does not
 		# publish an API, and the file carrying the directive is often
@@ -7773,10 +7811,18 @@ def do_install(targets, closures, root, outdir, conf, args):
 
 	for origin, source, directory, name, mode in install_plan(
 			targets, closures, root):
+		dst = os.path.join(paths[directory], name)
+		if origin == "symlink":
+			# The target stays a bare name. An absolute one points into
+			# whichever tree happened to build it, which is gone by the
+			# time anybody installs the package -- and a staged install
+			# has a different prefix than the final one by definition.
+			planned.append((source, dst, None))
+			continue
 		src = os.path.join(outdir if origin == "built" else root, source)
 		if origin == "built" and not os.path.exists(src):
 			die(f"{source} has not been built")
-		planned.append((src, os.path.join(paths[directory], name), mode))
+		planned.append((src, dst, mode))
 
 	# Before anything is copied, say what was asked for and will not be.
 	# A directive that is read and then discarded without comment is the
@@ -7795,6 +7841,18 @@ def do_install(targets, closures, root, outdir, conf, args):
 
 	for src, dst, mode in planned:
 		rel = _rel(src, root)
+		if mode is None:
+			# A relative target, so the chain still resolves when the whole
+			# prefix moves -- which is what a staged install is.
+			if args.dry_run:
+				print(f"ln -sf {src} {dst}")
+				continue
+			os.makedirs(os.path.dirname(dst), exist_ok=True)
+			if os.path.islink(dst) or os.path.exists(dst):
+				os.remove(dst)
+			os.symlink(src, dst)
+			print(f"{GREEN('->')} {dst} -> {src}")
+			continue
 		if args.dry_run:
 			print(f"install -m {mode:o} {rel} {dst}")
 			continue
