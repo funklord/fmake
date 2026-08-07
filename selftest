@@ -2462,6 +2462,97 @@ def _cross_available():
 	return shutil.which(CROSS_CC) is not None
 
 
+def _elf_machine(path):
+	"""The e_machine of an ELF file, read the way fmake reads it."""
+	with open(path, "rb") as fh:
+		head = fh.read(20)
+	if len(head) < 20 or head[:4] != b"\x7fELF":
+		return None
+	order = "little" if head[5] == 1 else "big"
+	return int.from_bytes(head[18:20], order)
+
+
+@case
+def a_cross_build_derives_the_cxx_compiler(t):
+	"""Naming the compiler is supposed to be enough, and was not for C++.
+
+	`aarch64-linux-gnu-gcc` already implied the matching `nm` and `ar` --
+	the rule was written down beside them. The C++ compiler was chosen a
+	line *above* the prefix that would have derived it, so it never did.
+
+	What that produced is the worst shape a build tool has: a tree
+	declaring linux/aarch64 compiled its C++ with the host compiler, linked
+	with the host compiler, wrote an x86-64 binary, and printed `built
+	prog'. Nothing was wrong anywhere a person would look, and the artifact
+	was for the wrong machine."""
+	if not _cross_available():
+		raise Skip(f"{CROSS_CC} not installed")
+	if not shutil.which("aarch64-linux-gnu-g++"):
+		raise Skip("aarch64-linux-gnu-g++ not installed")
+	t.write("prog.cpp", "#include <string>\n"
+	        'int main(){ std::string s = "x"; return (int)s.size() - 1; }\n')
+	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\n'
+	        'os = "linux"\narch = "aarch64"\n')
+
+	r = t.fmake("-n")
+	compile_line = next((l for l in r.stdout.splitlines() if " -c " in l), "")
+	check("g++" in compile_line and "aarch64" in compile_line,
+	      f"the host C++ compiler was chosen for a cross build: "
+	      f"{compile_line}")
+
+	check(t.fmake().returncode == 0, "the cross build failed")
+	prog = os.path.join(t.dir, "prog")
+	check(os.path.exists(prog), "no binary was produced")
+	check(_elf_machine(prog) == 0xB7,
+	      f"a build declaring aarch64 produced a "
+	      f"0x{_elf_machine(prog):x} binary")
+
+
+@case
+def an_object_built_for_the_wrong_machine_is_refused(t):
+	"""Deriving the compiler fixes one instance; this closes the class.
+
+	The next one will be a compiler named by hand, an `arch' that does not
+	match the `cc', or a $CXX left over in a shell -- none of which a
+	derivation can help with, and all of which produce an artifact for the
+	wrong machine while reporting success.
+
+	The evidence is the ELF header, the same thing section 23 reads off a
+	vendored archive: exact for any architecture, and needing no knowledge
+	of triplets. The guard only speaks when both sides are certain, so a
+	tree it cannot judge builds exactly as before."""
+	if not _cross_available():
+		raise Skip(f"{CROSS_CC} not installed")
+	t.write("prog.cpp", "int main(){ return 0; }\n")
+	# The wrong C++ compiler, named outright, which is what the derivation
+	# cannot save anybody from.
+	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\n'
+	        'cxx = "c++"\nos = "linux"\narch = "aarch64"\n')
+	r = t.fmake()
+	check(r.returncode != 0, "an x86-64 object satisfied an aarch64 build")
+	said = r.stdout + r.stderr
+	check("aarch64" in said and "x86_64" in said,
+	      f"the refusal does not say which machine is which: {said}")
+	check("cxx" in said or "CXX" in said,
+	      f"the refusal does not name the knob that fixes it: {said}")
+
+	# A correct cross build is untouched by the guard.
+	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\n'
+	        'os = "linux"\narch = "aarch64"\n')
+	t.write("prog.c", "int main(void){ return 0; }\n")
+	os.remove(os.path.join(t.dir, "prog.cpp"))
+	check(t.fmake().returncode == 0,
+	      "the guard refused a correct cross build")
+
+	# And a plain host build, which is the path every other case takes.
+	u = Tree("host")
+	try:
+		u.write("prog.c", "int main(void){ return 0; }\n")
+		check(u.fmake().returncode == 0, "the guard refused a host build")
+	finally:
+		u.cleanup()
+
+
 def host_machine():
 	"""This machine's e_machine value, for comparing against a built tool."""
 	return {"x86_64": 0x3E, "aarch64": 0xB7, "x86": 0x03, "arm": 0x28,

@@ -2569,12 +2569,23 @@ class Config:
 
 		# $CC beats fmake.toml, per the precedence chain: the environment is
 		# the outermost level, so a one-off cross build needs no edit.
+		# A tool built to run *here* is a separate build for a separate
+		# machine, and its objects are foreign on purpose.
+		self.for_build_machine = getattr(args, "use_build_toolchain", False)
 		self.cc      = os.environ.get("CC")  or tool.get("cc", "cc")
-		self.cxx     = os.environ.get("CXX") or tool.get("cxx", "c++")
 		# aarch64-linux-gnu-gcc implies aarch64-linux-gnu-nm and -ar. Naming
 		# the compiler should be enough; a host nm can often read foreign
 		# objects, but relying on that is luck rather than design.
 		self.prefix  = _tool_prefix(self.cc)
+		# The C++ compiler was the one this rule was written for and did not
+		# reach, because it was chosen a line above the prefix that would
+		# have derived it. A cross build with no `cxx' named compiled C++
+		# with the host compiler, linked with it, produced an x86-64 binary
+		# for a tree declaring aarch64, and said `built prog'. Nothing was
+		# wrong anywhere a person would look.
+		self.cxx     = (os.environ.get("CXX") or tool.get("cxx")
+		                or self._prefixed("g++") or self._prefixed("c++")
+		                or "c++")
 		self.triplet = _stdout([self.cc, "-print-multiarch"]).strip() \
 		               or _stdout([self.cc, "-dumpmachine"]).strip()
 		self.nm      = find_nm(tool.get("nm")
@@ -3009,6 +3020,54 @@ def _header_in_tree(name, headers):
 	return min(hits, key=lambda h: (h.count("/"), len(h))) if hits else None
 
 
+_ARCH_CHECKED = set()
+
+
+def check_object_arch(u, cfg):
+	"""Refuse an object built for a machine the tree did not ask for.
+
+    The C++ compiler not deriving from the toolchain prefix produced an
+    x86-64 binary for a tree declaring aarch64, with `built prog' as the
+    only output. Deriving it fixes that instance; this closes the class,
+    because the next one will be a compiler named by hand, a `[toolchain]
+    arch' that does not match the `cc', or a `$CXX' left over in a shell.
+
+    The evidence is the same one section 23 uses on a vendored archive --
+    the ELF header, which is exact for any architecture and needs no
+    knowledge of triplets. Once per architecture per run, so the cost is
+    one 20-byte read rather than one per object.
+
+    Silent when it cannot know: an architecture missing from ELF_MACHINES,
+    a non-ELF object, an unreadable file. A guard that guesses is worse
+    than none, and this one only ever speaks when both sides are certain.
+    """
+	# A generator is compiled for the build machine on purpose, so its
+	# objects do not match the target and must not be judged against it.
+	# The artifact is checked separately, against *this* machine, with a
+	# message that names [build-toolchain] -- which is the better one, and
+	# firing here first would replace it with a worse one.
+	if cfg.for_build_machine:
+		return
+	want = None
+	for code, name in ELF_MACHINES.items():
+		if name == cfg.arch:
+			want = code
+			break
+	if want is None or want in _ARCH_CHECKED:
+		return
+	ident = elf_identity(u.obj)
+	if ident is None:
+		return
+	_ARCH_CHECKED.add(want)
+	if ident[2] != want:
+		die(f"{u.rel} compiled for {describe_identity(ident)}, but this "
+		    f"tree is being built for {cfg.os}/{cfg.arch}\n"
+		    f"    the compiler used was {cfg.driver(u.cxx)!r}\n"
+		    f"    name the right one with [toolchain] "
+		    f"{'cxx' if u.cxx else 'cc'}, or $"
+		    f"{'CXX' if u.cxx else 'CC'}")
+
+
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
                   broken=None, tree_headers=(), quiet=False):
 	"""Compile what is stale. Returns True if anything was actually built.
@@ -3064,6 +3123,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {u.rel}")
 				if err.strip():
 					PROGRESS.write(err)
+				check_object_arch(u, cfg)
 
 	if failures:
 		# One missing system header fails every file that includes it, and

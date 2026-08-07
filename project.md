@@ -132,7 +132,8 @@ that had been green about nothing for five commits ·
 [87. `SANITIZE`, and a variable that means two things](#87-sanitize-and-a-variable-that-means-two-things) ·
 [88. The switches had to survive the exit too](#88-the-switches-had-to-survive-the-exit-too) ·
 [89. The flags that have to be on both lines](#89-the-flags-that-have-to-be-on-both-lines) ·
-[90. Two directives that were read and then discarded quietly](#90-two-directives-that-were-read-and-then-discarded-quietly)
+[90. Two directives that were read and then discarded quietly](#90-two-directives-that-were-read-and-then-discarded-quietly) ·
+[91. Sweeping the two paths that had not been swept](#91-sweeping-the-two-paths-that-had-not-been-swept)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6451,3 +6452,100 @@ the test cannot be "this source reaches a program". It is "this header is
 published by nothing", computed against the plan §85 already builds -- so
 the normal shape of a library, a consumer and one header stays silent, and
 the case asserts that as hard as it asserts the report.
+
+---
+
+## 91. Sweeping the two paths that had not been swept
+
+§90 named cross-compilation and Qt as unswept. Qt came back clean. Cross
+came back with the worst-shaped defect this tree has produced.
+
+### The C++ compiler that was not derived
+
+`aarch64-linux-gnu-gcc` already implied the matching `nm` and `ar`, and the
+rule was written in a comment right beside them: *naming the compiler
+should be enough*. **The C++ compiler was chosen one line above the prefix
+that would have derived it**, so it never did, and no `[toolchain] cxx`
+meant the host `c++`.
+
+What that produced is the shape a build tool should never have:
+
+```
+$ cat fmake.toml
+[toolchain]
+os = "linux"
+arch = "aarch64"
+cc = "aarch64-linux-gnu-gcc"
+
+$ fmake
+[1/1] CXX prog.cpp
+LD  prog
+* built prog
+$ file prog
+prog: ELF 64-bit LSB pie executable, x86-64
+```
+
+Compiled with the host compiler, linked with the host compiler, an x86-64
+binary for a tree declaring aarch64, and `built prog` as the only output.
+Nothing was wrong anywhere a person would look, and `aarch64-linux-gnu-g++`
+was installed the whole time.
+
+It is derived now, from the same prefix as `nm` and `ar`, tried as `g++`
+then `c++`.
+
+### Closing the class rather than the instance
+
+Deriving it fixes that case and no other. The next one is a compiler named
+by hand, an `arch` that disagrees with the `cc`, or a `$CXX` left in a
+shell -- none of which a derivation reaches, all of which produce an
+artifact for the wrong machine and report success.
+
+So the objects are checked. The evidence is the ELF header, exactly what
+§23 already reads off a vendored archive: precise for any architecture and
+needing no knowledge of triplets. Once per architecture per run, so the
+cost is one twenty-byte read.
+
+```
+!!! prog.cpp compiled for x86_64/64le, but this tree is being built for
+    linux/aarch64
+    the compiler used was 'c++'
+    name the right one with [toolchain] cxx, or $CXX
+```
+
+**It is silent whenever it cannot be certain** -- an architecture missing
+from `ELF_MACHINES`, a non-ELF object, an unreadable file. A guard that
+guesses is worse than no guard, and the case asserts the quiet direction as
+hard as the loud one.
+
+### The guard's first act was to break a better message
+
+`cross_rejects_an_unrunnable_generator` failed immediately. That case
+mis-declares `[build-toolchain]` on purpose, so the generator's objects
+*are* foreign -- deliberately, because a generator is built for the machine
+doing the building. The guard fired on them and replaced a message that
+says `cannot run here` and names `[build-toolchain]` with one that says the
+target architecture disagrees.
+
+Both statements were true and the older one is far more useful. `Config`
+now knows whether it is the build-machine toolchain, and the guard steps
+aside when it is. **Worth recording as the general point**: a check added
+to catch silence can take the place of a better diagnostic, and the suite
+is what noticed within a minute.
+
+### What Qt came back with
+
+Nothing, and the checks are worth naming so the next sweep can skip them.
+The ejected Makefile and the ejected ninja both carry the moc rules and
+produce a working binary. A header that *gains* `Q_OBJECT` after a build is
+re-moc'd, because headers are hash-cached. The `#include "moc_x.cpp"` idiom
+builds without compiling the output twice. A cross build uses the host's
+moc, which is correct -- moc is a build-machine tool and the target's could
+not run.
+
+One false alarm, and it was mine: a `Q_OBJECT` class in a `.cpp` with no
+`#include "app.moc"` appeared undiagnosed, contradicting §17. It is
+diagnosed, on the first line of the output, and the probe had truncated to
+the last four. The warning is followed by ten lines of linker noise and
+then a summary offering `--ldflags`, which is §31's shape again in a mild
+form -- the final advice does not know the first line was printed. Recorded
+rather than fixed.
