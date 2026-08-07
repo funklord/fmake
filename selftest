@@ -6436,6 +6436,73 @@ int main(int argc, char **argv) {
 
 
 @case
+def qt_code_is_compiled_position_independent(t):
+	"""Reported from a build of hydra: 113 moc outputs failed at once.
+
+	Qt configured with `-reduce-relocations` refuses to be included by code
+	that is not position independent, and says so with an #error. The guard
+	passes whenever __PIC__ is defined, and -fPIE defines it too -- so this
+	is invisible on a distribution whose gcc defaults to PIE and fires on
+	every Qt translation unit on one whose gcc does not. Nothing else about
+	that machine was different.
+
+	Qt states it nowhere fmake can read: its .pc files carry only -I and -D.
+	CMake's Qt6 puts POSITION_INDEPENDENT_CODE on consumers and qmake's
+	mkspec adds it for libraries -- every other Qt build system supplies it
+	rather than discovering it, because there is nothing to discover from.
+
+	Checked on both routes to a module, since @pkg and a header proposal are
+	two ways to reach one and the flag is a property of the module rather
+	than of how it was named. Not checked: that it fixes the #error, which
+	needs a Qt built with -reduce-relocations and this machine's is not."""
+	_need_qt()
+	t.write("w.h", """#pragma once
+#include <QObject>
+class W : public QObject { Q_OBJECT public: int n = 0; };
+""")
+	t.write("app.cpp", '#include "w.h"\nint main(){ W w; return w.n; }\n')
+
+	check(t.fmake().returncode == 0, "the Qt build failed")
+	r = t.fmake("--explain")
+	check(r.returncode == 0, f"--explain failed: {r.stderr}")
+	check("-fPIC" in r.stdout,
+	      f"Qt code was compiled without -fPIC: {r.stdout[:400]}")
+
+	# Named outright rather than proposed from the include: the same module
+	# by the other route.
+	t.write("app.cpp", '/*! @file\n *  @pkg Qt6Core\n */\n'
+	        '#include "w.h"\nint main(){ W w; return w.n; }\n')
+	r = t.fmake("--explain")
+	check("-fPIC" in r.stdout,
+	      f"@pkg Qt6Core did not bring -fPIC: {r.stdout[:400]}")
+
+	# And it has to survive the exit, or a project that leaves loses it.
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	check("-fPIC" in r.stdout, "the ejected Qt build lost -fPIC")
+
+	# A tree with no Qt in it must not acquire the flag -- and it has to be
+	# a tree that resolves a package, or the check never reaches the code
+	# that decides. A plain C program resolves nothing, so a version giving
+	# every module -fPIC passed against it.
+	if not _have_pkg("zlib"):
+		raise Skip("zlib not installed, so the negative case cannot run")
+	u = Tree("noqt")
+	try:
+		u.write("main.c", "#include <zlib.h>\n"
+		        "int main(void){ return zlibVersion() ? 0 : 1; }\n")
+		check(u.fmake().returncode == 0, "the zlib build failed")
+		r = u.fmake("--explain")
+		check("zlib" in r.stdout or "-lz" in r.stdout,
+		      f"zlib was not resolved, so nothing was checked: "
+		      f"{r.stdout[:300]}")
+		check("-fPIC" not in r.stdout,
+		      f"a non-Qt module was given -fPIC: {r.stdout[:300]}")
+	finally:
+		u.cleanup()
+
+
+@case
 def moc_survives_ejection(t):
 	"""An ejected build must regenerate moc output, not depend on fmake's.
 

@@ -4025,6 +4025,40 @@ class PkgConfig:
 		return subprocess.run([self.exe] + args, capture_output=True,
 		                      text=True, env=self.env)
 
+	@staticmethod
+	def _consumer_flags(module, cflags):
+		"""Flags a module needs from anything including it, that it does
+        not say so itself.
+
+        Qt configured with `-reduce-relocations` refuses to be included by
+        code that is not position independent:
+
+            #error "You must build your code with position independent code
+                    if Qt was configured with -reduce-relocations. Compile
+                    your code with -fPIC (and not with -fPIE)."
+
+        The guard passes whenever `__PIC__` is defined, and `-fPIE` defines
+        it too -- so this is invisible on a distribution whose gcc defaults
+        to PIE and fires on *every* Qt translation unit on one whose gcc
+        does not. Reported from a build of hydra where 113 moc outputs
+        failed at once, on a machine where nothing else was different.
+
+        Qt states it nowhere fmake can read: its `.pc` files carry only -I
+        and -D. CMake's Qt6 puts POSITION_INDEPENDENT_CODE on consumers and
+        qmake's mkspec adds it for libraries -- every other Qt build system
+        *supplies* this rather than discovering it, because there is
+        nothing to discover from. section 17 says fmake does not probe features,
+        so it does the same thing they do: compiling against Qt means
+        -fPIC.
+
+        Here rather than at either call site, because @pkg and a header
+        proposal are two ways to reach one module and a flag the module
+        needs is not a property of how it was named.
+        """
+		if module.startswith("Qt") and "-fPIC" not in cflags:
+			return list(cflags) + ["-fPIC"]
+		return cflags
+
 	def flags(self, module):
 		"""(cflags, libs) for a module, or None if it is not installed.
 
@@ -4113,7 +4147,8 @@ class PkgConfig:
 			return store[key]
 		got = self.flags(module)
 		store[key] = (None if got is None else
-		              [module, got[0], got[1], self._dirs.get(module, [])])
+		              [module, self._consumer_flags(module, got[0]), got[1],
+		               self._dirs.get(module, [])])
 		return store[key]
 
 	def satisfies(self, spec):
@@ -4156,7 +4191,8 @@ class PkgConfig:
 					break
 		got = self.flags(module) if module else None
 		store[key] = (None if got is None else
-		              [module, got[0], got[1], self._dirs.get(module, [])])
+		              [module, self._consumer_flags(module, got[0]), got[1],
+		               self._dirs.get(module, [])])
 		return store[key]
 
 	def by_includedir(self):

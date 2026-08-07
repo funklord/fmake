@@ -139,7 +139,8 @@ that had been green about nothing for five commits ·
 [94. `-MD` for generators, and a check that answered two ways](#94--md-for-generators-and-a-check-that-answered-two-ways) ·
 [95. CI was red, and the tool was the reason](#95-ci-was-red-and-the-tool-was-the-reason) ·
 [96. The byte-stability check was passing by luck](#96-the-byte-stability-check-was-passing-by-luck) ·
-[97. The clean that left a build behind](#97-the-clean-that-left-a-build-behind)
+[97. The clean that left a build behind](#97-the-clean-that-left-a-build-behind) ·
+[98. The Qt flag every other build system supplies](#98-the-qt-flag-every-other-build-system-supplies)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6928,3 +6929,73 @@ says something happened when nothing did is a clean nobody reads.
 object directory is by the ejected clean rule. Removing a directory means
 removing something no list named, and the fact that fmake put a file in it
 does not make it fmake's.
+
+---
+
+## 98. The Qt flag every other build system supplies
+
+Reported from a build of hydra on a different machine: 113 moc outputs
+failed at once, all with the same #error.
+
+```
+#error "You must build your code with position independent code if Qt was
+        configured with -reduce-relocations. Compile your code with -fPIC
+        (and not with -fPIE)."
+```
+
+The guard behind it is in `qcompilerdetection.h` and is worth reading,
+because it explains why nobody had seen this before:
+
+```c
+#if defined(QT_BOOTSTRAPPED) || ... || defined(__PIC__)
+// this is fine
+#elif defined(QT_REDUCE_RELOCATIONS)
+#  error ...
+#endif
+```
+
+**It passes whenever `__PIC__` is defined, and `-fPIE` defines it too.** So
+on any distribution whose gcc defaults to PIE -- Debian, which is this
+machine -- the whole thing is invisible. On one whose gcc does not, it
+fires on every Qt translation unit in the tree. Nothing else about that
+machine was different.
+
+### Nothing to discover from
+
+The instinct is to detect it: read `QT_REDUCE_RELOCATIONS` out of Qt's
+headers, or compile a probe and see. Both are feature probing, which §17
+says fmake does not do -- and the second is a configure step in all but
+name.
+
+The stronger argument is that **there is nothing to discover from**. Qt's
+`.pc` files carry `-I` and `-D` and nothing else; the flag appears in no
+file pkg-config will hand over. What CMake's Qt6 does is put
+`POSITION_INDEPENDENT_CODE` on its consumers, and what qmake's mkspec does
+is add it for libraries. Neither detects anything. **Every Qt build system
+supplies this flag rather than discovering it**, because Qt does not say.
+
+So fmake supplies it: a module whose name begins with `Qt` contributes
+`-fPIC` to whatever includes it.
+
+### In one place, because there are two routes to a module
+
+`@pkg Qt6Core` and an `#include <QObject>` that pkg-config attributes to
+Qt6Core are two ways of reaching one module, and they had separate code
+paths for turning it into flags. A flag the module needs is a property of
+the module, not of how it was named, so it goes where both paths meet --
+and the case checks both, because putting it in one of them looks exactly
+like putting it in both until somebody uses the other.
+
+### What the case cannot check
+
+That this fixes the #error. That needs a Qt configured with
+`-reduce-relocations`, and this machine's is not -- verified rather than
+assumed, by compiling a probe against `QT_REDUCE_RELOCATIONS`. So the case
+checks the flag is passed, on both routes, into the ejected build as well,
+and **not** to a non-Qt module.
+
+That last one took a second attempt. The first negative case was a plain C
+program, which resolves no package at all, so the code deciding this was
+never reached and a version handing `-fPIC` to *every* module passed
+against it. It resolves zlib now. **A negative case has to reach the code
+it is negating**, which is §96 one section later and in a smaller room.
