@@ -7594,6 +7594,95 @@ def a_stray_object_beside_its_source_is_ignored(t):
 
 
 @case
+def an_ambiguity_says_when_git_already_ignores_one(t):
+	"""The commonest confusing collision, and git knew all along.
+
+	A build output left in the tree collides with the file it was generated
+	from. The reader is shown two files defining one symbol and given no
+	reason to prefer either -- while `.gitignore` has said for years that
+	one of them is not source. The regression sweep in section 107 hit
+	exactly this twice, in two different projects, and both times the
+	answer was sitting in a file fmake had not looked at.
+
+	**Not a signal fmake builds with.** What to compile is decided from the
+	source, and adding a second authority for that is a design change. This
+	is consulted only while explaining a failure, on a path about to exit,
+	so it costs one subprocess and can be wrong without costing anything.
+
+	The half worth guarding is the quiet one: when git ignores *neither*
+	provider, or *both*, there is nothing to say and saying it would be
+	noise on top of a message that is already hard to read."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	check(subprocess.run(["git", "init", "-q", t.dir],
+	                     capture_output=True).returncode == 0,
+	      "could not make a repository")
+	t.write(".gitignore", "generated_*.c\n")
+	t.write("real.c", "int shared_thing(void){ return 1; }\n")
+	t.write("generated_copy.c", "int shared_thing(void){ return 1; }\n")
+	t.write("main.c", "int shared_thing(void);\n"
+	        "int main(void){ return shared_thing() - 1; }\n")
+
+	r = t.fmake()
+	check(r.returncode != 0, "two providers of one symbol should be refused")
+	said = r.stdout + r.stderr
+	check("git is told to ignore generated_copy.c" in said,
+	      f"the ignored file was not named: {said}")
+	check("exclude" in said, f"no remedy was offered: {said}")
+
+	# Neither ignored: nothing to say.
+	u = Tree("neither")
+	try:
+		check(subprocess.run(["git", "init", "-q", u.dir],
+		                     capture_output=True).returncode == 0,
+		      "could not make a repository")
+		u.write("a.c", "int shared_thing(void){ return 1; }\n")
+		u.write("b.c", "int shared_thing(void){ return 1; }\n")
+		u.write("main.c", "int shared_thing(void);\n"
+		        "int main(void){ return shared_thing() - 1; }\n")
+		r = u.fmake()
+		check(r.returncode != 0, "the ambiguity should still be refused")
+		check("git is told to ignore" not in r.stdout + r.stderr,
+		      f"said something about git when it had nothing to say: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+	# Both ignored is the same: naming both explains nothing.
+	v = Tree("both")
+	try:
+		check(subprocess.run(["git", "init", "-q", v.dir],
+		                     capture_output=True).returncode == 0,
+		      "could not make a repository")
+		v.write(".gitignore", "gen_*.c\n")
+		v.write("gen_a.c", "int shared_thing(void){ return 1; }\n")
+		v.write("gen_b.c", "int shared_thing(void){ return 1; }\n")
+		v.write("main.c", "int shared_thing(void);\n"
+		        "int main(void){ return shared_thing() - 1; }\n")
+		r = v.fmake()
+		check("git is told to ignore" not in r.stdout + r.stderr,
+		      f"named both providers, which explains nothing: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		v.cleanup()
+
+	# And a tree that is not a repository at all must not break.
+	w = Tree("norepo")
+	try:
+		w.write("a.c", "int shared_thing(void){ return 1; }\n")
+		w.write("b.c", "int shared_thing(void){ return 1; }\n")
+		w.write("main.c", "int shared_thing(void);\n"
+		        "int main(void){ return shared_thing() - 1; }\n")
+		r = w.fmake()
+		check("Traceback" not in r.stdout + r.stderr,
+		      f"a tree with no repository tracebacked: {r.stderr}")
+		check("more than one file" in r.stdout + r.stderr,
+		      f"the ambiguity was not reported: {r.stdout}{r.stderr}")
+	finally:
+		w.cleanup()
+
+
+@case
 def an_ambiguity_suggests_each_stanza_once(t):
 	"""Found by running fuzzypickles: 252 lines, nearly all identical.
 

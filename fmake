@@ -6305,6 +6305,22 @@ def build(args, _bootstrapping=False):
 		         "    " + listing,
 		         "fmake will not guess which one belongs in "
 		         + ", ".join(sorted({t.name for t, _s, _p in trouble})) + "."]
+		# git has usually known the answer all along: one of them is build
+		# output somebody left in the tree. Said before the guessing starts,
+		# because it is the one part of this message that is not a guess.
+		ignored = sorted(git_ignored(root, first_providers))
+		if ignored and len(ignored) < len(first_providers):
+			lines += ["",
+			          "git is told to ignore "
+			          + ", ".join(ignored[:3])
+			          + (f", and {len(ignored) - 3} more" if len(ignored) > 3
+			             else "")
+			          + ", so "
+			          + ("they are" if len(ignored) > 1 else "it is")
+			          + " probably build output rather than source. "
+			          + f"[project] exclude in {CONF_FILE} keeps "
+			          + ("them" if len(ignored) > 1 else "it")
+			          + " out."]
 
 		# The include graph must not decide this -- section 3 exists because it is
 		# not good enough to -- but it is good enough to *suggest*, and a
@@ -7928,6 +7944,36 @@ def do_install(targets, closures, root, outdir, conf, args):
 # ---------------------------------------------------------------------------
 # Housekeeping
 # ---------------------------------------------------------------------------
+
+def git_ignored(root, paths):
+	"""Which of these git is already told to ignore, or an empty set.
+
+    Not a signal fmake builds with -- what to compile is decided from the
+    source, and adding a second authority for it is a design change rather
+    than a diagnostic. This is only ever consulted while explaining a
+    failure, where it costs one subprocess on a path that is about to exit
+    anyway.
+
+    It earns that on the commonest confusing case there is: a build output
+    left in the tree, colliding with the file it was generated from. The
+    reader is shown two files defining one symbol and no reason to prefer
+    either, when git has known all along that one of them is not source.
+    """
+	if not os.path.isdir(os.path.join(root, ".git")) or not shutil.which("git"):
+		return set()
+	try:
+		r = subprocess.run(["git", "-C", root, "check-ignore", "--stdin"],
+		                   input="\n".join(paths), capture_output=True,
+		                   text=True, timeout=10)
+	except (OSError, subprocess.SubprocessError):
+		return set()
+	# 0 means some were ignored, 1 means none were; anything else is a
+	# git that could not answer, and a guess here would be worse than
+	# silence.
+	if r.returncode not in (0, 1):
+		return set()
+	return {l.strip() for l in r.stdout.splitlines() if l.strip()}
+
 
 def ensure_gitignore(root):
 	if not os.path.isdir(os.path.join(root, ".git")):

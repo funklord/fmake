@@ -149,7 +149,8 @@ that had been green about nothing for five commits ·
 [104. The hand-written list nobody had checked](#104-the-hand-written-list-nobody-had-checked) ·
 [105. The other two lists, and a check that checked nothing](#105-the-other-two-lists-and-a-check-that-checked-nothing) ·
 [106. Section 76's claim, enumerated](#106-section-76s-claim-enumerated) ·
-[107. Running the five projects again, and three defects in one message](#107-running-the-five-projects-again-and-three-defects-in-one-message)
+[107. Running the five projects again, and three defects in one message](#107-running-the-five-projects-again-and-three-defects-in-one-message) ·
+[108. Asking git the question it had already answered](#108-asking-git-the-question-it-had-already-answered)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -7567,3 +7568,48 @@ beerssh copy had an empty `vterm/` -- 80 files missing -- and failed to
 link on symbols that were simply not there. **A fixture built by a
 convenient command is a fixture worth checking before believing what it
 says about the tool.**
+
+---
+
+## 108. Asking git the question it had already answered
+
+§107's sweep hit the same collision twice, in two different projects: a
+build output left in the tree, colliding with the file it was generated
+from. Both times the reader would have been shown two files defining one
+symbol and given no reason to prefer either -- while `.gitignore` had said
+for years that one of them is not source.
+
+```
+!!! symbol 'shared' is defined by more than one file:
+    generated_copy.c
+    real.c
+fmake will not guess which one belongs in app.
+
+git is told to ignore generated_copy.c, so it is probably build output
+rather than source. [project] exclude in fmake.toml keeps it out.
+```
+
+### Explaining, not deciding
+
+**This is not a signal fmake builds with**, and the distinction is the
+whole of why it is safe. What to compile is decided from the source; adding
+`.gitignore` as a second authority for that would be a design change, and a
+tree whose ignore rules are wrong would silently build something different.
+
+It is consulted only while explaining a failure, on a path that is about to
+exit, so it costs one subprocess and can be wrong without costing anything.
+A `git` that cannot answer -- no repository, not installed, an exit status
+that is neither 0 nor 1 -- says nothing rather than guessing.
+
+The same fact used the other way round is what hydra's `fmake.toml` already
+does by hand: its exclude list exists to restate `.gitignore`. That
+duplication is still there, and turning it into inference is the design
+change this deliberately is not.
+
+### The half that had to stay quiet
+
+Nothing is said when git ignores **neither** provider, and nothing when it
+ignores **both** -- naming both explains nothing, and this message is
+already the hardest one fmake prints. Two of the three mutations are those
+directions, because a diagnostic that fires when it has nothing to add is
+how a useful message becomes one people skim past.
