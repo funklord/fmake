@@ -10518,6 +10518,32 @@ def an_ejected_clean_does_not_delete_outside_the_tree(t):
 		t.fmake("--clean")
 		check(os.path.exists(outside),
 		      "fmake --clean deleted a file outside the tree")
+
+		# Dropping it from the clean list silently would be the shape a
+		# stale artifact hides in, so the eject says which file it stopped
+		# cleaning. The reader is the only one who knows if it matters.
+		check("outside the tree" in r.stderr + r.stdout,
+		      f"the Makefile eject dropped it without saying so: "
+		      f"{r.stderr}")
+
+		# ninja cannot be fixed the same way and is not pretended to be:
+		# `ninja -t clean' is ninja's own tool over the outputs the file
+		# declares, and an output must be declared to be built. Stated.
+		n = t.fmake("--eject", "ninja")
+		check("ninja -t clean" in n.stderr + n.stdout,
+		      f"the ninja eject does not state the difference it cannot "
+		      f"remove: {n.stderr}")
+
+		# A note printed unconditionally would satisfy both of those and
+		# be noise on every ordinary tree, so drop the outside rule and
+		# require silence.
+		t.write("fmake.toml",
+		        "[generate.inside]\ninputs = [\"seed.txt\"]\n"
+		        "outputs = [\"made.txt\"]\ncommand = \"cp seed.txt made.txt\"\n")
+		q = t.fmake("--eject")
+		check("outside the tree" not in q.stderr + q.stdout,
+		      f"an ordinary tree is being told about a file it does not "
+		      f"have: {q.stderr}")
 	finally:
 		if os.path.exists(outside):
 			os.unlink(outside)

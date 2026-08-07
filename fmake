@@ -7602,6 +7602,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	            + [_eject_src(j["out"]) for j in moc_jobs]
 	            + [_eject_src(j["out"]) for j in rcc_jobs]
 	            + [o for o in gen_outs if _within(o)])
+	# Said, not silently dropped. A build that quietly stops cleaning
+	# something it makes is the shape a stale artifact hides in, and the
+	# reader is the only one who can decide whether that file matters.
+	for o in sorted(o for o in gen_outs if not _within(o)):
+		note(f"{o} is outside the tree, so the ejected clean leaves it "
+		     f"alone -- as fmake --clean does")
 	for i, item in enumerate(leavings):
 		a(f"\t{item}" + (" \\" if i < len(leavings) - 1 else ""))
 	a("")
@@ -7755,6 +7761,19 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# nothing declares a dependency on them until a depfile exists.
 	gen_outs = gen_outs + [_eject_src(j["out"]) for j in uic_jobs] \
 	           + [_eject_src(j["out"]) for j in moc_jobs if j["inline"]]
+
+	# The Makefile side drops an out-of-tree generated output from its
+	# clean list, because that rule is fmake's to write. Here it cannot:
+	# `ninja -t clean' is ninja's own tool over the outputs the file
+	# declares, and an output has to be declared or ninja will not build
+	# it. So the difference is real and stated rather than papered over --
+	# `ninja -t clean' removes what `fmake --clean' would not.
+	for o in sorted(o for o in gen_outs
+	                if not os.path.normpath(os.path.join(root, o))
+	                .startswith(os.path.join(root, ""))):
+		note(f"{o} is outside the tree; `ninja -t clean' will remove it, "
+		     f"which fmake --clean does not. ninja cleans by output and "
+		     f"an output has to be declared to be built.")
 
 	# Order-only: a generated header must exist before anything compiles,
 	# but the depfiles decide when a change to it forces a rebuild.

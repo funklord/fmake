@@ -8479,6 +8479,31 @@ the point: `build-and-commit.md` calls a clean target "the one thing
 everybody runs without reading", and this file is handed to people with a
 header telling them fmake is not needed to read it.
 
+### What the fix then did silently, and its twin in ninja
+
+Dropping the output from `CLEAN` and saying nothing is the shape a stale
+artifact hides in: a build that quietly stops cleaning something it makes.
+The eject names the file instead, and the case requires an ordinary tree
+to stay silent -- a note printed unconditionally would satisfy every
+assertion about printing it.
+
+**ninja cannot be fixed the same way**, and is not pretended to be.
+`ninja -t clean` is ninja's own tool over the outputs the file declares,
+and an output *has* to be declared or ninja will not build it. So there
+is no rule of fmake's to withhold, and `ninja -t clean` does remove what
+`fmake --clean` will not. That difference is stated at eject time rather
+than papered over:
+
+```
+../victim.txt is outside the tree; `ninja -t clean' will remove it, which
+fmake --clean does not. ninja cleans by output and an output has to be
+declared to be built.
+```
+
+**The two backends genuinely differ here**, and saying so is the whole
+answer available. Making them agree would mean either not building the
+file or not declaring it, and both are worse than a sentence.
+
 ### The method, four sections running
 
 §118 to §121 all came from the same afternoon of pointing deliberately
