@@ -152,7 +152,8 @@ that had been green about nothing for five commits ·
 [107. Running the five projects again, and three defects in one message](#107-running-the-five-projects-again-and-three-defects-in-one-message) ·
 [108. Asking git the question it had already answered](#108-asking-git-the-question-it-had-already-answered) ·
 [109. The packaging report, folded in and removed](#109-the-packaging-report-folded-in-and-removed) ·
-[110. The same question as §79, and a method that answered the order](#110-the-same-question-as-79-and-a-method-that-answered-the-order)
+[110. The same question as §79, and a method that answered the order](#110-the-same-question-as-79-and-a-method-that-answered-the-order) ·
+[111. The second list in the same file](#111-the-second-list-in-the-same-file)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -5933,6 +5934,13 @@ pattern is worth stating plainly: **the README is documentation of record
 in this project, not a summary**, and anything it lists that the program
 also knows needs a case holding the two together.
 
+**That rule was stated and then half-applied.** The option table was
+guarded here; the *directive* table, twenty lines further up the same file,
+was not -- and `@version` went undocumented within a few commits of the
+rule being written. §111 guards it. A rule that names a class of list and
+then covers one member of the class is a rule that has been agreed with
+rather than followed.
+
 ---
 
 ## 83. The index that stopped at 38
@@ -7725,3 +7733,41 @@ measuring the order.** It is worth running the second direction before
 believing the first, and that costs one repetition of something already
 written -- against a result that would otherwise have been recorded here as
 a fact.
+
+---
+
+## 111. The second list in the same file
+
+§82 guarded the README's option table and stated the rule that made it
+worth doing: the README is documentation of record here, so anything it
+lists that the program also knows needs a case holding the two together.
+
+The directive table is the second such list, twenty lines further up the
+same file, and it was left unguarded. `@version` -- added by §102 a few
+commits after the rule was written -- was missing from it, which is the
+drift the rule exists to catch, in the one place the rule had not been
+applied.
+
+Guarded now, against `DIRECTIVE_SCALAR` and `DIRECTIVE_LIST`, with the
+alias table folded in so `@defines` does not read as undocumented: it is
+the plural spelling of `@define`, accepted so that a fact does not need a
+different word for living in a config file, and documenting both would
+suggest they are two things.
+
+### The check found its own bug first
+
+The alias table is read out of the source, and the first version sliced
+from `DIRECTIVE_ALIAS = {` to `src.index("DIRECTIVES = ")`. That second
+string matches `MK_PROJECT_DIRECTIVES = ` **twelve hundred lines earlier**,
+so the slice ran backwards, came out empty, and `@defines` was reported as
+missing from the README.
+
+The fix is to anchor at a line start and search forward from where the
+alias table actually is. The lesson is smaller and more reusable: **a
+substring is not an anchor**, and a check that reads its own program's
+source is the easiest place to forget it -- the string that identifies a
+definition usually also appears inside three longer names.
+
+A `check` that the alias map is non-empty is in the case now, so a slice
+that silently reads nothing fails rather than producing a confident wrong
+answer about the README.

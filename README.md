@@ -289,6 +289,7 @@ like `@brief` are ignored.
 | `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms; overrides a `_platform` suffix |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |
+| `@version X.Y.Z` | Publishable: writes a `.pc`, and versions a `.so` with its soname chain |
 | `@rule …` | A build rule, in Makefile syntax (below) |
 
 `fmake --doxygen-aliases` emits an `ALIASES` block so Doxygen renders these

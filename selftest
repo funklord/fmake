@@ -9581,6 +9581,57 @@ def the_manual_describes_every_option(t):
 
 
 @case
+def the_readme_documents_every_directive(t):
+	"""The README's *other* list of what the program knows.
+
+	Section 82 guarded the option table and stated the rule: anything the
+	README lists that the program also knows needs a case holding the two
+	together. The directive table is the second such list in the same file
+	and was left unguarded -- so `@version`, added a few commits later,
+	went undocumented exactly as the rule predicts.
+
+	`@defines` is deliberately absent from the README. It is the plural
+	spelling of `@define`, accepted so a fact does not need a different
+	word for living in a config file, and documenting both would suggest
+	they are two things."""
+	with open(FMAKE) as fh:
+		src = fh.read()
+
+	def names(start, end):
+		return set(re.findall(r'"([^"]+)"', src[src.index(start):src.index(end)]))
+
+	scalar = names("DIRECTIVE_SCALAR = {", "# Accumulate across")
+	listed = names("DIRECTIVE_LIST = {", "# @define and @defines")
+	# Anchored at a line start and searched forward from the alias table.
+	# `src.index("DIRECTIVES = ")` finds MK_PROJECT_DIRECTIVES twelve
+	# hundred lines earlier, which makes the slice run backwards and the
+	# alias map come out empty -- so `@defines` read as undocumented.
+	at = src.index("\nDIRECTIVE_ALIAS = {")
+	alias = dict(re.findall(r'"([^"]+)": "([^"]+)"',
+	                        src[at:src.index("\nDIRECTIVES = ", at)]))
+	check(alias, "no directive aliases were read, so the check is wrong")
+	want = {alias.get(d, d) for d in scalar | listed}
+	check(len(want) > 10, f"only {len(want)} directives read out of fmake")
+
+	with open(os.path.join(REPO, "README.md")) as fh:
+		readme = fh.read()
+	marker = "| `@target NAME`"
+	check(marker in readme, "the README has no directive table")
+	table = readme[readme.index(marker):]
+	table = table[:table.index("\n\n")]
+	documented = set(re.findall(r"@(\w+)", table))
+	check(len(documented) > 10,
+	      f"only {len(documented)} rows found; the split is wrong")
+
+	missing = sorted(want - documented)
+	check(not missing, f"the README's directive table does not document: "
+	                   f"{missing}")
+	invented = sorted(documented - want - set(alias))
+	check(not invented,
+	      f"the README documents directives fmake does not have: {invented}")
+
+
+@case
 def the_readme_documents_every_option(t):
 	"""The README is the manual, so its option table is a third copy.
 
