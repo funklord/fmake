@@ -150,7 +150,8 @@ that had been green about nothing for five commits ·
 [105. The other two lists, and a check that checked nothing](#105-the-other-two-lists-and-a-check-that-checked-nothing) ·
 [106. Section 76's claim, enumerated](#106-section-76s-claim-enumerated) ·
 [107. Running the five projects again, and three defects in one message](#107-running-the-five-projects-again-and-three-defects-in-one-message) ·
-[108. Asking git the question it had already answered](#108-asking-git-the-question-it-had-already-answered)
+[108. Asking git the question it had already answered](#108-asking-git-the-question-it-had-already-answered) ·
+[109. The packaging report, folded in and removed](#109-the-packaging-report-folded-in-and-removed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -7613,3 +7614,53 @@ ignores **both** -- naming both explains nothing, and this message is
 already the hardest one fmake prints. Two of the three mutations are those
 directions, because a diagnostic that fires when it has nothing to add is
 how a useful message becomes one people skim past.
+
+---
+
+## 109. The packaging report, folded in and removed
+
+`suggestions/packaging.md` is the last of the seven evaluations still in
+the tree. Its closing note asked for this outright: *"If the folding was
+the point, this belongs in project.md section 16 instead and the directory
+should go again."*
+
+### What it said, and where it landed
+
+**Packaging itself: no, and the design already says so.** It compares the
+Debian stack -- `dpkg-deb`, `dpkg-buildpackage`, `dh`, `debuild`, `cpack`
+-- and concludes fmake should build none of it. The metadata is not in the
+tree: a maintainer, a distribution, a changelog and a licence are
+declarations nobody can infer from source. `dpkg-shlibdeps` has better
+evidence than fmake does, because it reads the finished binary against the
+installed package database. And `debian/rules` driving a Makefile is three
+lines. **That verdict stands and is why fmake has no packaging feature.**
+
+**The real gap: an ejected Makefile had no `install` target.** Closed by
+§85, in both emitted forms, and by §93's `uninstall` beside it.
+
+**"Say what an ejected build installs."** Its own words are the argument:
+*"which files are products, which are intermediates, which are meant to
+ship -- that is knowledge fmake has and currently keeps."* `--explain` has
+an `installs` block now, read out of `install_plan` rather than described,
+so it cannot drift from what installing does:
+
+```
+  installs
+    libgreet.so.1.2.3                   -> $LIBDIR
+    libgreet.so.1                       ->(link) $LIBDIR   [libgreet.so.1.2.3]
+    libgreet.so                         ->(link) $LIBDIR   [libgreet.so.1]
+    greet.h                             -> $INCLUDEDIR
+    greet.pc                            -> $PKGCONFIGDIR
+```
+
+The directories are the variables rather than resolved paths. A packager
+stages under a different prefix than a plain build uses, and `$LIBDIR` is
+what a `debian/rules` is written against; a resolved `/usr/local/lib` in
+that listing would be wrong for the only reader who wants it.
+
+### Removed for the reason the other six were
+
+A report is a snapshot of one run against a tree that has since changed.
+Every ask in this one is either implemented or recorded above, and the
+`suggestions/` directory goes with it -- for the second time, which is what
+its own note predicted. It stays in the history, one commit back.

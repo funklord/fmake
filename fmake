@@ -5213,6 +5213,26 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	# The same call the linker gets, not a second rendering of it.
 	shown = link_cmd(t, cl, cfg, outdir, res["ldflags"] if res else [])
 	print(f"    {DIM(_show_cmd(shown, root))}")
+
+	# What ships. The packaging evaluation asked for exactly this: "which
+	# files are products, which are intermediates, which are meant to
+	# ship -- knowledge fmake has and currently keeps". It has it in
+	# install_plan, which is the same list --install and both ejected
+	# builds read, so this cannot drift from what actually happens.
+	#
+	# Directories as the variables rather than resolved paths, because a
+	# packager stages under a different prefix than the one a plain build
+	# would use, and the names are what a debian/rules is written against.
+	if conf is not None:
+		plan = [p for p in install_plan([t], {t: cl}, root)]
+		if plan:
+			print(f"  {CYAN('installs')}")
+			for origin, source, directory, name, _mode in plan:
+				var = "$" + directory.upper()[:-3] + "DIR" \
+				    if directory != "pkgconfigdir" else "$PKGCONFIGDIR"
+				arrow = "->" if origin != "symlink" else "->(link)"
+				print(f"    {name:<{W}}{arrow} {var}"
+				      + (f"   [{source}]" if origin == "symlink" else ""))
 	print()
 
 # ---------------------------------------------------------------------------

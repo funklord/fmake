@@ -3669,6 +3669,68 @@ const char *greet(void){ return "hi"; }
 
 
 @case
+def explain_says_what_would_be_installed(t):
+	"""The packaging evaluation's second ask, and its own words for it.
+
+	*"Which files are products, which are intermediates, which are meant to
+	ship. That is knowledge fmake has and currently keeps."* It had it in
+	`install_plan` -- the same list `--install` and both ejected builds read
+	-- and printed none of it.
+
+	The directories are shown as the variables rather than as resolved
+	paths, because a packager stages under a different prefix than a plain
+	build would use, and `$LIBDIR` is what a `debian/rules` is written
+	against.
+
+	It reads from the plan rather than describing it, so it cannot drift
+	from what installing actually does -- which is the property that makes
+	this worth printing at all."""
+	t.write("greet.h", "#pragma once\nconst char *greet(void);\n")
+	t.write("greet.c", """
+/*! @file
+ *  @kind    shared
+ *  @target  greet
+ *  @headers greet.h
+ *  @version 1.2.3
+ */
+#include "greet.h"
+const char *greet(void){ return "hi"; }
+""")
+	check(t.fmake().returncode == 0, "build failed")
+	r = t.fmake("--explain")
+	check(r.returncode == 0, f"--explain failed: {r.stderr}")
+	block = r.stdout.split("installs")[-1] if "installs" in r.stdout else ""
+	check(block, f"--explain says nothing about installing: {r.stdout}")
+
+	# Everything the plan holds, and the directory as a variable.
+	for want in ("libgreet.so.1.2.3", "libgreet.so.1", "libgreet.so",
+	             "greet.h", "greet.pc"):
+		check(want in block, f"{want} is not in the install listing: {block}")
+	for var in ("$LIBDIR", "$INCLUDEDIR", "$PKGCONFIGDIR"):
+		check(var in block, f"{var} is not named: {block}")
+	check("/usr/local" not in block,
+	      f"a resolved path leaked into the listing, which is wrong for "
+	      f"anybody staging under another prefix: {block}")
+	# A symlink is not a copy and must not read as one.
+	check("(link)" in block, f"the chain is not shown as links: {block}")
+
+	# It has to match what installing does, or it is a description rather
+	# than a report.
+	stage = os.path.join(t.dir, "stage")
+	check(t.fmake("--install", "--destdir", stage).returncode == 0,
+	      "install failed")
+	# Files only: os.walk lists the directories it descends into as well,
+	# and `usr`, `local` and `lib` are not things anybody installed. The
+	# symlinks here point at files, so `files` already carries them.
+	staged = set()
+	for _base, _dirs, files in os.walk(stage):
+		staged |= set(files)
+	listed = {l.strip().split()[0] for l in block.splitlines() if l.strip()}
+	check(staged <= listed,
+	      f"installed files that --explain did not list: {staged - listed}")
+
+
+@case
 def a_versioned_library_gets_a_pkgconfig_file(t):
 	"""fmake resolves through pkg-config and published nothing it could read.
 
