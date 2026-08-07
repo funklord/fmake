@@ -164,7 +164,8 @@ that had been green about nothing for five commits ·
 [119. A name in a comment stays a name](#119-a-name-in-a-comment-stays-a-name) ·
 [120. Two ways to never return](#120-two-ways-to-never-return) ·
 [121. The clean that agreed with itself in only one direction](#121-the-clean-that-agreed-with-itself-in-only-one-direction) ·
-[122. The other half of a promise that was only half checked](#122-the-other-half-of-a-promise-that-was-only-half-checked)
+[122. The other half of a promise that was only half checked](#122-the-other-half-of-a-promise-that-was-only-half-checked) ·
+[123. A claim the case stated in prose and did not check](#123-a-claim-the-case-stated-in-prose-and-did-not-check)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -8565,3 +8566,61 @@ The check passes today, so this is a guard rather than a fix -- **and the
 argument for writing it is that the promise is load-bearing in three
 places** (the packaging, the README, and `project.md`) while being one
 careless import away at all times.
+
+---
+
+## 123. A claim the case stated in prose and did not check
+
+`--run` was swept the way §118-§121 swept the rest, and it holds up: the
+exit status is forwarded, arguments after the file reach the program,
+stdin belongs to it, a compile error under a shebang still names line 3,
+an unwritable directory builds in a cache elsewhere, and a script that
+calls a second file gets it from the closure. Nothing to fix.
+
+Two of those were being *asserted in a docstring* and checked by nothing.
+
+### Arguments only matter when they are fmake's
+
+`a_c_file_runs_as_a_script` passed `one two`, which would survive any
+parser ever written. The interesting arguments are the ones fmake wants:
+
+```
+fmake --run show.c --help --explain -v      ->  [--help][--explain][-v]
+```
+
+A regression here does not fail. It prints fmake's own help and exits 0,
+which is a plausible thing for a build tool to do and a completely wrong
+thing for an interpreter to do. Mutating the split to hold back anything
+starting with `-` is caught now.
+
+### The exit status cannot tell exec from wait
+
+The docstring says "fmake execs rather than waits, so it is not sitting
+between the program and the shell" -- and the assertion under it was the
+exit status, which proves nothing:
+`sys.exit(subprocess.run(...).returncode)` forwards a status identically.
+What differs is everything else: a signal kills fmake and orphans the
+program, job control addresses the wrong process, `ps` shows a Python
+interpreter.
+
+**The kernel settles it.** After exec the pid is unchanged and
+`/proc/<pid>/cmdline` is the program's own argv, so reading it while the
+thing runs is evidence rather than inference:
+
+```
+['/tmp/.../ready.c']                      exec'd -- the pid is the program
+['python3', '.../fmake', '--run', ...]    the mutation, waiting on a child
+```
+
+The program prints a line before the check, because reading cmdline
+before exec would find fmake there quite legitimately and the test would
+be about timing.
+
+### The pattern
+
+Both of these are the shape §122 was about, one level in: not a claim the
+documentation makes that nothing checks, but **a claim the case itself
+makes, in the prose explaining why the case exists, with no assertion
+under it.** A docstring that argues for a property is the best possible
+place to look for one that is untested -- somebody has already decided it
+matters.
