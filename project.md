@@ -1918,7 +1918,7 @@ survive being picked up cold.
 | `README.md` | how to use it |
 | `project.md` | this: why it works the way it does |
 | `code-style.md` | the style rules, and what the ejected build files owe them |
-| `LICENSE` | GPL-2.0-or-later, matching the SPDX headers |
+| `LICENSE` | GPL-3.0-or-later, matching the SPDX headers |
 | `Makefile` | not a build system: `install`, `deb`, `check`, `clean` |
 | `debian/` | native packaging; see §34 |
 
