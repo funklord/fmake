@@ -157,7 +157,8 @@ that had been green about nothing for five commits ·
 [112. Verifying the fix that could not be verified](#112-verifying-the-fix-that-could-not-be-verified) ·
 [113. Clang, LTO, and a wrong reason for not checking](#113-clang-lto-and-a-wrong-reason-for-not-checking) ·
 [114. Who chose the tool decides the advice](#114-who-chose-the-tool-decides-the-advice) ·
-[115. The direction of the disagreement that matters](#115-the-direction-of-the-disagreement-that-matters)
+[115. The direction of the disagreement that matters](#115-the-direction-of-the-disagreement-that-matters) ·
+[116. The lead §79 declined to act on was real](#116-the-lead-79-declined-to-act-on-was-real)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -5767,6 +5768,10 @@ whole program with a stopwatch and enough repetitions to see past the noise
 -- the instrument section 26 concluded was the right one. Until that is
 done, the honest statement is that nobody knows where the 2.4s goes.
 
+**Confirmed in §116, by that method, and the suspicion was right.** Which
+does not make the caution wrong: the reason to distrust it was sound, and
+the way it was settled is the reason it can now be believed.
+
 ---
 
 ## 80. A check that depended on how it was started
@@ -6207,10 +6212,25 @@ rather than what a real tree would give.
 Two things this did not establish, named rather than assumed. `-O0` was not
 chosen despite tying on the column that matters, on the strength of the
 convention rather than of anything measured here; it remains available as
-`--cflags -O0` or a `[profile.debug]`. And **clang is not installed on this
-machine**, so the fact that it treats `-Og` as roughly `-O1` is untested
-here rather than confirmed -- it accepts the flag, which is all that is
-known.
+`--cflags -O0` or a `[profile.debug]`. ~~And **clang is not installed on
+this machine**, so the fact that it treats `-Og` as roughly `-O1` is
+untested here rather than confirmed.~~
+
+Clang is installed, at `/usr/lib/llvm-19/bin/clang` -- the same wrong
+reason §113 found, reached independently in a second section, which is
+what a false premise does once it is written down. Measured on a
+non-degenerate function, `-Og` and `-O1` are not roughly the same on
+clang, they are **byte-identical objects**:
+
+```
+clang    -Og.o and -O1.o  same md5; -O0, -Os, -O2 all differ
+gcc      all five differ, -Og included
+```
+
+So `DEBUG=1` buys a real debug level on gcc and exactly `-O1` on clang.
+That is clang's documented behaviour and not a defect, but it means the
+band's value depends on the compiler, which the table above does not say
+and now does.
 
 ### The cache is the half worth guarding
 
@@ -8067,3 +8087,99 @@ Reporting it precisely at the moment it fails is the smaller answer, and
 the one consistent with `@sources` for symbol-invisible dependencies:
 fmake declines to guess, and says so where the guess would have been
 needed.
+
+---
+
+## 116. The lead §79 declined to act on was real
+
+§79 profiled a slow build on hydra, found `cProfile` pointing at
+`close_over_symbols` -- 2.64s across 76,010 calls to `builtins.any` -- and
+**deliberately did not act on it**. The reasoning was good: §26 is about
+that instrument pointing precisely at the wrong thing, `cProfile` charges
+per-call overhead, and a cheap function called 76,010 times is what it is
+built to over-report. The memo it justified last time made no difference
+and was taken out again.
+
+It also wrote down how to settle it: short-circuit the suspected work and
+time the whole program with a stopwatch, with enough repetitions to see
+past the noise.
+
+Done, and **the suspicion was right**.
+
+### What the scan was
+
+Three linear scans over the link set, not the two §79 named:
+
+```python
+if any(sym in o.strong for o in linked)                     # per symbol
+if any(sym in o.weak for o in linked)                       # per symbol
+if not any(sym in o.strong or sym in o.weak for o in linked)  # per external
+```
+
+`linked` is the thing that grows, so the work is quadratic in exactly the
+dimension that gets bigger. Two sets kept in step with it answer the same
+questions by lookup. The third scan is the one §79 did not mention and it
+runs over every undefined symbol in the whole link set.
+
+### Measured, not asserted
+
+On hydra -- 121 translation units, warm cache, `--explain` so nothing
+compiles -- 21 alternating runs each, **with the order of the pair
+reversed every round** so that a systematic drift cannot land on one
+version:
+
+| | min | p25 | median |
+|---|---|---|---|
+| scan | 0.921s | 1.065s | 1.211s |
+| sets | 0.604s | 0.730s | 0.812s |
+| | **-34%** | **-31%** | **-33%** |
+
+The machine was loaded by unrelated work, so the ranges overlap and no
+single run proves anything -- which is why all three statistics are
+reported rather than the flattering one. They agree on a third.
+
+**The alternation matters more than the repetitions.** §77 measured the
+*order* rather than the versions and got an answer that reversed when the
+order did.
+
+### The proof that it is the same closure
+
+A speedup that changes what gets linked is not a speedup. The invariant is
+that the plan is unchanged, and it is checked rather than sampled:
+`--explain` on hydra is **byte-identical** between the two versions, 299
+lines covering the link set, the externals and the install plan, over a
+tree with real ambiguity and real weak symbols in it. Plus the suite.
+
+### The risk it moved, and the gap that was already there
+
+The invariant used to be recomputed on demand and is now maintained in
+three places, which is a real trade. Breaking it deliberately -- dropping
+the seeds' symbols from the set -- **passed all 297 cases**, so the suite
+was not holding the rule up.
+
+Neither was it before the change. The shape that distinguishes them is
+specific enough to have been missed: the root defines a symbol, a *second*
+file defines it too, and a *third* file that does get linked is what refers
+to it. Only then does the short-circuit decide anything -- and without it
+the closure reports an ambiguity that is not one and refuses to build a
+tree that is fine.
+
+```
+* two files define shared(), which is a guess, not a decision
+    [target.ambig2]
+    sources = ["main.c"]
+```
+
+That is a correct message about a false problem, which is the expensive
+kind. A case pins it now, and it is worth being clear that this was **a
+gap in what the suite checked, not one the change created**: `only a
+strong definition already in the link set ends the search` has always had
+the root as its quietest and most important instance.
+
+### What this says about §79's caution
+
+Nothing bad. The reason to distrust the profiler was sound and remains
+sound; what changed is that the claim was settled with the instrument that
+can settle it. **A suspicion recorded honestly as a suspicion is what made
+this cheap to finish** -- the alternative is not "act on the profiler", it
+is "the lead is lost".

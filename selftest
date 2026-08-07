@@ -10440,6 +10440,51 @@ def a_vendored_main_stays_out_of_a_library(t):
 
 
 @case
+def a_symbol_the_root_itself_defines_is_not_an_ambiguity(t):
+	"""Nothing guarded this, and section 116 is what made it matter.
+
+	`only a strong definition already in the link set ends the search' is
+	the rule that keeps the closure from re-deciding a symbol it has
+	already placed. Its most important instance is the quietest: the root
+	object is in the link set from the start, so a symbol *it* defines is
+	settled before anything else is consulted -- even where another file in
+	the tree defines the same name.
+
+	Section 116 replaced the scan behind that rule with a set kept in step
+	with the link set, which is faster and moves the risk: the invariant
+	used to be recomputed every time and is now maintained in three
+	places. Dropping the seeds from it passed all 297 cases, because the
+	shape that distinguishes them is specific -- the root defines it, a
+	*second* file defines it too, and a third file that gets linked is what
+	refers to it. Then the closure either honours the root's definition or
+	reports an ambiguity that is not one, and refuses to build.
+
+	This is that shape. It is also a genuine gap in what the suite checked
+	before the change, rather than a gap the change created."""
+	t.write("main.c", "int entry(void);\nint shared(void){ return 1; }\n"
+	        "int main(void){ return entry() - 1; }\n")
+	t.write("a.c", "int shared(void);\nint entry(void){ return shared(); }\n")
+	t.write("b.c", "int shared(void){ return 2; }\n"
+	        "int spare(void){ return shared(); }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the root's own definition of shared() was not honoured, so a "
+	      f"symbol it had already settled came back as a decision: {out}")
+	check("ambiguous" not in out.lower() and "[target." not in out,
+	      f"an ambiguity was reported for a symbol the root defines: {out}")
+	check(_run_in(t.dir, "./" + os.path.basename(t.dir)).returncode == 0,
+	      "the binary does not run, so the wrong shared() was linked")
+
+	# The fixture is worthless if b.c cannot produce the collision, so
+	# check the collision exists rather than assuming it.
+	check("b.c not compiled" in out,
+	      f"b.c was linked, so there was never a second definition to be "
+	      f"ambiguous with: {out}")
+
+
+@case
 def a_q_object_reached_through_a_macro_is_named_at_the_link(t):
 	"""The scan is a token search, and one C++ shape defeats it entirely.
 

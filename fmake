@@ -3707,6 +3707,19 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
 		cl.link.append(u)
 		cl.why[u.rel] = ((forced_why or {}).get(u.rel, "--force-link"), "")
 	linked = set(seeds)
+	# The symbols the link set defines, maintained alongside it. Asking
+	# `any(sym in o.strong for o in linked)' walks the whole link set for
+	# every symbol considered, and the link set is the thing that grows --
+	# so the work is quadratic in exactly the dimension that gets bigger.
+	# Section 79 recorded this as a suspicion it declined to act on, since
+	# the profiler that raised it over-reports cheap functions called often.
+	# It was right: measured on hydra, a third of the wall clock. Keeping
+	# these two in step with `linked` is the whole cost.
+	linked_strong = set()
+	linked_weak = set()
+	for u in seeds:
+		linked_strong |= u.strong
+		linked_weak |= u.weak
 	frontier = list(seeds)
 
 	while frontier:
@@ -3719,7 +3732,7 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
 			# order of some unrelated symbol, so the same program could link
 			# two different ways. Strong beats weak has to hold globally,
 			# not just at the moment a provider is chosen.
-			if any(sym in o.strong for o in linked):
+			if sym in linked_strong:
 				continue
 
 			providers = strong_by_sym.get(sym, [])
@@ -3734,7 +3747,7 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
 				# undefined reference that only vague linkage satisfies.
 				# A weak copy already linked is as good as any other: vague
 				# linkage means they are interchangeable.
-				if any(sym in o.weak for o in linked):
+				if sym in linked_weak:
 					continue
 				weak = weak_by_sym.get(sym, [])
 				if not weak:
@@ -3744,6 +3757,8 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
 			p = providers[0]
 			if p not in linked:
 				linked.add(p)
+				linked_strong |= p.strong
+				linked_weak |= p.weak
 				cl.link.append(p)
 				cl.why[p.rel] = (sym, cur.rel)
 				frontier.append(p)
@@ -3752,7 +3767,7 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
 		for sym in u.undef:
 			if sym in LINKER_SYMBOLS:
 				continue
-			if not any(sym in o.strong or sym in o.weak for o in linked):
+			if sym not in linked_strong and sym not in linked_weak:
 				cl.external.setdefault(sym, []).append(u.rel)
 
 	return cl
