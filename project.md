@@ -7771,3 +7771,30 @@ definition usually also appears inside three longer names.
 A `check` that the alias map is non-empty is in the case now, so a slice
 that silently reads nothing fails rather than producing a confident wrong
 answer about the README.
+
+### And the list that is deliberately not guarded
+
+Applying the rule a third time would have been wrong, which is worth
+recording so the next application stops in the right place.
+
+The README's `fmake.toml` block looks like the same kind of list and is
+not. Measured against `CONF_SCHEMA` it is missing fifteen keys --
+`include-dirs`, `test-group`, `cxx`, `sysroot`, `lib-dirs`, both
+`description`s -- and none of that is drift, because **the block is an
+example and the program is the reference**:
+
+```
+[target.x]: unknown key 'nosuchkey' (expected one of: description, headers,
+kind, ldflags, libs, name, pkg, root, sources, target, test, test-args,
+test-group, test-timeout, version)
+```
+
+Every section answers like that, `version` and `depfile` among them,
+without anybody having maintained a second copy. The README says so in one
+line -- *"Unknown keys are an error, with the valid ones named"* -- and
+that sentence is the thing worth guarding, not the example beneath it.
+
+This is the same distinction the documentation gate draws between a path in
+prose and a path in a table (§44): **an inventory has to be complete and an
+illustration does not**, and forcing fifteen keys into a snippet would make
+it useless at the job it actually does.
