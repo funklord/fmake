@@ -146,7 +146,8 @@ that had been green about nothing for five commits ·
 [101. The prebuilt object, and the version of it that would have been wrong](#101-the-prebuilt-object-and-the-version-of-it-that-would-have-been-wrong) ·
 [102. The library fmake could install and then not find](#102-the-library-fmake-could-install-and-then-not-find) ·
 [103. The soname chain, for the price of a rule](#103-the-soname-chain-for-the-price-of-a-rule) ·
-[104. The hand-written list nobody had checked](#104-the-hand-written-list-nobody-had-checked)
+[104. The hand-written list nobody had checked](#104-the-hand-written-list-nobody-had-checked) ·
+[105. The other two lists, and a check that checked nothing](#105-the-other-two-lists-and-a-check-that-checked-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1842,6 +1843,8 @@ rather than code, and one lesson about testing.
   code and requiring the test to fail.
 - **Two hand-written lists are load-bearing**, soon three: linker-provided
   symbols (§14), interposer libraries (§14), and the builtin header table (§5).
+  **All three are checked against the machine now** — §104 and §105 — which
+  does not make them predicates, only examined lists.
   All are "things that look like providers but are not, or are not but are."
   A fourth would be the signal that the provider model wants a real predicate
   rather than another list, and the threshold is stated here so it is agreed in
@@ -7367,5 +7370,58 @@ stops being unexamined.
 An `ld` that prints no default script -- lld, or a cross toolchain that
 answers differently -- skips the case rather than failing it, so the list
 is checked against the linker the suite happens to run on. The other two
-lists in §15, interposer libraries and the builtin header table, are
-untouched and remain as they were.
+lists are §105.
+
+---
+
+## 105. The other two lists, and a check that checked nothing
+
+§104 left the other two of §15's load-bearing lists untouched. Both are
+checked now, and neither was wrong -- which is worth as much as finding a
+bug, because until this ran nobody knew.
+
+### Interposers: the failure that is silent
+
+A sanitiser runtime exports the symbols it interposes on, so by symbol
+evidence it is a perfectly good provider and the cover can pick one because
+it happens to intercept more of what a program calls. §14 caught `-lasan`
+being offered as an alternative to `-lm`.
+
+**The danger runs the opposite way from §104's list.** There, a missing
+entry produces a false alarm -- noisy and self-correcting, because somebody
+reads it. Here it produces a sanitiser linked into an ordinary build, and
+nothing says so.
+
+So the machine is asked which of its libraries look like interposers --
+exporting `malloc`, `free` and `memcpy` without being libc -- and every one
+must be named. Three are here: `asan`, `hwasan`, `tsan`. All three are on
+the list, and removing one fails the case.
+
+A first version searched `/usr/lib` and the usual places and found **zero**,
+which would have passed for ever. The sanitiser runtimes live in the
+compiler's own directory, which is where fmake looks and where the case
+looks now. A check that finds nothing is not a check that found nothing
+wrong.
+
+### The header table, and two attempts at evidence
+
+`HEADER_PKG` maps a system header to the pkg-config module that owns it.
+The obvious test -- is the header under one of the module's `-I`
+directories? -- **checks almost nothing**, and the mutation proved it:
+mapping `zlib.h` to `libpng` passed. pkg-config emits no `-I` for a header
+in a default directory, which is 11 of the 12 installed entries here, so
+the check fell back to `/usr/include` and passed for any module at all.
+
+What actually ties a header to a module is the package manager: they ship
+in the same package, or the mapping is wrong. Twelve entries verified that
+way, zero disagreements, and mapping `zlib.h` to `expat` now fails.
+
+**Two things that mutation taught, both about mutations rather than about
+the code.** The first attempt at breaking it -- `zlib.h` to `libpng` --
+also passed against the *fixed* check, because libpng is not installed here
+and the entry simply skipped. A mutation has to change something the check
+can see, and "the check passed" is evidence about the mutation until you
+know it did. The second is that a fallback added for robustness is exactly
+what made the check vacuous: `/usr/include` was in the list so that a
+header in a default place would still be found, and it meant every header
+was found regardless of the module.

@@ -7594,6 +7594,132 @@ def a_stray_object_beside_its_source_is_ignored(t):
 
 
 @case
+def the_header_table_maps_to_the_module_that_ships_the_header(t):
+	"""The second of section 15's load-bearing lists, checked.
+
+	`HEADER_PKG` says which pkg-config module owns a system header, and it
+	is what makes `#include <zlib.h>` propose zlib before anything has been
+	compiled. A wrong entry is quiet: the module supplies flags for the
+	wrong library, or does not exist and the include resolves the slow way.
+
+	The evidence took two attempts and the first was worth nothing. Asking
+	whether the header sits under one of the module's `-I` directories
+	sounds right and checks almost nothing: pkg-config emits no `-I` for a
+	header in a default directory, which is 11 of the 12 installed entries
+	here, so the check fell back to /usr/include and passed for any module
+	at all. Mapping `zlib.h` to `libpng` sailed through it.
+
+	What does tie them together is the package manager: the header and the
+	module's `.pc` file ship in the same package, or the mapping is wrong.
+	That is Debian-specific and skips elsewhere, which is honest -- an
+	unverifiable check that says nothing is worse than one that admits it
+	cannot run."""
+	if not (shutil.which("pkg-config") and shutil.which("dpkg-query")):
+		raise Skip("pkg-config or dpkg-query not installed")
+
+	def owner(path):
+		r = subprocess.run(["dpkg-query", "-S", path],
+		                   capture_output=True, text=True)
+		return r.stdout.split(":")[0].strip() if r.returncode == 0 else None
+
+	with open(FMAKE) as fh:
+		src = fh.read()
+	block = src[src.index("HEADER_PKG = {"):src.index("IMPLICIT_LIBS")]
+	pairs = dict(re.findall(r'"([^"]+)":\s*"([^"]+)"', block))
+	check(len(pairs) > 20, f"only {len(pairs)} entries read out of fmake")
+
+	checked, wrong = 0, []
+	for header, module in sorted(pairs.items()):
+		if subprocess.run(["pkg-config", "--exists", module],
+		                  capture_output=True).returncode != 0:
+			continue
+		pcdir = subprocess.run(["pkg-config", "--variable=pcfiledir", module],
+		                       capture_output=True, text=True).stdout.strip()
+		found = next((os.path.join(d, header) for d in
+		              ("/usr/include", "/usr/include/x86_64-linux-gnu",
+		               "/usr/local/include")
+		              if os.path.isfile(os.path.join(d, header))), None)
+		if not (pcdir and found):
+			continue
+		by_pc, by_header = owner(os.path.join(pcdir, module + ".pc")), owner(found)
+		if not (by_pc and by_header):
+			continue
+		checked += 1
+		if by_pc != by_header:
+			wrong.append((header, module, by_header, by_pc))
+
+	check(not wrong,
+	      f"a header and the module mapped to it ship in different "
+	      f"packages: {wrong}")
+	check(checked >= 5,
+	      f"only {checked} of {len(pairs)} entries were checkable here, "
+	      f"which is too few for this to mean anything")
+
+
+@case
+def interposers_on_this_machine_are_all_known(t):
+	"""The third list, and the one whose failure is silent and wrong.
+
+	A sanitiser runtime exports the symbols it interposes on -- asan
+	exports malloc, free and memcpy -- so by symbol evidence it is a
+	perfectly good provider, and the cover can pick one because it happens
+	to intercept more of what a program calls. Section 14 caught `-lasan`
+	being offered as an alternative to `-lm`.
+
+	The danger runs the opposite way from the linker-symbol list: there a
+	missing entry produces a false alarm, here it produces a *silent wrong
+	answer*, a sanitiser linked into an ordinary build.
+
+	So the machine is asked which of its libraries look like interposers --
+	exporting malloc, free and memcpy without being libc -- and every one
+	of them has to be named. The compiler's own directories are searched,
+	not just /usr/lib: that is where the sanitiser runtimes live, and a
+	first version of this looking only at the usual places found nothing at
+	all and would have passed for ever."""
+	if not shutil.which("nm"):
+		raise Skip("nm not installed")
+	dirs = []
+	for line in subprocess.run(["cc", "-print-search-dirs"],
+	                           capture_output=True, text=True).stdout.splitlines():
+		if line.startswith("libraries:"):
+			dirs += [os.path.realpath(d)
+			         for d in line.split("=", 1)[1].split(":")]
+	dirs = [d for d in dict.fromkeys(dirs) if os.path.isdir(d)]
+	check(dirs, "the compiler named no library directories")
+
+	with open(FMAKE) as fh:
+		src = fh.read()
+	block = src[src.index("INTERPOSER_LIBS = {"):
+	            src.index("# Symbols the linker itself provides")]
+	listed = set(re.findall(r'"([^"]+)"', block))
+	check(len(listed) > 10, f"only {len(listed)} names read out of fmake")
+
+	marks = {b"malloc", b"free", b"memcpy"}
+	found, looked = {}, 0
+	for d in dirs:
+		for path in sorted(glob.glob(os.path.join(d, "lib*.so"))
+		                   + glob.glob(os.path.join(d, "lib*.a"))):
+			stem = re.sub(r"^lib|\.(so|a)$", "", os.path.basename(path))
+			if stem in ("c", "c_nonshared") or stem in found:
+				continue
+			args = ["nm", "--defined-only", "--format=posix"]
+			if path.endswith(".so"):
+				args.insert(1, "-D")
+			r = subprocess.run(args + [path], capture_output=True)
+			looked += 1
+			syms = {l.split()[0] for l in r.stdout.splitlines() if l.split()}
+			if marks <= syms:
+				found[stem] = path
+	check(looked > 10,
+	      f"only {looked} libraries were read, so nothing was really checked")
+	unknown = sorted(set(found) - listed)
+	check(not unknown,
+	      f"these intercept rather than implement and fmake does not know "
+	      f"it, so the cover may choose one: "
+	      f"{[(u, found[u]) for u in unknown]}")
+
+
+@case
 def linker_symbols_cover_what_the_linker_provides(t):
 	"""A hand-written list, checked against the toolchain that has to match.
 
