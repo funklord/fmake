@@ -147,7 +147,8 @@ that had been green about nothing for five commits ·
 [102. The library fmake could install and then not find](#102-the-library-fmake-could-install-and-then-not-find) ·
 [103. The soname chain, for the price of a rule](#103-the-soname-chain-for-the-price-of-a-rule) ·
 [104. The hand-written list nobody had checked](#104-the-hand-written-list-nobody-had-checked) ·
-[105. The other two lists, and a check that checked nothing](#105-the-other-two-lists-and-a-check-that-checked-nothing)
+[105. The other two lists, and a check that checked nothing](#105-the-other-two-lists-and-a-check-that-checked-nothing) ·
+[106. Section 76's claim, enumerated](#106-section-76s-claim-enumerated)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -7425,3 +7426,64 @@ know it did. The second is that a fallback added for robustness is exactly
 what made the check vacuous: `/usr/include` was in the list so that a
 header in a default place would still be found, and it meant every header
 was found regardless of the module.
+
+---
+
+## 106. Section 76's claim, enumerated
+
+"Objects are keyed by the whole configuration" is what stops a sanitized
+object being linked into a plain build -- netcfgd's incident, and the whole
+of §76. It is also a claim that decays every time a knob is added, and this
+session added four: `$DEBUG`, `$SANITIZE`, the Qt `-fPIC`, and a
+generator's depfile.
+
+So the knobs were turned, one at a time, and the key watched. **Nothing was
+wrong**, which is the same kind of result as §79 and worth the same
+recording: the property was believed rather than known, and now it is
+known.
+
+Two mechanisms carry it, and both count:
+
+- a knob in the **configuration** changes the object directory, so two
+  configurations keep separate object trees and switching costs nothing;
+- a knob in **one file** leaves the directory alone and changes that
+  file's key, so it recompiles in place.
+
+What must never happen is neither, and a case now turns eight configuration
+knobs and requires each to land somewhere new.
+
+### The one that looks wrong and is not
+
+`[project] include-dirs` shares an object directory with the unset case.
+The include flags are in the *key* without being in the *path*, so
+switching forces a recompile and can never hand back a stale object -- it
+costs a rebuild when alternating rather than keeping two cached sets. A
+trade, not an oversight, and the case checks the rebuild rather than the
+directory so it cannot be "fixed" into a false alarm.
+
+### Two things the mutations taught, both about tests
+
+**A message that indexes what it is checking.** The first version wrote
+`check(got not in seen, f"...{seen[got]}...")`, and Python builds the
+message whether or not the condition holds -- so the *passing* path raised
+`KeyError`. A check whose failure text cannot be evaluated on the success
+path is a check that fails when it should pass.
+
+**Two knobs may legitimately agree.** Asserting that no two of them key
+alike failed immediately: `--cflags -O3` and `CFLAGS=-O3` are two
+spellings of one input -- the help says so -- and identical flags *should*
+produce identical objects. The values are distinct now, which is what makes
+the pairwise check mean "this knob was ignored" rather than "these two
+knobs agree".
+
+### And one term that is not load-bearing
+
+Removing `u.own` -- the per-file flags -- from the object key survives the
+case, and no fixture can catch it: a per-file flag lives *in* the file, so
+changing it changes the content hash, which is already in the key. The term
+is belt and braces.
+
+That is worth writing down rather than deleting. It is the only term that
+would still work if a per-file flag ever arrived from somewhere other than
+the file, and "no test covers it" is a much weaker statement than "nothing
+depends on it".

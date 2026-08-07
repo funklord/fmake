@@ -7594,6 +7594,105 @@ def a_stray_object_beside_its_source_is_ignored(t):
 
 
 @case
+def every_knob_that_changes_a_compile_reaches_the_object_key(t):
+	"""Section 76's claim, enumerated rather than trusted.
+
+	"Objects are keyed by the whole configuration" is the property that
+	stops a sanitized object being linked into a plain build -- netcfgd's
+	incident, and the reason that section exists. It is also a claim that
+	decays every time a knob is added, and several were added recently:
+	`$DEBUG`, `$SANITIZE`, the Qt `-fPIC`, a generator's depfile.
+
+	Each knob here is turned and the build has to notice. Two mechanisms
+	do that and both count: a knob in the *configuration* changes the
+	object directory, so two configurations keep separate object trees; a
+	knob in one *file* leaves the directory alone and changes that file's
+	key, so it recompiles in place. What must never happen is neither.
+
+	`include-dirs` is the one that looks wrong and is not: it shares a
+	directory with the unset case and still forces a recompile, because
+	the include flags are in the key without being in the path. That costs
+	a rebuild when switching back and forth and cannot produce a stale
+	object, which is the trade being made rather than an oversight."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	os.makedirs(os.path.join(t.dir, "sub"), exist_ok=True)
+	t.write("sub/extra.h", "#define EXTRA 1\n")
+
+	def objdir(conf=None, args=(), env=None):
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		path = os.path.join(t.dir, "fmake.toml")
+		if conf is None:
+			if os.path.exists(path):
+				os.remove(path)
+		else:
+			t.write("fmake.toml", conf)
+		r = t.fmake("-n", *args, env=env)
+		m = re.search(r"\.fmake/obj/([0-9a-f]+)", r.stdout)
+		check(m, f"no object path in the dry run: {r.stdout}{r.stderr}")
+		return m.group(1)
+
+	base = objdir()
+	separate = [
+	    ("$DEBUG", None, (), {"DEBUG": "1"}),
+	    ("$SANITIZE", None, (), {"SANITIZE": "1"}),
+	    # Distinct values on purpose. $CFLAGS and --cflags are two
+	    # spellings of one input -- the help says so -- so giving both
+	    # `-O3' makes them key the same, which is correct and would fail a
+	    # test asserting every knob is distinct.
+	    ("$CFLAGS", None, (), {"CFLAGS": "-O3"}),
+	    ("--cflags", None, ("--cflags", "-O1"), None),
+	    ("[project] cflags", '[project]\ncflags = ["-DX=1"]\n', (), None),
+	    ("[project] std", '[project]\nstd = "c11"\n', (), None),
+	    ("[toolchain] sysroot", '[toolchain]\nsysroot = "/"\n', (), None),
+	    ("a profile", '[profile.fast]\ncflags = ["-O3"]\n',
+	     ("-p", "fast"), None),
+	]
+	seen = {base: "the default configuration"}
+	for label, conf, args, env in separate:
+		got = objdir(conf, args, env)
+		check(got != base,
+		      f"{label} does not reach the object key, so its objects share "
+		      f"a directory with the default build")
+		# Spelled out rather than as one check(): `check(cond, f"...
+		# {seen[got]}")` builds its message whether or not the condition
+		# holds, so the passing path raised a KeyError on the key it was
+		# checking was absent.
+		if got in seen:
+			check(False,
+			      f"{label} keys the same as {seen[got]}, so one can be "
+			      f"handed the other's objects")
+		seen[got] = label
+
+	# The other mechanism: same directory, but the build still notices.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	check(t.fmake().returncode == 0, "the plain build failed")
+	t.write("fmake.toml", '[project]\ninclude-dirs = ["sub"]\n')
+	r = t.fmake()
+	check("CC " in r.stdout,
+	      f"changing include-dirs neither rekeyed nor rebuilt: {r.stdout}")
+
+	# And a flag written in one file. Worth being exact about what this
+	# does and does not pin: a per-file flag lives *in* the file, so
+	# changing it changes the content hash too, and a mutation removing
+	# `u.own' from the key survives this. The observable behaviour is what
+	# is checked -- the file recompiles -- and the `u.own' term is belt and
+	# braces rather than the thing doing the work. Removing it on that
+	# basis would still be a mistake: it is the only term that would
+	# survive a flag arriving from somewhere other than the file.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("main.c", "/*! @file\n *  @define A=1\n */\n"
+	        "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "the annotated build failed")
+	t.write("main.c", "/*! @file\n *  @define A=2\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check("CC " in r.stdout,
+	      f"changing a per-file @define did not recompile it: {r.stdout}")
+
+
+@case
 def the_header_table_maps_to_the_module_that_ships_the_header(t):
 	"""The second of section 15's load-bearing lists, checked.
 
