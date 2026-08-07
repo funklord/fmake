@@ -137,7 +137,8 @@ that had been green about nothing for five commits ·
 [92. Auditing every remedy the tool offers](#92-auditing-every-remedy-the-tool-offers) ·
 [93. Uninstall, and the manifest that was not written](#93-uninstall-and-the-manifest-that-was-not-written) ·
 [94. `-MD` for generators, and a check that answered two ways](#94--md-for-generators-and-a-check-that-answered-two-ways) ·
-[95. CI was red, and the tool was the reason](#95-ci-was-red-and-the-tool-was-the-reason)
+[95. CI was red, and the tool was the reason](#95-ci-was-red-and-the-tool-was-the-reason) ·
+[96. The byte-stability check was passing by luck](#96-the-byte-stability-check-was-passing-by-luck)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6831,3 +6832,53 @@ This is the first defect the CI job has caught that the suite could not,
 and it caught it by being a second machine rather than by testing anything
 extra. §63 recorded that the job found something before it ever ran; this
 is it finding something only a different filesystem could show.
+
+---
+
+## 96. The byte-stability check was passing by luck
+
+§95 was readdir order reaching the output. The same class has a bigger
+cousin in Python: **set iteration order, which is randomised per process**,
+so a set reaching an emitted file makes that file churn between runs on one
+machine rather than between machines.
+
+`eject_is_byte_stable` exists for exactly that -- its docstring names "a set
+iterated in a different order" as the thing it guards. It compared two
+subprocess runs, which do have different hash seeds, so the guard was real.
+It was also **a coin toss**: two random orders of a short list coincide
+often, and for a list of one they always do.
+
+The seeds are forced now, three of them, so the check fails on the first
+run rather than the fifteenth.
+
+### No leak found, which is worth recording as a measurement
+
+Probed before changing anything: `--eject make`, `--eject ninja` and
+`--explain`, over a tree with a static library, a `-lm` resolution, six
+programs and three tests, under five hash seeds. Byte-identical every time.
+The property held; only the check for it did not.
+
+### Two fixtures that could not fail
+
+Widening the check to the Qt path took three attempts, and the first two
+are the interesting part.
+
+**A set of one.** `moc_survives_ejection` builds one class, so the moc plan
+has one entry and iterates identically under any seed. A mutation replacing
+`sorted(hdrs)` with `set(hdrs)` passed it.
+
+**Three classes nobody constructs.** Adding three more `Q_OBJECT` headers
+did not help either, and the reason is §17 working correctly: a class no
+program reaches is moc'd, compiled, and then dropped by the closure, so
+none of the three reached the ejected file. The plan had four entries and
+the *output* still had one.
+
+They are constructed now, by a source the program actually calls, and both
+mutations fail. **The shape to remember: a check over a collection is only
+as good as the collection reaching the output.** Counting inputs to the
+plan says nothing; what matters is how many survive to the thing being
+compared.
+
+That is the third variant in three sections of one idea -- §94's property
+over phrasing, §95's property over a correlated side effect, and now
+coverage over apparent coverage.

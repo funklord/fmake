@@ -3090,8 +3090,9 @@ def eject_is_byte_stable(t):
 	t.write("extra.c", "int extra_thing(void){ return 1; }\n")
 	t.write("more.c", "int more_thing(void){ return 2; }\n")
 
-	def eject(kind):
-		r = t.fmake("--eject", kind)
+	def eject(kind, seed=None):
+		r = t.fmake("--eject", kind,
+		            env={"PYTHONHASHSEED": seed} if seed else None)
 		check(r.returncode == 0, f"eject {kind} failed: {r.stderr}")
 		return r.stdout
 
@@ -3103,6 +3104,28 @@ def eject_is_byte_stable(t):
 		      f"{kind} output differs between two warm runs")
 		check(warm[0] == cold,
 		      f"{kind} output differs cold versus warm")
+
+		# Two runs happen to have different hash seeds, so a set reaching
+		# the output is caught by the comparisons above only by luck --
+		# and two random orders of a short list coincide often. Forcing
+		# the seeds makes it a check rather than a coincidence, which is
+		# the difference between this and the symlink tie-break that
+		# passed here for eleven hours and failed on CI.
+		seeded = [eject(kind, "0"), eject(kind, "1"), eject(kind, "4242")]
+		check(len(set(seeded)) == 1,
+		      f"{kind} output depends on Python's hash seed, so a set is "
+		      f"reaching it: "
+		      f"{[len(x) for x in seeded]} bytes across three seeds")
+
+	# --explain is diffed by people too, and reads the same structures.
+	def explain(seed):
+		r = t.fmake("--explain", env={"PYTHONHASHSEED": seed})
+		check(r.returncode == 0, f"--explain failed: {r.stderr}")
+		return r.stdout
+
+	shown = [explain("0"), explain("1"), explain("4242")]
+	check(len(set(shown)) == 1,
+	      "--explain output depends on Python's hash seed")
 
 
 @case
@@ -6357,6 +6380,33 @@ def moc_survives_ejection(t):
 		raise Skip("make not installed")
 	t.write("counter.h", COUNTER_H)
 	t.write("main.cpp", COUNTER_MAIN)
+	# Four moc'd files rather than one, and all four *reached*. The seeded
+	# comparison below looks for a set reaching the emitted rules, and a
+	# set of one element iterates the same way whatever the seed -- so the
+	# original fixture could not fail it. The first attempt at widening
+	# added three classes nobody constructs, which section 17 says are
+	# moc'd, compiled and then dropped: they never reached the ejected file
+	# either, and the check still could not fail. They have to be used.
+	for extra in ("alpha", "bravo", "charlie"):
+		t.write(f"{extra}.h", f"""#pragma once
+#include <QObject>
+class {extra.capitalize()} : public QObject {{
+	Q_OBJECT
+public:
+	int n = 0;
+}};
+""")
+	t.write("extras.cpp", """
+#include "alpha.h"
+#include "bravo.h"
+#include "charlie.h"
+int extras_sum(void) { Alpha a; Bravo b; Charlie c; return a.n + b.n + c.n; }
+""")
+	t.write("main.cpp", COUNTER_MAIN.replace(
+	    "int main(int argc, char **argv) {",
+	    "int extras_sum(void);\nint main(int argc, char **argv) {").replace(
+	    "return seen == 1 ? 0 : 1;",
+	    "return (seen == 1 && extras_sum() == 0) ? 0 : 1;"))
 
 	r = t.fmake("--eject")
 	check(r.returncode == 0, f"eject failed: {r.stderr}")
@@ -6364,6 +6414,16 @@ def moc_survives_ejection(t):
 	      "the ejected build refers to fmake's state directory")
 	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
 		fh.write(r.stdout)
+
+	# Byte-stable across hash seeds here too. eject_is_byte_stable forces
+	# the seeds but its tree has no Qt in it, so the moc plan it iterates
+	# is empty and any order of nothing is the same order -- a mutation
+	# putting a set in that plan passes there and has to fail here.
+	seeded = [t.fmake("--eject", env={"PYTHONHASHSEED": seed}).stdout
+	          for seed in ("0", "1", "4242")]
+	check(len(set(seeded)) == 1,
+	      "the ejected Qt build depends on Python's hash seed, so a set is "
+	      "reaching the moc rules")
 
 	prog = os.path.basename(t.dir)
 	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
