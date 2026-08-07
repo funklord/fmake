@@ -352,6 +352,11 @@ inputs  = ["proto/*.msg"]
 outputs = ["gen/msg.c"]
 depfile = "gen/proto.d"         # re-runs when anything it opened changes
 
+[target.greet]                  # a library other projects can find
+kind    = "static"
+version = "1.2.3"               # declaring one asks for a greet.pc
+headers = ["greet.h"]
+
 [install]
 prefix = "/usr/local"
 
@@ -362,6 +367,14 @@ arch = "aarch64"
 [build-toolchain]               # tools that must run on *this* machine
 cc = "cc"
 ```
+
+**A `version` asks for a pkg-config file.** fmake resolves libraries
+*through* pkg-config — a header proposes a module, the module's `.pc`
+supplies the flags — so a library it installs should be findable the same
+way. Declare a `version` (in `fmake.toml` or as `@version`) and a
+`NAME.pc` is written beside the artifacts, installed under
+`$(LIBDIR)/pkgconfig`, and removed again by `uninstall`. There is no
+default version: a `.pc` without one is a file pkg-config refuses.
 
 `depfile` is `-MD` for generators. A `.y` that `%include`s another file, or
 a schema that includes a shared one, re-runs only when the file *named in

@@ -143,7 +143,8 @@ that had been green about nothing for five commits ·
 [98. The Qt flag every other build system supplies](#98-the-qt-flag-every-other-build-system-supplies) ·
 [99. The typo that could be named after all](#99-the-typo-that-could-be-named-after-all) ·
 [100. The archives the cover put in the wrong order](#100-the-archives-the-cover-put-in-the-wrong-order) ·
-[101. The prebuilt object, and the version of it that would have been wrong](#101-the-prebuilt-object-and-the-version-of-it-that-would-have-been-wrong)
+[101. The prebuilt object, and the version of it that would have been wrong](#101-the-prebuilt-object-and-the-version-of-it-that-would-have-been-wrong) ·
+[102. The library fmake could install and then not find](#102-the-library-fmake-could-install-and-then-not-find)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1780,11 +1781,11 @@ rather than code, and one lesson about testing.
   Still true that the ejected `clean` removes only what it knows about, and
   that is deliberate rather than pending — see the `CLEAN` comment. `--eject
   ninja` still has no install rule, since ninja has no convention for one.
-- **Install is minimal.** ~~No uninstall~~ (§93), no manifest, no pkg-config `.pc`
-  generation, no shared-library versioning — `SONAME` itself was added by
-  §22 and this entry was stale about it — no symlink chain
-  (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain name, which
-  is right for a private library and wrong for a published one.
+- **Install is minimal.** ~~No uninstall~~ (§93), ~~no pkg-config `.pc`
+  generation~~ (§102), no manifest, no shared-library versioning — `SONAME`
+  itself was added by §22 and this entry was stale about it — no symlink
+  chain (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain
+  name, which is right for a private library and wrong for a published one.
 - **Per-TU flags are per TU, not per target.** Two binaries sharing 90% of their
   TUs compile those once, and `@cflags`/`@define` belong to the *file*, so there
   is exactly one object per file and no conflict. What is impossible is the same
@@ -7188,3 +7189,64 @@ That is the shape worth remembering rather than the feature: **a flag
 carrying two facts is correct until the first case where they differ**, and
 the case where they differ is the one that arrives long after everybody has
 stopped thinking about it.
+
+---
+
+## 102. The library fmake could install and then not find
+
+fmake resolves libraries through pkg-config: a header proposes a module,
+the module's `.pc` supplies the flags. That is §5, and it is most of what
+makes a tree build with nothing said.
+
+**A library fmake installed was findable by none of it.** Headers in
+`includedir`, an archive in `libdir`, and nothing tying the two together --
+so the next project had to be told with `@pkg` or `@libs` exactly what
+fmake would otherwise have worked out. The consumer that most obviously
+suffers is fmake.
+
+Declaring a `version` writes one. There is no default, and that is the
+whole of the opt-in: a `.pc` without a `Version` is a file pkg-config
+refuses to read, and inventing `0.0.0` would publish a number nobody chose
+into a file other projects then depend on.
+
+### An ordinary built file
+
+The `.pc` is written beside the artifacts at build time, which is the only
+interesting design decision in it. From that moment it is a built file like
+any other: `install_plan` picks it up with no special case, `--uninstall`
+removes it because the plan names it, `--clean` names it, and both ejected
+builds emit a rule for it. Four callers, no fourth idea.
+
+Rewritten only when its content changes, for the same reason the ejected
+build file is byte-stable: it is a file somebody may commit.
+
+### `${prefix}` belongs to two languages
+
+The ejected Makefile writes the `.pc` itself, because a clean checkout of a
+project that committed that Makefile has no `.pc` in it and an install rule
+naming a file nothing produces fails on the one machine that matters.
+
+The first version of that rule was wrong in a way that looked right:
+
+```make
+greet.pc:
+	printf '%s\n' 'libdir=${prefix}/lib' ... > $@
+```
+
+**`${prefix}` is a pkg-config variable and a Make variable reference, and
+Make wins.** The recipe ran, succeeded, and wrote a `.pc` with empty paths
+-- §26's trap, in a new file, twenty-odd sections later.
+
+It was caught because the case compares the ejected output **byte for byte
+against fmake's own** rather than checking that a `.pc` exists. A
+`pkg-config --modversion` check would also have passed: the Version line
+was fine. It was the paths that were empty, and only the comparison saw it.
+
+### What the checks actually ask
+
+`pkg-config` is asked to read the file, rather than the file being searched
+for substrings -- it is the reader, and a file it will not parse is not a
+pkg-config file however much it looks like one. And the paths are required
+to be relative to `${prefix}`, because a package built with one prefix and
+installed under another is what staging and every distribution do; baked
+paths pass a substring check and are wrong the moment they are relocated.

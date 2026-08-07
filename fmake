@@ -481,7 +481,7 @@ CONF_SCHEMA = {
         "name": S, "target": S, "kind": S, "root": S,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "test": B, "test-group": S, "test-args": L,
-        "test-timeout": N,
+        "test-timeout": N, "version": S, "description": S,
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
@@ -1886,7 +1886,7 @@ RE_DOXY_OPEN = re.compile(r"^\s*(?://[/!]|/\*[*!])")
 RE_DIRECTIVE = re.compile(r"^[@\\](\w+)\b[ \t]*(.*)$")
 
 # Replace whatever came before; last one wins.
-DIRECTIVE_SCALAR = {"target", "kind", "std", "test"}
+DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
@@ -4764,13 +4764,19 @@ class Target:
 	"""One artifact: what roots it, what it is called, and what kind it is."""
 
 	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
-	             "test_group", "test_why")
+	             "test_group", "test_why", "version", "description")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
 		self.ann  = ann
 		self.kind = ann.scalar("kind", "exe")
 		self.name = ann.scalar("target") or default_name(rel, root)
+		# Declaring a version is what asks for a pkg-config file. There is
+		# no default: a `.pc` without a Version is one pkg-config refuses,
+		# and inventing "0.0.0" would publish a number nobody chose into a
+		# file other projects then depend on.
+		self.version = ann.scalar("version")
+		self.description = None
 		self.conf = {}
 		# Explicit membership, when fmake.toml gives it. This is the answer
 		# to two libraries built from one overlapping tree: the closure
@@ -4819,6 +4825,8 @@ class Target:
 			self.test_why = f"[target.*] test-group = {self.test_group!r}"
 		if section.get("sources"):
 			self.members = list(section["sources"])
+		self.version = section.get("version") or self.version
+		self.description = section.get("description") or self.description
 
 	@property
 	def test(self):
@@ -6517,6 +6525,29 @@ def build(args, _bootstrapping=False):
 		if built:
 			info(f"built {names}" if changed else f"{names} up to date")
 
+	# Written beside the artifacts, so from here on it is an ordinary built
+	# file: install_plan picks it up, --clean names it, and the ejected
+	# builds emit a rule for it. Not written in a dry run, which promises
+	# to touch nothing.
+	if not args.dry_run:
+		for t in wanted:
+			text = pc_text(t, conf)
+			if text is None:
+				continue
+			path = os.path.join(outdir, t.name + ".pc")
+			old_text = None
+			try:
+				with open(path) as fh:
+					old_text = fh.read()
+			except OSError:
+				pass
+			# Byte-stable for the same reason the ejected build is: this is
+			# a file somebody may commit, and rewriting it on every build
+			# makes it churn.
+			if old_text != text:
+				with open(path, "w") as fh:
+					fh.write(text)
+
 	if args.install and not failed:
 		say()
 		return do_install(wanted, closures, root, outdir, conf, args)
@@ -7145,14 +7176,35 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			sub = defaults[key]
 			a(f"{key.upper()} ?= "
 			  + (sub if os.path.isabs(sub) else f"$(PREFIX)/{sub}"))
+		a("PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig")
 		a("")
+		# The .pc files, written by the ejected build rather than copied
+		# out of the tree: a clean checkout of a project that committed
+		# this Makefile has no .pc in it, and an install rule naming a
+		# file nothing produces fails on the one machine that matters.
+		pcs = [(t, pc_text(t, conf)) for t in targets]
+		pcs = [(t, text) for t, text in pcs if text]
+		for t, text in pcs:
+			a(f"{t.name}.pc:")
+			# `${prefix}` is a pkg-config variable and a Make variable
+			# reference, and Make wins: unescaped, the recipe runs,
+			# succeeds, and writes a .pc with empty paths. Section 26
+			# records the same trap for fmake.mk recipes -- a surviving
+			# dollar has to be doubled or the output is quietly wrong.
+			args_ = " ".join(shlex.quote(l.replace("$", "$$"))
+			                 for l in text.rstrip("\n").split("\n"))
+			a(f"\tprintf '%s\\n' {args_} > $@")
+			a("")
+
 		rule = "fmake-install" if fragment else "install"
 		# Depends on the build: installing what was not built is how a
 		# stale artifact reaches a package, and fmake's own --install
 		# refuses for the same reason.
 		a(f".PHONY: {rule}")
-		a(f"{rule}: {'fmake-all' if fragment else 'all'}")
-		for directory in ("bindir", "libdir", "includedir"):
+		a(f"{rule}: {'fmake-all' if fragment else 'all'}"
+		  + ("".join(f" {t.name}.pc" for t, _x in pcs)))
+		for directory in ("bindir", "libdir", "includedir",
+		                  "pkgconfigdir"):
 			items = [p for p in plan if p[2] == directory]
 			if not items:
 				continue
@@ -7170,7 +7222,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		undo = "fmake-uninstall" if fragment else "uninstall"
 		a(f".PHONY: {undo}")
 		a(f"{undo}:")
-		for directory in ("bindir", "libdir", "includedir"):
+		for directory in ("bindir", "libdir", "includedir",
+		                  "pkgconfigdir"):
 			for _origin, _source, d, name, _mode in plan:
 				if d == directory:
 					a(f"\trm -f $(DESTDIR)$({directory.upper()})/{name}")
@@ -7195,6 +7248,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	leavings = ([f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in sorted(every)]
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d" for rel in sorted(every)]
 	            + [t.filename for t in targets]
+	            + [t.name + ".pc" for t in targets if pc_text(t, conf)]
 	            + [_eject_src(j["out"]) for j in uic_jobs]
 	            + [_eject_src(j["out"]) for j in moc_jobs]
 	            + [_eject_src(j["out"]) for j in rcc_jobs]
@@ -7442,7 +7496,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			sub = defaults[key]
 			value = sub if os.path.isabs(sub) else f"$$PREFIX/{sub}"
 			steps.append(f': "$${{{key.upper()}:={value}}}"')
-		for directory in ("bindir", "libdir", "includedir"):
+		steps.append(': "$${PKGCONFIGDIR:=$$LIBDIR/pkgconfig}"')
+		for directory in ("bindir", "libdir", "includedir",
+		                  "pkgconfigdir"):
 			items = [p for p in plan if p[2] == directory]
 			if not items:
 				continue
@@ -7456,19 +7512,35 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				steps.append(f"install -m {mode:o} -- {shlex.quote(src)} "
 				             f'"$$DESTDIR$${directory.upper()}/"'
 				             f"{shlex.quote(name)}")
+		# Same reason as the Makefile: a clean checkout has no .pc, so
+		# the build has to write one. `$$` for a literal dollar here too,
+		# ninja's escape rather than Make's.
+		pcs = [(t, pc_text(t, conf)) for t in targets]
+		pcs = [(t, text) for t, text in pcs if text]
+		for t, text in pcs:
+			body = " ".join(shlex.quote(l)
+			                for l in text.rstrip("\n").split("\n"))
+			a("")
+			a(f"rule pc_{_mk_ident(t.name)}")
+			a(f"  command = printf '%s\\n' {body.replace('$', '$$')} > $out")
+			a(f"  description = PC {t.name}.pc")
+			a(f"build {_ninja(t.name)}.pc: pc_{_mk_ident(t.name)}")
+
 		a("")
 		a("rule install")
 		a("  command = " + "; ".join(steps))
 		a("  description = INSTALL")
 		a("  pool = console")
-		deps = " ".join(sorted({_ninja(t.filename) for t in targets}))
+		deps = " ".join(sorted({_ninja(t.filename) for t in targets}
+		                       | {_ninja(t.name) + ".pc" for t, _x in pcs}))
 		a(f"build install: install | {deps}")
 
 		# The parameter lines only -- `set -e' and the five `: "${VAR:=...}"'
 		# defaults -- so uninstall reads the same environment install does.
 		undo = [step for step in steps
 		        if step.startswith((": ", "set -e"))]
-		for directory in ("bindir", "libdir", "includedir"):
+		for directory in ("bindir", "libdir", "includedir",
+		                  "pkgconfigdir"):
 			for _origin, _source, d, name, _mode in plan:
 				if d == directory:
 					undo.append(f'rm -f "$$DESTDIR$${directory.upper()}/"'
@@ -7494,6 +7566,49 @@ INSTALL_DEFAULTS = {"prefix": "/usr/local", "bindir": "bin",
                     "libdir": "lib", "includedir": "include"}
 
 
+def pc_text(t, conf):
+	"""The pkg-config file for a library, or None if none was asked for.
+
+    fmake resolves libraries *through* pkg-config -- a header proposes a
+    module, the module's .pc supplies the flags. A library fmake installs
+    was findable by none of that: it had headers in `includedir` and an
+    archive in `libdir` and nothing tying the two together, so the next
+    project had to be told with `@pkg` or `@libs` what fmake would have
+    worked out on its own. Generating the .pc closes that loop, and the
+    consumer it most obviously helps is fmake.
+
+    Declaring a `version` is the opt-in. There is no default, because a .pc
+    without a Version is one pkg-config refuses to read, and inventing one
+    would publish a number nobody chose into a file other projects then
+    depend on.
+
+    `${prefix}` and friends are written as pkg-config variables rather than
+    resolved, because a package built with one prefix and installed under
+    another -- which is what DESTDIR staging and every distribution do -- is
+    the ordinary case, and a .pc with baked paths is wrong the moment it is
+    relocated.
+    """
+	if t.kind == "exe" or not t.version:
+		return None
+	p = dict(INSTALL_DEFAULTS)
+	p.update({k: v for k, v in conf.install.items() if v})
+	def var(key):
+		sub = p[key]
+		return sub if os.path.isabs(sub) else "${prefix}/" + sub
+	lines = [
+	    "prefix=" + p["prefix"],
+	    "libdir=" + var("libdir"),
+	    "includedir=" + var("includedir"),
+	    "",
+	    "Name: " + t.name,
+	    "Description: " + (t.description or f"{t.name}, built by fmake"),
+	    "Version: " + t.version,
+	    "Libs: -L${libdir} -l" + t.name,
+	    "Cflags: -I${includedir}",
+	]
+	return "\n".join(lines) + "\n"
+
+
 def install_paths(conf, args):
 	p = dict(INSTALL_DEFAULTS)
 	p.update({k: v for k, v in conf.install.items() if v})
@@ -7505,6 +7620,9 @@ def install_paths(conf, args):
 		sub = p[key]
 		full = sub if os.path.isabs(sub) else os.path.join(p["prefix"], sub)
 		out[key] = os.path.join(dest, full.lstrip("/")) if dest else full
+	# Where every distribution puts them, and where pkg-config looks
+	# without being told: under libdir, not beside it.
+	out["pkgconfigdir"] = os.path.join(out["libdir"], "pkgconfig")
 	out["prefix"] = p["prefix"]
 	return out
 
@@ -7550,6 +7668,12 @@ def install_plan(targets, closures, root):
 				die(f"@headers {h!r} does not exist (named for {t.name})")
 			planned.append(("tree", h, "includedir",
 			                os.path.basename(h), 0o644))
+
+		# The .pc is written beside the artifacts at build time, so it is
+		# a built file and needs no special case anywhere downstream.
+		if t.kind != "exe" and t.version:
+			planned.append(("built", t.name + ".pc", "pkgconfigdir",
+			                t.name + ".pc", 0o644))
 
 	seen, unique = set(), []
 	for item in planned:

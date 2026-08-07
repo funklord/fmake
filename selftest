@@ -3568,6 +3568,157 @@ def an_ejected_build_uninstalls_what_it_installed(t):
 
 
 @case
+def a_versioned_library_gets_a_pkgconfig_file(t):
+	"""fmake resolves through pkg-config and published nothing it could read.
+
+	A header proposes a module, the module's `.pc` supplies the flags --
+	that is section 5. A library fmake installed was findable by none of it:
+	headers in `includedir`, an archive in `libdir`, and nothing tying them
+	together, so the next project had to be told with `@pkg` or `@libs`
+	what fmake would otherwise have worked out. The consumer this most
+	obviously helps is fmake.
+
+	Declaring a version is the opt-in, and there is no default: a `.pc`
+	without a Version is one pkg-config refuses, and inventing one would
+	publish a number nobody chose into a file other projects depend on.
+
+	The check is pkg-config's own opinion rather than a substring: it is
+	the reader, and a file it will not parse is not a pkg-config file
+	however much it looks like one."""
+	if not shutil.which("pkg-config"):
+		raise Skip("pkg-config not installed")
+	t.write("greet.h", "#pragma once\nconst char *greet(void);\n")
+	t.write("greet.c", """
+/*! @file
+ *  @kind    static
+ *  @target  greet
+ *  @headers greet.h
+ *  @version 1.2.3
+ */
+#include "greet.h"
+const char *greet(void){ return "hi"; }
+""")
+	check(t.fmake().returncode == 0, "build failed")
+	pc = os.path.join(t.dir, "greet.pc")
+	check(os.path.exists(pc), "no .pc was written")
+
+	env = dict(os.environ, PKG_CONFIG_PATH=t.dir)
+	got = subprocess.run(["pkg-config", "--modversion", "greet"],
+	                     capture_output=True, text=True, env=env)
+	check(got.returncode == 0 and got.stdout.strip() == "1.2.3",
+	      f"pkg-config will not read it: {got.stdout}{got.stderr}")
+
+	# The paths must survive relocation, which is what a staged install and
+	# every distribution do. Baked absolute paths would pass a substring
+	# check and be wrong the moment the prefix moves.
+	body = open(pc).read()
+	check("${prefix}" in body,
+	      f"the .pc has its paths baked in rather than relative to "
+	      f"${{prefix}}: {body}")
+
+	stage = os.path.join(t.dir, "stage")
+	check(t.fmake("--install", "--destdir", stage).returncode == 0,
+	      "install failed")
+	staged = os.path.join(stage, "usr", "local", "lib", "pkgconfig",
+	                      "greet.pc")
+	check(os.path.exists(staged), f"the .pc was not installed: {staged}")
+	check(t.fmake("--uninstall", "--destdir", stage).returncode == 0,
+	      "uninstall failed")
+	check(not os.path.exists(staged), "uninstall left the .pc behind")
+
+	# A program publishes no API and gets none, version or not.
+	u = Tree("prog")
+	try:
+		u.write("main.c", "/*! @file\n *  @version 9.9\n */\n"
+		        "int main(void){ return 0; }\n")
+		check(u.fmake().returncode == 0, "the program build failed")
+		check(not glob.glob(os.path.join(u.dir, "*.pc")),
+		      "a program was given a pkg-config file")
+	finally:
+		u.cleanup()
+
+	# And a library that declares no version gets none: the opt-in is the
+	# version, not the kind.
+	v = Tree("noversion")
+	try:
+		v.write("q.h", "#pragma once\nint q(void);\n")
+		v.write("q.c", "/*! @file\n *  @kind static\n *  @target q\n"
+		        " *  @headers q.h\n */\n"
+		        '#include "q.h"\nint q(void){ return 1; }\n')
+		check(v.fmake().returncode == 0, "the unversioned build failed")
+		check(not glob.glob(os.path.join(v.dir, "*.pc")),
+		      "a library with no version was given a .pc anyway")
+	finally:
+		v.cleanup()
+
+
+@case
+def an_ejected_build_writes_the_same_pkgconfig_file(t):
+	"""A clean checkout has no `.pc`, so the ejected build must write one.
+
+	An install rule naming a file nothing produces fails on the one machine
+	that matters -- somebody else's, from a fresh clone of a project that
+	committed the Makefile.
+
+	Compared byte for byte against fmake's own, which is how the first
+	version was caught: `${prefix}` is a pkg-config variable *and* a Make
+	variable reference, and Make wins. The recipe ran, succeeded, and wrote
+	a .pc with empty paths -- section 26's trap, in a new file."""
+	if not shutil.which("pkg-config"):
+		raise Skip("pkg-config not installed")
+	t.write("greet.h", "#pragma once\nconst char *greet(void);\n")
+	t.write("greet.c", """
+/*! @file
+ *  @kind    static
+ *  @target  greet
+ *  @headers greet.h
+ *  @version 1.2.3
+ */
+#include "greet.h"
+const char *greet(void){ return "hi"; }
+""")
+	check(t.fmake().returncode == 0, "build failed")
+	with open(os.path.join(t.dir, "greet.pc")) as fh:
+		mine = fh.read()
+
+	for kind, cmd in (("make", ["make", "-s"]),
+	                  ("ninja", ["ninja", "-f", "build.ninja"])):
+		if not shutil.which(cmd[0]):
+			continue
+		r = t.fmake("--eject", *([] if kind == "make" else ["ninja"]))
+		check(r.returncode == 0, f"eject {kind} failed: {r.stderr}")
+		name = "Makefile" if kind == "make" else "build.ninja"
+		with open(os.path.join(t.dir, name), "w") as fh:
+			fh.write(r.stdout)
+		# Deleted, so the rule has to produce it rather than the tree
+		# happening to still hold fmake's copy.
+		os.remove(os.path.join(t.dir, "greet.pc"))
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		stage = os.path.join(t.dir, "by-" + kind)
+		run = _run_in(t.dir, *(cmd + ["install", "DESTDIR=" + stage]
+		                       if kind == "make" else cmd))
+		if kind == "ninja":
+			check(run.returncode == 0, f"the ninja build failed: {run.stderr}")
+			run = _run_in(t.dir, "ninja", "-f", "build.ninja", "install",
+			              env={"DESTDIR": stage})
+		check(run.returncode == 0,
+		      f"the ejected {kind} install failed: {run.stdout}{run.stderr}")
+		got = os.path.join(stage, "usr", "local", "lib", "pkgconfig",
+		                   "greet.pc")
+		check(os.path.exists(got), f"the ejected {kind} wrote no .pc")
+		with open(got) as fh:
+			theirs = fh.read()
+		check(theirs == mine,
+		      f"the ejected {kind} .pc differs from fmake's:\n"
+		      f"  fmake: {mine!r}\n  {kind}: {theirs!r}")
+		env = dict(os.environ, PKG_CONFIG_PATH=os.path.dirname(got))
+		v = subprocess.run(["pkg-config", "--modversion", "greet"],
+		                   capture_output=True, text=True, env=env)
+		check(v.returncode == 0 and v.stdout.strip() == "1.2.3",
+		      f"pkg-config will not read the ejected {kind} .pc: {v.stderr}")
+
+
+@case
 def an_ejected_makefile_installs_what_fmake_installs(t):
 	"""The exit has to include the install, or it is only half an exit.
 
