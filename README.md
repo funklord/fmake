@@ -418,6 +418,12 @@ because something needs `Counter::staticMetaObject`, not because it is called
 `--explain` lists it under *compiled, not linked*. That is stricter than qmake,
 which links everything in `HEADERS` whether it is reachable or not.
 
+**Write `Q_OBJECT` in the class**, not a macro of your own that expands to it.
+The search is textual, deliberately — it is a marker, not a shape — so a class
+that reaches the macro indirectly carries no token to find, and nothing is
+generated for it. Where that happens the link fails on a missing vtable, and
+fmake names the header and the reason rather than blaming a library.
+
 A class declared inside a `.cpp` works too, on Qt's own terms: the output is
 `foo.moc` and that file must `#include` it. If it doesn't, fmake says so rather
 than letting it fail later on an undefined symbol.

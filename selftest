@@ -10439,6 +10439,66 @@ def a_vendored_main_stays_out_of_a_library(t):
 	      f"the archive carries the vendored main(): {syms}")
 
 
+@case
+def a_q_object_reached_through_a_macro_is_named_at_the_link(t):
+	"""The scan is a token search, and one C++ shape defeats it entirely.
+
+	Q_OBJECT is a marker rather than a shape, which is why scanning for the
+	token is right. But a class reaching that macro through another macro
+	carries no token at all:
+
+	    #define MY_OBJ Q_OBJECT      // in macros.h
+	    class G : public QObject { MY_OBJ };
+
+	moc's own preprocessor expands it and generates 2670 bytes; fmake's
+	scan sees nothing, plans no job, and the link fails on `undefined
+	reference to vtable for G'. Nothing on that line mentions Qt, and the
+	advice offered was `--ldflags' -- sending the reader to install a
+	library for a meta-object their own tree was supposed to generate.
+	Section 31's pattern, in the place it costs most.
+
+	Asking moc is definitive where guessing at C++ is not, and it is
+	affordable here because the link has already failed. The second half of
+	this case is the one that keeps it honest: a Qt build failing for an
+	ordinary reason must still get the ordinary advice."""
+	_need_qt()
+	t.write("macros.h", "#pragma once\n#define MY_OBJ Q_OBJECT\n")
+	t.write("g.h", "#pragma once\n#include <QtCore/QObject>\n"
+	        '#include "macros.h"\n'
+	        "class G : public QObject { MY_OBJ public: G(); };\n")
+	t.write("main.cpp", "/*! @file\n *  @pkg Qt6Core\n */\n"
+	        '#include "g.h"\nG::G() {}\nint main(){ G g; return 0; }\n')
+
+	r = t.fmake()
+	check(r.returncode != 0, f"this tree cannot link: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	check("g.h needs moc" in out,
+	      f"the header moc would have generated for is not named: {out}")
+	check("--ldflags" not in out,
+	      f"a meta-object this tree generates is still being reported as a "
+	      f"missing library, which is the whole defect: {out}")
+
+	# The probe must not leave its output in the tree.
+	check(not os.path.exists(os.path.join(t.dir, ".fmake/moc-probe.cpp")),
+	      "the moc probe left its output behind")
+
+	# And the ordinary Qt failure keeps the ordinary advice. Without this
+	# the fix could name every header in reach and still pass above.
+	t.write("g.h", "#pragma once\n#include <QtCore/QObject>\n"
+	        "class G : public QObject { public: G(); void gone(); };\n")
+	t.write("main.cpp", "/*! @file\n *  @pkg Qt6Core\n */\n"
+	        '#include "g.h"\nG::G() {}\n'
+	        "int main(){ G g; g.gone(); return 0; }\n")
+	r = t.fmake("-B")
+	check(r.returncode != 0, "an undefined method should not link")
+	out = r.stdout + r.stderr
+	check("--ldflags" in out,
+	      f"an ordinary undefined symbol lost the advice that fits it: {out}")
+	check("needs moc" not in out,
+	      f"a Qt tree failing for an ordinary reason is being blamed on "
+	      f"moc: {out}")
+
+
 def _unrunnable(path):
 	"""An executable file no binfmt handler will claim.
 

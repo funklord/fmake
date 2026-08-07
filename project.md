@@ -156,7 +156,8 @@ that had been green about nothing for five commits ·
 [111. The second list in the same file](#111-the-second-list-in-the-same-file) ·
 [112. Verifying the fix that could not be verified](#112-verifying-the-fix-that-could-not-be-verified) ·
 [113. Clang, LTO, and a wrong reason for not checking](#113-clang-lto-and-a-wrong-reason-for-not-checking) ·
-[114. Who chose the tool decides the advice](#114-who-chose-the-tool-decides-the-advice)
+[114. Who chose the tool decides the advice](#114-who-chose-the-tool-decides-the-advice) ·
+[115. The direction of the disagreement that matters](#115-the-direction-of-the-disagreement-that-matters)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2188,9 +2189,11 @@ added to `HEADER_PKG`.
   fail on an include it cannot resolve, so a missing `-I` costs an unexpanded
   macro rather than an error — which is what makes it safe to settle these
   flags before the include graph exists.
-- `#if 0` is the tested case for scan-and-preprocessor disagreement. Other
-  conditional shapes are handled by the same negative-result path but were not
-  enumerated.
+- `#if 0` is the tested case for scan-and-preprocessor disagreement. ~~Other
+  conditional shapes ... were not enumerated.~~ Enumerated in §115, and the
+  claim held for all of them. The same section found the disagreement in
+  the *other* direction, which this limit did not consider and which is
+  the dangerous one.
 
 ### Tried on a real project: qView
 
@@ -7994,3 +7997,73 @@ A `.pc` on `PKG_CONFIG_PATH` whose `libexecdir` points at the junk file
 does it, so all three branches are checked rather than two plus an
 assumption. **The branch left unexercised is the one the change is most
 likely to break**, because it is the one that was already correct.
+
+---
+
+## 115. The direction of the disagreement that matters
+
+§17 recorded that `#if 0` is the tested case for the scan and moc's
+preprocessor disagreeing, and that "other conditional shapes are handled by
+the same negative-result path but were not enumerated". Enumerating them is
+five minutes, and the claim is true -- moc writes a zero-byte file for
+every one:
+
+```
+#if 0                     0 bytes
+#ifdef NEVER_DEFINED      0 bytes
+#else branch not taken    0 bytes
+inside a block comment    0 bytes
+inside a string literal   0 bytes
+```
+
+(Measured against a real output file. Told to write to `/dev/stdout` moc
+emits a 60-odd byte preamble for all five, which would have looked like
+five failures and is an artifact of the fixture, not of moc.)
+
+**But the limit only considered one direction.** It is written as "the scan
+sees a Q_OBJECT that moc does not", whose cost is a wasted moc run and a
+file correctly discarded. The other direction is not mentioned, and it is
+the one that breaks a build:
+
+```cpp
+#define MY_OBJ Q_OBJECT              // macros.h
+class G : public QObject { MY_OBJ };  // g.h -- zero occurrences of Q_OBJECT
+```
+
+moc's preprocessor expands it and generates 2670 bytes. `g.h` contains no
+token for the scan to find, so no job is planned, and the link fails:
+
+```
+undefined reference to `vtable for G'
+  no x86_64/64le library exports: _ZTV1G
+  name the missing libraries with --ldflags        <- wrong
+```
+
+Nothing on those lines mentions Qt. The reader is sent to install a
+library for a meta-object their own tree was supposed to generate --
+§31's pattern, arriving where it costs most.
+
+### Asking is better than guessing, once the build has failed
+
+Recognising this shape by inspection means understanding C++ macro
+expansion, which is the thing fmake declines to do everywhere else.
+**Running moc answers it exactly.** That is far too expensive per build and
+free where it is now: only after a link has already failed, only when Qt is
+being linked, and only over headers that link set includes.
+
+The advice now has three endings rather than two, because there are three
+causes and only one of them is a missing library. The negative half of the
+case is what keeps that honest -- a Qt build failing for an ordinary reason
+must still get the ordinary advice, and the mutation that makes the probe
+always say yes is caught by exactly that assertion rather than by the
+positive one.
+
+### What is not being done
+
+**The scan is not falling back to running moc on every header.** It would
+be correct and it would be slow, and it would make a token search into a
+compiler pass for the sake of a shape Qt's own documentation does not use.
+Reporting it precisely at the moment it fails is the smaller answer, and
+the one consistent with `@sources` for symbol-invisible dependencies:
+fmake declines to guess, and says so where the guess would have been
+needed.

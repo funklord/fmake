@@ -1468,6 +1468,60 @@ def find_qt_tool(name, configured, pkg):
 	return shutil.which(name)
 
 
+def moc_would_generate(root, rel, moc, flags):
+	"""Whether moc produces anything for this file. Definitive, and slow."""
+	probe = os.path.join(root, STATE_DIR, "moc-probe.cpp")
+	os.makedirs(os.path.dirname(probe), exist_ok=True)
+	try:
+		r = subprocess.run([moc] + flags + [rel, "-o", probe],
+		                   cwd=root, capture_output=True, text=True)
+	except OSError:
+		return False
+	try:
+		got = r.returncode == 0 and os.path.getsize(probe) > 0
+	except OSError:
+		got = False
+	if os.path.exists(probe):
+		os.unlink(probe)
+	return got
+
+
+def unscanned_moc_inputs(root, link, scans, hdrs, mocced, cfg, conf, pkg):
+	"""Headers this link set includes that moc would generate for, and was
+    never run on.
+
+    The scan is a token search, and Qt's design justifies that: Q_OBJECT is
+    a marker rather than a shape. It does mean a class reaching the macro
+    through another macro carries no token to find --
+
+        #define MY_OBJ Q_OBJECT           /* in macros.h */
+        class G : public QObject { MY_OBJ };
+
+    -- and moc's own preprocessor expands it and generates, while the scan
+    sees nothing. The link then fails on `undefined reference to vtable for
+    G', which names no Qt anything, and the advice offered was --ldflags:
+    the reader is sent to install a library for a meta-object their own
+    tree was supposed to generate.
+
+    Asking moc is definitive where guessing at C++ is not, and it is
+    affordable precisely here: this runs only after a link has already
+    failed, and only over the headers that link set includes.
+    """
+	names = set()
+	for u in link:
+		for _kind, name, _line in scans.get(u.rel, {}).get("incs", []):
+			names.add(os.path.basename(name))
+	cands = [h for h in hdrs
+	         if h not in mocced and os.path.basename(h) in names]
+	if not cands:
+		return []
+	moc = find_qt_tool("moc", cfg.moc, pkg)
+	if not moc:
+		return []
+	flags = moc_cflags(root, hdrs, conf)
+	return [h for h in cands if moc_would_generate(root, h, moc, flags)]
+
+
 def moc_plan(srcs, hdrs, scans):
 	"""What moc must run on, and where each output goes.
 
@@ -6761,6 +6815,7 @@ def build(args, _bootstrapping=False):
 
 	if failed:
 		say()
+		hidden_moc = set()
 		for name, cl, res in failed:
 			warn(f"{name} did not link")
 			if res and res["chosen"]:
@@ -6798,12 +6853,35 @@ def build(args, _bootstrapping=False):
 				note(f"{rel} declares a Q_OBJECT class and does not "
 				     f'#include "{moc_unreachable[rel]}", so its '
 				     f"meta-object was never generated")
-		note("name the missing libraries with --ldflags, or build only the "
-		     "targets you want"
-		     if not any(u.rel in moc_unreachable
-		                for _n, c, _r in failed for u in c.link)
-		     else 'add the missing #include of the .moc file above; if that '
-		          "is not it, name the missing libraries with --ldflags")
+			# The other half of the same failure, and the one the scan
+			# cannot see at all: a header whose Q_OBJECT arrives through
+			# another macro carries no token, so no job was planned and
+			# nothing above blames it. Only asked when Qt is actually
+			# being linked, and only on a link that has already failed.
+			if not blamed and res and any(
+			        f.startswith("-lQt") for f in res.get("ldflags") or []):
+				for rel in unscanned_moc_inputs(root, cl.link, scans, hdrs,
+				                                {j["src"] for j in moc_jobs},
+				                                cfg, conf, pkg):
+					hidden_moc.add(rel)
+					note(f"{rel} needs moc -- it spells Q_OBJECT through "
+					     f"another macro, which the scan cannot see, so no "
+					     f"meta-object was generated for it")
+		# Three endings, because there are three causes and only one of them
+		# is a missing library. Offering --ldflags for a meta-object this
+		# tree was supposed to generate sends the reader to install
+		# something that does not exist.
+		if hidden_moc:
+			note("write Q_OBJECT in the class rather than reaching it "
+			     "through another macro: moc's preprocessor finds it either "
+			     "way, but what decides to run moc is a token search")
+		elif any(u.rel in moc_unreachable
+		         for _n, c, _r in failed for u in c.link):
+			note('add the missing #include of the .moc file above; if that '
+			     "is not it, name the missing libraries with --ldflags")
+		else:
+			note("name the missing libraries with --ldflags, or build only "
+			     "the targets you want")
 		return 1
 	return 1 if broken else 0
 
