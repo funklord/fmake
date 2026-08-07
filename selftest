@@ -7594,6 +7594,70 @@ def a_stray_object_beside_its_source_is_ignored(t):
 
 
 @case
+def two_ambiguous_archives_report_rather_than_traceback(t):
+	"""Found by running beerssh, in code nobody had touched.
+
+	It ships prebuilt `libcrypto.a` for two Android ABIs beside its desktop
+	sources. Both define the same symbols, section 3 refuses to choose --
+	correctly -- and the code that explains the refusal looked every
+	provider up in the scan map with `scans[p]`. An archive has no scan: it
+	was never a source. `KeyError`, and a traceback out of the command
+	line, which is section 32's class arriving in the message written to
+	explain a failure rather than in the failure.
+
+	Then the advice it printed could not be followed either. `@os` and
+	`@arch` go in a source file and an archive has none, so the one remedy
+	offered was the one thing that could not be done -- section 101 again.
+
+	And the remedy that *should* have worked did not: `[project] exclude`
+	never reached archives, so following the corrected advice changed
+	nothing. Three defects in one message, each hiding the next."""
+	if not (shutil.which("ar") and shutil.which("cc")):
+		raise Skip("ar or cc not installed")
+
+	def archive(rel, value):
+		src = os.path.join(t.dir, "tmp.c")
+		with open(src, "w") as fh:
+			fh.write(f"int zz_shared_thing(void){{ return {value}; }}\n")
+		obj = os.path.join(t.dir, "tmp.o")
+		check(subprocess.run(["cc", "-c", src, "-o", obj]).returncode == 0,
+		      "could not compile")
+		path = os.path.join(t.dir, rel)
+		os.makedirs(os.path.dirname(path), exist_ok=True)
+		check(subprocess.run(["ar", "rcs", path, obj]).returncode == 0,
+		      f"could not archive {rel}")
+		os.remove(src)
+		os.remove(obj)
+
+	archive("deps/a/libzz.a", 1)
+	archive("deps/b/libzz.a", 2)
+	t.write("main.c", "int zz_shared_thing(void);\n"
+	        "int main(void){ return zz_shared_thing() - 1; }\n")
+
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("Traceback" not in said and "KeyError" not in said,
+	      f"an ambiguous archive tracebacked instead of reporting: {said}")
+	check(r.returncode != 0, "two providers of one symbol should be refused")
+	check("more than one file" in said,
+	      f"the ambiguity was not reported: {said}")
+	# Advice that can be acted on: not @os, which an archive cannot carry.
+	check("exclude" in said,
+	      f"the advice does not name a remedy that works for an archive: "
+	      f"{said}")
+	check("@os or @arch on the platform-specific one" not in said,
+	      f"offered a directive an archive cannot carry: {said}")
+
+	# And taking that advice has to work.
+	t.write("fmake.toml", '[project]\nexclude = ["deps/b/**"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"following the advice did not resolve it: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the surviving archive was not the one kept")
+
+
+@case
 def every_knob_that_changes_a_compile_reaches_the_object_key(t):
 	"""Section 76's claim, enumerated rather than trusted.
 

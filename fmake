@@ -6086,6 +6086,14 @@ def build(args, _bootstrapping=False):
 	out_prefix = os.path.join(os.path.abspath(outdir), "")
 	vendored = []
 	for a in find_archives(root):
+		# `[project] exclude` reaches archives too, and did not. It is the
+		# one lever for "this subtree is not for this build", and beerssh
+		# ships prebuilt libcrypto.a for two Android ABIs beside the
+		# desktop sources: they define the same symbols, section 3 refuses
+		# to choose, and the only remedy fmake could suggest was the one
+		# thing that had no effect on them.
+		if exclude_pattern(a):
+			continue
 		if os.path.basename(a) in ours:
 			continue        # something this tree builds, not something it ships
 		# And anything already sitting in the output directory, unless that
@@ -6335,8 +6343,26 @@ def build(args, _bootstrapping=False):
 			             f"an entry point rather than one library.\nGive each "
 			             f"a [target.*] with its own sources in {CONF_FILE}, "
 			             f"or drop them with [project] exclude.")
-		elif any(scans[p].get("dirs", {}).get("os") for p in first_providers):
+		# `scans.get`, not `scans[...]`: a provider can be a vendored archive,
+		# which has no scan because it was never a source -- section 18 gives
+		# those units an empty one and keeps them out of the scan map. Found
+		# by running beerssh, where two Android archives under deps/ define
+		# the same symbols and the ambiguity report tracebacked instead of
+		# printing. Section 32's class, in the code written to explain a
+		# failure rather than in the failure itself.
+		elif any(scans.get(p, {}).get("dirs", {}).get("os")
+		         for p in first_providers):
 			lines.append("\nOne of them has @os; the others may need one too.")
+		elif all(p.endswith(".a") for p in first_providers):
+			# A directive cannot be written on an archive: there is no
+			# source to put it in. Section 101's shape, in the same
+			# message -- advice that cannot be followed is worse than
+			# none, and the remedy that does work is the one that names
+			# paths rather than files.
+			lines.append(f"\nThese are prebuilt archives, so @os and @arch "
+			             f"have nowhere to go. Keep the ones that are not "
+			             f"for this build out with [project] exclude in "
+			             f"{CONF_FILE}.")
 		else:
 			lines.append("\n@os or @arch on the platform-specific one will "
 			             "settle it, or name the sources of each target in "

@@ -148,7 +148,8 @@ that had been green about nothing for five commits ·
 [103. The soname chain, for the price of a rule](#103-the-soname-chain-for-the-price-of-a-rule) ·
 [104. The hand-written list nobody had checked](#104-the-hand-written-list-nobody-had-checked) ·
 [105. The other two lists, and a check that checked nothing](#105-the-other-two-lists-and-a-check-that-checked-nothing) ·
-[106. Section 76's claim, enumerated](#106-section-76s-claim-enumerated)
+[106. Section 76's claim, enumerated](#106-section-76s-claim-enumerated) ·
+[107. Running the five projects again, and three defects in one message](#107-running-the-five-projects-again-and-three-defects-in-one-message)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -7487,3 +7488,64 @@ That is worth writing down rather than deleting. It is the only term that
 would still work if a per-file flag ever arrived from somewhere other than
 the file, and "no test covers it" is a much weaker statement than "nothing
 depends on it".
+
+---
+
+## 107. Running the five projects again, and three defects in one message
+
+Thirty-odd commits into a session that changed the default flags, put the
+project's compile flags on the link line, sorted the tree walk and added
+`-fPIC` for Qt, nobody had asked whether a real project still built. So all
+five were run again, from copies rather than from anybody's working tree.
+
+**Four were fine.** netcfgd builds its GUI and its client. situ builds
+`libsitu.a` from one line of configuration, and the archive holds
+`situ.c.o` alone -- §73's fix, still holding. hydra builds its 57 files,
+now with `-fPIC` on every Qt compile, and ejects a 6252-line Makefile.
+
+beerssh found three defects, each hiding the next.
+
+### One symbol, two archives, and a traceback
+
+beerssh ships a prebuilt `libcrypto.a` for two Android ABIs beside its
+desktop sources. Both define the same symbols, §3 refuses to choose --
+which is right -- and the code explaining the refusal looked every provider
+up with `scans[p]`.
+
+**An archive has no scan**: it was never a source, and §18 gives those
+units an empty one outside the scan map. `KeyError`, and a traceback out of
+the command line. §32's class, arriving in the code written to explain a
+failure rather than in the failure itself.
+
+### Advice an archive cannot take
+
+With the traceback fixed, the message offered `@os` or `@arch` on the
+platform-specific one. Those go in a source file, and an archive has none
+-- §101 again, two sections later, in a message that had been correct for
+sources since it was written.
+
+### And the remedy that did nothing
+
+So the advice became `[project] exclude`, which names paths rather than
+files and is exactly right for a vendored archive. Following it changed
+nothing: **`exclude` had never reached archives.** `find_archives` walks
+the tree and the only filters applied afterwards were "something this tree
+builds" and "something in the output directory".
+
+That is the one lever a project has for "this subtree is not for this
+build", and the thing it could not move was the only kind of file that had
+no other way of being excluded.
+
+### What the sweep says about sweeps
+
+Each of the three was hidden behind the one before it: the traceback hid
+the bad advice, the bad advice hid the ineffective remedy. A fix that
+stopped at the traceback would have left a message that reads perfectly and
+sends the reader nowhere.
+
+Worth recording too: the sweep nearly reported a regression that was its
+own fault. `git archive` does not include submodule contents, so the first
+beerssh copy had an empty `vterm/` -- 80 files missing -- and failed to
+link on symbols that were simply not there. **A fixture built by a
+convenient command is a fixture worth checking before believing what it
+says about the tool.**
