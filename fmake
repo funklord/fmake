@@ -2532,10 +2532,36 @@ def walk_tree(root):
 	for dirpath, dirnames, filenames in _walk(root):
 		for f in filenames:
 			ext = os.path.splitext(f)[1]
-			rel = os.path.relpath(os.path.join(dirpath, f), root)
+			if ext not in SRC_EXTS and ext not in HDR_EXTS:
+				continue
+			path = os.path.join(dirpath, f)
+			# os.walk lists everything that is not a directory, and a
+			# source extension on something that is not a file does not
+			# make it one. Both of the ways that goes wrong are hangs
+			# rather than errors, which is why this is a guard and not a
+			# tidiness: reading a FIFO blocks until somebody writes to it,
+			# and a device like /dev/zero never stops producing. fmake read
+			# whatever it found, so either one meant a build that never
+			# returned and never said why.
+			#
+			# isfile() follows symlinks, so a symlinked source still
+			# builds, which trees do rely on.
+			#
+			# The exists() half is what keeps a *dangling* symlink out of
+			# this: it is a broken link rather than a thing that is not a
+			# file, which is somebody's mistake and is reported downstream
+			# by name. Dropping it silently here looked like the same
+			# case and is not, and the suite said so -- odd_trees_do_not_
+			# crash exists because a dangling link once raised KeyError,
+			# and it requires the report that replaced the crash.
+			if os.path.exists(path) and not os.path.isfile(path):
+				vinfo(f"{os.path.relpath(path, root)} is not a regular "
+				      f"file; not treating it as source")
+				continue
+			rel = os.path.relpath(path, root)
 			if ext in SRC_EXTS:
 				srcs.append(rel)
-			elif ext in HDR_EXTS:
+			else:
 				hdrs.append(rel)
 	return sorted(srcs), sorted(hdrs)
 

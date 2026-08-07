@@ -54,6 +54,10 @@ if not sys.stdout.isatty():
 
 CASES = []
 KEEP = False
+# No single fmake invocation legitimately takes this long -- the slowest
+# whole case measured 77s with the pool saturated. It exists so that a
+# hang fails the case instead of stopping the suite.
+FMAKE_TIMEOUT = 300
 JOBS = os.cpu_count() or 4
 
 
@@ -76,7 +80,7 @@ class Tree:
 			fh.write(text.lstrip("\n"))
 		return path
 
-	def fmake(self, *args, env=None):
+	def fmake(self, *args, env=None, timeout=FMAKE_TIMEOUT):
 		e = dict(os.environ)
 		e.pop("CFLAGS", None)
 		e.pop("LDFLAGS", None)
@@ -86,9 +90,20 @@ class Tree:
 		e.pop("DEBUG", None)
 		e.pop("SANITIZE", None)
 		e.update(env or {})
-		r = subprocess.run([FMAKE, "-C", self.dir, *args],
-		                   capture_output=True, text=True, env=e)
-		return r
+		try:
+			return subprocess.run([FMAKE, "-C", self.dir, *args],
+			                      capture_output=True, text=True, env=e,
+			                      timeout=timeout)
+		except subprocess.TimeoutExpired:
+			# A bound the suite carries itself, rather than one whoever
+			# runs it remembers to wrap around it. fmake had two ways to
+			# never return -- a FIFO named `*.c' blocks on open, a device
+			# never stops producing -- and a case that reached either hung
+			# the whole run: no failure, no output, just a suite that never
+			# finished. A hang has to arrive as a failing case naming the
+			# case, which is the one form of it anybody can act on.
+			raise Failure(f"fmake did not return within {timeout}s: "
+			              f"{' '.join(args) or '(no arguments)'}")
 
 	def run(self, prog, env=None):
 		e = dict(os.environ)
@@ -10437,6 +10452,55 @@ def a_vendored_main_stays_out_of_a_library(t):
 	                      capture_output=True, text=True).stdout
 	check(not re.search(r"^main [TT]", syms, re.M),
 	      f"the archive carries the vendored main(): {syms}")
+
+
+@case
+def something_that_is_not_a_file_is_not_a_source(t):
+	"""Both ways this went wrong were hangs, which is why it is a guard.
+
+	`os.walk' lists everything that is not a directory, and fmake filtered
+	on the extension alone -- so anything named `*.c' was read. A source
+	extension on something that is not a file does not make it one:
+
+	    a FIFO       blocks until somebody writes to it
+	    /dev/zero    never stops producing
+
+	Neither has a termination condition, so fmake did not fail on these,
+	it *never returned* -- no output, no error, nothing to read. That is
+	the worst shape a build tool has, and it needed a named pipe in a
+	directory to reach.
+
+	`isfile()' follows symlinks, so the fix must not cost a symlinked
+	source, which trees do rely on. The last part checks that, from
+	outside the walked tree so there is only one copy of the symbol and
+	the closure has nothing to be ambiguous about."""
+	if not hasattr(os, "mkfifo"):
+		raise Skip("no mkfifo on this platform")
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 7; }\n")
+	os.mkfifo(os.path.join(t.dir, "blocks.c"))
+	os.symlink("/dev/zero", os.path.join(t.dir, "endless.c"))
+	outside = t.dir + "-outside"
+	os.makedirs(outside, exist_ok=True)
+	with open(os.path.join(outside, "helper.c"), "w") as fh:
+		fh.write("int helper(void){ return 7; }\n")
+	os.symlink(os.path.join(outside, "helper.c"),
+	           os.path.join(t.dir, "helper.c"))
+	try:
+		r = t.fmake()
+		check(r.returncode == 0,
+		      f"the tree did not build: {r.stdout}{r.stderr}")
+		check(_run_in(t.dir, "./" + os.path.basename(t.dir)).returncode == 0,
+		      "the symlinked source was skipped along with the rest, so the "
+		      "guard costs a shape that trees actually use")
+
+		v = t.fmake("-v", "-B")
+		out = v.stdout + v.stderr
+		for name in ("blocks.c", "endless.c"):
+			check(f"{name} is not a regular file" in out,
+			      f"{name} was not reported as skipped: {out}")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
 
 
 @case

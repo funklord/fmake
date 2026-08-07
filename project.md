@@ -161,7 +161,8 @@ that had been green about nothing for five commits ·
 [116. The lead §79 declined to act on was real](#116-the-lead-79-declined-to-act-on-was-real) ·
 [117. A toolchain with no prefix to derive anything from](#117-a-toolchain-with-no-prefix-to-derive-anything-from) ·
 [118. Defensive on one side of the same rule](#118-defensive-on-one-side-of-the-same-rule) ·
-[119. A name in a comment stays a name](#119-a-name-in-a-comment-stays-a-name)
+[119. A name in a comment stays a name](#119-a-name-in-a-comment-stays-a-name) ·
+[120. Two ways to never return](#120-two-ways-to-never-return)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -8361,3 +8362,79 @@ the case ends by building an ordinary `@target myapp` and requiring it to
 work -- and the mutation that makes the guard fire on everything is caught
 there and nowhere else. **When the change is a refusal, the test that
 earns its keep is the one that checks what still gets through.**
+
+---
+
+## 120. Two ways to never return
+
+The hostile-input sweep of §119 kept going, and the next thing it found was
+not an error but a **hang**.
+
+`os.walk` lists everything that is not a directory, and `walk_tree`
+filtered on the extension alone. A source extension on something that is
+not a file does not make it one:
+
+```
+a FIFO named blocks.c      open() blocks until somebody writes
+/dev/zero symlinked as     read() never stops producing
+  endless.c
+```
+
+fmake read whatever it found. Neither of these fails -- fmake **never
+returned**. No output, no error, no exit status, nothing to read and
+nothing to act on. That is the worst shape a build tool has, and reaching
+it took a named pipe in a directory.
+
+`os.path.isfile()` is most of the fix, and it follows symlinks, so a
+symlinked source still builds -- which trees do rely on, and which the
+case checks from outside the walked tree so there is only one copy of the
+symbol and nothing to be ambiguous about. What is skipped is named under
+`-v`, since a silently dropped source is the other way to be wrong here.
+
+**And `isfile()` alone was wrong**, which the suite said and this section
+would otherwise have claimed as finished. A dangling symlink is not a
+file either, so it was being dropped silently too -- and
+`odd_trees_do_not_crash` exists precisely because one of those once
+raised `KeyError`, with the report that replaced the crash as its
+assertion. A broken link is somebody's mistake and gets named; a FIFO is
+not a source at all and does not. The condition is `exists() and not
+isfile()`, and the difference between the two is the whole point:
+
+```
+dangling.c   -> exists() is False -> passes through, reported by name
+blocks.c     -> exists() is True  -> skipped, named under -v
+```
+
+**A guard written for one shape swallowed a neighbouring one**, and only
+a case that already knew the difference caught it. It was the last full
+run before the commit that found it, not any of the targeted runs.
+
+### The suite could not have caught it, because it would have hung too
+
+`Tree.fmake()` ran `subprocess.run` with no timeout. A case that reached
+either shape would have stopped the whole run rather than failing: no
+result, no name, just a suite that never finished -- and under `make check`
+in CI, a job that runs until the runner's own limit kills it with no
+indication of which case did it.
+
+**The bound belongs inside**, which is the rule
+`~/.claude/guidelines/running-code.md` states for exactly this: a wrapper
+only guards the way somebody happened to run it. `FMAKE_TIMEOUT = 300`
+turns a hang into a failing case that names itself:
+
+```
+FAIL something_that_is_not_a_file_is_not_a_source
+       fmake did not return within 300s: (no arguments)
+```
+
+Verified by removing the guard and watching that come out, rather than
+assumed. No single invocation legitimately approaches it -- the slowest
+*whole case* measured 77s with the pool saturated -- so it costs nothing
+and applies to all 303.
+
+### The pattern in these three sections
+
+§118, §119 and this one all came from the same afternoon of pointing
+deliberately stupid input at the tool, and none of them came from thinking
+about the code. A traceback, an escape from `DESTDIR`, and two hangs --
+**the sweep was cheap and found what reading would not.**
