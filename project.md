@@ -131,7 +131,8 @@ that had been green about nothing for five commits ·
 [86. `-g` was in the default and should not have been](#86--g-was-in-the-default-and-should-not-have-been) ·
 [87. `SANITIZE`, and a variable that means two things](#87-sanitize-and-a-variable-that-means-two-things) ·
 [88. The switches had to survive the exit too](#88-the-switches-had-to-survive-the-exit-too) ·
-[89. The flags that have to be on both lines](#89-the-flags-that-have-to-be-on-both-lines)
+[89. The flags that have to be on both lines](#89-the-flags-that-have-to-be-on-both-lines) ·
+[90. Two directives that were read and then discarded quietly](#90-two-directives-that-were-read-and-then-discarded-quietly)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -6383,3 +6384,70 @@ against each other rather than against a description. The ninja case is its
 own rather than a second half of the Makefile one, so a machine without
 ninja skips it and still checks the Makefile -- the first version returned
 early instead, which is a silent reduction in coverage wearing a pass.
+
+---
+
+## 90. Two directives that were read and then discarded quietly
+
+A sweep for the failure class §89 closed -- something accepted, doing
+nothing, saying nothing -- found no more of that kind. What it did turn up
+was two directives that are handled correctly and reported badly, which is
+a different failure and a cheaper one to fix.
+
+Worth stating what the sweep covered, since a sweep is not a proof: twelve
+shapes across the directive surface, the config surface and eject fidelity.
+Four things suspected and cleared -- `--explain` does still list the
+directives it recognised, which is the only mitigation §15 claims for a
+typo; per-file `@ldflags` reach both ejected backends, the Makefile on the
+link line and ninja in the per-edge `libs`; per-file `@cflags` stay
+per-file after ejection; `$CFLAGS` reaches the link. The cross-compile
+paths, the Qt generators and the cache-invalidation edges were not swept
+and could hold one.
+
+### An exclusion that empties the tree
+
+`@os windwos` produced:
+
+```
+!!! every source file is excluded when building for linux/x86_64
+```
+
+True, and it sends the reader to `[toolchain]` and to the machine they are
+on -- everywhere except the spelling, which is the one thing that can be
+wrong. **This is §31's pattern arriving inside the message written to avoid
+it**, and it is the third time that has happened, after §68's header and
+§72's include directory.
+
+The fix is the same one both times: fmake had already recorded the reason
+per file while excluding it, so it prints what it knows.
+
+```
+!!! every source file is excluded when building for linux/x86_64
+    lib.c: @arch riscv (building for x86_64)
+    prog.c: @os windwos (building for linux)
+```
+
+Exact rather than a guess, which is what lets it replace the bare sentence
+rather than joining it. Capped at the same width the linker output is,
+because a tree excluded by a bad `[project] exclude` glob can be every file
+in it.
+
+### `@headers` next to a program
+
+Gathering `@headers` for libraries only is right and stays -- §7 argues it,
+and a program does not publish an API. But being right is not being
+understood. Somebody who writes `@headers api.h` beside a program's source
+runs `--install`, is told it installed one file, and gets no header and no
+word: the directive was read, understood, and dropped in silence, which is
+indistinguishable from a typo that did nothing.
+
+It is reported now, with both remedies named -- move it to the library's
+source, or say `[target.NAME] headers` to publish it anyway.
+
+**The negative case is what decides whether this is a diagnostic or a
+nuisance**, and it is the half worth the effort. The file carrying the
+directive is *usually* linked into one of the tree's programs as well, so
+the test cannot be "this source reaches a program". It is "this header is
+published by nothing", computed against the plan §85 already builds -- so
+the normal shape of a library, a consumer and one header stays silent, and
+the case asserts that as hard as it asserts the report.

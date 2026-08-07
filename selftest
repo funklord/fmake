@@ -3430,6 +3430,102 @@ def an_ejected_ninja_installs_what_fmake_installs(t):
 
 
 @case
+def an_exclusion_that_empties_the_tree_names_what_did_it(t):
+	"""`@os windwos` is a platform problem for about a minute.
+
+	The message was true and pointed at the wrong thing: told that every
+	source is excluded when building for linux/x86_64, a reader checks
+	[toolchain], checks the machine, and never suspects the spelling --
+	which is the one thing that can be wrong. Section 31's pattern, in the
+	message written to avoid it.
+
+	fmake recorded the reason per file while excluding it, so saying which
+	file and which directive costs nothing but printing what it already
+	knows. The fix is exact rather than a guess, which is what lets it
+	replace the bare sentence instead of joining it."""
+	t.write("prog.c", "/*! @file\n *  @os windwos\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "a tree with nothing to build should fail")
+	said = r.stdout + r.stderr
+	check("prog.c" in said, f"the file that was excluded is not named: {said}")
+	check("windwos" in said,
+	      f"the directive that excluded it is not named, so the reader "
+	      f"cannot see the typo: {said}")
+
+	# Two files, two different reasons, both named.
+	t.write("lib.c", "/*! @file\n *  @arch riscv\n */\n"
+	        "int helper(void){ return 1; }\n")
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("riscv" in said and "windwos" in said,
+	      f"only one of the two reasons was given: {said}")
+
+	# A real platform exclusion still reads as one rather than as a typo.
+	u = Tree("named")
+	try:
+		u.write("net_win32.c", "int main(void){ return 0; }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check("net_win32.c" in said and "@os" in said,
+		      f"a filename exclusion lost its explanation: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
+def a_program_only_headers_directive_is_reported(t):
+	"""A directive read, understood, and discarded in silence.
+
+	@headers is gathered for libraries only, and that rule is right --
+	section 7 -- but being right is not being understood. Somebody who
+	writes it beside a program's source runs --install, is told one file
+	was installed, and gets no header and no word about why.
+
+	The half that decides whether this is a diagnostic or a nuisance is the
+	negative case: the source carrying the directive is *usually* linked
+	into one of the tree's programs as well, and warning about that normal
+	shape would be crying wolf on every project that has a library and a
+	consumer."""
+	t.write("api.h", "void f(void);\n")
+	t.write("prog.c", '/*! @file\n *  @headers api.h\n */\n'
+	        '#include "api.h"\nvoid f(void){}\n'
+	        "int main(void){ f(); return 0; }\n")
+	r = t.fmake("--install", "--destdir", os.path.join(t.dir, "stage"))
+	check(r.returncode == 0, f"install failed: {r.stderr}")
+	said = r.stdout + r.stderr
+	check("api.h" in said and "not installed" in said,
+	      f"a @headers that installs nothing said nothing: {said}")
+
+	# The normal shape must stay quiet: greet.c is the archive's source and
+	# is also linked into tool, so the header IS published and there is
+	# nothing to report.
+	u = Tree("normal")
+	try:
+		u.write("greet.h", "#pragma once\nconst char *greet(void);\n")
+		u.write("greet.c", """
+/*! @file
+ *  @kind    static
+ *  @target  greet
+ *  @headers greet.h
+ */
+#include "greet.h"
+const char *greet(void){ return "hi"; }
+""")
+		u.write("tool.c", '/*! @file\n *  @target tool\n */\n'
+		        '#include <stdio.h>\n#include "greet.h"\n'
+		        "int main(void){ puts(greet()); return 0; }\n")
+		r = u.fmake("--install", "--destdir", os.path.join(u.dir, "stage"))
+		check(r.returncode == 0, f"install failed: {r.stderr}")
+		said = r.stdout + r.stderr
+		check("not installed" not in said,
+		      f"warned about a header it did install: {said}")
+		check("include/greet.h" in said, f"the header was not installed: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def install_does_not_publish_headers_for_programs(t):
 	"""A program has no public API to publish.
 

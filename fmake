@@ -5060,8 +5060,20 @@ def build(args, _bootstrapping=False):
 				by_name.append(rel)
 		srcs.remove(rel)
 	if not srcs:
+		# Name what did it. The bare sentence was true and sent the reader
+		# to the wrong place: a mistyped `@os windwos' reads as a platform
+		# problem, so somebody checks [toolchain] and the machine they are
+		# on, and the one thing that cannot be wrong is the thing that is.
+		# fmake recorded the reason per file while excluding it, so this
+		# costs nothing but printing what it already knows -- the same move
+		# as naming the include directory in section 68 rather than
+		# offering to install a package.
+		lines = [f"    {rel}: {why}" for rel, why in sorted(excluded.items())]
 		die(f"every source file is excluded when building for "
-		    f"{cfg.os}/{cfg.arch}")
+		    f"{cfg.os}/{cfg.arch}\n"
+		    + "\n".join(lines[:LINK_ERR_LINES])
+		    + (f"\n    ... and {len(lines) - LINK_ERR_LINES} more"
+		       if len(lines) > LINK_ERR_LINES else ""))
 	# Said out loud, because a file that stops being compiled is a file
 	# whose symbols stop existing, and the link error that follows names
 	# neither the file nor the reason. @os or @arch in the file overrides
@@ -7091,6 +7103,36 @@ def install_plan(targets, closures, root):
 	return unique
 
 
+def unpublished_headers(targets, closures, root):
+	"""`@headers` that were written down and then not installed.
+
+    Gathering for libraries only is the rule and it is right -- section 7 -- but
+    being right is not the same as being understood. Somebody who writes
+    `@headers api.h` next to a program's source runs `--install`, is told
+    it installed one file, and gets no header and no word about why. The
+    directive was read, understood, and discarded in silence, which is the
+    same shape as a typo that does nothing.
+
+    So: every header named by a file that only ever lands in a program, and
+    which no library published either. The second half matters -- the file
+    carrying the directive is usually linked into one of the tree's
+    programs *as well*, and reporting that would be crying wolf on the
+    normal case.
+    """
+	published = {source for _, source, directory, _, _
+	             in install_plan(targets, closures, root)
+	             if directory == "includedir"}
+	orphans = {}
+	for t in targets:
+		if t.kind != "exe":
+			continue
+		for u in closures[t].link:
+			for h in u.ann.items("headers"):
+				if h not in published:
+					orphans.setdefault(h, set()).add(u.rel)
+	return {h: sorted(where) for h, where in sorted(orphans.items())}
+
+
 def do_install(targets, closures, root, outdir, conf, args):
 	paths = install_paths(conf, args)
 	planned = []
@@ -7101,6 +7143,17 @@ def do_install(targets, closures, root, outdir, conf, args):
 		if origin == "built" and not os.path.exists(src):
 			die(f"{source} has not been built")
 		planned.append((src, os.path.join(paths[directory], name), mode))
+
+	# Before anything is copied, say what was asked for and will not be.
+	# A directive that is read and then discarded without comment is the
+	# failure this reports, not the rule that discards it -- which is
+	# right, and stays.
+	for header, sources in unpublished_headers(targets, closures,
+	                                           root).items():
+		warn(f"@headers {header!r} is not installed: "
+		     f"{', '.join(sources)} reaches only a program, and a program "
+		     f"publishes no API. Put the directive on the library's source, "
+		     f"or name it in [target.NAME] headers to publish it anyway")
 
 	if not planned:
 		info("nothing to install")
