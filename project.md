@@ -142,7 +142,8 @@ that had been green about nothing for five commits ·
 [97. The clean that left a build behind](#97-the-clean-that-left-a-build-behind) ·
 [98. The Qt flag every other build system supplies](#98-the-qt-flag-every-other-build-system-supplies) ·
 [99. The typo that could be named after all](#99-the-typo-that-could-be-named-after-all) ·
-[100. The archives the cover put in the wrong order](#100-the-archives-the-cover-put-in-the-wrong-order)
+[100. The archives the cover put in the wrong order](#100-the-archives-the-cover-put-in-the-wrong-order) ·
+[101. The prebuilt object, and the version of it that would have been wrong](#101-the-prebuilt-object-and-the-version-of-it-that-would-have-been-wrong)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1680,11 +1681,11 @@ rather than code, and one lesson about testing.
   outright. Any other generator whose sole contribution to a program is a
   vtable would need the same treatment, and there is no general mechanism for
   saying so.
-- ~~**Static libraries and prebuilt objects as inputs.**~~ Closed for `.a`;
-  see §18. The guess that it would fall out naturally was right, and the two
-  things that did not fall out — where an archive goes on the link line, and
-  keeping it out of the compile step — were both small. Prebuilt loose `.o`
-  files are still unhandled.
+- ~~**Static libraries and prebuilt objects as inputs.**~~ Closed for `.a`
+  by §18 and for loose `.o` by §101 — **named rather than discovered**, and
+  that distinction is the whole finding. The guess that it would fall out
+  naturally was right for the symbols and wrong about where such a file
+  comes from.
 - **LTO and `-ffunction-sections`.** `-flto` with GCC works and is now
   checked by hand: its objects still carry a symbol table `nm` can read, the
   closure is unaffected, and the binary runs. Clang emits pure bitcode where
@@ -7134,3 +7135,56 @@ that depend on each other.
 That entry also said there was no `SONAME`. §22 added one, and the entry
 had not been told. Corrected rather than left, since it is the list people
 read to find out what is missing.
+
+---
+
+## 101. The prebuilt object, and the version of it that would have been wrong
+
+§18 closed this question for `.a` and guessed the rest would follow. The
+symbols do: `nm` reads a loose object exactly as it reads an archive, so a
+`.o` joins the link set by symbol with nothing new asked of the closure.
+
+**What does not follow is discovering them**, and the obvious
+implementation -- walk the tree, treat every `.o` as a provider -- turns
+working trees into broken ones.
+
+```
+$ ls
+helper.c  helper.o  main.c        # helper.o is what `cc -c helper.c` left
+```
+
+That is not a vendored blob, it is litter, and it is everywhere: a kernel
+checkout in this workspace has dozens sitting beside their sources.
+Discovering it means two providers for every symbol `helper.c` defines, and
+§3 refusing to choose -- a build that works today failing on a stale object
+nobody meant to keep. **Naming the file is the entire difference between a
+vendored blob and a leftover**, so a prebuilt object is declared, in
+`@sources` or `[target.*] sources`, which are already the two ways of
+saying "link this whatever the symbols think".
+
+Both halves have a case. The second one -- a stale `helper.o` beside
+`helper.c`, deliberately returning a different value -- is what says the
+discovery version stays unbuilt, and it fails the moment anything picks up
+a loose object.
+
+### Two facts that had been one
+
+`Unit.archive` meant two things at once and nothing had noticed, because
+until now they were never different:
+
+- **where it goes on the link line** -- an archive goes after every object,
+  inside a group;
+- **whether fmake compiled it** -- an archive has no compile step, no
+  object directory and no depfile.
+
+A prebuilt `.o` is the first thing that is the second without being the
+first: fmake did not build it, and it is an ordinary object rather than
+something the linker searches member by member. Five places read
+`u.archive` to mean "nothing to compile" and got the wrong answer, one of
+them by tracebacking out of `--explain`. `prebuilt` is its own field now,
+and `archive` means only what it says.
+
+That is the shape worth remembering rather than the feature: **a flag
+carrying two facts is correct until the first case where they differ**, and
+the case where they differ is the one that arrives long after everybody has
+stopped thinking about it.

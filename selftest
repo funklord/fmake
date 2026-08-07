@@ -7237,6 +7237,111 @@ def _vendor(t, rel, stem, body, extra=None):
 
 
 @case
+def a_named_prebuilt_object_is_linked(t):
+	"""section 18 closed this for `.a` and guessed the rest would follow.
+
+	It does, mechanically: nm reads a loose object exactly as it reads an
+	archive, so the closure needs nothing new and `vendor/blob.o` joins the
+	link set by symbol like anything else.
+
+	What does not follow is *discovering* them, which is why this is
+	declared. See the case below."""
+	if not shutil.which("cc"):
+		raise Skip("cc not installed")
+	blob = os.path.join(t.dir, "vendor")
+	os.makedirs(blob, exist_ok=True)
+	src = os.path.join(blob, "blob.c")
+	with open(src, "w") as fh:
+		fh.write("int blob_value(void){ return 9; }\n")
+	check(subprocess.run(["cc", "-c", src, "-o",
+	                      os.path.join(blob, "blob.o")]).returncode == 0,
+	      "could not build the blob")
+	os.remove(src)
+
+	t.write("main.c", "/*! @file\n *  @sources vendor/blob.o\n */\n"
+	        "int blob_value(void);\n"
+	        "int main(void){ return blob_value() - 9; }\n")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program did not get the blob's value")
+
+	r = t.fmake("--explain")
+	check("vendor/blob.o" in r.stdout,
+	      f"the prebuilt object is not in the link set: {r.stdout}")
+	# An object is not searched member by member, so it must not be inside
+	# the archive group -- that is for things the linker searches.
+	link = [l for l in r.stdout.splitlines() if " -o " in l and " -c " not in l]
+	check(link, "no link line in --explain")
+	check("--start-group" not in link[0],
+	      f"a prebuilt object was put in the archive group: {link[0]}")
+
+	# It has to survive the exit, in both forms, or a project that leaves
+	# takes a build file that silently drops a blob it needs.
+	for kind, cmd in (("make", ["make", "-s"]),
+	                  ("ninja", ["ninja", "-f", "build.ninja"])):
+		if not shutil.which(cmd[0]):
+			continue
+		r = t.fmake("--eject", *([] if kind == "make" else ["ninja"]))
+		check(r.returncode == 0, f"eject {kind} failed: {r.stderr}")
+		name = "Makefile" if kind == "make" else "build.ninja"
+		with open(os.path.join(t.dir, name), "w") as fh:
+			fh.write(r.stdout)
+		check("vendor/blob.o" in r.stdout,
+		      f"the ejected {kind} build lost the prebuilt object")
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		built = _run_in(t.dir, *cmd)
+		check(built.returncode == 0,
+		      f"the ejected {kind} build failed: {built.stdout}{built.stderr}")
+		check(t.run(os.path.basename(t.dir)).returncode == 0,
+		      f"the ejected {kind} build produced a broken program")
+
+	# Named and absent is a mistake, not an empty list.
+	t.write("main.c", "/*! @file\n *  @sources vendor/ghost.o\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "a .o that is not there should be an error")
+
+
+@case
+def a_stray_object_beside_its_source_is_ignored(t):
+	"""Discovering prebuilt objects would be a regression, not a feature.
+
+	A `.o` next to its `.c` is what a hand-compile leaves behind, and it is
+	ordinary litter -- a kernel checkout has dozens. Picking those up turns
+	a tree that builds today into one reporting two providers for every
+	symbol, where the second is a stale object nobody meant to keep.
+
+	So they are declared, never discovered, and naming one is the whole
+	difference between a vendored blob and a leftover. This case is what
+	says the discovery version stays unbuilt."""
+	if not shutil.which("cc"):
+		raise Skip("cc not installed")
+	t.write("helper.c", "int helper(void){ return 3; }\n")
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 3; }\n")
+	# Exactly what `cc -c helper.c` leaves in the directory, and stale on
+	# purpose: if it were picked up the program would return 8, not 0.
+	stale = os.path.join(t.dir, "stale.c")
+	with open(stale, "w") as fh:
+		fh.write("int helper(void){ return 11; }\n")
+	check(subprocess.run(["cc", "-c", stale, "-o",
+	                      os.path.join(t.dir, "helper.o")]).returncode == 0,
+	      "could not build the stale object")
+	os.remove(stale)
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a stray .o broke a build that has nothing to do with it: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the stale object was linked instead of the compiled source")
+	r = t.fmake("--explain")
+	check("helper.o" not in r.stdout.replace("helper.c.o", ""),
+	      f"the stray object reached the build: {r.stdout}")
+
+
+@case
 def two_resolved_archives_are_grouped(t):
 	"""ld searches an archive only for what is undefined when it reaches it.
 

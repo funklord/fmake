@@ -3048,7 +3048,12 @@ def parse_depfile(path):
 # ---------------------------------------------------------------------------
 
 class Unit:
+	# `archive' is about where a unit goes on the link line; `prebuilt' is
+	# about whether fmake made it. They were the same fact until a loose .o
+	# arrived, which fmake did not build and which is not searched like an
+	# archive either.
 	__slots__ = ("rel", "abs", "cxx", "obj", "dep", "scan", "ann", "own",
+	             "prebuilt",
 	             "undef", "strong", "weak", "compiled", "archive")
 
 	def __init__(self, rel, root, objdir, scan):
@@ -3066,6 +3071,7 @@ class Unit:
 		# builds. It provides symbols like any object, but it is never
 		# compiled and it goes in a different place on the link line.
 		self.archive = False
+		self.prebuilt = False
 
 
 def optional_pkg(group):
@@ -3418,6 +3424,38 @@ def find_archives(root):
 	return sorted(out)
 
 
+def prebuilt_units(rels, root, cfg, jobs):
+	"""Prebuilt `.o` files, named rather than discovered.
+
+    section 18 closed the same question for `.a` and guessed the rest would follow.
+    It does, mechanically -- nm reads a loose object exactly as it reads an
+    archive -- but **discovering** them would be a regression rather than a
+    feature. A `.o` beside its `.c` is what a hand-compile leaves behind,
+    and it is ordinary litter: a kernel tree has dozens. Picking those up
+    turns a tree that builds today into one reporting two providers for
+    every symbol, and the second provider is a stale object nobody meant to
+    keep.
+
+    So a prebuilt object has to be asked for, in `@sources` or in
+    `[target.*] sources`, which are already the two ways of saying "link
+    this whatever the symbols think". Naming it is the whole difference
+    between a vendored blob and a leftover.
+
+    Unlike an archive it goes on the link line as an ordinary object rather
+    than inside the group: a group is for things searched member by member,
+    and an object is not searched at all.
+    """
+	made = []
+	for rel in rels:
+		u = Unit(rel, root, "", {})
+		u.obj, u.dep, u.archive = os.path.join(root, rel), None, False
+		u.prebuilt, u.compiled = True, True
+		made.append(u)
+	if made:
+		read_symbols(made, cfg, jobs)
+	return made
+
+
 def archive_units(rels, root, cfg, jobs):
 	"""Vendored archives as providers of symbols.
 
@@ -3434,6 +3472,7 @@ def archive_units(rels, root, cfg, jobs):
 	for rel in rels:
 		u = Unit(rel, root, "", {})
 		u.obj, u.dep, u.archive = os.path.join(root, rel), None, True
+		u.prebuilt = True
 		made.append(u)
 	if made:
 		read_symbols(made, cfg, jobs)
@@ -4624,7 +4663,12 @@ def _expand_sources(patterns, root, proj, who):
 	for pat in patterns:
 		hits = sorted(glob.glob(os.path.join(root, pat), recursive=True))
 		rels = [os.path.relpath(h, root) for h in hits]
-		rels = [r for r in rels if r in proj.src_set]
+		# A prebuilt object is not a source and never will be in
+		# `src_set', but naming one is the supported way to link a
+		# vendored blob -- see prebuilt_units.
+		rels = [r for r in rels
+		        if r in proj.src_set
+		        or (r.endswith(".o") and os.path.isfile(os.path.join(root, r)))]
 		if not rels:
 			die(f"{CONF_FILE}: [target.{who}] sources {pat!r} matched no "
 			    f"source file (excluded ones do not count)")
@@ -5116,7 +5160,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	print(f"  {CYAN('argv')}")
 	# Prebuilt archives have no compile command to show, only a place on the
 	# link line below.
-	built = [u for u in cl.link if not u.archive]
+	built = [u for u in cl.link if not u.prebuilt]
 	for u in built[:2]:
 		print(f"    {DIM(_show_cmd(compile_cmd(u, cfg, incflags), root))}")
 	if len(built) > 2:
@@ -5822,7 +5866,12 @@ def build(args, _bootstrapping=False):
 			                  recursive=True)
 			        or glob.glob(os.path.join(root, pat), recursive=True))
 			matched = [os.path.relpath(h, root) for h in sorted(hits)]
-			got = [g for g in matched if g in proj.src_set]
+			# A prebuilt .o is never in src_set and naming one is the
+			# supported way to link a vendored blob -- see prebuilt_units.
+			got = [g for g in matched
+			       if g in proj.src_set
+			       or (g.endswith(".o")
+			           and os.path.isfile(os.path.join(root, g)))]
 			if not got:
 				# "matched no source file" about a pattern that matched a
 				# file, which is what happens when the platform rules or a
@@ -5846,6 +5895,13 @@ def build(args, _bootstrapping=False):
 			candidates |= set(srcs)
 		else:
 			candidates |= proj.candidates(t.rel)
+	# A named .o is a prebuilt object rather than something to compile, so
+	# it is taken out here and linked as a unit of its own further down.
+	forced_objs = [r for r in forced_rels if r.endswith(".o")]
+	forced_rels = [r for r in forced_rels if r not in forced_objs]
+	for rel in forced_objs:
+		if not os.path.isfile(os.path.join(root, rel)):
+			die(f"{rel!r} is named as a prebuilt object and is not there")
 	for rel in forced_rels:
 		if rel not in proj.src_set:
 			die(f"{rel!r} is not a source file in this tree")
@@ -5994,6 +6050,10 @@ def build(args, _bootstrapping=False):
 		        os.path.abspath(os.path.join(root, a)).startswith(out_prefix):
 			continue
 		vendored.append(a)
+	prebuilt = prebuilt_units(sorted(set(forced_objs)), root, cfg, jobs)
+	if prebuilt:
+		vinfo(f"{len(prebuilt)} prebuilt object(s): "
+		      + ", ".join(u.rel for u in prebuilt[:4]))
 	archives = archive_units(vendored, root, cfg, jobs)
 	if archives:
 		vinfo(f"{len(archives)} vendored archive(s): "
@@ -6064,7 +6124,7 @@ def build(args, _bootstrapping=False):
 					continue
 				keep.append(a)
 			archives = keep
-		pool = pool + archives
+		pool = pool + archives + prebuilt
 
 		# confirm main() against the symbol tables now that objects exist
 		if not args.dry_run:
@@ -6920,7 +6980,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	every = {}
 	for t in targets:
 		for u in closures[t].link:
-			if not u.archive:       # prebuilt: there is nothing to compile
+			if not u.prebuilt:      # nothing fmake compiled, nothing to emit
 				every[u.rel] = u
 
 	# Only the moc outputs this build actually reaches. The caller has
@@ -7021,7 +7081,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	for t in targets:
 		ident = _mk_ident(t.name).upper()
 		objs = [f"$({P}BUILD_DIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link
-		        if not u.archive]
+		        if not u.prebuilt]
 		a(f"{P}{ident}_OBJS = \\")
 		for i, o in enumerate(objs):
 			a(f"\t{o}" + (" \\" if i < len(objs) - 1 else ""))
@@ -7036,20 +7096,28 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# matching what fmake itself does.
 		arcs = [] if t.kind == "static" else \
 		       [u.rel for u in closures[t].link if u.archive]
+		# A prebuilt .o is an ordinary object: named with the rest rather
+		# than after them, and never inside the group, since a group is for
+		# things the linker searches and an object is not searched.
+		blobs = [u.rel for u in closures[t].link
+		         if u.prebuilt and not u.archive]
+		objs_txt = f"$({P}{ident}_OBJS)" + (
+		    " " + " ".join(blobs) if blobs else "")
 		arcs_txt = " ".join(arcs)
 		if len(arcs) > 1:
 			arcs_txt = f"-Wl,--start-group {arcs_txt} -Wl,--end-group"
 		tail = ((f" {arcs_txt}" if arcs_txt else "")
 		        + (f" {libs}" if libs else "") + f" $({P}LDFLAGS)")
 		a(f"{t.filename}: $({P}{ident}_OBJS)"
+		  + (f" {' '.join(blobs)}" if blobs else "")
 		  + (f" {' '.join(arcs)}" if arcs else ""))
 		if t.kind == "static":
 			a("\trm -f $@")
 			a("\t$(AR) rcs $@ $^")
 		elif t.kind == "shared":
-			a(f"\t$({driver}) -shared -Wl,-soname,{t.filename} -o $@ $({P}{ident}_OBJS){tail}")
+			a(f"\t$({driver}) -shared -Wl,-soname,{t.filename} -o $@ {objs_txt}{tail}")
 		else:
-			a(f"\t$({driver}) -o $@ $({P}{ident}_OBJS){tail}")
+			a(f"\t$({driver}) -o $@ {objs_txt}{tail}")
 		a("")
 
 	# ---- install
@@ -7233,7 +7301,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	every = {}
 	for t in targets:
 		for u in closures[t].link:
-			if not u.archive:       # prebuilt: there is nothing to compile
+			if not u.prebuilt:      # nothing fmake compiled, nothing to emit
 				every[u.rel] = u
 
 	uic = uic or {}
@@ -7298,7 +7366,13 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 
 	for t in targets:
 		objs = " ".join(f"$build_dir/{_ninja(_eject_obj(u.rel))}.o"
-		                for u in closures[t].link if not u.archive)
+		                for u in closures[t].link if not u.prebuilt)
+		# A prebuilt .o is an ordinary input, beside the objects fmake
+		# compiled rather than after them with the archives.
+		blobs = [u.rel for u in closures[t].link
+		         if u.prebuilt and not u.archive]
+		if blobs:
+			objs = objs + " " + " ".join(_ninja(b) for b in blobs)
 		arcs = [] if t.kind == "static" else \
 		       [u.rel for u in closures[t].link if u.archive]
 		rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
