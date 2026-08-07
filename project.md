@@ -141,7 +141,8 @@ that had been green about nothing for five commits ·
 [96. The byte-stability check was passing by luck](#96-the-byte-stability-check-was-passing-by-luck) ·
 [97. The clean that left a build behind](#97-the-clean-that-left-a-build-behind) ·
 [98. The Qt flag every other build system supplies](#98-the-qt-flag-every-other-build-system-supplies) ·
-[99. The typo that could be named after all](#99-the-typo-that-could-be-named-after-all)
+[99. The typo that could be named after all](#99-the-typo-that-could-be-named-after-all) ·
+[100. The archives the cover put in the wrong order](#100-the-archives-the-cover-put-in-the-wrong-order)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1718,11 +1719,11 @@ rather than code, and one lesson about testing.
   needing `-I` somewhere non-standard — was closed by §30 as a side effect:
   a header-only package in a hand-made prefix now resolves, verified with a
   `.pc` carrying `Cflags` and an empty `Libs`.
-- **Library resolution has no notion of link order.** The chosen `-l` flags are
-  emitted in cover order. That is fine for shared libraries but wrong for
-  static archives, where the linker is order-sensitive. Still true for
-  resolved `-l` flags; **no longer true for archives in the tree**, which are
-  grouped — see §18.
+- ~~**Library resolution has no notion of link order.**~~ Closed; see §100.
+  Archives in the tree were grouped by §18, and two or more *resolved*
+  archives are grouped now for the same reason. One archive still needs no
+  group, since a shared library is not order-sensitive as a provider and
+  libc is last regardless.
 - **`-L` is emitted from where the library was found**, compared against
   `cc -print-search-dirs`, rather than from pkg-config's `-L`. That covers
   libraries found by symbol alone as well as by package, and it is only as
@@ -1779,7 +1780,8 @@ rather than code, and one lesson about testing.
   that is deliberate rather than pending — see the `CLEAN` comment. `--eject
   ninja` still has no install rule, since ninja has no convention for one.
 - **Install is minimal.** ~~No uninstall~~ (§93), no manifest, no pkg-config `.pc`
-  generation, no shared-library versioning or `SONAME`, no symlink chain
+  generation, no shared-library versioning — `SONAME` itself was added by
+  §22 and this entry was stale about it — no symlink chain
   (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain name, which
   is right for a private library and wrong for a published one.
 - **Per-TU flags are per TU, not per target.** Two binaries sharing 90% of their
@@ -7081,3 +7083,54 @@ One consequence, named rather than left: a file scanned into an existing
 cache before this change has no near misses recorded, so it stays quiet
 until something makes it rescan. Bumping the cache version would fix that
 and cost every user a full rebuild for a warning, which is the wrong trade.
+
+---
+
+## 100. The archives the cover put in the wrong order
+
+`ld` searches an archive only for what is undefined at the moment it
+reaches it. An archive listed before the thing that needs it contributes
+nothing at all, and the link fails on a symbol neither the program nor
+fmake ever mentioned.
+
+§18 grouped the archives **in the tree** for exactly this. The `-l` flags
+the cover resolves were never grouped, and the cover has no reason to have
+ordered them usefully -- it ranks by coverage, not by who needs whom. Two
+or more resolved archives are grouped now.
+
+One archive still gets none. A shared library is not order-sensitive as a
+provider, and libc is implicit and last regardless, so a single archive has
+nothing it could be on the wrong side of -- and a group is linker syntax on
+every ordinary link line for a problem that line does not have. The case
+for that is separate and a mutation grouping unconditionally fails it.
+
+### The fixture that proved nothing
+
+The first version had two archives with a mutual dependency and it linked
+either way, with the fix reverted, on the first try. The reason is worth
+keeping: **both of the second archive's functions were in one object**, so
+pulling either brought the other along and the order stopped mattering.
+An archive is searched per *member*, not per archive, and a fixture that
+forgets that is testing nothing.
+
+Separate objects now -- and the case establishes the fixture is
+order-sensitive by running `cc` directly, both ways, before it asks fmake
+anything:
+
+```
+cc main.c -L... -lzzbeta -lzzalpha    undefined reference to `zzbeta_helper'
+cc main.c -L... -lzzalpha -lzzbeta    links
+```
+
+Only then is it worth checking that fmake picks an order and survives it.
+Which it does, and it picks the failing one: `-lzzbeta -lzzalpha`, grouped.
+
+**A test for an ordering bug has to contain an ordering the linker can
+actually get wrong**, and that is not the same as containing two things
+that depend on each other.
+
+### A stale line in §15, while here
+
+That entry also said there was no `SONAME`. §22 added one, and the entry
+had not been told. Corrected rather than left, since it is the list people
+read to find out what is missing.

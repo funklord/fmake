@@ -4520,6 +4520,11 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 	    "chosen": chosen, "why": why, "alts": alts, "ldirs": ldirs,
 	    "implicit": sorted(implicit), "unresolved": unresolved,
 	    "ident": ident,
+	    # Which of them are archives. The scan already knows -- it read the
+	    # file to get its symbols -- and it is the one fact the link line
+	    # needs that a `-l' flag cannot carry.
+	    "archives": sorted(l for l in chosen
+	                       if paths.get(l, "").endswith(".a")),
 	}
 
 	# Not cached: these depend on the header proposals, which are cheap.
@@ -4589,9 +4594,22 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 
 	res["declared"] = [d for d in declared if d not in res["chosen"]]
 	res["wrap"] = wrap_flags(cl)
+	# Two or more resolved archives get a group, for the reason
+	# archive_flags gives about archives in the tree: ld searches an archive
+	# only for what is undefined when it reaches it, so an archive needing a
+	# symbol from one listed earlier contributes nothing, and the cover has
+	# no reason to have ordered them usefully. A group makes the order among
+	# them irrelevant and resolves a cycle without naming either twice.
+	#
+	# One archive needs no group. Shared libraries are not order-sensitive
+	# as providers, and libc is implicit and last regardless -- so a single
+	# archive has nothing it could be on the wrong side of.
+	found = ["-l" + l for l in res["chosen"]]
+	if len(res.get("archives", [])) > 1:
+		found = ["-Wl,--start-group"] + found + ["-Wl,--end-group"]
 	res["ldflags"] = (["-Wl,--wrap=" + w for w in res["wrap"]]
 	                  + ["-L" + d for d in res.get("ldirs", [])]
-	                  + ["-l" + l for l in res["chosen"]]
+	                  + found
 	                  + ["-l" + l for l in res["declared"]]
 	                  + extra_ld)
 	return res

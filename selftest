@@ -7237,6 +7237,111 @@ def _vendor(t, rel, stem, body, extra=None):
 
 
 @case
+def two_resolved_archives_are_grouped(t):
+	"""ld searches an archive only for what is undefined when it reaches it.
+
+	Archives *in the tree* have been grouped since section 18. The `-l`
+	flags the cover resolves were not, and the cover has no reason to have
+	ordered them usefully -- it ranks by coverage. So an archive needing a
+	symbol from one listed earlier contributes nothing, and the link fails
+	on a name neither the program nor fmake ever mentioned.
+
+	The fixture has to be built with care to mean anything. An earlier one
+	put both of the second archive's functions in a single object, so
+	pulling either brought the other and any order worked -- it proved
+	nothing, and passed with the fix reverted. They are separate objects
+	now, and the fixture is checked against `cc` directly first: one order
+	links, the other does not."""
+	if not (shutil.which("ar") and shutil.which("cc")):
+		raise Skip("ar or cc not installed")
+	libs = tempfile.mkdtemp(prefix="fmake-arcs-")
+	try:
+		def obj(name, text):
+			src = os.path.join(libs, name + ".c")
+			with open(src, "w") as fh:
+				fh.write(text)
+			o = os.path.join(libs, name + ".o")
+			check(subprocess.run(["cc", "-c", src, "-o", o]).returncode == 0,
+			      f"could not compile {name}")
+			return o
+
+		# beta's two functions in separate objects: pulling one must not
+		# bring the other, or the order stops mattering.
+		bh = obj("bh", "int zzbeta_helper(void){ return 4; }\n")
+		bs = obj("bs", "int zzbeta_seed(void){ return 6; }\n")
+		al = obj("a", "int zzbeta_helper(void);\n"
+		         "int zzalpha_thing(void){ return zzbeta_helper(); }\n")
+		for name, members in (("libzzbeta.a", [bh, bs]),
+		                      ("libzzalpha.a", [al])):
+			check(subprocess.run(["ar", "rcs", os.path.join(libs, name)]
+			                     + members).returncode == 0,
+			      f"could not archive {name}")
+
+		t.write("main.c", "int zzalpha_thing(void);\nint zzbeta_seed(void);\n"
+		        "int main(void){ return zzalpha_thing() + zzbeta_seed() "
+		        "- 10; }\n")
+
+		# The fixture is only worth anything if it is order-sensitive, so
+		# that is established with cc before fmake is asked.
+		bad = subprocess.run(["cc", os.path.join(t.dir, "main.c"),
+		                      "-L" + libs, "-lzzbeta", "-lzzalpha",
+		                      "-o", os.path.join(t.dir, "probe")],
+		                     capture_output=True, text=True)
+		good = subprocess.run(["cc", os.path.join(t.dir, "main.c"),
+		                       "-L" + libs, "-lzzalpha", "-lzzbeta",
+		                       "-o", os.path.join(t.dir, "probe")],
+		                      capture_output=True, text=True)
+		check(bad.returncode != 0 and good.returncode == 0,
+		      "the fixture is not order-sensitive, so it proves nothing "
+		      f"(bad={bad.returncode} good={good.returncode})")
+		os.remove(os.path.join(t.dir, "probe"))
+
+		t.write("fmake.toml", f'[toolchain]\nlib-dirs = ["{libs}"]\n')
+		r = t.fmake()
+		check(r.returncode == 0,
+		      f"two resolved archives did not link: {r.stdout}{r.stderr}")
+
+		r = t.fmake("--explain")
+		check("--start-group" in r.stdout and "--end-group" in r.stdout,
+		      f"the resolved archives were not grouped: {r.stdout}")
+	finally:
+		shutil.rmtree(libs, ignore_errors=True)
+
+
+@case
+def one_resolved_archive_needs_no_group(t):
+	"""A group is not free, and one archive cannot be on the wrong side.
+
+	Shared libraries are not order-sensitive as providers and libc is
+	implicit and last regardless, so a single archive has nothing to be
+	ordered against. Emitting a group anyway would make every ordinary
+	link line carry linker syntax for a problem it does not have."""
+	if not (shutil.which("ar") and shutil.which("cc")):
+		raise Skip("ar or cc not installed")
+	libs = tempfile.mkdtemp(prefix="fmake-onearc-")
+	try:
+		src = os.path.join(libs, "s.c")
+		with open(src, "w") as fh:
+			fh.write("int zzsolo_thing(void){ return 7; }\n")
+		o = os.path.join(libs, "s.o")
+		check(subprocess.run(["cc", "-c", src, "-o", o]).returncode == 0,
+		      "could not compile")
+		check(subprocess.run(["ar", "rcs", os.path.join(libs, "libzzsolo.a"),
+		                      o]).returncode == 0, "could not archive")
+		t.write("main.c", "int zzsolo_thing(void);\n"
+		        "int main(void){ return zzsolo_thing() - 7; }\n")
+		t.write("fmake.toml", f'[toolchain]\nlib-dirs = ["{libs}"]\n')
+		r = t.fmake()
+		check(r.returncode == 0, f"the build failed: {r.stdout}{r.stderr}")
+		r = t.fmake("--explain")
+		check("-lzzsolo" in r.stdout, f"the archive was not used: {r.stdout}")
+		check("--start-group" not in r.stdout,
+		      f"one archive was given a group it does not need: {r.stdout}")
+	finally:
+		shutil.rmtree(libs, ignore_errors=True)
+
+
+@case
 def a_vendored_archive_provides_symbols(t):
 	"""A .a in the tree satisfies the closure like any object.
 
