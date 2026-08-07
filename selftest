@@ -7594,6 +7594,58 @@ def a_stray_object_beside_its_source_is_ignored(t):
 
 
 @case
+def an_ambiguity_suggests_each_stanza_once(t):
+	"""Found by running fuzzypickles: 252 lines, nearly all identical.
+
+	The refusal offers a `[target.*]` stanza per program, which is the
+	thing the reader would otherwise write by hand. It was built by looping
+	over one entry per *(target, symbol)* -- and a file that collides with
+	another collides on everything it defines, which was eight meta-objects
+	there. The same block eight times.
+
+	The stanza depends only on the target, so it is said once. The advice
+	line above it depends on the target and the file, so it is said once
+	per pair. Neither is a new fact; both were being repeated.
+
+	A message nobody can read is a message that does not do its job, and
+	this one exists precisely because the situation is confusing."""
+	# Two files defining the same several symbols, reachable from two
+	# different programs -- the shape that produces one `trouble` entry per
+	# symbol per target.
+	for d in ("one", "two"):
+		t.write(f"{d}/dup.h", "int dup_alpha(void);\nint dup_beta(void);\n"
+		        "int dup_gamma(void);\n")
+		t.write(f"{d}/dup.c",
+		        '#include "dup.h"\n'
+		        "int dup_alpha(void){ return 1; }\n"
+		        "int dup_beta(void){ return 2; }\n"
+		        "int dup_gamma(void){ return 3; }\n")
+		# Includes its own sibling, so the include graph reaches exactly one
+		# provider from each root -- which is the condition for the stanza
+		# to be offered at all. Without it the case exercises the refusal
+		# and not the suggestion, which is what it is about.
+		t.write(f"{d}/main.c",
+		        '/*! @file\n *  @target prog_%s\n */\n#include "dup.h"\n'
+		        "int main(void){ return dup_alpha()+dup_beta()+dup_gamma()-6; }\n"
+		        % d)
+
+	r = t.fmake()
+	check(r.returncode != 0, "two providers of one symbol should be refused")
+	said = r.stdout + r.stderr
+	check("more than one file" in said, f"no ambiguity reported: {said}")
+
+	stanzas = [l for l in said.splitlines() if l.strip().startswith("[target.")]
+	check(stanzas, f"no stanza was suggested at all: {said}")
+	check(len(stanzas) == len(set(s.strip() for s in stanzas)),
+	      f"the same stanza was suggested more than once: {stanzas}")
+
+	advice = [l for l in said.splitlines()
+	          if l.startswith("    ") and "dup.c" in l and "[" not in l]
+	check(len(advice) == len(set(a.strip() for a in advice)),
+	      f"the same advice line was repeated: {advice}")
+
+
+@case
 def two_ambiguous_archives_report_rather_than_traceback(t):
 	"""Found by running beerssh, in code nobody had touched.
 

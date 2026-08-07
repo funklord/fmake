@@ -7536,6 +7536,24 @@ That is the one lever a project has for "this subtree is not for this
 build", and the thing it could not move was the only kind of file that had
 no other way of being excluded.
 
+### fuzzypickles: 252 lines, nearly all identical
+
+The fifth project stops on an ambiguity and offers a `[target.*]` stanza
+per program -- the thing the reader would otherwise write by hand. It built
+that list by looping over one entry per *(target, symbol)*, and **a file
+that collides with another collides on everything it defines**: eight
+meta-objects there, so the same block eight times, and the advice line
+above it sixteen.
+
+Said once each now: the stanza depends only on the target, the advice line
+on the target and the file. Neither was a new fact, and a message nobody
+can read is a message not doing its job -- particularly this one, which
+exists because the situation is confusing.
+
+The ambiguity itself was the fixture again: `gui/moc_main_window.cpp` is a
+qmake leftover, git-ignored in their tree and copied by `tar`. Third time
+in one sweep, which is a rate worth naming.
+
 ### What the sweep says about sweeps
 
 Each of the three was hidden behind the one before it: the traceback hid

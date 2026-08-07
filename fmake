@@ -6312,13 +6312,25 @@ def build(args, _bootstrapping=False):
 		# exactly one of the providers from a target's own root, that is
 		# almost always the right answer, and the stanza below is the thing
 		# the user would otherwise write out by hand.
+		# `trouble` is one entry per (target, symbol), and a file that
+		# collides with another collides on everything it defines -- eight
+		# meta-objects in the tree that found this. The stanza depends only
+		# on the target, so writing one per symbol printed the same block
+		# eight times and turned a readable refusal into 252 lines of
+		# identical text. Said once each.
 		advice, stanzas = [], []
+		seen_advice, seen_stanza = set(), set()
 		for t, _sym, providers in trouble:
 			reach = proj.candidates(t.rel)
 			mine = [p for p in providers if p in reach]
 			if len(mine) != 1:
 				continue
-			advice.append(f"    {t.name:<20} {mine[0]}")
+			if (t.name, mine[0]) not in seen_advice:
+				seen_advice.add((t.name, mine[0]))
+				advice.append(f"    {t.name:<20} {mine[0]}")
+			if t.name in seen_stanza:
+				continue
+			seen_stanza.add(t.name)
 			members = sorted(r for r in reach if r in proj.src_set)
 			stanzas.append(f"[target.{t.name}]\nsources = ["
 			               + ", ".join(f'"{m}"' for m in members) + "]")
