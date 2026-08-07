@@ -159,7 +159,8 @@ that had been green about nothing for five commits ·
 [114. Who chose the tool decides the advice](#114-who-chose-the-tool-decides-the-advice) ·
 [115. The direction of the disagreement that matters](#115-the-direction-of-the-disagreement-that-matters) ·
 [116. The lead §79 declined to act on was real](#116-the-lead-79-declined-to-act-on-was-real) ·
-[117. A toolchain with no prefix to derive anything from](#117-a-toolchain-with-no-prefix-to-derive-anything-from)
+[117. A toolchain with no prefix to derive anything from](#117-a-toolchain-with-no-prefix-to-derive-anything-from) ·
+[118. Defensive on one side of the same rule](#118-defensive-on-one-side-of-the-same-rule)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -8257,3 +8258,56 @@ architecture filled in from what was actually read out of the object. Same
 lesson as §114 and, by this point, unmistakable: **where two fixes are
 possible, naming one is not brevity, it is a guess presented as a
 diagnosis.**
+
+---
+
+## 118. Defensive on one side of the same rule
+
+Every file fmake reads is opened with `errors="replace"`, in five places,
+because a tree is allowed to contain whatever it contains. Source is not
+required to be UTF-8; C predates it.
+
+Every subprocess it ran decoded strictly.
+
+```python
+subprocess.run(cmd, capture_output=True, text=True)
+```
+
+**gcc quotes the offending source line back at you**, so a diagnostic
+about a line that is not UTF-8 is not UTF-8 either. Python raises
+`UnicodeDecodeError` from inside `communicate()`, and fmake dies with a
+traceback naming subprocess internals -- while holding the compile error
+it was about to print.
+
+```
+int main(void){ int caf<e9>_count = 0; return caf<e9>_count; }
+```
+
+That is a Latin-1 source, which is not exotic; it is most C written before
+about 2005 that had a person's name in it. A file of random bytes named
+`.c` produces the identical failure, because the cause is the decode
+rather than the file.
+
+### The proof, since the change is mechanical
+
+Fourteen call sites, one substitution. The invariant is that **nothing but
+those occurrences moved**, and it is checked by undoing the substitution
+and requiring the original back byte for byte -- the same shape as the
+`ast.dump` and `dpkg -c` proofs in the evidence rules. A reviewer reading
+a sample of fourteen near-identical hunks proves nothing about the
+fifteenth.
+
+### What the case has to check beyond "it did not crash"
+
+A fix that discarded the compiler's output entirely would pass "no
+traceback", "no `UnicodeDecodeError`" and "reported a failure". So the
+case also requires the diagnostic itself to survive `-v`. **The obvious
+assertions here are all satisfiable by making things worse**, which is the
+argument for asking what a wrong fix would look like before writing them.
+
+### The finding worth keeping
+
+The rule was known. It was written down five times, in the code, on the
+file side -- and the process side was never asked the same question.
+**A defence applied to one class of input is not a defence; it is a habit
+that happened to cover the case somebody thought of.**

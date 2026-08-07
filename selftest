@@ -10440,6 +10440,49 @@ def a_vendored_main_stays_out_of_a_library(t):
 
 
 @case
+def a_source_that_is_not_utf8_reports_rather_than_tracebacks(t):
+	"""fmake read every file defensively and every subprocess naively.
+
+	Source files are opened with `errors="replace"' in five places,
+	because a tree is allowed to contain whatever it contains. The
+	compiler's *output* was decoded strictly -- `subprocess.run(...,
+	text=True)' -- and gcc quotes the offending source line back at you,
+	so a diagnostic about a line that is not UTF-8 is not UTF-8 either.
+
+	Python then raises UnicodeDecodeError from inside `communicate()',
+	and fmake dies with a traceback naming subprocess internals instead
+	of showing the compile error it was holding.
+
+	This is not exotic. C predates UTF-8 and Latin-1 sources are
+	everywhere; all it takes is a diagnostic on a line with an accented
+	character in it, which is what this fixture is. A file of random
+	bytes named `.c' does it too, and the two failures were identical
+	because the cause is the decode, not the file.
+
+	The fix is the rule the file side already followed, applied to the
+	other side."""
+	with open(os.path.join(t.dir, "main.c"), "wb") as fh:
+		fh.write(b"int main(void){ int caf\xe9_count = 0; "
+		         b"return caf\xe9_count; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("Traceback (most recent call last)" not in out,
+	      f"fmake died inside Python instead of reporting the compile "
+	      f"failure: {out[-600:]}")
+	check("UnicodeDecodeError" not in out, f"the decode still raised: {out}")
+	check(r.returncode != 0, "a file that cannot compile is not a success")
+	check("did not compile" in out,
+	      f"the compile failure was not reported at all: {out}")
+
+	# The diagnostic has to survive, not just the process: a fix that
+	# threw the compiler's output away would pass everything above.
+	v = t.fmake("-v", "-B")
+	check("main.c" in (v.stdout + v.stderr),
+	      f"the compiler's own message was lost: {v.stdout}{v.stderr}")
+
+
+@case
 def a_cross_toolchain_that_prefixes_nothing_works(t):
 	"""Section 15 called this untried, and only one shape of it is.
 

@@ -1301,7 +1301,7 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			os.makedirs(os.path.dirname(o) or root, exist_ok=True)
 		for line, ignore in lines:
 			res = subprocess.run(line, shell=True, cwd=root,
-			                     capture_output=True, text=True)
+			                     capture_output=True, text=True, errors="replace")
 			if res.stdout.strip():
 				PROGRESS.write(res.stdout)
 			if res.stderr.strip():
@@ -1474,7 +1474,7 @@ def moc_would_generate(root, rel, moc, flags):
 	os.makedirs(os.path.dirname(probe), exist_ok=True)
 	try:
 		r = subprocess.run([moc] + flags + [rel, "-o", probe],
-		                   cwd=root, capture_output=True, text=True)
+		                   cwd=root, capture_output=True, text=True, errors="replace")
 	except OSError:
 		return False
 	try:
@@ -1761,7 +1761,7 @@ def run_rcc(root, jobs, rcc, cache, dry_run=False):
 		say(f"{YELLOW('RCC')} {src}")
 		os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
 		try:
-			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, errors="replace")
 		except OSError as exc:
 			die(f"could not run rcc ({rcc}): {exc.strerror or exc}")
 		if res.stderr.strip():
@@ -1858,7 +1858,7 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
 		say(f"{YELLOW('MOC')} {src}")
 		os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
 		try:
-			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, errors="replace")
 		except OSError as exc:
 			# Who chose this moc decides the advice. Where pkg-config found
 			# it, naming one is the fix; where the reader named it, saying so
@@ -1920,7 +1920,7 @@ def run_uic(root, jobs, uic, cache, dry_run=False):
 		say(f"{YELLOW('UIC')} {src}")
 		os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
 		try:
-			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, errors="replace")
 		except OSError as exc:
 			die(f"could not run uic ({uic}): {exc.strerror or exc}")
 		if res.stderr.strip():
@@ -2761,7 +2761,7 @@ class Project:
 
 def tool_version(exe):
 	try:
-		r = subprocess.run([exe, "--version"], capture_output=True, text=True)
+		r = subprocess.run([exe, "--version"], capture_output=True, text=True, errors="replace")
 		return (r.stdout or r.stderr).splitlines()[0].strip()
 	except (OSError, IndexError):
 		return "?"
@@ -3367,7 +3367,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		if dry_run:
 			print(" ".join(cmd))
 			return u, 0, ""
-		r = subprocess.run(cmd, capture_output=True, text=True)
+		r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
 		return u, r.returncode, r.stderr
 
 	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -3581,7 +3581,7 @@ def archive_units(rels, root, cfg, jobs):
 def read_symbols(units, cfg, jobs):
 	def one(u):
 		r = subprocess.run([cfg.nm, "--format=posix", u.obj],
-		                   capture_output=True, text=True)
+		                   capture_output=True, text=True, errors="replace")
 		# An object nm could not read yields no symbols, and an object with
 		# no symbols is invisible to the closure: it defines nothing so it is
 		# never linked, and needs nothing so it reports no externals. The
@@ -3925,7 +3925,7 @@ LINKER_SYMBOLS = {
 
 def _stdout(cmd):
 	try:
-		r = subprocess.run(cmd, capture_output=True, text=True)
+		r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
 		return r.stdout if r.returncode == 0 else ""
 	except OSError:
 		return ""
@@ -3937,7 +3937,7 @@ def _stderr(cmd):
 	is not evidence about the output.
 	"""
 	try:
-		return subprocess.run(cmd, capture_output=True, text=True).stderr
+		return subprocess.run(cmd, capture_output=True, text=True, errors="replace").stderr
 	except OSError:
 		return ""
 
@@ -4151,7 +4151,7 @@ def lib_exports(cfg, path):
 	cmd = [cfg.nm, "--defined-only", "--format=posix"]
 	if dyn:
 		cmd.append("-D")
-	r = subprocess.run(cmd + [path], capture_output=True, text=True)
+	r = subprocess.run(cmd + [path], capture_output=True, text=True, errors="replace")
 	out = set()
 	for line in r.stdout.splitlines():
 		parts = line.split()
@@ -4306,7 +4306,7 @@ class PkgConfig:
 
 	def _run(self, args):
 		return subprocess.run([self.exe] + args, capture_output=True,
-		                      text=True, env=self.env)
+		                      text=True, errors="replace", env=self.env)
 
 	@staticmethod
 	def _consumer_flags(module, cflags):
@@ -5122,7 +5122,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		os.remove(out)          # ar appends; a stale member would survive
 	if not quiet:
 		say(f"{GREEN('AR ' if t.kind == 'static' else 'LD ')} {BOLD(name)}")
-	r = subprocess.run(cmd, capture_output=True, text=True)
+	r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
 	if r.stderr.strip():
 		# A missing library produces one linker line per call site, which
 		# buries everything else. fmake already knows the unresolved symbols
@@ -8158,7 +8158,7 @@ def git_ignored(root, paths):
 	try:
 		r = subprocess.run(["git", "-C", root, "check-ignore", "--stdin"],
 		                   input="\n".join(paths), capture_output=True,
-		                   text=True, timeout=10)
+		                   text=True, errors="replace", timeout=10)
 	except (OSError, subprocess.SubprocessError):
 		return set()
 	# 0 means some were ignored, 1 means none were; anything else is a
