@@ -34,6 +34,7 @@ regardless, because a suite whose output shuffles between runs is a suite
 nobody diffs.
 """
 
+import ast
 import concurrent.futures
 import glob
 import os
@@ -9587,6 +9588,69 @@ def the_source_runs_on_the_python_it_declares(t):
 	                   capture_output=True, text=True)
 	check(r.returncode == 0,
 	      f"python{floor[0]}.{floor[1]} cannot run fmake --help: {r.stderr}")
+
+
+@case
+def the_source_imports_only_the_standard_library(t):
+	"""The other half of the promise `debian/control` makes.
+
+	The case above checks fmake runs on the Python it declares. This one
+	checks it needs nothing else, and the two are the same promise: the
+	package Depends on `python3 (>= 3.11)' and on nothing further, so an
+	`import yaml' would install cleanly, satisfy every dependency,
+	configure -- and die at the first line of main on a machine that
+	happens not to have it. The failure lands at the far end of the chain
+	from the thing that caused it, exactly as the PEP 701 one did.
+
+	It is also the README's first claim about the tool ("no dependencies
+	beyond the Python 3.11 standard library"), and a claim nothing checks
+	is a claim that is true until somebody is in a hurry.
+
+	`sys.stdlib_module_names` makes it exact rather than a guess -- no
+	list to maintain here, which is the point. The one soft edge is that
+	it describes the *running* interpreter, so a module added to the
+	stdlib after 3.11 would pass here and fail there; where python3.11 is
+	installed, it is asked instead, which is the same "the old
+	interpreter saying it" the case above prefers to an inference."""
+	src = open(FMAKE).read()
+	tops = set()
+	for node in ast.walk(ast.parse(src)):
+		if isinstance(node, ast.Import):
+			tops |= {a.name.split(".")[0] for a in node.names}
+		elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+			tops.add(node.module.split(".")[0])
+	check(len(tops) > 10,
+	      f"only {len(tops)} imports found, so this parsed the wrong thing "
+	      f"and would pass whatever fmake imported: {sorted(tops)}")
+
+	names, where = sys.stdlib_module_names, "this python"
+	floor = re.search(r"python3 \(>= (\d+)\.(\d+)\)",
+	                  open(os.path.join(REPO, "debian/control")).read())
+	if floor:
+		old = shutil.which(f"python{floor.group(1)}.{floor.group(2)}")
+		if old:
+			got = subprocess.run(
+			    [old, "-c", "import sys; print(' '.join("
+			           "sys.stdlib_module_names))"],
+			    capture_output=True, text=True)
+			if got.returncode == 0:
+				names = set(got.stdout.split())
+				where = f"python{floor.group(1)}.{floor.group(2)}"
+
+	outside = sorted(m for m in tops if m not in names)
+	check(not outside,
+	      f"fmake imports {outside}, which {where} does not ship. The "
+	      f"package Depends only on python3, so this installs and then "
+	      f"fails to start.")
+
+	# "One file" is the other half of the same sentence: a local module
+	# would not be packaged at all, and is not a missing dependency any
+	# apt could resolve.
+	beside = {os.path.splitext(f)[0] for f in os.listdir(REPO)
+	          if f.endswith(".py")}
+	check(not (tops & beside),
+	      f"fmake imports {sorted(tops & beside)} from its own directory, "
+	      f"so it is no longer one file")
 
 
 @case

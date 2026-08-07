@@ -163,7 +163,8 @@ that had been green about nothing for five commits ·
 [118. Defensive on one side of the same rule](#118-defensive-on-one-side-of-the-same-rule) ·
 [119. A name in a comment stays a name](#119-a-name-in-a-comment-stays-a-name) ·
 [120. Two ways to never return](#120-two-ways-to-never-return) ·
-[121. The clean that agreed with itself in only one direction](#121-the-clean-that-agreed-with-itself-in-only-one-direction)
+[121. The clean that agreed with itself in only one direction](#121-the-clean-that-agreed-with-itself-in-only-one-direction) ·
+[122. The other half of a promise that was only half checked](#122-the-other-half-of-a-promise-that-was-only-half-checked)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -8514,3 +8515,53 @@ command that produced it.
 
 The one that generalises: **a comment claiming two things agree is a place
 to test, not a place to trust.** This one had been true when written.
+
+---
+
+## 122. The other half of a promise that was only half checked
+
+§44 checks that fmake runs on the Python it declares, and the argument
+for it is exact: `debian/control` says `python3 (>= 3.11)`, so a syntax newer
+than that produces a package which installs, satisfies its dependency,
+configures, and then dies before reaching `main`.
+
+**The same sentence makes a second promise, and nothing checked it.**
+That `Depends` line names python3 *and nothing else*, so an `import yaml`
+fails in exactly the same shape -- installed, configured, dead at the
+first line -- on any machine that happens not to have it. It is also the
+README's first claim about the tool.
+
+```
+Depends: ${misc:Depends}, python3 (>= 3.11)
+```
+
+`sys.stdlib_module_names` settles it without a list to maintain, which is
+the point: §15 already counts three hand-written lists as load-bearing and
+says a fourth would be a signal. This needed none.
+
+### Asking the right interpreter
+
+The set describes the *running* interpreter, so a module added to the
+stdlib after 3.11 would pass on 3.13 and fail on the floor. Where the
+declared interpreter is installed -- it is here, at
+`~/.local/bin/python3.11` -- it is asked for its own set instead. Same
+preference as the case beside it: the old interpreter saying so beats an
+inference about what it would say, and that inference has already been
+wrong once in this file.
+
+### Two guards that are not the point but earn their place
+
+**A vacuity check.** If the walk finds fewer than ten imports it has
+parsed the wrong thing, and would then pass whatever fmake imported.
+Breaking the walk is one of the three mutations, and it is caught here
+rather than by the assertion that looks like the subject.
+
+**"One file" is the other half of the same sentence.** A module imported
+from beside fmake is not a missing dependency any `apt` could resolve --
+it simply would not be in the package. Checked against the `.py` files in
+the repository root.
+
+The check passes today, so this is a guard rather than a fix -- **and the
+argument for writing it is that the promise is load-bearing in three
+places** (the packaging, the README, and `project.md`) while being one
+careless import away at all times.
