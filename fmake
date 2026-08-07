@@ -1177,6 +1177,11 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	# this existed simply has none, and every rule that declares a depfile
 	# regenerates once to record its own.
 	gen_deps = cache.data.setdefault("generated_deps", {})
+	# What each rule actually wrote, so `--clean' can remove those files by
+	# name later. Declared outputs would do as well and would need the
+	# whole tree scanned to find the rules in source comments; this is a
+	# record of what happened, which is what a clean should act on.
+	gen_wrote = cache.data.setdefault("generated_outputs", {})
 	produced = []
 
 	for name in _gen_order(rules):
@@ -1332,6 +1337,7 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			key = gen_key(read_paths + gen_deps[name])
 
 		store[name] = key
+		gen_wrote[name] = sorted(r["outputs"])
 		ran = True
 
 	# A generator that writes more than it declared. The extra file is
@@ -7496,6 +7502,35 @@ def do_clean(root):
 	if not os.path.isdir(state):
 		info("nothing to clean")
 		return 0
+
+	# Generated sources, named one by one, for the reason `--uninstall' and
+	# the ejected clean rule name theirs: this is removing files from
+	# somebody's source tree, so it must not be able to take one it did not
+	# write. The list is what the generators actually produced, read out of
+	# the cache before the cache goes -- not a pattern, and not the declared
+	# outputs, which would mean scanning the tree to find the rules that
+	# live in source comments.
+	#
+	# The ejected Makefile has removed these since it first had a clean
+	# rule. fmake not doing it was an inconsistency between the two, in the
+	# direction of leaving a build behind that a fresh checkout would not
+	# have.
+	wrote = Cache(os.path.join(state, CACHE_FILE)).data.get(
+	    "generated_outputs", {})
+	removed = []
+	for rel in sorted({o for outs in wrote.values() for o in outs}):
+		# Inside the tree, and a file. A rule could name anything; this is
+		# the one place that matters, because nothing else here deletes.
+		full = os.path.normpath(os.path.join(root, rel))
+		if not full.startswith(os.path.join(root, "")) or os.path.islink(full):
+			continue
+		if os.path.isfile(full):
+			os.remove(full)
+			removed.append(rel)
+	if removed:
+		info(f"removed {len(removed)} generated file(s): "
+		     + ", ".join(removed[:4])
+		     + (f", and {len(removed) - 4} more" if len(removed) > 4 else ""))
 	count = sum(len(fs) for _d, _sub, fs in os.walk(state))
 	shutil.rmtree(state)
 	info(f"removed {STATE_DIR}/ ({count} file(s))")

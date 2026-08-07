@@ -3769,6 +3769,73 @@ outputs = ["gen/v.c"]
 
 
 @case
+def clean_removes_generated_sources_by_name(t):
+	"""`--clean` left a build behind that a fresh checkout would not have.
+
+	It removed `.fmake/` and nothing else, so the sources a generator wrote
+	into the tree stayed -- and the ejected Makefile's clean rule has
+	removed those since it first had one. The two disagreed, in the
+	direction of leaving files a clean checkout does not contain.
+
+	Named one by one, for the reason `--uninstall` names its files: this is
+	deleting from somebody's source tree. The list is what the generators
+	actually wrote, recorded in the cache and read out of it before the
+	cache goes -- not a pattern, and not the declared outputs, which would
+	mean scanning the tree to find rules living in source comments."""
+	t.write("seed.txt", "in\n")
+	t.write("main.c", "int v(void);\nint main(void){ return v() - 1; }\n")
+	t.write("fmake.toml", """
+[generate.v]
+command = "mkdir -p gen && printf 'int v(void){return 1;}\\n' > gen/v.c"
+inputs  = ["seed.txt"]
+outputs = ["gen/v.c"]
+""")
+	check(t.fmake().returncode == 0, "build failed")
+	made = os.path.join(t.dir, "gen", "v.c")
+	check(os.path.exists(made), "the generator did not run")
+
+	r = t.fmake("--clean")
+	check(r.returncode == 0, f"clean failed: {r.stderr}")
+	check(not os.path.exists(made),
+	      "a generated source survived --clean, which a fresh checkout "
+	      "would not contain")
+	check(not os.path.exists(os.path.join(t.dir, ".fmake")),
+	      "the state directory survived --clean")
+
+	# Everything the tree came with is still there. This is the half that
+	# matters: the rule deletes from a source tree, so it must not be able
+	# to take a file it did not write.
+	for kept in ("seed.txt", "main.c", "fmake.toml"):
+		check(os.path.exists(os.path.join(t.dir, kept)),
+		      f"--clean removed {kept}, which it did not write")
+	# The directory the generator made is not ours to remove either.
+	check(os.path.isdir(os.path.join(t.dir, "gen")),
+	      "--clean removed a directory, and a directory was not named")
+
+	# It builds again from what is left, which is what says the clean was
+	# a clean rather than a demolition.
+	check(t.fmake().returncode == 0, "the tree did not rebuild after --clean")
+	check(os.path.exists(made), "the generator did not re-run")
+
+	# A second clean is not an error, and a tree that never generated
+	# anything is unaffected.
+	check(t.fmake("--clean").returncode == 0, "the second clean failed")
+	u = Tree("nogen")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		check(u.fmake().returncode == 0, "the plain build failed")
+		r = u.fmake("--clean")
+		check(r.returncode == 0, f"clean of a plain tree failed: {r.stderr}")
+		check("generated" not in r.stdout,
+		      f"a tree with no generators was told about generated files: "
+		      f"{r.stdout}")
+		check(os.path.exists(os.path.join(u.dir, "main.c")),
+		      "--clean removed a source from a tree with no generators")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_generator_depfile_is_read_back(t):
 	"""What the compiler's -MD does, for generators that can say the same.
 

@@ -138,7 +138,8 @@ that had been green about nothing for five commits ·
 [93. Uninstall, and the manifest that was not written](#93-uninstall-and-the-manifest-that-was-not-written) ·
 [94. `-MD` for generators, and a check that answered two ways](#94--md-for-generators-and-a-check-that-answered-two-ways) ·
 [95. CI was red, and the tool was the reason](#95-ci-was-red-and-the-tool-was-the-reason) ·
-[96. The byte-stability check was passing by luck](#96-the-byte-stability-check-was-passing-by-luck)
+[96. The byte-stability check was passing by luck](#96-the-byte-stability-check-was-passing-by-luck) ·
+[97. The clean that left a build behind](#97-the-clean-that-left-a-build-behind)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1803,10 +1804,11 @@ rather than code, and one lesson about testing.
   linker script, or a function pointer table built at runtime. All need
   `@sources`. Whether that one directive is a sufficient answer for all of them
   is unproven.
-- **Generated outputs are not cleaned.** `--clean` removes `.fmake/`; files a
-  generator wrote into the tree stay, because fmake did not create the
-  directory and will not guess what else is in it. The ejected Makefile does
-  remove them, which is an inconsistency.
+- ~~**Generated outputs are not cleaned.**~~ Closed; see §97. `--clean`
+  removes them by name, from what the generators actually wrote rather than
+  from a pattern, which is the rule `--uninstall` and the ejected clean rule
+  already follow. The directories they were written into are still left
+  alone, and deliberately: a directory was never named.
 - ~~**A generator's own dependencies are not tracked.**~~ Closed for
   generators that can write a depfile; see §94. `[generate.*] depfile` is
   read back into the freshness key, the same bargain the compile side
@@ -6882,3 +6884,47 @@ compared.
 That is the third variant in three sections of one idea -- §94's property
 over phrasing, §95's property over a correlated side effect, and now
 coverage over apparent coverage.
+
+---
+
+## 97. The clean that left a build behind
+
+`fmake --clean` removed `.fmake/` and nothing else, so a source a generator
+had written into the tree stayed there. **The ejected Makefile has removed
+those since it first had a clean rule**, so the two disagreed -- and in the
+worse direction, leaving a checkout containing files a fresh clone does not.
+
+§15 recorded the reason: fmake did not create the directory and will not
+guess what else is in it. That reasoning is right about *directories* and
+was being applied to *files*, which fmake knows precisely.
+
+### Recorded, not declared, and not matched
+
+Three lists were available and only one of them is honest.
+
+- **A pattern** -- `gen/**` or the like. Refused everywhere else in this
+  tree and refused here: this is deleting from somebody's source tree.
+- **The declared `outputs`** -- correct, but reaching them means scanning
+  the whole tree, because a rule can live in a source comment (§27's
+  `@rule`). A `--clean` that has to compile nothing should not have to read
+  everything.
+- **What the generators actually wrote**, recorded in the cache as they
+  ran. No scan, no guess, and it is a record of what happened rather than
+  of what was declared -- which is the same distinction `--uninstall`
+  draws, and the same one that makes both of them refuse to remove
+  something they did not put there.
+
+It is read out of the cache before the cache is removed, which is the only
+ordering that works and the only interesting line in the implementation.
+
+A tree that never generated anything has nothing recorded and is
+untouched -- the case checks that too, because "removed 0 generated files"
+appearing on every plain build would be noise, and because a clean that
+says something happened when nothing did is a clean nobody reads.
+
+### The directories stay
+
+`gen/` is left behind, exactly as `bin/` is by `--uninstall` and as the
+object directory is by the ejected clean rule. Removing a directory means
+removing something no list named, and the fact that fmake put a file in it
+does not make it fmake's.
