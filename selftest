@@ -3438,6 +3438,107 @@ def _same_install(mine, theirs, who):
 
 
 @case
+def uninstall_removes_exactly_what_install_placed(t):
+	"""The inverse, held to `clean`'s rule rather than to a pattern.
+
+	A target everybody runs without reading must not be able to remove
+	something it did not put there, which is why `clean` names its files
+	and why this does. There is no manifest and no wildcard: the list comes
+	from install_plan, the same one --install, the ejected Makefile and the
+	ejected ninja read.
+
+	The property checked is not that files disappeared. It is that the
+	staging tree is **empty of files and has all its directories**, and
+	that a neighbour installed beside them is untouched -- because "removed
+	everything under the prefix" would pass a weaker test and is exactly
+	the behaviour being avoided."""
+	mine = _install_fixture(t)
+	stage = os.path.join(t.dir, "by-fmake")
+
+	# Somebody else's file, in a directory fmake installs into.
+	intruder = os.path.join(stage, "usr", "local", "bin", "not-ours")
+	with open(intruder, "w") as fh:
+		fh.write("someone else's\n")
+
+	r = t.fmake("--uninstall", "--destdir", stage, "-n")
+	check(r.returncode == 0, f"dry run failed: {r.stderr}")
+	check(len([l for l in r.stdout.splitlines() if l.startswith("rm ")])
+	      == len(mine), f"the dry run does not match the install: {r.stdout}")
+	check(os.path.exists(os.path.join(stage, "usr", "local", "bin", "tool")),
+	      "the dry run removed something")
+
+	r = t.fmake("--uninstall", "--destdir", stage)
+	check(r.returncode == 0, f"uninstall failed: {r.stdout}{r.stderr}")
+	left = _staged(stage)
+	check("usr/local/bin/not-ours" in left,
+	      f"uninstall removed a file it did not install: {sorted(left)}")
+	check(set(left) == {"usr/local/bin/not-ours"},
+	      f"something fmake installed survived: {sorted(left)}")
+	# Directories are not ours to remove; `bin' was not ours to begin with.
+	for kept in ("usr/local/bin", "usr/local/lib", "usr/local/include"):
+		check(os.path.isdir(os.path.join(stage, kept)),
+		      f"{kept} was removed, and a directory is not ours to remove")
+
+	# Twice is an ordinary thing to do.
+	r = t.fmake("--uninstall", "--destdir", stage)
+	check(r.returncode == 0,
+	      f"uninstalling twice should not be an error: {r.stderr}")
+
+
+@case
+def an_ejected_build_uninstalls_what_it_installed(t):
+	"""Both emitted forms carry the inverse too, or leaving costs it.
+
+	The install rule without an uninstall rule is the same half-promise the
+	build file made before section 85: everything to put a project in
+	place, and nothing to take it out again."""
+	if not shutil.which("make") or not shutil.which("install"):
+		raise Skip("make or install(1) not installed")
+	mine = _install_fixture(t)
+
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+	body = r.stdout
+	check("rm -rf" not in body.split("uninstall:")[-1].split("\n\n")[0],
+	      "the ejected uninstall uses rm -rf")
+	check("*" not in body.split("uninstall:")[-1].split("\n\n")[0],
+	      "the ejected uninstall uses a wildcard")
+
+	stage = os.path.join(t.dir, "by-make")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	check(_run_in(t.dir, "make", "install", "DESTDIR=" + stage).returncode == 0,
+	      "the ejected install failed")
+	check(_staged(stage) == mine, "the ejected install differs")
+	check(_run_in(t.dir, "make", "uninstall",
+	              "DESTDIR=" + stage).returncode == 0,
+	      "the ejected uninstall failed")
+	check(not _staged(stage),
+	      f"the ejected uninstall left files: {sorted(_staged(stage))}")
+
+	if not shutil.which("ninja"):
+		return
+	r = t.fmake("--eject", "ninja")
+	check(r.returncode == 0, f"ninja eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+		fh.write(r.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	check(_run_in(t.dir, "ninja", "-f", "build.ninja").returncode == 0,
+	      "the ninja build failed")
+	nstage = os.path.join(t.dir, "by-ninja")
+	check(_run_in(t.dir, "ninja", "-f", "build.ninja", "install",
+	              env={"DESTDIR": nstage}).returncode == 0,
+	      "the ninja install failed")
+	check(_staged(nstage) == mine, "the ninja install differs")
+	check(_run_in(t.dir, "ninja", "-f", "build.ninja", "uninstall",
+	              env={"DESTDIR": nstage}).returncode == 0,
+	      "the ninja uninstall failed")
+	check(not _staged(nstage),
+	      f"the ninja uninstall left files: {sorted(_staged(nstage))}")
+
+
+@case
 def an_ejected_makefile_installs_what_fmake_installs(t):
 	"""The exit has to include the install, or it is only half an exit.
 

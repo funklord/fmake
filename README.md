@@ -484,6 +484,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `--no-libs` | resolve no libraries; pass every `-l` yourself |
 | `--run FILE` | build FILE and run it, passing what follows as its arguments |
 | `--install` | build, then install the artifacts and their `@headers` |
+| `--uninstall` | remove exactly those files again, and nothing else |
 | `--prefix` / `--destdir` | install paths |
 | `--clean` | remove `.fmake/` |
 | `--man` | write the manual page as roff, for packaging |
@@ -551,7 +552,12 @@ and are yours to set, like `CC` — all `?=`, so a parent Makefile or a
 package build wins without editing the file. Anything you put in
 `[install]` becomes the default they start from.
 
-`--eject ninja` has one too. Ninja cannot set a variable on the command
+`make uninstall` is the inverse, and it names its files one by one for the
+same reason `clean` does — a target everybody runs without reading must not
+be able to remove something it did not put there. No wildcards, and the
+directories are left alone.
+
+`--eject ninja` has both. Ninja cannot set a variable on the command
 line, so the recipe reads the same five names from the environment:
 
 ```sh

@@ -134,7 +134,8 @@ that had been green about nothing for five commits ·
 [89. The flags that have to be on both lines](#89-the-flags-that-have-to-be-on-both-lines) ·
 [90. Two directives that were read and then discarded quietly](#90-two-directives-that-were-read-and-then-discarded-quietly) ·
 [91. Sweeping the two paths that had not been swept](#91-sweeping-the-two-paths-that-had-not-been-swept) ·
-[92. Auditing every remedy the tool offers](#92-auditing-every-remedy-the-tool-offers)
+[92. Auditing every remedy the tool offers](#92-auditing-every-remedy-the-tool-offers) ·
+[93. Uninstall, and the manifest that was not written](#93-uninstall-and-the-manifest-that-was-not-written)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1771,7 +1772,7 @@ rather than code, and one lesson about testing.
   Still true that the ejected `clean` removes only what it knows about, and
   that is deliberate rather than pending — see the `CLEAN` comment. `--eject
   ninja` still has no install rule, since ninja has no convention for one.
-- **Install is minimal.** No uninstall, no manifest, no pkg-config `.pc`
+- **Install is minimal.** ~~No uninstall~~ (§93), no manifest, no pkg-config `.pc`
   generation, no shared-library versioning or `SONAME`, no symlink chain
   (`libfoo.so.1.2` → `libfoo.so`). A `.so` installs under its plain name, which
   is right for a private library and wrong for a published one.
@@ -6641,3 +6642,57 @@ this. The pattern is not that fmake lacks the fact -- it had it every time,
 computed a few hundred lines earlier and dropped on the way to the
 sentence. Worth remembering when adding a message: **the question is not
 "what do I know here", it is "what did something already know".**
+
+---
+
+## 93. Uninstall, and the manifest that was not written
+
+`--install` had no inverse, and neither did the two build files it emits.
+That is half a promise in the same shape §85 fixed: everything needed to
+put a project in place, and nothing to take it out again.
+
+`fmake --uninstall`, `make uninstall` and `ninja uninstall` all exist now,
+and all four callers -- those three plus `--install` -- read `install_plan`.
+A fourth caller rather than a fifth idea of what this project publishes.
+
+### Named files, because that is what `clean` does
+
+The obvious implementation removes the install directories, or globs them.
+Both are the thing this tree refuses everywhere else: **a target everybody
+runs without reading must not be able to remove something it did not put
+there.** `clean` names its files one by one for that reason and says so in
+a comment longer than the rule; uninstall is the same rule with higher
+stakes, because it operates on a prefix somebody else's software lives in.
+
+So it removes exactly the paths the plan names, and the case checks the
+property that distinguishes the two implementations rather than the one
+they share: a neighbour's file dropped into `bin` **survives**, and the
+directories survive. "The staging tree is empty afterwards" would pass for
+a version that removed the prefix, which is precisely the version being
+avoided.
+
+`rm -f` in the emitted rules and a swallowed `FileNotFoundError` in fmake:
+uninstalling twice, or after a partial install, is an ordinary thing to do
+and the end state is the one asked for either way. It reports how many were
+already gone rather than staying silent about it.
+
+### The manifest, declined for now and not quietly
+
+There is a real limit, and stating it is better than discovering it. This
+removes **what the tree says today**. Rename a target, uninstall, and the
+old name stays behind, because nothing in the tree names it any more.
+
+A manifest -- a file recording what a previous run actually placed -- fixes
+that, and it is a much larger promise than it looks: it has to live
+somewhere, survive the source tree moving, be found again from a different
+checkout, and be trusted when it disagrees with the plan. §15 lists it
+separately from uninstall, and it stays listed. What is built here is the
+thing that needs no new state and cannot be wrong about the present.
+
+### `--uninstall -n` reaches the plan
+
+The dry-run gate returns before the install step unless `--install` was
+asked for, and the same would have made `--uninstall -n` print the compile
+lines and stop -- silently doing nothing where a person was checking what
+was about to be deleted. That is the one dry run in this tool that somebody
+should always do first, so it is the one that most had to work.

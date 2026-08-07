@@ -6183,7 +6183,7 @@ def build(args, _bootstrapping=False):
 		(built if ok else failed).append((t.filename, closures[t], res))
 
 	cache.save()
-	if args.dry_run and not args.install:
+	if args.dry_run and not (args.install or args.uninstall):
 		if not args.no_libs:
 			note("libraries are not resolved in a dry run: nothing was "
 			     "compiled, so there are no symbols to resolve. The link "
@@ -6191,6 +6191,10 @@ def build(args, _bootstrapping=False):
 		return 0
 	if args.dry_run and args.install:
 		return do_install(wanted, closures, root, outdir, conf, args)
+	# `--uninstall -n' is the one anybody should run first, so it has to
+	# reach the plan rather than stopping at the dry-run gate above.
+	if args.dry_run and args.uninstall:
+		return do_uninstall(wanted, closures, root, conf, args)
 
 	if not args.quiet:
 		if changed:
@@ -6214,6 +6218,10 @@ def build(args, _bootstrapping=False):
 	if args.install and not failed:
 		say()
 		return do_install(wanted, closures, root, outdir, conf, args)
+
+	if args.uninstall and not failed:
+		say()
+		return do_uninstall(wanted, closures, root, conf, args)
 
 	if asked_phony and not failed:
 		made = {}
@@ -6844,6 +6852,19 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				src = source if origin == "built" else _eject_src(source)
 				a(f"\tinstall -m {mode:o} {src} {var}/{name}")
 		a("")
+		# The inverse, named file by file for the reason `clean' is: a
+		# target everybody runs without reading must not be able to remove
+		# something it did not put there. No wildcard, no directory.
+		# `-f' so that uninstalling twice, or after a partial install, is
+		# the ordinary thing it looks like rather than an error.
+		undo = "fmake-uninstall" if fragment else "uninstall"
+		a(f".PHONY: {undo}")
+		a(f"{undo}:")
+		for directory in ("bindir", "libdir", "includedir"):
+			for _origin, _source, d, name, _mode in plan:
+				if d == directory:
+					a(f"\trm -f $(DESTDIR)$({directory.upper()})/{name}")
+		a("")
 
 	all_objs = sorted({f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in every})
 	# Every file this build creates, named. Not `rm -rf $(BUILD_DIR)`: BUILD_DIR
@@ -7126,6 +7147,22 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("  pool = console")
 		deps = " ".join(sorted({_ninja(t.filename) for t in targets}))
 		a(f"build install: install | {deps}")
+
+		# The parameter lines only -- `set -e' and the five `: "${VAR:=...}"'
+		# defaults -- so uninstall reads the same environment install does.
+		undo = [step for step in steps
+		        if step.startswith((": ", "set -e"))]
+		for directory in ("bindir", "libdir", "includedir"):
+			for _origin, _source, d, name, _mode in plan:
+				if d == directory:
+					undo.append(f'rm -f "$$DESTDIR$${directory.upper()}/"'
+					            f"{shlex.quote(name)}")
+		a("")
+		a("rule uninstall")
+		a("  command = " + "; ".join(undo))
+		a("  description = UNINSTALL")
+		a("  pool = console")
+		a("build uninstall: uninstall")
 	return "\n".join(L) + "\n"
 
 # ---------------------------------------------------------------------------
@@ -7235,6 +7272,59 @@ def unpublished_headers(targets, closures, root):
 				if h not in published:
 					orphans.setdefault(h, set()).add(u.rel)
 	return {h: sorted(where) for h, where in sorted(orphans.items())}
+
+
+def do_uninstall(targets, closures, root, conf, args):
+	"""Remove exactly what `--install` would place, and nothing else.
+
+    The same rule `clean` follows, for the same reason: a target everybody
+    runs without reading must not be able to remove something it did not
+    put there. So there is no manifest and no pattern. The list comes from
+    `install_plan`, which is the same list `--install`, the ejected
+    Makefile and the ejected ninja read -- a fourth caller rather than a
+    fifth idea about what this project publishes.
+
+    That has one consequence worth stating rather than discovering: it
+    removes what the tree says *today*. Rename a target, uninstall, and the
+    old name stays behind, because nothing in the tree names it any more.
+    A manifest would fix that and would be a file recording what a previous
+    run did, which is a different and much larger promise -- and the wrong
+    one to make quietly.
+
+    Directories are left alone. Removing a directory means removing
+    something this list did not name, and `bin` was not ours to begin with.
+    """
+	paths = install_paths(conf, args)
+	planned = [os.path.join(paths[directory], name)
+	           for _origin, _source, directory, name, _mode
+	           in install_plan(targets, closures, root)]
+	if not planned:
+		info("nothing to uninstall")
+		return 0
+
+	removed, absent = 0, 0
+	for dst in planned:
+		if args.dry_run:
+			print(f"rm {dst}")
+			continue
+		try:
+			os.remove(dst)
+		except FileNotFoundError:
+			# Not an error. Uninstalling twice, or after a partial install,
+			# is an ordinary thing to do and the end state is the one asked
+			# for either way.
+			absent += 1
+			vinfo(f"not there: {dst}")
+			continue
+		except OSError as exc:
+			die(f"cannot remove {dst}: {exc}")
+		removed += 1
+		print(f"{GREEN('rm')} {dst}")
+
+	if not args.dry_run:
+		info(f"removed {removed} file(s) from {paths['prefix']}"
+		     + (f", {absent} already gone" if absent else ""))
+	return 0
 
 
 def do_install(targets, closures, root, outdir, conf, args):
@@ -7390,6 +7480,9 @@ def parse_args(argv):
 	p.add_argument("--install", action="store_true",
 	               help="build, then install the artifacts and their "
 	                    "@headers")
+	p.add_argument("--uninstall", action="store_true",
+	               help="remove exactly the files --install would place, "
+	                    "and nothing else")
 	p.add_argument("--prefix", default=None,
 	               help="install prefix (default /usr/local, or [install])")
 	p.add_argument("--destdir", default=None,
