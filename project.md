@@ -1831,6 +1831,13 @@ rather than code, and one lesson about testing.
   read back into the freshness key, the same bargain the compile side
   makes. `depends` stays for the ones that cannot -- flex cannot, and a
   shell script only can if somebody makes it.
+- **Object directories are never reclaimed.** One is kept per
+  configuration on purpose, so switching profiles, toolchains or `$DEBUG`
+  costs nothing the second time -- and nothing removes the ones that fall
+  out of use. A real project held 274M and 14M side by side after a single
+  change of default flags. `--clean` is the only reclamation and it now
+  says how much it freed, which is the one moment the trade is visible.
+  Pruning by age or by size is a policy nobody has asked for.
 - **A build with a permanently broken file never reaches a fixed point.**
   A file that failed to compile is retried on every build, because the fix
   might be outside it — an installed header, a corrected include path — and a
@@ -7702,9 +7709,16 @@ before it. The maxima said so out loud and were nearly missed: **80 to 97
 seconds** against medians of 1.7, exactly once per version, on whichever
 version had just been displaced.
 
-Each version has its own copy of the tree now, warmed with itself. The
-outliers vanish -- which also settles what they were: an artifact of the
-experiment, not something anybody building a project ever meets.
+Each version has its own copy of the tree now, warmed with itself, and the
+outliers vanish.
+
+**What they were is not what this first said.** They were called an
+artifact of the experiment that nobody building a project meets, and that
+was wrong: the expensive run is a *full recompile*, because this session
+changed the default flags -- `-Os -g` became `-Os`, and Qt gained `-fPIC`
+-- and different flags are a different object key. Anybody upgrading fmake
+across that change rebuilds once, exactly as the experiment did. Correct
+behaviour, and met by every user rather than by none.
 
 **A measurement whose answer reverses when you reverse the order is
 measuring the order.** It is worth running the second direction before

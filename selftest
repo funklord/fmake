@@ -4083,6 +4083,37 @@ outputs = ["gen/v.c"]
 
 
 @case
+def clean_says_how_much_it_freed(t):
+	"""The answer to the question that brings anybody to `--clean`.
+
+	An object directory is kept per configuration on purpose: switching
+	profiles, toolchains or `$DEBUG` is then free, because the previous
+	set is still there. Nothing ever reclaims one, so a tree built four
+	ways holds four sets -- 274M and 14M side by side in a real project
+	after a single change of default flags.
+
+	That is the intended trade and it is invisible. The size makes it
+	visible at the one moment somebody is asking."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "build failed")
+	check(t.fmake(env={"DEBUG": "1"}).returncode == 0, "debug build failed")
+
+	r = t.fmake("--clean")
+	check(r.returncode == 0, f"clean failed: {r.stderr}")
+	said = r.stdout + r.stderr
+	check("file(s)" in said, f"the count is gone: {said}")
+	check(re.search(r"\d+(\.\d+)?[BKMG]\)", said),
+	      f"no size was reported: {said}")
+	check(not os.path.isdir(os.path.join(t.dir, ".fmake")),
+	      "the state directory survived")
+
+	# Nothing to clean is still nothing to clean, not "0B".
+	r = t.fmake("--clean")
+	check("nothing to clean" in r.stdout + r.stderr,
+	      f"a second clean should say there was nothing: {r.stdout}")
+
+
+@case
 def clean_removes_generated_sources_by_name(t):
 	"""`--clean` left a build behind that a fresh checkout would not have.
 

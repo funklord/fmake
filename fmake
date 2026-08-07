@@ -8012,6 +8012,14 @@ def ensure_gitignore(root):
 		pass
 
 
+def _human(n):
+	"""A byte count somebody can read at a glance."""
+	for unit in ("B", "K", "M", "G"):
+		if n < 1024 or unit == "G":
+			return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+		n /= 1024.0
+
+
 def do_clean(root):
 	"""Remove the state directory, having checked it is the state directory.
 
@@ -8062,9 +8070,22 @@ def do_clean(root):
 		info(f"removed {len(removed)} generated file(s): "
 		     + ", ".join(removed[:4])
 		     + (f", and {len(removed) - 4} more" if len(removed) > 4 else ""))
-	count = sum(len(fs) for _d, _sub, fs in os.walk(state))
+	count, bytes_ = 0, 0
+	for base, _sub, files in os.walk(state):
+		for f in files:
+			count += 1
+			try:
+				bytes_ += os.lstat(os.path.join(base, f)).st_size
+			except OSError:
+				pass
+	# The size, because it is the answer to the question that brings
+	# anybody here. An object directory is kept per configuration on
+	# purpose -- switching profiles or toolchains is then free -- and
+	# nothing ever reclaims one, so a tree that has been built four ways
+	# holds four sets. That is the intended trade and it is invisible
+	# until this line says how much of it there is.
 	shutil.rmtree(state)
-	info(f"removed {STATE_DIR}/ ({count} file(s))")
+	info(f"removed {STATE_DIR}/ ({count} file(s), {_human(bytes_)})")
 	return 0
 
 # ---------------------------------------------------------------------------
