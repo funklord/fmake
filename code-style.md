@@ -165,6 +165,19 @@ Unicode.
 Enabled here (`ascii_only` in `.style-gate.toml`): this is a build tool with
 no user-facing Unicode and nothing that needs it.
 
+The check is not a byte scan. fmake is Python, so it means ASCII *outside
+string literals* -- the gate reads the file with `tokenize` -- and Unicode
+inside a literal passes. Everything else gets a whole-file byte check,
+having no tokenizer here, and so does a Python file that will not tokenise:
+a file nobody can parse is not a file that has been cleared.
+
+It was the whole file for everyone until a project that prints two status
+ticks had to switch the check off to keep them, which switched it off for
+its comments as well, and an em dash arrived in one. **An exception wider
+than its reason is how a rule stops being enforced.** Nothing here needs
+the allowance today, but the gate is carried verbatim and behaves this way.
+
+## The commit-msg hook
 
 The commit-msg hook is `tools/hooks/commit-msg`, installed with `make hooks`.
 It rejects generator attribution and a subject over 75 columns. It lives in
