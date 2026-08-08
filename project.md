@@ -8285,6 +8285,7 @@ them:
 | `fmake --clean` | already refuses anything above the root, and refuses to follow a symlink out. |
 | an interrupted build | the cache entry is written only after a compile succeeds *and* `nm` reads it, so a kill leaves none and the next build recompiles. Checked with `SIGTERM` mid-compile. |
 | two builds at once | `.fmake/lock`; one waits, then reports up to date, cache consistent. |
+| `--uninstall` | removes exactly the files its own plan named, leaving foreign files in the same directories alone -- and removes a *symlink* rather than what it points at, so an installed path replaced by a link out of the prefix costs the link and nothing else. |
 
 **The ejected Makefile was the odd one out**, removing a file two
 directories up that `fmake --clean` would not touch. Both halves had been
