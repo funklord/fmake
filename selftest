@@ -10912,7 +10912,7 @@ def a_compiler_named_as_a_command_line_says_so(t):
 
 @case
 def a_symbol_the_root_itself_defines_is_not_an_ambiguity(t):
-	"""Nothing guarded this, and section 116 is what made it matter.
+	"""Nothing guarded this, and section 114 is what made it matter.
 
 	`only a strong definition already in the link set ends the search' is
 	the rule that keeps the closure from re-deciding a symbol it has

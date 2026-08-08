@@ -10,7 +10,9 @@ so they don't get relitigated.
 **For using the tool, read `README.md`.** This file is the record of how the
 design was arrived at, which is a different thing and much longer.
 
-Status: **phases 1–6 implemented, plus two passes over the invariants.**
+Status: **phases 1–6 implemented, plus three passes over the invariants** —
+the chains (§14), the tooling's own claims (§77 onward), and a sweep of what
+was recorded as unverifiable or left unasserted (§112 onward).
 
 `fmake` builds C and C++ programs and libraries from an unannotated tree,
 resolves their dependencies, accepts in-source directives for what cannot be
@@ -21,6 +23,12 @@ out of the way.
 `./selftest` covers the design claims below, one case per claim, and every fix
 in §14 is mutation-checked: the case is confirmed to fail when the bug is put
 back. Phase 7 (`fmake.py`) is **declined** rather than pending — see §11.
+
+**Mutation is the standard, not a habit of §14.** A case that cannot be made
+to fail has not been shown to check anything, and §112–§116 are largely the
+record of what that turns up: a passing check whose fixture was too easy, a
+claim argued for in prose with no assertion under it, a guard that swallowed
+the case beside the one it was written for.
 
 ---
 
@@ -154,18 +162,11 @@ that had been green about nothing for five commits ·
 [109. The packaging report, folded in and removed](#109-the-packaging-report-folded-in-and-removed) ·
 [110. The same question as §79, and a method that answered the order](#110-the-same-question-as-79-and-a-method-that-answered-the-order) ·
 [111. The second list in the same file](#111-the-second-list-in-the-same-file) ·
-[112. Verifying the fix that could not be verified](#112-verifying-the-fix-that-could-not-be-verified) ·
-[113. Clang, LTO, and a wrong reason for not checking](#113-clang-lto-and-a-wrong-reason-for-not-checking) ·
-[114. Who chose the tool decides the advice](#114-who-chose-the-tool-decides-the-advice) ·
-[115. The direction of the disagreement that matters](#115-the-direction-of-the-disagreement-that-matters) ·
-[116. The lead §79 declined to act on was real](#116-the-lead-79-declined-to-act-on-was-real) ·
-[117. A toolchain with no prefix to derive anything from](#117-a-toolchain-with-no-prefix-to-derive-anything-from) ·
-[118. Defensive on one side of the same rule](#118-defensive-on-one-side-of-the-same-rule) ·
-[119. A name in a comment stays a name](#119-a-name-in-a-comment-stays-a-name) ·
-[120. Two ways to never return](#120-two-ways-to-never-return) ·
-[121. The clean that agreed with itself in only one direction](#121-the-clean-that-agreed-with-itself-in-only-one-direction) ·
-[122. The other half of a promise that was only half checked](#122-the-other-half-of-a-promise-that-was-only-half-checked) ·
-[123. A claim the case stated in prose and did not check](#123-a-claim-the-case-stated-in-prose-and-did-not-check)
+[112. Conditions recorded as untestable, and what that cost](#112-conditions-recorded-as-untestable-and-what-that-cost) ·
+[113. Advice that names the wrong fix](#113-advice-that-names-the-wrong-fix) ·
+[114. The lead §79 declined to act on was real](#114-the-lead-79-declined-to-act-on-was-real) ·
+[115. What deliberately stupid input found](#115-what-deliberately-stupid-input-found) ·
+[116. Claims that nothing was checking](#116-claims-that-nothing-was-checking)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1708,7 +1709,7 @@ rather than code, and one lesson about testing.
   that distinction is the whole finding. The guess that it would fall out
   naturally was right for the symbols and wrong about where such a file
   comes from.
-- ~~**LTO and `-ffunction-sections`.**~~ Closed; see §113. GCC's `-flto`
+- ~~**LTO and `-ffunction-sections`.**~~ Closed; see §112. GCC's `-flto`
   was already checked by hand. Clang was called untested "because clang is
   not installed here" — it is, just not on `$PATH`, and the entry is what
   a wrong reason for not checking something looks like. It works: the
@@ -1738,7 +1739,7 @@ rather than code, and one lesson about testing.
   pkg-config variables and the tool-prefix derivation have only been exercised
   against `aarch64-linux-gnu-*`. ~~A toolchain that names its tools
   differently~~ is tried now and works -- clang targets by flag and prefixes
-  nothing; see §117. A bare-metal one with no libc at all is still untried.
+  nothing; see §112. A bare-metal one with no libc at all is still untried.
 - ~~**Header-only libraries.**~~ Correctly need no link, and signal 2
   naturally produces no external symbols for them. The remaining case — one
   needing `-I` somewhere non-standard — was closed by §30 as a side effect:
@@ -2191,7 +2192,7 @@ added to `HEADER_PKG`.
 - Exercised against Qt 6.8 on Debian only. Qt 5 is coded for and untested.
 - On a cross build the moc that pkg-config names may be a target binary that
   cannot execute here; `[toolchain] moc` is the answer and the failure is
-  reported with that pointer. ~~The case is untested.~~ Tested; see §114,
+  reported with that pointer. ~~The case is untested.~~ Tested; see §112,
   which also found the pointer was given to readers who had already
   followed it.
 - moc's include path is best effort. It runs its own preprocessor but does not
@@ -2199,7 +2200,7 @@ added to `HEADER_PKG`.
   macro rather than an error — which is what makes it safe to settle these
   flags before the include graph exists.
 - `#if 0` is the tested case for scan-and-preprocessor disagreement. ~~Other
-  conditional shapes ... were not enumerated.~~ Enumerated in §115, and the
+  conditional shapes ... were not enumerated.~~ Enumerated in §113, and the
   claim held for all of them. The same section found the disagreement in
   the *other* direction, which this limit did not consider and which is
   the dangerous one.
@@ -5776,7 +5777,7 @@ whole program with a stopwatch and enough repetitions to see past the noise
 -- the instrument section 26 concluded was the right one. Until that is
 done, the honest statement is that nobody knows where the 2.4s goes.
 
-**Confirmed in §116, by that method, and the suspicion was right.** Which
+**Confirmed in §114, by that method, and the suspicion was right.** Which
 does not make the caution wrong: the reason to distrust it was sound, and
 the way it was settled is the reason it can now be believed.
 
@@ -6225,7 +6226,7 @@ this machine**, so the fact that it treats `-Og` as roughly `-O1` is
 untested here rather than confirmed.~~
 
 Clang is installed, at `/usr/lib/llvm-19/bin/clang` -- the same wrong
-reason §113 found, reached independently in a second section, which is
+reason §112 found, reached independently in a second section, which is
 what a false premise does once it is written down. Measured on a
 non-degenerate function, `-Og` and `-O1` are not roughly the same on
 clang, they are **byte-identical objects**:
@@ -7839,39 +7840,39 @@ it useless at the job it actually does.
 
 ---
 
-## 112. Verifying the fix that could not be verified
+## 112. Conditions recorded as untestable, and what that cost
 
-§98 fixed the Qt `-fPIC` reported from another machine, checked that the
-flag was passed on both routes to a module and into the ejected build, and
-recorded that whether it *silences Qt's #error* could not be checked here:
-that needs a Qt configured with `-reduce-relocations`, and this one is not.
+Four places in this document had recorded a property as unverifiable and
+moved on. All four were wrong, in the same way, and the method that
+unstuck them is one sentence:
 
-Both halves of the condition can be supplied.
+> **An untestable condition is worth restating as a list of differences
+> before it is accepted**, because the differences are usually smaller
+> than the label.
 
-**`QT_REDUCE_RELOCATIONS` is an ordinary macro**, so `@define` sets it and
-Qt's guard behaves exactly as it does on a Qt built that way -- the guard
-reads the macro, not the build.
+Not "we need a Qt built the other way", which is true and ends the
+conversation, but "what does that machine do that this one does not".
 
-**A compiler that does not default to PIE is a three-line shim.**
+### Qt's `-fPIC`, which §98 said needed a different Qt
 
-```sh
-#!/bin/sh
-exec c++ -fno-pie "$@"
-```
+§98 fixed the `-fPIC` reported from another machine, checked the flag was
+passed on both routes to a module and into the ejected build, and recorded
+that whether it *silences Qt's #error* could not be checked here, because
+it needs a Qt configured with `-reduce-relocations` and this one is not.
+Two differences, both arrangeable:
 
-That is the only thing different about the reporting machine, and the shim
-is faithful rather than approximate: its gcc puts `-fno-pie` before the
-project's flags too, and fmake's `-fPIC` comes later and wins.
+- **`QT_REDUCE_RELOCATIONS` is an ordinary macro**, so `@define` sets it
+  and Qt's guard behaves exactly as on a Qt built that way. The guard
+  reads the macro, not the build.
+- **A compiler that does not default to PIE is a three-line shim**
+  (`exec c++ -fno-pie "$@"`). Faithful rather than approximate: the
+  reporting machine's gcc puts `-fno-pie` first too, and fmake's `-fPIC`
+  comes later and wins.
 
-With both, the exact reported failure reproduces here -- and removing
-fmake's `-fPIC` is what produces it:
+With both, the reported failure reproduces exactly, and removing fmake's
+`-fPIC` is what produces it.
 
-```
-* #error "You must build your code with position independent code if Qt
-  was configured with -reduce-relocations."
-```
-
-### The order is the mechanism, and it corrects §98
+**The flag order is the mechanism, and it corrects §98:**
 
 ```
 -fPIC            __PIC__=2
@@ -7880,113 +7881,48 @@ fmake's `-fPIC` is what produces it:
 -fno-pie -fPIC   __PIC__=2
 ```
 
-Last wins. §98 said `--cflags` could not drop the flag; what `--cflags`
-cannot do is remove it from the *list*, and it is emitted last by design,
-so `--cflags -fno-pie` leaves `-fPIC` in the command and cancels it.
+§98 said `--cflags` could not drop the flag. What `--cflags` cannot do is
+remove it from the *list*, and it is emitted last by design, so
+`--cflags -fno-pie` leaves `-fPIC` in the command and cancels it.
+**Surviving in a flag list is not the same as taking effect** -- the
+distinction this document spends most of its length insisting on, got
+wrong in the section that introduced the flag, by a check that looked for
+`-fPIC` in a string.
 
-**Surviving in a flag list is not the same as taking effect**, and that
-distinction is the one this document spends most of its length insisting
-on. It was got wrong in the section that introduced the flag, by a check
-that looked for `-fPIC` in a string.
+### Clang, and a wrong reason repeated twice
 
-### What made it testable was asking what was actually different
+§15 recorded a good fear about LTO: `clang -flto` emits **pure bitcode**
+where GCC emits an ELF object with extra sections, an object `nm` reads
+nothing from defines nothing, and a file that defines nothing is invisible
+to the closure -- so every file would look like it provides nothing and
+the link set would be empty. Untested, "because clang is not installed
+here".
 
-Not "we need a Qt built the other way" -- which is true and stops the
-conversation -- but "what does that machine do that this one does not".
-Two things, and both are things a test can arrange. **An untestable
-condition is worth restating as a list of differences before it is
-accepted**, because the differences are usually smaller than the label.
+**Clang is installed here**, at `/usr/lib/llvm-19/bin/clang`, which is not
+on `$PATH`. `which clang` was the whole investigation. The same false
+premise had been written down independently in §86, where it left the
+claim that clang treats `-Og` as roughly `-O1` unchecked -- measured, they
+are **byte-identical objects**, while gcc's five levels all differ.
 
----
-
-## 113. Clang, LTO, and a wrong reason for not checking
-
-§15 recorded a specific fear about link-time optimisation, and it was a
-good one. `clang -flto` emits **pure bitcode** where GCC emits an ELF
-object carrying extra sections. An object `nm` reads nothing from defines
-nothing, and a file that defines nothing is invisible to the closure --
-so every file in the tree would look like it provides nothing, and the
-link set would be empty.
-
-It was left untested "because clang is not installed here".
-
-**Clang is installed here.** It is at `/usr/lib/llvm-19/bin/clang`, which
-is not on `$PATH` -- and `which clang` was the whole investigation. The
-entry is not wrong about the risk; it is wrong about why it could not
-look, which is the same failure as §112 one section earlier and worth
-saying twice.
-
-### What actually happens
-
-It works, and the fixture checks the magic rather than trusting the flag:
-
-```
-BC c0 de     the object really is bitcode, not ELF
-helper.c     compiled -- reached by symbol
-unused.c     not compiled -- reached by nothing
-7            the binary runs
-```
-
-`nm` reads bitcode because **`LLVMgold.so` is installed as a BFD plugin**,
-in `/usr/lib/bfd-plugins`. That is a property of the machine, not of the
-tree or the compiler, so the feared failure is real on a machine without
-it -- and mutating `read_symbols` to return nothing for bitcode produces
-it exactly:
+The LTO fear does not materialise. The objects really are bitcode (the
+fixture checks the `BC c0 de` magic rather than trusting the flag), the
+closure is exactly right, and the binary runs. `nm` reads bitcode because
+**`LLVMgold.so` is installed as a BFD plugin**, in
+`/usr/lib/bfd-plugins` -- a property of the machine, not of the tree or
+the compiler, so the feared failure is real elsewhere. Mutating `read_symbols` to return nothing for bitcode produces
+it, and fmake reports rather than silently linking an empty program:
 
 ```
 * main.c looked like it defined main() but the object does not export it
 !!! no target could be built
 ```
 
-Which is fmake reporting the condition rather than silently linking an
-empty program. That half was already right.
+### A moc that cannot run, where the obvious fixture is the wrong one
 
-### The advice was the wrong half
-
-`read_symbols` dies when `nm` exits non-zero, and told the reader:
-
-> Set `[toolchain] nm` in fmake.toml, or `$NM`, to one that understands
-> **unknown** objects.
-
-`elf_identity` returns `None` for a file that is not ELF, and
-`describe_identity(None)` is `"unknown"`. So a clang LTO build without the
-plugin sent its reader looking for a cross-toolchain problem they did not
-have, when the first four bytes of the file say LLVM bitcode and the fix
-is `llvm-nm` -- verified to work, not assumed.
-
-**The file knew. The line printing the advice had not asked it.** That is
-§31's pattern again, in the fifth place it has been found, and the fix is
-the same shape: `bitcode_object()` reads the magic, and the message names
-the format, the reader that handles it, and the plugin that would let the
-existing one handle it.
-
-### The case that needs no clang
-
-The end-to-end case skips where clang is absent, which makes it the weaker
-of the two. The diagnostic case does not skip anywhere: a compiler that
-writes bitcode magic and an `nm` that refuses it are the entire condition,
-and both are four-line shims. **A condition worth testing is often smaller
-than the toolchain that produces it** -- the same lesson as §112, arrived
-at from the other end.
-
----
-
-## 114. Who chose the tool decides the advice
-
-§17 listed a Qt limit as handled-but-untested: on a cross build the moc
-pkg-config names may be a target binary that cannot execute on the build
-machine, and `[toolchain] moc` is the answer. Following §112 and §113, the
-question is not whether the condition is exotic but **what is actually
-different about the machine that would hit it**.
-
-Almost nothing. "Cannot execute here" is a property `subprocess` reports,
-and reaching it needs no cross toolchain at all.
-
-### An aarch64 binary is the wrong way to write it
-
-The obvious fixture -- compile a real aarch64 moc -- is wrong on this
-machine and would have passed for the wrong reason if it had been used
-carelessly, or failed to fail if it had been used honestly:
+§17 listed this as handled-but-untested: on a cross build the moc
+pkg-config names may be a target binary that cannot execute here. Reaching
+it needs no cross toolchain at all -- and the obvious fixture is actively
+wrong on this machine:
 
 ```
 qemu-aarch64 is registered in /proc/sys/fs/binfmt_misc
@@ -7994,147 +7930,198 @@ qemu-aarch64 is registered in /proc/sys/fs/binfmt_misc
 ```
 
 **Bytes that are no executable format** are refused by every kernel with
-`ENOEXEC`, which is exactly what the code is reacting to. Four junk bytes
-and a `chmod` are the whole condition -- smaller, and true everywhere.
+`ENOEXEC`, which is what the code reacts to. Four junk bytes and a
+`chmod`: smaller than the toolchain, and true everywhere.
 
-### What the test found
+### A toolchain with no prefix to derive anything from
 
-The message was right for one of the three routes to a moc and wrong for
-the other two:
+§15 records cross builds as verified against `aarch64-linux-gnu-*` and
+notes that a toolchain naming its tools differently is untried. Clang is
+that toolchain, and it is the interesting case rather than an exotic one:
+one binary for every target, chosen with `--target`, no triplet for
+`_prefixed()` to derive from, the host's binutils reading the objects.
+
+It works end to end. The case checks the **artifact** -- `e_machine` 183,
+a real aarch64 ELF -- because "the build succeeded" is what a cross build
+says when it has quietly produced a host binary, which is the failure §5
+was written about.
+
+**What does not work is how everyone spells it.** Autotools and make treat
+`CC` as a word list, so `CC="clang --target=aarch64-linux-gnu"` is the
+ordinary idiom, and it produced `C compiler '...' not found` -- which
+reads as a missing program and says nothing about the space.
+
+`cc` stays a program, and this is a decision rather than an oversight.
+`self.cc` is invoked on its own in eight places, three of which are
+questions whose answers `--target` changes:
 
 ```
-That moc comes from [toolchain] moc in fmake.toml -- advice: set [toolchain] moc
-That moc comes from $MOC                          -- advice: set [toolchain] moc
-pkg-config found it                               -- advice: set [toolchain] moc
+cc -print-multiarch        the triplet
+cc -print-search-dirs      where libraries are
+cc -E -Wp,-v               the builtin include path
 ```
 
-Two of those tell the reader to do the thing they have already done. It is
-§31's pattern once more, in advice rather than in a summary, and the same
-cause: `run_moc` was handed the path and not who chose it, so the line
-printing the instruction could not ask.
+A compiler that is really a command line has to be a **list** everywhere,
+including those probes, or it answers for the host while compiling for the
+target -- the exact class of silent wrongness this tool exists to refuse.
+**That design change is raised, not made.** What is fixed is the message:
+the space is recognised and `[project] cflags` named, which reaches the
+compile *and* the link as a `--target` needs. A plain typo keeps the plain
+message, checked, because trading one misleading answer for another is not
+a fix.
 
-`tool_origin()` answers that once, and `find_qt_tool`'s not-found message
-uses it too -- it was already distinguishing `$MOC` from the config file
-with its own copy of the logic.
+### The shape of the four
 
-### The branch nothing would otherwise reach
-
-The route that keeps the original advice is the one a real cross build
-hits, and it is the only one needing pkg-config to name the broken tool.
-A `.pc` on `PKG_CONFIG_PATH` whose `libexecdir` points at the junk file
-does it, so all three branches are checked rather than two plus an
-assumption. **The branch left unexercised is the one the change is most
-likely to break**, because it is the one that was already correct.
+Each was blocked by a label rather than by a condition, and in three of
+the four the fixture that finally worked was **smaller than the toolchain
+that produces the condition** -- a macro, a three-line shim, four junk
+bytes. A test that needs the whole environment reproduced is usually a
+test that has not yet been reduced.
 
 ---
 
-## 115. The direction of the disagreement that matters
+## 113. Advice that names the wrong fix
 
-§17 recorded that `#if 0` is the tested case for the scan and moc's
-preprocessor disagreeing, and that "other conditional shapes are handled by
-the same negative-result path but were not enumerated". Enumerating them is
-five minutes, and the claim is true -- moc writes a zero-byte file for
-every one:
+§31 named the pattern: the code that knows the answer runs early, the code
+printing the last line never asks it. Five more instances turned up
+together, all in *advice* rather than in a summary, and one rule covers
+them:
+
+> **Where two fixes are possible, naming one is not brevity. It is a guess
+> presented as a diagnosis.**
+
+### An object `nm` could not read
+
+`read_symbols` dies when `nm` exits non-zero, and said: set `[toolchain]
+nm` to one that understands **unknown** objects. `elf_identity` returns
+`None` for a file that is not ELF and `describe_identity(None)` is
+`"unknown"`, so a clang LTO build on a machine without the BFD plugin was
+sent looking for a cross-toolchain problem it did not have -- when the
+first four bytes say LLVM bitcode and the fix is `llvm-nm`, verified to
+build the tree rather than assumed. `bitcode_object()` reads the magic;
+the message names the format, the reader that handles it, and the plugin
+that would let the existing one handle it.
+
+### A moc that cannot run
+
+Three routes to a moc, and the message was right for one:
 
 ```
-#if 0                     0 bytes
-#ifdef NEVER_DEFINED      0 bytes
-#else branch not taken    0 bytes
-inside a block comment    0 bytes
-inside a string literal   0 bytes
+named by [toolchain] moc  -- advice: set [toolchain] moc
+named by $MOC             -- advice: set [toolchain] moc
+found by pkg-config       -- advice: set [toolchain] moc
 ```
 
-(Measured against a real output file. Told to write to `/dev/stdout` moc
-emits a 60-odd byte preamble for all five, which would have looked like
-five failures and is an artifact of the fixture, not of moc.)
+Two of those tell the reader to do what they have already done.
+`run_moc` was handed the path and not who chose it, so the line printing
+the instruction could not ask; `tool_origin()` answers it once, and
+`find_qt_tool`'s not-found message uses it too, having previously carried
+its own copy of the same logic.
 
-**But the limit only considered one direction.** It is written as "the scan
-sees a Q_OBJECT that moc does not", whose cost is a wasted moc run and a
-file correctly discarded. The other direction is not mentioned, and it is
-the one that breaks a build:
+**The branch nothing would otherwise reach** is the one a real cross build
+hits -- pkg-config naming the broken tool -- and a `.pc` on
+`PKG_CONFIG_PATH` whose `libexecdir` points at the junk file arranges it.
+All three are checked rather than two plus an assumption: *the branch left
+unexercised is the one a change is most likely to break, because it is the
+one that was already correct.*
+
+### A meta-object the tree was supposed to generate
+
+§17 recorded `#if 0` as the tested case for the scan and moc's
+preprocessor disagreeing, and left other conditional shapes unenumerated.
+Enumerated, the claim holds -- moc writes a zero-byte file for all of
+them:
+
+```
+#if 0 · #ifdef NEVER_DEFINED · an untaken #else · a block comment ·
+a string literal          all 0 bytes
+```
+
+(Against a real output file. Told to write to `/dev/stdout` moc emits a
+60-odd byte preamble for all five, which would have read as five failures
+of the fixture's own making.)
+
+**But the limit considered only one direction**, and the harmless one. A
+class reaching the macro through *another* macro carries no token at all:
 
 ```cpp
 #define MY_OBJ Q_OBJECT              // macros.h
 class G : public QObject { MY_OBJ };  // g.h -- zero occurrences of Q_OBJECT
 ```
 
-moc's preprocessor expands it and generates 2670 bytes. `g.h` contains no
-token for the scan to find, so no job is planned, and the link fails:
+moc's preprocessor expands it and generates 2670 bytes; the scan sees
+nothing, plans no job, and the link fails on `undefined reference to
+vtable for G` -- `no x86_64/64le library exports: _ZTV1G`, which mentions
+no Qt anything -- with **`--ldflags`** offered -- sending the reader to
+install a library for a meta-object their own tree makes.
 
-```
-undefined reference to `vtable for G'
-  no x86_64/64le library exports: _ZTV1G
-  name the missing libraries with --ldflags        <- wrong
-```
+Recognising the shape by inspection means understanding macro expansion,
+which fmake declines to do everywhere else. **Asking moc answers it
+exactly**, and is affordable only where it now runs: after a link has
+already failed, when Qt is being linked, over the headers that link set
+includes. The advice grew a third ending, because there are three causes
+and one of them is a missing library.
 
-Nothing on those lines mentions Qt. The reader is sent to install a
-library for a meta-object their own tree was supposed to generate --
-§31's pattern, arriving where it costs most.
+**Not done, and declined rather than pending:** falling back to running
+moc on every header. Correct, slow, and a token search turned into a
+compiler pass for a shape Qt's own documentation does not use. Reporting
+precisely where it fails is the smaller answer, and the one `@sources`
+already takes for symbol-invisible dependencies.
 
-### Asking is better than guessing, once the build has failed
+### An architecture mismatch
 
-Recognising this shape by inspection means understanding C++ macro
-expansion, which is the thing fmake declines to do everywhere else.
-**Running moc answers it exactly.** That is far too expensive per build and
-free where it is now: only after a link has already failed, only when Qt is
-being linked, and only over headers that link set includes.
+Leave `[toolchain] arch` out of a clang cross build and the architecture
+check catches it, correctly -- from where that check stands, a compiler
+cross-compiling by flag is indistinguishable from the wrong compiler. It
+offered `name the right one with [toolchain] cc`, which is the one fix
+that does not apply when the compiler is right and the *declaration* is
+missing. It offers both now, with the architecture filled in from what was
+read out of the object.
 
-The advice now has three endings rather than two, because there are three
-causes and only one of them is a missing library. The negative half of the
-case is what keeps that honest -- a Qt build failing for an ordinary reason
-must still get the ordinary advice, and the mutation that makes the probe
-always say yes is caught by exactly that assertion rather than by the
-positive one.
+### What the cases had to do
 
-### What is not being done
-
-**The scan is not falling back to running moc on every header.** It would
-be correct and it would be slow, and it would make a token search into a
-compiler pass for the sake of a shape Qt's own documentation does not use.
-Reporting it precisely at the moment it fails is the smaller answer, and
-the one consistent with `@sources` for symbol-invisible dependencies:
-fmake declines to guess, and says so where the guess would have been
-needed.
+Two of these fixes are refusals or additions that a lazy version would
+satisfy. The mutation that makes the moc probe answer *yes* to everything
+passes every positive assertion and is caught only by the requirement that
+an ordinary Qt failure still gets the ordinary advice. **When the change
+is a refusal, the test that earns its keep is the one that checks what
+still gets through.**
 
 ---
 
-## 116. The lead §79 declined to act on was real
+## 114. The lead §79 declined to act on was real
 
 §79 profiled a slow build on hydra, found `cProfile` pointing at
 `close_over_symbols` -- 2.64s across 76,010 calls to `builtins.any` -- and
 **deliberately did not act on it**. The reasoning was good: §26 is about
 that instrument pointing precisely at the wrong thing, `cProfile` charges
 per-call overhead, and a cheap function called 76,010 times is what it is
-built to over-report. The memo it justified last time made no difference
-and was taken out again.
+built to over-report. It also wrote down how to settle the question:
+short-circuit the suspected work and time the whole program with a
+stopwatch, with enough repetitions to see past the noise.
 
-It also wrote down how to settle it: short-circuit the suspected work and
-time the whole program with a stopwatch, with enough repetitions to see
-past the noise.
-
-Done, and **the suspicion was right**.
+Done, and the suspicion was right.
 
 ### What the scan was
 
 Three linear scans over the link set, not the two §79 named:
 
 ```python
-if any(sym in o.strong for o in linked)                     # per symbol
-if any(sym in o.weak for o in linked)                       # per symbol
+if any(sym in o.strong for o in linked)                       # per symbol
+if any(sym in o.weak for o in linked)                         # per symbol
 if not any(sym in o.strong or sym in o.weak for o in linked)  # per external
 ```
 
 `linked` is the thing that grows, so the work is quadratic in exactly the
 dimension that gets bigger. Two sets kept in step with it answer the same
-questions by lookup. The third scan is the one §79 did not mention and it
+questions by lookup. The third scan is the one §79 did not mention, and it
 runs over every undefined symbol in the whole link set.
 
 ### Measured, not asserted
 
-On hydra -- 121 translation units, warm cache, `--explain` so nothing
-compiles -- 21 alternating runs each, **with the order of the pair
-reversed every round** so that a systematic drift cannot land on one
-version:
+hydra, 121 translation units, warm cache, `--explain` so nothing compiles;
+21 runs each, **with the order of the pair reversed every round** so a
+systematic drift cannot land on one version:
 
 | | min | p25 | median |
 |---|---|---|---|
@@ -8142,47 +8129,32 @@ version:
 | sets | 0.604s | 0.730s | 0.812s |
 | | **-34%** | **-31%** | **-33%** |
 
-The machine was loaded by unrelated work, so the ranges overlap and no
-single run proves anything -- which is why all three statistics are
-reported rather than the flattering one. They agree on a third.
-
-**The alternation matters more than the repetitions.** §77 measured the
-*order* rather than the versions and got an answer that reversed when the
-order did.
+The machine carried unrelated load, so the ranges overlap and no single
+run proves anything -- which is why all three statistics are here rather
+than the flattering one. They agree on a third. **The alternation matters
+more than the repetitions**: §77 measured the *order* rather than the
+versions and got an answer that reversed when the order did.
 
 ### The proof that it is the same closure
 
 A speedup that changes what gets linked is not a speedup. The invariant is
-that the plan is unchanged, and it is checked rather than sampled:
-`--explain` on hydra is **byte-identical** between the two versions, 299
-lines covering the link set, the externals and the install plan, over a
-tree with real ambiguity and real weak symbols in it. Plus the suite.
+that the plan is unchanged, checked rather than sampled: `--explain` on
+hydra is **byte-identical** between the two versions -- 299 lines covering
+the link set, the externals and the install plan, over a tree with real
+ambiguity and real weak symbols in it.
 
-### The risk it moved, and the gap that was already there
+### The risk it moved, and the gap already there
 
 The invariant used to be recomputed on demand and is now maintained in
-three places, which is a real trade. Breaking it deliberately -- dropping
-the seeds' symbols from the set -- **passed all 297 cases**, so the suite
-was not holding the rule up.
-
-Neither was it before the change. The shape that distinguishes them is
+three places. Breaking it deliberately -- dropping the seeds' symbols from
+the set -- **passed all 297 cases**, so the suite was not holding the rule
+up. Neither was it before the change. The shape that distinguishes them is
 specific enough to have been missed: the root defines a symbol, a *second*
-file defines it too, and a *third* file that does get linked is what refers
-to it. Only then does the short-circuit decide anything -- and without it
-the closure reports an ambiguity that is not one and refuses to build a
-tree that is fine.
-
-```
-* two files define shared(), which is a guess, not a decision
-    [target.ambig2]
-    sources = ["main.c"]
-```
-
-That is a correct message about a false problem, which is the expensive
-kind. A case pins it now, and it is worth being clear that this was **a
-gap in what the suite checked, not one the change created**: `only a
-strong definition already in the link set ends the search` has always had
-the root as its quietest and most important instance.
+file defines it too, and a *third* file that does get linked refers to it.
+Only then does the short-circuit decide anything -- and without it the
+closure reports an ambiguity that is not one and refuses to build a tree
+that is fine. A correct message about a false problem, which is the
+expensive kind. A case pins it now.
 
 ### What this says about §79's caution
 
@@ -8194,433 +8166,223 @@ is "the lead is lost".
 
 ---
 
-## 117. A toolchain with no prefix to derive anything from
+## 115. What deliberately stupid input found
 
-§15 records cross builds as verified against `aarch64-linux-gnu-*` and
-notes that "a toolchain that names its tools differently is untried".
-Clang is precisely that toolchain, and it is the interesting case rather
-than an exotic one: **one binary for every target**, chosen with
-`--target`, no triplet in the name, nothing for `_prefixed()` to derive,
-and the host's binutils reading the objects.
+A sweep: empty trees, binary sources, broken TOML, symlink loops, absurd
+filenames, paths where a name was documented, things that are not files.
+Twelve shapes to start with, asking only whether fmake *reported* rather
+than tracebacked. **Four bugs, none of which came from thinking about the
+code**, and a list of things now known to be fine.
 
-It works, end to end. The case checks the artifact rather than the exit
-status -- `e_machine` 183, a real aarch64 ELF -- because "the build
-succeeded" is what a cross build says when it has quietly produced a host
-binary, which is the failure §5 was written about.
-
-### What does not work is how everyone spells it
-
-```
-CC="clang --target=aarch64-linux-gnu"
-```
-
-Autotools and make both treat `CC` as a word list, so naming a compiler
-with its flags is the ordinary idiom for a toolchain with no prefix.
-fmake takes a *program*, and the failure was:
-
-```
-!!! C compiler 'clang --target=aarch64-linux-gnu' not found
-```
-
-Which reads as a missing program and says nothing about the space. The
-route that does work is `[project] cflags`, because those reach the
-compile **and the link** -- and a `--target` needs both.
-
-### Why it is a program and not a command line
-
-Not an oversight worth quietly fixing. `self.cc` is invoked on its own in
-eight places, and three of them are questions whose answers `--target`
-changes:
-
-```
-cc -print-multiarch        the triplet
-cc -print-search-dirs      where libraries are
-cc -E -Wp,-v               the builtin include path
-```
-
-A compiler that is really a command line has to be a **list** everywhere,
-including those probes, or it answers for the host while compiling for the
-target -- which is the exact class of silent wrongness this tool exists to
-refuse. That is a design change, so it is raised here rather than made in
-passing. What is not acceptable is a message that misdescribes the
-failure, and that is fixed: the space is recognised and the working route
-named. A plain typo keeps the plain message, checked, because trading one
-misleading answer for another is not a fix.
-
-### The guard that fires, and the fix it did not name
-
-Leave `[toolchain] arch` out and the architecture check catches it, which
-is correct -- from where that check stands, a compiler cross-compiling by
-flag is indistinguishable from the wrong compiler. But it offered one fix:
-
-```
-    name the right one with [toolchain] cc, or $CC
-```
-
-Here the compiler is right and the *declaration* is missing, so the only
-advice given was the one that does not apply. It offers both now, with the
-architecture filled in from what was actually read out of the object. Same
-lesson as §114 and, by this point, unmistakable: **where two fixes are
-possible, naming one is not brevity, it is a guess presented as a
-diagnosis.**
-
----
-
-## 118. Defensive on one side of the same rule
+### A traceback on any source that is not UTF-8
 
 Every file fmake reads is opened with `errors="replace"`, in five places,
-because a tree is allowed to contain whatever it contains. Source is not
-required to be UTF-8; C predates it.
-
-Every subprocess it ran decoded strictly.
-
-```python
-subprocess.run(cmd, capture_output=True, text=True)
-```
-
-**gcc quotes the offending source line back at you**, so a diagnostic
-about a line that is not UTF-8 is not UTF-8 either. Python raises
-`UnicodeDecodeError` from inside `communicate()`, and fmake dies with a
-traceback naming subprocess internals -- while holding the compile error
-it was about to print.
+because a tree is allowed to contain whatever it contains. Every
+subprocess it ran decoded strictly. **gcc quotes the offending source line
+back at you**, so a diagnostic about a line that is not UTF-8 is not UTF-8
+either -- and Python raises `UnicodeDecodeError` from inside
+`communicate()`, killing fmake with a traceback naming subprocess
+internals while it holds the compile error it was about to print.
 
 ```
 int main(void){ int caf<e9>_count = 0; return caf<e9>_count; }
 ```
 
-That is a Latin-1 source, which is not exotic; it is most C written before
-about 2005 that had a person's name in it. A file of random bytes named
-`.c` produces the identical failure, because the cause is the decode
-rather than the file.
+Latin-1 is not exotic; it is most C written before about 2005 with a
+person's name in it. Random bytes named `.c` fail identically, because the
+cause is the decode rather than the file.
 
-### The proof, since the change is mechanical
+**The rule was known and applied on one side only.** Fourteen call sites,
+one substitution -- and since the change is mechanical it carries a proof
+rather than a reading: undoing the substitution must reproduce the
+original byte for byte. A reviewer reading a sample of fourteen
+near-identical hunks proves nothing about the fifteenth.
 
-Fourteen call sites, one substitution. The invariant is that **nothing but
-those occurrences moved**, and it is checked by undoing the substitution
-and requiring the original back byte for byte -- the same shape as the
-`ast.dump` and `dpkg -c` proofs in the evidence rules. A reviewer reading
-a sample of fourteen near-identical hunks proves nothing about the
-fifteenth.
+The case checks more than the absence of a traceback, because a fix that
+discarded the compiler's output would satisfy that: the diagnostic itself
+has to survive `-v`. **The obvious assertions here are all satisfiable by
+making things worse.**
 
-### What the case has to check beyond "it did not crash"
-
-A fix that discarded the compiler's output entirely would pass "no
-traceback", "no `UnicodeDecodeError`" and "reported a failure". So the
-case also requires the diagnostic itself to survive `-v`. **The obvious
-assertions here are all satisfiable by making things worse**, which is the
-argument for asking what a wrong fix would look like before writing them.
-
-### The finding worth keeping
-
-The rule was known. It was written down five times, in the code, on the
-file side -- and the process side was never asked the same question.
-**A defence applied to one class of input is not a defence; it is a habit
-that happened to cover the case somebody thought of.**
-
----
-
-## 119. A name in a comment stays a name
-
-§118 came out of pointing hostile input at fmake -- empty trees, binary
-sources, broken TOML, symlink loops, absurd filenames -- and asking only
-whether it *reported* rather than tracebacked. Twelve shapes, one
-traceback. The same sweep asked a second question of the directives, and
-that one was worse.
+### A name in a comment that was a path
 
 `@target NAME` is documented as a name in both README and §7, and `-o` is
-how output moves elsewhere. Nothing checked it.
+how output moves elsewhere. Nothing checked it:
 
 ```
 @target ../../ESCAPED        built outside the tree
 @target /tmp/ABSOLUTE        built at an absolute path, tree ignored
 ```
 
-Surprising, and no worse than surprising -- until the install side, where
-the name is joined onto the destination exactly as written:
+Surprising, and no worse than surprising until the install side, where the
+name is joined onto the destination exactly as written:
 
 ```make
 install -m 755 ../../ESCAPED $(DESTDIR)$(BINDIR)/../../ESCAPED
 ```
 
-That leaves the prefix, and **leaves a staging root**. `DESTDIR` is the
-mechanism every Debian build depends on to keep an install inside the
-package being built, and this walks out of it from a comment in a source
-file.
+That leaves the prefix and **leaves a staging root** -- `DESTDIR` being
+the mechanism every Debian build depends on to keep an install inside the
+package being built.
 
-### What is and is not being claimed
+**Not a security boundary**, and claiming one would be theatre: `@rule`
+runs recipes exactly as make does, so a tree you build is a tree you have
+already trusted to run commands. The property is smaller and worth having
+anyway: what a comment says is a name is a name. fmake already refused a
+target that would overwrite a directory, from the same instinct, and this
+guard goes beside it. Both routes to the field are covered.
 
-Not a security boundary. `@rule` runs recipes, exactly as make does, so a
-tree you build is a tree you have already trusted to run commands, and
-pretending otherwise would be theatre.
-
-**The property is smaller and worth having anyway**: what a comment says
-is a name is a name. fmake already refused a target that would overwrite a
-directory, from the same instinct; this is the same guard on the same
-field, and it goes beside it.
-
-### The half of the case that matters most
-
-A guard that refuses too much passes every assertion about refusing. So
-the case ends by building an ordinary `@target myapp` and requiring it to
-work -- and the mutation that makes the guard fire on everything is caught
-there and nowhere else. **When the change is a refusal, the test that
-earns its keep is the one that checks what still gets through.**
-
----
-
-## 120. Two ways to never return
-
-The hostile-input sweep of §119 kept going, and the next thing it found was
-not an error but a **hang**.
+### Two ways to never return
 
 `os.walk` lists everything that is not a directory, and `walk_tree`
-filtered on the extension alone. A source extension on something that is
-not a file does not make it one:
+filtered on the extension alone:
 
 ```
-a FIFO named blocks.c      open() blocks until somebody writes
-/dev/zero symlinked as     read() never stops producing
-  endless.c
+a FIFO named blocks.c        open() blocks until somebody writes
+/dev/zero as endless.c       read() never stops producing
 ```
 
-fmake read whatever it found. Neither of these fails -- fmake **never
-returned**. No output, no error, no exit status, nothing to read and
-nothing to act on. That is the worst shape a build tool has, and reaching
-it took a named pipe in a directory.
+Neither of these fails. fmake **never returned** -- no output, no error,
+no exit status, nothing to act on, which is the worst shape a build tool
+has, and it took a named pipe in a directory to reach.
 
-`os.path.isfile()` is most of the fix, and it follows symlinks, so a
-symlinked source still builds -- which trees do rely on, and which the
-case checks from outside the walked tree so there is only one copy of the
-symbol and nothing to be ambiguous about. What is skipped is named under
-`-v`, since a silently dropped source is the other way to be wrong here.
-
-**And `isfile()` alone was wrong**, which the suite said and this section
-would otherwise have claimed as finished. A dangling symlink is not a
-file either, so it was being dropped silently too -- and
-`odd_trees_do_not_crash` exists precisely because one of those once
-raised `KeyError`, with the report that replaced the crash as its
-assertion. A broken link is somebody's mistake and gets named; a FIFO is
-not a source at all and does not. The condition is `exists() and not
-isfile()`, and the difference between the two is the whole point:
+`isfile()` alone was the wrong fix, and **the suite said so**: a dangling
+symlink is not a file either, and `odd_trees_do_not_crash` exists because
+one of those once raised `KeyError`, carrying the report that replaced the
+crash as its assertion. A broken link is somebody's mistake and gets
+named; a FIFO is not a source at all and does not:
 
 ```
 dangling.c   -> exists() is False -> passes through, reported by name
 blocks.c     -> exists() is True  -> skipped, named under -v
 ```
 
-**A guard written for one shape swallowed a neighbouring one**, and only
-a case that already knew the difference caught it. It was the last full
-run before the commit that found it, not any of the targeted runs.
+A guard written for one shape swallowed a neighbouring one, and only a
+case that already knew the difference caught it -- on the last full run
+before the commit, not on any of the targeted ones.
 
-### The suite could not have caught it, because it would have hung too
+**The suite could not have caught the hang, because it would have hung
+too.** `Tree.fmake()` ran `subprocess.run` with no timeout, so a case
+reaching either shape stopped the whole run: no result, no name, and in CI
+a job burning until the runner's limit with nothing saying which case did
+it. The bound belongs inside, which is what
+`~/.claude/guidelines/running-code.md` requires -- a wrapper only guards
+the way somebody happened to run it. `FMAKE_TIMEOUT = 300` turns a hang
+into a failing case that names itself -- `FAIL
+something_that_is_not_a_file_is_not_a_source / fmake did not return within
+300s` -- verified by removing the guard and watching it come out. No invocation legitimately approaches it; the
+slowest *whole case* measured 77s with the pool saturated.
 
-`Tree.fmake()` ran `subprocess.run` with no timeout. A case that reached
-either shape would have stopped the whole run rather than failing: no
-result, no name, just a suite that never finished -- and under `make check`
-in CI, a job that runs until the runner's own limit kills it with no
-indication of which case did it.
+### A clean rule that left its own tree
 
-**The bound belongs inside**, which is the rule
-`~/.claude/guidelines/running-code.md` states for exactly this: a wrapper
-only guards the way somebody happened to run it. `FMAKE_TIMEOUT = 300`
-turns a hang into a failing case that names itself:
-
-```
-FAIL something_that_is_not_a_file_is_not_a_source
-       fmake did not return within 300s: (no arguments)
-```
-
-Verified by removing the guard and watching that come out, rather than
-assumed. No single invocation legitimately approaches it -- the slowest
-*whole case* measured 77s with the pool saturated -- so it costs nothing
-and applies to all 303.
-
-### The pattern in these three sections
-
-§118, §119 and this one all came from the same afternoon of pointing
-deliberately stupid input at the tool, and none of them came from thinking
-about the code. A traceback, an escape from `DESTDIR`, and two hangs --
-**the sweep was cheap and found what reading would not.**
-
----
-
-## 121. The clean that agreed with itself in only one direction
-
-The hostile sweep kept going, and after `@target` the question was whether
-any *other* field naming a path could escape. Four were checked, and three
-are sound -- worth recording so nobody re-derives them:
+After `@target`, the question was whether any other field naming a path
+could escape. Three were sound, and are recorded so nobody re-derives
+them:
 
 | | |
 |---|---|
-| `@headers ../outside.h` | installs, but by **basename**, so nothing leaves `$INCLUDEDIR`. Staged into a `DESTDIR` and listed: five files, all inside it. |
-| a generator writing outside | it is arbitrary shell, exactly as a Makefile recipe is. Same trust class as make, by design. |
-| `fmake --clean` | already refuses anything above the root, and refuses to follow a symlink out. The reason is written beside the code. |
-| an interrupted build | the cache is written only after a compile succeeds *and* `nm` reads it, so a kill leaves no entry and the next build recompiles. Checked with `SIGTERM` mid-compile. |
-| two builds at once | `.fmake/lock`; one waits and then reports up to date, cache consistent. |
+| `@headers ../outside.h` | installs by **basename**, so nothing leaves `$INCLUDEDIR`. Staged into a `DESTDIR` and listed: five files, all inside it. |
+| a generator writing outside | arbitrary shell, exactly as a Makefile recipe is. Same trust class as make, by design. |
+| `fmake --clean` | already refuses anything above the root, and refuses to follow a symlink out. |
+| an interrupted build | the cache entry is written only after a compile succeeds *and* `nm` reads it, so a kill leaves none and the next build recompiles. Checked with `SIGTERM` mid-compile. |
+| two builds at once | `.fmake/lock`; one waits, then reports up to date, cache consistent. |
 
-**The ejected Makefile was the odd one out.** It listed every generated
-output in `CLEAN` unfiltered, so:
+**The ejected Makefile was the odd one out**, removing a file two
+directories up that `fmake --clean` would not touch. Both halves had been
+true for a while and nobody had put them side by side -- and the comment
+on fmake's own clean *asserts* the two are consistent, which is what made
+it worth going to look rather than reasoning about. **A comment claiming
+two things agree is a place to test, not a place to trust.** This one had
+been true when written.
 
-```make
-clean:
-	rm -f build/main.c.o build/main.c.d tree made.txt ../victim.txt
-```
+What is guarded is deleting, not building: a generate rule naming an
+outside output is an instruction and its build rule stays. Dropping it
+from `CLEAN` *silently* would then be the shape a stale artifact hides in,
+so the eject names the file — and an ordinary tree is required to stay
+silent, since a note printed unconditionally satisfies every assertion
+that it was printed.
 
-`make clean` removed a file two directories up that `fmake --clean` would
-not touch. Both halves of that sentence were already true and nobody had
-put them side by side -- and the comment on fmake's own clean *asserts*
-the two are consistent, which is what made this worth going to look at
-rather than reasoning about.
+**ninja is the same question with a different answer.** `ninja -t clean`
+removes the file too, but that is ninja's own tool over the outputs the
+build file declares, and an output *has* to be declared to be built. There
+is no rule of fmake's to withhold, so the backends genuinely differ and
+the difference is stated at eject time. Making them agree would mean
+either not building the file or not declaring it, and both are worse than
+a sentence.
 
-### What is guarded is deleting, not building
+### Why it was worth doing
 
-The rule that builds an outside output stays. A generate rule naming one is
-an instruction, and refusing it would be a different decision than the one
-being made here. What does not survive is the `rm`, and the asymmetry is
-the point: `build-and-commit.md` calls a clean target "the one thing
-everybody runs without reading", and this file is handed to people with a
-header telling them fmake is not needed to read it.
-
-### What the fix then did silently, and its twin in ninja
-
-Dropping the output from `CLEAN` and saying nothing is the shape a stale
-artifact hides in: a build that quietly stops cleaning something it makes.
-The eject names the file instead, and the case requires an ordinary tree
-to stay silent -- a note printed unconditionally would satisfy every
-assertion about printing it.
-
-**ninja cannot be fixed the same way**, and is not pretended to be.
-`ninja -t clean` is ninja's own tool over the outputs the file declares,
-and an output *has* to be declared or ninja will not build it. So there
-is no rule of fmake's to withhold, and `ninja -t clean` does remove what
-`fmake --clean` will not. That difference is stated at eject time rather
-than papered over:
-
-```
-../victim.txt is outside the tree; `ninja -t clean' will remove it, which
-fmake --clean does not. ninja cleans by output and an output has to be
-declared to be built.
-```
-
-**The two backends genuinely differ here**, and saying so is the whole
-answer available. Making them agree would mean either not building the
-file or not declaring it, and both are worse than a sentence.
-
-### The method, four sections running
-
-§118 to §121 all came from the same afternoon of pointing deliberately
-stupid input at the tool. Three bugs and a list of things now known to be
-fine -- and **the negative results are half the value**, because the next
-person to wonder about `@headers` and `DESTDIR` has the answer and the
-command that produced it.
-
-The one that generalises: **a comment claiming two things agree is a place
-to test, not a place to trust.** This one had been true when written.
+Three bugs, one hang class, and five negative results in an afternoon --
+and **the negative results are half the value**, because the next person
+to wonder about `@headers` and `DESTDIR` has the answer and the command
+that produced it.
 
 ---
 
-## 122. The other half of a promise that was only half checked
+## 116. Claims that nothing was checking
 
-§44 checks that fmake runs on the Python it declares, and the argument
-for it is exact: `debian/control` says `python3 (>= 3.11)`, so a syntax newer
-than that produces a package which installs, satisfies its dependency,
-configures, and then dies before reaching `main`.
+The last of the sweep turned inward, on properties this project had
+already decided were important and left unasserted. Three levels of the
+same defect, in increasing order of how well hidden they are.
 
-**The same sentence makes a second promise, and nothing checked it.**
-That `Depends` line names python3 *and nothing else*, so an `import yaml`
-fails in exactly the same shape -- installed, configured, dead at the
-first line -- on any machine that happens not to have it. It is also the
-README's first claim about the tool.
+### A promise the packaging makes
+
+§44 checks that fmake runs on the Python it declares. The same line of
+`debian/control` makes a second promise:
 
 ```
 Depends: ${misc:Depends}, python3 (>= 3.11)
 ```
 
-`sys.stdlib_module_names` settles it without a list to maintain, which is
-the point: §15 already counts three hand-written lists as load-bearing and
-says a fourth would be a signal. This needed none.
+python3 **and nothing else**, so an `import yaml` fails in exactly the
+shape the PEP 701 bug did -- installs, satisfies its dependency,
+configures, dies at the first line on a machine that happens not to have
+it. It is also the README's first claim about the tool.
 
-### Asking the right interpreter
+`sys.stdlib_module_names` settles it **with no list to maintain**, which
+matters here: §15 counts three hand-written lists as load-bearing and says
+a fourth would be the signal that the model wants a predicate. This needed
+none. Where the declared interpreter is installed it is asked for its own
+set, since the running one would accept a module added to the stdlib after
+3.11 -- the same preference §44 states, the old interpreter saying so
+beating an inference about what it would say.
 
-The set describes the *running* interpreter, so a module added to the
-stdlib after 3.11 would pass on 3.13 and fail on the floor. Where the
-declared interpreter is installed -- it is here, at
-`~/.local/bin/python3.11` -- it is asked for its own set instead. Same
-preference as the case beside it: the old interpreter saying so beats an
-inference about what it would say, and that inference has already been
-wrong once in this file.
+### A claim the case's own docstring makes
 
-### Two guards that are not the point but earn their place
+`--run` was swept the same way and holds up: exit status forwarded,
+arguments reaching the program, stdin its own, a compile error under a
+shebang still naming line 3, an unwritable directory building in a cache
+elsewhere, a script calling a second file getting it from the closure.
+Two of those were asserted **in the prose explaining why the case exists**
+and checked by nothing.
 
-**A vacuity check.** If the walk finds fewer than ten imports it has
-parsed the wrong thing, and would then pass whatever fmake imported.
-Breaking the walk is one of the three mutations, and it is caught here
-rather than by the assertion that looks like the subject.
-
-**"One file" is the other half of the same sentence.** A module imported
-from beside fmake is not a missing dependency any `apt` could resolve --
-it simply would not be in the package. Checked against the `.py` files in
-the repository root.
-
-The check passes today, so this is a guard rather than a fix -- **and the
-argument for writing it is that the promise is load-bearing in three
-places** (the packaging, the README, and `project.md`) while being one
-careless import away at all times.
-
----
-
-## 123. A claim the case stated in prose and did not check
-
-`--run` was swept the way §118-§121 swept the rest, and it holds up: the
-exit status is forwarded, arguments after the file reach the program,
-stdin belongs to it, a compile error under a shebang still names line 3,
-an unwritable directory builds in a cache elsewhere, and a script that
-calls a second file gets it from the closure. Nothing to fix.
-
-Two of those were being *asserted in a docstring* and checked by nothing.
-
-### Arguments only matter when they are fmake's
-
+**Arguments only matter when they are fmake's.**
 `a_c_file_runs_as_a_script` passed `one two`, which would survive any
-parser ever written. The interesting arguments are the ones fmake wants:
+parser ever written. The interesting
+ones are `--help`, `--explain`, `-v` -- and a regression there does not
+fail, it prints fmake's own help and exits 0, a plausible thing for a
+build tool to do and completely wrong for an interpreter.
 
-```
-fmake --run show.c --help --explain -v      ->  [--help][--explain][-v]
-```
-
-A regression here does not fail. It prints fmake's own help and exits 0,
-which is a plausible thing for a build tool to do and a completely wrong
-thing for an interpreter to do. Mutating the split to hold back anything
-starting with `-` is caught now.
-
-### The exit status cannot tell exec from wait
-
-The docstring says "fmake execs rather than waits, so it is not sitting
-between the program and the shell" -- and the assertion under it was the
-exit status, which proves nothing:
-`sys.exit(subprocess.run(...).returncode)` forwards a status identically.
-What differs is everything else: a signal kills fmake and orphans the
-program, job control addresses the wrong process, `ps` shows a Python
-interpreter.
-
-**The kernel settles it.** After exec the pid is unchanged and
-`/proc/<pid>/cmdline` is the program's own argv, so reading it while the
-thing runs is evidence rather than inference:
+**The exit status cannot tell exec from wait.** The docstring says fmake
+execs rather than waits, so it is not sitting between the program and the
+shell; the assertion under it was the exit status, which
+`sys.exit(subprocess.run(...).returncode)` forwards identically. What
+differs is everything else: a signal kills fmake and orphans the program,
+job control addresses the wrong process. The kernel settles it -- after
+exec the pid is unchanged, so `/proc/<pid>/cmdline` is evidence rather
+than inference:
 
 ```
 ['/tmp/.../ready.c']                      exec'd -- the pid is the program
 ['python3', '.../fmake', '--run', ...]    the mutation, waiting on a child
 ```
 
-The program prints a line before the check, because reading cmdline
-before exec would find fmake there quite legitimately and the test would
-be about timing.
+### A test whose inputs were too easy
 
-### The pattern
+The third level, and the quietest: not an unchecked claim but a checked
+one whose fixture could not exercise it. `one two` as arguments, a
+`DW_AT_location` count on a seven-line function, a gate over an empty file
+list. All report success exactly as loudly as a real pass.
 
-Both of these are the shape §122 was about, one level in: not a claim the
-documentation makes that nothing checks, but **a claim the case itself
-makes, in the prose explaining why the case exists, with no assertion
-under it.** A docstring that argues for a property is the best possible
-place to look for one that is untested -- somebody has already decided it
-matters.
+**A docstring that argues for a property is the best place to look for an
+untested one**, because somebody has already decided it matters and then
+written the easy assertion instead of the hard one.
