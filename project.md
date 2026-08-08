@@ -8156,6 +8156,35 @@ closure reports an ambiguity that is not one and refuses to build a tree
 that is fine. A correct message about a false problem, which is the
 expensive kind. A case pins it now.
 
+### The same method again, on what was left
+
+With the scans gone, a warm `--explain` on hydra profiles to something
+else entirely: `object_key`, and inside it 93,478 calls to
+`os.path.relpath` and 97,797 to `os.stat` across 183 objects. A depfile
+names every header its object saw, so the same Qt header is turned into a
+relative path once **per object that includes it** -- a few thousand
+distinct paths, ninety-three thousand calls.
+
+`relpath` is pure and `root` is fixed for a run, so one dict answers it:
+
+| | min | p25 | median |
+|---|---|---|---|
+| plain | 0.560s | 0.733s | 0.738s |
+| memoised | 0.422s | 0.561s | 0.580s |
+| | **-25%** | **-23%** | **-21%** |
+
+Byte-identical `--explain`, same alternating stopwatch, and the memo keyed
+on `(root, dep)` rather than `dep` -- measured as costing nothing over the
+faster string key, so the assumption that a process only ever has one root
+is removed rather than relied on.
+
+**`hash_of` was left alone, and that is the interesting half.** It is the
+same shape -- 97,797 stats for the same few thousand files -- and a
+per-run memo would be wrong: generators write moc and uic output *during*
+a build, so a file hashed before and after would return the stale answer.
+The cheap win and the wrong win look identical in a profile, and the only
+thing separating them is knowing when the tree changes under you.
+
 ### What this says about §79's caution
 
 Nothing bad. The reason to distrust the profiler was sound and remains

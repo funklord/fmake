@@ -3246,6 +3246,14 @@ def compile_cmd(u, cfg, incflags):
 	        + incflags + cfg.cflags + u.own + cfg.override)
 
 
+# One entry per distinct header, not one per (header, object) pair. A
+# depfile names every header its object saw, so across a tree the same
+# Qt header is turned into a relative path once per object that includes
+# it -- on hydra, 93,478 calls for a few thousand distinct paths. `root'
+# is fixed for the run, so the answer cannot change.
+_REL_CACHE = {}
+
+
 def object_key(u, cfg, cache, root, incflags):
 	"""Cache key: source content, every prerequisite's content, and config.
 
@@ -3259,7 +3267,9 @@ def object_key(u, cfg, cache, root, incflags):
 		return None
 	parts.append(src_h)
 	for dep in parse_depfile(u.dep):
-		rel = os.path.relpath(dep, root)
+		rel = _REL_CACHE.get((root, dep))
+		if rel is None:
+			rel = _REL_CACHE[(root, dep)] = os.path.relpath(dep, root)
 		dh = cache.hash_of(dep, rel)
 		if dh:
 			parts.append(rel + ":" + dh)
