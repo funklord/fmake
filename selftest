@@ -5412,6 +5412,47 @@ def a_header_the_tree_already_holds_is_named(t):
 	check(r.returncode == 0,
 	      f"following the advice should build: {r.stdout}{r.stderr}")
 
+	# The shape where the two possible answers differ. Everything above
+	# uses `<thing.h>' -- unqualified, so the directory holding the file
+	# and the directory the include resolves *from* are the same, and the
+	# assertion passes whichever one the advice names.
+	#
+	# An include carrying a path separates them: `proj/math.h' found at
+	# include/proj/math.h needs -Iinclude, and -Iinclude/proj does nothing
+	# at all. The advice named the containing directory, so following it
+	# exactly left the build failing exactly as before.
+	#
+	# `math.h' is not a perverse choice: the resolver refuses to guess from
+	# a basename the toolchain owns, which is what lands a project with its
+	# own math.h in this diagnostic rather than having it resolved.
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("include/proj/math.h", "#pragma once\nint add(int, int);\n")
+	t.write("src/adder.c", '#include "proj/math.h"\n'
+	        "int add(int a, int b){ return a + b; }\n")
+	# Only `add' here: the advice names one directory, so setting it drops
+	# vendor/include and src/emu.c stops compiling again. That is correct
+	# and is somebody else's target -- this program must not need it.
+	t.write("src/main.c", '#include "proj/math.h"\n'
+	        "int main(void){ return add(2, 2) - 4; }\n")
+	r = t.fmake("-B")
+	out = r.stdout + r.stderr
+	check("include-dirs = ['include']" in out,
+	      f"the advice must name the directory the include text resolves "
+	      f"from, not the one holding the file: {out}")
+	# src/emu.c belongs to the assertions above and its header is no longer
+	# on the path, so it would fail here and make the exit non-zero whatever
+	# this program did. The section below writes it again.
+	os.remove(os.path.join(t.dir, "src/emu.c"))
+	t.write("fmake.toml", "[project]\ninclude-dirs = ['include']\n")
+	r = t.fmake("-B")
+	check(r.returncode == 0,
+	      f"following the advice verbatim still does not build: "
+	      f"{r.stdout}{r.stderr}")
+	os.remove(os.path.join(t.dir, "include/proj/math.h"))
+	os.remove(os.path.join(t.dir, "src/adder.c"))
+	t.write("src/main.c", "int emu_start(void);\n"
+	        "int main(void){ return emu_start(); }\n")
+
 	# A header that is genuinely absent still gets the other two remedies.
 	# A header that is genuinely absent still gets the other two remedies --
 	# and must not be answered by one whose name merely ends the same way.

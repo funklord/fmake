@@ -8339,6 +8339,44 @@ the difference is stated at eject time. Making them agree would mean
 either not building the file or not declaring it, and both are worse than
 a sentence.
 
+### The advice that named the wrong directory
+
+Trying fmake against ordinary project layouts rather than against its own
+fixtures found one more, and it is §31's shape in its most expensive form:
+advice a reader can follow exactly and still be stuck.
+
+The classic `src/` plus `include/proj/` split builds correctly -- the
+include path comes from the include *text*, per §37, so
+`#include "proj/geometry.h"` found at `include/proj/geometry.h` yields
+`-Iinclude`. That logic is `incdir_for`, whose docstring says plainly that
+the containing directory "is the obvious answer and wrong whenever an
+include carries a path", and cites a project that lost 84 files to exactly
+that.
+
+**The diagnostic had its own copy of the question, and got it wrong.**
+Where the resolver *declines* to guess, it offers a remedy:
+
+```
+proj/math.h is on no include path here
+it is in this tree, at include/proj/math.h
+[project] include-dirs = ['include/proj'] would find it     <- does nothing
+```
+
+`-Iinclude/proj` resolves `math.h`, not `proj/math.h`. Following that line
+verbatim leaves the build failing in exactly the same way. The two share
+one function now.
+
+**Reaching it needs no contrivance.** The resolver refuses to guess from a
+basename the toolchain owns, so a project carrying its own `math.h` -- or
+`time.h`, or `error.h` -- lands here rather than being resolved. The guard
+is working correctly and handing the reader a wrong answer.
+
+The case that already covered this diagnostic could not have caught it:
+every include in it was unqualified, and for those the containing
+directory and the resolving directory are **the same string**. The fixture
+was too easy in precisely the way §116 describes, and the assertion passed
+whichever answer the advice named.
+
 ### Why it was worth doing
 
 Three bugs, one hang class, and five negative results in an afternoon --

@@ -1586,6 +1586,32 @@ def moc_plan(srcs, hdrs, scans):
 	return jobs, unreachable
 
 
+def include_root_for(resolved, inc_name):
+	"""The -I that makes this include text find this file.
+
+    Not the file's own directory, which is the obvious answer and wrong
+    whenever an include carries a path. `#include "model/profile.h"`
+    resolving to src/model/profile.h needs -Isrc; -Isrc/model, the
+    directory the file is actually in, does nothing at all -- and
+    subdirectory-qualified includes from a source root are ordinary C++,
+    which is how one project lost 84 files to this in a single build.
+
+    So the directory is whatever is left of the path once the include name
+    is taken off the end of it. For a bare `#include "profile.h"` that is
+    the containing directory, which is why this reads as a generalisation
+    rather than a change.
+
+    Module-level because the *diagnostic* needs the same answer and had
+    its own, wrong, copy: when the resolver declines to guess -- which it
+    does for any name the toolchain owns, so a project with its own
+    `math.h` lands here -- the advice named the containing directory, and
+    following it exactly did not fix the build.
+    """
+	left = (resolved[: -len(inc_name)].rstrip("/")
+	        if resolved.endswith(inc_name) else os.path.dirname(resolved))
+	return left or "."
+
+
 def moc_cflags(root, hdrs, conf):
 	"""The include path and defines moc parses with.
 
@@ -2670,23 +2696,7 @@ class Project:
 		self.incdirs = set()
 
 	def incdir_for(self, resolved, inc_name):
-		"""The -I that makes this include text find this file.
-
-		Not the file's own directory, which is the obvious answer and wrong
-		whenever an include carries a path. `#include "model/profile.h"`
-		resolving to src/model/profile.h needs -Isrc; -Isrc/model, the
-		directory the file is actually in, does nothing at all -- and
-		subdirectory-qualified includes from a source root are ordinary C++,
-		which is how one project lost 84 files to this in a single build.
-
-		So the directory is whatever is left of the path once the include
-		name is taken off the end of it. For a bare `#include "profile.h"`
-		that is the containing directory, which is why this reads as a
-		generalisation rather than a change.
-		"""
-		left = resolved[: -len(inc_name)].rstrip("/") if \
-			resolved.endswith(inc_name) else os.path.dirname(resolved)
-		return left or "."
+		return include_root_for(resolved, inc_name)
 
 	def resolve_header(self, inc_name, from_rel):
 		"""Resolve an include to a tree-relative header path, or None."""
@@ -3474,9 +3484,9 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				note(f"{miss} is on no include path here")
 				if here:
 					note(f"it is in this tree, at {here}")
+					want = include_root_for(here, miss)
 					note(f"[project] include-dirs = "
-					     f"[{os.path.dirname(here)!r}] would find it")
-					want = os.path.dirname(here)
+					     f"[{want!r}] would find it")
 					if want not in need_dirs:
 						need_dirs.append(want)
 				else:
