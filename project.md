@@ -5906,6 +5906,18 @@ document quotes those reports rather than replacing them. `--no-docs-only`
 is a judgement in `build-and-commit.md`, not a gate, and this is what
 judging it looks like.
 
+**Squashing is allowed; splitting is not.** Stated directly during the pass
+that reformatted all 125 messages, and it is why the question above was
+only ever which commits to fold together. Reformat messages freely, squash
+a genuine slip -- a commit renamed or corrected minutes later, exactly the
+case above -- and leave every commit's content boundaries where the author
+put them, even where a change looks like two things wearing one hat.
+
+The asymmetry is not arbitrary. Squashing a slip removes something that was
+never a decision; splitting invents boundaries after the fact and asserts
+an intent nobody recorded, in a history whose whole value is that it says
+what was actually done.
+
 ### A swap file, removed from four trees
 
 `.project.md.swp` was committed by accident and deleted four commits later,
