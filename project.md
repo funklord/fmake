@@ -8389,6 +8389,62 @@ directory and the resolving directory are **the same string**. The fixture
 was too easy in precisely the way §116 describes, and the assertion passed
 whichever answer the advice named.
 
+### The sweep the last three findings suggested
+
+§92 enumerated the twenty-five messages that offer a remedy and asked
+whether each pointed at the right *kind* of thing. Three later findings --
+the `nm` identity, who chose a moc, the include directory -- were a
+different question it did not ask: **which messages compute a value rather
+than echo one**, and does that computation agree with the code that
+actually decides? A message quoting a path cannot drift. A message
+deriving an answer has a second copy of a rule.
+
+Two came out of asking it deliberately.
+
+**The `[target.*]` stanza was never pasted back.** §20's dead-end remedy
+hands over a whole config section with computed membership -- the richest
+advice in the tool -- and the case checked that it was *printed* and named
+the right files. Nothing checked that pasting it ends the ambiguity. It
+does; the case now takes the text fmake actually emitted, writes it to
+`fmake.toml`, and requires both programs to build **and to return 0**,
+which each does only when it linked its own `win()`. A stanza that
+resolved the ambiguity to one file for both targets would build happily
+and fail that.
+
+Using what fmake printed rather than a hand-written copy of what it ought
+to print matters: the other way tests the case's opinion of the rule
+instead of the tool's.
+
+**The missing-header advice guessed where the resolver had refused to.**
+The resolver declines a basename that more than one file answers -- which
+is *why* the compile failed -- and the advice then picked the shortest
+path and stated it as the location:
+
+```
+gizmo.h is on no include path here
+it is in this tree, at beta/gizmo.h        <- one of two, silently chosen
+```
+
+Two `gizmo.h` in a tree is an ordinary shape, and a reader following that
+lands on `beta` when they may have wanted `alpha/deep`, with nothing
+saying a choice was made. It names every candidate now, each with the `-I`
+that would find *it*, and says that having more than one is why nothing
+resolved:
+
+```
+2 files in this tree could be it, which is why it was not resolved:
+    beta/gizmo.h         [project] include-dirs = ['beta']
+    alpha/deep/gizmo.h   [project] include-dirs = ['alpha/deep']
+```
+
+The single-candidate message is untouched, which the case asserts -- the
+fix must not cost the exact answer in the common case.
+
+**The rule this leaves behind.** Where the tool refuses to choose, the
+advice must not choose either. Refusing and then quietly guessing in the
+sentence that explains the refusal is worse than either, because it reads
+as a fact and is a coin toss.
+
 ### Why it was worth doing
 
 Three bugs, one hang class, and five negative results in an afternoon --

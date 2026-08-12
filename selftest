@@ -5453,6 +5453,34 @@ def a_header_the_tree_already_holds_is_named(t):
 	t.write("src/main.c", "int emu_start(void);\n"
 	        "int main(void){ return emu_start(); }\n")
 
+	# Two files answering one basename is *why* the resolver declined --
+	# it refuses a basename more than one file answers -- so advice that
+	# picks the shortest and states it as the location has guessed exactly
+	# where the tool refused to, and can send somebody to the wrong file
+	# without ever saying a choice was made.
+	# fmake.toml is left in place: the section below removes it, and
+	# include-dirs = ['include'] does not resolve gizmo.h either way.
+	t.write("alpha/deep/gizmo.h", "#pragma once\nint gizmo(void);\n")
+	t.write("beta/gizmo.h", "#pragma once\nint gizmo(void);\n")
+	t.write("beta/gizmo.c", "int gizmo(void){ return 0; }\n")
+	t.write("src/emu.c", "#include <gizmo.h>\n"
+	        "int emu_start(void){ return gizmo(); }\n")
+	out = t.fmake("-B").stdout + t.fmake().stderr
+	check("could be it" in out,
+	      f"with two candidates the message must say so: {out}")
+	for cand in ("beta/gizmo.h", "alpha/deep/gizmo.h"):
+		check(cand in out, f"{cand} is a candidate and is not named: {out}")
+	check("include-dirs = ['alpha/deep']" in out
+	      and "include-dirs = ['beta']" in out,
+	      f"each candidate needs its own -I, since they differ: {out}")
+	check("it is in this tree, at" not in out,
+	      f"one location was stated as fact while two answer the name: "
+	      f"{out}")
+	for gone in ("alpha/deep/gizmo.h", "beta/gizmo.h", "beta/gizmo.c"):
+		path = os.path.join(t.dir, gone)
+		if os.path.exists(path):
+			os.remove(path)
+
 	# A header that is genuinely absent still gets the other two remedies.
 	# A header that is genuinely absent still gets the other two remedies --
 	# and must not be answered by one whose name merely ends the same way.
@@ -8876,6 +8904,30 @@ def an_ambiguous_symbol_suggests_the_owner(t):
 	      f"a paste-ready stanza should be offered: {out}")
 	check('"one/win.c"' in out and '"two/win.c"' in out,
 	      f"each stanza should name that target's own file: {out}")
+
+	# "Hand back the config that ends it" is the claim, and reading the
+	# stanza only checks that something was printed. Paste what fmake
+	# actually emitted -- not a hand-written copy of what it ought to
+	# emit, which would test this case's opinion rather than the tool --
+	# and require the dead end to be over.
+	lines = [l.strip() for l in out.splitlines()]
+	start = next(i for i, l in enumerate(lines) if l.startswith("[target."))
+	stanza = "\n".join(l for l in lines[start:] if l)
+	check(stanza.count("[target.") == 2,
+	      f"expected both stanzas to paste: {stanza!r}")
+	t.write("fmake.toml", stanza + "\n")
+
+	r = t.fmake("-B")
+	check(r.returncode == 0,
+	      f"pasting the offered stanza did not end the ambiguity: "
+	      f"{r.stdout}{r.stderr}")
+	# And to the right answer: each program returns 0 only when it linked
+	# its *own* win(), so a stanza that resolved the ambiguity by picking
+	# one file for both would build and fail here.
+	for stem in ("first", "second"):
+		check(_run_in(t.dir, "./" + stem).returncode == 0,
+		      f"{stem} linked the wrong win(), so the stanza resolved the "
+		      f"ambiguity to the wrong file")
 
 @case
 def widening_does_not_compile_the_whole_tree(t):

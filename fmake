@@ -3303,18 +3303,25 @@ def _missing_header(msg):
 	return m.group(1).strip().strip("'\"")
 
 
-def _header_in_tree(name, headers):
+def _headers_in_tree(name, headers):
 	"""Where this tree holds the header the compiler could not find.
 
     Matched on whole path components, the same rule as everywhere else
     here: `time.h` must not be answered by `datetime.h`. Shortest path
-    wins, so a header at the root beats one buried under a vendored copy
-    of itself.
+    first, so a header at the root comes before one buried under a
+    vendored copy of itself.
+
+    Every match, not the best one. The resolver declines to resolve a
+    basename that more than one file answers -- that is why the compile
+    failed at all -- and an advice that then picks the shortest and
+    states it as *the* location has guessed exactly where the tool
+    refused to. Naming both costs a line and cannot send anybody to the
+    wrong file.
     """
 	want = "/" + name.replace(os.sep, "/")
 	hits = [h for h in headers
 	        if h == name or h.replace(os.sep, "/").endswith(want)]
-	return min(hits, key=lambda h: (h.count("/"), len(h))) if hits else None
+	return sorted(hits, key=lambda h: (h.count("/"), len(h)))
 
 
 _ARCH_CHECKED = set()
@@ -3480,9 +3487,20 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				# <vterm.h> from vterm/include is not a missing package and
 				# not a file for another platform, and being told to
 				# install something is worse than being told nothing.
-				here = _header_in_tree(miss, tree_headers)
+				found = _headers_in_tree(miss, tree_headers)
 				note(f"{miss} is on no include path here")
-				if here:
+				if len(found) > 1:
+					# More than one answer is why nothing resolved it.
+					# Saying which are candidates is the honest form of
+					# the same help; picking one would be the guess the
+					# resolver already declined to make.
+					note(f"{len(found)} files in this tree could be it, "
+					     f"which is why it was not resolved:")
+					for cand in found:
+						note(f"    {cand}   [project] include-dirs = "
+						     f"[{include_root_for(cand, miss)!r}]")
+				elif found:
+					here = found[0]
 					note(f"it is in this tree, at {here}")
 					want = include_root_for(here, miss)
 					note(f"[project] include-dirs = "
