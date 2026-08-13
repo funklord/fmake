@@ -7995,12 +7995,22 @@ test that has not yet been reduced.
 ## 113. Advice that names the wrong fix
 
 §31 named the pattern: the code that knows the answer runs early, the code
-printing the last line never asks it. Five more instances turned up
-together, all in *advice* rather than in a summary, and one rule covers
-them:
+printing the last line never asks it. Six more instances collected here,
+all in *advice* rather than in a summary. The first four turned up
+alongside other work; the last two came from asking the question
+deliberately, once it was clear they were one shape rather than four
+coincidences.
+
+Two rules cover them, and the second is the sharper:
 
 > **Where two fixes are possible, naming one is not brevity. It is a guess
 > presented as a diagnosis.**
+>
+> **Where the tool refuses to choose, the advice must not choose either.**
+
+The common cause is duplication rather than carelessness: a message that
+*echoes* a path cannot drift, and every one of these **computed** an
+answer the deciding code had already computed differently.
 
 ### An object `nm` could not read
 
@@ -8089,6 +8099,100 @@ offered `name the right one with [toolchain] cc`, which is the one fix
 that does not apply when the compiler is right and the *declaration* is
 missing. It offers both now, with the architecture filled in from what was
 read out of the object.
+
+### The advice that named the wrong directory
+
+Trying fmake against ordinary project layouts rather than against its own
+fixtures found one more, and it is §31's shape in its most expensive form:
+advice a reader can follow exactly and still be stuck.
+
+The classic `src/` plus `include/proj/` split builds correctly -- the
+include path comes from the include *text*, per §37, so
+`#include "proj/geometry.h"` found at `include/proj/geometry.h` yields
+`-Iinclude`. That logic is `incdir_for`, whose docstring says plainly that
+the containing directory "is the obvious answer and wrong whenever an
+include carries a path", and cites a project that lost 84 files to exactly
+that.
+
+**The diagnostic had its own copy of the question, and got it wrong.**
+Where the resolver *declines* to guess, it offers a remedy:
+
+```
+proj/math.h is on no include path here
+it is in this tree, at include/proj/math.h
+[project] include-dirs = ['include/proj'] would find it     <- does nothing
+```
+
+`-Iinclude/proj` resolves `math.h`, not `proj/math.h`. Following that line
+verbatim leaves the build failing in exactly the same way. The two share
+one function now.
+
+**Reaching it needs no contrivance.** The resolver refuses to guess from a
+basename the toolchain owns, so a project carrying its own `math.h` -- or
+`time.h`, or `error.h` -- lands here rather than being resolved. The guard
+is working correctly and handing the reader a wrong answer.
+
+The case that already covered this diagnostic could not have caught it:
+every include in it was unqualified, and for those the containing
+directory and the resolving directory are **the same string**. The fixture
+was too easy in precisely the way §116 describes, and the assertion passed
+whichever answer the advice named.
+
+### The sweep the last three findings suggested
+
+§92 enumerated the twenty-five messages that offer a remedy and asked
+whether each pointed at the right *kind* of thing. Three later findings --
+the `nm` identity, who chose a moc, the include directory -- were a
+different question it did not ask: **which messages compute a value rather
+than echo one**, and does that computation agree with the code that
+actually decides? A message quoting a path cannot drift. A message
+deriving an answer has a second copy of a rule.
+
+Two came out of asking it deliberately.
+
+**The `[target.*]` stanza was never pasted back.** §20's dead-end remedy
+hands over a whole config section with computed membership -- the richest
+advice in the tool -- and the case checked that it was *printed* and named
+the right files. Nothing checked that pasting it ends the ambiguity. It
+does; the case now takes the text fmake actually emitted, writes it to
+`fmake.toml`, and requires both programs to build **and to return 0**,
+which each does only when it linked its own `win()`. A stanza that
+resolved the ambiguity to one file for both targets would build happily
+and fail that.
+
+Using what fmake printed rather than a hand-written copy of what it ought
+to print matters: the other way tests the case's opinion of the rule
+instead of the tool's.
+
+**The missing-header advice guessed where the resolver had refused to.**
+The resolver declines a basename that more than one file answers -- which
+is *why* the compile failed -- and the advice then picked the shortest
+path and stated it as the location:
+
+```
+gizmo.h is on no include path here
+it is in this tree, at beta/gizmo.h        <- one of two, silently chosen
+```
+
+Two `gizmo.h` in a tree is an ordinary shape, and a reader following that
+lands on `beta` when they may have wanted `alpha/deep`, with nothing
+saying a choice was made. It names every candidate now, each with the `-I`
+that would find *it*, and says that having more than one is why nothing
+resolved:
+
+```
+2 files in this tree could be it, which is why it was not resolved:
+    beta/gizmo.h         [project] include-dirs = ['beta']
+    alpha/deep/gizmo.h   [project] include-dirs = ['alpha/deep']
+```
+
+The single-candidate message is untouched, which the case asserts -- the
+fix must not cost the exact answer in the common case.
+
+**The rule this leaves behind.** Where the tool refuses to choose, the
+advice must not choose either. Refusing and then quietly guessing in the
+sentence that explains the refusal is worse than either, because it reads
+as a fact and is a coin toss.
 
 ### What the cases had to do
 
@@ -8351,106 +8455,17 @@ the difference is stated at eject time. Making them agree would mean
 either not building the file or not declaring it, and both are worse than
 a sentence.
 
-### The advice that named the wrong directory
-
-Trying fmake against ordinary project layouts rather than against its own
-fixtures found one more, and it is §31's shape in its most expensive form:
-advice a reader can follow exactly and still be stuck.
-
-The classic `src/` plus `include/proj/` split builds correctly -- the
-include path comes from the include *text*, per §37, so
-`#include "proj/geometry.h"` found at `include/proj/geometry.h` yields
-`-Iinclude`. That logic is `incdir_for`, whose docstring says plainly that
-the containing directory "is the obvious answer and wrong whenever an
-include carries a path", and cites a project that lost 84 files to exactly
-that.
-
-**The diagnostic had its own copy of the question, and got it wrong.**
-Where the resolver *declines* to guess, it offers a remedy:
-
-```
-proj/math.h is on no include path here
-it is in this tree, at include/proj/math.h
-[project] include-dirs = ['include/proj'] would find it     <- does nothing
-```
-
-`-Iinclude/proj` resolves `math.h`, not `proj/math.h`. Following that line
-verbatim leaves the build failing in exactly the same way. The two share
-one function now.
-
-**Reaching it needs no contrivance.** The resolver refuses to guess from a
-basename the toolchain owns, so a project carrying its own `math.h` -- or
-`time.h`, or `error.h` -- lands here rather than being resolved. The guard
-is working correctly and handing the reader a wrong answer.
-
-The case that already covered this diagnostic could not have caught it:
-every include in it was unqualified, and for those the containing
-directory and the resolving directory are **the same string**. The fixture
-was too easy in precisely the way §116 describes, and the assertion passed
-whichever answer the advice named.
-
-### The sweep the last three findings suggested
-
-§92 enumerated the twenty-five messages that offer a remedy and asked
-whether each pointed at the right *kind* of thing. Three later findings --
-the `nm` identity, who chose a moc, the include directory -- were a
-different question it did not ask: **which messages compute a value rather
-than echo one**, and does that computation agree with the code that
-actually decides? A message quoting a path cannot drift. A message
-deriving an answer has a second copy of a rule.
-
-Two came out of asking it deliberately.
-
-**The `[target.*]` stanza was never pasted back.** §20's dead-end remedy
-hands over a whole config section with computed membership -- the richest
-advice in the tool -- and the case checked that it was *printed* and named
-the right files. Nothing checked that pasting it ends the ambiguity. It
-does; the case now takes the text fmake actually emitted, writes it to
-`fmake.toml`, and requires both programs to build **and to return 0**,
-which each does only when it linked its own `win()`. A stanza that
-resolved the ambiguity to one file for both targets would build happily
-and fail that.
-
-Using what fmake printed rather than a hand-written copy of what it ought
-to print matters: the other way tests the case's opinion of the rule
-instead of the tool's.
-
-**The missing-header advice guessed where the resolver had refused to.**
-The resolver declines a basename that more than one file answers -- which
-is *why* the compile failed -- and the advice then picked the shortest
-path and stated it as the location:
-
-```
-gizmo.h is on no include path here
-it is in this tree, at beta/gizmo.h        <- one of two, silently chosen
-```
-
-Two `gizmo.h` in a tree is an ordinary shape, and a reader following that
-lands on `beta` when they may have wanted `alpha/deep`, with nothing
-saying a choice was made. It names every candidate now, each with the `-I`
-that would find *it*, and says that having more than one is why nothing
-resolved:
-
-```
-2 files in this tree could be it, which is why it was not resolved:
-    beta/gizmo.h         [project] include-dirs = ['beta']
-    alpha/deep/gizmo.h   [project] include-dirs = ['alpha/deep']
-```
-
-The single-candidate message is untouched, which the case asserts -- the
-fix must not cost the exact answer in the common case.
-
-**The rule this leaves behind.** Where the tool refuses to choose, the
-advice must not choose either. Refusing and then quietly guessing in the
-sentence that explains the refusal is worse than either, because it reads
-as a fact and is a coin toss.
-
 ### Why it was worth doing
 
 Three bugs, one hang class, and five negative results in an afternoon --
 and **the negative results are half the value**, because the next person
 to wonder about `@headers` and `DESTDIR` has the answer and the command
 that produced it.
+
+It also found two things that are not about hostile input at all, and they
+are in §113 with the rest of their family: pointing the tool at ordinary
+project layouts, and then at its own advice, turned up the same defect the
+sweep kept finding by accident.
 
 ---
 
