@@ -137,11 +137,41 @@ diff would never have shown it.
 
 ## 3. Filenames
 
-Lowercase for everything this project names itself. The tool is `fmake`,
-extensionless and executable; the suite is `selftest`, the same.
+**Lowercase, always**, for everything this project names itself. The tool is
+`fmake`, extensionless and executable; the suite is `selftest`, the same.
 
-The exception is a name a tool will not accept lowercased: `Makefile`,
-`README.md`, `LICENSE`, and the `debian/` files native packaging dictates.
+**The separator follows what the name binds to**, and the two cases are a
+technical difference rather than a matter of taste:
+
+- **`snake_case` where the filename becomes an identifier** -- a source
+  file, a header, a module. `tools/style_gate.py` *is* the module
+  `style_gate`, and `style-gate.py` could not be imported under any name,
+  because a hyphen is not legal in a Python one. That is the language's
+  requirement wearing a convention's clothes, and it is not negotiable
+  where it applies.
+- **`kebab-case` for prose** -- documentation, design notes, decision
+  records. Nothing imports `code-style.md`, so no identifier is at stake,
+  and kebab-case is what markdown and URLs settled on long ago.
+
+The rule used to say `snake_case` for prose as well, and was rewritten
+against a count of what the private projects actually do -- the source
+carries the numbers. The distinction had never come up here: the two
+programs this project names are one word each, with no separator to argue
+about, and every document it names was kebab-case or a single word already.
+
+Settled exceptions:
+
+- **Names a tool will not accept lowercased** -- `Makefile`, and the
+  `debian/` files native packaging dictates.
+- **Root files with an established convention** -- `README.md`, `LICENSE`
+  and `VERSION`.
+- **Package-system spellings** -- kebab-case where Debian requires it. That
+  is now the same spelling prose uses, so the packaging and the documents
+  beside it agree by construction rather than by coincidence.
+
+`tools/hooks/commit-msg` needs none of these: git dictates that name
+exactly, which is rule 3's "unless a tool demands otherwise", and it is
+lowercase in any case.
 
 ## 4. Editing `selftest`
 
@@ -167,9 +197,13 @@ no user-facing Unicode and nothing that needs it.
 
 The check is not a byte scan. fmake is Python, so it means ASCII *outside
 string literals* -- the gate reads the file with `tokenize` -- and Unicode
-inside a literal passes. Everything else gets a whole-file byte check,
-having no tokenizer here, and so does a Python file that will not tokenise:
-a file nobody can parse is not a file that has been cleared.
+inside a literal passes. C and C++ get the same shape from a scanner written
+for the purpose, nothing in the standard library lexing them; that half does
+not arise here, since this project has no C or C++ of its own, but the gate
+is carried verbatim and it is what a sibling's copy will be describing.
+Every other language gets a whole-file byte check, having no lexer, and so
+does a file in either of those two that will not lex: a file nobody can
+parse is not a file that has been cleared.
 
 It was the whole file for everyone until a project that prints two status
 ticks had to switch the check off to keep them, which switched it off for
