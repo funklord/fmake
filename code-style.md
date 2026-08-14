@@ -11,9 +11,10 @@ and the packaging, **and the build files `fmake` ejects**.
 style; where the two disagree, `project.md` wins. **Above both sits the
 global source**, `~/.claude/guidelines/code-style.md`, which applies to
 every private project. Where either disagrees with it, that is **drift to
-fix, not a local override**. A genuine divergence needs a technical reason and is signalled to the list in `claude-guidelines`' `project.md` rather
-than decided in passing -- and when a conflict between
-the three actually comes up, stop and ask instead of picking a winner.
+fix, not a local override**. A genuine divergence needs a technical reason
+and is signalled to the list in `claude-guidelines`' `project.md` rather
+than decided in passing -- and when a conflict between the three actually
+comes up, stop and ask instead of picking a winner.
 
 Nothing is vendored. The reference projects in section 16 are fetched into scratch
 directories and are not part of this repository, so their style is their
