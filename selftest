@@ -1513,6 +1513,71 @@ void run_all(void){ for(int i=0;i<n;i++) printf("plugin: %s\\n", names[i]); }
 
 
 @case
+def a_symbol_found_by_name_at_runtime_needs_more_than_sources(t):
+	"""§15 asked whether `@sources' answers the whole family. It does not.
+
+	The entry groups `dlopen', a linker script and a runtime function
+	pointer table together as things the closure cannot see, and says all
+	of them need `@sources' -- with whether that one directive is a
+	sufficient answer left unproven. Measured, the family splits in two and
+	the directive answers only one half:
+
+	    reached by address at link time   `@sources' alone is enough
+	      (a constructor registration, a table of function addresses)
+	      -- the reference exists, so seeding the closure is the whole job
+
+	    reached by name at run time       `@sources' is not enough
+	      (dlsym, and any table built by dlsym)
+
+	`@sources' answers *reachability*: it gets the file compiled and into
+	the link. It says nothing about *visibility*, and a symbol that nothing
+	in the program references is not written to `.dynsym' -- so `dlsym'
+	cannot find it. The build succeeds, the link succeeds, and the failure
+	arrives only when the program runs, which is why asserting the build is
+	not enough to check it.
+
+	`@ldflags -rdynamic' is the other half and it belongs on the same file,
+	since §4's asymmetry is exactly that a link flag propagates to whatever
+	contains the file. The pair works; this case runs the program rather
+	than linking it, because linking proves nothing here.
+
+	Only the working pair is asserted. That `@sources' alone fails is the
+	finding and is recorded in §15, not pinned here: making `@sources' imply
+	`-rdynamic' would be a defensible design change, and a case forbidding
+	it would be this suite obstructing a decision rather than checking
+	one."""
+	t.write("plugin.c", """
+/*! @file
+ *  @sources plugin.c
+ *  @ldflags -rdynamic
+ */
+int plugin_answer(void) { return 42; }
+""")
+	t.write("main.c", """
+#include <dlfcn.h>
+#include <stdio.h>
+int main(void){
+	void *h = dlopen(NULL, RTLD_NOW);
+	int (*fn)(void) = (int(*)(void))dlsym(h, "plugin_answer");
+	if (!fn) { printf("dlsym failed\\n"); return 1; }
+	printf("%d\\n", fn());
+	return 0;
+}
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	out = subprocess.run(["nm", "-D", "--defined-only", prog],
+	                     capture_output=True, text=True).stdout
+	check("plugin_answer" in out,
+	      "the symbol is not in the dynamic table, so no dlsym could find "
+	      "it -- which links cleanly and fails only when run")
+	check(t.run(os.path.basename(t.dir)).stdout == "42\n",
+	      "the program should find its own symbol by name at run time")
+
+
+@case
 def incremental_rebuilds_only_what_changed(t):
 	"""Content hashing, depfiles, and a cached link set."""
 	t.write("lib.h", "int calc(int);\n")

@@ -1850,11 +1850,39 @@ rather than code, and one lesson about testing.
   single edit from a directive *and* shares its first three characters is
   named. `--explain` still lists what was recognised, for the cases the
   rule declines to guess at.
-- **Symbol-invisible dependencies generally.** §3 lists the constructor-plugin
-  case, but the family is larger: anything reached only through `dlopen`, a
-  linker script, or a function pointer table built at runtime. All need
-  `@sources`. Whether that one directive is a sufficient answer for all of them
-  is unproven.
+- **Symbol-invisible dependencies split in two, and `@sources` answers one
+  half.** §3 lists the constructor-plugin case, and this entry used to group
+  `dlopen`, a linker script and a runtime function pointer table with it as
+  one family all needing `@sources`, with sufficiency unproven. Measured, it
+  is two families and the directive answers the first:
+
+  | reached by | enough? |
+  |---|---|
+  | an address at link time — a constructor registration, a table of function addresses | `@sources` alone |
+  | a **name** at run time — `dlsym`, and any table built by `dlsym` | `@sources` **and** `@ldflags -rdynamic` |
+
+  **`@sources` answers reachability, not visibility.** It gets the file
+  compiled and into the link, which is the whole job when a reference
+  exists. A symbol nothing references is not written to `.dynsym`, so
+  `dlsym` cannot find it — and the build succeeds, the link succeeds, and
+  the failure arrives only when the program runs. Measured: `@sources`
+  alone leaves `T plugin_answer` in the static table and nothing in the
+  dynamic one, and the program dies on `undefined symbol`; adding
+  `@ldflags -rdynamic` to the same file puts it in both and it prints 42.
+  §4's asymmetry is why the flag belongs on the file: a link flag
+  propagates to whatever contains it.
+
+  The third listed shape was never separate. A function pointer table is
+  link-visible when built from addresses — the reference is right there —
+  and is the `dlsym` case when built from names, so it collapses into one
+  side or the other rather than needing its own answer. A linker script
+  names external inputs and is §14's business, not a tree source's.
+
+  **fmake is not made to detect this**, and that is deliberate rather than
+  pending. `dlsym` against a handle from a real `.so` needs no `-rdynamic`
+  at all; only lookups resolving into the program itself do. Warning on the
+  token would fire on the common correct case, which is the shape of
+  exception §5 keeps refusing.
 - ~~**Generated outputs are not cleaned.**~~ Closed; see §97. `--clean`
   removes them by name, from what the generators actually wrote rather than
   from a pattern, which is the rule `--uninstall` and the ejected clean rule
