@@ -11,8 +11,8 @@ and the packaging, **and the build files `fmake` ejects**.
 style; where the two disagree, `project.md` wins. **Above both sits the
 global source**, `~/.claude/guidelines/code-style.md`, which applies to
 every private project. Where either disagrees with it, that is **drift to
-fix, not a local override**. A genuine divergence needs a technical reason
-and is raised rather than decided in passing -- and when a conflict between
+fix, not a local override**. A genuine divergence needs a technical reason and is signalled to the list in `claude-guidelines`' `project.md` rather
+than decided in passing -- and when a conflict between
 the three actually comes up, stop and ask instead of picking a winner.
 
 Nothing is vendored. The reference projects in section 16 are fetched into scratch
@@ -26,8 +26,9 @@ own and never ours to correct.
 3. **Lowercase filenames,** unless a tool demands otherwise.
 
 Everything below is those three rules in detail, plus the exceptions that
-are already settled. An exception not listed is not yet settled: raise it
-rather than deciding it in passing.
+are already settled. An exception not listed is not yet settled: signal it
+to the list in `claude-guidelines`' `project.md` rather than deciding it in
+passing.
 
 ## 1. Naming
 
@@ -88,8 +89,10 @@ rather than a preference behind it:
   compliant by construction. Where that matters here is the ejected output,
   below.
 
-Anything else that seems to need spaces: raise it, get it settled, and add
-it to the source rather than to this copy.
+Anything else that seems to need spaces: signal it to the list in
+`claude-guidelines`' `project.md`, follow the rule meanwhile, and it gets
+settled and added here in a pass rather than in whichever project met it
+first.
 
 ### Ejected build files
 
