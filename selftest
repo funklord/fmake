@@ -6431,6 +6431,74 @@ int main(void){
 
 
 @case
+def a_commented_out_group_is_not_believed(t):
+	"""§15 called the ld script scan pattern-matching, not understanding.
+
+	It is, and the distinction that matters is which unhandled constructs
+	are *inert*. `OUTPUT_FORMAT', `SECTIONS' and the rest carry no filename
+	the scan would take, so not understanding them costs nothing. A comment
+	is the one construct that can make it believe something the script
+	disowns -- and comments are not hypothetical: four of the ten linker
+	scripts among `lib*.so' on the machine this was written on carry one,
+	`libc.so' and `libm.so' among them. None of them holds a token the scan
+	would take, so nothing was misparsed; that is a dependency on somebody
+	else's comments staying prose.
+
+	**The damage is not a mislink**, which is worth stating because it was
+	the first guess and it was wrong. `ld' reads the script correctly
+	itself, so a comment fmake misreads never reaches the real link. What it
+	corrupts is what fmake believes is *available* -- and the shape that
+	bites is a comment naming a provider the live script does not:
+
+	    without   undefined reference to `only_in_decoy'
+	              resolved to: -L.../lib -lthing
+	    with      no x86_64/64le library exports: only_in_decoy
+
+	fmake believed the comment, emitted `-lthing' for a symbol it does not
+	have, and left the reader a link error beside fmake's own confident
+	claim about where the symbol was. The fix makes the report true."""
+	prefix = tempfile.mkdtemp(prefix="fmake-ldscript-")
+	try:
+		lib = os.path.join(prefix, "lib")
+		os.makedirs(lib, exist_ok=True)
+		for name, body in (("decoy", "int only_in_decoy(void){ return 42; }"),
+		                   ("real", "int something_else(void){ return 1; }")):
+			src = os.path.join(prefix, name + ".c")
+			with open(src, "w") as fh:
+				fh.write(body + "\n")
+			r = subprocess.run(["cc", "-fPIC", "-shared",
+			                    f"-Wl,-soname,lib{name}.so.1", src,
+			                    "-o", os.path.join(lib, f"lib{name}.so.1")],
+			                   capture_output=True, text=True)
+			check(r.returncode == 0, f"could not build lib{name}: {r.stderr}")
+		# The comment names the library that has the symbol; the live line
+		# names the one that does not.
+		with open(os.path.join(lib, "libthing.so"), "w") as fh:
+			fh.write("/* GNU ld script\n   GROUP ( libdecoy.so.1 )\n*/\n"
+			         "GROUP ( libreal.so.1 )\n")
+
+		t.write("main.c", """
+#include <stdio.h>
+int only_in_decoy(void);
+int main(void){ printf("%d\\n", only_in_decoy()); return 0; }
+""")
+		t.write("fmake.toml", f'[toolchain]\nlib-dirs = ["{lib}"]\n')
+
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"nothing linkable exports the symbol, so this cannot build: "
+		      f"{out}")
+		check("-lthing" not in out,
+		      f"the comment was believed: fmake resolved the symbol to a "
+		      f"library whose live script does not export it: {out}")
+		check("library exports: only_in_decoy" in out,
+		      f"and the honest report is that nothing exports it: {out}")
+	finally:
+		shutil.rmtree(prefix, ignore_errors=True)
+
+
+@case
 def linker_provided_symbols_are_not_reported(t):
 	"""_GLOBAL_OFFSET_TABLE_ is not a missing dependency.
 

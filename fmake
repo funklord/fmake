@@ -4295,6 +4295,9 @@ def linkable_libs(dirs):
 	return out
 
 
+# Non-greedy and DOTALL: ld comments are C-style and routinely span lines,
+# which is how glibc writes the one at the top of libc.so.
+RE_LD_SCRIPT_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 RE_LD_SCRIPT_GROUP = re.compile(r"\b(?:INPUT|GROUP|AS_NEEDED)\s*\(([^)]*)\)")
 RE_LD_SCRIPT_TOKEN = re.compile(r"(-l\S+|[\w./+-]+\.(?:so[0-9.]*|a))")
 
@@ -4327,6 +4330,21 @@ def elf_targets(path, dirs=(), _depth=0):
 			text = fh.read(8192)
 	except OSError:
 		return []
+	# Comments go before anything is matched, and they are the only part of
+	# the ld script language that is worth the trouble. Everything else
+	# unhandled here is *inert*: OUTPUT_FORMAT, SECTIONS and the rest carry
+	# no filename this scan would take, so not understanding them costs
+	# nothing. A comment is the one construct that can make the scan believe
+	# something the script disowns, and missing a library is a link error
+	# somebody can read while linking a commented-out one is a wrong answer.
+	#
+	# Not hypothetical, though the damage would be: four of the ten linker
+	# scripts among lib*.so on the machine this was written on carry a
+	# comment, `libc.so' and `libm.so' among them. None of them currently
+	# holds a token this would take -- glibc's are prose -- so nothing was
+	# being misparsed. That is a dependency on somebody else's comments
+	# staying prose, which is not a thing to rely on for two lines.
+	text = RE_LD_SCRIPT_COMMENT.sub(" ", text)
 
 	here = os.path.dirname(path)
 	search = [here] + [d for d in dirs if d != here]

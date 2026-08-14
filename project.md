@@ -1802,7 +1802,33 @@ rather than code, and one lesson about testing.
 - **Linker scripts are parsed, not executed.** `INPUT`, `GROUP` and
   `AS_NEEDED` are read for filenames and `-l` flags; anything else in the ld
   script language is ignored. That covers glibc and ncurses, which is what
-  exists in practice, but it is pattern-matching rather than understanding.
+  exists in practice, and it is pattern-matching rather than understanding —
+  **but the cost of that is now measured, and one construct was worth
+  handling.** Everything else unhandled is *inert*: `OUTPUT_FORMAT`,
+  `SECTIONS` and the rest carry no filename the scan would take, so not
+  understanding them costs nothing. A comment is the only construct that can
+  make the scan believe something the script disowns, and comments are not
+  hypothetical — four of the ten linker scripts among `lib*.so` here carry
+  one, `libc.so` and `libm.so` among them. None holds a token the scan would
+  take, so nothing was being misparsed; that was a dependency on somebody
+  else's comments staying prose.
+
+  **The damage is not a mislink**, which is worth recording because it was
+  the first guess and it was wrong: `ld` reads the script correctly itself,
+  so a comment fmake misreads never reaches the real link. What it corrupts
+  is what fmake believes is *available*. The shape that bites is a comment
+  naming a provider the live script does not —
+
+      without   undefined reference to `only_in_decoy'
+                resolved to: -L.../lib -lthing
+      with      no x86_64/64le library exports: only_in_decoy
+
+  — where fmake emitted `-lthing` for a symbol that library does not have,
+  leaving a link error beside its own confident claim about where the symbol
+  was. Comments are stripped before matching now, and the real scripts were
+  re-checked afterwards: `libc.so`, `libm.so`, `libncursesw.so` and
+  `libcurses.so` still resolve to exactly the objects they did before, in
+  all three forms the docstring names.
 - **The linker-symbol list is hand-written**, and now checked: §104 has the
   suite derive what `ld` actually provides and requires the list to cover
   it. It found six gaps the first time it ran. Still a list -- a toolchain
