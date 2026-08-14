@@ -2612,6 +2612,26 @@ headers where the first was moc 6.8.2 against Qt 5's — which is the
 docstring's claim that the mixture is refused in both directions, checked
 rather than asserted.
 
+**The preference is derived from `moc` alone, and `find_qt_tool` serves
+three tools.** Naming `[toolchain] uic` or `rcc` from the other major
+therefore moves that tool without moving the preference, which is the
+asymmetry this fix would have if it were a hole. Probed rather than
+reasoned about, on a machine carrying a `uic` and an `rcc` for each major
+and the preference left on Qt 6: Qt 5's `uic` output compiled against Qt
+6's headers, and Qt 5's `rcc` output compiled, linked, and **loaded its
+resource at run time** -- the binary was run, because a resource that links
+says nothing about whether it opens.
+
+So no harm could be produced, and the reason looks structural rather than
+lucky: moc's output is the only one of the three carrying a version guard,
+the `cannot be used with the include files from this version of Qt` error
+that started all of this, so it is the only generator whose output cannot
+cross a major. Deriving the preference from it may therefore be right
+rather than an oversight. Recorded because the asymmetry is visible in the
+code and invites exactly this question, and answering it from the code
+alone would get a guess: **the probe succeeded, so there is no defect here
+to report, and that is a different statement from there being none.**
+
 The preference is part of the cache key. A cache written under one must not
 be read back under another, because naming a moc changes what every Qt
 header resolves to, and an answer cached before the hatch was pulled would
