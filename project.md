@@ -1910,8 +1910,13 @@ rather than code, and one lesson about testing.
   was meant to check, and the case failed while fmake was right. The diagnostic
   `sed` range used to investigate had the identical flaw, which is what made it
   slow to find. Assertions on `--explain` now split on a line-anchored pattern.
-- **The Qt tool and the Qt flags are chosen by different rules, and on a
-  machine with two Qts they disagree.** `find_qt_tool` walks
+- ~~**The Qt tool and the Qt flags are chosen by different rules, and on a
+  machine with two Qts they disagree.**~~ Fixed; see §17. Both answers were
+  arguable and the decision went to the second, because the first leaves the
+  escape hatch half working: pinning the major at the first Qt module that
+  resolves says nothing about what to do when `[toolchain] moc` names an
+  older one, and a hatch that moves the tool while the flags stay put swaps
+  one disagreement for another. The entry as it stood: `find_qt_tool` walks
   `QT_CORE_MODULES` newest-first and takes Qt 6's moc, which §17 argues for
   and which is right. Header-to-package resolution has no such preference:
   it takes whichever `.pc` sorts first, which is Qt 5. Qt 6's moc then emits
@@ -1921,11 +1926,10 @@ rather than code, and one lesson about testing.
   cases fail this way where both are installed; twelve of the thirteen pass
   with `MOC` pinned to Qt 5, which is what identifies the disagreement as
   the whole cause. `[toolchain] moc` is the documented escape hatch and it
-  moves only the tool, so the two can still part company. **This needs a
-  decision rather than code**: whether resolving any Qt module should pin
-  the major for every later Qt header, or whether the flag side should
-  follow the tool that was chosen. It is invisible wherever one Qt is
-  installed, which is why the suite has always passed elsewhere.
+  moves only the tool, so the two can still part company. It is invisible
+  wherever one Qt is installed, which is why the suite has always passed
+  elsewhere -- and why the case that closed it skips there rather than
+  reporting a pass it did not earn.
 
 ---
 
@@ -2550,9 +2554,56 @@ its own directory stops resolving.
 **How it was found is worth keeping too.** Nothing in this tree writes a
 qualified Qt include by hand often enough to notice, and moc's output does
 — Qt 6's moc emits `<QtCore/qtmochelpers.h>` and `<QtCore/qxptype_traits.h>`
-— so it surfaced while chasing a different defect entirely, in which the
-tool chosen for a Qt and the flags chosen for it disagree about the major
-version. That one is still open and is §15's, not this section's.
+— so it surfaced while chasing the defect the next subsection records.
+
+### One Qt per build, chosen once
+
+Two Qt majors installed side by side spell their headers identically, so a
+header both provide is answered by both and something has to choose.
+Nothing did. The tool was taken newest-first, which this section argues for;
+the flags were taken from whichever `.pc` sorted first, which is Qt 5 and is
+not an argument at all. Qt 6's moc then emitted its own major's includes,
+those resolved to Qt 6, and the tree's own `<QObject>` resolved to Qt 5. Qt
+refuses the mixture and says so precisely:
+
+    error: Qt major version not 6 or 7
+    error: "This file was generated using the moc from 6.8.2. It"
+    error: "cannot be used with the include files from this version of Qt."
+
+**Thirteen cases failed this way and not one of them said why.** They
+asserted that a Qt tree builds, which is true wherever a single Qt is
+installed, so the suite had always passed and the machine was the variable
+nobody was looking at. That is the vacuous pass of `evidence.md` inverted —
+not a check that inspected nothing, but a check whose subject was the one
+thing that varied.
+
+The choice is made once now and both sides read it. `qt_preference` returns
+the majors most-wanted first, and `PkgConfig.qt_order` carries it into
+header resolution, so the moc and the `-I` cannot come from different Qts.
+
+**A named moc moves the preference**, which is the half that decided the
+design. `[toolchain] moc` exists for when newest-first is the wrong guess,
+and a hatch that moves the tool while leaving the flags behind swaps one
+disagreement for another — so the Qt whose tool directory holds the named
+moc becomes the preferred one. That is asked of pkg-config, which was going
+to be asked for those directories anyway, rather than of the tool: running a
+binary to find out which build it is for is a probe, and §17 does not probe.
+A moc from somewhere pkg-config has never heard of leaves the default alone,
+which is an honest answer rather than a guess. Measured on the machine that
+found this: with nothing named the flags name qt6 alone, with `MOC` pinned
+to Qt 5's they name qt5 alone, and both build.
+
+The preference is part of the cache key. A cache written under one must not
+be read back under another, because naming a moc changes what every Qt
+header resolves to, and an answer cached before the hatch was pulled would
+survive it. Cheaper to prevent than to find.
+
+The case is `every_qt_flag_comes_from_one_major`, and **it asserts the
+invariant rather than the symptom**: exactly one Qt include root in the
+emitted flags, read back out of `--eject` rather than inferred from the
+compile having worked. A mixture that happens to compile is still a tree
+linking two Qts. It skips where one Qt is installed, which is the guard the
+other thirteen never had.
 
 ### Shared code across many programs, on real code
 

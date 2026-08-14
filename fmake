@@ -1468,6 +1468,41 @@ def find_qt_tool(name, configured, pkg):
 	return shutil.which(name)
 
 
+def qt_preference(configured, pkg):
+	"""The Qt majors to answer for, most wanted first.
+
+    Newest first by default, which is the order find_qt_tool takes the tool
+    in and the order §17 argued for. The point of returning it rather than
+    letting each side apply it is that both sides must apply the *same* one:
+    a build whose moc is Qt 6 and whose -I is Qt 5 does not compile.
+
+    A named moc moves it. `[toolchain] moc' exists for when newest-first is
+    the wrong guess, and a hatch that moves the tool while leaving the flags
+    behind swaps one disagreement for another -- so the Qt whose tool
+    directory holds the named moc becomes the preferred one. Asked of
+    pkg-config, which was going to be asked for those directories anyway,
+    rather than of the tool: running a binary to find out which build it is
+    for is a probe, and a moc that cannot run here is a case §17 already
+    has. A moc from somewhere pkg-config has never heard of leaves the
+    default alone, which is the honest answer rather than a guess.
+    """
+	default = tuple(m[:len("Qt0")] for m in QT_CORE_MODULES)
+	named = os.environ.get("MOC") or configured
+	if not named:
+		return default
+	got = shutil.which(named) or (named if os.path.isfile(named) else None)
+	if not got:
+		return default          # find_qt_tool reports this, and better
+	got = os.path.realpath(got)
+	for mod in QT_CORE_MODULES:
+		for var in ("libexecdir", "host_bins", "bindir"):
+			d = pkg.variable(mod, var)
+			if d and os.path.realpath(os.path.join(d, "moc")) == got:
+				want = mod[:len("Qt0")]
+				return (want,) + tuple(p for p in default if p != want)
+	return default
+
+
 def moc_would_generate(root, rel, moc, flags):
 	"""Whether moc produces anything for this file. Definitive, and slow."""
 	probe = os.path.join(root, STATE_DIR, "moc-probe.cpp")
@@ -4351,6 +4386,12 @@ class PkgConfig:
 		self.libdirs = []
 		self._dirs = {}
 		self._by_incdir = None
+		# Which Qt to answer for when more than one can. Newest first, the
+		# same order and for the same reason find_qt_tool takes the tool in
+		# -- set here so a header resolved before anything has looked at the
+		# configuration still gets the default rather than no answer, and
+		# replaced by qt_preference() once a named moc is known.
+		self.qt_order = tuple(m[:len("Qt0")] for m in QT_CORE_MODULES)
 		self.sysroot = sysroot
 
 		# Left alone, pkg-config answers for the host: host .pc files, host
@@ -4514,13 +4555,18 @@ class PkgConfig:
         every .pc file on the machine and running pkg-config, and a no-op
         build should not pay for that.
         """
-		key = sig + "|" + name
+		# The Qt preference is part of the answer, so a cache written under
+		# one must not be read back under another: naming a moc changes what
+		# every Qt header resolves to.
+		key = sig + "|" + ",".join(self.qt_order) + "|" + name
 		if key in store:
 			self._note_dirs((store[key] or [None, None, None, []])[3])
 			return store[key]
 		module = HEADER_PKG.get(name)
 		if module is None:
-			for inc, mod in self.by_includedir().items():
+			incdirs = self.by_includedir()
+			hits = []
+			for inc, mod in incdirs.items():
 				real = inc
 				if self.sysroot and not inc.startswith(self.sysroot):
 					real = os.path.join(self.sysroot, inc.lstrip("/"))
@@ -4534,9 +4580,12 @@ class PkgConfig:
 				# was misidentified. Six of Qt's own examples are written
 				# this way.
 				if os.path.isfile(os.path.join(real, name)):
-					module = _deepest_owner(self.by_includedir(), inc,
-					                        name, mod)
-					break
+					hits.append((inc, mod))
+					if not mod.startswith(self.qt_order):
+						break     # only Qt has a major to choose between
+			if hits:
+				inc, mod = _preferred_qt(hits, self.qt_order)
+				module = _deepest_owner(incdirs, inc, name, mod)
 		got = self.flags(module) if module else None
 		store[key] = (None if got is None else
 		              [module, self._consumer_flags(module, got[0]), got[1],
@@ -4628,6 +4677,36 @@ def _deepest_owner(incdirs, inc, name, found_in):
 		if len(d) > depth and found.startswith(d + os.sep):
 			owner, depth = mod, len(d)
 	return owner
+
+
+def _preferred_qt(hits, order):
+	"""The hit belonging to the Qt this build is for.
+
+    Two Qt majors installed side by side spell their headers identically,
+    so a header that both provide is answered by both and something has to
+    choose. Nothing did: the tool was taken newest-first and the flags were
+    taken from whichever .pc sorted first, which is Qt 5, so a tree got Qt
+    6's moc and Qt 5's headers. moc emits its own major's includes --
+    <QtCore/qtmochelpers.h> exists only in Qt 6 -- and those resolved to Qt
+    6 while the tree's own <QObject> resolved to Qt 5, putting both majors
+    on one command line. Qt then refuses it in as many words:
+
+        error: Qt major version not 6 or 7
+
+    So the choice is made once and both sides read it. `order' is
+    newest-first by default, which is what §17 already argued for and what
+    find_qt_tool has always done, and it moves when a moc is named so that
+    the escape hatch moves the flags with the tool rather than leaving them
+    to disagree.
+
+    A header only one major provides is unaffected: nothing else claims it,
+    and it is answered by the major that has it whatever the preference.
+    """
+	for want in order:
+		for inc, mod in hits:
+			if mod.startswith(want):
+				return inc, mod
+	return hits[0]
 
 
 def propose_from_headers(units, pkg, store, proj=None):
@@ -5517,6 +5596,10 @@ def build(args, _bootstrapping=False):
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.
 	pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet)
+	# Before anything resolves a header, so that every Qt answer in this
+	# build comes from the one major -- including the moc outputs, whose
+	# includes are the ones that gave the disagreement away.
+	pkg.qt_order = qt_preference(cfg.moc, pkg)
 	outdir = os.path.abspath(args.output) if args.output else root
 	if args.run and not args.output:
 		# Nothing appears beside the script. The answer to "does it clean

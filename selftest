@@ -7131,6 +7131,67 @@ int main(){ return 0; }
 
 
 @case
+def every_qt_flag_comes_from_one_major(t):
+	"""Two Qts installed must not both reach one command line.
+
+	Nothing in a source says which Qt it wants -- the include spellings are
+	identical -- so with Qt 5 and Qt 6 both installed each side of the build
+	was free to choose, and they chose differently. The tool was taken
+	newest-first, which §17 argues for; the flags were taken from whichever
+	`.pc' sorted first, which is Qt 5 and is not an argument at all. moc then
+	emits its own major's includes, and `<QtCore/qtmochelpers.h>' exists only
+	in Qt 6, so the moc output resolved to Qt 6 while the tree's own
+	`<QObject>' resolved to Qt 5. Qt refuses the mixture in as many words:
+
+	    error: Qt major version not 6 or 7
+
+	Thirteen cases here failed that way and not one of them said why, which
+	is the other half of what this case is for.
+
+	**The assertion is the invariant, not the symptom.** That a Qt tree
+	builds is what the other Qt cases already check, and every one of them
+	passes on a machine with a single Qt whatever this rule says -- so this
+	one skips there rather than reporting a pass it did not earn."""
+	_need_qt()
+	roots = {}
+	for mod in ("Qt6Core", "Qt5Core"):
+		if not _have_pkg(mod):
+			continue
+		d = subprocess.run(["pkg-config", "--variable=includedir", mod],
+		                   capture_output=True, text=True).stdout.strip()
+		if d:
+			roots[mod] = d
+	if len(roots) < 2:
+		raise Skip("only one Qt major is installed, so nothing can mix")
+
+	# Q_OBJECT, so that moc runs and its output joins the build: the moc
+	# output is the file whose includes gave the disagreement away, and a
+	# tree without one never reaches the shape at all.
+	t.write("counter.h", """
+#pragma once
+#include <QObject>
+class counter : public QObject { Q_OBJECT public: counter(){} };
+""")
+	t.write("main.cpp", """
+#include "counter.h"
+int main(){ counter c; (void)c; return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a Q_OBJECT tree did not build with two Qts installed: "
+	      f"{r.stdout}{r.stderr}")
+
+	# The flags themselves, read back out of the ejected build rather than
+	# inferred from the compile having worked. A mixture that happens to
+	# compile is still a tree linking two Qts.
+	out = t.fmake("--eject").stdout
+	named = sorted(m for m, d in roots.items() if f"-I{d}" in out)
+	check(len(named) == 1,
+	      f"the emitted flags name {len(named)} Qt majors rather than one, "
+	      f"which is the mixture Qt refuses: {named}")
+
+
+@case
 def qt_code_is_compiled_position_independent(t):
 	"""Reported from a build of hydra: 113 moc outputs failed at once.
 
