@@ -5901,6 +5901,61 @@ int main(void){ printf("%d\\n", macro_made()); return 0; }
 
 
 @case
+def both_spellings_of_an_explicit_specialization_are_found(t):
+	"""Section 19 fixed the instantiation and left the specialization.
+
+	The two sit in one place: declared in a header, so a user gets an
+	undefined reference rather than the primary template's own code, and
+	defined in a file with no header of its own, which the include graph
+	therefore never proposes. Widening is the only route to it, and the
+	negative lookahead that correctly excludes `template <class T>' excludes
+	`template <>' with it.
+
+	The member spelling worked by accident all along -- `int
+	Box<int>::twice() const {' is a name, a parameter list and a brace, so
+	the ordinary function pattern matches -- while the free-function
+	spelling was invisible, because `twice<int>(' puts a `<' where that
+	pattern needs a `('. One of two working is the half-fix section 19
+	named while committing the other half of it, which is why both
+	spellings are here and why one of them is a bare `template<>' with no
+	space.
+
+	The declaration sits in the header beside them because that is how the
+	shape occurs, not as a second assertion. Requiring the brace is a
+	precision choice rather than a correctness one: a pattern accepting the
+	`;' form would propose a file that only announces a specialisation,
+	which compiles to an empty object and costs the one compile section 5
+	says candidate guesses are allowed to cost. That was checked by
+	loosening the pattern to accept `;' and watching this case pass
+	unchanged -- so no assertion about it is made here, because there is no
+	failure to produce and section 16 would rather have no case than one no
+	mutation fails."""
+	t.write("box.h", """
+#pragma once
+template <class T> int twice(T v);
+template <class T> int thrice(T v);
+template <> int twice<int>(int v);
+template <> int thrice<int>(int v);
+""")
+	# No header of its own, so nothing but widening can reach it.
+	t.write("specialisations.cpp", """
+#include "box.h"
+template <> int twice<int>(int v) { return 2 * v; }
+template<> int thrice<int>(int v) { return 3 * v; }
+""")
+	t.write("main.cpp", """
+#include "box.h"
+#include <stdio.h>
+int main(){ printf("%d\\n", twice<int>(7) + thrice<int>(7)); return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"widening did not reach the specialisations: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "35\n",
+	      "both specialisations should be linked, not one")
+
+
+@case
 def clashing_target_names_are_refused(t):
 	t.write("one.c", "//! @target same\nint main(void){ return 0; }\n")
 	t.write("two.c", "//! @target same\nint main(void){ return 0; }\n")

@@ -1695,8 +1695,11 @@ rather than code, and one lesson about testing.
   is invisible to it. Such files are found only if something else pulls them
   in, or via `--widen-all`. Mostly harmless, because a definition in a header
   is emitted weakly into every TU that uses one and needs no provider at all.
-  **The case where it did matter is closed** — see §19. What remains untested
-  is whether any other C++ shape reaches it.
+  **The case where it did matter is closed** — see §19, and the second one
+  with it: the explicit *specialization* reaches the same place and §19's fix
+  did not cover it. Both are in §19 now. The remaining shapes that defeat the
+  scan are ones whose file the include graph already proposes, or the
+  macro-written definition `--widen-all` exists for and has a case.
 - **The widening filter cannot see a vtable either**, and this one is no
   longer theoretical: §17 found that `_ZTV4Base` is not a string any source
   spells, so nothing scanning for apparent definitions will ever propose the
@@ -2835,6 +2838,50 @@ list of declaration keywords, so `template struct Box<int>;` contributes
 `Box` rather than `struct` and `int`. Over-proposing here is cheap by
 construction — §5's rule is that being wrong about candidates costs a compile,
 never a wrong link set — so the list only has to catch the common noise.
+
+### The other half of it, found by asking §15's question
+
+§15 left one thing untested: whether any other C++ shape reaches the same
+blindness. One does, and it is the sibling of the shape above.
+
+An explicit **specialization** sits in exactly the same place — declared in
+a header, so a user gets an undefined reference rather than the primary
+template's own code, and defined in a file with no header of its own, which
+the include graph never proposes. The negative lookahead that correctly
+excludes `template <class T>` excludes `template <>` along with it, so
+widening had nothing to match:
+
+    template <> int twice<int>(int v) { return 2 * v; }   // defs: nothing
+
+**One of the two spellings worked, which is what made it hard to see.** The
+member form `int Box<int>::twice() const {` is a name, a parameter list and
+a brace, so the ordinary function pattern matches it by accident. The
+free-function form is not, because `twice<int>(` puts a `<` where that
+pattern needs a `(`. §19 above warned in as many words that a regex passing
+its own test while missing a sibling spelling is the half-fix this suite
+exists to catch, and then was one.
+
+`RE_TEMPLATE_SPEC` recognises it. The capture stops at the parameter list
+rather than running to the brace, so a parameter's name does not become a
+symbol to widen on — checked, since `int leaky` next to it would otherwise
+propose every file defining anything called `leaky`.
+
+**One assertion was written and then removed, which is the more useful
+half of the record.** Requiring the brace means a declaration does not read
+as a definition, and that looked worth asserting. It is not: loosening the
+pattern to accept the `;` form and re-running left the case passing
+unchanged, because a file that only announces a specialization compiles to
+an empty object and costs exactly the one compile §5 permits a candidate
+guess to cost. So the brace is a precision choice rather than a correctness
+one, there is no failure to produce, and §16 would rather have no case than
+one no mutation fails.
+
+The mutation that established that had to be checked twice. The first
+attempt was a `sed` whose pattern did not match, so it edited nothing and
+the case passed — a result indistinguishable from the assertion being
+sound. It was caught by counting the substitutions rather than by reading
+the output, which is `evidence.md`'s rule about a check that inspected
+nothing arriving in the shape of a pass.
 
 ---
 

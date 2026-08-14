@@ -369,6 +369,28 @@ RE_MACRO_MAIN = re.compile(
 # template`, which declares too.
 RE_TEMPLATE_INST = re.compile(r'^[ \t]*template[ \t]+(?![<])([^;{]*)[;{]', re.M)
 
+# An explicit *specialization*, which the lookahead above excludes along with
+# the primary template it was written to exclude -- `template <>` opens with
+# the `<` that says "not an instantiation". It is a definition all the same,
+# and it sits in the same place: declared in a header so users get an
+# undefined reference rather than the primary's own code, defined in a file
+# with no header of its own, which the include graph therefore never
+# proposes.
+#
+# The member spelling was already caught, but only by accident -- `int
+# Box<int>::twice() const {` is a name, a parameter list and a brace, so the
+# function pattern matches it. The free-function spelling is not, because
+# `twice<int>(` puts a `<` where that pattern needs a `(`. One of the two
+# working is exactly the half-fix section 19 warned about while fixing the
+# instantiation shape and missing this one.
+#
+# The capture stops at the parameter list rather than running to the brace,
+# so a parameter's name does not become a symbol to widen on. Requiring the
+# brace is what separates the definition from the declaration beside it in
+# the header.
+RE_TEMPLATE_SPEC = re.compile(
+    r'^[ \t]*template[ \t]*<[ \t]*>([^;{(]*)\([^;{]*\)[^;{]*\{', re.M)
+
 # Words that turn up inside a declaration and are never what a symbol is
 # called. Over-proposing costs one compile the closure then ignores, so this
 # only has to catch the common noise, not every keyword there is.
@@ -411,6 +433,8 @@ def scan_source(path):
 
 	defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
 	for m in RE_TEMPLATE_INST.finditer(code):
+		defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
+	for m in RE_TEMPLATE_SPEC.finditer(code):
 		defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
 	defs -= DECL_WORDS
 	_dirs_and_typos = parse_directives(comments)
