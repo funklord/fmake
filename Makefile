@@ -38,6 +38,17 @@ DESTDIR ?=
 # lets clean name them.
 BUILD_DIR  ?= build
 
+# Where the finished packages land. `dpkg-buildpackage` writes to the PARENT
+# directory, so they have to be moved somewhere regardless; this names it.
+#
+# A `deb/` subdirectory of the build tree rather than the build tree itself,
+# which is what five of the ten packaging projects already did and is now the
+# settled answer. Two reasons beyond consistency: it keeps a set of artifacts
+# separable from object files, so `ls` and `clean` can both speak about them
+# by name; and it is the only spelling that still works when BUILD_DIR is `.`,
+# as openmlx4 sets it, where the build tree and the source tree are one.
+DEB_DIR ?= $(BUILD_DIR)/deb
+
 # Read rather than restated. Two hand-edited copies of a version number
 # drift, and the symptom is a package whose reported version disagrees with
 # the one that installed it.
@@ -49,7 +60,7 @@ VERSION     = $(shell cat VERSION)
 DEB_VERSION = $(shell sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
 DEB_ARCH    = $(shell dpkg-architecture -qDEB_HOST_ARCH 2>/dev/null)
 
-DEB         = $(BUILD_DIR)/fmake_$(VERSION)_all.deb
+DEB         = $(DEB_DIR)/fmake_$(VERSION)_all.deb
 DEB_EXTRA   = $(BUILD_DIR)/fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
               $(BUILD_DIR)/fmake_$(VERSION)_$(DEB_ARCH).changes
 
@@ -118,13 +129,13 @@ version-check:
 # The package. dpkg-buildpackage drives debian/rules, which is three lines
 # of dh; everything the package declares is in debian/control.
 deb: version-check
-	@test -n "$(BUILD_DIR)" || { echo "deb: BUILD_DIR is empty, refusing" >&2; exit 1; }
+	@test -n "$(DEB_DIR)" || { echo "deb: DEB_DIR is empty, refusing" >&2; exit 1; }
 	dpkg-buildpackage -b -us -uc
-	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(DEB_DIR)
 	@for f in fmake_$(VERSION)_all.deb \
 	          fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
 	          fmake_$(VERSION)_$(DEB_ARCH).changes; do \
-		if [ -e "../$$f" ]; then mv -f "../$$f" $(BUILD_DIR)/; fi; \
+		if [ -e "../$$f" ]; then mv -f "../$$f" $(DEB_DIR)/; fi; \
 	done
 	@test -f $(DEB) || { echo "deb: $(DEB) was not produced" >&2; exit 1; }
 	@echo $(DEB)
