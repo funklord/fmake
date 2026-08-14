@@ -2589,9 +2589,18 @@ moc becomes the preferred one. That is asked of pkg-config, which was going
 to be asked for those directories anyway, rather than of the tool: running a
 binary to find out which build it is for is a probe, and §17 does not probe.
 A moc from somewhere pkg-config has never heard of leaves the default alone,
-which is an honest answer rather than a guess. Measured on the machine that
-found this: with nothing named the flags name qt6 alone, with `MOC` pinned
-to Qt 5's they name qt5 alone, and both build.
+which is an honest answer rather than a guess.
+
+That half shipped on a hand measurement — with nothing named the flags named
+qt6 alone, with `MOC` pinned to Qt 5's they named qt5 alone, and both built —
+and a hand measurement is not a case. It has one now:
+`naming_a_moc_moves_the_flags_with_it` names **the moc fmake would not have
+chosen**, because naming the one it was going to pick anyway asserts nothing
+and would pass with the naming ignored entirely. Mutating the branch away
+fails it on the mirror of the original defect, moc 5.15.15 against Qt 6's
+headers where the first was moc 6.8.2 against Qt 5's — which is the
+docstring's claim that the mixture is refused in both directions, checked
+rather than asserted.
 
 The preference is part of the cache key. A cache written under one must not
 be read back under another, because naming a moc changes what every Qt

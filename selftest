@@ -7192,6 +7192,74 @@ int main(){ counter c; (void)c; return 0; }
 
 
 @case
+def naming_a_moc_moves_the_flags_with_it(t):
+	"""`[toolchain] moc' has to move the -I, not only the tool.
+
+	The hatch exists for when newest-first is the wrong guess about which Qt
+	a tree wants. Moving the tool alone would swap one disagreement for
+	another: Qt 5's moc against Qt 6's headers is the same mixture as Qt 6's
+	against Qt 5's, and Qt refuses both. So the Qt whose tool directory holds
+	the named moc becomes the preferred one and the flags follow it.
+
+	**The direction is the whole case.** The moc named here is deliberately
+	the one fmake would not have chosen, because naming the one it was going
+	to pick anyway asserts nothing -- the default already produces that
+	answer, and the case would pass with the naming ignored entirely. It is
+	the half of the fix that decided the design and it was the half with no
+	case."""
+	_need_qt()
+	found = {}
+	for mod in ("Qt6Core", "Qt5Core"):
+		if not _have_pkg(mod):
+			continue
+		root = subprocess.run(["pkg-config", "--variable=includedir", mod],
+		                      capture_output=True, text=True).stdout.strip()
+		for var in ("libexecdir", "host_bins", "bindir"):
+			d = subprocess.run(["pkg-config", f"--variable={var}", mod],
+			                   capture_output=True, text=True).stdout.strip()
+			if d and os.access(os.path.join(d, "moc"), os.X_OK):
+				found[mod] = (os.path.join(d, "moc"), root)
+				break
+	if len(found) < 2:
+		raise Skip("two Qt majors, each with a moc, are needed before a "
+		           "preference can be told apart from the default")
+
+	# QT_CORE_MODULES is newest-first, so of the two installed the second is
+	# the one fmake would not choose, and therefore the one naming has to be
+	# able to reach.
+	order = [m for m in ("Qt6Core", "Qt5Core") if m in found]
+	wanted, other = order[1], order[0]
+	moc, root = found[wanted]
+
+	t.write("counter.h", """
+#pragma once
+#include <QObject>
+class counter : public QObject { Q_OBJECT public: counter(){} };
+""")
+	t.write("main.cpp", """
+#include "counter.h"
+int main(){ counter c; (void)c; return 0; }
+""")
+	t.write("fmake.toml", f'[toolchain]\nmoc = "{moc}"\n')
+
+	# $MOC wins over the file, so a suite run with it set would be testing
+	# the environment instead of the directive. Empty is falsy to the same
+	# check that reads it, which is how the file gets to be what decides.
+	env = {"MOC": ""}
+	r = t.fmake(env=env)
+	check(r.returncode == 0,
+	      f"naming {wanted}'s moc did not give a build that compiles, which "
+	      f"is the mixture the preference exists to stop: {r.stdout}{r.stderr}")
+
+	out = t.fmake("--eject", env=env).stdout
+	check(f"-I{root}" in out,
+	      f"the flags do not name {wanted}, whose moc was named: {root}")
+	check(f"-I{found[other][1]}" not in out,
+	      f"the flags still name {other}, which nothing asked for and which "
+	      f"is the Qt the default would have picked")
+
+
+@case
 def qt_code_is_compiled_position_independent(t):
 	"""Reported from a build of hydra: 113 moc outputs failed at once.
 
