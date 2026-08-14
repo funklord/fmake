@@ -1910,6 +1910,22 @@ rather than code, and one lesson about testing.
   was meant to check, and the case failed while fmake was right. The diagnostic
   `sed` range used to investigate had the identical flaw, which is what made it
   slow to find. Assertions on `--explain` now split on a line-anchored pattern.
+- **The Qt tool and the Qt flags are chosen by different rules, and on a
+  machine with two Qts they disagree.** `find_qt_tool` walks
+  `QT_CORE_MODULES` newest-first and takes Qt 6's moc, which §17 argues for
+  and which is right. Header-to-package resolution has no such preference:
+  it takes whichever `.pc` sorts first, which is Qt 5. Qt 6's moc then emits
+  `<QtCore/qtmochelpers.h>` and `<QtCore/qxptype_traits.h>`, both Qt 6 only,
+  so a Qt 6 `-I` joins a command line already carrying Qt 5's and the
+  compile dies on Qt's own `#error Qt major version not 6 or 7`. Thirteen
+  cases fail this way where both are installed; twelve of the thirteen pass
+  with `MOC` pinned to Qt 5, which is what identifies the disagreement as
+  the whole cause. `[toolchain] moc` is the documented escape hatch and it
+  moves only the tool, so the two can still part company. **This needs a
+  decision rather than code**: whether resolving any Qt module should pin
+  the major for every later Qt header, or whether the flag side should
+  follow the tool that was chosen. It is invisible wherever one Qt is
+  installed, which is why the suite has always passed elsewhere.
 
 ---
 
@@ -2473,6 +2489,70 @@ neither changed any observable behaviour, so no mutation could make their
 tests fail. A test that cannot fail is worse than no test, and §16 already
 records two of those. They came out, and the one line that carries the fix is
 mutation-checked on its own.
+
+**The second of the two was needed after all.** That conclusion was right
+about every header it was tried against and wrong about a shape nobody
+tried, which the subsection below records. It is left standing above rather
+than corrected in place, because the reasoning was sound and the gap was in
+the evidence, and that is the part worth being able to recognise again.
+
+### The half of that bug that `isfile` did not reach
+
+`isfile` fixes the umbrella header and cannot fix a qualified one, and the
+difference is why no mutation could find the rules that came out.
+`<QtWidgets>` is a *directory* under the shared parent and a *file* under
+`<qt5>/QtWidgets`, so once a directory stopped counting it resolved against
+its own module and the parent's arbitrary claimant never came up.
+`QtCore/qmetatype.h` is the other shape: a real file under the shared
+parent, and not a file under `<qt5>/QtCore`, because the header's own
+prefix makes up the difference. It resolved against the parent exactly as
+before, and the parent still belongs to whichever `.pc` sorts first —
+`Qt5Concurrent`, ahead of `Qt5Core`.
+
+**Every qualified Qt include therefore came back as a module the tree never
+mentioned**, carrying that module's `-D` and its proposed `-l`, and never
+carrying the `-D` of the module that owns the header.
+
+It stayed invisible because the misattribution still *builds*. Qt's `.pc`
+files all advertise the shared parent, so the parent's `-I` comes along and
+the include resolves anyway; only the define and the proposed library are
+wrong. `<QtCore/QObject>` in §17's own moc case compiled for exactly that
+reason. The symptom is a package in the link that nothing asked for, which
+is not what anybody greps for.
+
+The fix is `_deepest_owner`: having found the file, attribute it to the
+module owning the deepest claimed directory that contains it, rather than
+to the directory the search happened to stop at.
+
+**The measurement is the argument**, since a rule this quiet cannot be
+judged by reading a diff. Old and new were run side by side over every
+package installed on the machine that found it — 148 include directories,
+9283 header spellings. 6453 answers are unchanged; 2830 move, and every one
+of the 2830 lands on a module whose own include directory really holds the
+header. That check is what makes it a fix rather than a different guess.
+
+**It is not a Qt bug**, and the same measurement is what showed it. Two of
+the 2830 are elsewhere, and they are what the shape costs where nobody
+thought to look: `<nouveau/nouveau.h>` answered `libdrm` rather than
+`libdrm_nouveau`, so a build took `-ldrm` and never `-ldrm_nouveau`; and
+`<python3.13/pyconfig.h>` answered `caf-openmpi`, a Fortran MPI package
+whose `.pc` claims `/usr/include/x86_64-linux-gnu` and so claims everything
+underneath it.
+
+The case is `a_header_is_owned_by_the_deepest_include_directory`, and it
+needs no Qt — two `.pc` files shaped the way Qt's are, with each module's
+header refusing to compile without its own module's define, which is what
+turns a silent misattribution into a failing build. It exercises both
+modules rather than only the one that was wrong: the cheap over-correction
+is to prefer depth so eagerly that a module whose header sits at the top of
+its own directory stops resolving.
+
+**How it was found is worth keeping too.** Nothing in this tree writes a
+qualified Qt include by hand often enough to notice, and moc's output does
+— Qt 6's moc emits `<QtCore/qtmochelpers.h>` and `<QtCore/qxptype_traits.h>`
+— so it surfaced while chasing a different defect entirely, in which the
+tool chosen for a Qt and the flags chosen for it disagree about the major
+version. That one is still open and is §15's, not this section's.
 
 ### Shared code across many programs, on real code
 

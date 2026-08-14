@@ -4534,7 +4534,8 @@ class PkgConfig:
 				# was misidentified. Six of Qt's own examples are written
 				# this way.
 				if os.path.isfile(os.path.join(real, name)):
-					module = mod
+					module = _deepest_owner(self.by_includedir(), inc,
+					                        name, mod)
 					break
 		got = self.flags(module) if module else None
 		store[key] = (None if got is None else
@@ -4595,6 +4596,38 @@ def _pc_includedirs(path):
 		    lambda m: expand(variables.get(m.group(1), ""), depth + 1), s)
 
 	return [a[2:] for a in shlex.split(expand(cflags)) if a.startswith("-I")]
+
+
+def _deepest_owner(incdirs, inc, name, found_in):
+	"""The module owning the deepest include directory the header sits in.
+
+    A project keeping several modules under one parent has every module's
+    .pc advertise two directories: its own, and the shared parent. Qt is
+    the case here -- `Qt5Core.pc' carries `-I${includedir}/QtCore' and
+    `-I${includedir}', and so does every sibling. The parent therefore
+    belongs to whichever .pc was read first, which is alphabetical and so
+    arbitrary: `QtCore/qmetatype.h' resolved under the parent and was
+    attributed to Qt5Concurrent, whose -D and -l then joined a build that
+    never mentioned QtConcurrent.
+
+    Matching on the directory alone cannot see this, because the header's
+    own prefix makes up the difference -- `QtCore/qmetatype.h' is a file
+    under the parent and is not one under `.../qt5/QtCore'. So ask where
+    the file that was found actually lies, and take the deepest claimant
+    of it.
+
+    The neighbouring comment in for_header fixed the other half of this,
+    for a bare `<QtWidgets>' naming a directory rather than a file. A
+    prefixed include is a real file under the parent and walks straight
+    through that test, which is why it survived it.
+    """
+	found = os.path.normpath(os.path.join(inc, name))
+	owner, depth = found_in, len(inc.rstrip("/"))
+	for d, mod in incdirs.items():
+		d = d.rstrip("/")
+		if len(d) > depth and found.startswith(d + os.sep):
+			owner, depth = mod, len(d)
+	return owner
 
 
 def propose_from_headers(units, pkg, store, proj=None):

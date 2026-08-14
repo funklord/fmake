@@ -9463,6 +9463,77 @@ int main(void){ return mylib_answer() == 42 ? 0 : 1; }
 
 
 @case
+def a_header_is_owned_by_the_deepest_include_directory(t):
+	"""A module's own -D must not be swapped for a sibling's.
+
+    A project keeping several modules under one parent has every module's
+    .pc advertise that parent as well as its own directory, so the parent
+    belongs to whichever .pc was read first -- alphabetical, and nothing to
+    do with the header being asked about. A prefixed include is a real file
+    under the parent, so it resolves there and is attributed to that
+    arbitrary winner: `QtCore/qmetatype.h' came back as Qt5Concurrent, whose
+    -D and -l then joined a build that never mentioned QtConcurrent, while
+    the -D of the module that does own the header never arrived.
+
+    Two .pc files shaped the way Qt's are, which is all it takes to
+    reproduce it -- no Qt required, and it misfires with one Qt installed
+    as readily as with two. Each module's header refuses to compile without
+    its own module's define, so a header attributed to its neighbour fails
+    the build rather than merely being described wrongly.
+
+    Both modules are built, not just the one that was wrong. The cheap
+    over-correction here is to prefer depth so eagerly that a module whose
+    header really does sit at the top of its own directory stops
+    resolving."""
+	if not shutil.which("pkg-config"):
+		raise Skip("pkg-config not installed")
+
+	prefix = tempfile.mkdtemp(prefix="fmake-toolkit-")
+	try:
+		root = os.path.join(prefix, "include", "toolkit")
+		os.makedirs(os.path.join(prefix, "lib", "pkgconfig"), exist_ok=True)
+		# alpha sorts first, so alpha's .pc is the one that claims the shared
+		# parent and the one a misattributed header lands on.
+		for mod in ("alpha", "beta"):
+			os.makedirs(os.path.join(root, mod), exist_ok=True)
+			with open(os.path.join(root, mod, mod + ".h"), "w") as fh:
+				fh.write(f"#pragma once\n"
+				         f"#ifndef TOOLKIT_{mod.upper()}\n"
+				         f"#error {mod}.h did not get its own module flags\n"
+				         f"#endif\n"
+				         f"static inline int {mod}_answer(void)"
+				         f"{{ return 42; }}\n")
+			with open(os.path.join(prefix, "lib", "pkgconfig",
+			                       f"toolkit-{mod}.pc"), "w") as fh:
+				fh.write(f"prefix={prefix}\n"
+				         f"includedir=${{prefix}}/include/toolkit\n\n"
+				         f"Name: toolkit-{mod}\n"
+				         f"Description: one module of a toolkit\n"
+				         f"Version: 1.0\n"
+				         f"Cflags: -DTOOLKIT_{mod.upper()} "
+				         f"-I${{includedir}}/{mod} -I${{includedir}}\n")
+
+		env = {"PKG_CONFIG_PATH": os.path.join(prefix, "lib", "pkgconfig")}
+		for mod in ("beta", "alpha"):
+			u = Tree("toolkit_" + mod)
+			try:
+				u.write("main.c",
+				        f"#include <{mod}/{mod}.h>\n"
+				        f"int main(void)"
+				        f"{{ return {mod}_answer() == 42 ? 0 : 1; }}\n")
+				r = u.fmake(env=env)
+				check(r.returncode == 0,
+				      f"<{mod}/{mod}.h> was not given toolkit-{mod}'s "
+				      f"flags: {r.stdout}{r.stderr}")
+				check(u.run(os.path.basename(u.dir)).returncode == 0,
+				      f"the {mod} program did not run")
+			finally:
+				u.cleanup()
+	finally:
+		shutil.rmtree(prefix, ignore_errors=True)
+
+
+@case
 def one_program_pulled_into_another_is_reported(t):
 	"""A function defined next to a main() is still a function.
 
