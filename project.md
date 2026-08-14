@@ -1757,7 +1757,31 @@ rather than code, and one lesson about testing.
   pkg-config variables and the tool-prefix derivation have only been exercised
   against `aarch64-linux-gnu-*`. ~~A toolchain that names its tools
   differently~~ is tried now and works -- clang targets by flag and prefixes
-  nothing; see §112. A bare-metal one with no libc at all is still untried.
+  nothing; see §112. ~~A bare-metal one with no libc at all~~ is tried now
+  too: `avr-gcc`, freestanding, eight-bit, and an ELF machine fmake has no
+  name for. It builds — a 200-byte statically linked AVR executable with no
+  dynamic section — and **the architecture check proved agnostic by doing
+  the right thing with a machine it does not know**: it refused the object,
+  synthesised `machine-0x53` for what it found rather than guessing or
+  ignoring it, and named that back as the thing to declare. The remedy it
+  printed worked verbatim.
+
+  **The target OS is the gap that trip found, and it is a real asymmetry.**
+  `arch` is checked against the object and the build refused when they
+  disagree; `os` is never checked, and undeclared it defaults to the
+  *host's*. So a file marked `@os linux` compiles into a bare-metal binary.
+  Every earlier cross test used `aarch64-linux-gnu`, where host and target
+  are both Linux and the default is right by accident. `[toolchain] os` is
+  the remedy, and with it the exclusion is reported well — `linux_only.c is
+  excluded (@os linux (building for none)) and appears to define one of
+  them`.
+
+  **fmake cannot detect this and should not warn about it**, which is why
+  the asymmetry stays. Nothing in a bare-metal ELF says whether an
+  operating system is underneath it; and a warning on "arch declared, os
+  not" would fire on `aarch64-linux-gnu`, the common cross build, where the
+  host default is correct. That is the shape of exception §5 keeps
+  refusing, so this is documented rather than diagnosed.
 - ~~**Header-only libraries.**~~ Correctly need no link, and signal 2
   naturally produces no external symbols for them. The remaining case — one
   needing `-I` somewhere non-standard — was closed by §30 as a side effect:

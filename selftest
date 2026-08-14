@@ -2658,6 +2658,75 @@ def _elf_machine(path):
 
 
 @case
+def a_bare_metal_target_builds_and_names_its_own_machine(t):
+	"""§15's untried case: a toolchain with no hosted libc at all.
+
+	Cross builds had only ever been exercised against
+	`aarch64-linux-gnu-*', where the target is Linux on a machine fmake
+	knows by name. AVR is neither: freestanding, eight-bit, and an ELF
+	machine number fmake has no name for.
+
+	**The architecture check is agnostic, and this is what proves it.** It
+	does not recognise AVR, refuses the object because it does not match
+	the host, and synthesises a name for the thing it found rather than
+	guessing or ignoring it -- `machine-0x53', which is the AVR e_machine
+	value. Declaring that name back is what makes the build legal, so the
+	refusal names its own remedy and the remedy is exact.
+
+	**The target OS is a different matter and is the finding here.** `arch'
+	is checked against the object and the build refused when they disagree;
+	`os' is not checked at all, because nothing in a bare-metal ELF says
+	whether an operating system is underneath it. Undeclared it defaults to
+	the *host's*, so a file marked `@os linux' compiles into a bare-metal
+	binary. Every previous cross test had `aarch64-linux-gnu', where host
+	and target are both Linux and the default is right by accident.
+
+	`[toolchain] os' is the remedy and it is what this checks, in both
+	directions: with it the file is excluded, and fmake says which file and
+	why rather than leaving an undefined symbol."""
+	if not shutil.which("avr-gcc"):
+		raise Skip("avr-gcc not installed")
+
+	t.write("blink.c", """
+extern int host_helper(void);
+int main(void){ return host_helper(); }
+""")
+	t.write("linux_only.c", """
+/*! @file
+ *  @os linux
+ */
+int host_helper(void) { return 1; }
+""")
+	base = ('[toolchain]\ncc   = "avr-gcc"\narch = "machine-0x53"\n%s'
+	        '\n[project]\ncflags = ["-mmcu=atmega328p", "-Os"]\n')
+
+	# Without an OS declared, the host's is assumed and the Linux-only file
+	# is compiled into a bare-metal binary.
+	t.write("fmake.toml", base % "")
+	r = t.fmake()
+	check(r.returncode == 0, f"the AVR build failed: {r.stdout}{r.stderr}")
+	prog = os.path.join(t.dir, "blink")
+	check(os.path.exists(prog), f"no AVR binary was produced: {r.stdout}")
+	machine = _elf_machine(prog)
+	check(machine == 0x53,
+	      f"the artifact is not an AVR object: e_machine={machine}")
+
+	# Declaring it excludes the file, and the message names which and why
+	# rather than leaving the reader an undefined symbol.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("fmake.toml", base % 'os   = "none"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"host_helper is @os linux, so a bare-metal link cannot "
+	      f"resolve it: {out}")
+	check("linux_only.c is excluded" in out,
+	      f"the excluded file should be named: {out}")
+	check("@os linux" in out and "none" in out,
+	      f"and the reason should be given, both sides of it: {out}")
+
+
+@case
 def cross_builds_for_the_target_architecture(t):
 	"""A real cross build, end to end.
 
