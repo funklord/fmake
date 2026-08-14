@@ -2591,6 +2591,16 @@ binary to find out which build it is for is a probe, and §17 does not probe.
 A moc from somewhere pkg-config has never heard of leaves the default alone,
 which is an honest answer rather than a guess.
 
+**Reading the major off the path is the shortcut to refuse**, and
+`a_mocs_major_is_asked_of_pkg_config_not_of_its_path` is what refuses it.
+Its fixture is a moc that lies: Qt 6's moc reached through a shim under a
+`qt5/bin/` directory pkg-config has never heard of. Replacing the lookup
+with path inference — which reads as a simplification, since it deletes a
+loop and a pkg-config call — puts that tree back on `#error Qt major
+version not 6 or 7`, the defect this whole section exists to have removed.
+A moc is wherever somebody put it, and a hand-built one carries no major in
+its path at all.
+
 That half shipped on a hand measurement — with nothing named the flags named
 qt6 alone, with `MOC` pinned to Qt 5's they named qt5 alone, and both built —
 and a hand measurement is not a case. It has one now:

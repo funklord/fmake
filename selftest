@@ -7260,6 +7260,85 @@ int main(){ counter c; (void)c; return 0; }
 
 
 @case
+def a_mocs_major_is_asked_of_pkg_config_not_of_its_path(t):
+	"""A moc that lies about where it lives must not move the preference.
+
+	qt_preference decides which Qt a named moc belongs to by asking
+	pkg-config for each major's tool directory and comparing paths. Reading
+	the major out of the path instead is the obvious shortcut and it is a
+	guess: a moc is wherever somebody put it, and a hand-built one carries
+	no major in its path at all.
+
+	So the fixture is a moc that lies. It is the *newest* Qt's moc reached
+	through a shim under a directory named for the older one, somewhere
+	pkg-config has never heard of. Inferring from the path would move the
+	preference to the older major and then compile that major's headers
+	against the newer major's moc -- the exact mixture the preference
+	exists to prevent, reintroduced by the shortcut that looks like a
+	simplification.
+
+	Asking pkg-config finds no owner for that path, leaves the default
+	alone, and the flags then agree with the tool that was actually
+	named."""
+	_need_qt()
+	found = {}
+	for mod in ("Qt6Core", "Qt5Core"):
+		if not _have_pkg(mod):
+			continue
+		root = subprocess.run(["pkg-config", "--variable=includedir", mod],
+		                      capture_output=True, text=True).stdout.strip()
+		for var in ("libexecdir", "host_bins", "bindir"):
+			d = subprocess.run(["pkg-config", f"--variable={var}", mod],
+			                   capture_output=True, text=True).stdout.strip()
+			if d and os.access(os.path.join(d, "moc"), os.X_OK):
+				found[mod] = (os.path.join(d, "moc"), root)
+				break
+	if len(found) < 2:
+		raise Skip("two Qt majors are needed before a path can name the "
+		           "wrong one")
+
+	order = [m for m in ("Qt6Core", "Qt5Core") if m in found]
+	default, decoy = order[0], order[1]
+	real_moc, default_root = found[default]
+
+	# Named for the major it is not: `qt5/bin/moc' running Qt 6's moc. A
+	# shim rather than a copy, so that realpath cannot lead back to the
+	# directory pkg-config does know -- the point is a path pkg-config has
+	# no answer for at all.
+	shim_dir = os.path.join(t.dir, decoy[:len("Qt0")].lower(), "bin")
+	os.makedirs(shim_dir, exist_ok=True)
+	shim = os.path.join(shim_dir, "moc")
+	with open(shim, "w") as fh:
+		fh.write(f'#!/bin/sh\nexec {real_moc} "$@"\n')
+	os.chmod(shim, 0o755)
+
+	t.write("counter.h", """
+#pragma once
+#include <QObject>
+class counter : public QObject { Q_OBJECT public: counter(){} };
+""")
+	t.write("main.cpp", """
+#include "counter.h"
+int main(){ counter c; (void)c; return 0; }
+""")
+	t.write("fmake.toml", f'[toolchain]\nmoc = "{shim}"\n')
+
+	env = {"MOC": ""}
+	r = t.fmake(env=env)
+	check(r.returncode == 0,
+	      f"a moc under a {decoy}-shaped path did not build against "
+	      f"{default}: {r.stdout}{r.stderr}")
+
+	out = t.fmake("--eject", env=env).stdout
+	check(f"-I{default_root}" in out,
+	      f"the flags left {default}, which is the default and the major "
+	      f"the named moc really is: {default_root}")
+	check(f"-I{found[decoy][1]}" not in out,
+	      f"the flags followed the {decoy} in the path rather than asking "
+	      f"pkg-config, which is the guess this case exists to refuse")
+
+
+@case
 def qt_code_is_compiled_position_independent(t):
 	"""Reported from a build of hydra: 113 moc outputs failed at once.
 
