@@ -5974,6 +5974,20 @@ def build(args, _bootstrapping=False):
 	qrc_jobs, qrc_outs = [], []
 	rcc_exe = None
 	qrc_jobs = rcc_plan(srcs + gen_hdrs, scans, root)
+	# A .qrc that nothing names is dropped, and unlike every other omission
+	# here that one is invisible twice over: the link succeeds, and the
+	# program only finds out when it asks for the file. An unreferenced
+	# *source* is already reported, so this is the same courtesy for the one
+	# input where the evidence is textual rather than a symbol.
+	#
+	# Collected beside the plan rather than inside it, because rcc_plan
+	# returns the work to do and a list of what it declined is a different
+	# question asked of the same glob.
+	_qrc_named = {j["src"] for j in qrc_jobs}
+	qrc_unused = sorted(
+	    os.path.relpath(p, root)
+	    for p in glob.glob(os.path.join(root, "**", "*.qrc"), recursive=True)
+	    if os.path.relpath(p, root) not in _qrc_named)
 	if not args.dry_run:
 		prune_generated(root, QRC_DIR, [j["out"] for j in qrc_jobs])
 	if qrc_jobs:
@@ -7113,6 +7127,17 @@ def build(args, _bootstrapping=False):
 				     f"(--force-link if it is needed anyway)")
 			if len(ignored) > 5:
 				note(f"... and {len(ignored) - 5} more")
+			# The remedy names Q_INIT_RESOURCE rather than --force-link,
+			# which was what the documentation said and does not work: a
+			# .qrc is not a source file, so --force-link refuses it by
+			# name, and the generated qrc_*.cpp does not exist to be named
+			# until rcc has already been decided on.
+			for rel in qrc_unused[:5]:
+				stem = os.path.splitext(os.path.basename(rel))[0]
+				note(f"{rel} not built: no source names a path it declares "
+				     f"(Q_INIT_RESOURCE({stem}) says so outright)")
+			if len(qrc_unused) > 5:
+				note(f"... and {len(qrc_unused) - 5} more resource(s)")
 
 		names = ", ".join(n for n, _, _ in built)
 		if built:

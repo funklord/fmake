@@ -8293,6 +8293,82 @@ def rcc_ignores_a_resource_nothing_opens(t):
 	prog = os.path.join(t.dir, os.path.basename(t.dir))
 	check(b"nobody wants this" not in open(prog, "rb").read(),
 	      "an unreferenced resource was embedded anyway")
+	# Correct to leave it out, and worth saying so: see the case below for
+	# why this particular omission cannot be noticed any other way.
+	check("extra/unused.qrc not built" in r.stdout + r.stderr,
+	      f"the resource left out should be named: {r.stdout}{r.stderr}")
+
+
+@case
+def an_unbuilt_resource_is_reported_rather_than_dropped(t):
+	"""§15's textual-evidence limit, made visible instead of silent.
+
+	A resource is the one input whose evidence is what the source appears
+	to say. A path assembled at run time -- `base + "/" + name', with
+	`base' from a variable -- names nothing, so rcc never runs, and the
+	omission is invisible twice over: the link succeeds, and the program
+	only finds out when it asks for the file and gets nothing.
+
+	Every other thing fmake leaves out is either reported (`not compiled:
+	nothing reaches it') or shows up as an undefined symbol. This one did
+	neither, so it is now reported the same way a source is.
+
+	**The remedy named is Q_INIT_RESOURCE, not --force-link**, and that
+	distinction was worth checking rather than copying: §15 said
+	`--force-link' covers this and the README said it does not. The README
+	is right. `--force-link' takes a source file and refuses a .qrc by
+	name, and the generated qrc_*.cpp it would otherwise want does not
+	exist yet -- with no evidence, rcc never ran, so there is nothing to
+	force. §15 has been corrected."""
+	_need_qt()
+	t.write("assets/note.txt", "hello from the resource\n")
+	t.write("assets/res.qrc", _qrc("/", "note.txt", ""))
+	# No ":/..." literal and no Q_INIT_RESOURCE: the path is assembled.
+	t.write("main.cpp", """
+#include <QtCore/QFile>
+#include <QtCore/QString>
+#include <cstdio>
+int main(){
+	QString base = QString(":") + "/";
+	QFile f(base + "note.txt");
+	std::printf("%s\\n", f.open(QIODevice::ReadOnly) ? "found" : "MISSING");
+	return f.isOpen() ? 0 : 1;
+}
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"this builds, which is the problem: {out}")
+	check("assets/res.qrc not built" in out,
+	      f"the dropped resource should be named: {out}")
+	check("Q_INIT_RESOURCE(res)" in out,
+	      f"and the remedy should be the one that works: {out}")
+	check("--force-link" not in out.split("res.qrc not built")[-1][:200],
+	      f"--force-link is refused for a .qrc and must not be offered: "
+	      f"{out}")
+
+	# The same tree with the evidence present: rcc runs, the resource is
+	# there, and nothing is reported -- so the note above is a real signal
+	# rather than a line printed whenever a .qrc exists.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("main.cpp", """
+#include <QtCore/QFile>
+#include <QtCore/QString>
+#include <cstdio>
+int main(){
+	Q_INIT_RESOURCE(res);
+	QString base = QString(":") + "/";
+	QFile f(base + "note.txt");
+	std::printf("%s\\n", f.open(QIODevice::ReadOnly) ? "found" : "MISSING");
+	return f.isOpen() ? 0 : 1;
+}
+""")
+	g = t.fmake()
+	out2 = g.stdout + g.stderr
+	check(g.returncode == 0, f"build failed: {out2}")
+	check("not built" not in out2,
+	      f"a resource that is built must not be reported as dropped: {out2}")
+	check(t.run(os.path.basename(t.dir)).stdout.strip() == "found",
+	      "the resource should be readable once Q_INIT_RESOURCE names it")
 
 
 @case

@@ -1999,10 +1999,23 @@ rather than code, and one lesson about testing.
   from a static constructor, so no symbol refers to the generated object —
   but the other is not, and a resource path in the source turned out to be
   enough to decide which program opens it.
-- **Resource evidence is textual, and that is a real limit.** A path built
-  with no `":/..."` literal anywhere, and no `Q_INIT_RESOURCE`, leaves nothing
-  to go on. `--force-link` still covers it, but unlike the symbol closure
-  there is no guarantee here, only good evidence.
+- **Resource evidence is textual, and that is a real limit** — but it is no
+  longer a *silent* one. A path built with no `":/..."` literal anywhere, and
+  no `Q_INIT_RESOURCE`, leaves nothing to go on, so rcc never runs. That
+  omission was invisible twice over: the link succeeds, and the program only
+  finds out when it asks for the file and gets nothing. Every other thing
+  fmake leaves out is either reported (`not compiled: nothing reaches it`) or
+  arrives as an undefined symbol; this one did neither. It is reported now,
+  the same way an unreferenced source is, and names the file and the remedy.
+
+  **This entry was wrong about the remedy, and the README was right.** It
+  said `--force-link` covers it; `README.md` says it does not, and trying it
+  settles the disagreement — `--force-link` takes a source file and refuses a
+  `.qrc` by name, and the generated `qrc_*.cpp` it would otherwise want does
+  not exist, because with no evidence rcc never ran. `Q_INIT_RESOURCE(name)`
+  is the remedy, which is what the note prints. Two documents disagreeing
+  about a remedy is exactly the case that gets settled by running it rather
+  than by picking the more authoritative file.
 - **A program's root file can be pulled into another program.** Still true
   and still deliberate — a function defined next to a `main()` is a function,
   and refusing to link it would be its own guess — but it is now *reported*
