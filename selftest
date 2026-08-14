@@ -2408,6 +2408,42 @@ def an_ejected_makefile_wraps_a_long_flag_list(t):
 
 
 @case
+def both_ejected_forms_state_the_staleness_contract(t):
+	"""§15 records that an ejected build is a snapshot. It now says so.
+
+	The entry is right and the limit is fine: adding a source means
+	ejecting again, and the ejected build cannot re-run the closure. What
+	it did not do was tell the person holding the artifact, and
+	`project.md' is not where that reader is -- fmake is not running when
+	this matters, so the file has to carry its own contract.
+
+	**Both halves are named because only one is loud.** A new call into a
+	file the snapshot does not know gives an undefined symbol, checked
+	here by hand before this was written and impossible to miss. A file
+	nothing refers to -- a constructor-registered plugin, a test
+	registered by a macro -- is simply never compiled: the build succeeds
+	and the code is absent. That is the half worth the sentence.
+
+	Both backends, because a `build.ninja' is a snapshot for exactly the
+	same reason. Saying it in one and not the other would leave whichever
+	backend a reader happened to choose deciding whether they were
+	told."""
+	t.write("main.c", "int base(void);\nint main(void){ return base(); }\n")
+	t.write("base.c", "int base(void){ return 0; }\n")
+
+	for form in ("make", "ninja"):
+		out = t.fmake("--eject", form).stdout
+		head = out.split("\n\n", 1)[0]
+		check("snapshot of one closure" in head,
+		      f"--eject {form} does not say it is a snapshot: {head}")
+		check("--eject again" in head,
+		      f"--eject {form} does not say what to do about it: {head}")
+		check("never compiled" in head,
+		      f"--eject {form} names only the loud half; the file nothing "
+		      f"refers to is the one that goes missing quietly: {head}")
+
+
+@case
 def an_ejected_makefile_aligns_its_assignments(t):
 	"""Alignment computed from the names, not counted once by hand.
 

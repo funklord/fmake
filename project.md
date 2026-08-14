@@ -1869,6 +1869,18 @@ rather than code, and one lesson about testing.
   there cannot be one, because per-file `@cflags` is the whole point. Nor does
   the ejected build know how to re-run the closure, so a new symbol dependency
   is invisible to it.
+
+  **The limit is fine; not saying so was the defect.** Measured: adding a call
+  into a file the snapshot does not name gives `undefined reference`, `make
+  *** Error 1`, and no binary — loud, and nobody could miss it. But a file
+  nothing *refers* to is simply never compiled, and that is silent: the build
+  succeeds and the code is absent, which is the symbol-invisible family two
+  entries down arriving by another route. Both halves are in the ejected
+  header now, in **both** backends — a `build.ninja` is a snapshot for the
+  same reason, and saying it in one artifact only would leave whichever
+  backend a reader chose deciding whether they were told. `project.md` is
+  not where that reader is: fmake is not running when this matters, so the
+  file has to carry its own contract.
 - ~~**`--eject` emits no install rule.**~~ Closed; see §85. It emits one for
   both Make forms, from the same plan `--install` uses, guarded by a case
   that compares the two staged trees rather than the presence of a rule.

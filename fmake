@@ -7430,6 +7430,23 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("# build system passed. If you are replacing one, diff the flags first:")
 	a("# a dropped -std= or -W set is silent, and shows up as behaviour.")
 	a("#")
+	# The staleness contract, said in the artifact rather than only in
+	# project.md, because project.md is not where the reader is. It is a
+	# snapshot of one closure: there is one explicit rule per object and no
+	# way to recompute which objects there should be.
+	#
+	# Both halves are worth naming because only one of them is loud. A new
+	# call into a file this build does not know gives an undefined
+	# reference, which nobody can miss. A file nothing refers to -- a
+	# constructor-registered plugin, a test registered by a macro -- is
+	# simply never compiled, and that is silent: the build succeeds and the
+	# code is not in it.
+	a("# This is a snapshot of one closure, not a translation of the tree.")
+	a("# Adding a source file, or a call that reaches a file this build does")
+	a("# not already name, means running --eject again. A new reference gives")
+	a("# an undefined symbol, which is loud; a file nothing refers to is just")
+	a("# never compiled, which is not.")
+	a("#")
 	# None is needed, and the reason is worth writing down because the
 	# obvious helpful edit is the one that reintroduces the hazard.
 	a("# There are no pattern rules here -- one explicit rule per object, so")
@@ -7921,6 +7938,16 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("# Standalone: fmake is not needed to build this. Link sets were")
 	a("# computed from object symbol tables rather than from the #include")
 	a("# graph, so they are exact rather than inferred.")
+	a("#")
+	# The same staleness contract the Make backend carries. A build.ninja is
+	# a snapshot for the same reason and in the same way, and saying it in
+	# one artifact and not the other would leave whichever backend a reader
+	# chose deciding whether they were told.
+	a("# This is a snapshot of one closure, not a translation of the tree.")
+	a("# Adding a source file, or a call that reaches a file this build does")
+	a("# not already name, means running --eject again. A new reference gives")
+	a("# an undefined symbol, which is loud; a file nothing refers to is just")
+	a("# never compiled, which is not.")
 	a("#")
 	a(f"# Built for: {cfg.os}/{cfg.arch}"
 	  + (f"    profile: {conf.profile_name}" if conf.profile_name else ""))
