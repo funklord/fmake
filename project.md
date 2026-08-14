@@ -1971,9 +1971,35 @@ rather than code, and one lesson about testing.
   rather than left to the linker; see §31. What has not been decided is
   whether §3 should exclude other roots outright, as it already does when
   assembling a library.
-- **`[build-toolchain]` is only consulted for generator tools.** Nothing else
-  in fmake distinguishes the build machine from the target, because nothing
-  else needs to yet. A test binary meant to run during the build would.
+- **`[build-toolchain]` is only consulted for generator tools**, and the test
+  binary this entry predicted would need it does. `fmake test` in a cross
+  build compiles the tests for the *target*, tries to run them here, and got
+  the raw OSError back:
+
+      * twice_test: [Errno 8] Exec format error: '.../twice_test'
+      * 1 of 1 failed: twice_test
+
+  **Both lines mislead, and the second is wrong rather than terse.** The
+  test did not fail; it was never executed. A test reported as failing when
+  it did not run is the vacuous pass inverted — a result asserted about work
+  that never happened — and nothing connects either line to `[toolchain]
+  arch`, which may be several files away. It says so now, and names
+  `[build-toolchain]` as the remedy.
+
+  Keyed on `ENOEXEC` rather than on the configuration, because the errno
+  *is* the fact: a native build cannot produce one, so it cannot fire on a
+  native tree, and it holds for any target rather than the ones fmake knows
+  by name. The case builds the same tree natively afterwards, which is what
+  makes it a case rather than a fixture that cannot fail — the test is
+  sound, and the cross build is the whole reason it did not run. It skips
+  where a `binfmt_misc` handler could run the target binary, since then no
+  `ENOEXEC` arises and there is nothing to check.
+
+  What is **not** changed is the tally: an unrunnable test still counts
+  against `fmake test` and still exits non-zero. Calling it a pass would say
+  the tests were verified, and calling it a skip is a decision about what
+  `fmake test` promises in a cross build — worth settling deliberately
+  rather than in the commit that fixed the wording.
 - **A test that split on a substring hid a working feature.** The `--explain`
   libraries header reads `[from the external symbols above]`, so
   `split("external symbols")[0]` truncated the output above the very lines it

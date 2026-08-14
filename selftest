@@ -2727,6 +2727,70 @@ int host_helper(void) { return 1; }
 
 
 @case
+def a_cross_built_test_is_not_run_rather_than_failed(t):
+	"""§15 said a test meant to run during the build would need it.
+
+	`[build-toolchain]` exists for tools that must run on *this* machine,
+	and §15 recorded that nothing else in fmake distinguishes the build
+	machine from the target because nothing else needs to -- adding that a
+	test binary would. It does, and what it got was the raw OSError:
+
+	    * twice_test: [Errno 8] Exec format error: '.../twice_test'
+	    * 1 of 1 failed: twice_test
+
+	**Both lines mislead.** `Exec format error' reads as a broken binary,
+	and `failed' is not what happened -- the test was never executed. A
+	test reported as failing when it did not run is wrong information
+	rather than merely unhelpful, and the reader has no reason to connect
+	either line to `[toolchain] arch', which may be several files away.
+
+	Keyed on ENOEXEC rather than on the configuration, because the errno
+	*is* the fact: a native build cannot produce one, so it cannot fire on
+	a native tree, and it holds for any target rather than the ones fmake
+	knows by name.
+
+	The same tree is built natively at the end. That is what makes this a
+	case rather than a fixture that cannot fail: it proves the test itself
+	is sound and the cross build is the only reason it did not run."""
+	if not _cross_available():
+		raise Skip(f"{CROSS_CC} not installed")
+	# A registered interpreter would run the target binary happily, and the
+	# case would then be asserting nothing at all.
+	if glob.glob("/proc/sys/fs/binfmt_misc/*aarch64*") or \
+	   glob.glob("/proc/sys/fs/binfmt_misc/qemu*"):
+		raise Skip("a binfmt handler can run aarch64 here, so ENOEXEC "
+		           "cannot arise and this would check nothing")
+
+	t.write("lib.c", "int twice(int v){ return 2 * v; }\n")
+	t.write("tests/twice_test.c", """
+#include <stdio.h>
+int twice(int v);
+int main(void){ if (twice(21) != 42) return 1; printf("ok\\n"); return 0; }
+""")
+	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a test that could not run is not a pass: {out}")
+	check("was built for another machine" in out,
+	      f"the reason should be given, not left as an errno: {out}")
+	check("not run" in out,
+	      f"and it should say the test did not run, since reporting it as "
+	      f"failed is wrong rather than merely terse: {out}")
+	check("[build-toolchain]" in out,
+	      f"the remedy should be named: {out}")
+
+	# Natively the very same test runs and passes, so the fixture is sound
+	# and the cross build is the whole reason it did not.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	n = t.fmake("test")
+	check(n.returncode == 0,
+	      f"the same test must pass natively, or this case proves nothing "
+	      f"about the cross build: {n.stdout}{n.stderr}")
+
+
+@case
 def cross_builds_for_the_target_architecture(t):
 	"""A real cross build, end to end.
 

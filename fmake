@@ -1104,6 +1104,24 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 			proc = subprocess.Popen(argv, cwd=root, start_new_session=True)
 		except OSError as exc:
 			warn(f"{t.name}: {exc}")
+			# ENOEXEC is the kernel saying this binary is not for this
+			# machine, which in a tree that has just built it means the
+			# tests were cross-compiled along with everything else. Left
+			# as the raw OSError it reads as a broken test: the reader
+			# sees `Exec format error' and `1 of 1 failed' and has no
+			# reason to connect either to [toolchain] arch, which may be
+			# several files away in fmake.toml.
+			#
+			# Keyed on the errno rather than on the configuration because
+			# the errno *is* the fact -- a native build cannot produce
+			# one, so this cannot fire on a native tree, and it holds for
+			# any target rather than only the ones fmake knows by name.
+			if exc.errno == errno.ENOEXEC:
+				note(f"{t.name} was built for another machine, so it was "
+				     f"not run -- this is not a test that failed")
+				note("a test meant to run during a cross build has to be "
+				     "built for this machine, which is what "
+				     "[build-toolchain] is for")
 			failed.append(t.name)
 			continue
 		try:
