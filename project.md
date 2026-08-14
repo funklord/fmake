@@ -1700,13 +1700,17 @@ rather than code, and one lesson about testing.
   did not cover it. Both are in §19 now. The remaining shapes that defeat the
   scan are ones whose file the include graph already proposes, or the
   macro-written definition `--widen-all` exists for and has a case.
-- **The widening filter cannot see a vtable either**, and this one is no
-  longer theoretical: §17 found that `_ZTV4Base` is not a string any source
-  spells, so nothing scanning for apparent definitions will ever propose the
-  file that defines it. moc output sidesteps this by joining the candidate set
-  outright. Any other generator whose sole contribution to a program is a
-  vtable would need the same treatment, and there is no general mechanism for
-  saying so.
+- ~~**The widening filter cannot see a vtable either.**~~ Closed; see §19.
+  There is a general mechanism after all, and it follows from where the
+  compiler puts the thing: a vtable is emitted in the translation unit
+  defining the class's *key function*, and a key function is by definition
+  an out-of-line member. So a file defining any member of `Widget` is
+  exactly a file that might carry `Widget`'s vtable — and `Widget` is the
+  token `_ZTV6Widget` already yielded. The missing half was on the scan
+  side, where `void Widget::method()` recorded `method` and never `Widget`.
+  **It was never only generators**: the shape that found it is ordinary
+  C++, a class whose members are all inline but for an out-of-line
+  destructor, whose own mangling carries no member name either.
 - ~~**Static libraries and prebuilt objects as inputs.**~~ Closed for `.a`
   by §18 and for loose `.o` by §101 — **named rather than discovered**, and
   that distinction is the whole finding. The guess that it would fall out
@@ -2893,6 +2897,54 @@ the case passed — a result indistinguishable from the assertion being
 sound. It was caught by counting the substitutions rather than by reading
 the output, which is `evidence.md`'s rule about a check that inspected
 nothing arriving in the shape of a pass.
+
+### The vtable, and the mechanism §15 said did not exist
+
+The same question one more time, from the entry beside the one above. A
+vtable is reached by nothing: `_ZTV6Widget` is not a string any source
+spells, so no scan for apparent definitions can propose the file defining
+it. moc's output sidesteps that by joining the candidate set outright, and
+§15 recorded that anything else contributing only a vtable would need the
+same special case, with nothing general available.
+
+There is something general, and both halves were already present:
+
+- `symbol_tokens("_ZTV6Widget")` already yields `Widget`. The demangling
+  side was never the problem.
+- A vtable is emitted in the translation unit defining the class's **key
+  function** — the first non-inline virtual — and a key function is by
+  definition an out-of-line member.
+
+So *a file defining any member of `Widget` is a file that might carry
+`Widget`'s vtable*, which is exactly the token already in hand. What was
+missing sat on the scan side: `void Widget::method() {` recorded `method`
+and never `Widget`, because the pattern captures the member and discards
+the qualifier. `RE_MEMBER_DEF` records the qualifier.
+
+**It was never only generators**, and believing so is what kept it filed
+under moc. The shape that reproduced it is ordinary C++: a class whose
+members are all inline except an out-of-line destructor, in a file with no
+header of its own. Three symbols, none of which carries a member name to
+fall back on:
+
+    _ZTV6Widget      the vtable, no member name at all
+    _ZN6WidgetD1Ev   a destructor, D1 rather than a name
+    _ZN6GadgetC1Ev   a constructor, C1 rather than a name
+
+The constructor is there because the first version of the pattern missed
+it. A member-initialiser list sits between the parameter list and the
+brace, so `Gadget::Gadget() : n(22) {` did not match while
+`Widget::~Widget() {}` did — the destructor spelling fixed and the
+constructor spelling missed, which is §19's own half-fix one more time. The
+case carries a class of each, in **separate files**, because a single file
+would be proposed by whichever class matched first and would pass with the
+other spelling still broken. Both mutations were run: removing the pattern
+fails the case, and removing only the initialiser-list clause fails it too.
+
+What the pattern deliberately does not match is a call. `if (A::check(x))
+{` has a `)` where a definition has its brace, so the ordinary
+control-flow shapes contribute nothing — checked, since a pattern keyed on
+`::` that fired on every qualified call would propose most of a tree.
 
 ---
 

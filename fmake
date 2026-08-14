@@ -130,7 +130,7 @@ LICENCE     = "GPL-3.0-or-later"
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
-CACHE_VER   = 6   # scans record module interfaces and imports
+CACHE_VER   = 7   # scans record the class of an out-of-line member
 
 C_EXTS      = {".c"}
 CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
@@ -333,6 +333,33 @@ RE_FUNC_DEF = re.compile(
     r'(?:^|[;}\s*&:])([A-Za-z_][A-Za-z0-9_]*)[ \t\n]*\([^;{)]*\)'
     r'(?:[ \t\n]*(?:const|noexcept|override|final))*[ \t\n]*\{', re.M)
 
+# The class an out-of-line member is defined in, which is how a vtable gets
+# proposed at all. `_ZTV6Widget' is not a string any source spells, so
+# section 15 recorded that nothing scanning for apparent definitions reaches
+# the file defining it, and that moc's output sidesteps this by joining the
+# candidate set outright -- with no general mechanism for anything else.
+#
+# This is that mechanism, and it follows from where the compiler puts the
+# thing. A vtable is emitted in the translation unit defining the class's
+# key function, and a key function is by definition an out-of-line member.
+# So a file defining any member of Widget is exactly a file that might carry
+# Widget's vtable, and `Widget' is the token `_ZTV6Widget' already yields.
+#
+# It is not only generators. The shape that found this is ordinary C++: a
+# class whose members are all inline except an out-of-line destructor, whose
+# mangling `_ZN6WidgetD1Ev' carries no member name to match on either, in a
+# file with no header of its own for the include graph to reach it by.
+# The member-initialiser list is allowed for after the parameter list because
+# a constructor is the same bug in a different spelling: `_ZN6WidgetC1Ev'
+# carries no member name either, so a file whose only out-of-line member is a
+# constructor is reachable by nothing. Covering the destructor and missing
+# the constructor is the half-fix section 19 warns about, one spelling over.
+RE_MEMBER_DEF = re.compile(
+    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*::[ \t]*~?[A-Za-z_][A-Za-z0-9_]*'
+    r'[ \t\n]*\([^;{)]*\)'
+    r'(?:[ \t\n]*(?:const|noexcept|override|final))*'
+    r'(?:[ \t\n]*:[^;{]*)?[ \t\n]*\{', re.M)
+
 # File-scope data. Anchored at column zero, since file-scope definitions are
 # conventionally unindented and locals are not; a miss only costs a widening
 # pass, so the heuristic is allowed to be loose.
@@ -446,6 +473,7 @@ def scan_source(path):
 		incs.append([m.group(1), m.group(2), lineno])
 
 	defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
+	defs |= set(RE_MEMBER_DEF.findall(code))
 	for m in RE_TEMPLATE_INST.finditer(code):
 		defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
 	for m in RE_TEMPLATE_SPEC.finditer(code):

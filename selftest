@@ -5956,6 +5956,73 @@ int main(){ printf("%d\\n", twice<int>(7) + thrice<int>(7)); return 0; }
 
 
 @case
+def a_vtable_reaches_the_file_that_defines_the_key_function(t):
+	"""§15 said there was no general mechanism for this. There is one.
+
+	`_ZTV6Widget' is not a string any source spells, so nothing scanning
+	for apparent definitions could ever propose the file defining it, and
+	moc's output sidesteps that by joining the candidate set outright. §15
+	recorded that any other generator contributing only a vtable would need
+	the same treatment, with nothing general to say so.
+
+	The mechanism follows from where the compiler puts the thing. A vtable
+	is emitted in the translation unit defining the class's *key function*,
+	and a key function is by definition an out-of-line member -- so a file
+	defining any member of Widget is exactly a file that might carry
+	Widget's vtable, and `Widget' is the token `_ZTV6Widget' already
+	yields. What was missing was the other half: `void Widget::method()'
+	put `method' in the scan and never `Widget'.
+
+	**It is not only generators**, which is why this is a case rather than
+	a note. Both classes here are ordinary C++, and each is the shape whose
+	mangling carries no member name to fall back on:
+
+	    _ZTV6Widget      the vtable, no member name at all
+	    _ZN6WidgetD1Ev   a destructor, D1 rather than a name
+	    _ZN6GadgetC1Ev   a constructor, C1 rather than a name
+
+	The two files are separate on purpose. One would be proposed by
+	whichever class matched first, and the case would then pass with the
+	constructor spelling unhandled -- which it was, until the
+	member-initialiser list was allowed for."""
+	t.write("widget.h", """
+#pragma once
+struct Widget {
+	virtual ~Widget();
+	virtual int value() { return 20; }
+};
+""")
+	t.write("gadget.h", """
+#pragma once
+struct Gadget {
+	Gadget();
+	int n;
+};
+""")
+	# Neither has a header of its own, so sibling_source proposes neither
+	# and widening is the only route to both.
+	t.write("widget_impl.cpp", """
+#include "widget.h"
+Widget::~Widget() {}
+""")
+	t.write("gadget_impl.cpp", """
+#include "gadget.h"
+Gadget::Gadget() : n(22) {}
+""")
+	t.write("main.cpp", """
+#include "widget.h"
+#include "gadget.h"
+#include <stdio.h>
+int main(){ Widget w; Gadget g; printf("%d\\n", w.value() + g.n); return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"widening did not reach the key function: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "42\n",
+	      "both files should be linked, not one")
+
+
+@case
 def a_module_import_is_told_fmake_does_not_build_modules(t):
 	"""§15 said modules degrade the guess. They defeat the build.
 
