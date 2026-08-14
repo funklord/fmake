@@ -5956,6 +5956,58 @@ int main(){ printf("%d\\n", twice<int>(7) + thrice<int>(7)); return 0; }
 
 
 @case
+def a_module_import_is_told_fmake_does_not_build_modules(t):
+	"""§15 said modules degrade the guess. They defeat the build.
+
+	The entry recorded that `import std;' breaks the include-graph
+	candidate heuristic, that the closure is unaffected because symbols are
+	symbols, and that the worst case is falling back to compiling the whole
+	tree. Measured, the last part is not true: `--widen-all' fails
+	identically, because the problem is not which files were chosen. A
+	module interface has to be compiled into a BMI *before* anything
+	importing it, and the importer has to be handed that BMI by name --
+	an ordering between translation units, which fmake does not have and
+	which no candidate set supplies.
+
+	Left alone the failure is the compiler's `module 'hello' not found',
+	which reads exactly like a missing include path. Every remedy fmake
+	offers around it is about include paths, so a reader following them
+	is adjusting flags for a build that cannot work whatever the flags say.
+
+	Keyed on the scan rather than on that message, so this case needs no
+	particular compiler: `import hello;' fails to compile under any of
+	them, and what fmake says is drawn from what the file says about
+	itself."""
+	t.write("hello.cpp", """
+export module hello;
+export int twice(int v) { return 2 * v; }
+""")
+	t.write("main.cpp", """
+import hello;
+int main(){ return twice(21) == 42 ? 0 : 1; }
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a modules tree should not report success: {out}")
+	check("does not build C++20 modules" in out,
+	      f"the reader should be told that, not left with the compiler's "
+	      f"word for it: {out}")
+	check("hello" in out, f"the module that was imported should be named: {out}")
+	check("no order" in out,
+	      f"the reason is the ordering, and saying so is what stops a flag "
+	      f"hunt: {out}")
+
+	# The measured half. --widen-all is the documented escape when scanning
+	# cannot see something, and it is the wrong instinct here -- so the
+	# message says so, and this checks the claim rather than repeating it.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	w = t.fmake("--widen-all")
+	check(w.returncode != 0,
+	      f"--widen-all must not be reported as a way out of this: "
+	      f"{w.stdout}{w.stderr}")
+
+
+@case
 def clashing_target_names_are_refused(t):
 	t.write("one.c", "//! @target same\nint main(void){ return 0; }\n")
 	t.write("two.c", "//! @target same\nint main(void){ return 0; }\n")

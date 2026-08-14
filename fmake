@@ -130,7 +130,7 @@ LICENCE     = "GPL-3.0-or-later"
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
-CACHE_VER   = 5   # package entries now carry their -L directories
+CACHE_VER   = 6   # scans record module interfaces and imports
 
 C_EXTS      = {".c"}
 CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
@@ -341,6 +341,20 @@ RE_DATA_DEF = re.compile(
     r'[A-Za-z_][A-Za-z0-9_]*(?:[ \t]*[\*&][ \t]*|[ \t]+)'
     r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\[[^\]]*\])?[ \t]*[=;]', re.M)
 
+# C++20 modules, recognised so that a tree using them is told so rather than
+# left with the compiler's word for it. `import hello;' fails as `module
+# 'hello' not found', which reads exactly like a missing include path and
+# sends the reader looking for a -I that would not have helped.
+#
+# Keyed on the source rather than on that message on purpose: the wording is
+# the compiler's and differs between vendors and releases, and only clang's
+# has been measured here. What a file says about itself does not.
+RE_MODULE_IFACE = re.compile(
+    r'^[ \t]*export[ \t]+module[ \t]+([A-Za-z_][A-Za-z0-9_.:]*)', re.M)
+RE_MODULE_IMPORT = re.compile(
+    r'^[ \t]*(?:export[ \t]+)?import[ \t]+([A-Za-z_][A-Za-z0-9_.:]*)[ \t]*;',
+    re.M)
+
 RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
 
 # Qt writes a test's entry point with a macro, so a QtTest translation unit
@@ -446,6 +460,8 @@ def scan_source(path):
 		# Against the stripped text, for the same reason main() is: the word
 		# in a comment or a string is not a declaration.
 	    "qobject":  bool(RE_QOBJECT.search(code)),
+	    "modiface": sorted(set(RE_MODULE_IFACE.findall(code))),
+	    "modimp":   sorted(set(RE_MODULE_IMPORT.findall(code))),
 	    "qrc":      sorted(set(RE_QRC_PATH.findall(code))),
 	    "qrc_init": sorted(set(RE_QRC_INIT.findall(code))),
 	    "defs":     sorted(defs),
@@ -3537,6 +3553,29 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			blame = origins.get(first_unit.rel, first_unit.rel)
 			if blame != first_unit.rel:
 				note(f"generated from {blame}")
+
+			# Before the header advice, because a tree using modules will
+			# not be fixed by any of it. `module 'hello' not found' looks
+			# like a missing include path, and every remedy below is about
+			# include paths -- so a reader following them is being sent to
+			# adjust flags for a build that cannot work whatever the flags
+			# say.
+			imported = first_unit.scan.get("modimp") or []
+			if imported:
+				note(f"{first_unit.rel} imports {', '.join(imported)}, and "
+				     f"fmake does not build C++20 modules")
+				# The reason, because "not supported" invites the obvious
+				# wrong guess that a flag or a wider candidate set is all
+				# it needs. A module interface has to be compiled into a
+				# BMI *before* anything importing it, and the importer has
+				# to be handed that BMI by name; fmake compiles
+				# translation units in no particular order and passes no
+				# such flag. Measured: --widen-all fails identically, so
+				# the usual escape is not one here.
+				note("a module interface must be compiled before the files "
+				     "that import it, and fmake compiles in no order")
+				note("--widen-all does not help: the ordering is the "
+				     "problem, not which files were chosen")
 
 			miss = _missing_header(msg)
 			if miss:

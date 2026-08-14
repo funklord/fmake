@@ -1720,11 +1720,22 @@ rather than code, and one lesson about testing.
   the closure is unaffected. Guarded by two cases, one of which needs no
   clang. `-ffunction-sections` only changes what the linker discards,
   which is downstream of everything fmake decides.
-- **C++ modules.** `import std;` breaks the include-graph candidate heuristic,
-  and module dependency scanning needs a real compiler pass
-  (`clang-scan-deps`). Note that the *closure* is unaffected — symbols are
-  symbols — so this degrades the guess, not the answer, and worst case it falls
-  back to compiling the whole tree. Less fatal than it looked before §3 changed.
+- **C++ modules are not built at all**, and the entry that used to sit here
+  was wrong in the part that mattered. It said the closure is unaffected
+  because symbols are symbols, so modules degrade the guess rather than the
+  answer, and the worst case is falling back to compiling the whole tree.
+  **Measured: `--widen-all` fails identically**, because the problem is not
+  which files were chosen. A module interface must be compiled into a BMI
+  before anything importing it, and the importer must be handed that BMI by
+  name — an ordering *between* translation units, which fmake's model does
+  not have and which no candidate set supplies. The same measurement showed
+  the compiler can do it in three ordered phases, so the gap is entirely
+  fmake's; `.cppm` and `.ixx` are not in `CXX_EXTS` either, so the
+  conventional spelling of a module interface is not even a source here.
+  What exists now is an honest refusal: a file that imports a module is told
+  so, and told that `--widen-all` is not the way out, because the compiler's
+  own `module 'hello' not found` reads like a missing include path and sends
+  the reader hunting for a `-I`. Building them is a feature, not a fix.
 - ~~**Generated sources.**~~ Closed; see §7. The prediction that it would need a
   two-pass scan was wrong — running the generators before the tree is walked
   makes their output an ordinary source, with no special case downstream.
