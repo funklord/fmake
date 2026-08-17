@@ -1977,6 +1977,37 @@ rather than code, and one lesson about testing.
   because it exercises nothing is indistinguishable from one that passes
   because the code is right — which is the entire argument for mutating the
   code and requiring the test to fail.
+
+  **Measured across the suite rather than left as a principle.** Four
+  load-bearing paths were mutated one at a time, each verified to *behave*
+  as intended before a run and the tree restored and checksummed between
+  them, against 319 cases:
+
+  | mutation | caught | unique |
+  |---|---|---|
+  | widening returns nothing | 47 | — |
+  | a filename claims no platform | 5 | 3 |
+  | the provider scan finds nothing | 48 | 43 |
+  | linker scripts never expand | 5 | 1 |
+
+  **No silent survivors**, and each is caught by the case written for it.
+  The *unique* column is the finding and the caught column is close to
+  noise: widening feeds nearly every path, so its 47 are mostly collateral,
+  while the provider scan has 43 cases that fail only when it breaks. That
+  is the difference between a subsystem being tested and merely being
+  touched, and it cannot be seen by counting failures.
+
+  Two things about the method are worth more than the table. **A mutation
+  that breaks the parse fails all 319 cases**, which reads as overwhelming
+  coverage and measures a syntax error — the helper did exactly that on one
+  of the four, and it was caught only because each mutation was checked for
+  *behaviour* (`widen_candidates` really returning `[]`, `libm.so` really
+  ceasing to expand) rather than for having applied. And **a targeted case
+  does not cover its subsystem**: `a_commented_out_group_is_not_believed`
+  guards the comment rule and does not fail when linker-script expansion is
+  disabled outright, because a total failure produces the same observable
+  it already asserts. That is correct for a targeted case and worth knowing
+  before treating one as coverage.
 - **Two hand-written lists are load-bearing**, soon three: linker-provided
   symbols (§14), interposer libraries (§14), and the builtin header table (§5).
   **All three are checked against the machine now** — §104 and §105 — which
