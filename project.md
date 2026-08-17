@@ -2387,7 +2387,21 @@ added to `HEADER_PKG`.
 
 ### Limits
 
-- Exercised against Qt 6.8 on Debian only. Qt 5 is coded for and untested.
+- ~~Exercised against Qt 6.8 on Debian only. Qt 5 is coded for and
+  untested.~~ Qt 5 is tested now, through all three generators, and it
+  works. The interesting part is how it works on a machine carrying both.
+  Pinning moc to Qt 5 moves the flag preference with it, so the tree
+  compiles and links against Qt 5 — `libQt5Core` and no Qt 6 in the binary,
+  which is what the case asserts, since a build that quietly picked up Qt 6
+  would compile just as happily. `uic` and `rcc` are *not* moved, the
+  preference being derived from moc alone, so they come from Qt 6 and the
+  build mixes generators on purpose: **moc 5.15.15, uic 6.8.2, rcc 6.8.2**,
+  read from the stamps the generated files carry rather than inferred.
+  That is the mirror of what §112 measured — Qt 5's generators against Qt
+  6's headers — and it is the direction a machine defaulting to the newest
+  Qt actually produces. It holds for the same structural reason the
+  asymmetry is tolerated: moc's output is the only one carrying a version
+  guard, so it is the only generator whose major has to match.
 - On a cross build the moc that pkg-config names may be a target binary that
   cannot execute here; `[toolchain] moc` is the answer and the failure is
   reported with that pointer. ~~The case is untested.~~ Tested; see §112,

@@ -7668,6 +7668,95 @@ int main(){ counter c; (void)c; return 0; }
 
 
 @case
+def a_qt5_tree_builds_through_all_three_generators(t):
+	"""§17's limits said Qt 5 is coded for and untested. Now it is tested.
+
+	The Qt work was all done against Qt 6.8, so Qt 5 was a code path
+	nothing had run. It works, and the interesting part is *how* it works
+	on a machine carrying both.
+
+	Pinning moc to Qt 5 moves the flag preference with it, so the tree
+	compiles and links against Qt 5. `uic' and `rcc' are not moved -- the
+	preference is derived from moc alone -- so they come from Qt 6, and
+	this build therefore mixes generators on purpose:
+
+	    moc   5.15.15      uic   6.8.2      rcc   6.8.2
+
+	That direction was the untested one. §17 measured Qt 5's uic and rcc
+	against Qt 6's headers and found no harm; Qt 6's against Qt 5's is the
+	mirror, and it is the one a machine defaulting to the newest Qt will
+	actually produce. It holds, for the reason the asymmetry is tolerated
+	at all: moc's output is the only one carrying a version guard, so it
+	is the only generator whose major has to match.
+
+	The link is asserted rather than the build, because a Qt 5 build that
+	quietly picked up Qt 6 would compile just as happily -- `libQt5Core'
+	in the binary is what says which Qt this actually was."""
+	_need_qt()
+	moc5 = None
+	for var in ("host_bins", "bindir", "libexecdir"):
+		if not _have_pkg("Qt5Core"):
+			break
+		d = subprocess.run(["pkg-config", f"--variable={var}", "Qt5Core"],
+		                   capture_output=True, text=True).stdout.strip()
+		if d and os.access(os.path.join(d, "moc"), os.X_OK):
+			moc5 = os.path.join(d, "moc")
+			break
+	if not moc5:
+		raise Skip("no Qt 5 moc on this machine")
+
+	t.write("counter.h", """
+#pragma once
+#include <QtCore/QObject>
+class counter : public QObject { Q_OBJECT public: int twice(int v){ return 2*v; } };
+""")
+	t.write("form.ui", """
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Form</class>
+ <widget class="QWidget" name="Form">
+  <property name="windowTitle"><string>Form</string></property>
+ </widget>
+ <resources/><connections/></ui>
+""")
+	t.write("note.txt", "hello from the resource\n")
+	t.write("res.qrc",
+	        '<RCC><qresource prefix="/"><file>note.txt</file></qresource></RCC>\n')
+	t.write("main.cpp", """
+#include "counter.h"
+#include "ui_form.h"
+#include <QtCore/QFile>
+#include <cstdio>
+int main(){
+	Q_INIT_RESOURCE(res);
+	counter c; Ui::Form f; (void)f;
+	QFile r(":/note.txt");
+	std::printf("%d %s\\n", c.twice(21),
+	            r.open(QIODevice::ReadOnly) ? "res" : "NORES");
+	return 0;
+}
+""")
+	t.write("fmake.toml", f'[toolchain]\nmoc = "{moc5}"\n')
+
+	env = {"MOC": ""}
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the Qt 5 build failed: {out}")
+	for step in ("MOC", "UIC", "RCC"):
+		check(step in out, f"{step} did not run, so this case is not "
+		                   f"exercising all three generators: {out}")
+	check(t.run(os.path.basename(t.dir), env).stdout.strip() == "42 res",
+	      "the Qt 5 program did not run, or could not read its resource")
+
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	ldd = subprocess.run(["ldd", prog], capture_output=True, text=True).stdout
+	check("libQt5Core" in ldd,
+	      f"this was meant to be a Qt 5 build and is not: {ldd}")
+	check("libQt6Core" not in ldd,
+	      f"the binary carries both Qt majors, which is the mixture the "
+	      f"preference exists to prevent: {ldd}")
+
+
+@case
 def naming_a_moc_moves_the_flags_with_it(t):
 	"""`[toolchain] moc' has to move the -I, not only the tool.
 
