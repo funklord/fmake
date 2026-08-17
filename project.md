@@ -6489,8 +6489,37 @@ That is the same objection fuzzypickles raised in §45 and it has the same
 answer available -- `--eject make-fragment`, which §45 built for exactly
 this. Worth stating plainly that **the fragment was not offered here**: the
 trial predates nothing, the option existed, and the report reached its
-verdict without it. Whether it changes the answer for situ is untested, and
-guessing would repeat the mistake the report itself records below.
+verdict without it.
+
+**Tried since, in a throwaway worktree so that situ's tree was never
+written to. It does not change the answer, and the reason is structural
+rather than a matter of taste.** situ's schema compiler writes both the
+headers *and* the sources it generates into `$(BUILD_DIR)/gen/`, and
+fmake's `SKIP_DIRS` excludes `build` by construction — so the eleven
+generated test binaries, which are the bulk of situ's C, are not merely
+unbuilt but invisible. Measured twice: with the generated files absent, ten
+of fourteen targets are skipped on missing headers; after generating all
+seventy-four of them through situ's own `situc`, **exactly the same ten are
+skipped**, because scanning never reaches them.
+
+What is left for a fragment to own is `runtime/c` and `walker/c` — five
+hand-written files and two targets, which situ's `Makefile` builds in about
+five lines. The sub-Makefile that fmake cannot replace is 382. Delegating
+five lines and leaving 382 is not the "two build systems where there is
+one" objection answered; it is that objection with an extra file in it.
+
+**What would change this is not the fragment but where situ generates.** A
+generator writing into the source tree rather than into `build/` would put
+those eleven binaries inside fmake's model, where the hand-declared
+`OBJS_test_header := $(GEN_DIR)/header.o` lists are exactly what a symbol
+closure replaces. That is a change to situ for fmake's benefit, which is
+the wrong way round, and it is recorded here as the condition rather than
+as a suggestion.
+
+One thing the trial turned up in passing: `walker/c/` ejects as a target
+named **`c`**, because a target takes its directory's name and that
+directory is called `c`. Harmless in a fragment somebody edits, and a poor
+name to hand anyone.
 
 **What would change the answer is not a feature.** If the C side grows --
 more runtime translation units, more codecs, per-platform variants -- the
