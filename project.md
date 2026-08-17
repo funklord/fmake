@@ -2053,6 +2053,28 @@ rather than code, and one lesson about testing.
   rather than left to the linker; see §31. What has not been decided is
   whether §3 should exclude other roots outright, as it already does when
   assembling a library.
+- ~~**A version that cannot identify a build.**~~ Decided and done: it
+  should not, and something else should. `VERSION` answers *which release*
+  and is stated three times — the file, the literal in the script,
+  `debian/changelog` — with `make version-check` gating that they agree.
+  Making it also answer *which copy* means moving it on every edit, and a
+  package version that moves eighty times in a fortnight is not a version.
+  The two questions are different and only the first had an answer: an
+  installed copy **86 commits behind** reported the same `fmake 1.0` as the
+  source, and the difference was 23 silently dropped targets in the project
+  that hit it. Its framing is the better one — not that the failure was
+  silent, but that **there was no check to make**.
+
+  `--version` carries a short hash of the file now, so any copy answers for
+  itself: `fmake 1.0 (fcd49b18)`. Hashed at run time rather than stamped at
+  build time because **there is no build step to stamp** — `make all`
+  produces the man page and the completion, and fmake *is* the source.
+  Adding one to carry an identity would trade away the property that makes
+  a single file copyable anywhere, which is worth more than the identity.
+  Identity is of the content, not the path: a copy differing by one byte
+  reads differently, an identical copy at another path reads the same. Both
+  are in the case, because they are the semantics rather than the format.
+
 - **`[build-toolchain]` is only consulted for generator tools**, and the test
   binary this entry predicted would need it does. `fmake test` in a cross
   build compiles the tests for the *target*, tries to run them here, and got

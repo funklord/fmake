@@ -128,6 +128,42 @@ VERSION     = "1.0"
 AUTHOR      = "Nabeel Sowan <nabeel@vibes.se>"
 LICENCE     = "GPL-3.0-or-later"
 
+
+def build_identity():
+	"""Short hash of this file, so two copies can be told apart.
+
+    VERSION answers "which release is this", and deliberately: it is stated
+    three times -- here, in the VERSION file and in debian/changelog -- and
+    `make version-check' gates that they agree. It cannot also answer "is
+    the fmake I am running the same one as over there", because that would
+    mean changing it on every edit, and a package version that moves eighty
+    times in a fortnight is not a version.
+
+    They are different questions and the second one had no answer at all.
+    An installed copy eighty-six commits behind the source reported the
+    same `fmake 1.0' as the source did, so a caller had no way to tell
+    which it had invoked -- and the difference was twenty-three silently
+    dropped targets. That was reported from a project that hit it, and its
+    words for it are the right ones: not that the failure was silent, but
+    that there was no check to make.
+
+    Hashing the file itself rather than stamping something at build time,
+    because there is no build step to stamp: `make all' produces the man
+    page and the completion, and fmake *is* the source. Adding a build step
+    to carry an identity would trade away the property that makes this one
+    file copyable anywhere, which is worth more than the identity. Any copy
+    can answer for itself, however it arrived -- package, `cp', symlink or
+    worktree -- and two copies that differ differ visibly.
+
+    Never fatal. A version string is the last place to raise, so an
+    unreadable file gives `unknown' rather than a traceback from -V.
+    """
+	try:
+		with open(os.path.realpath(__file__), "rb") as fh:
+			return hashlib.sha256(fh.read()).hexdigest()[:8]
+	except OSError:
+		return "unknown"
+
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
 CACHE_VER   = 7   # scans record the class of an out-of-line member
@@ -8759,7 +8795,8 @@ def parse_args(argv):
 	# -V rather than -v: the lower case is taken by --verbose, and a build
 	# tool uses that one far more often than it reports its own version.
 	p.add_argument("-V", "--version", action="version",
-	               version=f"fmake {VERSION}\n{AUTHOR}\n{LICENCE}")
+	               version=f"fmake {VERSION} ({build_identity()})\n"
+	                       f"{AUTHOR}\n{LICENCE}")
 	p.add_argument("-v", "--verbose", action="store_true")
 	p.add_argument("-q", "--quiet", action="store_true")
 	# argparse refuses a value that looks like an option, so `--ldflags -lm`

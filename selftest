@@ -37,6 +37,7 @@ nobody diffs.
 import ast
 import concurrent.futures
 import glob
+import hashlib
 import os
 import platform
 import re
@@ -10553,6 +10554,71 @@ def the_package_version_matches_the_program(t):
 	check(m, "no VERSION in fmake")
 	check(m.group(1) == packaged,
 	      f"fmake says {m.group(1)}, debian/changelog says {packaged}")
+
+
+@case
+def the_version_identifies_the_build_as_well_as_the_release(t):
+	"""VERSION says which release; the hash says which copy.
+
+	These are different questions and only the first had an answer. An
+	installed copy eighty-six commits behind the source reported the same
+	`fmake 1.0' as the source did, so a caller had no way to tell which it
+	had invoked -- and the difference was twenty-three silently dropped
+	targets in the project that hit it. Its own words for that are the
+	right ones: not that the failure was silent, but that **there was no
+	check to make**.
+
+	VERSION cannot answer it. It is stated three times -- the file, the
+	literal here, `debian/changelog' -- and `make version-check' gates
+	that they agree, so making it identify a build means moving it on
+	every edit, and a package version that moves eighty times in a
+	fortnight is not a version.
+
+	The hash is of the file itself rather than something stamped at build
+	time, because there is no build step to stamp: `make all' produces the
+	man page and the completion, and fmake *is* the source. So any copy
+	answers for itself however it arrived.
+
+	The last two checks are the semantics and are the reason this is a
+	case rather than a format assertion: identity is of the **content**,
+	not the path. A copy that differs by one byte reads differently; a
+	copy that is identical reads the same, because it is the same
+	build."""
+	out = subprocess.run([FMAKE, "--version"], capture_output=True,
+	                     text=True).stdout.splitlines()[0]
+	m = re.match(r"fmake (\S+) \(([0-9a-f]{8})\)$", out)
+	check(m is not None,
+	      f"--version does not carry a build identity: {out!r}")
+
+	# Independently computed, so this checks the hash rather than repeating
+	# whatever fmake happened to print.
+	with open(FMAKE, "rb") as fh:
+		want = hashlib.sha256(fh.read()).hexdigest()[:8]
+	check(m.group(2) == want,
+	      f"the identity is not this file's hash: said {m.group(2)}, "
+	      f"file is {want}")
+
+	def identity(path):
+		o = subprocess.run([path, "--version"], capture_output=True,
+		                   text=True).stdout.splitlines()[0]
+		g = re.search(r"\(([0-9a-f]{8})\)", o)
+		return g.group(1) if g else None
+
+	changed = os.path.join(t.dir, "fmake_changed")
+	same = os.path.join(t.dir, "fmake_same")
+	shutil.copy(FMAKE, changed)
+	shutil.copy(FMAKE, same)
+	with open(changed, "a") as fh:
+		fh.write("\n# one byte more\n")
+	os.chmod(changed, 0o755)
+	os.chmod(same, 0o755)
+
+	check(identity(changed) not in (None, want),
+	      "a copy that differs reports the same identity, so it cannot be "
+	      "told from the original")
+	check(identity(same) == want,
+	      "an identical copy at another path reports a different identity, "
+	      "so the hash is of the path rather than of the build")
 
 
 @case
