@@ -2075,6 +2075,26 @@ rather than code, and one lesson about testing.
   reads differently, an identical copy at another path reads the same. Both
   are in the case, because they are the semantics rather than the format.
 
+- ~~**`--eject` reported success while dropping targets.**~~ Decided and
+  fixed: it should not, and the build path already agreed — `return 1 if
+  broken else 0` there against an unconditional `return 0` in the eject
+  block, so this was an inconsistency rather than a considered choice. The
+  case for changing it is sharper for `--eject` than for a build: a build
+  that drops targets leaves no binaries, which the next command notices,
+  while an eject writes a build file that **looks complete and is not**,
+  and goes on being wrong every time it is used. One project regenerated
+  its object-set file from a tree in this state and was wrong for a week,
+  because its caller checked the status and nothing else. Measured before
+  and after, across all three emitters:
+
+      before   build 1     make 0     make-fragment 0     ninja 0
+      after    build 1     make 1     make-fragment 1     ninja 1
+
+  **The artifact is still written**, and that is deliberate: the part that
+  worked is worth having and worth reading, and a partial file beside a
+  non-zero status is a better answer than either alone. The case asserts
+  both, for all three emitters, since three separate functions emit them.
+
 - **`[build-toolchain]` is only consulted for generator tools**, and the test
   binary this entry predicted would need it does. `fmake test` in a cross
   build compiles the tests for the *target*, tries to run them here, and got

@@ -2445,6 +2445,51 @@ def both_ejected_forms_state_the_staleness_contract(t):
 
 
 @case
+def an_eject_that_dropped_a_target_says_so_in_its_status(t):
+	"""An incomplete build file is worse than a build that did not run.
+
+	The build path has always answered this correctly -- a file that will
+	not compile gives exit 1 -- but `--eject' returned 0 regardless, and
+	that is the path where it matters more. A build that drops targets
+	leaves no binaries, which the next command notices. An eject that drops
+	them writes a build file that *looks* complete, and it goes on being
+	wrong every time it is used afterwards: one project regenerated its
+	object-set file from a tree in this state and was wrong for a week,
+	because its caller checked the status and nothing else.
+
+	The artifact is still written. The part that worked is worth having and
+	worth reading, and a partial file plus a non-zero status is a better
+	answer than either alone -- which is why this checks that something was
+	emitted as well as that the status is bad.
+
+	All three forms, because they are three separate emitters and fixing
+	one is the half-fix this suite keeps finding."""
+	t.write("good.c", '#include <stdio.h>\nint main(void){ puts("ok"); return 0; }\n')
+	t.write("bad.c", "int main(void){ this is not c; }\n")
+
+	for form in ("make", "make-fragment", "ninja"):
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake("--eject", form)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"--eject {form} dropped a target and reported success: {out}")
+		check("did not compile" in out,
+		      f"--eject {form} should say which file: {out}")
+		check(len(r.stdout.splitlines()) > 20,
+		      f"--eject {form} emitted nothing; the part that worked is "
+		      f"still worth having: {len(r.stdout.splitlines())} lines")
+
+	# And a tree with nothing broken must still be a success, or the status
+	# stops meaning anything.
+	os.unlink(os.path.join(t.dir, "bad.c"))
+	for form in ("make", "make-fragment", "ninja"):
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake("--eject", form)
+		check(r.returncode == 0,
+		      f"--eject {form} failed on a clean tree: {r.stdout}{r.stderr}")
+
+
+@case
 def an_ejected_makefile_aligns_its_assignments(t):
 	"""Alignment computed from the names, not counted once by hand.
 

@@ -7108,7 +7108,16 @@ def build(args, _bootstrapping=False):
 		                      {"exe": uic_exe, "jobs": ui_jobs},
 		                      {"exe": rcc_exe, "jobs": qrc_jobs}, **extra))
 		cache.save()
-		return 0
+		# Same answer the build path gives, and for a sharper reason. A
+		# build that drops targets leaves no binaries, which the next
+		# command notices. An eject that drops them writes a build file
+		# that looks complete and is not, and it goes on being wrong every
+		# time it is used -- one project's generated object-set file was
+		# regenerated from a tree in this state and was wrong for a week.
+		# The artifact is still written, because the part that worked is
+		# worth having and worth inspecting; the status is what stops a
+		# caller adopting it without looking.
+		return 1 if broken else 0
 
 	all_units = [units[r] for r in sorted(units)]
 	if args.explain:
