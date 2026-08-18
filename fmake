@@ -1120,6 +1120,10 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 	# its exit status as a test result -- which it did, and counted it. The
 	# caller has already narrowed this to the groups asked for.
 	failed = []
+	# Neither a pass nor a failure, and it needs its own count for the
+	# tally to stop contradicting the prose above it: fmake said "this is
+	# not a test that failed" and then printed "1 of 1 failed".
+	not_run = []
 	for t in sorted(targets, key=lambda x: x.name):
 		exe = os.path.join(outdir, t.filename)
 		argv = [exe] + list(t.conf.get("test-args", []))
@@ -1158,7 +1162,9 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 				note("a test meant to run during a cross build has to be "
 				     "built for this machine, which is what "
 				     "[build-toolchain] is for")
-			failed.append(t.name)
+				not_run.append(t.name)
+			else:
+				failed.append(t.name)
 			continue
 		try:
 			rc = proc.wait(timeout=limit)
@@ -1175,14 +1181,25 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 	if dry_run:
 		return 0
 	say()
-	if failed:
+	def _some(names):
 		# Capped like every other list here. Nine names already wrap a
 		# terminal; a suite where forty fail prints the one thing nobody
 		# can read, and the count is the part that matters.
-		shown = ", ".join(failed[:6])
-		if len(failed) > 6:
-			shown += f", and {len(failed) - 6} more"
-		warn(f"{len(failed)} of {len(targets)} failed: {shown}")
+		shown = ", ".join(names[:6])
+		return shown + (f", and {len(names) - 6} more"
+		                if len(names) > 6 else "")
+
+	if failed:
+		warn(f"{len(failed)} of {len(targets)} failed: {_some(failed)}")
+	if not_run:
+		# Reported apart from failures because it is a different fact, and
+		# non-zero all the same. A test that did not run has not failed --
+		# saying so accuses code that may be perfectly good -- but it has
+		# not passed either, and `fmake test' exists to say that they did.
+		# Calling this a skip would make the status green over a suite that
+		# verified nothing, which is the vacuous pass one level up.
+		warn(f"{len(not_run)} of {len(targets)} not run: {_some(not_run)}")
+	if failed or not_run:
 		return 1
 	n = len(targets)
 	info(f"{n} test{'' if n == 1 else 's'} passed")

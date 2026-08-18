@@ -2110,6 +2110,22 @@ rather than code, and one lesson about testing.
   arch`, which may be several files away. It says so now, and names
   `[build-toolchain]` as the remedy.
 
+  **Decided: neither, and the tally now says so.** It is *not run* — its own
+  count, reported apart from failures, and still non-zero. Not a failure,
+  because the test did not fail and saying so accuses code that may be
+  perfectly good; fmake printed `this is not a test that failed` and then
+  `1 of 1 failed` directly beneath it, so the count was contradicting its
+  own prose. Not a skip either: a skip means *proceed*, and `fmake test`
+  exists to say the tests ran and passed. Green over a suite that verified
+  nothing is the vacuous pass one level up, in the exit status.
+
+      before   * 1 of 1 failed: twice_test      exit 1
+      after    * 1 of 1 not run: twice_test     exit 1
+
+  The status is unchanged on purpose. What changed is that it is now true.
+  A native run still reports `1 test passed` and exits 0, which is what
+  keeps the distinction worth anything.
+
   Keyed on `ENOEXEC` rather than on the configuration, because the errno
   *is* the fact: a native build cannot produce one, so it cannot fire on a
   native tree, and it holds for any target rather than the ones fmake knows

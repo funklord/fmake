@@ -2859,6 +2859,15 @@ int main(void){ if (twice(21) != 42) return 1; printf("ok\\n"); return 0; }
 	check("not run" in out,
 	      f"and it should say the test did not run, since reporting it as "
 	      f"failed is wrong rather than merely terse: {out}")
+	# The tally, not the note. Both say "not run", so asserting the
+	# phrase alone passes while the count still calls it a failure --
+	# which is what it did, contradicting the sentence above it. The
+	# colon is what distinguishes the summary line from the prose.
+	check("not run:" in out,
+	      f"the tally should count this apart from failures: {out}")
+	check("failed:" not in out,
+	      f"the tally still calls it a failure while the note says it "
+	      f"is not one: {out}")
 	check("[build-toolchain]" in out,
 	      f"the remedy should be named: {out}")
 
