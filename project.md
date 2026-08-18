@@ -1749,9 +1749,36 @@ rather than code, and one lesson about testing.
 - **A tree whose sibling programs reuse class names cannot be built at
   once.** Three of Qt's painting examples each define a class `Window`, so the
   symbol has three strong providers and §3 refuses. Correct, and a real limit
-  of one-project-per-tree. Whether the include graph should *decide* such a
-  tie is still a change to §3 and still has not been made — but it now
-  **suggests**, and prints the `[target.*]` stanza that ends it; see §20.
+  of one-project-per-tree.
+
+  **Decided: the include graph should keep suggesting and not start
+  deciding.** The evidence runs the other way from what the entry implies —
+  §20's guess is good, and once companions were owned by provenance all nine
+  painting examples built and ran from the stanza fmake printed. No fixture
+  could be made where the guess fires and is wrong; the condition declines
+  when the graph cannot distinguish. So this is not a judgement about a
+  failure rate.
+
+  It is a judgement about what a wrong answer would cost. Refusing is loud
+  and hands back an exact remedy that is proven to work. Deciding would
+  remove the one thing that makes a heuristic safe — the label saying it is
+  one, on lists fmake itself calls *worth checking* — and it would fire
+  precisely where fmake has already found genuine ambiguity, which is the
+  worst place to begin guessing silently. A wrong decision links another
+  program's implementation, builds cleanly, misbehaves, and says nothing;
+  and once ejected it is baked into a build file that outlives the guess.
+  One paste per tree, once, against that.
+
+  **What the question actually exposed is that the conservative half had no
+  case.** Every ambiguity case is built so the graph *can* distinguish — one
+  says so in a comment — so nothing checked that it declines when it cannot.
+  The first attempt at one did not check it either: both roots reached
+  *nothing*, which every spelling of the condition skips, so it passed with
+  the guess loosened. The branch that matters is both roots reaching *both*
+  providers, and with that, loosening `len(mine) != 1` prints `reaches
+  exactly one` — by then false — over stanzas naming both providers, which
+  would not build either.
+
 - **Cross builds are verified on one toolchain, on Linux.** The architecture
   check is architecture-agnostic by construction, but sysroot handling, the
   pkg-config variables and the tool-prefix derivation have only been exercised

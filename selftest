@@ -9783,6 +9783,57 @@ int main(int argc, char **argv) {{
 
 
 @case
+def an_ambiguity_the_graph_cannot_settle_offers_no_guess(t):
+	"""The half of the suggestion that makes keeping it a suggestion safe.
+
+	§20 offers a `[target.*]` stanza when the include graph reaches exactly
+	one provider from each program's own root, labelled as a guess. That is
+	only defensible because of what it does when the graph *cannot* tell:
+	nothing. Every other ambiguity case here is built so the graph can
+	distinguish -- one of them says so in a comment -- so the conservative
+	half had no case at all, and a change making the guess fire on a tie
+	would have been caught by nothing.
+
+	Here both programs include the same header, so neither root reaches a
+	provider the other does not. fmake must still refuse, still name both
+	files, and must **not** print a stanza: a guess offered where there is
+	nothing to go on is worse than the refusal, because it is presented in
+	the same words as one that had evidence behind it.
+
+	The refusal still has to carry a remedy, which is the other half of
+	§20's lesson -- a dead end that names the problem and leaves the reader
+	to work out the answer is what that section was written about."""
+	t.write("window.h", "#pragma once\nstruct Window { int id(void); };\n")
+	for d, n in (("a", 1), ("b", 2)):
+		t.write(f"{d}/window.h",
+		        "#pragma once\nstruct Window { int id(void); };\n")
+		t.write(f"{d}/window.cpp",
+		        f'#include "window.h"\nint Window::id(void){{ return {n}; }}\n')
+	# Each root reaches *both* providers, by including both headers. That is
+	# the branch that matters: "reaches none" is skipped by any spelling of
+	# the condition, so a case built on it passes even when the guess has
+	# stopped being conservative. This one was, and did.
+	t.write("a/main.cpp",
+	        '#include "window.h"\n#include "../b/window.h"\n#include <cstdio>\n'
+	        'int main(){ Window w; std::printf("%d\\n", w.id()); return 0; }\n')
+	t.write("b/main.cpp",
+	        '#include "window.h"\n#include "../a/window.h"\n#include <cstdio>\n'
+	        'int main(){ Window w; std::printf("%d\\n", w.id()); return 0; }\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two strong providers should not build: {out}")
+	check("a/window.cpp" in out and "b/window.cpp" in out,
+	      f"both providers should be named: {out}")
+	check("reaches exactly one" not in out,
+	      f"each root reaches both, and a stanza was offered anyway -- in "
+	      f"the same words used when there is evidence, and listing both "
+	      f"providers, which would not build either: {out}")
+	check("sources" in out,
+	      f"the refusal still has to name a way out: {out}")
+
+
+@case
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 
