@@ -6975,13 +6975,27 @@ def build(args, _bootstrapping=False):
 	# closing over a program, deliberately: a function defined next to a
 	# main() is still a function, and refusing to link it would be its own
 	# kind of guess. So this reports rather than resolves.
-	roots = {t.rel: t.name for t in wanted if t.kind == "exe"}
+	# Every root in the tree, not just the ones asked for. Narrowing by name
+	# is what hid this: `fmake app' drops tool from `wanted', so the root it
+	# collides with is not in the set to notice, and the reader gets the
+	# linker's multiple-definition error under the advice this check exists
+	# to replace -- the one offering to name missing libraries when nothing
+	# is missing. The collision is a property of the tree rather than of
+	# what was asked for.
+	roots = {t.rel: t.name for t in targets if t.kind == "exe"}
 	intruders = []
 	for t, cl in closures.items():
 		if t.kind != "exe":
 			continue
 		for u in cl.link:
-			if u.rel != t.rel and u.rel in roots:
+			# Its object, not the target list. A file whose main() the
+			# preprocessor removes is proposed as a root and then dropped
+			# once the symbol table disagrees -- and linking it is then
+			# perfectly safe, because there is no second main() to collide
+			# with. Reading every root rather than only the wanted ones
+			# reinstated exactly those false roots, which the suite caught.
+			if (u.rel != t.rel and u.rel in roots
+			        and "main" in u.strong):
 				sym, by = cl.why.get(u.rel, ("", ""))
 				intruders.append((t.name, u.rel, roots[u.rel], sym, by))
 	if intruders:

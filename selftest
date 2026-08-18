@@ -10471,6 +10471,21 @@ int main(void){ printf("%d\\n", shared_bit()); return 0; }
 	check("missing libraries" not in out,
 	      f"nothing is missing; that advice points the wrong way: {out}")
 
+	# Naming one target has to reach the same answer, and this is where the
+	# check was blind. The collision was looked for among the targets asked
+	# for, so `fmake app' dropped tool from that set and there was no second
+	# root left to notice -- and the reader got the linker's multiple
+	# definition of main under the very advice this exists to replace. It is
+	# a property of the tree, not of what was asked for.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	one = t.fmake("app")
+	out1 = one.stdout + one.stderr
+	check(one.returncode != 0, f"naming one target should not build: {out1}")
+	check("pulled into another program" in out1,
+	      f"naming one target lost the explanation: {out1}")
+	check("missing libraries" not in out1,
+	      f"and got the advice that points the wrong way instead: {out1}")
+
 	# And the fix it recommends has to work.
 	t.write("shared.c", "int shared_bit(void){ return 5; }\n")
 	t.write("tool.c", """

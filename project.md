@@ -2050,9 +2050,35 @@ rather than code, and one lesson about testing.
 - **A program's root file can be pulled into another program.** Still true
   and still deliberate — a function defined next to a `main()` is a function,
   and refusing to link it would be its own guess — but it is now *reported*
-  rather than left to the linker; see §31. What has not been decided is
-  whether §3 should exclude other roots outright, as it already does when
-  assembling a library.
+  rather than left to the linker; see §31.
+
+  **Decided: §3 should not change, and asking the question found a hole in
+  the report instead.** Excluding other roots cannot make a broken tree
+  build: `app` still needs `shared_bit`, so removing `tool.c` from its
+  closure trades `multiple definition of main` — which §31 explains, names
+  the file for, and gives the fix — for `undefined reference to shared_bit`,
+  which explains nothing and points at no file. Both routes fail and both
+  need the same edit; the current one fails where fmake knows most. The
+  asymmetry with library assembly stands: a library has no `main()` to
+  collide with, so excluding roots there costs nothing and here it costs the
+  diagnosis.
+
+  What the question did turn up is that **§31's check was blind to the
+  single-target path**. It looked for the collision among the targets asked
+  for, so `fmake app` dropped `tool` from that set, left no second root to
+  notice, and handed back the linker's error under the very advice §31
+  exists to replace — *name the missing libraries* when nothing is missing.
+  A root collision is a property of the tree rather than of what was asked
+  for, and the check now reads every root — **and verifies the intruder's
+  object exports `main`**, which the first attempt did not and which the
+  suite caught. `wanted` was not merely "what was asked for": a file whose
+  `main()` the preprocessor removes is proposed as a root and then dropped
+  once the symbol table disagrees, so reading every root reinstated exactly
+  those false roots and flagged a collision that could not happen. Both
+  halves are needed and each has a mutation: taking roots from `wanted`
+  restores the blindness, dropping the object check restores the over-fire.
+  The case built everything, which is why this survived writing it.
+
 - ~~**A version that cannot identify a build.**~~ Decided and done: it
   should not, and something else should. `VERSION` answers *which release*
   and is stated three times — the file, the literal in the script,
