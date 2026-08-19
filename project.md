@@ -5213,6 +5213,21 @@ It is recorded rather than explained, and rather than quietly forgotten.
 Section 29 is in this document because a flake dismissed once cost a session
 later; the honest state of this one is *seen once, cause unknown, three
 clean runs since*.
+**The message it would have failed with has been widened**, which is the
+only part of this that could be acted on. It reported stdout and stderr, and
+a run killed by a signal has neither -- so the failure read as `$CC should
+override [toolchain] cc:' followed by nothing, which is why the cause could
+only be guessed at. All three checks carry the exit status now. A negative
+status says signalled and names which signal, and would have confirmed or
+killed the `killpg' theory on the spot rather than by reasoning about
+whether a zombie's pid can be reissued.
+
+That reasoning was re-checked while doing this and it stands, for both
+signals rather than the first: `_kill_group' sends SIGTERM, then waits, and
+only continues to SIGKILL when that wait *timed out* -- which leaves the
+child unreaped and its pid held, so the group id cannot have been reused by
+the second call either. The theory is dead; what was missing was any way to
+see what actually happened next time.
 
 
 ## 55. What is built and what is run are different sets

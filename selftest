@@ -5276,14 +5276,26 @@ def environment_beats_the_config_file(t):
 	t.write("main.c", "int main(void){ return 0; }\n")
 	t.write("fmake.toml", '[toolchain]\ncc = "definitely-not-a-compiler"\n')
 
+	# Both checks carry the exit status, which is the one thing that would
+	# have told the story. Section 58 records a full-suite failure here
+	# that never reproduced: the message showed stdout and stderr, and a
+	# run killed by a signal has neither, so it read as `$CC should
+	# override' followed by nothing. A negative status says signalled and
+	# names which; 1 says fmake refused and the output explains it. The
+	# killpg theory examined and dismissed there is exactly what a
+	# negative status would have confirmed or killed on the spot.
 	r = t.fmake()
-	check(r.returncode != 0, "the configured compiler does not exist")
+	check(r.returncode != 0,
+	      f"the configured compiler does not exist, so this should fail "
+	      f"(rc={r.returncode}): {r.stdout}{r.stderr}")
 	check("definitely-not-a-compiler" in r.stderr,
-	      f"the configured compiler should be named: {r.stderr}")
+	      f"the configured compiler should be named (rc={r.returncode}): "
+	      f"{r.stderr}")
 
 	r = t.fmake(env={"CC": "cc"})
 	check(r.returncode == 0,
-	      f"$CC should override [toolchain] cc: {r.stdout}{r.stderr}")
+	      f"$CC should override [toolchain] cc (rc={r.returncode}): "
+	      f"{r.stdout}{r.stderr}")
 
 
 @case
