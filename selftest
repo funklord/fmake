@@ -1366,6 +1366,48 @@ def relinking_follows_the_command_not_just_mtimes(t):
 
 
 @case
+def a_declared_source_list_scopes_a_library(t):
+	"""§15 said a library contains everything. It does unless told.
+
+	The entry recorded that a library ignores `@sources' and the closure
+	alike, so neither has anything to do -- and predicted that a large tree
+	with one small shared object in it would want scoping back. §117 is
+	that tree: without a list the library swallows two LD_PRELOAD shims and
+	they collide on a symbol both intercept.
+
+	A list in `fmake.toml' scopes it exactly, and nothing here checked
+	that, which is how the entry stayed wrong. `--explain' says where the
+	answer came from, and the file left out is reported the way any
+	unreached file is rather than silently dropped.
+
+	Only the working half is asserted. That the `@sources' *directive* is
+	ignored for a library is current behaviour and is recorded in §15 as a
+	decision rather than a defect -- the same fact spelled two ways
+	behaving differently is worth settling, and a case forbidding either
+	answer would settle it here instead of where it belongs."""
+	t.write("core.c", '/*! @file\n *  @kind static\n *  @target core\n */\n'
+	                  "int core_a(void){ return 1; }\n")
+	t.write("helper.c", "int helper_b(void){ return 2; }\n")
+	t.write("stranger.c", "int stranger_c(void){ return 3; }\n")
+	t.write("fmake.toml", '[target.core]\nsources = ["core.c", "helper.c"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	ar = subprocess.run(["ar", "t", os.path.join(t.dir, "libcore.a")],
+	                    capture_output=True, text=True).stdout.split()
+	check(sorted(ar) == ["core.c.o", "helper.c.o"],
+	      f"the declared list did not scope the library: {ar}")
+	check("stranger.c not compiled" in out,
+	      f"the file left out should be reported, not dropped in silence: "
+	      f"{out}")
+
+	e = t.fmake("--explain").stdout
+	check("declared in fmake.toml" in e,
+	      f"--explain should say where the link set came from: {e}")
+
+
+@case
 def a_library_will_not_hold_two_definitions(t):
 	"""section 3 refuses to guess for programs; a library is not exempt.
 

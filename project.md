@@ -166,7 +166,8 @@ that had been green about nothing for five commits ·
 [113. Advice that names the wrong fix](#113-advice-that-names-the-wrong-fix) ·
 [114. The lead §79 declined to act on was real](#114-the-lead-79-declined-to-act-on-was-real) ·
 [115. What deliberately stupid input found](#115-what-deliberately-stupid-input-found) ·
-[116. Claims that nothing was checking](#116-claims-that-nothing-was-checking)
+[116. Claims that nothing was checking](#116-claims-that-nothing-was-checking) ·
+[117. ossacli's evaluation, and what a library needed told](#117-ossaclis-evaluation-and-what-a-library-needed-told)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1925,12 +1926,30 @@ rather than code, and one lesson about testing.
   file compiled two ways for two targets — that needs per-target object
   directories, and nothing asks for it yet. `-fPIC` sidesteps the question by
   being applied tree-wide whenever any target is shared.
-- **A library ignores `@sources` and the closure alike.** It contains everything,
-  so neither has anything to do. That is right for now, but a large tree with one
-  small shared object in it would want the closure back, seeded from `@headers`.
-  That was the original §3 design for libraries and it is still the better answer
-  for that case; it needs matching header declarations to mangled symbols, which
-  is why it is not built.
+- **A library ignores `@sources`, but not `[target.*] sources`.** The entry
+  here said it ignores both that and the closure — "it contains everything"
+  — and half of that is wrong, which matters because the half that works is
+  what makes a real tree buildable. Measured on one fixture, changing only
+  where the list is written:
+
+      @sources core.c helper.c   in the head file  -> stranger.c.o in the archive
+      sources = [...]            in fmake.toml     -> only the two, and
+                                                      `stranger.c not compiled'
+
+  So the closure genuinely has nothing to do, and the *directive* genuinely
+  is ignored; a declared list in `fmake.toml` scopes a library exactly.
+  **The same fact spelled two ways behaves differently**, which is the thing
+  fmake's own config comment says should not happen — `target` sits beside
+  `name` there precisely so a fact need not change words to change files.
+  Whether `@sources` should be honoured too, or refused with a message
+  saying where to write it instead, is a decision rather than a defect and
+  is not made here.
+
+  The prediction the entry ended on has also arrived: "a large tree with one
+  small shared object in it would want the closure back". §117 is that tree.
+  Without a declared list the library swallows two `LD_PRELOAD` shims and
+  they collide on `ioctl`; with one, the whole project builds.
+
 - ~~**`@kind` is per TU but describes an artifact.**~~ Closed by
   `[target.*] sources` in §7: membership is declared where it is known, and the
   closure is not consulted for those targets.
@@ -9131,3 +9150,77 @@ list. All report success exactly as loudly as a real pass.
 **A docstring that argues for a property is the best place to look for an
 untested one**, because somebody has already decided it matters and then
 written the easy assertion instead of the hard one.
+
+---
+
+## 117. ossacli's evaluation, and what a library needed told
+
+The eighth, and the first since §84 said the seventh was the last. Run under
+the standing directive in `build-and-commit.md`: any project keeping a
+hand-written build system is a candidate, tested against the tree actually in
+front of you. Done in a throwaway worktree, so nothing was written to a
+repository that was nine commits ahead of its remote.
+
+### The result
+
+fmake builds the whole artifact set from **14 lines of TOML and four short
+directive blocks**, against a **742-line Makefile**:
+
+    libossa.so  (soname libossa.so.0)   ossacli        ossa-check
+    libossa-capture.so                  ossa-metrics   health_summary
+    libossa-sgshim.so                   ossa.pc
+
+`ossacli --version` answers `ossacli 0.1.0 (libossa 0.1.0)`. `fmake test`
+runs both real tests and both pass. `--install --destdir` lays the soname
+chain down properly — `libossa.so` -> `libossa.so.0` -> `libossa.so.0.1.0`
+— beside `pkgconfig/ossa.pc`.
+
+**Where it beat the Makefile on accuracy.** The two `LD_PRELOAD` shims
+collide, §20's suggestion fired, and for once the guess could be checked
+against ground truth rather than trusted. `ossa-capture` came back exactly
+right. For `ossa-sgshim` it computed `sgshim.c` plus `simfw.c` where the
+Makefile links the whole of `libossa.a` and leaves the linker to discard the
+rest — the precise closure rather than the convenient one.
+
+### What it needed told, and what that exposed
+
+Three one-liners: rename three targets, put `tests/fuzz.c` in a test group
+of its own, and scope the library. The first two are ordinary. The third is
+the finding.
+
+**`fmake test` ran the fuzz harness and it exited 2.** `tests/fuzz.c` sits in
+`tests/`, which is the whole of the convention, and it takes arguments —
+`./tests/fuzz cdb 200000`. The Makefile keeps it out of `test` deliberately,
+"minutes rather than seconds". `@test fuzz` settles it, and the convention
+was right to propose it: a harness in the test directory is a test until
+somebody says otherwise.
+
+**Scoping the library is what §15 said was not possible.** Without a declared
+source list the library contains everything, which here means both shims, and
+they collide on `ioctl`. §15 recorded that a library ignores `@sources` and
+the closure alike — and a declared list in `fmake.toml` scopes it exactly,
+which is the correction now in that entry. It also predicted this shape as
+the one that would want it, so the entry was written before the capability
+existed and never revisited. This trial is what re-measured it.
+
+### Two limits, reported rather than worked around
+
+- **`@kind shared` forces a `lib` prefix.** The shims install as
+  `libossa-capture.so` where the project calls them `ossa-capture.so`. For a
+  shared *library* the prefix is right; for an `LD_PRELOAD` shim it is not,
+  and there is no way to say which this is.
+- **A source can declare one kind.** ossacli ships a static *and* a shared
+  library from the same sources; only one can be asked for.
+
+### The verdict
+
+**A candidate, and the strongest of the eight.** Unlike situ, the C is not
+downstream of a generator and is not a fifth of what the build does — it is
+most of it, and fmake produces every artifact including the packaging inputs.
+What remains in the Makefile is style, version-check, deb, install, hooks,
+fuzz and asan, which is real but is not compiling and linking.
+
+Not a recommendation to switch: that is the project's call and the two limits
+above are its to weigh. What is settled is that the C side is expressible,
+and that the trial paid for itself in fmake's own record before reaching the
+verdict.
