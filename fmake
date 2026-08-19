@@ -6775,6 +6775,29 @@ def build(args, _bootstrapping=False):
 		other_roots |= {rel for _, rel in passed_over} - {t.rel for t in targets}
 		closures = {}
 		for t in wanted:
+			# @sources cannot reach a library, and saying nothing about it
+			# costs the reader a compile and a wrong belief. The directive
+			# means "force this into the link that no symbol reaches", and
+			# it is collected tree-wide and handed to close_over_symbols,
+			# which only an exe goes through -- so a file named this way is
+			# compiled and then not in the archive, with nothing said.
+			#
+			# Reported against the head, because that is the file somebody
+			# annotates when they mean to describe the library. Where a
+			# declared list exists it is the answer and the directive would
+			# be a second opinion on membership, which is the thing that
+			# list exists to stop; where there is none the library already
+			# holds everything reachable and the directive has nothing to
+			# add. Neither case wants it honoured, and both want it said.
+			if t.kind in ("static", "shared"):
+				head = Ann(scans.get(t.rel, {}).get("dirs"))
+				if list(head.items("sources")):
+					where = ("membership is [target."
+					         f"{t.name}] sources in {CONF_FILE}"
+					         if t.members is not None else
+					         "a library already holds everything reachable")
+					note(f"@sources in {t.rel} does not reach the library "
+					     f"it heads: {where}")
 			if t.members is not None:
 				# Declared membership is the answer, not a starting point.
 				# Nothing in the source says which of two libraries a shared

@@ -1366,6 +1366,69 @@ def relinking_follows_the_command_not_just_mtimes(t):
 
 
 @case
+def a_sources_directive_that_cannot_reach_its_library_says_so(t):
+	"""A directive that does nothing, silently, and costs a compile.
+
+	`@sources' means *force this into the link that no symbol reaches*. It
+	is collected tree-wide and handed to the exe closure, and a library
+	never goes through that -- so a file named this way on a library's head
+	is compiled and then is not in the archive, with nothing said. §15
+	recorded that a library ignores the directive and was right; what it
+	did not say is that being ignored is invisible.
+
+	Neither case wants it honoured. With a declared list, membership is
+	already answered and the directive would be a second opinion on it,
+	which is what that list exists to stop. Without one, the library
+	already holds everything reachable and there is nothing to add. Both
+	cases want it *said*, and the wording differs because the remedy does.
+
+	An exe is checked too. `@sources' is the one thing that works there,
+	and a warning keyed on the directive rather than on the kind would fire
+	on every correct use of it."""
+	t.write("core.c", '/*! @file\n *  @kind static\n *  @target core\n'
+	                  ' *  @sources stranger.c\n */\n'
+	                  "int core_a(void){ return 1; }\n")
+	t.write("helper.c", "int helper_b(void){ return 2; }\n")
+	t.write("stranger.c", "int stranger_c(void){ return 3; }\n")
+	t.write("fmake.toml", '[target.core]\nsources = ["core.c", "helper.c"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check("does not reach the library it heads" in out,
+	      f"a directive that cannot apply should say so: {out}")
+	check("[target.core] sources" in out,
+	      f"and should name where membership is actually written: {out}")
+	ar = subprocess.run(["ar", "t", os.path.join(t.dir, "libcore.a")],
+	                    capture_output=True, text=True).stdout.split()
+	check("stranger.c.o" not in ar,
+	      f"the directive was honoured after all, over a declared list: {ar}")
+
+	# Without a declared list the remedy is different, so the wording is.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	n = t.fmake()
+	out2 = n.stdout + n.stderr
+	check("holds everything reachable" in out2,
+	      f"with no declared list the reason is that there is nothing to "
+	      f"add, not that a list already answered it: {out2}")
+
+	# And the case that must stay quiet: an exe, where @sources is the one
+	# thing that does work.
+	u = Tree("sources_on_exe")
+	try:
+		u.write("main.c", '/*! @file\n *  @sources plugin.c\n */\n'
+		                  "int main(void){ return 0; }\n")
+		u.write("plugin.c", "int plugin(void){ return 1; }\n")
+		e = u.fmake()
+		check(e.returncode == 0, f"the exe build failed: {e.stdout}{e.stderr}")
+		check("does not reach the library" not in e.stdout + e.stderr,
+		      "an exe was warned about a directive that works there")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_declared_source_list_scopes_a_library(t):
 	"""§15 said a library contains everything. It does unless told.
 

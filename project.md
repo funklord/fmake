@@ -1926,38 +1926,29 @@ rather than code, and one lesson about testing.
   file compiled two ways for two targets — that needs per-target object
   directories, and nothing asks for it yet. `-fPIC` sidesteps the question by
   being applied tree-wide whenever any target is shared.
-- **A library ignores `@sources`, but not `[target.*] sources`.** The entry
-  here said it ignores both that and the closure — "it contains everything"
-  — and half of that is wrong, which matters because the half that works is
-  what makes a real tree buildable. Measured on one fixture, changing only
-  where the list is written:
+- **A library ignores `@sources` and the closure alike**, exactly as this
+  entry always said — and being ignored was invisible, which it did not say.
+  `@sources` means *force this into the link that no symbol reaches*; it is
+  collected tree-wide and handed to the exe closure, and a library never goes
+  through that. So a file named on a library's head is compiled and then is
+  not in the archive, with nothing said. It says so now, and the wording
+  follows the remedy: with a declared list, membership is already answered
+  and the directive would be a second opinion on it; without one, the library
+  already holds everything reachable and there is nothing to add.
 
-      @sources core.c helper.c   in the head file  -> stranger.c.o in the archive
-      sources = [...]            in fmake.toml     -> only the two, and
-                                                      `stranger.c not compiled'
+  **What the entry was missing is the mechanism that does scope a library.**
+  `[target.*] sources` is not the same fact spelled differently — the
+  directive *adds*, the declared list *replaces*, which is why "declared
+  membership is the answer, not a starting point" is written where it is.
+  Measured: with `sources = ["core.c", "helper.c"]` declared, `@sources
+  stranger.c` on the head leaves `stranger.c.o` out of the archive and
+  compiles it anyway.
 
-  So the closure genuinely has nothing to do, and the *directive* genuinely
-  is ignored; a declared list in `fmake.toml` scopes a library exactly.
-  **The same fact spelled two ways behaves differently**, which is the thing
-  fmake's own config comment says should not happen — `target` sits beside
-  `name` there precisely so a fact need not change words to change files.
-  Whether `@sources` should be honoured too, or refused with a message
-  saying where to write it instead, is a decision rather than a defect and
-  is not made here.
+  That distinction is what makes §117 buildable. Without a declared list the
+  library swallows two `LD_PRELOAD` shims and they collide on `ioctl`; with
+  one, the whole project builds — which is the shape this entry predicted
+  would want scoping back.
 
-  The prediction the entry ended on has also arrived: "a large tree with one
-  small shared object in it would want the closure back". §117 is that tree.
-  Without a declared list the library swallows two `LD_PRELOAD` shims and
-  they collide on `ioctl`; with one, the whole project builds.
-
-- ~~**`@kind` is per TU but describes an artifact.**~~ Closed by
-  `[target.*] sources` in §7: membership is declared where it is known, and the
-  closure is not consulted for those targets.
-- ~~**Directive typos are silently inert.**~~ Closed; see §99. An unknown
-  command is still ignored -- that constraint was real -- but one that is a
-  single edit from a directive *and* shares its first three characters is
-  named. `--explain` still lists what was recognised, for the cases the
-  rule declines to guess at.
 - **Symbol-invisible dependencies split in two, and `@sources` answers one
   half.** §3 lists the constructor-plugin case, and this entry used to group
   `dlopen`, a linker script and a runtime function pointer table with it as
@@ -5222,6 +5213,7 @@ It is recorded rather than explained, and rather than quietly forgotten.
 Section 29 is in this document because a flake dismissed once cost a session
 later; the honest state of this one is *seen once, cause unknown, three
 clean runs since*.
+
 
 ## 55. What is built and what is run are different sets
 
