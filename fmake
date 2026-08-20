@@ -4212,7 +4212,17 @@ ELF_MACHINES = {
 }
 
 
-def elf_identity(path):
+# What an unreadable file is, as distinct from one that is not ELF. Both
+# used to come back as None, and every caller reads None as "no opinion" --
+# which is right for a linker script and wrong for a file that could not be
+# opened. At the one site where the answer decides whether a library may be
+# linked, "no opinion" means the host's zlib is offered to a cross build.
+#
+# A tuple, so it can never equal a real identity, and never None.
+UNREADABLE = ("unreadable",)
+
+
+def elf_identity(path, unreadable=None):
 	"""(class, byte order, machine) from an ELF header, or None.
 
     This is what makes cross builds honest. A cross compiler's own search
@@ -4232,7 +4242,10 @@ def elf_identity(path):
 					return None
 				head = blob[at:at + 20]
 	except OSError:
-		return None
+		# Not "this is not an ELF file". Callers that only want an opinion
+		# pass nothing and still get None; the one that decides whether a
+		# library may be linked asks to be told, and refuses.
+		return unreadable
 	if len(head) < 20 or head[:4] != b"\x7fELF":
 		return None
 	order = "little" if head[5] == 1 else "big"
@@ -4462,7 +4475,8 @@ def find_providers(cfg, wanted, jobs, want_ident=None):
 			# Architecture first: a 20-byte header read is far cheaper than
 			# an nm, and on a cross build most of what is on the machine is
 			# the wrong architecture and must not contribute a single symbol.
-			if want_ident and elf_identity(t) not in (None, want_ident):
+			if want_ident and elf_identity(t, UNREADABLE) not in (
+			        None, want_ident):
 				continue
 			syms |= lib_exports(cfg, t)
 		return name, syms & want

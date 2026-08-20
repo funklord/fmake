@@ -2500,11 +2500,28 @@ added to `HEADER_PKG`.
 - **QML and Qt Quick.** `qmltyperegistrar`, `qmldir` generation and
   `qmlcachegen` are a protocol, not a rule, and deeply CMake-coupled in Qt 6.
   Out of scope, and said so rather than half-supported.
-- **Feature probing.** A project whose optional dependencies are `-D` before
-  they are `-l` — where the code does not *exist* when the library is absent —
-  needs a probe-then-define step. Symbol inference answers *what do I link*;
-  it cannot answer *what do I compile*. Outside fmake's core rule, and not a
-  Qt problem.
+- **Feature probing, and the half of it that exists now.** A project whose
+  optional dependencies are `-D` before they are `-l` — where the code does
+  not *exist* when the library is absent — needs a probe-then-define step,
+  and `@pkg_optional NAME defines MACRO` is one. Measured: `zlib` present
+  defines its macro, an absent package does not, and the file compiles
+  either way. The sentence that stood here said such a project "needs" that
+  step as though fmake had none, which was true when it was written and
+  stopped being true without the entry noticing.
+
+  **What remains is narrower and is still outside the core rule.** A whole
+  *file* cannot be excluded because a package is missing: `[project]
+  exclude` is a static list of paths, and symbol inference answers *what do
+  I link* rather than *what do I compile*. The source has to guard itself,
+  which is ordinary C and is what `@pkg_optional` is for — but it is an edit
+  to the source, and a project that gates the file in its build system
+  instead will see fmake compile it and fail on a header.
+
+  raidcfgd is the live instance, reported from that tree rather than
+  imagined: its Makefile gates one source on `pkg-config --exists ossa`, and
+  fmake compiles everything it finds, so the single remaining failure there
+  is `ossa/ossa.h: No such file` on a machine without libossa. Everything
+  else in that project builds.
 
 ### Limits
 
@@ -5228,6 +5245,32 @@ only continues to SIGKILL when that wait *timed out* -- which leaves the
 child unreaped and its pid held, so the group id cannot have been reused by
 the second call either. The theory is dead; what was missing was any way to
 see what actually happened next time.
+**A second full-suite failure, in `cross_refuses_host_libraries`**, seen
+2026-08-20 and not reproduced in isolation. It failed on the assertion that
+matters — `-lz` *was* offered to an aarch64 link — which is the bug that
+case exists to catch, appearing intermittently.
+
+Chasing it found a real defect, though not proof that this is the cause.
+`elf_identity` returned `None` for two different things: *this is not an
+ELF file*, which a linker script legitimately is, and *I could not read
+it*. Every caller reads `None` as "no opinion", which is right for the
+first and wrong for the second — and at the one site that decides whether a
+library may be linked, no opinion means the host's zlib is acceptable to a
+cross build. Measured: a readable host `libz` is refused for aarch64, the
+same file unreadable is **accepted**. An error read as a match.
+
+It takes an `unreadable` argument now, and only that site passes it, so the
+four callers that genuinely want an opinion are unchanged.
+
+**What is fixed is the contract, not demonstrably the flake.** An
+unreadable library never becomes a provider in the first place — `nm`
+cannot read it either — so `chmod 000` does not reproduce it at build
+level, and the path needs a *transient* failure between the symbol scan and
+the identity check. Twelve workers each opening some nine hundred libraries
+is a plausible source of one and is not evidence of it. **No case is
+written**, because none can be made to fail without the fix, and a case
+that cannot fail is the thing this document keeps warning about.
+
 
 
 ## 55. What is built and what is run are different sets
