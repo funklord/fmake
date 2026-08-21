@@ -167,7 +167,8 @@ that had been green about nothing for five commits ·
 [114. The lead §79 declined to act on was real](#114-the-lead-79-declined-to-act-on-was-real) ·
 [115. What deliberately stupid input found](#115-what-deliberately-stupid-input-found) ·
 [116. Claims that nothing was checking](#116-claims-that-nothing-was-checking) ·
-[117. ossacli's evaluation, and what a library needed told](#117-ossaclis-evaluation-and-what-a-library-needed-told)
+[117. ossacli's evaluation, and what a library needed told](#117-ossaclis-evaluation-and-what-a-library-needed-told) ·
+[118. fuzznet's evaluation, and a project that wants no artifact](#118-fuzznets-evaluation-and-a-project-that-wants-no-artifact)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9274,3 +9275,71 @@ Not a recommendation to switch: that is the project's call and the two limits
 above are its to weigh. What is settled is that the C side is expressible,
 and that the trial paid for itself in fmake's own record before reaching the
 verdict.
+
+---
+
+## 118. fuzznet's evaluation, and a project that wants no artifact
+
+The ninth, run like §117 under the standing directive in
+`build-and-commit.md` and in a throwaway worktree, so nothing was written to
+that repository.
+
+### What it does here
+
+**`fmake test` runs 23 programs and all of them pass** — fifteen tests and
+all eight fuzz harnesses — from a one-line `fmake.toml`. That is more than
+`make test` runs, which builds `TEST_BINS` and leaves `fuzz` as its own
+target. Here the harnesses pass quickly on their default case count, where
+ossacli's exited 2; the Makefile drives them with `CASES=200000` when it
+wants the long form.
+
+The whole tree compiles clean. What fmake *builds* is one binary,
+`consumer_check`, because that is the only `main()` outside the tests.
+
+### Why it is a weaker fit than §117, and the reason is fuzznet's
+
+**This project deliberately produces no artifact fmake makes.** `all:` builds
+objects, `install:` installs headers, and there is no archive or shared
+object anywhere in its 963 lines. Its own words, at the install rule: *not a
+system package and not a shared library — a `.so` would put wire
+compatibility in the hands of whatever the distribution shipped*. And at the
+top: *a prebuilt `.a` serves neither*, citing this workspace's own rule
+against adding an archive step without a specific need. Consumers compile
+these sources into their own objects with their own flags, which is the
+point.
+
+So fmake's programs-and-libraries model has nothing here to produce. What it
+would own is *does this compile, and do the tests pass* — real, and a thin
+slice of the file:
+
+    all 1     test 2     fuzz 2     codegencheck 4     install 6
+    style 146   coverage 31   schema 63   installcheck 34   analyze 19
+
+§117 was the opposite shape: there the C *was* most of what the build did,
+and fmake produced every artifact including the packaging inputs. The
+difference between the two verdicts is not about fmake.
+
+### A third instance of §17's limit
+
+`MONOCYPHER_DIR ?=` gates three sources and three tests on a variable naming
+an external checkout, and fmake compiles everything it finds, so a plain run
+fails on `monocypher.h`. That is the same shape as raidcfgd's `pkg-config
+--exists ossa` and is now the third independent project to show it — the
+limit §17 records, arrived at from three directions rather than one.
+`[project] exclude = ["**/*monocypher*"]` expresses it, which works and
+restates in fmake what the Makefile already knows.
+
+**One thing fmake did well under failure**, found by under-excluding on the
+first attempt: a test that needed an excluded source reported
+`session/hash_monocypher.c is excluded ([project] exclude = '...') and
+appears to define one of them` rather than a bare undefined symbol. The
+exclusion is named as the cause, which is the same advice §112 added for a
+platform-excluded file arriving from a different direction.
+
+### The verdict for fuzznet
+
+**Not a candidate today, and not because of a gap in fmake.** A project whose
+deliverable is headers and whose build exists to prove the sources compile is
+one fmake can check and cannot ship. If fuzznet ever grows an artifact — the
+`.a` its own comment declines, or a packaged library — the answer changes,
+and the test side is already better served than the Makefile serves it.
