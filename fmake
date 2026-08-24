@@ -1563,6 +1563,29 @@ RE_UI_HEADER = re.compile(r"^ui_(.+)\.h$")
 # [toolchain] moc is there for when the guess is wrong.
 QT_CORE_MODULES = ("Qt6Core", "Qt5Core")
 
+RE_QT_LIB = re.compile(r"^Qt(\d+)[A-Z]\w*$")
+
+
+def qt_major_of(lib):
+	"""The Qt major a library name carries, or None if it carries none."""
+	m = RE_QT_LIB.match(lib)
+	return "Qt" + m.group(1) if m else None
+
+
+def link_qt_major(proposed, order):
+	"""Which Qt major the link may draw from, or None if Qt is not involved.
+
+    Taken from what the headers already asked for, because the link has to
+    agree with the compile rather than with a preference computed a second
+    time. Where they named no Qt at all -- a tree whose Qt arrives through
+    the symbol scan alone -- the same order both other sides use decides it,
+    so all three answer to `qt_preference'.
+    """
+	named = {m for m in (qt_major_of(lib) for lib in proposed) if m}
+	if len(named) == 1:
+		return named.pop()
+	return order[0] if order else None
+
 
 def tool_origin(name, configured):
 	"""Where a named tool came from, or None if nobody named it.
@@ -5074,6 +5097,19 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 	# it needs is cached by now, so this costs nothing.
 	_, proposed = propose_from_headers(cl.link, pkg, hdr_store, proj)
 	want = sorted(cl.external)
+
+	# Qt 5 and Qt 6 define a great many of the same mangled names --
+	# QBoxLayout::addSpacing is one spelling in both -- while each also has
+	# names the other lacks, QWidget::enterEvent taking a QEnterEvent only
+	# in 6. So a cover free to take either picks one of each on symbol
+	# count alone, and the program links two Qts. Nothing downstream
+	# notices: the compile is clean, the link succeeds, and it is the
+	# runtime that pays.
+	keep = link_qt_major(proposed, pkg.qt_order)
+	if keep:
+		providers = {s: [l for l in libs
+		                 if (qt_major_of(l) or keep) == keep]
+		             for s, libs in providers.items()}
 
 	chosen, why, implicit, unresolved = choose_libs(
 	    providers, want, set(proposed))

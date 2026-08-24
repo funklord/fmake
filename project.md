@@ -168,7 +168,8 @@ that had been green about nothing for five commits ·
 [115. What deliberately stupid input found](#115-what-deliberately-stupid-input-found) ·
 [116. Claims that nothing was checking](#116-claims-that-nothing-was-checking) ·
 [117. ossacli's evaluation, and what a library needed told](#117-ossaclis-evaluation-and-what-a-library-needed-told) ·
-[118. fuzznet's evaluation, and a project that wants no artifact](#118-fuzznets-evaluation-and-a-project-that-wants-no-artifact)
+[118. fuzznet's evaluation, and a project that wants no artifact](#118-fuzznets-evaluation-and-a-project-that-wants-no-artifact) ·
+[119. raidcfgd's evaluation, and a class that moved between Qts](#119-raidcfgds-evaluation-and-a-class-that-moved-between-qts)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9343,3 +9344,82 @@ deliverable is headers and whose build exists to prove the sources compile is
 one fmake can check and cannot ship. If fuzznet ever grows an artifact — the
 `.a` its own comment declines, or a packaged library — the answer changes,
 and the test side is already better served than the Makefile serves it.
+
+## 119. raidcfgd's evaluation, and a class that moved between Qts
+
+The tenth, run like §117 and §118 in a throwaway worktree at `bd47f65`, so
+nothing was written to that repository — which mattered more than usual here,
+because another session began editing that tree while this ran.
+
+It is the one evaluation that found a defect in fmake rather than in a
+Makefile, and the defect was ours.
+
+### The documented reason was stale, and so was the check that said so
+
+raidcfgd's `README.md:180` and `project.md:894` say fmake "does not work here
+yet" because `<QApplication>` resolved to Qt 5 headers — the defect fixed in
+§17. There is a signal to that effect in `claude-guidelines`' list. It is
+dead: the include flags are now `-I/usr/include/x86_64-linux-gnu/qt6` and its
+three module directories, nothing else, and the tree builds complete.
+
+**Complete needed two external checkouts.** `src/ossa_source.cpp` wants
+`ossa/ossa.h`, which their Makefile gates on `pkg-config --exists ossa`, and
+`local/socket.c` wants `local/peer.h` from fuzznet through `FUZZNET_DIR`.
+Supplied through `include-dirs` and `lib-dirs` — libossa built from an ossacli
+worktree — the result is exit 0, 33 sources, moc on four headers, and all five
+binaries: `raidtray`, its three helpers and `ciss_probe`. The tree already
+carries an `fmake.toml` saying fmake needs telling "almost nothing" about it,
+and that is now true through to a working program.
+
+The `local/peer.h` half is **a fourth instance of §17's limit** and was not in
+the signal. Both are the same shape: a header behind a variable the Makefile
+sets and fmake cannot see.
+
+**The first report of this said "zero Qt 5 anywhere in the output", from
+grepping the build log. That was a vacuous check** — fmake prints no link
+flags to the build log at all, so the grep could not have found Qt 5 there
+whatever the link did. It is `evidence.md`'s rule with the tool's own output
+as the empty file list, and it hid the finding below for one round.
+
+### What it found instead: a class that moved between majors
+
+`raidtray` linked **both majors of the same module**. `readelf -d` names
+`libQt5Widgets.so.5` as a direct `NEEDED` entry beside `libQt6Widgets.so.6`,
+and `--explain` convicted us in as many words: it took Qt 5 for the
+`QBoxLayout` symbols while printing *could also come from -lQt6Widgets*.
+
+**This is not a tie, and no tiebreak repairs it.** `QAction` lives in QtWidgets
+in Qt 5 and moved to QtGui in Qt 6. So for a program compiled against Qt 6
+headers, `libQt5Widgets` defines every shared widget symbol *and* the QAction
+ones, while `libQt6Widgets` defines the shared ones and not QAction. Measured
+over `raidtray`'s 835 undefined symbols: Qt 5 covers 263, Qt 6 covers 258, and
+the ten in the difference are all `QAction`. `choose_libs` is a greedy cover
+keyed on symbol count, so **Qt 5 won by five, took the shared symbols with it,
+and Qt 6 picked up the remainder.** Qt 5 genuinely was the better answer to
+the question asked; the question was wrong.
+
+The fix is a constraint rather than a preference, in `link_qt_major`: the link
+may draw only from the major the compile used, taken from what the headers
+already asked for and falling back to the order `qt_preference` gives both
+other sides. `bc0b5fb` taught the header side to prefer one major and left the
+symbol scan free to undo it, so it was half a fix for ten days.
+
+**It is worse than the failure it survived.** The original mixture stopped the
+build — `Qt major version not 6 or 7`. This one stops nothing: the compile is
+clean, the link succeeds, exit status is 0, the program starts and `--help`
+prints. Only `readelf` says otherwise.
+
+### The case cost two attempts, and the first was not a case
+
+`every_qt_flag_comes_from_one_major` already carried the sentence *"A mixture
+that happens to compile is still a tree linking two Qts"* — and asserted on
+`-I` alone. It read include flags, never `-l`, and passed throughout. The
+comment stated the invariant and the code checked the narrower half, which is
+the §116 shape exactly. It reads both now.
+
+The new case took two goes. The first fixture used `QBoxLayout` and
+`QTreeWidget` and **passed without the fix**: Qt 6 covered all three of its
+symbols, won outright, and Qt 5 was never reached. A fixture reproducing this
+needs the moved class, not merely a shared one — so it uses `QAction` beside
+the layout calls, and fails without the fix naming both majors. Checked in
+both directions rather than assumed, which is what caught the first one.

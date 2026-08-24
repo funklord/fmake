@@ -7838,6 +7838,81 @@ int main(){ counter c; (void)c; return 0; }
 	      f"the emitted flags name {len(named)} Qt majors rather than one, "
 	      f"which is the mixture Qt refuses: {named}")
 
+	# The link half, which this case described from the beginning and did
+	# not read: it asserted on -I alone, so a tree compiling against one
+	# major and linking the other satisfied it. raidcfgd is where that
+	# showed up, and the sibling case below is the shape that reproduces it.
+	linked = sorted({f"Qt{d}" for d in re.findall(r"-lQt(\d+)[A-Z]\w*", out)})
+	check(len(linked) <= 1,
+	      f"the emitted flags link {len(linked)} Qt majors rather than one: "
+	      f"{linked}")
+
+
+@case
+def a_class_that_moved_between_qts_does_not_drag_the_old_one_in(t):
+	"""A library scoring best overall must still not be the wrong major.
+
+	The sibling case above checks that the *flags* name one major. This
+	checks the harder half, which is that the symbol scan cannot undo it,
+	and the mechanism is worth stating because it is not a tie.
+
+	`QAction' lives in QtWidgets in Qt 5 and moved to QtGui in Qt 6. So for
+	a program compiled against Qt 6 headers, `libQt5Widgets' defines every
+	shared widget symbol *and* the QAction ones, while `libQt6Widgets'
+	defines the shared ones and not QAction -- and a cover choosing by
+	symbol count therefore prefers Qt 5 outright. Measured in raidcfgd,
+	where it was 263 symbols against 258: the wrong major won by five, took
+	the shared symbols with it, and Qt 6 picked up the remainder.
+
+	No tiebreak repairs that, because Qt 5 genuinely is the better single
+	answer to the question that was asked. The question is wrong instead:
+	the link may only draw from the major the compile used, which is what
+	`link_qt_major' settles.
+
+	The failure is silent, which is why it outlived a fix to the header
+	half. The compile is clean, the link succeeds, `--help' runs, and
+	`readelf -d' is the first thing that says `libQt5Widgets.so.5' beside
+	`libQt6Widgets.so.6'. Grepping a build log does not find it: fmake
+	prints no link flags there."""
+	_need_qt()
+	for mod in ("Qt5Widgets", "Qt6Widgets"):
+		if not _have_pkg(mod):
+			raise Skip(f"{mod} is not installed, so nothing can mix")
+
+	# Shared symbols and moved ones together, which is what makes Qt 5 the
+	# better cover: the layout calls mangle identically in both majors, and
+	# the QAction calls are ones only Qt 5's QtWidgets answers for.
+	t.write("main.cpp", """
+#include <QApplication>
+#include <QWidget>
+#include <QVBoxLayout>
+#include <QPushButton>
+#include <QLabel>
+#include <QAction>
+int main(int argc, char **argv) {
+	QApplication app(argc, argv);
+	QWidget w;
+	QVBoxLayout *box = new QVBoxLayout(&w);
+	box->addSpacing(4);
+	box->addStretch(1);
+	box->addWidget(new QPushButton("go"));
+	box->addWidget(new QLabel("text"));
+	QAction one("one", &w), two("two", &w), three("three", &w);
+	one.setEnabled(false); two.setText("t"); three.setEnabled(true);
+	w.addAction(&one); w.addAction(&two); w.addAction(&three);
+	w.show();
+	return 0;
+}
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"a widget tree did not build: {r.stdout}{r.stderr}")
+
+	out = t.fmake("--eject").stdout
+	linked = sorted({f"Qt{d}" for d in re.findall(r"-lQt(\d+)[A-Z]\w*", out)})
+	check(len(linked) == 1,
+	      f"the link names {len(linked)} Qt majors rather than one, so the "
+	      f"program carries two Qts: {linked}")
+
 
 @case
 def a_qt5_tree_builds_through_all_three_generators(t):
