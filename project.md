@@ -169,7 +169,8 @@ that had been green about nothing for five commits ·
 [116. Claims that nothing was checking](#116-claims-that-nothing-was-checking) ·
 [117. ossacli's evaluation, and what a library needed told](#117-ossaclis-evaluation-and-what-a-library-needed-told) ·
 [118. fuzznet's evaluation, and a project that wants no artifact](#118-fuzznets-evaluation-and-a-project-that-wants-no-artifact) ·
-[119. raidcfgd's evaluation, and a class that moved between Qts](#119-raidcfgds-evaluation-and-a-class-that-moved-between-qts)
+[119. raidcfgd's evaluation, and a class that moved between Qts](#119-raidcfgds-evaluation-and-a-class-that-moved-between-qts) ·
+[120. beerssh's evaluation, and the environment a suite needs](#120-beersshs-evaluation-and-the-environment-a-suite-needs)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9423,3 +9424,101 @@ symbols, won outright, and Qt 5 was never reached. A fixture reproducing this
 needs the moved class, not merely a shared one — so it uses `QAction` beside
 the layout calls, and fails without the fix naming both majors. Checked in
 both directions rather than assumed, which is what caught the first one.
+
+## 120. beerssh's evaluation, and the environment a suite needs
+
+The eleventh, run like §117 to §119 in a throwaway worktree, so nothing was
+written to that repository. It is the first evaluated tree carrying **no
+`fmake.toml` at all**, which is the case fmake is actually for.
+
+### Three lines, two of them fmake's own
+
+**It builds, and the program runs.** Three lines of configuration, two of
+which fmake wrote itself:
+
+    * beerssh.pro defines BSSH_VERSION_STRING and nothing else does
+    * vterm.h is on no include path here
+      it is in this tree, at vterm/include/vterm.h
+      [project] include-dirs = ['vterm/include'] would find it
+
+Given those, exit 0 over 152 sources including the vendored libvterm, and
+the binary prints `beerssh 1.0`. **The Qt link names one major** --
+`libQt6Core`, `Gui`, `Widgets`, `DBus`, `Network`, no Qt 5 -- which is §119's
+fix holding in a second field tree, on a program that reaches Qt through five
+modules rather than three.
+
+Two things it cannot guess and should not: the binary is named for the
+directory, because nothing carries `@target` the way raidcfgd's `main.cpp`
+does, and the test binary is one binary, which is what `TEST_BIN` already is.
+
+### The macro that only qmake defines, twice
+
+beerssh's README already records that fmake found a real bug here as a second
+build system: `BSSH_VERSION_STRING` comes from `beerssh.pro:24` and from
+nowhere else, so no build system but qmake can compile `src/main.cpp`.
+Reproduced exactly. **There is a second instance the README does not have** --
+`BSSH_TEST_FONT_DIR`, from `tests/tests.pro:28`, which stops
+`tests/font_catalog_test.cpp` compiling the same way. Same class, same cost,
+and it is the test half rather than the program half.
+
+### What it found: a suite's environment is part of how it runs
+
+beerssh's `test` target sets three variables, and fmake could say none of
+them. **`test-env` exists now**, `KEY=VALUE` under `[project]` or
+`[target.NAME]`, added to the inherited environment rather than replacing it,
+the target's setting winning. It is the third thing of this shape after
+`test-args` and `test-timeout`, both of which the README records as reported
+reasons to keep a hand-written build.
+
+Two of the three are not preferences. `QT_QPA_PLATFORM=offscreen` is the
+ordinary one -- without it a widget test waits on an event loop that never
+turns, and the suite hangs rather than failing. The other two,
+`QTEST_DISABLE_STACK_DUMP` and `QTEST_DISABLE_CORE_DUMP`, stop a failing
+QTest running `gdb --batch -ex "thread apply all bt" --pid <self>` on itself.
+**That is the incident `running-code.md` records**, and it was reproduced
+here twice while measuring: two runs, two test binaries orphaned to init, gdb
+attached to both, found by looking rather than by anything reporting it. A
+tracer becomes the reaping parent and a stopped process ignores SIGTERM, so
+adopting fmake for this suite without `test-env` would have re-enabled a
+failure mode this workspace has already paid 15G of resident memory for.
+
+With it, `fmake test` returns 0 and the suite reports **363 passed, 0 failed,
+3 skipped** -- the same numbers as running the binary by hand under beerssh's
+own environment, with no orphan and no debugger left behind.
+
+### The patch step, which fmake should not have
+
+beerssh patches its vendored libvterm before building it -- four patches
+applied in place by `git -C vterm apply`, with a stamp under `build-vterm/`.
+fmake compiles what is on disk and does not run that step, so on a fresh
+checkout it builds **unpatched** libvterm. That cost exactly five test
+failures, and the correspondence is not loose:
+
+| failing test | patch |
+|---|---|
+| `decrqm_answers_for_modes_it_knows` | `0004-fallback-for-dec-mode-queries` |
+| `synchronised_output_*` (two) | `0002-fallback-for-unknown-dec-modes`, `0003-flush-deferred-damage-before-a-scroll` |
+| `kitty_protocol_pushes_and_pops` | `0001-reach-the-fallback-for-private-csi` |
+| `modify_other_keys_encodes_and_reports_its_level` | `0001-reach-the-fallback-for-private-csi` |
+
+Applying the four and rebuilding took it from 358 passed and 5 failed to 363
+and 0, which is the measurement rather than the inference.
+
+**This is not a gap to close.** The step mutates the source tree, and a build
+tool that edits its own inputs is a different and worse thing than one that
+does not -- the reason `@rule` produces files rather than rewriting them. What
+it means for adoption is narrower and worth saying plainly: fmake is a correct
+second build system here only after `make` has patched the tree, or with the
+patches applied some other way. Recorded, not fixed.
+
+### What the measuring got wrong
+
+The vendored tree was copied into the worktree with `cp -r`, because a
+submodule does not populate in one. That copied libvterm's `.git` *gitfile*,
+whose path is relative to the tree it came from, so `git -C vterm apply
+--check` had no repository to work in and their Makefile reported
+`0001-...: DOES NOT APPLY -- upstream changed under it`. **That reads exactly
+like beerssh's build being broken, and it was an artifact of the copy.** The
+patches apply cleanly to the pristine tree, checked afterwards, one at a time.
+Worth recording because the failure message was specific, plausible, and about
+somebody else's project.

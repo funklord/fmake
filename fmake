@@ -573,7 +573,7 @@ CONF_SCHEMA = {
         "name": S, "std": S, "profile": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
         "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
-        "test-timeout": N,
+        "test-timeout": N, "test-env": L,
     },
     "profile": {"*": {
         "std": S, "cflags": L, "ldflags": L, "defines": L, "define": L,
@@ -585,7 +585,7 @@ CONF_SCHEMA = {
         "name": S, "target": S, "kind": S, "root": S,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "test": B, "test-group": S, "test-args": L,
-        "test-timeout": N, "version": S, "description": S,
+        "test-timeout": N, "test-env": L, "version": S, "description": S,
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
@@ -1094,6 +1094,34 @@ def describe_exit(rc):
 DEFAULT_TEST_TIMEOUT = 60
 
 
+def test_env_pairs(conf, t):
+	"""KEY=VALUE settings for one test, project first and target after.
+
+    A list of KEY=VALUE rather than a table because the schema has no table
+    type and because `defines' is already spelled this way -- the same shape
+    should not need a second syntax for being about the environment.
+
+    It exists because a test binary's environment is part of how a project
+    runs its suite, and fmake could not say it. beerssh's test target sets
+    three variables: `QT_QPA_PLATFORM=offscreen', without which a widget
+    test waits on an event loop that never turns, and QTest's
+    `QTEST_DISABLE_STACK_DUMP' and `QTEST_DISABLE_CORE_DUMP', which stop a
+    failing test attaching gdb to itself. That last pair is not a
+    preference: a tracer becomes the reaping parent and a stopped process
+    ignores SIGTERM, so a suite run without them leaves debuggers attached
+    to binaries nobody can kill. Measured while evaluating that tree -- two
+    runs, two orphans, gdb attached to both.
+    """
+	out = []
+	for where, src in (("[project]", conf.project.get("test-env", [])),
+	                   (f"[target.{t.name}]", t.conf.get("test-env", []))):
+		for item in src:
+			if "=" not in item:
+				die(f"{where} test-env wants KEY=VALUE, not {item!r}")
+			out.append(item)
+	return out
+
+
 def run_tests_now(targets, root, outdir, conf, dry_run=False):
 	"""Build step done; now run them. Returns a process exit status.
 
@@ -1128,6 +1156,14 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 		exe = os.path.join(outdir, t.filename)
 		argv = [exe] + list(t.conf.get("test-args", []))
 		limit = t.conf.get("test-timeout", default) or None
+		pairs = test_env_pairs(conf, t)
+		# Inherited and added to rather than replaced: a test needs PATH
+		# and HOME like anything else, and a caller who exported something
+		# meant it.
+		env = None
+		if pairs:
+			env = dict(os.environ)
+			env.update(dict(p.split("=", 1) for p in pairs))
 		if dry_run:
 			say(f"{CYAN('RUN')} {_show_cmd(argv, root)}")
 			continue
@@ -1141,7 +1177,8 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 			# test started. A test that hangs on the network usually hangs
 			# with a helper alive, and killing only the process fmake
 			# launched leaves that helper holding the terminal.
-			proc = subprocess.Popen(argv, cwd=root, start_new_session=True)
+			proc = subprocess.Popen(argv, cwd=root, start_new_session=True,
+			                        env=env)
 		except OSError as exc:
 			warn(f"{t.name}: {exc}")
 			# ENOEXEC is the kernel saying this binary is not for this
@@ -7783,7 +7820,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		for t in sorted(by_group[g], key=lambda x: x.name):
 			argv = " ".join(shlex.quote(x)
 			                for x in t.conf.get("test-args", []))
-			a(f"\t./{t.filename}" + (f" {argv}" if argv else ""))
+			env = " ".join(shlex.quote(p)
+			               for p in test_env_pairs(conf, t))
+			a(f"\t{env + ' ' if env else ''}./{t.filename}"
+			  + (f" {argv}" if argv else ""))
 		a("")
 
 	gen_rules = gen_rules if gen_rules is not None else {}
@@ -8311,8 +8351,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		members = sorted(by_group[g], key=lambda x: x.name)
 		a("")
 		cmds = " && ".join(
-		    "./" + " ".join(shlex.quote(x) for x in [t.filename]
-		                    + list(t.conf.get("test-args", [])))
+		    " ".join([shlex.quote(p) for p in test_env_pairs(conf, t)]
+		             + ["./" + " ".join(shlex.quote(x) for x in [t.filename]
+		                                + list(t.conf.get("test-args", [])))])
 		    for t in members)
 		a(f"rule run_{_mk_ident(g)}")
 		a(f"  command = {cmds}")

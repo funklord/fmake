@@ -1199,6 +1199,64 @@ def a_test_is_given_its_arguments(t):
 
 
 @case
+def a_test_is_given_its_environment(t):
+	"""beerssh's `test` target is three environment variables, and two of
+	them are not a preference.
+
+	`QT_QPA_PLATFORM=offscreen` is the ordinary one: without it a widget
+	test waits on an event loop that never turns, and the suite hangs
+	rather than failing. The other two are `QTEST_DISABLE_STACK_DUMP` and
+	`QTEST_DISABLE_CORE_DUMP`, which stop a failing QTest running
+	`gdb --batch -ex "thread apply all bt" --pid <self>` on itself. A
+	tracer becomes the reaping parent and a stopped process ignores
+	SIGTERM, so a suite run without them leaves debuggers attached to
+	binaries that cannot be killed by the obvious means -- the incident
+	`running-code.md` records, which cost 15G of resident memory once.
+
+	Measured while evaluating that tree: two runs without this, two
+	orphaned test binaries reparented to init, gdb attached to both. The
+	suite passes 363 with the variables set and hangs without them, so a
+	runner that cannot say this cannot run that project's tests at all.
+
+	Both levels, because the project-wide setting is the common case and a
+	single test needing one more should not have to restate it -- and the
+	target wins, since the narrower statement is the later one. PATH is
+	checked too: the environment is added to rather than replaced, and a
+	test needs PATH like anything else."""
+	_suite(t)
+	t.write("tests/env_test.c",
+	        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
+	        "int main(void){\n"
+	        '\tconst char *a = getenv("FMAKE_CASE_PROJECT");\n'
+	        '\tconst char *b = getenv("FMAKE_CASE_TARGET");\n'
+	        '\tif (!a || strcmp(a, "from-project")) return 1;\n'
+	        '\tif (!b || strcmp(b, "from-target")) return 2;\n'
+	        '\tif (!getenv("PATH")) return 3;\n'
+	        '\tprintf("env ok\\n"); return 0; }\n')
+	t.write("fmake.toml",
+	        '[project]\n'
+	        'test-env = ["FMAKE_CASE_PROJECT=from-project",\n'
+	        '            "FMAKE_CASE_TARGET=overridden"]\n'
+	        '\n[target.env_test]\n'
+	        'test-env = ["FMAKE_CASE_TARGET=from-target"]\n')
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check("env ok" in r.stdout,
+	      f"test-env should reach the binary: {r.stdout}")
+
+	# The ejected build has to carry it too, or `make test` on the ejected
+	# Makefile runs the suite the one way that hangs. Both backends, since
+	# they assemble the command line separately and only one of them was
+	# covered when this was written.
+	for backend in ("make", "ninja"):
+		out = t.fmake("--eject", backend).stdout
+		check("FMAKE_CASE_TARGET=from-target" in out,
+		      f"the ejected {backend} build dropped the test "
+		      f"environment: {out}")
+
+
+@case
 def an_ejected_build_keeps_tests_out_of_all(t):
 	"""`build-and-commit.md` requires this of a hand-written Makefile, and
 	an ejected one is a Makefile someone will edit.
