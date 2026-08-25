@@ -1865,7 +1865,7 @@ def a_broken_file_does_not_sink_other_targets(t):
     started passing for the wrong reason. Two ordinary programs instead:
     the property is per-target failure, not anything about tests."""
 	t.write("main.c", '#include <stdio.h>\nint main(void){ puts("fine"); return 0; }\n')
-	t.write("tools/dumper.c", "#include <nonexistent_library_header.h>\n"
+	t.write("tool/dumper.c", "#include <nonexistent_library_header.h>\n"
 	        "int main(void){ return 0; }\n")
 
 	r = t.fmake()
@@ -6260,11 +6260,11 @@ def explain_says_what_decided_the_kind(t):
 	inferred one names the alternative -- that is the whole point: a reader
 	asking "why is there no archive" gets the answer rather than a fact."""
 	t.write("lib.c", "int helper(void){ return 1; }\n")
-	t.write("tools/prog.c",
+	t.write("tool/prog.c",
 	        "int helper(void);\nint main(void){ return helper() - 1; }\n")
 
 	ex = t.fmake("--explain").stdout
-	check("tools/prog.c defines main()" in ex and "@kind static" in ex,
+	check("tool/prog.c defines main()" in ex and "@kind static" in ex,
 	      f"an inferred exe should say so and name the alternative: {ex}")
 
 	t.write("lib.c", "//! @kind static\n//! @target helper\n"
@@ -6273,7 +6273,7 @@ def explain_says_what_decided_the_kind(t):
 	check("static: @kind in lib.c" in ex,
 	      f"a declared kind should name the file that declared it: {ex}")
 
-	os.unlink(os.path.join(t.dir, "tools/prog.c"))
+	os.unlink(os.path.join(t.dir, "tool/prog.c"))
 	t.write("lib.c", "int helper(void){ return 1; }\n")
 	ex = t.fmake("-B", "--explain").stdout
 	check("nothing here defines main()" in ex,

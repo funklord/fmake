@@ -497,7 +497,7 @@ the thing annotations exist to fix.
 ```c
 /*! @file
  *  @rule gen/table.c: data/table.txt
- *        python3 tools/mktable.py $< $@
+ *        python3 tool/mktable.py $< $@
  */
 ```
 
@@ -2328,7 +2328,7 @@ a synonym introduced now reads as a second concept:
 | `cli` | the command-line surface itself: `-V`, `--man`, the completion |
 | `selftest` | the suite in this repository |
 | `build` | this project's own Makefile and CI |
-| `tools` | `tools/`, the shared style gate and hooks |
+| `tools` | `tool/`, the shared style gate and hooks |
 | `packaging` | `debian/`, and the version |
 | `docs` | `README.md`, `project.md`, `code-style.md` |
 
@@ -5095,12 +5095,12 @@ teaching its own convention to everyone who ejects.
 ### Two sessions, one repository
 
 This work was mostly already done when it was started. A concurrent session
-had installed `tools/style_gate.py`, `tools/hooks/commit-msg`,
+had installed `tool/style_gate.py`, `tool/hooks/commit-msg`,
 `.style-gate.toml`, `make style` and `make hooks`, and renamed the
 Makefile's own variable -- and had committed four times on top of this
 session's last commit.
 
-Copying `style_gate.py` from `~/.claude/tools/` over the project's copy
+Copying `style_gate.py` from `~/.claude/tool/` over the project's copy
 removed the two-line provenance header the project copy carries and the
 source does not, which `git diff` caught before it was committed. The lesson
 is the one the global guidelines already state and this session had to learn
@@ -6496,7 +6496,7 @@ Rewrapping the bodies needed its own proof, since that text really is
 rewritten. The tool refuses to write a block whose whitespace-separated
 tokens are not exactly the tokens it read, in the same order. Author and
 committer identity and dates are carried across verbatim, and every
-resulting message was put through this tree's own `tools/hooks/commit-msg`
+resulting message was put through this tree's own `tool/hooks/commit-msg`
 rather than through a checker invented for the occasion.
 
 ### Two defects, and only one of them was caught by the proof aimed at it

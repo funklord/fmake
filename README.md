@@ -314,7 +314,7 @@ it cannot grow into a program. Recipes are shell.
 @libs   m
 
 gen/%.c: proto/%.msg
-	python3 tools/gen.py $< $@
+	python3 tool/gen.py $< $@
 
 .PHONY: flash
 flash: firmware
@@ -331,7 +331,7 @@ for — it goes through the same parser:
 
 ```c
 /*! @rule gen/table.c: data/table.txt
- *        python3 tools/mktable.py $< $@
+ *        python3 tool/mktable.py $< $@
  */
 ```
 

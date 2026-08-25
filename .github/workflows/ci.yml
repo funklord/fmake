@@ -117,5 +117,5 @@ jobs:
 
       - name: style gate
         run: |
-          python3 tools/style_gate.py check
-          python3 tools/style_gate.py docs
+          python3 tool/style_gate.py check
+          python3 tool/style_gate.py docs

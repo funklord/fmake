@@ -21,7 +21,7 @@
 #   make deb           -- build the .deb into BUILD_DIR
 #   make lint          -- build it, then run lintian over it where lintian
 #                         is installed
-#   make hooks         -- install the git hooks from tools/hooks/
+#   make hooks         -- install the git hooks from tool/hooks/
 #   make clean         -- remove the generated files and the package
 #   make veryclean     -- clean, plus the build directory
 #   make distclean     -- veryclean, plus stray editor files
@@ -161,18 +161,18 @@ clean:
 	@rmdir $(BUILD_DIR) 2>/dev/null || :
 
 # The shared style gate: one tool, copied verbatim from
-# ~/.claude/tools/style_gate.py into every private project. It refuses to
+# ~/.claude/tool/style_gate.py into every private project. It refuses to
 # run against a collapsed file list, so a pass means it actually looked.
 style: style-source style-docs
 
 style-source:
-	$(PYTHON) tools/style_gate.py check
+	$(PYTHON) tool/style_gate.py check
 
 # project.md is authoritative, so it is held to the tree: a heading
 # that appears twice means whichever one you find, the other is the
 # one with the answer.
 style-docs:
-	$(PYTHON) tools/style_gate.py docs
+	$(PYTHON) tool/style_gate.py docs
 
 # `test` is the suite alone; `check` is everything that must pass first.
 test:
@@ -204,8 +204,8 @@ distclean: veryclean
 # a fresh clone.
 hooks:
 	@test -d .git || { echo "hooks: not a git repository" >&2; exit 1; }
-	@install -m 0755 tools/hooks/commit-msg .git/hooks/commit-msg
-	@echo "hooks: commit-msg installed from tools/hooks/"
+	@install -m 0755 tool/hooks/commit-msg .git/hooks/commit-msg
+	@echo "hooks: commit-msg installed from tool/hooks/"
 
 # The TARGETS block in the header is the one statement of what the targets
 # are, and `help` reads it back rather than repeating it: a list written
