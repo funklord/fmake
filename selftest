@@ -1180,7 +1180,7 @@ def a_test_can_be_named_or_denied(t):
 
 @case
 def a_test_is_given_its_arguments(t):
-	"""netcfgd runs `./tests/client_test ../docs/schema/socket.json`: the
+	"""netcfgd runs `./tests/client_test ../doc/schema/socket.json`: the
 	test reads the daemon's frozen protocol witness, which is the entire
 	reason it exists. A runner that can only invoke a binary bare cannot
 	express it."""

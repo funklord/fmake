@@ -170,7 +170,8 @@ that had been green about nothing for five commits ·
 [117. ossacli's evaluation, and what a library needed told](#117-ossaclis-evaluation-and-what-a-library-needed-told) ·
 [118. fuzznet's evaluation, and a project that wants no artifact](#118-fuzznets-evaluation-and-a-project-that-wants-no-artifact) ·
 [119. raidcfgd's evaluation, and a class that moved between Qts](#119-raidcfgds-evaluation-and-a-class-that-moved-between-qts) ·
-[120. beerssh's evaluation, and the environment a suite needs](#120-beersshs-evaluation-and-the-environment-a-suite-needs)
+[120. beerssh's evaluation, and the environment a suite needs](#120-beersshs-evaluation-and-the-environment-a-suite-needs) ·
+[121. netcfgd's evaluation, and a tree fmake only half sees](#121-netcfgds-evaluation-and-a-tree-fmake-only-half-sees)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -4856,7 +4857,7 @@ it is paired with is never to conclude a test passed from a binary the build
 step did not rebuild -- and a failed assertion and a crash are reported as
 the different things they are, since Python renders both as a number.
 `test-args` under `[target.NAME]` covers netcfgd's
-`./tests/client_test ../docs/schema/socket.json`, which was their third
+`./tests/client_test ../doc/schema/socket.json`, which was their third
 finding and is a test whose whole purpose is the file it is handed.
 
 **Ejected build files get it too**, because an ejected Makefile is a
@@ -9522,3 +9523,79 @@ like beerssh's build being broken, and it was an artifact of the copy.** The
 patches apply cleanly to the pristine tree, checked afterwards, one at a time.
 Worth recording because the failure message was specific, plausible, and about
 somebody else's project.
+
+## 121. netcfgd's evaluation, and a tree fmake only half sees
+
+The twelfth, in a throwaway worktree as §117 to §120 were. It is the first
+evaluated project where **most of the tree is not fmake's to build**: the core
+is Rust, and Cargo owns it. What is left is `client/` and `gui/` -- 37 C and
+C++ files under two hand-written Makefiles -- and that half is the evaluation.
+
+### Both subtrees, from the root, with no configuration at all
+
+`fmake` at the tree root returns 0 and builds all 25 units: 11 mocs, the two
+`client/` sources, and the twelve `gui/src/` ones, linked into one program.
+The Rust never comes up, because fmake does not read `.rs` and there is
+nothing to exclude.
+
+**That is one graph where the project keeps two.** `gui/Makefile` builds
+`../client/libncfg_client.a` first and links it; fmake compiles the client
+sources straight into the program, because symbol closure reaches them and an
+archive is a step rather than a fact. Same binary, one fewer artifact, and no
+`CLIENT_DIR` to keep pointed at the right place. The Qt link names one major
+-- `libQt6Core`, `Gui`, `Widgets` -- which is §119's fix in a third field
+tree.
+
+Run inside `client/` alone it is equally happy: `libclient.a` from the two
+sources, and it holds `client_test` back from the default build with
+
+    * 1 test program not built by default (client_test);
+      `fmake test` builds and runs them
+
+which is the convention `build-and-commit.md` requires, arrived at rather than
+configured.
+
+### The suite needs ten lines, and each one is a real fact
+
+`fmake test` finds ten test programs where the project runs eight, and the
+difference is worth having:
+
+- **`client_test` wants its argument, but only from the root.** The test
+  defaults to `../doc/schema/socket.json`, which resolves when it is run from
+  `client/` as its own Makefile does, and does not from the tree root -- so
+  `test-args` is the fix, and this is the case the README has cited for
+  `test-args` all along, met in the field for the first time. Confirmed not
+  vacuous: pointed at a missing witness the test exits 1, so the run that
+  passed had genuinely read all 47 lines of it.
+- **Two live probes open `/run/netcfgd/netcfgd.sock`** and want real radios.
+  `gui/Makefile` leaves them out by globbing `tests/*.pro`, which does not
+  reach `tests/live/`; fmake compiles what it finds and ran them, reporting
+  `cannot reach netcfgd ... Is the daemon running?` as two test failures.
+  `test = false` says so, and the honest reading is that a glob that excludes
+  by directory depth is not a statement fmake can recover.
+- **`QT_QPA_PLATFORM=offscreen`**, which `gui/Makefile` sets and §120 taught
+  fmake to say.
+
+With those, eight tests pass and `fmake test` returns 0.
+
+### A path this project had been quoting wrongly
+
+netcfgd's witness is at `doc/schema/socket.json`. fmake's README, its
+`--help` prose, a selftest docstring and this document all said `docs/`, in
+four places, quoting that project's command line as evidence for why
+`test-args` exists. The singular sweep moved it and nothing here noticed,
+because nothing here reads that tree. Corrected in all four.
+
+### What the measuring got wrong, again
+
+Running fmake in `client/` first left `libclient.a` in the tree. The next run
+from the root then found `ncfg_event_free` defined twice -- once in
+`client/ncfg_client.c` and once in the archive fmake itself had just built --
+and refused to guess which belonged in the program, which is exactly right
+and exactly what §15 asks for. **It reads as a finding about netcfgd and is a
+finding about the evaluation.** The tree carries no such archive; a
+`.gitignore` would call it build output, and fmake does not read one.
+
+Recreating the worktree rather than cleaning around it is the cheap fix, and
+the general shape is the one §120 already paid for: measure a tree that has
+been built in, and some of what you measure is your own leavings.

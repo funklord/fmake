@@ -1131,7 +1131,7 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
     for the one thing anybody wants it for.
 
     From the project root, since that is where a test's relative paths were
-    written to work -- `./tests/client_test ../docs/schema/socket.json` is
+    written to work -- `./tests/client_test ../doc/schema/socket.json` is
     one project's real command line, and `test-args` exists for it.
 
     Each test gets a deadline. hydra has 26 live drivers, and running its

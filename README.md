@@ -352,7 +352,7 @@ kind    = "static"
 sources = ["src/alpha.c", "src/shared.c"]
 
 [target.client_test]            # `fmake test` runs it with an argument
-test-args    = ["docs/schema/socket.json"]
+test-args    = ["doc/schema/socket.json"]
 test-timeout = 300              # seconds; 0 removes the limit
 test-env     = ["QT_QPA_PLATFORM=offscreen"]   # added to, not replacing
 
