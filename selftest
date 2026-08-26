@@ -1247,6 +1247,80 @@ outputs = ["gen/cases.s", "gen/cases.inc"]
 
 
 @case
+def a_version_a_source_invents_for_itself_is_reported(t):
+	"""The quiet member of the version-macro family, and the worst of them.
+
+	`a_version_the_build_system_injects_is_named_with_its_value' answers a
+	build that stopped. This answers one that did not. bbq-predictor and
+	raidcfgd both guard the macro:
+
+	    #ifndef BBQ_VERSION_STRING
+	    #define BBQ_VERSION_STRING "unknown"
+
+	so the tree compiles, links, runs, and prints `bbq-predictor unknown'.
+	Nothing failed. raidcfgd says `unknown (built without a version)' and
+	was built here once during its own evaluation without anybody noticing,
+	because the check made was `--help' rather than `--version'.
+
+	What makes it answerable rather than merely true is the VERSION file
+	beside it: every one of the fourteen private projects keeps one, so
+	fmake is not guessing what the right answer is, only reporting that the
+	source picked a different one.
+
+	**An include guard is the thing this must not fire on**, and the first
+	measurement of how common the pattern is got three projects where there
+	are two, by matching names alone -- fuzznet's `version/version.h' opens
+	`#ifndef FZN_VERSION_H'. The discriminator is the value: a guard defines
+	its symbol with nothing after it, a fallback defines it with a string.
+	Both refusals are checked here, along with the case where the build does
+	supply the macro and there is nothing to say."""
+	t.write("VERSION", "3.1.4\n")
+	t.write("main.c", '#include <stdio.h>\n'
+	        '#ifndef APP_VERSION_STRING\n'
+	        '#define APP_VERSION_STRING "unknown"\n'
+	        '#endif\n'
+	        'int main(void){ printf("%s\\n", APP_VERSION_STRING); return 0; }\n')
+	out = t.fmake().stdout
+	check("main.c defines APP_VERSION_STRING itself because the build did not"
+	      in out, f"the invented version was not reported: {out}")
+	check("VERSION here says 3.1.4" in out,
+	      f"the real version was not read: {out}")
+	check("""-DAPP_VERSION_STRING="3.1.4\"""" in out,
+	      f"the line that supplies it was not offered: {out}")
+
+	# And again on a build that did nothing, which is where this first got
+	# it wrong. The notes above it are about what THIS build decided and
+	# are correctly silent on a no-op run; this is about what the artifact
+	# says, which does not stop being true because nothing was rebuilt.
+	# Under that guard it printed once and never again -- which is how a
+	# binary saying "unknown" gets shipped by somebody who saw the warning
+	# a week ago.
+	out = t.fmake().stdout
+	check("reports a version it made up" in out,
+	      f"a no-op rebuild stopped reporting the invented version: {out}")
+
+	# Supplied by the build: nothing to say, and saying it anyway would make
+	# the note appear on every correctly-configured tree.
+	t.write("fmake.toml",
+	        '[project]\ncflags = [\'-DAPP_VERSION_STRING="3.1.4"\']\n')
+	out = t.fmake("-B").stdout
+	check("reports a version it made up" not in out,
+	      f"the note fired on a build that supplies the macro: {out}")
+
+	# An include guard is not a fallback. This is the false positive that
+	# miscounted the workspace before it was looked at properly.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	t.write("guard.h", "#ifndef APP_VERSION_H\n#define APP_VERSION_H\n"
+	        "int helper(void);\n#endif\n")
+	t.write("main.c", '#include "guard.h"\n'
+	        "int helper(void){ return 0; }\n"
+	        "int main(void){ return helper(); }\n")
+	out = t.fmake("-B").stdout
+	check("reports a version it made up" not in out,
+	      f"an include guard was read as a version fallback: {out}")
+
+
+@case
 def a_version_the_build_system_injects_is_named_with_its_value(t):
 	"""Three trees in two projects would not compile for want of a macro
 	no source defines, and the compiler cannot say what to do about it.

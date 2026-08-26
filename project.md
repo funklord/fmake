@@ -173,7 +173,8 @@ that had been green about nothing for five commits ·
 [120. beerssh's evaluation, and the environment a suite needs](#120-beersshs-evaluation-and-the-environment-a-suite-needs) ·
 [121. netcfgd's evaluation, and a tree fmake only half sees](#121-netcfgds-evaluation-and-a-tree-fmake-only-half-sees) ·
 [122. openmlx4's evaluation, and the macro no source defines](#122-openmlx4s-evaluation-and-the-macro-no-source-defines) ·
-[123. anti-avx's evaluation, and the file fmake would not build](#123-anti-avxs-evaluation-and-the-file-fmake-would-not-build)
+[123. anti-avx's evaluation, and the file fmake would not build](#123-anti-avxs-evaluation-and-the-file-fmake-would-not-build) ·
+[124. bbq-predictor's evaluation, and a version invented in silence](#124-bbq-predictors-evaluation-and-a-version-invented-in-silence)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9776,3 +9777,108 @@ four-line Makefile it already has. Recorded with the number rather than the
 impression, which is what the next pass needs.
 
 Recorded so the next pass has the measurement rather than the impression.
+
+## 124. bbq-predictor's evaluation, and a version invented in silence
+
+The fifteenth and the last of the candidates, in a throwaway worktree.
+
+### It builds cold, and the binary lies about itself
+
+`fmake` with no configuration at all returns 0 over 32 sources and 20 mocs,
+and the Qt link names one major -- `libQt6Core`, `Gui`, `Widgets`, `Network`,
+`Sql`, `Positioning` -- which is §119's fix in a **fourth** field tree, on the
+widest module set met yet. Given the version macro and its test environment,
+all eleven test binaries build and pass.
+
+And the binary it built prints this:
+
+    bbq-predictor unknown
+
+**Nothing failed.** `src/main.cpp` carries
+
+    #ifndef BBQ_VERSION_STRING
+    #define BBQ_VERSION_STRING "unknown"
+
+so the tree compiles, links, runs, and reports a version it made up. This is
+the fourth instance of the version macro §122 is about and the first quiet
+one, and **§122's remedy cannot reach it**: that one is keyed on a compile
+failure, and there is no failure here. It helps the loud cases -- beerssh's
+parse error inside `QStringLiteral`, openmlx4's `#error` -- and is blind to
+the one that matters most, which is the ordering this workspace's own evidence
+rules would predict.
+
+So fmake reports it from the scan rather than from an error, and says it on a
+build that succeeded:
+
+    src/main.cpp defines BBQ_VERSION_STRING itself because the build did
+    not, so this binary reports a version it made up
+    VERSION here says 0.1.0; [project] cflags =
+    ['-DBBQ_VERSION_STRING="0.1.0"'] supplies it
+
+Supplying that line takes the same binary to `bbq-predictor 0.1.0`, and the
+note goes quiet, which is the whole loop and is what the case checks.
+
+### Two projects, not three, and the difference is the discriminator
+
+The first count of how common this is said three -- bbq-predictor, raidcfgd
+and fuzznet -- by matching macro names alone. **fuzznet's is an include
+guard**: `version/version.h` opens `#ifndef FZN_VERSION_H`, which contains
+the word and is not a fallback for anything.
+
+That false positive is also the answer. A guard defines its symbol with
+**nothing after it**; a fallback defines it with a value. Matching on the
+value rather than the name takes the count to the two real ones and refuses
+every `version.h` in the workspace, and the case checks the refusal as well
+as the report -- a heuristic nobody has watched decline has not been shown to
+discriminate.
+
+**raidcfgd is the other one, and it was built here in §119 without anybody
+noticing.** That evaluation ran `raidtray --help` and never `--version`, so a
+binary reporting `unknown (built without a version)` was written up as a
+success. The finding was available the whole time and the check made was the
+wrong one.
+
+### Two faults in the fix, and the second was written on the wall
+
+**A loop variable shadowed a function.** The first version wrote
+`for _rel in sorted(scans)`, and `_rel` is a module-level function that
+`build()` calls several hundred lines further down. Python makes a name
+assigned anywhere in a function local to the whole of it, so the later call
+raised `UnboundLocalError` on a path this change never touched --
+`--run` naming a file with no `main`. The suite caught it, which is what it
+is for; nothing else would have, because the failing path had no reason to
+be near this work.
+
+**And the note printed once and never again.** It went in beside the notes
+about unreachable sources and unreferenced resources, under their `if
+changed:` guard, whose comment says *only worth saying when something was
+actually rebuilt; on a no-op build it is the same notice every time*. That
+is right for its neighbours and wrong here, and the distinction is what the
+entry is about: **those report what this build decided, and this reports what
+the artifact says.** A binary that invents its version does not stop having
+invented it because nothing was rebuilt.
+
+Measured before it was moved -- three runs of an unchanged tree, one message
+-- which is exactly how a `unknown` binary gets shipped by somebody who saw
+the warning a week ago. The case checks the second run now.
+
+The failure was written on the wall three lines above where the code went:
+the scan record keeps `typos` rather than warning while scanning, *because a
+scan is cached, so a warning printed here would appear once and never again*.
+Same mistake, one guard further out, in the same function.
+
+### An environment that names an artifact
+
+bbq-predictor's `test` target sets `BBQ_APP_BINARY` to the app it just built,
+plus `QTEST_DISABLE_STACK_DUMP` and `QTEST_DISABLE_CORE_DUMP` -- **the third
+project needing that pair**, after beerssh and its own sibling, which is what
+§120 added `test-env` for. `test_seed.cpp` asserts outright when the variable
+is unset rather than skipping, so that half fails loudly and well.
+
+`test-env` carries it, and a relative path reaches the artifact because fmake
+runs a test with the tree root as its working directory. **What `test-env`
+cannot do is name a path it does not already know**: the value is a literal in
+`fmake.toml`, so it hardcodes the artifact's name rather than asking the build
+what it produced. That is fine here and would not be if the name were
+configurable. Recorded rather than fixed, because no project has needed it yet
+and a substitution syntax invented for a case nobody has met is a guess.

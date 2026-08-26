@@ -166,7 +166,7 @@ def build_identity():
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
-CACHE_VER   = 7   # scans record the class of an out-of-line member
+CACHE_VER   = 8   # scans record a version macro's own fallback
 
 C_EXTS      = {".c"}
 CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
@@ -503,6 +503,28 @@ RE_QRC_INIT = re.compile(
     r'\bQ_INIT_RESOURCE\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)')
 
 
+# A source that supplies its own fallback for a macro the build normally
+# defines. The discriminator against an include guard is the VALUE: a guard
+# is `#define FZN_VERSION_H' with nothing after it, a fallback is
+# `#define BBQ_VERSION_STRING "unknown"'. Matching on the name alone counts
+# every version.h in the workspace, which is how the first measurement of
+# this got three projects where there are two.
+RE_IFNDEF_ANY = re.compile(r"^[ \t]*#[ \t]*ifndef[ \t]+([A-Za-z_]\w*)", re.M)
+RE_DEFINE_VALUED = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+(\S[^\n]*)", re.M)
+
+
+def version_fallbacks(code):
+	"""Version macros this file defines for itself when the build does not.
+
+    Reported rather than resolved: fmake cannot know that "unknown" is wrong,
+    only that the tree carries a VERSION file saying something else.
+    """
+	guarded = {n for n in RE_IFNDEF_ANY.findall(code) if "VERSION" in n}
+	valued = {n for n, _v in RE_DEFINE_VALUED.findall(code)}
+	return sorted(guarded & valued)
+
+
 def scan_source(path):
 	"""Read one source file and return its scan record."""
 	with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -534,6 +556,7 @@ def scan_source(path):
 	    "modimp":   sorted(set(RE_MODULE_IMPORT.findall(code))),
 	    "qrc":      sorted(set(RE_QRC_PATH.findall(code))),
 	    "qrc_init": sorted(set(RE_QRC_INIT.findall(code))),
+	    "verfall":  version_fallbacks(code),
 	    "defs":     sorted(defs),
 	    "dirs":     _dirs_and_typos[0],
 	    # Recorded with the scan rather than warned about while
@@ -6212,6 +6235,27 @@ def build(args, _bootstrapping=False):
 	    os.path.relpath(p, root)
 	    for p in glob.glob(os.path.join(root, "**", "*.qrc"), recursive=True)
 	    if os.path.relpath(p, root) not in _qrc_named)
+	# A source that defines a version macro for itself when the build did
+	# not is not a compile failure, and that is the whole problem: the tree
+	# builds, the program links, it runs, and it reports a version it made
+	# up. bbq-predictor prints `bbq-predictor unknown' this way and
+	# raidcfgd `unknown (built without a version)'. What makes it
+	# answerable rather than merely true is the VERSION file beside it.
+	try:
+		with open(os.path.join(root, "VERSION")) as _vfh:
+			version_says = _vfh.read().strip()
+	except OSError:
+		version_says = ""
+	version_fallen = []
+	if version_says:
+		_supplied = " ".join(cfg.cflags)
+		for scanned in sorted(scans):
+			own = " ".join(Ann(scans[scanned].get("dirs")).items("define"))
+			for macro in scans[scanned].get("verfall", ()):
+				if f"-D{macro}" in _supplied or macro in own:
+					continue
+				version_fallen.append((scanned, macro))
+
 	if not args.dry_run:
 		prune_generated(root, QRC_DIR, [j["out"] for j in qrc_jobs])
 	if qrc_jobs:
@@ -7408,6 +7452,21 @@ def build(args, _bootstrapping=False):
 				     f"(Q_INIT_RESOURCE({stem}) says so outright)")
 			if len(qrc_unused) > 5:
 				note(f"... and {len(qrc_unused) - 5} more resource(s)")
+		# Outside `if changed', unlike everything above it. Those report
+		# what THIS build decided, and repeating them on a no-op run is
+		# the noise that guard exists to stop. This reports what the
+		# ARTIFACT says, which does not stop being true because nothing
+		# was rebuilt -- and under the guard it printed once and never
+		# again, which is exactly how a binary saying "unknown" gets
+		# shipped by somebody who saw the warning a week ago. Measured:
+		# three runs, one message.
+		for rel, name in version_fallen[:3]:
+			note(f"{rel} defines {name} itself because the build did "
+			     f"not, so this binary reports a version it made up")
+			note(f"VERSION here says {version_says}; [project] cflags "
+			     f"= ['-D{name}=\"{version_says}\"'] supplies it")
+		if len(version_fallen) > 3:
+			note(f"... and {len(version_fallen) - 3} more")
 
 		names = ", ".join(n for n, _, _ in built)
 		if built:
