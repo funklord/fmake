@@ -177,7 +177,8 @@ that had been green about nothing for five commits ·
 [124. bbq-predictor's evaluation, and a version invented in silence](#124-bbq-predictors-evaluation-and-a-version-invented-in-silence) ·
 [125. `$bin()`, and the filename written twice](#125-bin-and-the-filename-written-twice) ·
 [126. Assembly, and the language table under it](#126-assembly-and-the-language-table-under-it) ·
-[127. Rust, and why it is not a row in the table](#127-rust-and-why-it-is-not-a-row-in-the-table)
+[127. Rust, and why it is not a row in the table](#127-rust-and-why-it-is-not-a-row-in-the-table) ·
+[128. A symbol read that did not happen, believed](#128-a-symbol-read-that-did-not-happen-believed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10101,3 +10102,116 @@ build file cannot begin by reading one. netcfgd's 143 files across thirteen
 crates are Cargo's, and stay Cargo's. What fmake can offer is the
 single-crate case and the interop case, which is the same offer it makes to
 a C tree with a Makefile.
+
+---
+
+## 128. A symbol read that did not happen, believed
+
+§127 measured Rust by asking one question -- does `nm` find `rust_seven` in
+a staticlib -- and got the right answer to it. Asking `nm` what *else* it
+had to say about the same archive found a hole in the floor.
+
+### `nm` reports a failed read as an empty file
+
+rustc's prebuilt `std` objects are ordinary ELF carrying an `.llvmbc`
+section, so a BFD plugin claims them. On this machine the plugin that gets
+them is older than the compiler that wrote them:
+
+    bfd plugin: LLVM gold plugin has failed to create LTO module: Opaque
+    pointers are only supported in -opaque-pointers mode
+    (Producer: 'LLVM19.1.7' Reader: 'LLVM 14.0.6')
+
+`nm` then reports **no symbols, and exits 0**. It does not fall back to the
+ELF symbol table that is sitting in the same file, and it does not call the
+read a failure. Measured on one 53 MB staticlib: 244 members, `nm` refused
+**241 of them**, and the symbol tables it declined to read carry **1830
+global definitions**. `readelf -s` reads every one.
+
+`read_symbols` guarded the exit status and nothing else. Its own comment
+already described the consequence exactly -- *an object with no symbols is
+invisible to the closure ... the file would compile, appear in the build,
+and simply be absent from the result* -- and guarded the one route the
+status can show while the other went past it.
+
+### What it produced was a confident wrong answer
+
+The interesting part is that the build **worked**. `ld` reads the archive
+properly, so the binary linked and printed 7. What was wrong was fmake's
+account of it:
+
+    libraries        (unresolved)  __rdl_alloc, __rdl_alloc_zeroed,
+                                   __rdl_dealloc, __rdl_realloc, __rg_oom
+                                   no x86_64/64le library exports these --
+                                   name it with --ldflags
+
+Every one of those five is defined two members away, in
+`std-...cgu.12.rcgu.o` and `cgu.14`, which `readelf` confirms and `nm`
+would not look at. So the reader is sent hunting for a library that does
+not exist and is not needed -- §113's fault again, advice that names the
+wrong fix -- and this time under fmake's own claim to have worked out where
+each symbol comes from. A build that succeeds while its explanation is
+wrong is worse than one that fails, because the explanation is the half
+`--eject` writes into a build file that outlives it.
+
+### The line arrives where a symbol parser throws it away
+
+bfd prints that message through the ordinary error handler, on to
+**stdout** -- beside the symbols. A parser reading two fields a line takes
+`plugin:` for a symbol type, finds it neither undefined nor uppercase, and
+discards it as file-local. So the one statement the tool made about its own
+failure was landing in the middle of the data and being dropped by the
+rule that ignores locals. 236 such lines went past in a single run.
+
+It is matched on the `bfd plugin:` prefix rather than on the wording. bfd
+reaches that handler only when the plugin path has gone wrong, and a
+pattern tuned to one release's sentence is a check that stops firing when
+the sentence changes -- which is how the version-macro pattern in eeaa081
+managed to match nothing at all.
+
+### The remedy is named only where the file says it
+
+The message names `llvm-nm-19` because the plugin said `Producer:
+'LLVM19.1.7'`, and only after `shutil.which` agrees that binary exists;
+with no producer named it says `llvm-nm` and invents no version. That
+distinction is the whole of §113 in one line, and the case checks both.
+
+The remedy was run rather than reasoned about. With `NM=llvm-nm-19` the
+same tree resolves 161 externals, finds 148 of them in libc, and asks for
+`-lgcc_s` for the unwinder -- a complete and correct account, from the
+instrument that can read the file. Two other candidate remedies were
+measured and are **not** offered:
+
+- **the matching gold plugin** gives the bitcode view rather than the ELF
+  one, which is the same answer `llvm-nm` gives, so it is the cause worth
+  knowing and not a second fix;
+- **`--target=elf64-x86-64`**, which does silence the plugin, gives that
+  same bitcode view and hardcodes a target fmake would then have to guess.
+
+### Scoped to where the decision is made
+
+`lib_exports` reads `nm` too and ignores its status the same way, and it is
+left alone -- measured, not assumed: of every `.a` and `.so` in
+`/usr/lib/x86_64-linux-gnu`, **none** trips the plugin. Dying there would
+also be wrong in shape, since that path sweeps hundreds of libraries the
+tree never named, while `read_symbols` is handed files the tree asked for
+and is where the link set is decided.
+
+### What the mutation showed
+
+Reverting the guard and running the case does not merely fail it. It
+prints
+
+    * main.c looked like it defined main() but the object does not export
+      it; skipping
+    !!! no target could be built
+
+on a `main.c` that does define `main()`. That is the shape of the whole
+defect in one line: an unread symbol table becomes a false statement about
+the source, and the message that carries it names the file that is
+innocent.
+
+The fixture is three shims and the machine's own `nm`. One prints the
+plugin line with a producer, one prints it without, and the declining half
+runs the same tree through the real `nm` and requires it to build and to
+say nothing -- because a refusal nobody has watched decline has not been
+shown to discriminate.

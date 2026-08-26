@@ -4146,6 +4146,35 @@ def archive_units(rels, root, cfg, jobs):
 	return made
 
 
+# bfd names itself before the message, and prints it through the ordinary
+# error handler on to *stdout*, where a parser reading two fields a line
+# takes `plugin:' for a symbol type and discards it as file-local. Matched
+# on the prefix rather than on the wording: bfd reaches this handler only
+# when the plugin path has gone wrong, and a pattern tuned to one release's
+# sentence is a check that stops firing when the sentence changes.
+_PLUGIN_FAIL = re.compile(r"^(?:[^\n]*: )?bfd plugin: (.*)$", re.M)
+_PLUGIN_PRODUCER = re.compile(r"Producer: '\s*LLVM ?(\d+)")
+
+
+def plugin_failure(*streams):
+	"""What a BFD plugin said when it claimed a file and could not read it.
+
+    Returns (message, suggested nm) or None. The suggestion is named only
+    when the plugin says which compiler wrote the file, because an nm named
+    on a guess is the advice section 113 is about.
+    """
+	for text in streams:
+		hit = _PLUGIN_FAIL.search(text or "")
+		if not hit:
+			continue
+		major = _PLUGIN_PRODUCER.search(hit.group(1))
+		want = f"llvm-nm-{major.group(1)}" if major else None
+		if want and not shutil.which(want):
+			want = f"an nm from LLVM {major.group(1)}"
+		return hit.group(1), want or "llvm-nm"
+	return None
+
+
 def read_symbols(units, cfg, jobs):
 	def one(u):
 		r = subprocess.run([cfg.nm, "--format=posix", u.obj],
@@ -4177,6 +4206,26 @@ def read_symbols(units, cfg, jobs):
 			    f"Set [toolchain] nm in {CONF_FILE}, or $NM, to one that "
 			    f"understands {describe_identity(elf_identity(u.obj))} "
 			    f"objects.")
+		# Exiting 0 is not the same as having read the file. A plugin that
+		# claims an object and then fails leaves nm reporting no symbols
+		# and exiting 0, so the file reads as *empty* rather than as
+		# unread -- which is the failure the comment above describes,
+		# arriving by the one route the exit status cannot show. Believing
+		# it is worse than a link error: fmake goes on to say confidently
+		# where each symbol came from, and it is wrong.
+		bad = plugin_failure(r.stdout, r.stderr)
+		if bad:
+			said, want = bad
+			die(f"{cfg.nm} could not read {u.rel}'s symbols:\n"
+			    f"    bfd plugin: {said}\n"
+			    f"A plugin claimed that file and then failed, and nm "
+			    f"reports that as no symbols and exit 0 rather than as "
+			    f"an error -- so it reads as an object defining nothing "
+			    f"and needing nothing, which the closure cannot see "
+			    f"past. Which plugin nm loads is a property of this "
+			    f"machine rather than of the tree.\n"
+			    f"Set [toolchain] nm in {CONF_FILE}, or $NM, to "
+			    f"{want}, which reads the file the plugin could not.")
 		undef, strong, weak = set(), set(), set()
 		for line in r.stdout.splitlines():
 			parts = line.split()

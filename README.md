@@ -569,6 +569,14 @@ bitcode, which `nm` reads only where `LLVMgold.so` is installed as a BFD
 plugin. Where it is not, fmake says so and names `llvm-nm` rather than
 letting a file that reads as defining nothing quietly drop out of the link.
 
+**A plugin that is present but stale is the harder half**, and it is checked
+now. An ELF object carrying an `.llvmbc` section — every `std` object rustc
+ships is one — gets claimed by that plugin, and if the plugin is older than
+the compiler that wrote the file it fails, at which point `nm` reports *no
+symbols* and exits 0 rather than falling back to the ELF symbol table beside
+it. fmake refuses instead of believing it, quotes what `nm` said, and names
+the `llvm-nm` the plugin's own `Producer:` field points at.
+
 **Project-wide compile flags go on the link line too**, which is what makes
 `--coverage`, `-pg` and `-fopenmp` work — each is an instrumentation *and* a
 runtime, and the compiler links the runtime only if it sees the flag again

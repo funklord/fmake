@@ -12988,6 +12988,78 @@ def an_unreadable_bitcode_object_says_it_is_bitcode(t):
 	      f"identity, which is the advice this case exists to remove: {out}")
 
 
+@case
+def a_plugin_that_claims_an_object_and_then_fails_is_not_an_empty_one(t):
+	"""nm exiting 0 is not nm having read the file.
+
+	The case beside this is the loud failure: nm cannot open a bitcode
+	file, says so, and exits non-zero. This is the quiet one. A BFD plugin
+	claims an object -- an ordinary ELF file carrying an .llvmbc section,
+	which is what rustc's std objects are -- fails on it, and nm then
+	reports *no symbols* and exits 0 rather than falling back to the ELF
+	symbol table that is sitting right there.
+
+	fmake believed it. read_symbols guarded the status and nothing else,
+	so the object arrived as one defining nothing and needing nothing,
+	which the closure cannot see past. Measured on a real rust staticlib:
+	nm refused 241 of its 244 members, dropping 1830 global definitions,
+	and fmake reported five symbols as unresolved with `no x86_64/64le
+	library exports these -- name it with --ldflags' when every one of
+	them was defined two members away. The link worked, because ld reads
+	the archive properly; what was wrong was fmake's account of it, which
+	is the half that gets ejected into a build file.
+
+	The plugin line goes to stdout, where a parser taking two fields a
+	line reads `plugin:' as a symbol type and discards it as file-local.
+	So the shim writes it there, and the declining half runs the same tree
+	through the real nm."""
+	def shim(name, body):
+		path = os.path.join(t.dir, name)
+		with open(path, "w") as fh:
+			fh.write("#!/bin/sh\n" + body)
+		os.chmod(path, 0o755)
+		return path
+
+	said = ("LLVM gold plugin has failed to create LTO module: Opaque "
+	        "pointers are only supported in -opaque-pointers mode "
+	        "(Producer: 'LLVM19.1.7' Reader: 'LLVM 14.0.6')")
+	# No symbols, the plugin's complaint on stdout, and a status of 0 --
+	# all three together are the whole condition.
+	named = shim("nm-plugin", f'echo "bfd plugin: {said}"\nexit 0\n')
+	# The same failure from a plugin that does not say who wrote the file.
+	# There is then no version to name, and naming one anyway would be the
+	# advice section 113 exists to refuse.
+	anon = shim("nm-plugin-anon",
+	            'echo "bfd plugin: could not create LTO module"\nexit 0\n')
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	r = t.fmake(env={"NM": named})
+	check(r.returncode != 0,
+	      f"a symbol read that did not happen was believed: {r.stdout}")
+	out = r.stdout + r.stderr
+	check("bfd plugin" in out,
+	      f"the message does not quote what nm actually said: {out}")
+	check("llvm-nm-19" in out or "LLVM 19" in out,
+	      f"the message does not name an nm from the compiler the plugin "
+	      f"says wrote the file: {out}")
+
+	r = t.fmake(env={"NM": anon})
+	check(r.returncode != 0,
+	      f"the refusal is keyed on the wording rather than on the plugin "
+	      f"having failed: {r.stdout}")
+	out = r.stdout + r.stderr
+	check("llvm-nm" in out and not re.search(r"llvm-nm-\d", out),
+	      f"a version was invented for a plugin that never said one: "
+	      f"{out}")
+
+	# Declining: the same tree, the machine's own nm, and nothing to say.
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the check fires on an ordinary build: {r.stdout}{r.stderr}")
+	check("bfd plugin" not in r.stdout + r.stderr,
+	      f"a build with no plugin trouble reported some: {r.stdout}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c):
