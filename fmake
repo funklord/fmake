@@ -3537,6 +3537,58 @@ def _missing_header(msg):
 	return m.group(1).strip().strip("'\"")
 
 
+# gcc quotes an identifier with U+2018/U+2019 and clang with an
+# apostrophe, so the class carries all three. Written as escapes because
+# this file is ASCII: the characters are the compiler's, not ours.
+_QUOTE = "['\u2018\u2019]"
+_Q = _QUOTE
+
+# Four spellings, one per way the three real instances failed. gcc says
+# `undeclared' for C and `was not declared in this scope' for C++; clang
+# says `use of undeclared identifier'; and a source that guards itself
+# says so with #error, which openmlx4 does and which never reaches the
+# other three because the preprocessor stops first.
+RE_VERSION_MISSING = tuple(re.compile(p) for p in (
+    "^" + _Q + r"([A-Za-z_]\w*)" + _Q + r" undeclared",
+    "^" + _Q + r"([A-Za-z_]\w*)" + _Q + r" was not declared in this scope",
+    "^use of undeclared identifier " + _Q + r"([A-Za-z_]\w*)" + _Q,
+    r'^#error\s+.*?\b([A-Za-z_]\w*VERSION)\b',
+))
+
+
+def _undeclared_version(msg, root):
+	"""A version macro a build system was expected to inject, or None.
+
+    An undeclared identifier is nearly always a fault in the source, and
+    answering every one of them with "define it on the command line" would
+    be advice that is wrong more often than right. So this answers for one
+    shape only: a name ending in VERSION, in a tree that carries a VERSION
+    file. That is a build system's macro rather than the program's, and the
+    file is the value.
+
+    Three have been met in two projects. beerssh spells it
+    BSSH_VERSION_STRING and hands it to QStringLiteral, where the failure
+    is a parse error inside a Qt macro and names the macro rather than the
+    cause; openmlx4 spells it OMLX4_VERSION. In each the source cannot be
+    compiled by anything that does not already know the convention, which
+    is exactly what a second build system does not.
+    """
+	name = None
+	for pattern in RE_VERSION_MISSING:
+		m = pattern.match(msg.strip())
+		if m:
+			name = m.group(1)
+			break
+	if not name or not name.endswith("VERSION"):
+		return None
+	try:
+		with open(os.path.join(root, "VERSION")) as fh:
+			value = fh.read().strip()
+	except OSError:
+		return None
+	return (name, value) if value else None
+
+
 def _headers_in_tree(name, headers):
 	"""Where this tree holds the header the compiler could not find.
 
@@ -3769,6 +3821,19 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					     f"it with @pkg")
 					note(f"if {blame} belongs to another platform, "
 					     f"@os NAME or @arch NAME keeps it out of this build")
+			found_version = _undeclared_version(msg, root)
+			if found_version:
+				# Same shape as the header remedy above: name the exact
+				# line rather than the class of problem. The value is read
+				# from the tree rather than guessed, so it is either right
+				# or the file is wrong, and both are worth knowing.
+				vname, vvalue = found_version
+				note(f"{vname} is defined by no file in this tree, which is "
+				     f"what a build system injecting a version looks like")
+				note(f"VERSION here says {vvalue}")
+				note(f"[project] cflags = ['-D{vname}=\"{vvalue}\"'] "
+				     f"would define it")
+
 			if VERBOSE or len(groups) == 1 and len(hit) == 1:
 				PROGRESS.write(first_err)
 			elif len(hit) > 1:

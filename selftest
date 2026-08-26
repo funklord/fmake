@@ -1199,6 +1199,70 @@ def a_test_is_given_its_arguments(t):
 
 
 @case
+def a_version_the_build_system_injects_is_named_with_its_value(t):
+	"""Three trees in two projects would not compile for want of a macro
+	no source defines, and the compiler cannot say what to do about it.
+
+	beerssh spells it `BSSH_VERSION_STRING' and hands it to
+	`QStringLiteral', so g++ reports a parse error inside a Qt macro and
+	names the macro rather than the cause; it has a second one,
+	`BSSH_TEST_FONT_DIR', that stops its font test the same way. openmlx4
+	spells it `OMLX4_VERSION' and guards it with `#error "... use the
+	Makefile"', which is better and still no help to a second build system,
+	since using the Makefile is the thing that is not happening.
+
+	Every one of these projects keeps the number in a `VERSION' file --
+	thirteen of the fourteen do, and `code-style.md' settles it -- so the
+	value is not a guess. Read it and name the exact line, which is what
+	the missing-header remedy beside this already does.
+
+	**The bound is the point.** An undeclared identifier is nearly always a
+	fault in the source, and answering all of them with "define it on the
+	command line" would be advice that is wrong far more often than right.
+	So it answers only where the name ends in VERSION *and* the tree
+	carries a VERSION file, and this checks both halves of that as well as
+	the help itself -- a heuristic nobody has watched refuse is one that
+	has not been shown to discriminate."""
+	t.write("VERSION", "2.4.1\n")
+	t.write("main.c", '#include <stdio.h>\n'
+	        'int main(void){ printf("%s\\n", MYAPP_VERSION); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode != 0, "a tree missing its version macro built anyway")
+	out = r.stdout + r.stderr
+	check("MYAPP_VERSION is defined by no file in this tree" in out,
+	      f"the missing version was not named: {out}")
+	check("VERSION here says 2.4.1" in out,
+	      f"the value was not read from the VERSION file: {out}")
+	check("""cflags = ['-DMYAPP_VERSION="2.4.1"']""" in out,
+	      f"the exact line to add was not offered: {out}")
+
+	# The #error spelling, which is openmlx4's and which never reaches the
+	# other three because the preprocessor stops first.
+	t.write("main.c", '#if !defined(MYAPP_VERSION)\n'
+	        '#error "MYAPP_VERSION must be defined by the build"\n'
+	        '#endif\nint main(void){ return 0; }\n')
+	out = t.fmake().stdout
+	check("MYAPP_VERSION is defined by no file in this tree" in out,
+	      f"a source guarding itself with #error was not understood: {out}")
+
+	# First bound: an ordinary undeclared identifier is a fault in the
+	# source, and gets no advice about defining it.
+	t.write("main.c", "int main(void){ return not_a_thing; }\n")
+	out = t.fmake().stdout
+	check("defined by no file in this tree" not in out,
+	      f"an ordinary undeclared name was answered as a version: {out}")
+
+	# Second bound: no VERSION file, so there is no value to offer and
+	# nothing worth saying.
+	os.unlink(os.path.join(t.dir, "VERSION"))
+	t.write("main.c", '#include <stdio.h>\n'
+	        'int main(void){ printf("%s\\n", MYAPP_VERSION); return 0; }\n')
+	out = t.fmake().stdout
+	check("defined by no file in this tree" not in out,
+	      f"a tree with no VERSION file was told what its version is: {out}")
+
+
+@case
 def a_test_is_given_its_environment(t):
 	"""beerssh's `test` target is three environment variables, and two of
 	them are not a preference.

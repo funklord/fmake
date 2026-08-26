@@ -171,7 +171,8 @@ that had been green about nothing for five commits ·
 [118. fuzznet's evaluation, and a project that wants no artifact](#118-fuzznets-evaluation-and-a-project-that-wants-no-artifact) ·
 [119. raidcfgd's evaluation, and a class that moved between Qts](#119-raidcfgds-evaluation-and-a-class-that-moved-between-qts) ·
 [120. beerssh's evaluation, and the environment a suite needs](#120-beersshs-evaluation-and-the-environment-a-suite-needs) ·
-[121. netcfgd's evaluation, and a tree fmake only half sees](#121-netcfgds-evaluation-and-a-tree-fmake-only-half-sees)
+[121. netcfgd's evaluation, and a tree fmake only half sees](#121-netcfgds-evaluation-and-a-tree-fmake-only-half-sees) ·
+[122. openmlx4's evaluation, and the macro no source defines](#122-openmlx4s-evaluation-and-the-macro-no-source-defines)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9599,3 +9600,84 @@ finding about the evaluation.** The tree carries no such archive; a
 Recreating the worktree rather than cleaning around it is the cheap fix, and
 the general shape is the one §120 already paid for: measure a tree that has
 been built in, and some of what you measure is your own leavings.
+
+## 122. openmlx4's evaluation, and the macro no source defines
+
+The thirteenth, in a throwaway worktree as the others were.
+
+### It derives the list a person maintains
+
+fmake compiles **exactly the fifteen sources the Makefile names in `SRCS`**,
+derived from symbol closure rather than read from anywhere, and links a
+program that prints `openmlx4 1.0.0`. It also finds **liblzma by itself**:
+`src/mfa.c` calls into it under `OMLX4_HAVE_LZMA`, and where the Makefile
+carries `MFALIBS = -llzma` for that, fmake resolves it from the undefined
+symbols. All thirteen tests build and pass.
+
+What it has to be told is four defines and one exclusion, and every one is a
+fact rather than a knob:
+
+- `-D_POSIX_C_SOURCE=200809L` and `-D_DEFAULT_SOURCE`, which decide what
+  glibc's headers expose and are therefore not decoration;
+- `-DOMLX4_HAVE_LZMA`, the optional feature, on because liblzma is here;
+- `-DOMLX4_VERSION="1.0.0"`, which is the entry below;
+- and `tests/diff_layouts.c`, which is not part of `make test` at all. It
+  belongs to a separate `check-mstflint` target, needs a checkout at
+  `MSTFLINT ?= ../mstflint-4.22`, and is compiled with `-Os -D_DEFAULT_SOURCE`
+  rather than the project's warning set -- deliberately, since it is somebody
+  else's code held to their own warnings. Another instance of §17's limit,
+  and the clearest one yet: the file is not excluded anywhere, it simply has
+  a different build.
+
+### A version macro that no source defines, three times over
+
+**This is the most common reason a private project will not build cold**, met
+now in two projects and three files. beerssh's `BSSH_VERSION_STRING` comes
+from `beerssh.pro` and its `BSSH_TEST_FONT_DIR` from `tests/tests.pro`;
+openmlx4's `OMLX4_VERSION` comes from its Makefile, which reads the `VERSION`
+file. In each the source cannot be compiled by anything that does not already
+know the convention, which is exactly what a second build system does not.
+
+The compiler is no help, and each fails differently. beerssh reports a parse
+error *inside* `QStringLiteral` and names the macro rather than the cause.
+openmlx4 does better and guards itself:
+
+    #error "OMLX4_VERSION must be defined by the build; use the Makefile"
+
+which is honest and still useless here, because using the Makefile is the
+thing that is not happening.
+
+**So fmake reads the VERSION file and names the exact line**, the same remedy
+shape as the missing-header one beside it:
+
+    * OMLX4_VERSION is defined by no file in this tree, which is what a
+      build system injecting a version looks like
+      VERSION here says 1.0.0
+      [project] cflags = ['-DOMLX4_VERSION="1.0.0"'] would define it
+
+The value is read rather than guessed, so it is either right or the VERSION
+file is wrong, and both are worth knowing. Every private project keeps one --
+thirteen of the fourteen, which `code-style.md` settles -- so this is a
+convention the tool can rely on rather than a heuristic about names.
+
+**The bound is the point, and the case checks it.** An undeclared identifier
+is nearly always a fault in the source; answering all of them with "define it
+on the command line" would be wrong far more often than right. It fires only
+where the name ends in VERSION *and* the tree carries a VERSION file, and the
+case checks both refusals as well as the help, because a heuristic nobody has
+watched decline is one that has not been shown to discriminate.
+
+### Four spellings, and a quote that is not an apostrophe
+
+The first version of the check matched one spelling and fired on neither real
+project. gcc says `undeclared` for C and `was not declared in this scope` for
+C++, clang says `use of undeclared identifier`, and a self-guarding source
+says `#error` -- which reaches none of the other three, because the
+preprocessor stops first. All four are matched now.
+
+**And gcc does not quote with an apostrophe.** It uses U+2018 and U+2019, so a
+pattern written around `'` matched nothing at all and the remedy stayed
+silent on the tree that motivated it. Caught by running it rather than by
+reading it, which is the only way that class of thing is ever caught. The
+characters are written as escapes here, since this file is ASCII and they are
+the compiler's rather than ours.
