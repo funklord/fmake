@@ -171,6 +171,12 @@ CACHE_VER   = 7   # scans record the class of an out-of-line member
 C_EXTS      = {".c"}
 CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
 SRC_EXTS    = C_EXTS | CXX_EXTS
+# Assembly is not built, and a generator emitting some is where the silence
+# costs something: the file is produced, nothing refers to it again, and the
+# link fails naming symbols rather than the file holding them. Only the
+# assembly extensions, because that is what has been met -- a wider guess
+# about languages fmake does not build would be speculation.
+UNBUILT_SRC_EXTS = {".s", ".S", ".asm"}
 HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
 
 SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
@@ -1545,6 +1551,19 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			     f"{'them' if len(extra) > 1 else 'it'} in outputs; add "
 			     f"{'them' if len(extra) > 1 else 'it'}, or a missing one "
 			     f"will not re-run the rule")
+
+	# A generated file nothing can compile is worth saying out loud. Left
+	# silent it becomes a link error listing symbols, under advice about
+	# naming libraries with --ldflags, when the answer is a file fmake
+	# wrote itself a moment earlier. anti-avx generates a 218K .s holding
+	# 233 case_N symbols and lands exactly there.
+	stranded = sorted({o for o in produced
+	                   if os.path.splitext(o)[1] in UNBUILT_SRC_EXTS})
+	for rel in stranded[:5]:
+		note(f"{rel} was generated and nothing will compile it: fmake "
+		     f"builds C and C++, not {os.path.splitext(rel)[1]}")
+	if len(stranded) > 5:
+		note(f"... and {len(stranded) - 5} more")
 
 	return produced
 

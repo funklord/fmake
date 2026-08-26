@@ -172,7 +172,8 @@ that had been green about nothing for five commits ·
 [119. raidcfgd's evaluation, and a class that moved between Qts](#119-raidcfgds-evaluation-and-a-class-that-moved-between-qts) ·
 [120. beerssh's evaluation, and the environment a suite needs](#120-beersshs-evaluation-and-the-environment-a-suite-needs) ·
 [121. netcfgd's evaluation, and a tree fmake only half sees](#121-netcfgds-evaluation-and-a-tree-fmake-only-half-sees) ·
-[122. openmlx4's evaluation, and the macro no source defines](#122-openmlx4s-evaluation-and-the-macro-no-source-defines)
+[122. openmlx4's evaluation, and the macro no source defines](#122-openmlx4s-evaluation-and-the-macro-no-source-defines) ·
+[123. anti-avx's evaluation, and the file fmake would not build](#123-anti-avxs-evaluation-and-the-file-fmake-would-not-build)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9681,3 +9682,97 @@ silent on the tree that motivated it. Caught by running it rather than by
 reading it, which is the only way that class of thing is ever caught. The
 characters are written as escapes here, since this file is ASCII and they are
 the compiler's rather than ours.
+
+## 123. anti-avx's evaluation, and the file fmake would not build
+
+The fourteenth, in a throwaway worktree. It is the first tree fmake cannot
+finish, and the reason is a capability rather than a configuration.
+
+anti-avx rewrites VEX-encoded instructions in x86-64 PE executables so a
+binary built with an `/arch:AVX2` baseline runs on a CPU that has no AVX. Its
+own sources are C; what it manipulates is machine code.
+
+### Four tests out of five, on four lines
+
+There is no program to build here -- `all: check` builds tests -- so a plain
+`fmake` produces only `tool/icache_bench`, correctly, since it holds the one
+`main` that is not a test. Given four lines of configuration, four of the five
+test binaries build and pass.
+
+**Three of those four lines are compile flags, and they are semantics.** The
+Makefile says so itself:
+
+> The ISA flags are load-bearing rather than decoration: the whole point of
+> this code is to run where AVX and F16C do not exist, so the compiler is
+> forbidden from emitting either. `-mno-f16c` in particular stops it from
+> "helpfully" recognising the conversion idiom and emitting the very
+> instruction the code exists to replace.
+
+Without them the intrinsics do not compile at all -- `inlining failed in call
+to 'always_inline' '_mm_shuffle_epi8': target specific option mismatch` --
+which is the loud failure and the lucky one. **The quiet failure is the one
+worth naming**: a reference implementation compiled without `-mno-f16c` may be
+given the F16C instruction by the compiler, so the test would compare F16C
+against F16C and pass while checking nothing. This is a tree where a default
+flag set is not a safe guess, and it is the clearest argument met so far that
+`cflags` is a statement about correctness rather than a preference.
+
+### The generator works; the file it writes does not get built
+
+The lowering test is checked against cases emitted by the rewriter itself, so
+they cannot drift from what it really produces. One generator run writes both
+halves -- `lowering_cases.s` and `lowering_cases.inc` -- and
+`[generate.lowering_cases]` expresses that exactly: fmake ran it, produced
+both, and compiled `test/lowering_test.c` against the `.inc`.
+
+Then it dropped the `.s`. 218K of it, defining 233 `case_N` symbols, written
+by fmake and never mentioned again, because **`SRC_EXTS` is C and C++ and
+nothing else.** What the reader got was a link failure listing every one of
+those symbols under
+
+    name the missing libraries with --ldflags
+
+when the symbols were in a file fmake had written itself a moment earlier.
+**Advice that points away from the answer is worse than silence.**
+
+The remedy is the same shape as the unreferenced `.qrc` beside it -- say what
+was produced and not built:
+
+    gen/lowering_cases.s was generated and nothing will compile it:
+    fmake builds C and C++, not .s
+
+Scoped to assembly extensions rather than to "any file fmake does not
+compile", because assembly is what has been met and a wider set would be a
+guess. A `.d`, a `.json` or a header is data or is consumed, and neither
+should draw a complaint.
+
+### Whether fmake should assemble is open, and is not this
+
+**Not decided here.** The README says fmake builds C and C++, and assembly is
+adjacent rather than inside that -- so adding it changes what the tool claims
+to be, which is a decision for the copyright holder rather than one to take
+while evaluating something else.
+
+The cost looks small. Symbol closure already works on object symbol tables, so
+an assembled `.o` participates unchanged and §3 needs nothing; the work is
+recognising the extension, choosing the compile command -- `cc` assembles both
+`.s` and `.S` -- and scanning `.S` for includes, since that one goes through
+the preprocessor and `.s` does not. Against that, `.S` raises questions
+nothing here has answered: whether an assembly file can carry `@target`, and
+whether a `main` written in assembly makes a root.
+
+**But the demand is one file.** Measured across all thirteen private projects:
+**no tracked `.s`, `.S` or `.asm` anywhere.** anti-avx's assembly does not
+appear in that count because it is generated rather than committed, which is
+the whole of the demand -- one generated file, feeding one test binary, in one
+project, emitted by a Python script that project already controls. An earlier
+draft of this section said the payoff was "not only this tree"; that was
+written before the count and the count does not support it.
+
+So the honest shape of the question is not "is assembly cheap to add" but
+"is one test in one tree worth widening what fmake claims to build", and the
+alternatives are real: the generator could emit C, or that test could keep the
+four-line Makefile it already has. Recorded with the number rather than the
+impression, which is what the next pass needs.
+
+Recorded so the next pass has the measurement rather than the impression.

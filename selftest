@@ -1199,6 +1199,54 @@ def a_test_is_given_its_arguments(t):
 
 
 @case
+def a_generated_file_nothing_can_compile_is_named(t):
+	"""anti-avx generates 218K of assembly and fmake dropped it silently.
+
+	Its lowering test is checked against cases emitted by the rewriter
+	itself, so they cannot drift from what it really produces: one
+	generator run writes `lowering_cases.s' and `lowering_cases.inc', the
+	test includes the `.inc' and links the `.s'. fmake ran the generator,
+	wrote both, compiled the test against the `.inc' -- and never mentioned
+	the `.s' again, because assembly is not a source kind it builds.
+
+	What the reader got was a link failure listing 233 undefined `case_N'
+	symbols under the advice *name the missing libraries with --ldflags*,
+	when the symbols were in a file fmake had written itself a moment
+	earlier. **Advice that points away from the answer is worse than
+	silence**, and this is the same shape as the unreferenced `.qrc' beside
+	it: the fix is to say what was produced and not built, rather than to
+	build it.
+
+	Whether fmake should assemble is a separate question and a larger one.
+	This is only that it must not drop a file without a word."""
+	t.write("src/mk.py", """
+import sys
+open(sys.argv[1], "w").write(".globl case_0\\ncase_0:\\n\\tret\\n")
+open(sys.argv[2], "w").write("#define CASE_COUNT 1\\n")
+""")
+	t.write("main.c", '#include "cases.inc"\n'
+	        "int main(void){ return CASE_COUNT - 1; }\n")
+	t.write("fmake.toml", f"""
+[project]
+include-dirs = ["gen"]
+
+[generate.cases]
+command = "{sys.executable} src/mk.py gen/cases.s gen/cases.inc"
+inputs  = ["src/mk.py"]
+outputs = ["gen/cases.s", "gen/cases.inc"]
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("gen/cases.s was generated and nothing will compile it" in out,
+	      f"the stranded assembly was not named: {out}")
+
+	# The half that is built is not complained about, or the note would be
+	# noise on every generator that emits a header beside its source.
+	check("cases.inc was generated and nothing" not in out,
+	      f"an ordinary generated include was called stranded: {out}")
+
+
+@case
 def a_version_the_build_system_injects_is_named_with_its_value(t):
 	"""Three trees in two projects would not compile for want of a macro
 	no source defines, and the compiler cannot say what to do about it.
