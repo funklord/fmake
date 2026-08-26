@@ -245,8 +245,12 @@ is how a stale binary gets tested. `@test` and `@test no` in the source, or
 `test-args` under `[target.NAME]` gives a test its arguments, and `test-env`
 under either takes `KEY=VALUE` settings for the environment it runs in --
 added to what fmake inherited rather than replacing it, with the target's
-setting winning over the project's. Ejected build files get a `test` target
-that `all` does not depend on, and carry both.
+setting winning over the project's. A value may say `$bin(NAME)` for where
+this build puts a target, which is how a test is told the path of the program
+it exercises without the filename being written twice; **naming a target that
+way also asks for it**, so `fmake test` on a clean tree builds it. Ejected
+build files get a `test` target that `all` does not depend on, carry all of
+this, and depend on whatever `$bin()` named.
 
 A suite's environment is often load-bearing rather than decorative: beerssh
 needs `QT_QPA_PLATFORM=offscreen` or a widget test waits forever on an event
@@ -354,7 +358,8 @@ sources = ["src/alpha.c", "src/shared.c"]
 [target.client_test]            # `fmake test` runs it with an argument
 test-args    = ["doc/schema/socket.json"]
 test-timeout = 300              # seconds; 0 removes the limit
-test-env     = ["QT_QPA_PLATFORM=offscreen"]   # added to, not replacing
+test-env     = ["QT_QPA_PLATFORM=offscreen",   # added to, not replacing
+                "APP_BINARY=$bin(greet)"]      # where this build put it
 
 [generate.proto]                # a generator, and what it read
 command = "protoc --dependency_out=gen/proto.d --c_out=gen $in"

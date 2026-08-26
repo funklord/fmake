@@ -1385,6 +1385,78 @@ def a_version_the_build_system_injects_is_named_with_its_value(t):
 
 
 @case
+def a_test_told_where_a_program_is_gets_the_one_this_build_made(t):
+	"""bbq-predictor sets BBQ_APP_BINARY to the artifact it just built, and
+	`test-env' could only say that as a literal.
+
+	Spelled literally it is the target's filename written twice -- once as
+	the target and once in `fmake.toml' -- and the copy in the config is the
+	one that goes stale when the other changes. `$bin(NAME)' asks the build
+	instead, which is the only party that knows.
+
+	**Naming a target this way asks for it.** Their Makefiles say so
+	outright: bbq-predictor's `test' depends on `$(ARTIFACT)'. Without that,
+	`fmake test' on a clean tree hands a test the path of something nobody
+	built, which is a test failing for the one reason that is not about the
+	code.
+
+	The ejected forms have to say it in their own vocabulary or they are not
+	the same build. Measured before they did: the ejected Makefile ran the
+	test, the test could not open `./app', and the live run had been right
+	all along because it builds what test-env asks for. Both are checked
+	here by reading the rule, since a generated build file that merely
+	mentions a path is not one that depends on it."""
+	t.write("app.c", '#include <stdio.h>\n'
+	        'int main(void){ printf("app\\n"); return 0; }\n')
+	t.write("tests/needs_app.c", """
+#include <stdio.h>
+#include <stdlib.h>
+int main(void){
+	const char *p = getenv("APP_BINARY");
+	if (!p) { printf("APP_BINARY unset\\n"); return 1; }
+	FILE *f = fopen(p, "rb");
+	if (!f) { printf("cannot open %s\\n", p); return 2; }
+	fclose(f);
+	printf("reached %s\\n", p);
+	return 0;
+}
+""")
+	t.write("fmake.toml",
+	        '[target.app]\nsources = ["app.c"]\n\n'
+	        '[project]\ntest-env = ["APP_BINARY=$bin(app)"]\n')
+
+	# A clean tree: the app must be built because a test asked where it is.
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check("reached" in r.stdout,
+	      f"the test could not open what $bin(app) named: {r.stdout}")
+
+	# Both ejected forms carry the value AND depend on the artifact.
+	mk = t.fmake("--eject", "make").stdout
+	check("APP_BINARY=./app" in mk, f"make eject dropped the value: {mk}")
+	rule = [l for l in mk.splitlines() if l.startswith("test:")]
+	check(rule and "app" in rule[0].split(":", 1)[1],
+	      f"the ejected test rule does not depend on the app: {rule}")
+
+	nj = t.fmake("--eject", "ninja").stdout
+	check("APP_BINARY=./app" in nj, f"ninja eject dropped the value: {nj}")
+	edge = [l for l in nj.splitlines() if l.startswith("build run-")]
+	check(edge and " app" in edge[0],
+	      f"the ninja run edge does not depend on the app: {edge}")
+
+	# A name that is no target is refused rather than passed through: a
+	# literal `$bin(typo)' in the environment is a test looking for a file
+	# of that name, which reports as something else entirely.
+	t.write("fmake.toml",
+	        '[target.app]\nsources = ["app.c"]\n\n'
+	        '[project]\ntest-env = ["APP_BINARY=$bin(nosuch)"]\n')
+	r = t.fmake("test")
+	check(r.returncode != 0, "an unknown $bin() name was accepted")
+	check("names no target here" in r.stdout + r.stderr,
+	      f"the unknown name was not explained: {r.stdout}{r.stderr}")
+
+
+@case
 def a_test_is_given_its_environment(t):
 	"""beerssh's `test` target is three environment variables, and two of
 	them are not a preference.

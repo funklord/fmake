@@ -1123,7 +1123,63 @@ def describe_exit(rc):
 DEFAULT_TEST_TIMEOUT = 60
 
 
-def test_env_pairs(conf, t):
+RE_BIN_REF = re.compile(r"\$bin\(([^)]*)\)")
+
+
+def _sub_bin(item, where, paths):
+	"""Resolve `$bin(NAME)' to where this build puts NAME.
+
+    A test that runs the program it is testing has to be told where it is,
+    and the name is the build's to know rather than the reader's to repeat.
+    bbq-predictor sets BBQ_APP_BINARY to the artifact it just built; spelled
+    literally that is the target's filename written twice, and the copy in
+    fmake.toml is the one that goes stale when the other changes.
+
+    The value is the path this build itself uses to reach that target, so
+    the test is handed exactly what fmake would run. That is where the
+    output goes -- absolute when BUILD_DIR is -- for a live run, and `./NAME'
+    in an ejected build, whose recipe invokes it that way from the tree root.
+    The two spellings differ and resolve to the same file, which is the same
+    trade the ejected build makes everywhere else: it is a snapshot of this
+    build, not a translation of it.
+
+    An unknown name is refused rather than left as text: a literal
+    `$bin(typo)' in the environment is a test looking for a file called
+    `$bin(typo)', which reports as something else entirely.
+    """
+	if paths is None:
+		return item
+
+	def one(m):
+		name = m.group(1).strip()
+		if name not in paths:
+			known = ", ".join(sorted(paths)) or "none"
+			die(f"{where} test-env: $bin({name}) names no target here "
+			    f"(this build has: {known})")
+		return paths[name]
+
+	return RE_BIN_REF.sub(one, item)
+
+
+def bin_deps(conf, tests, names):
+	"""Targets these tests name with `$bin()', as build prerequisites.
+
+    A test handed the path of a program needs the program, and an ejected
+    build has to say so in its own vocabulary or `make test' runs the suite
+    against something nobody built. Measured before this existed: the
+    ejected Makefile ran the test, the test could not open `./app', and the
+    live run had been correct for a fortnight because it builds what
+    test-env asks for.
+    """
+	want = set()
+	for src_list in [conf.project.get("test-env", [])] + [
+	        t.conf.get("test-env", []) for t in tests]:
+		for item in src_list:
+			want |= {n.strip() for n in RE_BIN_REF.findall(item)}
+	return sorted({names[n] for n in want if n in names})
+
+
+def test_env_pairs(conf, t, paths=None):
 	"""KEY=VALUE settings for one test, project first and target after.
 
     A list of KEY=VALUE rather than a table because the schema has no table
@@ -1147,11 +1203,11 @@ def test_env_pairs(conf, t):
 		for item in src:
 			if "=" not in item:
 				die(f"{where} test-env wants KEY=VALUE, not {item!r}")
-			out.append(item)
+			out.append(_sub_bin(item, where, paths))
 	return out
 
 
-def run_tests_now(targets, root, outdir, conf, dry_run=False):
+def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None):
 	"""Build step done; now run them. Returns a process exit status.
 
     Sequentially and in name order, because a test suite that passes only
@@ -1172,6 +1228,10 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
     depend on the order they run in.
     """
 	default = conf.project.get("test-timeout", DEFAULT_TEST_TIMEOUT)
+	# Every target, not only the tests: what a test wants the path of is
+	# usually the program under test, which is not itself a test.
+	bin_paths = {x.name: os.path.join(outdir, x.filename)
+	             for x in (known if known is not None else targets)}
 	# What was built is not what is run. `fmake test myapp` builds the
 	# program and the tests, and running the program as a test would report
 	# its exit status as a test result -- which it did, and counted it. The
@@ -1185,7 +1245,7 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False):
 		exe = os.path.join(outdir, t.filename)
 		argv = [exe] + list(t.conf.get("test-args", []))
 		limit = t.conf.get("test-timeout", default) or None
-		pairs = test_env_pairs(conf, t)
+		pairs = test_env_pairs(conf, t, bin_paths)
 		# Inherited and added to rather than replaced: a test needs PATH
 		# and HOME like anything else, and a caller who exported something
 		# meant it.
@@ -6649,6 +6709,23 @@ def build(args, _bootstrapping=False):
 			           if t.test_group in run_groups and t not in wanted]
 		if not wanted and asked_phony:
 			wanted = []         # an action with nothing of ours to build
+		# A test told where the program is has to have the program. Their
+		# Makefiles say this outright -- bbq-predictor's `test' depends on
+		# $(ARTIFACT) -- and without it `fmake test' on a clean tree hands
+		# a test the path of something nobody built. So naming a target in
+		# test-env asks for it, which is the same rule as naming it on the
+		# command line.
+		if run_groups:
+			asked_bin = set()
+			for src_list in [conf.project.get("test-env", [])] + [
+			        t.conf.get("test-env", []) for t in wanted]:
+				for item in src_list:
+					asked_bin |= set(RE_BIN_REF.findall(item))
+			for nm in sorted(asked_bin):
+				dep = by_name.get(nm.strip())
+				if dep is not None and dep not in wanted:
+					wanted.append(dep)
+
 		if run_groups and not held:
 			warn("no test programs here: nothing is in a test directory, "
 			     "named as a test, or marked @test")
@@ -7525,7 +7602,8 @@ def build(args, _bootstrapping=False):
 		say()
 		return run_tests_now([t for t in wanted
 		                      if t.test_group in run_groups],
-		                     root, outdir, conf, args.dry_run)
+		                     root, outdir, conf, args.dry_run,
+		                     known=targets)
 
 	if broken:
 		say()
@@ -7760,6 +7838,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
     an unrelated-looking reason. CC, CXX and AR stay unprefixed and become
     conditional, because those the parent *should* control.
     """
+	# Both ejected forms run their tests from the tree root, so $bin(NAME)
+	# resolves to the same relative path the recipe below invokes.
+	eject_bins = {x.name: "./" + x.filename for x in targets}
+	eject_files = {x.name: x.filename for x in targets}
 	P = "FM_" if fragment else ""
 	_refuse_whitespace(targets, closures, root)
 	common = _eject_flags(cfg.base_cflags() + incflags, root)
@@ -7959,12 +8041,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"all: {names}")
 	a("")
 	for g in group_names:
-		a(f"{group_rule(g)}: $({group_var(g)})")
+		_dep = bin_deps(conf, by_group[g], eject_files)
+		a(f"{group_rule(g)}: $({group_var(g)})"
+		  + ("".join(" " + d for d in _dep) if _dep else ""))
 		for t in sorted(by_group[g], key=lambda x: x.name):
 			argv = " ".join(shlex.quote(x)
 			                for x in t.conf.get("test-args", []))
 			env = " ".join(shlex.quote(p)
-			               for p in test_env_pairs(conf, t))
+			               for p in test_env_pairs(conf, t, eject_bins))
 			a(f"\t{env + ' ' if env else ''}./{t.filename}"
 			  + (f" {argv}" if argv else ""))
 		a("")
@@ -8285,6 +8369,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
                 gen_rules=None, moc=None, uic=None, rcc=None):
 	"""A standalone build.ninja."""
+	# Both ejected forms run their tests from the tree root, so $bin(NAME)
+	# resolves to the same relative path the recipe below invokes.
+	eject_bins = {x.name: "./" + x.filename for x in targets}
+	eject_files = {x.name: x.filename for x in targets}
 	common = " ".join(_eject_flags(cfg.cflags + incflags, root))
 	override = " ".join(_eject_flags(cfg.override, root))
 	L = []
@@ -8494,7 +8582,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		members = sorted(by_group[g], key=lambda x: x.name)
 		a("")
 		cmds = " && ".join(
-		    " ".join([shlex.quote(p) for p in test_env_pairs(conf, t)]
+		    " ".join([shlex.quote(p)
+		              for p in test_env_pairs(conf, t, eject_bins)]
 		             + ["./" + " ".join(shlex.quote(x) for x in [t.filename]
 		                                + list(t.conf.get("test-args", [])))])
 		    for t in members)
@@ -8502,8 +8591,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"  command = {cmds}")
 		a(f"  description = RUN {g}")
 		a("  pool = console")
+		_dep = [_ninja(d) for d in bin_deps(conf, members, eject_files)]
 		a(f"build run-{g}: run_{_mk_ident(g)} | "
-		  f"{' '.join(_ninja(t.filename) for t in members)}")
+		  f"{' '.join([_ninja(t.filename) for t in members] + _dep)}")
 		a(f"build {g}: phony run-{g}")
 
 	# ---- install

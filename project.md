@@ -174,7 +174,8 @@ that had been green about nothing for five commits ·
 [121. netcfgd's evaluation, and a tree fmake only half sees](#121-netcfgds-evaluation-and-a-tree-fmake-only-half-sees) ·
 [122. openmlx4's evaluation, and the macro no source defines](#122-openmlx4s-evaluation-and-the-macro-no-source-defines) ·
 [123. anti-avx's evaluation, and the file fmake would not build](#123-anti-avxs-evaluation-and-the-file-fmake-would-not-build) ·
-[124. bbq-predictor's evaluation, and a version invented in silence](#124-bbq-predictors-evaluation-and-a-version-invented-in-silence)
+[124. bbq-predictor's evaluation, and a version invented in silence](#124-bbq-predictors-evaluation-and-a-version-invented-in-silence) ·
+[125. `$bin()`, and the filename written twice](#125-bin-and-the-filename-written-twice)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9882,3 +9883,60 @@ cannot do is name a path it does not already know**: the value is a literal in
 what it produced. That is fine here and would not be if the name were
 configurable. Recorded rather than fixed, because no project has needed it yet
 and a substitution syntax invented for a case nobody has met is a guess.
+
+## 125. `$bin()`, and the filename written twice
+
+§124 left this recorded rather than fixed: `test-env` carried its values as
+literals, so bbq-predictor's `BBQ_APP_BINARY` had to name the artifact by
+hand. That is the target's filename written twice -- once as the target, once
+in `fmake.toml` -- and the copy in the config is the one that goes stale when
+the other changes. It was recorded rather than fixed on the grounds that no
+project had needed more, which was true and was also the reason to look again
+once one had.
+
+### Asking the build rather than repeating it
+
+A value may now say `$bin(NAME)`, which resolves to where this build puts
+that target. The vocabulary is the one `[generate.*]` already uses -- `$in`,
+`$out`, `$tool` -- and the value is safe to spell with parentheses because
+`test-env` settings go into the environment directly rather than through a
+shell.
+
+**Naming a target that way asks for it.** Their Makefiles say so outright:
+bbq-predictor's `test` depends on `$(ARTIFACT)`. Without that rule, `fmake
+test` on a clean tree hands a test the path of something nobody built, and
+the test fails for the one reason that has nothing to do with the code.
+`$bin()` therefore adds the target to what the run builds, which is the same
+rule as naming it on the command line.
+
+An unknown name is refused with the list of what this build does have, rather
+than left in the environment as text. A literal `$bin(typo)` reaching a test
+is a test looking for a file of that name, which reports as something else
+entirely -- and the message a reader would get names neither the typo nor the
+config.
+
+### The ejected forms had to be made to agree, and were not at first
+
+Both backends carried the *value* immediately, because they share
+`test_env_pairs`. Neither carried the *dependency*, and the difference is the
+whole point of the paragraph above.
+
+Measured rather than reasoned about: the ejected Makefile was run, it built
+the test, ran it, and the test reported `cannot open ./app`. `make test`
+exited 2 while the live `fmake test` had been correct throughout -- the same
+build described two ways, disagreeing about what a test needs. The rule reads
+`test: $(TEST_TARGETS) app` now, and ninja's edge
+`build run-test: run_test | uses_app app`, both derived from the same
+`$bin()` references rather than restated.
+
+The case checks the rule text in both, not merely that the value appears: a
+generated build file that mentions a path is not one that depends on it, and
+mentioning was exactly what it did while failing.
+
+### What it does not do
+
+`$bin()` names a target of this build and nothing else. It is not a general
+substitution syntax, there is no `$(...)`-style expression behind it, and a
+value wanting an absolute path or a directory can still say so literally --
+which is what §124 said about inventing syntax for cases nobody has met, and
+still holds for everything except the one case that turned up.
