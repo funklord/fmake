@@ -178,7 +178,8 @@ that had been green about nothing for five commits ·
 [125. `$bin()`, and the filename written twice](#125-bin-and-the-filename-written-twice) ·
 [126. Assembly, and the language table under it](#126-assembly-and-the-language-table-under-it) ·
 [127. Rust, and why it is not a row in the table](#127-rust-and-why-it-is-not-a-row-in-the-table) ·
-[128. A symbol read that did not happen, believed](#128-a-symbol-read-that-did-not-happen-believed)
+[128. A symbol read that did not happen, believed](#128-a-symbol-read-that-did-not-happen-believed) ·
+[129. Rust, and the unit that is built and searched](#129-rust-and-the-unit-that-is-built-and-searched)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10215,3 +10216,206 @@ plugin line with a producer, one prints it without, and the declining half
 runs the same tree through the real `nm` and requires it to build and to
 say nothing -- because a refusal nobody has watched decline has not been
 shown to discriminate.
+
+---
+
+## 129. Rust, and the unit that is built and searched
+
+§127 measured what Rust would cost and declined to start it, on the grounds
+that a language half-wired into the unit model is worse than one not
+started. This is the other half. Everything below was run against rustc
+1.85.
+
+### It is a row after all, and the row is where the unit kind lives
+
+§127's conclusion was "a second unit kind, not a fifth row". It is both, and
+the reason is that `Lang` was already the only place a fact about a language
+has anywhere to go. `_RUST` is an entry in `LANGS` like the other four, and
+it carries `unit="crate"`; everything that reads the table -- the progress
+tag, whether the preprocessor runs, which ninja rule compiles it -- reads it
+for Rust too. What `unit` buys is the thing §127 was right about: **a file
+does not become an object**. A crate root plus the files it draws in become
+one artifact, and a member is never a unit, a target, or a candidate.
+
+That distinction is not decoration. Handed a module file on its own, rustc
+says
+
+    error[E0601]: `main` function not found in crate `helper`
+
+because a bare `.rs` *is* a crate. So compiling one is not a piece of the
+program going wrong, it is a category error, and the model has to make it
+unreachable rather than merely unlikely.
+
+### `archive` and `prebuilt` were separated for exactly this
+
+§101 split those two flags when a loose `.o` arrived -- `archive` is where a
+unit goes on the link line, `prebuilt` is whether fmake made it -- and noted
+they had been the same fact until then. **A library crate is the first thing
+to be one and not the other.** It is built here, like a source, and it is
+searched member by member at the link, like a vendored `.a`. §127 called
+that hybrid the work, and in the end the two flags already described it: the
+change is one line in `Unit`.
+
+Everything downstream needed nothing. The closure reads `nm`, so a crate
+joins a link set on the terms a C object does; `archive_flags` groups it
+with the vendored archives; §100's ordering rule covers it. **A C program
+calling Rust builds from a tree with no build file** -- and the unwinder
+`-lgcc_s` arrives because the archive's undefined symbols asked for it, not
+because anybody named it.
+
+### The program half is rustc's, and that was measured rather than chosen
+
+A Rust *program* is one rustc call from source to binary, and fmake does not
+assemble its link. The reason is not deference:
+
+    $ ls /usr/lib/rustlib/x86_64-unknown-linux-gnu/lib/
+    libstd-735cce14533b4b14.rlib   libcore-2d4b9a0883bc3ecf.rlib   ... 27 files
+
+**Every one is an `.rlib` and there is no shared object at all.** There is
+nothing here for fmake to put on a link line, and which rlibs a crate needs
+lives in rustc's crate metadata rather than in any symbol table. So the link
+set of a Rust program is the crate, `--explain` says so in those words, and
+the closure is not one that came out empty but one that was never fmake's to
+compute.
+
+### The depfile is right or wrong depending on how the output is named
+
+This is the finding worth the section. rustc writes an ordinary Make depfile
+from `--emit=dep-info`, which §127 called `-MD -MP` under another spelling.
+It is -- but **the target line depends on a flag that looks unrelated**, and
+four spellings were measured:
+
+| how the output is named | depfile's target line |
+|---|---|
+| `--emit=link=out/x.a,dep-info=out/x.d` | `liblib.a: ...` |
+| `-o out/x.a --emit=link,dep-info` | `out/x: ...` |
+| `--out-dir out --crate-name c --emit=link,dep-info` | `out/libc.a: ...` |
+| **`-o out/x.a --emit=link,dep-info=out/x.d`** | **`out/x.a: ...`** |
+
+Only the last names the artifact. The first is the obvious spelling and the
+one this was written with, and it puts the *crate name* in the target line,
+so every `lib.rs` in every tree writes `liblib.a: lib.rs helper.rs`.
+
+**Make and ninja disagree about how bad that is, and the disagreement is the
+whole lesson.** Make attaches those prerequisites to a target it has never
+heard of and drops them without a word: the depfile is written, `-include`d,
+and contributes nothing -- §126's "a depfile written and never read looks
+exactly like one that works", arriving in a second language. Ninja refuses:
+
+    ninja explain: expected depfile 'build/lib.rs.a.d' to mention
+                   'build/lib.rs.a', got 'liblib.a'
+
+and rebuilds the crate on every run, for ever. It was found by running the
+ejected build rather than reading it, and it was found in ninja because
+ninja is strict where make is silent -- the ejected Makefile passed its test
+the whole time, on the strength of a prerequisite the `mod` scan happened to
+supply.
+
+### Ninja wanted one thing more
+
+rustc's dep-info carries a second rule naming the depfile itself:
+
+    build/x.a: lib.rs helper.rs
+    build/x.a.d: lib.rs helper.rs
+
+Ninja reads every target in a depfile as an output of the edge and refuses
+one it was not told about -- and it refuses on the **second** run, after a
+first that looked perfectly fine. Declaring it as an implicit output is the
+honest fix, since the file really is something that edge produces, and it is
+why `ninja_required_version` moves to 1.7 for a tree with a crate in it and
+stays at 1.5 for one without.
+
+### The scan proposes and the depfile decides, again
+
+`mod name;` is what the scan reads, and it reads `#[path = "..."]` with it,
+because not reading that is silent -- the member is simply missed and the
+crate builds from fewer files than it has. What the scan cannot see at all
+is `include!("extra.rs")`, which is a macro and carries no `mod` token.
+
+That produced a wrong *report* before it produced anything else. `extra.rs`
+is genuinely part of the crate and fmake said
+
+    extra.rs is reached by no crate root: nothing declares it with `mod'
+
+which is a confident false statement about a file rustc had just read. The
+answer is that the question is asked at the wrong time: the orphan report
+now runs **after** the build, against `crate_inputs`, which reads the
+depfile rustc wrote. A file rustc read draws no complaint; `lonely.rs`,
+which nothing reaches, still does. Both halves are in the case, because a
+report nobody has watched decline has not been shown to discriminate.
+
+### The case that tested nothing, and what it turned up
+
+The rule is that a fix's case must fail when the fix is reverted, and the
+first version of the module case did not. It built `main.c` beside a
+`lib.rs` and asserted that `helper.rs` was never compiled on its own --
+which passes with the exclusion taken out, because an ordinary build never
+proposes a module anyway. Nothing includes it, so the include graph does
+not reach it, and the assertion was true for a reason that had nothing to
+do with the code under test.
+
+`--widen-all` is where the exclusion is load-bearing, since that and a
+library with no declared membership both reset the candidate set to the
+whole tree. With it, the mutation prints `[1/3] RS  helper.rs` -- a module
+compiled as a crate of its own, which rustc will do for a staticlib
+*quietly*, producing a second 50MB archive of the same code and no error at
+all.
+
+**And writing the honest version found a second gap.** The exclusion took
+out members; it did not take out a `.rs` that no root reaches. Under
+`--widen-all` one of those became a unit too, on the same path and with the
+same silent result. Only a crate root is a unit now, and both halves are in
+the case. This is §15's oldest entry arriving again: a test that passes
+because it exercises nothing is indistinguishable from one that passes
+because the code is right.
+
+### Two crates in a tree are two crates
+
+`main.rs` beside `lib.rs` is the commonest Rust layout there is, and fmake
+builds each on its own. It does not make one available to the other, and it
+should not pretend to: that is a dependency graph, and it lives in a build
+file fmake does not read. What the reader got was rustc's
+
+    error[E0432]: unresolved import `thing`
+
+followed by fmake's own `name the missing libraries with --ldflags` -- §113
+again, advice about a link line that does not exist for a target rustc
+builds. A crate program now gets its own ending, which names the sibling
+crate and says that `mod` draws a file into this crate while `use
+othercrate::` needs Cargo.
+
+### What it costs, and what is not done
+
+**A staticlib carries rustc's own objects.** 12MB for a `#![no_std]` crate
+and around 50MB for one that uses `std`, because `--crate-type=staticlib`
+bundles `core`, `compiler_builtins` and the rest. That is the cost of the
+language rather than of fmake, and it is why a crate is built eagerly and
+linked only if the closure reaches it -- the same bargain a vendored archive
+makes, one step earlier.
+
+**And on this machine it cannot be read at all without help.** Those bundled
+objects are what §128 is about: every one carries an embedded-bitcode
+section, a stale bfd plugin claims them and fails, and `nm` reports no
+symbols and exits 0. fmake refuses rather than believing it and names the
+`llvm-nm` that works. The suite asks the same question by building the
+smallest crate there is and looking at what each candidate `nm` says about
+it, and skips with that as the reason when none can.
+
+Declined deliberately, and each for a reason rather than for want of time:
+
+- **Cargo.** A workspace resolves versions, features and build scripts, and
+  a tool whose premise is that a tree needs no build file cannot begin by
+  reading one. netcfgd's 143 files across thirteen crates are Cargo's and
+  stay Cargo's.
+- **Cross builds.** rustc targets by `--target <triple>` and its triples are
+  not the compiler's: `aarch64-linux-gnu` against `aarch64-unknown-linux-gnu`.
+  Mapping one to the other is a guess, and a guess that produces a binary
+  for the wrong machine is the failure §5's architecture check exists to
+  catch.
+- **Rust's own tests.** `#[test]` needs `--test`, which builds a different
+  binary with a harness in it. That is a second thing `fmake test` would
+  have to know, and no tree here has asked.
+- **Per-file directives.** `@define`, `@std` and `@pkg` all spell C flags
+  and rustc would refuse the first one it saw, so a crate takes none of
+  them. `@ldflags` still applies, because a link flag belongs to whatever
+  contains the unit rather than to the compile.

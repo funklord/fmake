@@ -1,7 +1,7 @@
 # fmake
 
-A build tool for C, C++ and assembly programs that shouldn't need a build
-file.
+A build tool for C, C++, assembly and Rust programs that shouldn't need a
+build file.
 
 ```sh
 $ ls
@@ -69,6 +69,12 @@ system was what excluded them. The suffix is read only when it cannot mean
 anything else: `_win32` yes, `_win` no, because that could be a window;
 `_posix` and `_unix` never, because a family is not a platform. `@os` and
 `@arch` override the name in both directions.
+
+**C, C++, assembly and Rust.** The first three are one file per object, and
+they mix in a single link set because the closure reads symbol tables rather
+than source. Rust is not one file per object: a crate root — `main.rs` or
+`lib.rs` — plus the files it draws in with `mod` is one unit, and a member is
+never compiled on its own. See [Rust](#rust) below.
 
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.
@@ -418,6 +424,68 @@ did the reading is the only thing that knows what it read. Declaring one
 the command never writes is an error, not an empty list.
 
 Unknown keys are an error, with the valid ones named.
+
+---
+
+## Rust
+
+A `lib.rs` becomes a static library the link set can reach, and a `main.rs`
+becomes a program. Nothing else is needed — no `Cargo.toml`, no target list.
+
+```sh
+$ ls
+main.c  lib.rs  helper.rs
+$ fmake
+[1/2] RS  lib.rs
+[2/2] CC  main.c
+LD  demo
+```
+
+`lib.rs` is compiled to a staticlib, and from there it is an ordinary archive:
+`nm` reads it, the closure links it if something needs it, and what it leaves
+undefined is resolved the way any archive's is — which is how `-lgcc_s`
+arrives for rustc's unwinder without anyone naming it. **A C program calling
+Rust therefore builds from a tree with no build file at all**, which is the
+case fmake is unusually placed to do, because it decides link membership from
+symbols rather than from declarations.
+
+A **crate is one unit, not one per file.** `mod name;` draws a file in, and so
+does `#[path = "..."] mod name;`; those files are inputs to one `rustc` call
+and are never compiled separately, because a module handed to rustc on its own
+is a crate with no `main()`. A `.rs` that no root reaches is reported the way
+an unreferenced C source is.
+
+A **Rust program is linked by rustc**, not by fmake. That is measured rather
+than deferential: rustc ships `std` as `.rlib` files with no shared object, so
+there is no library for fmake to name, and which rlibs a crate needs lives in
+crate metadata rather than in a symbol table. `--explain` says so instead of
+printing an empty closure.
+
+**Staleness comes from rustc.** `--emit=dep-info` writes an ordinary Make
+depfile naming the whole module graph, so a crate rebuilds on a member the
+`mod` scan never saw — an `include!("extra.rs")`, for instance. Both ejected
+backends read it too.
+
+`[toolchain] rustc` and `[toolchain] rust-edition` name the compiler and the
+edition (default 2021, because rustc's own default of 2015 is wrong for almost
+anything written since). `$RUSTFLAGS` and `[project] rustflags` are the flag
+band; the C ones are not passed, since rustc would refuse the first `-Os` it
+saw. Per-file `@define`, `@std` and `@pkg` are C flags for the same reason and
+do not apply to a crate; `@ldflags` does.
+
+**What is not done, deliberately:** Cargo (a workspace is a build file, and
+reading one is the thing fmake exists not to do), cross builds (rustc's target
+triples are not the compiler's, and mapping them would be a guess), and Rust's
+own `#[test]` harness. A `main.rs` beside a `lib.rs` is two crates and fmake
+does not make one available to the other — that is a dependency graph, and
+`use othercrate::` needs Cargo. It says so rather than leaving you with
+rustc's `unresolved import`.
+
+One cost worth knowing: a staticlib bundles rustc's own `core` and `std`
+objects, so it is 12MB for a `#![no_std]` crate and around 50MB for one using
+`std`. Those objects carry embedded LLVM bitcode, which is the case the
+paragraph on stale bfd plugins above is about — on a machine where `nm` cannot
+read them, fmake refuses and names an `llvm-nm` that can.
 
 ---
 

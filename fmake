@@ -20,7 +20,7 @@
 fmake -- a build tool for programs that shouldn't need a build file.
 
 One file, zero dependencies beyond the Python stdlib. Drop it in $PATH and
-run it in a directory containing C, C++ or assembly source:
+run it in a directory containing C, C++, assembly or Rust source:
 
     fmake                      # build every program in the tree
     fmake myapp                # build one
@@ -184,14 +184,22 @@ class Lang:
     exactly the terms a compiled one does, and section 3 needed no change
     to admit a language it had never heard of.
     """
-	__slots__ = ("name", "tag", "cxx", "cpp", "dep_via_as")
+	__slots__ = ("name", "tag", "cxx", "cpp", "dep_via_as", "unit")
 
-	def __init__(self, name, tag, cxx=False, cpp=True, dep_via_as=False):
+	def __init__(self, name, tag, cxx=False, cpp=True, dep_via_as=False,
+	             unit="object"):
 		self.name = name              # what to call it in a message
 		self.tag  = tag               # the progress column, three wide
 		self.cxx  = cxx               # $CXX rather than $CC, and c++ to link
 		self.cpp  = cpp               # the preprocessor runs, so #include means something
 		self.dep_via_as = dep_via_as  # gas writes the depfile, cpp having not run
+		# What one unit of this language is. "object": a file becomes an
+		# object, which every language here assumed until Rust. "crate": a
+		# root file plus the files it draws in become one artifact, and the
+		# members are never compiled on their own. Section 127 predicted
+		# this would be a second unit kind and not a fifth row; it is both,
+		# because the row is where the unit kind has anywhere to live.
+		self.unit = unit
 
 	def dep_flags(self, dep, phony=False):
 		"""Flags that make this language's compiler write `dep'.
@@ -208,6 +216,8 @@ class Lang:
 	@property
 	def rule(self):
 		"""The ninja rule name this language compiles under."""
+		if self.unit == "crate":
+			return "rustc"
 		return "cxx" if self.cxx else ("as" if self.dep_via_as else "cc")
 
 
@@ -218,15 +228,27 @@ _CXX = Lang("C++", "CXX", cxx=True)
 # they are two entries rather than one with a special case.
 _ASM = Lang("assembly", "AS ", cpp=False, dep_via_as=True)
 _ASM_CPP = Lang("assembly", "AS ")
+# Rust is the first language whose unit is not a file. rustc is handed a
+# crate root and draws the rest in through `mod', so a member .rs is not a
+# translation unit and compiling one on its own is an error rather than a
+# piece of the program.
+_RUST = Lang("Rust", "RS ", cpp=False, unit="crate")
 
 LANGS = {
     ".c": _C,
     ".cc": _CXX, ".cpp": _CXX, ".cxx": _CXX, ".c++": _CXX, ".C": _CXX,
     ".s": _ASM, ".S": _ASM_CPP,
+    ".rs": _RUST,
 }
 C_EXTS      = {e for e, l in LANGS.items() if l is _C}
 CXX_EXTS    = {e for e, l in LANGS.items() if l.cxx}
+CRATE_EXTS  = {e for e, l in LANGS.items() if l.unit == "crate"}
 SRC_EXTS    = set(LANGS)
+# What names a crate root. Everything else with a crate extension has to be
+# reached by `mod' from one of these, and is reported when it is not --
+# the same answer an unreferenced C source gets, for the same reason.
+CRATE_ROOTS = {"main.rs", "lib.rs"}
+RUST_EDITION = "2021"
 # Still not built: `.asm' is Intel syntax for nasm or masm, which is a
 # different assembler rather than a different extension for this one, and
 # nothing here has met a tree that wants it. A generator emitting one gets
@@ -251,6 +273,15 @@ SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
 # rather than an argument about what `ifdef` means in Make.
 DEFAULT_CFLAGS = ["-Os"]
 DEBUG_CFLAGS   = ["-Og", "-g"]
+
+# The same two bands for rustc, which does not take -Os and would refuse
+# the C spelling outright. `z' rather than `s' is what build-and-commit.md
+# names as the Rust equivalent of building for size, and `0' with debug
+# info is what -Og -g says here. Kept beside the C flags rather than
+# derived from them: a translation would be a guess about two flag
+# languages, and the pair is two lines.
+DEFAULT_RUSTFLAGS = ["-C", "opt-level=z"]
+DEBUG_RUSTFLAGS   = ["-C", "opt-level=0", "-C", "debuginfo=2"]
 
 # AddressSanitizer and UndefinedBehaviorSanitizer together, which is how
 # every sibling Makefile in this workspace spells it -- fuzzypickles has it
@@ -289,6 +320,10 @@ def sanitize_wanted(env=None):
 
 def default_cflags(env=None):
 	return list(DEBUG_CFLAGS if debug_wanted(env) else DEFAULT_CFLAGS)
+
+
+def default_rustflags(env=None):
+	return list(DEBUG_RUSTFLAGS if debug_wanted(env) else DEFAULT_RUSTFLAGS)
 LINK_ERR_LINES = 8              # linker output shown before truncating
 
 # nm symbol type letters. Uppercase is global, lowercase is file-local.
@@ -593,6 +628,29 @@ def version_fallbacks(code):
 RE_ASM_GLOBAL = re.compile(
     r"^[ \t]*\.(?:globl|global)[ \t]+([A-Za-z_.$][\w.$]*)", re.M)
 
+# A crate's module declarations, which are what say the crate is more than
+# one file. The semicolon is load-bearing: `mod name { ... }' is a module
+# written inline and names no file at all, so matching without it would
+# propose a member that does not exist. `#[path = "..."]' overrides where
+# the file is, and is read because not reading it is silent -- the member
+# is simply missed, and the crate then builds from fewer files than it has.
+RE_RUST_MOD = re.compile(
+    r'(?:#\s*\[\s*path\s*=\s*"([^"]*)"\s*\]\s*)?'
+    r'(?:pub(?:\s*\([^)]*\))?\s+)?\bmod\s+([A-Za-z_]\w*)\s*;')
+# `fn main()' at the outermost level. Indentation is what tells it from a
+# nested one, which is crude and is what the object settles afterwards --
+# the same bargain section 3 already makes for C, where a main() behind an
+# #if is seen by the scan and disowned by the symbol table.
+RE_RUST_MAIN = re.compile(r'(?m)^(?:pub\s+)?(?:async\s+)?fn\s+main\s*\(')
+
+
+def rust_mods(code):
+	"""(name, explicit path or None) for every `mod name;' in a crate file."""
+	out = []
+	for m in RE_RUST_MOD.finditer(code):
+		out.append([m.group(2), m.group(1)])
+	return out
+
 
 def scan_source(path):
 	"""Read one source file and return its scan record."""
@@ -611,7 +669,20 @@ def scan_source(path):
 			lineno = code.count("\n", 0, m.start()) + 1
 			incs.append([m.group(1), m.group(2), lineno])
 
-	if not lang.cpp or lang.tag == "AS ":
+	mods, rust_main = [], False
+	if lang.unit == "crate":
+		mods = rust_mods(code)
+		rust_main = bool(RE_RUST_MAIN.search(code))
+
+	if lang.unit == "crate":
+		# Deliberately empty. `defs' exists so widen_candidates can propose
+		# a file from a symbol it might define, and a crate is never
+		# proposed that way: it is built up front like a vendored archive
+		# and joins a link set only if the closure reaches it. Scanning for
+		# `#[no_mangle]' would be a second, weaker answer to a question the
+		# archive's own symbol table already answers exactly.
+		defs = set()
+	elif not lang.cpp or lang.tag == "AS ":
 		defs = set(RE_ASM_GLOBAL.findall(code))
 	else:
 		defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
@@ -625,8 +696,13 @@ def scan_source(path):
 
 	return {
 	    "incs":     incs,
-	    "has_main": bool(RE_MAIN.search(code)
+	    "has_main": rust_main if lang.unit == "crate" else
+	                bool(RE_MAIN.search(code)
 	                     or RE_MACRO_MAIN.search(code)),
+	    # The crate's `mod' declarations: [name, explicit path or None].
+	    # Empty for every other language, and the reason a crate root can
+	    # be told from a module file before rustc has run.
+	    "mods":     mods,
 		# Against the stripped text, for the same reason main() is: the word
 		# in a comment or a string is not a declaration.
 	    "qobject":  bool(RE_QOBJECT.search(code)),
@@ -680,10 +756,11 @@ CONF_SCHEMA = {
         "name": S, "std": S, "profile": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
         "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
-        "test-timeout": N, "test-env": L,
+        "test-timeout": N, "test-env": L, "rustflags": L,
     },
     "profile": {"*": {
         "std": S, "cflags": L, "ldflags": L, "defines": L, "define": L,
+        "rustflags": L,
     }},
 	# `target` alongside `name`, because the directive is @target: the same
 	# fact should not need a different word for being written in a different
@@ -703,7 +780,7 @@ CONF_SCHEMA = {
     },
     "toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
-        "moc": S, "uic": S, "rcc": S,
+        "moc": S, "uic": S, "rcc": S, "rustc": S, "rust-edition": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
     },
 	# The machine doing the building, as opposed to the one being built for.
@@ -825,6 +902,10 @@ class Conf:
 
 	def ldflags(self):
 		return self.project.get("ldflags", []) + self.profile.get("ldflags", [])
+
+	def rustflags(self):
+		return (self.project.get("rustflags", [])
+		        + self.profile.get("rustflags", []))
 
 	def target(self, name):
 		return self.targets.get(name, {})
@@ -1722,7 +1803,7 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	                   if os.path.splitext(o)[1] in UNBUILT_SRC_EXTS})
 	for rel in stranded[:5]:
 		note(f"{rel} was generated and nothing will compile it: fmake "
-		     f"builds C, C++ and assembly, not "
+		     f"builds C, C++, assembly and Rust, not "
 		     f"{os.path.splitext(rel)[1]}")
 	if len(stranded) > 5:
 		note(f"... and {len(stranded) - 5} more")
@@ -2773,7 +2854,7 @@ def man_page(parser):
     argparse was given.
     """
 	out = [f'.TH FMAKE 1 "" "fmake {VERSION}" "User Commands"',
-	       ".SH NAME", "fmake \\- build C, C++ and assembly programs with no build file",
+	       ".SH NAME", "fmake \\- build C, C++, assembly and Rust programs with no build file",
 	       ".SH SYNOPSIS", ".B fmake",
 	       ".RI [ options ]",
 	       ".RI [ targets ]",
@@ -3061,6 +3142,90 @@ def vendor_of(rel, dirs):
 	return None
 
 
+def _mod_dir(rel):
+	"""Where a file's `mod' declarations look for their members.
+
+    Rust's rule, and it is a rule about the file's own name rather than
+    about where it sits: a crate root or a `mod.rs' owns the directory it
+    is in, and any other module file owns a subdirectory named after
+    itself. Getting this wrong does not fail loudly -- the member is simply
+    not found, and the crate builds from fewer files than it has.
+    """
+	d, base = os.path.dirname(rel), os.path.basename(rel)
+	stem = os.path.splitext(base)[0]
+	if base in CRATE_ROOTS or base == "mod.rs":
+		return d
+	return os.path.join(d, stem) if d else stem
+
+
+def crate_plan(root, srcs, scans):
+	"""Crate roots, what each draws in, and the .rs files nothing reaches.
+
+    Returns (crates, owner, orphans). `crates' maps a root to its member
+    list with the root first; `owner' maps every member back to its root;
+    `orphans' is every crate-language file no root reached.
+
+    The whole reason this exists is section 127's finding: `rustc' is handed
+    one file and reads the rest itself, so a member is not a translation
+    unit. Treating each .rs as a unit compiles a module on its own, which
+    is an error rather than a piece of a program.
+    """
+	have = set(srcs)
+	roots = [r for r in srcs
+	         if os.path.splitext(r)[1] in CRATE_EXTS
+	         and os.path.basename(r) in CRATE_ROOTS]
+
+	def expand(start):
+		members, order = {start}, [start]
+		queue = [start]
+		while queue:
+			cur = queue.pop(0)
+			base = _mod_dir(cur)
+			for name, explicit in (scans.get(cur, {}).get("mods") or []):
+				if explicit:
+					cands = [os.path.normpath(os.path.join(base, explicit))]
+				else:
+					cands = [os.path.normpath(os.path.join(base, name + ".rs")),
+					         os.path.normpath(os.path.join(base, name,
+					                                       "mod.rs"))]
+				for c in cands:
+					if c in have and c not in members:
+						members.add(c)
+						order.append(c)
+						queue.append(c)
+						break
+		return order
+
+	crates = {r: expand(r) for r in roots}
+	# A root drawn in by another crate is a module, not a root. `#[path]'
+	# can name any file, so this is reachable rather than theoretical, and
+	# a file compiled as both a crate and a module of one is two copies of
+	# every symbol in it.
+	drawn = {m for r, ms in crates.items() for m in ms[1:]}
+	for r in list(crates):
+		if r in drawn:
+			del crates[r]
+
+	owner, shared = {}, {}
+	for r, ms in crates.items():
+		for m in ms:
+			if m in owner and m != r:
+				shared.setdefault(m, [owner[m]]).append(r)
+			owner.setdefault(m, r)
+	# Two crates holding one file is section 3's ambiguity in another
+	# language: nothing in the tree says which crate the file belongs to,
+	# and compiling it into both duplicates every symbol it defines.
+	for m in sorted(shared):
+		die(f"{m} is a module of more than one crate: "
+		    f"{', '.join(sorted(shared[m]))}\n"
+		    f"A file can belong to one crate. Move it, or draw it in from "
+		    f"one root and re-export it from there.")
+
+	orphans = [r for r in srcs
+	           if os.path.splitext(r)[1] in CRATE_EXTS and r not in owner]
+	return crates, owner, orphans
+
+
 def is_cxx(rel):
 	return os.path.splitext(rel)[1] in CXX_EXTS
 
@@ -3274,6 +3439,16 @@ class Config:
 		self.nm      = find_nm(tool.get("nm")
 		                       or self._prefixed("nm"))
 		self.sysroot = tool.get("sysroot")
+		# rustc takes no prefix. It targets by `--target <triple>' rather
+		# than by being a differently-named binary, which is clang's model
+		# and not gcc's -- so _prefixed would look for a tool nobody ships.
+		self.rustc   = os.environ.get("RUSTC") or tool.get("rustc", "rustc")
+		# 2015 is rustc's default and is the wrong one for almost every
+		# tree written since: `mod' paths and `dyn' both changed. There is
+		# no Cargo.toml to read it from, because a tool whose premise is
+		# that a tree needs no build file cannot begin by reading one, so
+		# it is a setting with a modern default.
+		self.rust_edition = str(tool.get("rust-edition") or RUST_EDITION)
 
 		# A cross build must test @os/@arch against the machine being built
 		# *for*, not the one doing the building. Without this the host is
@@ -3303,6 +3478,11 @@ class Config:
 		self.cflags  += conf.cflags()
 		self.override = list(args.cflags)
 		self.ldflags = conf.ldflags() + list(args.ldflags)
+		# rustc's band is its own. --cflags is a C flag list and handing it
+		# to rustc would fail on the first -Os; $RUSTFLAGS is the spelling
+		# every Rust toolchain already uses for this.
+		self.rustflags = default_rustflags() + shlex.split(
+		    os.environ.get("RUSTFLAGS", "")) + conf.rustflags()
 
 		# $SANITIZE goes to both sides, and the link side is the one that
 		# matters. A sanitizer is a runtime as well as an instrumentation:
@@ -3419,9 +3599,15 @@ class Config:
         adds for itself. The key names the object directory, so a flag that
         is not in it is a flag that silently reuses objects built without it.
         """
+		# rustc and its flags are in the key for the reason everything
+		# else is: a crate archive built at one opt-level must not be
+		# reused for a build asking for another, and the object directory
+		# is what keeps two configurations apart.
 		self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
 		                         self.os, self.arch,
-		                         *self.cflags, "|", *self.override]))[:12]
+		                         *self.cflags, "|", *self.override,
+		                         "|", self.rustc, self.rust_edition,
+		                         *self.rustflags]))[:12]
 
 	def _prefixed(self, tool):
 		"""The toolchain's own copy of a binutil, if there is one."""
@@ -3595,14 +3781,19 @@ class Unit:
 	# arrived, which fmake did not build and which is not searched like an
 	# archive either.
 	__slots__ = ("rel", "abs", "cxx", "lang", "obj", "dep", "scan", "ann",
-	             "own", "prebuilt",
+	             "own", "prebuilt", "members",
 	             "undef", "strong", "weak", "compiled", "archive")
 
-	def __init__(self, rel, root, objdir, scan):
+	def __init__(self, rel, root, objdir, scan, members=None):
 		self.rel  = rel
 		self.abs  = os.path.join(root, rel)
 		self.lang = LANGS.get(os.path.splitext(rel)[1], _C)
 		self.cxx  = self.lang.cxx
+		# `members' is the rest of the crate: files that are inputs and
+		# never units, because rustc is handed the root and reads them
+		# itself. Empty for every other language, where the unit is the
+		# file.
+		self.members = list(members or [])
 		self.obj  = os.path.join(objdir, rel + ".o")
 		self.dep  = os.path.join(objdir, rel + ".d")
 		self.scan = scan
@@ -3613,8 +3804,35 @@ class Unit:
 		# A prebuilt archive shipped in the tree rather than a TU fmake
 		# builds. It provides symbols like any object, but it is never
 		# compiled and it goes in a different place on the link line.
+		# `archive' is where it goes on the link line and `prebuilt' is
+		# whether fmake made it. A crate library is the first thing to be
+		# one and not the other -- built here, and searched like a vendored
+		# .a -- which is why the two flags were worth separating.
 		self.archive = False
 		self.prebuilt = False
+		if self.lang.unit == "crate":
+			if scan.get("has_main"):
+				# A crate with a main() is a program rustc links, so this
+				# unit produces nothing on its own and there is no object
+				# to read. Marked compiled with empty tables so that
+				# nothing tries to build it or ask nm about it; what it
+				# needs is settled by rustc, from crate metadata a symbol
+				# table does not carry.
+				self.obj = None
+				self.undef = self.strong = self.weak = set()
+				self.compiled = True
+			else:
+				self.obj = os.path.join(objdir, rel + ".a")
+				self.archive = True
+
+	@property
+	def crate(self):
+		return self.lang.unit == "crate"
+
+	@property
+	def crate_exe(self):
+		"""A crate rustc links itself, rather than one fmake links."""
+		return self.crate and self.obj is None
 
 
 def optional_pkg(group):
@@ -3667,9 +3885,42 @@ def unit_cflags(u, pkg, store, sig):
 
 
 def compile_cmd(u, cfg, incflags):
+	if u.lang.unit == "crate":
+		return crate_cmd(u, cfg, u.obj)
 	cc = cfg.driver(u.cxx)
 	return ([cc, "-c", u.abs, "-o", u.obj] + u.lang.dep_flags(u.dep)
 	        + incflags + cfg.cflags + u.own + cfg.override)
+
+
+def crate_cmd(u, cfg, out, exe=False):
+	"""The one rustc call that builds a crate.
+
+    Both halves of a crate build are this command with a different
+    `--crate-type': a library becomes a staticlib the closure can read with
+    nm and the linker can search, and a program is linked by rustc itself.
+
+    The second is not a choice. Debian's rustc ships `std' as .rlib files
+    and no shared object at all, so there is nothing for fmake to put on a
+    link line -- resolving a Rust program's own dependencies means walking
+    rustc's crate metadata, which is rustc's job and not a symbol table's.
+
+    The output is named with `-o' and the depfile inside `--emit'. That is
+    not a style choice and it was measured: writing the link path inside
+    --emit instead -- `--emit=link=PATH,dep-info=PATH' -- puts the *crate
+    name* in the depfile's target line, so every lib.rs in every tree
+    produces `liblib.a: ...'. Make silently attaches those prerequisites to
+    a target it has never heard of and drops them, which is a depfile
+    written and never read; ninja is stricter and calls the output
+    perpetually dirty, rebuilding it on every run for ever. With `-o' the
+    target line names the real artifact and both backends read it.
+
+    dep-info is otherwise an ordinary Make depfile naming the whole module
+    graph, so staleness needs nothing that -MD did not already give C.
+    """
+	return ([cfg.rustc, "--edition", cfg.rust_edition]
+	        + ([] if exe else ["--crate-type=staticlib"])
+	        + ["-o", out, f"--emit=link,dep-info={u.dep}"]
+	        + cfg.rustflags + u.own + [u.abs])
 
 
 # One entry per distinct header, not one per (header, object) pair. A
@@ -3687,7 +3938,11 @@ def object_key(u, cfg, cache, root, incflags):
     header a name resolves to, so an object built without it is not reusable.
     So are the TU's own flags, since @define changes what the file means.
     """
-	parts = [cfg.key, sha("\0".join(incflags)), sha("\0".join(u.own))]
+	# Include flags are not part of a crate's identity: rustc never sees
+	# them, so keying on them would rebuild a 50MB staticlib every time a
+	# -I moved somewhere else in the tree.
+	inc = [] if u.lang.unit == "crate" else incflags
+	parts = [cfg.key, sha("\0".join(inc)), sha("\0".join(u.own))]
 	src_h = cache.hash_of(u.abs, u.rel)
 	if src_h is None:
 		return None
@@ -3904,7 +4159,11 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {u.rel}")
 				if err.strip():
 					PROGRESS.write(err)
-				check_object_arch(u, cfg)
+				# An archive is not an ELF file, so the 20-byte header read
+				# has nothing to read. Its members are checked where it
+				# matters anyway -- the link refuses a foreign object.
+				if not u.archive:
+					check_object_arch(u, cfg)
 
 	if failures:
 		# One missing system header fails every file that includes it, and
@@ -4216,8 +4475,18 @@ def read_symbols(units, cfg, jobs):
 		bad = plugin_failure(r.stdout, r.stderr)
 		if bad:
 			said, want = bad
+			# Which file it is decides how much of this a reader has to
+			# work out. A crate is one fmake built a moment ago, out of
+			# rustc's own std objects -- and every one of those carries an
+			# embedded-bitcode section, so this is not an unlucky vendored
+			# blob but the ordinary case for Rust on this machine.
+			what = (f"{u.rel} is a Rust crate, and the staticlib fmake "
+			        f"built from it holds rustc's std objects, which carry "
+			        f"embedded bitcode.\n"
+			        if u.crate else "")
 			die(f"{cfg.nm} could not read {u.rel}'s symbols:\n"
 			    f"    bfd plugin: {said}\n"
+			    + what +
 			    f"A plugin claimed that file and then failed, and nm "
 			    f"reports that as no symbols and exit 0 rather than as "
 			    f"an error -- so it reads as an object defining nothing "
@@ -5787,6 +6056,12 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
     """
 	objs = [u.obj for u in cl.link if not u.archive]
 	out = os.path.join(outdir, t.filename)
+	if cl.root.crate_exe:
+		# One command from source to program. Not a link fmake assembles:
+		# Debian's rustc ships std as .rlib and no shared object, so there
+		# is no library here to name, and which rlibs a crate needs is in
+		# rustc's metadata rather than in any symbol table.
+		return crate_cmd(cl.root, cfg, out, exe=True)
 	# A shared library says its own name, because otherwise the consumer
 	# decides it. Without DT_SONAME the linker records whatever it was given:
 	# `-lgreet` leaves the bare name and works, but linking the file by path
@@ -5799,6 +6074,18 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
 		# Whatever it leaves undefined is the consumer's problem to resolve.
 		# A vendored archive is left out rather than nested inside this one,
 		# which `ar` would happily do and no linker would then understand.
+		#
+		# Which leaves the case where there is nothing else: a tree whose
+		# only source is a Rust library crate. `ar rcs` over an empty
+		# object list succeeds and writes an eight-byte archive with no
+		# members, and fmake said `built libthing.a` over it -- a wrong
+		# answer delivered confidently, which is worse than a refusal. The
+		# crate's own staticlib *is* the library, so it is copied rather
+		# than assembled, and the command says so.
+		if not objs:
+			arcs = [u for u in cl.link if u.archive and u.crate]
+			if len(arcs) == 1:
+				return ["cp", arcs[0].obj, out]
 		return [cfg.ar, "rcs", out] + objs
 	cxx = any(u.cxx for u in cl.link)
 	# Resolved libraries first, then whatever the user named, so an explicit
@@ -5825,9 +6112,37 @@ def archive_flags(cl):
 	return ["-Wl,--start-group"] + arcs + ["-Wl,--end-group"]
 
 
+def _link_key(cmd, inputs, cache, root):
+	"""The command, plus the content of everything it consumes."""
+	parts = list(cmd)
+	for o in inputs:
+		parts.append(cache.hash_of(o, os.path.relpath(o, root)) or "?")
+	return sha("|".join(parts))
+
+
+def crate_inputs(u, root):
+	"""Every file a crate is built from, as absolute paths.
+
+    The depfile rustc wrote last time is the authority, because it is the
+    module graph rustc actually walked; the scan's `mod' list is the guess
+    that has to do until one exists. Reading it back is what keeps a crate
+    from going stale invisibly -- a member added to a module file fmake's
+    regex did not match would otherwise never trigger a rebuild.
+    """
+	from_dep = [p for p in parse_depfile(u.dep) if os.path.isfile(p)]
+	if from_dep:
+		return sorted(set(from_dep))
+	return [u.abs] + [os.path.join(root or "", m) for m in u.members]
+
+
 def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
                 root=None, quiet=False):
-	name, objs = t.filename, [u.obj for u in cl.link]
+	name = t.filename
+	# A crate program has no objects; its inputs are its source files, and
+	# the depfile rustc writes names every one of them. Same rule either
+	# way: if the inputs and the invocation are unchanged, so is the output.
+	objs = (crate_inputs(cl.root, root)
+	        if cl.root.crate_exe else [u.obj for u in cl.link])
 	out = os.path.join(outdir, name)
 	cmd = link_cmd(t, cl, cfg, outdir, libflags)
 
@@ -5836,6 +6151,12 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# file", which says nothing about the directory being the problem.
 	if not dry_run:
 		os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+		# A crate program never goes through compile_units -- it has no
+		# object -- so nothing else has made the directory rustc is about
+		# to write its depfile into. Without it rustc reports `error
+		# writing dependencies', which reads as a permissions problem.
+		if cl.root.crate_exe:
+			os.makedirs(os.path.dirname(cl.root.dep) or ".", exist_ok=True)
 
 	if dry_run:
 		print(" ".join(cmd))
@@ -5848,19 +6169,26 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# inputs and the invocation are unchanged, the output is too.
 	key = None
 	if cache is not None and root is not None:
-		parts = list(cmd)
-		for o in objs:
-			parts.append(cache.hash_of(o, os.path.relpath(o, root)) or "?")
-		key = sha("|".join(parts))
+		key = _link_key(cmd, objs, cache, root)
 		store = cache.data.setdefault("links", {})
 		if store.get(name) == key and os.path.exists(out):
 			vinfo(f"up to date {name}")
 			return out, False, True
 
+	if t.kind == "static" and not objs and cmd[0] != "cp":
+		# `ar rcs` over nothing writes a valid, empty archive and exits 0.
+		# Every other way of producing no artifact here is loud; this one
+		# is not, so it is made so.
+		PROGRESS.flush()
+		warn(f"{name} would have no members: nothing in this tree compiles "
+		     f"into it")
+		return out, True, False
 	if t.kind == "static" and os.path.exists(out):
 		os.remove(out)          # ar appends; a stale member would survive
 	if not quiet:
-		say(f"{GREEN('AR ' if t.kind == 'static' else 'LD ')} {BOLD(name)}")
+		tag = ("AR " if t.kind == "static"
+		       else cl.root.lang.tag if cl.root.crate_exe else "LD ")
+		say(f"{GREEN(tag)} {BOLD(name)}")
 	r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
 	if r.stderr.strip():
 		# A missing library produces one linker line per call site, which
@@ -5874,6 +6202,13 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 			note(f"... {len(lines) - LINK_ERR_LINES} more linker lines (-v "
 			     f"for all)")
 	if key is not None and r.returncode == 0:
+		# Recomputed, not reused. A crate's inputs come from the depfile
+		# rustc has only just written, so the key computed above was made
+		# from the scan's guess -- storing it would leave every fresh tree
+		# rebuilding once more for nothing, and the difference between the
+		# two keys is exactly the thing the depfile came to correct.
+		if cl.root.crate_exe:
+			key = _link_key(cmd, crate_inputs(cl.root, root), cache, root)
 		cache.data.setdefault("links", {})[name] = key
 	return out, True, r.returncode == 0
 
@@ -5938,6 +6273,12 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		how = f"[target.*] in {CONF_FILE} says so"
 	elif t.ann.scalar("kind"):
 		how = f"@kind in {t.rel}"
+	elif cl.root.crate_exe:
+		# @kind does not decide this one. A crate with a `fn main()' is a
+		# program and one without is a library, because that is what rustc
+		# will accept -- a staticlib built from a crate whose main() is not
+		# `#[no_mangle]' exports no entry point and links to nothing.
+		how = f"{t.rel} is a crate root defining main()"
 	elif t.kind == "exe":
 		how = f"{t.rel} defines main(); @kind static builds an archive instead"
 	else:
@@ -6003,14 +6344,25 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		print(f"  {CYAN('excluded here')}")
 		for rel, why in sorted(excluded.items()):
 			print(f"    {_col(rel, W-4)}{DIM(why)}")
-	if t.members is not None:
+	if cl.root.crate_exe:
+		how = "[the crate; rustc resolves the rest from crate metadata]"
+	elif t.members is not None:
 		how = f"[declared in {CONF_FILE}]"
 	elif t.kind != "exe":
 		how = "[every TU in the tree; a library is not pruned]"
 	else:
 		how = "[symbol closure from " + _rel(cl.root.obj, root) + "]"
 	print(f"  {_col(CYAN('link set'), W)}{DIM(how)}")
-	for u in cl.link:
+	if cl.root.crate_exe:
+		# The members are the crate, so they are listed. They are not link
+		# set entries and saying "<- some symbol" about one would be a
+		# claim nothing measured: rustc read them from the root.
+		print(f"    {_col(cl.root.rel, W-4)}{DIM('crate root: defines main()')}")
+		for m in sorted(crate_inputs(cl.root, root)):
+			m = _rel(m, root)
+			if m != cl.root.rel:
+				print(f"    {_col(m, W-4)}{DIM('module of the crate')}")
+	for u in cl.link if not cl.root.crate_exe else []:
 		if u is cl.root and t.kind == "exe":
 			print(f"    {_col(u.rel, W-4)}{DIM('root: defines main()')}")
 		elif u is cl.root:
@@ -6088,13 +6440,18 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 
 	ldflags = (res["ldflags"] if res else []) + cfg.link_flags()
 	print(f"  {CYAN('flags')}")
-	print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) if f.startswith('-I') else f for f in incflags] + cfg.override)}")
-	if ldflags:
-		print(f"    {' '.join(ldflags)}")
+	if cl.root.crate_exe:
+		# The C bands say nothing about this target: rustc never sees them.
+		print(f"    {' '.join(cfg.rustflags)}")
+	else:
+		print(f"    {' '.join(cfg.cflags + ['-I' + _rel(f[2:], root) if f.startswith('-I') else f for f in incflags] + cfg.override)}")
+		if ldflags:
+			print(f"    {' '.join(ldflags)}")
 	print(f"  {CYAN('argv')}")
 	# Prebuilt archives have no compile command to show, only a place on the
-	# link line below.
-	built = [u for u in cl.link if not u.prebuilt]
+	# link line below -- and a crate program has none either, because the
+	# one command below is the whole of its build.
+	built = [u for u in cl.link if not u.prebuilt and u.obj]
 	for u in built[:2]:
 		print(f"    {DIM(_show_cmd(compile_cmd(u, cfg, incflags), root))}")
 	if len(built) > 2:
@@ -6293,7 +6650,7 @@ def build(args, _bootstrapping=False):
 	gen_dirs = sorted({os.path.dirname(g) for g in generated
 	                   if os.path.splitext(g)[1] in HDR_EXTS})
 	if not srcs:
-		die("no C, C++ or assembly source files found here")
+		die("no C, C++, assembly or Rust source files found here")
 
 	for rel in list(unreadable):
 		if rel in srcs:
@@ -6534,6 +6891,19 @@ def build(args, _bootstrapping=False):
 
 	proj = Project(root, srcs, hdrs, scans)
 
+	# ---- crates -------------------------------------------------------
+	# Rust before targets, because it decides which .rs files can root one.
+	# A module file is not a translation unit and must not become a target
+	# or a candidate: handed to rustc alone it is a crate, and a binary
+	# crate with no main() is an error rather than a piece of a program.
+	crates, crate_of, crate_orphans = crate_plan(root, srcs, scans)
+	crate_members = {m for r, ms in crates.items() for m in ms[1:]}
+	if crates and not shutil.which(cfg.rustc):
+		die(f"this tree has {len(crates)} Rust crate(s) and {cfg.rustc} is "
+		    f"not installed.\n"
+		    f"Install rustc, or name it with [toolchain] rustc in "
+		    f"{CONF_FILE}.")
+
 	# ---- targets ------------------------------------------------------
 	# A TU roots an artifact if it defines main() or carries @kind. A tree
 	# with neither is a library named after its directory, which is the only
@@ -6573,6 +6943,10 @@ def build(args, _bootstrapping=False):
 
 	targets, claimed = [], set()
 	for rel in srcs:
+		# A module file is not a program even when it has a `fn main()' in
+		# it: rustc compiles the root, and the root is what says so.
+		if rel in crate_members:
+			continue
 		ann = Ann(scans[rel].get("dirs"))
 		if ann.scalar("kind") is None and scans[rel]["has_main"] \
 		        and main_is_a_mirage(rel):
@@ -6871,7 +7245,8 @@ def build(args, _bootstrapping=False):
 
 	def unit(rel):
 		if rel not in units:
-			units[rel] = Unit(rel, root, objdir, scans[rel])
+			units[rel] = Unit(rel, root, objdir, scans[rel],
+			                  members=crates.get(rel, [])[1:])
 		return units[rel]
 
 	# Shared objects need position-independent code, and mixing PIC objects
@@ -6977,6 +7352,22 @@ def build(args, _bootstrapping=False):
 	# traded for. They cannot be used either way -- an exe root is excluded
 	# from every library closure by construction.
 	candidates -= {t.rel for t in held} - {t.rel for t in wanted}
+	# A crate is one unit whatever the candidate set says. Only a root is
+	# a unit -- rustc reads the rest from it -- and the root is always
+	# built, because a library crate's symbol table is the only thing that
+	# can say whether anything here needs it. That is the same bargain a
+	# vendored archive makes, one step earlier: built first, linked only
+	# if the closure reaches it.
+	#
+	# Every other .rs is taken out, members and orphans alike. `--widen-all`
+	# and a library with no declared membership both reset the candidate
+	# set to the whole tree, and either would otherwise compile a module as
+	# a crate of its own -- which rustc will do for a staticlib, quietly,
+	# producing a second 50MB archive of the same code.
+	candidates -= {r for r in srcs
+	               if os.path.splitext(r)[1] in CRATE_EXTS
+	               and r not in crates}
+	candidates |= set(crates)
 
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in sorted(proj.incdirs | {"."})]
@@ -7011,7 +7402,14 @@ def build(args, _bootstrapping=False):
         without its @define, @cflags or @std -- silently, since nothing
         downstream reads the annotations again, and a wrong -D produces a
         program that builds and answers differently.
+
+        A crate takes none of them. Every directive here spells a C flag --
+        -D, -std, and whatever pkg-config hands back -- and rustc would
+        refuse the first one it saw. @ldflags still applies, since that
+        belongs to whatever contains the unit rather than to the compile.
         """
+		if u.lang.unit == "crate":
+			return []
 		for group in u.ann.groups("pkg"):
 			# Checked up front rather than at the compiler's "no such file",
 			# which is a much worse way to learn a package is missing.
@@ -7115,7 +7513,7 @@ def build(args, _bootstrapping=False):
 	# it for no reason. Stable inputs, stable keys, idempotent builds.
 	if not args.no_libs:
 		every_unit = [units.get(rel) or Unit(rel, root, objdir, scans[rel])
-		              for rel in srcs]
+		              for rel in srcs if rel not in crate_members]
 		pkg_cflags, _ = propose_from_headers(every_unit, pkg, hdr_store, proj)
 		incflags = base_incflags + [f for f in pkg_cflags
 		                            if f not in base_incflags]
@@ -7143,6 +7541,12 @@ def build(args, _bootstrapping=False):
 		# not where the archives were found.
 		if target_ident is None:
 			for u in pool:
+				# A crate program has no object to ask, and an archive is
+				# not an ELF file. Either way there is nothing here to
+				# read, and a tree that is only Rust simply never sets
+				# this -- correctly, since rustc chose the architecture.
+				if not u.obj or u.archive:
+					continue
 				target_ident = elf_identity(u.obj)
 				if target_ident:
 					break
@@ -7176,7 +7580,13 @@ def build(args, _bootstrapping=False):
 					warn(f"{t.name} skipped: {t.rel} did not compile")
 					wanted.remove(t)
 					continue
-				if t.kind == "exe" and "main" not in units[t.rel].strong:
+				# A Rust program has no object here to disagree with: it
+				# is one rustc call from source to binary, and rustc is
+				# the thing that decides whether main() is there. It says
+				# so loudly -- `main function not found in crate' -- and
+				# that arrives from the link step below.
+				if (t.kind == "exe" and not units[t.rel].crate_exe
+				        and "main" not in units[t.rel].strong):
 					warn(f"{t.rel} looked like it defined main() but the "
 					     f"object does not export it; skipping")
 					# Remembered against the file and the configuration, so
@@ -7238,6 +7648,12 @@ def build(args, _bootstrapping=False):
 				chosen += [units[o] for o in sorted(owned)
 				           if o in units and units[o] not in chosen]
 				closures[t] = close_over_library(chosen, units[t.rel])
+			elif units[t.rel].crate_exe:
+				# The link set of a Rust program is the crate, and nothing
+				# else is fmake's to decide. rustc resolves the rest from
+				# crate metadata -- which is why this is not a closure that
+				# came out empty but one that was never fmake's to compute.
+				closures[t] = Closure(units[t.rel])
 			elif t.kind == "exe":
 				closures[t] = close_over_symbols(units[t.rel], pool, forced,
 				                                 forced_why)
@@ -7291,7 +7707,8 @@ def build(args, _bootstrapping=False):
 		tried |= fresh
 
 		rest = [Unit(rel, root, objdir, scans[rel])
-		        for rel in srcs if rel not in units]
+		        for rel in srcs
+		        if rel not in units and rel not in crate_members]
 		extra = widen_candidates(fresh, rest)
 		if not extra:
 			break
@@ -7625,6 +8042,14 @@ def build(args, _bootstrapping=False):
 			note("libraries are not resolved in a dry run: nothing was "
 			     "compiled, so there are no symbols to resolve. The link "
 			     "lines above are missing their -l flags.")
+		if any(u.crate and not u.crate_exe for u in units.values()):
+			# Same cause, and worth saying separately because this one is
+			# a file in the tree rather than a package on the machine. A
+			# crate joins a link set through its archive's symbol table,
+			# and in a dry run the archive was never built.
+			note("a Rust library crate is missing from the link lines for "
+			     "the same reason: it joins a link set through the symbol "
+			     "table of an archive nothing has built yet.")
 		return 0
 	if args.dry_run and args.install:
 		return do_install(wanted, closures, root, outdir, conf, args)
@@ -7640,13 +8065,38 @@ def build(args, _bootstrapping=False):
 			# A held-back test is not unreachable, it was not asked
 			# for, and saying the wrong one of those sends the reader to
 			# --force-link for a file that needs `fmake test`.
+			# A crate member is not uncompiled, it is not a unit: rustc
+			# read it from the root, and `--force-link' on one would ask
+			# fmake to compile a module on its own, which is an error.
+			# A .rs nothing reaches was already named, at the point the
+			# crates were worked out, with the remedy that fits it.
 			ignored = sorted(set(srcs) - set(units)
-			                 - {t.rel for t in held})
+			                 - {t.rel for t in held}
+			                 - crate_members
+			                 - set(crate_orphans))
 			for rel in ignored[:5]:
 				note(f"{rel} not compiled: nothing reaches it "
 				     f"(--force-link if it is needed anyway)")
 			if len(ignored) > 5:
 				note(f"... and {len(ignored) - 5} more")
+			# The same answer, for a .rs no crate draws in -- and asked
+			# after the build rather than before it, because the scan is
+			# not the authority on what a crate contains. `mod' is what
+			# the scan reads; `include!("extra.rs")' is a macro and reads
+			# as nothing at all, so a file that is genuinely part of the
+			# crate looked exactly like one nothing reached. rustc's
+			# depfile settles it, and only exists once rustc has run.
+			read_by_crates = set()
+			for u in units.values():
+				if u.crate:
+					read_by_crates |= {
+					    os.path.relpath(f, root)
+					    for f in crate_inputs(u, root)}
+			for rel in [r for r in crate_orphans
+			            if r not in read_by_crates][:5]:
+				note(f"{rel} is reached by no crate root: nothing declares "
+				     f"it with `mod', and only "
+				     f"{' or '.join(sorted(CRATE_ROOTS))} roots a crate")
 			# The remedy names Q_INIT_RESOURCE rather than --force-link,
 			# which was what the documentation said and does not work: a
 			# .qrc is not a source file, so --force-link refuses it by
@@ -7747,6 +8197,31 @@ def build(args, _bootstrapping=False):
 		hidden_moc = set()
 		for name, cl, res in failed:
 			warn(f"{name} did not link")
+			if cl.root.crate_exe:
+				# Nothing below applies. rustc compiled and linked this in
+				# one command, so there is no link line fmake assembled
+				# and no library it could have failed to find -- and the
+				# ending that offers --ldflags would send the reader to
+				# install something that has nothing to do with it.
+				others = sorted(r for r in crates
+				                if r != cl.root.rel
+				                and not scans[r].get("has_main"))
+				if others:
+					# The common Rust layout is a main.rs beside a lib.rs,
+					# and they are two crates. Cargo makes one available
+					# to the other through a dependency graph in a build
+					# file; fmake has none to read, so `use thing::x' in
+					# the program is an undeclared crate. Said here
+					# because rustc's own `unresolved import' names the
+					# crate and not the reason.
+					note(f"{cl.root.rel} and {', '.join(others)} are "
+					     f"separate crates, and fmake does not make one "
+					     f"available to the other: that is a dependency "
+					     f"graph, and it lives in a build file fmake does "
+					     f"not read")
+					note("`mod' draws a file into this crate; `use "
+					     "othercrate::' needs Cargo")
+				continue
 			if res and res["chosen"]:
 				note(f"resolved to: {' '.join(res['ldflags'])}")
 			missing = res["unresolved"] if res else sorted(cl.external)
@@ -7808,6 +8283,10 @@ def build(args, _bootstrapping=False):
 		         for _n, c, _r in failed for u in c.link):
 			note('add the missing #include of the .moc file above; if that '
 			     "is not it, name the missing libraries with --ldflags")
+		elif all(c.root.crate_exe for _n, c, _r in failed):
+			# Every failure here was rustc's, and rustc has already said
+			# what was wrong in its own words.
+			pass
 		else:
 			note("name the missing libraries with --ldflags, or build only "
 			     "the targets you want")
@@ -7973,6 +8452,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	eject_files = {x.name: x.filename for x in targets}
 	P = "FM_" if fragment else ""
 	_refuse_whitespace(targets, closures, root)
+	any_crate = any(u.crate for t in targets for u in closures[t].link)
 	common = _eject_flags(cfg.base_cflags() + incflags, root)
 	override = _eject_flags(cfg.override, root)
 	L = []
@@ -8085,6 +8565,13 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# which point every conditional in this file has been decided.
 	a(var("LDFLAGS", [f"$({P}CFLAGS)", f"$({P}CFLAGS_LAST)"]
 	      + _eject_flags(cfg.ldflags, root)))
+	if any_crate:
+		# rustc has no CC/CFLAGS convention to inherit, so both are ours
+		# and both are plain assignments even in a fragment: a parent
+		# Makefile that had a RUSTFLAGS would be talking about a build
+		# fmake did not compute.
+		a(var("RUSTC", cfg.rustc, assign, own=False))
+		a(var("RUSTFLAGS", ["--edition", cfg.rust_edition] + cfg.rustflags))
 	a(var("BUILD_DIR", EJECT_BUILD_DIR, assign))
 	a("")
 
@@ -8212,11 +8699,20 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				a("\t@:")
 			a("")
 
-	every = {}
+	every, crate_libs, crate_deps = {}, {}, {}
 	for t in targets:
 		for u in closures[t].link:
-			if not u.prebuilt:      # nothing fmake compiled, nothing to emit
-				every[u.rel] = u
+			if u.prebuilt:          # nothing fmake compiled, nothing to emit
+				continue
+			# A crate is not a translation unit and gets no object rule.
+			# Its members are not rules at all: rustc reads them from the
+			# root, so they are prerequisites of one command.
+			if u.crate:
+				crate_deps[u.rel] = u
+				if not u.crate_exe:
+					crate_libs[u.rel] = u
+				continue
+			every[u.rel] = u
 
 	# Only the moc outputs this build actually reaches. The caller has
 	# already dropped the inputs that produced nothing -- a rule promising a
@@ -8312,12 +8808,46 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		  f"-c $< -o $@ {dep}")
 		a("")
 
+	if crate_libs:
+		a("# ---- crates " + "-" * 52)
+		a("#")
+		a("# One rustc call per crate. The members are prerequisites and not")
+		a("# rules: rustc is handed the root and reads the rest itself, so a")
+		a("# module compiled on its own would be a crate with no main().")
+		a("")
+		for rel in sorted(crate_libs):
+			u = crate_libs[rel]
+			out = f"$({P}BUILD_DIR)/{_eject_obj(rel)}.a"
+			deps = " ".join([_eject_src(rel)]
+			                + [_eject_src(m) for m in sorted(u.members)])
+			a(f"{out}: {deps}")
+			a("\t@mkdir -p $(@D)")
+			a(f"\t$({P}RUSTC) $({P}RUSTFLAGS) --crate-type=staticlib \\")
+			a(f"\t    -o $@ --emit=link,dep-info=$(@:.a=.d) {_eject_src(rel)}")
+			a("")
+
 	a("# ---- targets " + "-" * 50)
 	a("")
 	for t in targets:
 		ident = _mk_ident(t.name).upper()
+		root_unit = closures[t].root
+		if root_unit.crate_exe:
+			# The whole build of a Rust program is this one command, so
+			# there is no object list and no link line. Its prerequisites
+			# are the crate's files, which is what keeps it honest here --
+			# a Makefile has no closure to recompute.
+			deps = " ".join([_eject_src(root_unit.rel)]
+			                + [_eject_src(m)
+			                   for m in sorted(root_unit.members)])
+			a(f"{t.filename}: {deps}")
+			a(f"\t@mkdir -p $({P}BUILD_DIR)")
+			a(f"\t$({P}RUSTC) $({P}RUSTFLAGS) -o $@ \\")
+			a(f"\t    --emit=link,dep-info=$({P}BUILD_DIR)/"
+			  f"{_eject_obj(root_unit.rel)}.d {_eject_src(root_unit.rel)}")
+			a("")
+			continue
 		objs = [f"$({P}BUILD_DIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link
-		        if not u.prebuilt]
+		        if not u.prebuilt and not u.crate]
 		a(f"{P}{ident}_OBJS = \\")
 		for i, o in enumerate(objs):
 			a(f"\t{o}" + (" \\" if i < len(objs) - 1 else ""))
@@ -8331,7 +8861,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# a prerequisite list at all. A static target takes none of them,
 		# matching what fmake itself does.
 		arcs = [] if t.kind == "static" else \
-		       [u.rel for u in closures[t].link if u.archive]
+		       [f"$({P}BUILD_DIR)/{_eject_obj(u.rel)}.a" if u.crate else u.rel
+		        for u in closures[t].link if u.archive]
+		# Asked separately, because `arcs' is empty for a static target by
+		# design -- an archive is not nested inside another one. The crate
+		# archives are still there, and for a tree that is only a library
+		# crate they are the whole of the answer.
+		crate_arcs = [f"$({P}BUILD_DIR)/{_eject_obj(u.rel)}.a"
+		              for u in closures[t].link if u.archive and u.crate]
 		# A prebuilt .o is an ordinary object: named with the rest rather
 		# than after them, and never inside the group, since a group is for
 		# things the linker searches and an object is not searched.
@@ -8346,8 +8883,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		        + (f" {libs}" if libs else "") + f" $({P}LDFLAGS)")
 		a(f"{t.filename}: $({P}{ident}_OBJS)"
 		  + (f" {' '.join(blobs)}" if blobs else "")
-		  + (f" {' '.join(arcs)}" if arcs else ""))
-		if t.kind == "static":
+		  + (f" {' '.join(arcs or crate_arcs)}"
+		     if (arcs or crate_arcs) else ""))
+		if t.kind == "static" and not objs and len(crate_arcs) == 1:
+			# The crate's staticlib is the library. Copied rather than
+			# assembled, for the reason link_cmd gives: `ar` over no
+			# objects writes an empty archive and reports success.
+			a(f"\tcp {crate_arcs[0]} $@")
+		elif t.kind == "static":
 			a("\trm -f $@")
 			a("\t$(AR) rcs $@ $^")
 		elif t.kind == "shared":
@@ -8465,6 +9008,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(f"{P}CLEAN = \\")
 	leavings = ([f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in sorted(every)]
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d" for rel in sorted(every)]
+	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.a"
+	               for rel in sorted(crate_libs)]
+	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d"
+	               for rel in sorted(crate_deps)]
 	            + [t.filename for t in targets]
 	            + [t.name + ".pc" for t in targets if pc_text(t, conf)]
 	            + [_eject_src(j["out"]) for j in uic_jobs]
@@ -8493,6 +9040,17 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("# Depfiles the compiler writes as a side effect, so a changed header")
 	a("# rebuilds what includes it.")
 	a(f"-include $({P}OBJS:.o=.d)")
+	if crate_deps:
+		a("")
+		a("# rustc writes an ordinary Make depfile naming the whole module")
+		a("# graph, so a crate goes stale on a member the `mod' scan above")
+		a("# never saw -- which is the half that would have rotted quietly.")
+		a(f"{P}CRATE_DEPS = \\")
+		names = [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d"
+		         for rel in sorted(crate_deps)]
+		for n, o in enumerate(names):
+			a(f"\t{o}" + (" \\" if n < len(names) - 1 else ""))
+		a(f"-include $({P}CRATE_DEPS)")
 	return "\n".join(L) + "\n"
 
 
@@ -8527,7 +9085,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(f"# Built for: {cfg.os}/{cfg.arch}"
 	  + (f"    profile: {conf.profile_name}" if conf.profile_name else ""))
 	a("")
-	a("ninja_required_version = 1.5")
+	# 1.7 where a crate is present, for the implicit outputs the rustc
+	# rules below need. Not raised otherwise: a tree with no Rust in it has
+	# no reason to demand a newer ninja than it did yesterday.
+	a("ninja_required_version = "
+	  + ("1.7" if any(u.crate for t in targets for u in closures[t].link)
+	     else "1.5"))
 	a("")
 	a(f"cc = {cfg.cc}")
 	a(f"cxx = {cfg.cxx}")
@@ -8575,6 +9138,43 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("  command = rm -f $out && $ar rcs $out $in")
 	a("  description = AR $out")
 	a("")
+	a("rule copy")
+	a("  command = cp $in $out")
+	a("  description = CP $out")
+	a("")
+	if any(u.crate for t in targets for u in closures[t].link):
+		a(f"rustc = {cfg.rustc}")
+		a(f"rustflags = --edition {cfg.rust_edition} "
+		  + " ".join(_eject_flags(cfg.rustflags, root)))
+		a("")
+		# `$in' is the crate root alone. Its members are implicit inputs,
+		# because rustc takes one file and reads the rest -- naming them on
+		# the command line would compile each as a crate of its own.
+		# The depfile is an *implicit output* of the edge, which is why
+		# the required version above moves to 1.7. rustc's dep-info holds
+		# a second rule naming the depfile itself:
+		#
+		#     build/x.a: lib.rs helper.rs
+		#     build/x.a.d: lib.rs helper.rs
+		#
+		# Make attaches that to a target it has never heard of and ignores
+		# it. Ninja reads every target in a depfile as an output of the
+		# edge and refuses one it was not told about -- and it refuses on
+		# the *second* run, after a first that looked perfectly fine.
+		# Declaring it is the honest fix: the file really is something
+		# this edge produces.
+		a("rule rustlib")
+		a("  command = $rustc $rustflags --crate-type=staticlib -o $out "
+		  "--emit=link,dep-info=$dep $in")
+		a("  depfile = $dep")
+		a("  description = RS $in")
+		a("")
+		a("rule rustbin")
+		a("  command = $rustc $rustflags -o $out "
+		  "--emit=link,dep-info=$dep $in")
+		a("  depfile = $dep")
+		a("  description = RS $out")
+		a("")
 
 	gen_rules = gen_rules if gen_rules is not None else {}
 	gen_outs = []
@@ -8600,11 +9200,16 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	if gen_rules:
 		a("")
 
-	every = {}
+	every, ninja_crates = {}, {}
 	for t in targets:
 		for u in closures[t].link:
-			if not u.prebuilt:      # nothing fmake compiled, nothing to emit
-				every[u.rel] = u
+			if u.prebuilt:          # nothing fmake compiled, nothing to emit
+				continue
+			if u.crate:
+				if not u.crate_exe:
+					ninja_crates[u.rel] = u
+				continue
+			every[u.rel] = u
 
 	uic = uic or {}
 	uic_jobs = uic.get("jobs") or []
@@ -8677,24 +9282,60 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		  f"{u.lang.rule} {_ninja(_eject_src(rel))}{after}")
 		if u.own:
 			a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
+	# One edge per crate, with the members as implicit inputs. The depfile
+	# ninja reads afterwards is rustc's own and names the real module
+	# graph, so a member the `mod' scan missed still forces a rebuild.
+	for rel in sorted(ninja_crates):
+		u = ninja_crates[rel]
+		mods = (" | " + " ".join(_ninja(_eject_src(m))
+		                         for m in sorted(u.members))) if u.members else ""
+		dep = f"$build_dir/{_ninja(_eject_obj(rel))}.d"
+		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.a | {dep}: "
+		  f"rustlib {_ninja(_eject_src(rel))}{mods}")
+		a(f"  dep = {dep}")
 	a("")
 
 	for t in targets:
+		root_unit = closures[t].root
+		if root_unit.crate_exe:
+			mods = (" | " + " ".join(_ninja(_eject_src(m))
+			                         for m in sorted(root_unit.members))) \
+			       if root_unit.members else ""
+			# In the build directory rather than beside the binary: a
+			# program's depfile is an intermediate, and the tree root is
+			# where the program goes.
+			dep = f"$build_dir/{_ninja(_eject_obj(root_unit.rel))}.d"
+			a(f"build {_ninja(t.filename)} | {dep}: rustbin "
+			  f"{_ninja(_eject_src(root_unit.rel))}{mods}")
+			a(f"  dep = {dep}")
+			continue
 		objs = " ".join(f"$build_dir/{_ninja(_eject_obj(u.rel))}.o"
-		                for u in closures[t].link if not u.prebuilt)
+		                for u in closures[t].link
+		                if not u.prebuilt and not u.crate)
 		# A prebuilt .o is an ordinary input, beside the objects fmake
 		# compiled rather than after them with the archives.
 		blobs = [u.rel for u in closures[t].link
 		         if u.prebuilt and not u.archive]
 		if blobs:
 			objs = objs + " " + " ".join(_ninja(b) for b in blobs)
+		# Escaped here rather than at each use. A built crate's path
+		# starts with `$build_dir', which is ninja's own variable and must
+		# not be escaped a second time -- doing so asks ninja for a file
+		# called `$build_dir/...' and it reports no rule to make it.
 		arcs = [] if t.kind == "static" else \
-		       [u.rel for u in closures[t].link if u.archive]
+		       [f"$build_dir/{_ninja(_eject_obj(u.rel))}.a" if u.crate
+		        else _ninja(u.rel)
+		        for u in closures[t].link if u.archive]
+		crate_arcs = [f"$build_dir/{_ninja(_eject_obj(u.rel))}.a"
+		              for u in closures[t].link if u.archive and u.crate]
+		if t.kind == "static" and not objs.strip() and len(crate_arcs) == 1:
+			a(f"build {_ninja(t.filename)}: copy {crate_arcs[0]}")
+			continue
 		rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
 		# Implicit inputs so a changed archive relinks; the command line
 		# places them after the objects and groups them when there is more
 		# than one, neither of which an input list can express.
-		after = (" | " + " ".join(_ninja(x) for x in arcs)) if arcs else ""
+		after = (" | " + " ".join(arcs)) if arcs else ""
 		a(f"build {_ninja(t.filename)}: {rule} {objs}{after}")
 		if t.kind != "static":
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
@@ -9245,7 +9886,7 @@ def do_clean(root):
 def parse_args(argv):
 	p = argparse.ArgumentParser(
 	    prog="fmake",
-	    description="Build C and C++ programs with no build file.",
+	    description="Build C, C++, assembly and Rust programs with no build file.",
 	    formatter_class=argparse.RawDescriptionHelpFormatter,
 	    epilog="The link set is computed from object symbol tables, not from "
 	           "the #include graph. Run --explain to see every decision.")

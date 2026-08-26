@@ -47,6 +47,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 FMAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fmake")
@@ -13058,6 +13059,412 @@ def a_plugin_that_claims_an_object_and_then_fails_is_not_an_empty_one(t):
 	      f"the check fires on an ordinary build: {r.stdout}{r.stderr}")
 	check("bfd plugin" not in r.stdout + r.stderr,
 	      f"a build with no plugin trouble reported some: {r.stdout}")
+
+
+# ---------------------------------------------------------------------------
+# Rust
+#
+# Every crate case builds a staticlib, and a staticlib carries rustc's own
+# `core' and `std' objects -- 12MB for a no_std crate and around 50MB for
+# one that uses std. That is the cost of the language rather than of the
+# case, and it is why there are a handful of these rather than one per
+# assertion. Each tree is removed when its case finishes.
+# ---------------------------------------------------------------------------
+
+_RUST_LOCK = threading.Lock()
+_RUST_NM = "unasked"
+
+
+def _rust_nm():
+	"""An nm that can read a rust staticlib, or None.
+
+	Not a formality on every machine. rustc's prebuilt std objects are ELF
+	carrying an .llvmbc section, so a BFD plugin claims them -- and where
+	that plugin is older than the compiler that wrote them it fails, at
+	which point nm reports no symbols and exits 0. fmake refuses rather
+	than believing that (see the plugin case above), so a Rust tree cannot
+	be built here at all until an nm that can read one is named.
+
+	Asked once, by building the smallest crate there is and looking at what
+	each candidate says about it.
+	"""
+	global _RUST_NM
+	with _RUST_LOCK:
+		if _RUST_NM != "unasked":
+			return _RUST_NM
+		_RUST_NM = None
+		if not shutil.which("rustc"):
+			return None
+		d = tempfile.mkdtemp(prefix="fmake-rustnm-")
+		try:
+			src = os.path.join(d, "lib.rs")
+			with open(src, "w") as fh:
+				fh.write('#[no_mangle]\n'
+				         'pub extern "C" fn probe_symbol() -> i32 { 1 }\n')
+			arc = os.path.join(d, "libprobe.a")
+			r = subprocess.run(
+			    ["rustc", "--edition", "2021", "--crate-type=staticlib",
+			     "-o", arc, "--emit=link", src],
+			    capture_output=True, text=True, timeout=FMAKE_TIMEOUT)
+			if r.returncode != 0:
+				return None
+			cands = ["nm"] + sorted(
+			    (os.path.basename(x) for x in glob.glob("/usr/bin/llvm-nm*")),
+			    reverse=True)
+			for cand in cands:
+				if not shutil.which(cand):
+					continue
+				out = subprocess.run([cand, "--format=posix", arc],
+				                     capture_output=True, text=True)
+				# Both halves matter. A plugin failure means the answer is
+				# not to be trusted whatever else is in it, and an answer
+				# with no probe_symbol in it is one that read nothing.
+				if "bfd plugin" in out.stdout + out.stderr:
+					continue
+				if "probe_symbol" in out.stdout:
+					_RUST_NM = cand
+					break
+			return _RUST_NM
+		except (OSError, subprocess.SubprocessError):
+			return None
+		finally:
+			shutil.rmtree(d, ignore_errors=True)
+
+
+def _rust(t):
+	"""The environment a Rust case needs, or a Skip saying what is missing."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	nm = _rust_nm()
+	if not nm:
+		raise Skip("no nm here can read a rust staticlib -- every candidate "
+		           "either failed a bfd plugin or read no symbols")
+	return {"NM": nm}
+
+
+@case
+def a_c_program_links_a_rust_crate_with_no_build_file(t):
+	"""Section 127 called this the case worth building toward, because no
+	other build system arrives at it by looking at symbols.
+
+	A staticlib is an ordinary archive: nm reads it, the closure links it
+	if something needs it, and what it leaves undefined is resolved the way
+	any archive's is -- which is how -lgcc_s arrives for rustc's unwinder
+	without anybody naming it. So the language boundary costs the closure
+	nothing, and that is the finding rather than the feature."""
+	env = _rust(t)
+	t.write("main.c", """
+#include <stdio.h>
+int rust_seven(void);
+int main(void) { printf("%d\\n", rust_seven()); return 0; }
+""")
+	t.write("lib.rs", """
+mod helper;
+
+#[no_mangle]
+pub extern "C" fn rust_seven() -> i32 { helper::seven() }
+""")
+	t.write("helper.rs", "pub fn seven() -> i32 { 7 }\n")
+
+	r = t.fmake(env=env)
+	check(r.returncode == 0, f"the tree did not build: {r.stdout}{r.stderr}")
+	got = t.run(os.path.basename(t.dir))
+	check(got.stdout.strip() == "7",
+	      f"the program does not call into the crate: {got.stdout!r} "
+	      f"{got.stderr!r}")
+
+	e = t.fmake("--explain", env=env)
+	check("lib.rs" in before_externals(e.stdout),
+	      f"the crate is not in the link set: {e.stdout}")
+	check("rust_seven" in e.stdout,
+	      f"the link set does not say which symbol reached the crate: "
+	      f"{e.stdout}")
+
+
+@case
+def a_rust_module_is_not_a_translation_unit(t):
+	"""The whole of section 127's finding, asserted.
+
+	`rustc helper.rs' is not a piece of a program -- handed a module file
+	on its own rustc reports `main function not found in crate helper',
+	because a bare .rs *is* a crate. So a member must not become a unit, a
+	target, or a candidate, and it must not be reported as a source
+	nothing reaches: it is reached, by the root, and --force-link on one
+	would ask fmake to do the thing that is an error.
+
+	A .rs no root draws in is a different fact and is still reported."""
+	env = _rust(t)
+	t.write("main.c", """
+#include <stdio.h>
+int rust_seven(void);
+int main(void) { printf("%d\\n", rust_seven()); return 0; }
+""")
+	t.write("lib.rs", """
+mod helper;
+
+#[no_mangle]
+pub extern "C" fn rust_seven() -> i32 { helper::seven() }
+""")
+	t.write("helper.rs", "pub fn seven() -> i32 { 7 }\n")
+	t.write("lonely.rs", "pub fn nobody() -> i32 { 0 }\n")
+
+	# --widen-all, because that is where the exclusion is load-bearing: an
+	# ordinary build never proposes helper.rs anyway -- nothing includes it
+	# -- so a plain run asserts nothing and passes with the exclusion
+	# removed. --widen-all and a library with no declared membership both
+	# reset the candidate set to the whole tree, and that is the shape that
+	# would compile a module as a crate of its own. Watched failing with
+	# the exclusion taken out: `[1/3] RS  helper.rs`.
+	r = t.fmake("--widen-all", env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the tree did not build: {out}")
+	check("RS  helper.rs" not in out and "RS helper.rs" not in out,
+	      f"a module was compiled on its own, which rustc cannot do: {out}")
+	check("RS  lonely.rs" not in out and "RS lonely.rs" not in out,
+	      f"a .rs no root reaches was compiled as a crate of its own: {out}")
+	check("helper.rs not compiled" not in out,
+	      f"a module of the crate is reported as unreachable: {out}")
+	check("lonely.rs is reached by no crate root" in out,
+	      f"a .rs nothing draws in should be said, the way an unreferenced "
+	      f"C source is: {out}")
+
+	e = t.fmake("--explain", env=env)
+	check(e.stdout.count("rustc ") == 1,
+	      f"a crate is one rustc call, not one per file: {e.stdout}")
+
+
+@case
+def a_rust_program_is_linked_by_rustc_and_not_by_fmake(t):
+	"""Measured rather than chosen. Debian's rustc ships `std' as .rlib
+	files and no shared object, so there is nothing for fmake to put on a
+	link line -- and which rlibs a crate needs lives in rustc's crate
+	metadata rather than in any symbol table.
+
+	So the link set of a Rust program is the crate, and --explain says so
+	rather than printing an empty closure that looks like a bug."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	t.write("main.rs", """
+mod helper;
+fn main() { println!("{}", helper::seven()); }
+""")
+	t.write("helper.rs", "pub fn seven() -> i32 { 7 }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the crate did not build: {r.stdout}{r.stderr}")
+	got = t.run(os.path.basename(t.dir))
+	check(got.stdout.strip() == "7",
+	      f"the program does not run: {got.stdout!r} {got.stderr!r}")
+
+	e = t.fmake("--explain")
+	check("rustc resolves the rest" in e.stdout,
+	      f"--explain does not say who decides this link: {e.stdout}")
+	check("module of the crate" in e.stdout,
+	      f"--explain does not name the crate's members: {e.stdout}")
+	# The C bands are not this target's, and printing them would invite an
+	# edit that changes nothing.
+	check("-Os" not in e.stdout.split("flags")[-1].split("argv")[0],
+	      f"C flags are shown for a target rustc builds: {e.stdout}")
+
+
+@case
+def a_crate_rebuilds_on_a_member_the_mod_scan_cannot_see(t):
+	"""The half section 126 called the one that would rot quietly.
+
+	`mod' is what the scan reads. `include!("extra.rs")' is a macro and
+	reads as nothing at all, so a file that is genuinely part of the crate
+	looks exactly like one nothing reaches -- and a crate that does not
+	rebuild when it changes is wrong in the direction nobody notices.
+
+	rustc's --emit=dep-info writes an ordinary Make depfile naming the
+	whole module graph, which answers both: the rebuild, and the report,
+	which is asked after the build rather than before it for this reason."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	t.write("main.rs", """
+include!("extra.rs");
+fn main() { println!("{}", extra_value()); }
+""")
+	t.write("extra.rs", "fn extra_value() -> i32 { 11 }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the crate did not build: {r.stdout}{r.stderr}")
+	name = os.path.basename(t.dir)
+	check(t.run(name).stdout.strip() == "11",
+	      "the included file is not in the build")
+	check("extra.rs is reached by no crate root" not in r.stdout,
+	      f"a file rustc read is reported as reaching nothing: {r.stdout}")
+
+	again = t.fmake()
+	check("RS" not in again.stdout,
+	      f"an unchanged crate was rebuilt: {again.stdout}")
+
+	t.write("extra.rs", "fn extra_value() -> i32 { 22 }\n")
+	r = t.fmake()
+	check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+	check(t.run(name).stdout.strip() == "22",
+	      "a change to a member the scan cannot see did not rebuild the "
+	      "crate, so the depfile is written and never read")
+
+
+@case
+def the_ejected_builds_agree_with_the_live_one_about_a_crate(t):
+	"""Both backends, run rather than read -- which is what found the bug
+	this case mostly exists for.
+
+	rustc's dep-info names its target from the *crate name* when the link
+	path is given inside --emit, so every lib.rs in every tree writes
+	`liblib.a: ...'. Make attaches those prerequisites to a target it has
+	never heard of and drops them silently; ninja calls the output
+	perpetually dirty and rebuilds it on every run, and only on the second
+	run, after a first that looked perfectly fine. Naming the output with
+	`-o' instead puts the real path in the depfile.
+
+	Ninja needed one thing more: rustc's dep-info carries a second rule
+	naming the depfile itself, and ninja refuses a depfile that mentions an
+	output the edge did not declare. It is declared now."""
+	env = _rust(t)
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("main.c", """
+#include <stdio.h>
+int rust_seven(void);
+int main(void) { printf("%d\\n", rust_seven()); return 0; }
+""")
+	t.write("lib.rs", """
+mod helper;
+
+#[no_mangle]
+pub extern "C" fn rust_seven() -> i32 { helper::seven() }
+""")
+	t.write("helper.rs", "pub fn seven() -> i32 { 7 }\n")
+	name = os.path.basename(t.dir)
+
+	for backend, tool in (("make", ["make", "-C", t.dir]),
+	                      ("ninja", ["ninja", "-C", t.dir])):
+		if backend == "ninja" and not shutil.which("ninja"):
+			continue
+		e = t.fmake("--eject", backend, env=env)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write("Makefile" if backend == "make" else "build.ninja", e.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+
+		r = subprocess.run(tool, capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"the ejected {backend} build failed: {r.stdout}{r.stderr}")
+		check(t.run(name).stdout.strip() == "7",
+		      f"the ejected {backend} build produced a different program")
+
+		r = subprocess.run(tool, capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"the second {backend} run failed, which is where a depfile "
+		      f"ninja cannot read shows up: {r.stdout}{r.stderr}")
+		check("rustc" not in r.stdout and "RS" not in r.stdout,
+		      f"the ejected {backend} build rebuilds the crate every time: "
+		      f"{r.stdout}")
+
+
+@case
+def a_library_that_is_only_a_crate_is_the_crates_own_archive(t):
+	"""`ar rcs` over an empty object list succeeds.
+
+	A tree whose only source is a lib.rs has a library target and nothing
+	that compiles into it, and the archive step wrote eight bytes -- a
+	valid archive with no members -- under `* built libthing.a`. A wrong
+	answer delivered confidently, which is worse than a refusal, and the
+	kind that only shows up when a consumer fails to link against it.
+
+	The crate's own staticlib is the library, so it is copied rather than
+	assembled. Both ejected backends had to be told separately, because
+	`arcs` is empty for a static target by design -- an archive is not
+	nested inside another one -- so the first version of this fix could
+	never fire there and both kept writing the empty archive."""
+	env = _rust(t)
+	t.write("lib.rs", """
+#[no_mangle]
+pub extern "C" fn only_thing() -> i32 { 1 }
+""")
+	name = "lib" + os.path.basename(t.dir) + ".a"
+
+	def members(where):
+		out = subprocess.run(["nm", "--format=posix",
+		                      os.path.join(t.dir, where)],
+		                     capture_output=True, text=True)
+		return "only_thing" in out.stdout
+
+	r = t.fmake(env=env)
+	check(r.returncode == 0, f"the tree did not build: {r.stdout}{r.stderr}")
+	check(members(name),
+	      f"the library exports nothing, so it is the empty archive `ar` "
+	      f"writes when it is given no objects: {r.stdout}")
+
+	for backend, tool, out in (("make", ["make", "-C", t.dir], "Makefile"),
+	                           ("ninja", ["ninja", "-C", t.dir],
+	                            "build.ninja")):
+		if not shutil.which(backend):
+			continue
+		e = t.fmake("--eject", backend, env=env)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write(out, e.stdout)
+		for gone in (".fmake", "build", name):
+			path = os.path.join(t.dir, gone)
+			shutil.rmtree(path, ignore_errors=True)
+			if os.path.exists(path):
+				os.remove(path)
+		r = subprocess.run(tool, capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"the ejected {backend} build failed: {r.stdout}{r.stderr}")
+		check(members(name),
+		      f"the ejected {backend} build wrote the empty archive")
+
+
+@case
+def a_file_cannot_be_a_module_of_two_crates(t):
+	"""Section 3's ambiguity in another language. Nothing in the tree says
+	which crate the file belongs to, and compiling it into both gives two
+	copies of every symbol it defines -- so fmake refuses rather than
+	choosing, exactly as it does for two providers of one symbol."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	t.write("lib.rs", "mod shared;\n")
+	t.write("main.rs", "mod shared;\nfn main() { println!(\"x\"); }\n")
+	t.write("shared.rs", "pub fn thing() -> i32 { 1 }\n")
+
+	r = t.fmake()
+	check(r.returncode != 0,
+	      f"a file in two crates should be refused: {r.stdout}")
+	out = r.stdout + r.stderr
+	check("shared.rs" in out and "more than one crate" in out,
+	      f"the refusal does not name the file and the problem: {out}")
+
+
+@case
+def a_rust_program_using_a_sibling_crate_is_told_what_it_needs(t):
+	"""A main.rs beside a lib.rs is the commonest Rust layout there is, and
+	they are two crates. Cargo makes one available to the other through a
+	dependency graph in a build file; fmake has none to read.
+
+	rustc says `unresolved import' and names the crate, which is true and
+	does not say why -- and what fmake used to add was `name the missing
+	libraries with --ldflags', which is advice about a link line that does
+	not exist for a target rustc builds."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	t.write("lib.rs", "pub fn shared() -> i32 { 4 }\n")
+	t.write("main.rs", """
+use thing::shared;
+fn main() { println!("{}", shared()); }
+""")
+
+	r = t.fmake(env=_rust(t))
+	check(r.returncode != 0, f"this cannot build: {r.stdout}")
+	out = r.stdout + r.stderr
+	check("separate crates" in out,
+	      f"the failure does not say why the import cannot resolve: {out}")
+	check("--ldflags" not in out,
+	      f"a target rustc links has no library to name, and offering one "
+	      f"sends the reader to install something: {out}")
 
 
 # ---------------------------------------------------------------------------
