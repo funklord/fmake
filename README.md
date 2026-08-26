@@ -1,6 +1,7 @@
 # fmake
 
-A build tool for C and C++ programs that shouldn't need a build file.
+A build tool for C, C++ and assembly programs that shouldn't need a build
+file.
 
 ```sh
 $ ls
@@ -719,7 +720,9 @@ both were reasonable ones.
   already installed. It is not a package manager.
 - **C++20 modules**, `import std;` and friends.
 - **macOS and Windows.** The symbol scan is ELF-shaped.
-- **Languages other than C and C++.**
+- **Languages other than C, C++ and assembly.** `.s` and `.S` are built;
+  `.asm` is not, being nasm or masm syntax rather than another suffix for
+  this assembler.
 - **Logic.** There is deliberately no `fmake.py` and nowhere to put code. If
   something genuinely needs a program, a rule can call one.
 

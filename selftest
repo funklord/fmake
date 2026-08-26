@@ -1199,51 +1199,140 @@ def a_test_is_given_its_arguments(t):
 
 
 @case
+def a_symbol_only_assembly_defines_is_found(t):
+	"""Assembly is a source language here, and the link is not the hard part.
+
+	Symbol closure reads `nm', so an assembled object joins a link set on
+	exactly the terms a compiled one does and section 3 needed no change to
+	admit a language it had never heard of. **What did need changing is the
+	guess about what to compile.** `widen_candidates' proposes a file by
+	matching wanted symbols against the scan's `defs', and `defs' came out
+	of C regexes -- so an assembly file's was always empty, it was never
+	proposed, and the build reported `seven.s not compiled: nothing reaches
+	it' and then failed to link naming the symbol that file held.
+
+	So the scanner reads `.globl'/`.global', which is exactly the set
+	another translation unit could refer to: a bare label is file-local
+	until one of those names it.
+
+	Nothing here declares the assembly in a header, which is the point --
+	the include graph cannot reach it and the symbol is the only evidence
+	there is."""
+	t.write("seven.s", ".text\n.globl seven\nseven:\n\tmovl $7, %eax\n\tret\n")
+	t.write("main.c", '#include <stdio.h>\nint seven(void);\n'
+	        'int main(void){ printf("%d\\n", seven()); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"a tree with assembly did not build: "
+	      f"{r.stdout}{r.stderr}")
+	check("AS " in r.stdout, f"the assembly was not assembled: {r.stdout}")
+
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	got = subprocess.run([exe], capture_output=True, text=True)
+	check(got.stdout.strip() == "7",
+	      f"the program did not reach the assembly: {got.stdout!r}")
+
+	# Both ejected backends have to choose the same compiler and the same
+	# depfile mechanism, or `make'/`ninja' build something fmake did not.
+	mk = t.fmake("--eject", "make").stdout
+	check("-Wa,--MD," in mk,
+	      f"the ejected Makefile assembles without a depfile: {mk}")
+	nj = t.fmake("--eject", "ninja").stdout
+	check("rule as" in nj and ": as seven.s" in nj,
+	      f"the ejected ninja build has no rule for assembly: {nj}")
+
+
+@case
+def the_two_assembly_kinds_differ_by_the_preprocessor(t):
+	"""`.s' is assembled as it stands; `.S' goes through cpp first.
+
+	That is the whole of the difference and it decides three things: whether
+	`#include' means anything, whether `-D' reaches the file, and who writes
+	the depfile. cpp writes one for everything it preprocesses; for a raw
+	`.s' the assembler does, with `-Wa,--MD', or nobody does and a changed
+	`.include' rebuilds nothing.
+
+	Both halves are checked by changing a file and watching the answer move,
+	because a depfile that is written and never read looks exactly like one
+	that works."""
+	t.write("val.h", "#define ANSWER 42\n")
+	t.write("answer.S", '#include "val.h"\n.text\n.globl answer\n'
+	        "answer:\n\tmovl $ANSWER, %eax\n\tret\n")
+	t.write("part.inc", "\t.byte 5\n")
+	t.write("tbl.s", ".data\n.globl tbl\ntbl:\n.include \"part.inc\"\n")
+	t.write("main.c", '#include <stdio.h>\nint answer(void);\n'
+	        "extern char tbl[];\n"
+	        'int main(void){ printf("%d %d\\n", answer(), tbl[0]); return 0; }\n')
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+
+	r = t.fmake()
+	check(r.returncode == 0, f"did not build: {r.stdout}{r.stderr}")
+	got = subprocess.run([exe], capture_output=True, text=True)
+	check(got.stdout.strip() == "42 5",
+	      f"the preprocessor or the .include did not take: {got.stdout!r}")
+
+	# cpp's depfile: the .S includes this.
+	t.write("val.h", "#define ANSWER 99\n")
+	t.fmake()
+	got = subprocess.run([exe], capture_output=True, text=True)
+	check(got.stdout.startswith("99"),
+	      f"changing a header the .S includes rebuilt nothing: {got.stdout!r}")
+
+	# The assembler's depfile: the .s includes this, and cpp never saw it.
+	t.write("part.inc", "\t.byte 8\n")
+	t.fmake()
+	got = subprocess.run([exe], capture_output=True, text=True)
+	check(got.stdout.strip().endswith("8"),
+	      f"changing a file the .s includes rebuilt nothing: {got.stdout!r}")
+
+
+@case
 def a_generated_file_nothing_can_compile_is_named(t):
-	"""anti-avx generates 218K of assembly and fmake dropped it silently.
+	"""A file a generator writes and nothing builds must not vanish quietly.
 
-	Its lowering test is checked against cases emitted by the rewriter
-	itself, so they cannot drift from what it really produces: one
-	generator run writes `lowering_cases.s' and `lowering_cases.inc', the
-	test includes the `.inc' and links the `.s'. fmake ran the generator,
-	wrote both, compiled the test against the `.inc' -- and never mentioned
-	the `.s' again, because assembly is not a source kind it builds.
+	This began with anti-avx's `.s': one generator run wrote
+	`lowering_cases.s' and `lowering_cases.inc', fmake compiled the test
+	against the `.inc' and never mentioned the assembly again, and what the
+	reader got was a link failure listing 233 undefined `case_N' symbols
+	under *name the missing libraries with --ldflags*. Advice pointing away
+	from the answer is worse than silence.
 
-	What the reader got was a link failure listing 233 undefined `case_N'
-	symbols under the advice *name the missing libraries with --ldflags*,
-	when the symbols were in a file fmake had written itself a moment
-	earlier. **Advice that points away from the answer is worse than
-	silence**, and this is the same shape as the unreferenced `.qrc' beside
-	it: the fix is to say what was produced and not built, rather than to
-	build it.
+	**fmake assembles now, so that example builds and this case needed a
+	new one.** The rule did not change and neither did the reason for it;
+	only the set of extensions it can be true of. `.asm' is the one left:
+	Intel syntax for nasm or masm, a different assembler rather than a
+	different suffix for this one.
 
-	Whether fmake should assemble is a separate question and a larger one.
-	This is only that it must not drop a file without a word."""
+	The other half is that a generated file fmake *does* build draws no
+	complaint, or the note becomes noise on every generator that emits a
+	source beside a header."""
 	t.write("src/mk.py", """
 import sys
-open(sys.argv[1], "w").write(".globl case_0\\ncase_0:\\n\\tret\\n")
+open(sys.argv[1], "w").write("; nasm syntax, not gas\\n")
 open(sys.argv[2], "w").write("#define CASE_COUNT 1\\n")
+open(sys.argv[3], "w").write("int helper(void){ return 1; }\\n")
 """)
 	t.write("main.c", '#include "cases.inc"\n'
-	        "int main(void){ return CASE_COUNT - 1; }\n")
+	        "int helper(void);\n"
+	        "int main(void){ return CASE_COUNT - helper(); }\n")
 	t.write("fmake.toml", f"""
 [project]
 include-dirs = ["gen"]
 
 [generate.cases]
-command = "{sys.executable} src/mk.py gen/cases.s gen/cases.inc"
+command = "{sys.executable} src/mk.py gen/cases.asm gen/cases.inc gen/helper.c"
 inputs  = ["src/mk.py"]
-outputs = ["gen/cases.s", "gen/cases.inc"]
+outputs = ["gen/cases.asm", "gen/cases.inc", "gen/helper.c"]
 """)
 	r = t.fmake()
 	out = r.stdout + r.stderr
-	check("gen/cases.s was generated and nothing will compile it" in out,
+	check("gen/cases.asm was generated and nothing will compile it" in out,
 	      f"the stranded assembly was not named: {out}")
 
-	# The half that is built is not complained about, or the note would be
-	# noise on every generator that emits a header beside its source.
-	check("cases.inc was generated and nothing" not in out,
-	      f"an ordinary generated include was called stranded: {out}")
+	# The generated C and the generated header are built and used, and
+	# neither is complained about.
+	for quiet in ("cases.inc", "helper.c"):
+		check(f"{quiet} was generated and nothing" not in out,
+		      f"a generated file fmake does build was called stranded: {out}")
 
 
 @case

@@ -20,7 +20,7 @@
 fmake -- a build tool for programs that shouldn't need a build file.
 
 One file, zero dependencies beyond the Python stdlib. Drop it in $PATH and
-run it in a directory containing C or C++ source:
+run it in a directory containing C, C++ or assembly source:
 
     fmake                      # build every program in the tree
     fmake myapp                # build one
@@ -168,15 +168,70 @@ STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
 CACHE_VER   = 8   # scans record a version macro's own fallback
 
-C_EXTS      = {".c"}
-CXX_EXTS    = {".cc", ".cpp", ".cxx", ".c++", ".C"}
-SRC_EXTS    = C_EXTS | CXX_EXTS
-# Assembly is not built, and a generator emitting some is where the silence
-# costs something: the file is produced, nothing refers to it again, and the
-# link fails naming symbols rather than the file holding them. Only the
-# assembly extensions, because that is what has been met -- a wider guess
-# about languages fmake does not build would be speculation.
-UNBUILT_SRC_EXTS = {".s", ".S", ".asm"}
+class Lang:
+	"""One source language: how to compile it and what its text means.
+
+    A table rather than a pair of sets, because what varies between
+    languages is more than a name. C and C++ differ by driver; assembly
+    differs by whether the preprocessor runs at all, and therefore by who
+    writes the depfile -- cpp does it for everything it preprocesses, and
+    for a raw `.s' it is the assembler or nobody. Left as a boolean the
+    third language had nowhere to put that, and the fourth would have had
+    nowhere either.
+
+    Nothing downstream of the object file needs to know any of this. Symbol
+    closure reads `nm' output, so an assembled object joins a link set on
+    exactly the terms a compiled one does, and section 3 needed no change
+    to admit a language it had never heard of.
+    """
+	__slots__ = ("name", "tag", "cxx", "cpp", "dep_via_as")
+
+	def __init__(self, name, tag, cxx=False, cpp=True, dep_via_as=False):
+		self.name = name              # what to call it in a message
+		self.tag  = tag               # the progress column, three wide
+		self.cxx  = cxx               # $CXX rather than $CC, and c++ to link
+		self.cpp  = cpp               # the preprocessor runs, so #include means something
+		self.dep_via_as = dep_via_as  # gas writes the depfile, cpp having not run
+
+	def dep_flags(self, dep, phony=False):
+		"""Flags that make this language's compiler write `dep'.
+
+        `-MP' emits a phony target per prerequisite so a deleted header does
+        not wedge Make. gas has no equivalent, which costs nothing: the
+        assembler's prerequisites are `.include' files, and a Makefile that
+        loses one reports it the ordinary way.
+        """
+		if self.dep_via_as:
+			return ["-Wa,--MD," + dep]
+		return ["-MD", "-MP", "-MF", dep] if phony else ["-MD", "-MF", dep]
+
+	@property
+	def rule(self):
+		"""The ninja rule name this language compiles under."""
+		return "cxx" if self.cxx else ("as" if self.dep_via_as else "cc")
+
+
+_C   = Lang("C", "CC ")
+_CXX = Lang("C++", "CXX", cxx=True)
+# `.s' is assembled as it stands; `.S' goes through cpp first, which is what
+# makes #include and -D mean something in one and not the other, and is why
+# they are two entries rather than one with a special case.
+_ASM = Lang("assembly", "AS ", cpp=False, dep_via_as=True)
+_ASM_CPP = Lang("assembly", "AS ")
+
+LANGS = {
+    ".c": _C,
+    ".cc": _CXX, ".cpp": _CXX, ".cxx": _CXX, ".c++": _CXX, ".C": _CXX,
+    ".s": _ASM, ".S": _ASM_CPP,
+}
+C_EXTS      = {e for e, l in LANGS.items() if l is _C}
+CXX_EXTS    = {e for e, l in LANGS.items() if l.cxx}
+SRC_EXTS    = set(LANGS)
+# Still not built: `.asm' is Intel syntax for nasm or masm, which is a
+# different assembler rather than a different extension for this one, and
+# nothing here has met a tree that wants it. A generator emitting one gets
+# told rather than ignored, which is what section 123 was about.
+UNBUILT_SRC_EXTS = {".asm"}
 HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
 
 SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
@@ -525,24 +580,47 @@ def version_fallbacks(code):
 	return sorted(guarded & valued)
 
 
+# What an assembly file exports. `.globl'/`.global' is the whole of it:
+# a bare label is file-local until one of those names it, which is exactly
+# the set another translation unit could refer to.
+#
+# This is needed for one reason and it is not the link. Symbol closure reads
+# `nm', so a compiled object needs no help -- but widen_candidates decides
+# what is worth compiling in the first place from the scan, and a language
+# whose defs are always empty can never be proposed. Assembly was recognised,
+# skipped as "nothing reaches it", and the link then failed naming the symbol
+# it held.
+RE_ASM_GLOBAL = re.compile(
+    r"^[ \t]*\.(?:globl|global)[ \t]+([A-Za-z_.$][\w.$]*)", re.M)
+
+
 def scan_source(path):
 	"""Read one source file and return its scan record."""
 	with open(path, "r", encoding="utf-8", errors="replace") as fh:
 		text = fh.read()
 	code, comments = strip_comments(text)
+	lang = LANGS.get(os.path.splitext(path)[1], _C)
 
 	incs = []
-	for m in RE_INCLUDE.finditer(code):
-		lineno = code.count("\n", 0, m.start()) + 1
-		incs.append([m.group(1), m.group(2), lineno])
+	if lang.cpp:
+		# A `.s' is assembled as it stands, so a line beginning `#include'
+		# in one is not an include -- it is a comment on most targets and a
+		# syntax error on the rest. Reading it as one would put a header on
+		# a candidate set for a file that cannot include anything.
+		for m in RE_INCLUDE.finditer(code):
+			lineno = code.count("\n", 0, m.start()) + 1
+			incs.append([m.group(1), m.group(2), lineno])
 
-	defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
-	defs |= set(RE_MEMBER_DEF.findall(code))
-	for m in RE_TEMPLATE_INST.finditer(code):
-		defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
-	for m in RE_TEMPLATE_SPEC.finditer(code):
-		defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
-	defs -= DECL_WORDS
+	if not lang.cpp or lang.tag == "AS ":
+		defs = set(RE_ASM_GLOBAL.findall(code))
+	else:
+		defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
+		defs |= set(RE_MEMBER_DEF.findall(code))
+		for m in RE_TEMPLATE_INST.finditer(code):
+			defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
+		for m in RE_TEMPLATE_SPEC.finditer(code):
+			defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
+		defs -= DECL_WORDS
 	_dirs_and_typos = parse_directives(comments)
 
 	return {
@@ -1644,7 +1722,8 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	                   if os.path.splitext(o)[1] in UNBUILT_SRC_EXTS})
 	for rel in stranded[:5]:
 		note(f"{rel} was generated and nothing will compile it: fmake "
-		     f"builds C and C++, not {os.path.splitext(rel)[1]}")
+		     f"builds C, C++ and assembly, not "
+		     f"{os.path.splitext(rel)[1]}")
 	if len(stranded) > 5:
 		note(f"... and {len(stranded) - 5} more")
 
@@ -2694,7 +2773,7 @@ def man_page(parser):
     argparse was given.
     """
 	out = [f'.TH FMAKE 1 "" "fmake {VERSION}" "User Commands"',
-	       ".SH NAME", "fmake \\- build C and C++ programs with no build file",
+	       ".SH NAME", "fmake \\- build C, C++ and assembly programs with no build file",
 	       ".SH SYNOPSIS", ".B fmake",
 	       ".RI [ options ]",
 	       ".RI [ targets ]",
@@ -3515,14 +3594,15 @@ class Unit:
 	# about whether fmake made it. They were the same fact until a loose .o
 	# arrived, which fmake did not build and which is not searched like an
 	# archive either.
-	__slots__ = ("rel", "abs", "cxx", "obj", "dep", "scan", "ann", "own",
-	             "prebuilt",
+	__slots__ = ("rel", "abs", "cxx", "lang", "obj", "dep", "scan", "ann",
+	             "own", "prebuilt",
 	             "undef", "strong", "weak", "compiled", "archive")
 
 	def __init__(self, rel, root, objdir, scan):
 		self.rel  = rel
 		self.abs  = os.path.join(root, rel)
-		self.cxx  = is_cxx(rel)
+		self.lang = LANGS.get(os.path.splitext(rel)[1], _C)
+		self.cxx  = self.lang.cxx
 		self.obj  = os.path.join(objdir, rel + ".o")
 		self.dep  = os.path.join(objdir, rel + ".d")
 		self.scan = scan
@@ -3588,7 +3668,7 @@ def unit_cflags(u, pkg, store, sig):
 
 def compile_cmd(u, cfg, incflags):
 	cc = cfg.driver(u.cxx)
-	return ([cc, "-c", u.abs, "-o", u.obj, "-MD", "-MF", u.dep]
+	return ([cc, "-c", u.abs, "-o", u.obj] + u.lang.dep_flags(u.dep)
 	        + incflags + cfg.cflags + u.own + cfg.override)
 
 
@@ -3814,7 +3894,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
 		for u, rc, err in pool.map(run_one, todo):
 			done[0] += 1
-			tag = "CXX" if u.cxx else "CC "
+			tag = u.lang.tag
 			if rc != 0:
 				failures.append((u, err))
 				if not quiet:
@@ -6164,7 +6244,7 @@ def build(args, _bootstrapping=False):
 	gen_dirs = sorted({os.path.dirname(g) for g in generated
 	                   if os.path.splitext(g)[1] in HDR_EXTS})
 	if not srcs:
-		die("no C or C++ source files found here")
+		die("no C, C++ or assembly source files found here")
 
 	for rel in list(unreadable):
 		if rel in srcs:
@@ -8178,8 +8258,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# build. fmake's own depfiles are read by fmake, which simply skips a
 		# prerequisite that is gone; a Makefile has no such luxury, and an
 		# ejected Makefile is a Makefile someone will edit.
+		dep = " ".join(u.lang.dep_flags("$(@:.o=.d)", phony=True))
 		a(f"\t$({var}) $({P}{flags}){' ' + own if own else ''} $({P}CFLAGS_LAST) "
-		  f"-c $< -o $@ -MD -MP -MF $(@:.o=.d)")
+		  f"-c $< -o $@ {dep}")
 		a("")
 
 	a("# ---- targets " + "-" * 50)
@@ -8423,6 +8504,16 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("  deps = gcc")
 	a("  description = CXX $in")
 	a("")
+	# Assembly the preprocessor never sees. The depfile is the assembler's,
+	# so `deps = gcc' is wrong here -- that tells ninja to read the compiler
+	# own dependency stream, which gas does not write. The plain
+	# `depfile' form reads the file itself, which is what --MD leaves.
+	a("rule as")
+	a("  command = $cc $cflags $extra $cflags_last -c $in -o $out "
+	  "-Wa,--MD,$out.d")
+	a("  depfile = $out.d")
+	a("  description = AS $in")
+	a("")
 	a("rule link")
 	a("  command = $driver -o $out $in $arcs $libs $ldflags")
 	a("  description = LD $out")
@@ -8534,7 +8625,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	for rel in sorted(every):
 		u = every[rel]
 		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.o: "
-		  f"{'cxx' if u.cxx else 'cc'} {_ninja(_eject_src(rel))}{after}")
+		  f"{u.lang.rule} {_ninja(_eject_src(rel))}{after}")
 		if u.own:
 			a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
 	a("")

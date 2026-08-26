@@ -175,7 +175,8 @@ that had been green about nothing for five commits ·
 [122. openmlx4's evaluation, and the macro no source defines](#122-openmlx4s-evaluation-and-the-macro-no-source-defines) ·
 [123. anti-avx's evaluation, and the file fmake would not build](#123-anti-avxs-evaluation-and-the-file-fmake-would-not-build) ·
 [124. bbq-predictor's evaluation, and a version invented in silence](#124-bbq-predictors-evaluation-and-a-version-invented-in-silence) ·
-[125. `$bin()`, and the filename written twice](#125-bin-and-the-filename-written-twice)
+[125. `$bin()`, and the filename written twice](#125-bin-and-the-filename-written-twice) ·
+[126. Assembly, and the language table under it](#126-assembly-and-the-language-table-under-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9940,3 +9941,86 @@ substitution syntax, there is no `$(...)`-style expression behind it, and a
 value wanting an absolute path or a directory can still say so literally --
 which is what §124 said about inventing syntax for cases nobody has met, and
 still holds for everything except the one case that turned up.
+
+## 126. Assembly, and the language table under it
+
+§123 measured the demand for assembly and recommended against it: no tracked
+`.s`, `.S` or `.asm` in any of the thirteen private projects, and the whole
+call for it one generated file feeding one test in anti-avx. The copyright
+holder overruled that, and the reason is the one a count could not see --
+**fmake is a general tool and other languages are coming**, so the question
+was never "is this worth it for anti-avx" but "is a language a thing fmake
+can have".
+
+It could not, and that is the finding. A language was a boolean.
+
+### What a boolean had nowhere to put
+
+`is_cxx(rel)` decided everything: which driver, which flags variable, which
+progress tag, which linker. Two languages fit in a bool. The third does not,
+because what separates assembly from C is not a driver -- it is that **the
+preprocessor does not run**, and that decides three things a boolean has no
+room for: whether `#include` means anything, whether `-D` reaches the file,
+and *who writes the depfile*.
+
+So `LANGS` is a table now, one entry per extension, and `Lang` carries name,
+progress tag, whether it is C++, whether cpp runs, and who emits
+dependencies. C and C++ read out of it unchanged; `.s` and `.S` are two
+entries rather than one with a special case, because they genuinely differ.
+
+    .c    cc    cpp runs    cpp writes the depfile
+    .cc   c++   cpp runs    cpp writes the depfile
+    .S    cc    cpp runs    cpp writes the depfile
+    .s    cc    no cpp      the assembler writes it, with -Wa,--MD
+
+The fourth language adds a row.
+
+### The link was free and the guess was not
+
+**Symbol closure needed no change at all.** It reads `nm` output, so an
+assembled object joins a link set on exactly the terms a compiled one does;
+§3 admitted a language it had never heard of without being touched.
+
+What did need changing was the guess about what to compile. `widen_candidates`
+proposes a file by matching wanted symbols against the scan's `defs`, and
+`defs` came out of C regexes -- so an assembly file's was **always empty**, it
+was never proposed, and the build said
+
+    seven.s not compiled: nothing reaches it
+
+and then failed to link naming the symbol that file held. Recognising the
+extension was not enough and looked like it was: the file was found, listed,
+and skipped. The scanner reads `.globl`/`.global` now, which is exactly the
+set another translation unit could refer to -- a bare label is file-local
+until one of those names it.
+
+### Dependencies, which are the part that would have rotted quietly
+
+A raw `.s` gets no depfile from `-MD`, because there is no preprocessing to
+write one; gcc accepts the flag and silently produces nothing. Left there,
+assembly would have built correctly and gone stale invisibly -- a `.include`
+edited and nothing rebuilt.
+
+`-Wa,--MD,FILE` asks the assembler instead, and it emits an ordinary Make
+depfile naming the `.include` files. Both halves are checked by changing a
+file and watching the answer move, because a depfile that is written and
+never read looks exactly like one that works.
+
+### Measured on the tree that asked
+
+anti-avx went from **four of five test binaries to five of five**. Its
+lowering test is checked against cases the rewriter emits itself -- 218K of
+generated assembly holding 233 `case_N` symbols -- and that is the file §123
+recorded fmake dropping in silence. It assembles now, and the test reports
+`1864 lowerings executed over 233 cases`.
+
+All three build paths were exercised rather than reasoned about: the live
+build, `make` on an ejected Makefile, and `ninja` on an ejected `build.ninja`,
+each with both assembly kinds and each checked for staleness through the
+depfile its language actually writes.
+
+`.asm` is still not built, and the note §123 added still fires for it. It is
+nasm or masm syntax -- a different assembler rather than another suffix for
+this one -- and nothing here has met a tree wanting it. That is the same
+answer §123 gave, now resting on which assembler a file is for rather than on
+a count of how many trees carry one.
