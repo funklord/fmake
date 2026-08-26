@@ -176,7 +176,8 @@ that had been green about nothing for five commits ·
 [123. anti-avx's evaluation, and the file fmake would not build](#123-anti-avxs-evaluation-and-the-file-fmake-would-not-build) ·
 [124. bbq-predictor's evaluation, and a version invented in silence](#124-bbq-predictors-evaluation-and-a-version-invented-in-silence) ·
 [125. `$bin()`, and the filename written twice](#125-bin-and-the-filename-written-twice) ·
-[126. Assembly, and the language table under it](#126-assembly-and-the-language-table-under-it)
+[126. Assembly, and the language table under it](#126-assembly-and-the-language-table-under-it) ·
+[127. Rust, and why it is not a row in the table](#127-rust-and-why-it-is-not-a-row-in-the-table)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10024,3 +10025,79 @@ nasm or masm syntax -- a different assembler rather than another suffix for
 this one -- and nothing here has met a tree wanting it. That is the same
 answer §123 gave, now resting on which assembler a file is for rather than on
 a count of how many trees carry one.
+
+## 127. Rust, and why it is not a row in the table
+
+§126 finished by saying the fourth language adds a row to `LANGS`. Rust is
+the fourth language and it does not, which is worth having found before
+writing any of it.
+
+**Measured, not assumed.** Everything below was run against rustc 1.85.
+
+### The unit is the crate, and a module file is not a translation unit
+
+    $ rustc --emit=obj -o helper.o helper.rs
+    error[E0601]: `main` function not found in crate `helper`
+
+`helper.rs` is not a piece of a program; handed to rustc on its own it *is*
+a crate, and a binary crate without a `main` is an error. What compiles is
+the root -- `main.rs` or `lib.rs` -- and `mod helper;` draws the rest in.
+One invocation, one crate, however many files.
+
+`LANGS` assumes a file becomes an object. Every entry in it does. Rust needs
+a second **unit kind**, not a fifth row: one where the unit is a set of files
+with a root, and the members are not compiled at all.
+
+### What already works, and it is the surprising half
+
+**Symbol closure needs nothing, again.** A crate built as a staticlib is an
+ordinary archive:
+
+    $ rustc --crate-type=staticlib -o librs.a lib.rs
+    $ nm librs.a | grep rust_seven
+    0000000000000000 T rust_seven
+
+and a C program linking it runs. So the thing fmake is unusually good at --
+closing a link set over symbols rather than over declarations -- crosses a
+language boundary for free, and **a C program calling Rust with no build
+file is the case worth building toward**, because no other build system
+arrives at it by looking at symbols.
+
+**Staleness needs nothing either.** `rustc --emit=dep-info` writes an
+ordinary Make depfile naming the whole module graph, with phony targets, so
+it is `-MD -MP` under a different spelling:
+
+    prog: main.rs helper.rs
+    main.rs:
+    helper.rs:
+
+That answers the question §126 called the half that rots quietly, before it
+had a chance to.
+
+### What it costs, which is where this stopped
+
+A Rust crate is a **built archive**: a unit that compiles like a source and
+links like a vendored `.a`. fmake has both halves and has never had one
+thing be both -- `archive_units` and `prebuilt_units` construct units that
+are already compiled, and everything that compiles produces a `.o` that is
+not an archive. That hybrid is the work, and it reaches:
+
+- source discovery, which must stop treating a member `.rs` as a unit;
+- the crate-root rule, and whether a `.rs` that is neither root nor member
+  is an error or a crate of its own;
+- `compile_cmd`, which branches on the driver for the first time;
+- the link, where a built archive joins the group rather than the objects;
+- both ejected backends, which need a rule that produces an archive;
+- and a pure-Rust program, where rustc links and fmake does not.
+
+None of that is hard and all of it is real. It is recorded here rather than
+half-written, because a language left partly wired into the unit model is
+worse than one not started: the tree builds, the suite passes, and the shape
+that is wrong is the one everything after it is built on.
+
+**Cargo is not the answer to any of this.** A workspace resolves versions,
+features and build scripts, and a tool whose premise is that a tree needs no
+build file cannot begin by reading one. netcfgd's 143 files across thirteen
+crates are Cargo's, and stay Cargo's. What fmake can offer is the
+single-crate case and the interop case, which is the same offer it makes to
+a C tree with a Makefile.
