@@ -179,7 +179,9 @@ that had been green about nothing for five commits ·
 [126. Assembly, and the language table under it](#126-assembly-and-the-language-table-under-it) ·
 [127. Rust, and why it is not a row in the table](#127-rust-and-why-it-is-not-a-row-in-the-table) ·
 [128. A symbol read that did not happen, believed](#128-a-symbol-read-that-did-not-happen-believed) ·
-[129. Rust, and the unit that is built and searched](#129-rust-and-the-unit-that-is-built-and-searched)
+[129. Rust, and the unit that is built and searched](#129-rust-and-the-unit-that-is-built-and-searched) ·
+[130. hydra's report: a build directory compiled because it was there](#130-hydras-report-a-build-directory-compiled-because-it-was-there) ·
+[131. The copyright line, and the surface that is an interface](#131-the-copyright-line-and-the-surface-that-is-an-interface)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10464,3 +10466,72 @@ in particular, a project whose real sources live under a directory called
 every Android adopter, since `tool/android.mk` is shared and the build
 directory name is settled workspace-wide as `build-android-$(ANDROID_ABI)`.
 bbq-predictor, beerssh and fuzzypickles all produce one.
+
+---
+
+## 131. The copyright line, and the surface that is an interface
+
+The workspace names the copyright holder in three places -- what the program
+says about itself, its About window, and its documentation -- instructed by
+the copyright holder on 2026-08-29 and recorded in `harmonization.md`. fmake
+has no About window, so it has two, and both print the same constant.
+
+**It is attribution and not licensing.** Authorship vests automatically, so
+naming the holder states a fact and grants nothing. It says nothing about
+fmake's GPL-3.0-or-later position and was not an opening to revisit one.
+**Per-file headers are explicitly not what the rule asks for**; fmake's
+source header carries the line already and keeps it, which is this project's
+own choice rather than the rule being applied one file at a time.
+
+### The first line was already an interface
+
+`--version` reads
+
+    fmake 1.0 (d06f19d4)
+    Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>
+    GPL-3.0-or-later
+
+and the attribution is on a line of its own because the first line is
+**parsed** -- by whoever reads it, and by
+`the_version_identifies_the_build_as_well_as_the_release`, which anchors a
+regex to it and recomputes the hash independently. Appending to that line
+would have been a change to a format somebody may already read, and would
+have broken the case that exists because §15 found an installed copy 86
+commits behind reporting the same version as the source.
+
+### The case guards drift, and the message names the mistake
+
+Three surfaces stating one fact is an invitation for one to be edited and
+the others not, with nothing reporting it because each is correct alone. So
+the case takes the line the program prints and requires the README and the
+man page to carry **that same line**, rather than checking each of them for
+a copyright line of its own.
+
+Two mutations, and the second is why the checks are in the order they are.
+Removing the attribution fails it; appending it to the first line failed it
+too, but reported *`--version` carries no copyright line* -- true of a
+standalone line, and the wrong thing to tell somebody who has just put the
+text in plain view one line above. The parsed-line check is asked first now,
+so the message names what was actually done.
+
+### A relayed claim about this tree was wrong, and checking cost nothing
+
+The directive arrived from another session, which reported finding no
+`--version` handler in fmake at all and concluded the work here was to add
+one. `fmake -V` has existed since §15 and already printed the author and the
+licence, so the work was one line rather than a new flag. **A claim about
+another tree is a measurement somebody else took**, and the cheapest
+possible check -- running the program -- settled it before any code was
+written.
+
+The cause is worth more than the error, and that session published it: its
+survey globbed `*.c *.cpp *.h *.rs *.py`, and fmake's program is a 425KB
+**extensionless** script, so the scope excluded the program while including
+its tooling. That is the case `code-style.md` names under *Filenames* --
+`fmake` IS fmake -- and the one `style_gate.py` carries a shebang
+special-case for. A probe whose scope excludes the thing being looked for
+returns a confident negative, which is the family this document keeps
+finding: a check that cannot fail, wearing the other sign. The same session numbered its own section §130 while this one was
+being drafted, which is the other half of the same lesson: the tree moves
+under you, and an edit that asserts where it is writing fails loudly rather
+than landing in the wrong place.

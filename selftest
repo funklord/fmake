@@ -11275,6 +11275,58 @@ def the_package_version_matches_the_program(t):
 
 
 @case
+def the_copyright_line_is_the_same_on_every_surface(t):
+	"""The workspace names the copyright holder in three places -- what the
+	program says about itself, its About box, and its documentation --
+	and fmake has no About box, so it has two.
+
+	Attribution rather than licensing, and the distinction is the one
+	CLAUDE.md draws: authorship vests automatically, so naming the holder
+	states a fact and grants nothing. It says nothing about fmake's
+	licence and is not an opening to change one.
+
+	What this guards is drift between the surfaces, which is the failure
+	a rule stated in three places invites: one gets edited and the others
+	do not, and nothing reports it because each is correct on its own.
+
+	And it guards the interface. `--version`'s first line is what a
+	caller parses and what the case below anchors a regex to, so the
+	attribution belongs on a line of its own -- appending it would be a
+	change to a format somebody may already read."""
+	out = subprocess.run([FMAKE, "--version"], capture_output=True,
+	                     text=True).stdout.splitlines()
+	check(len(out) >= 2, f"--version says too little: {out}")
+	# Asked first, so that the message names the mistake that was made.
+	# Appending to line one leaves no line *starting* with Copyright, so
+	# the standalone-line check below would report the attribution as
+	# absent while it sits in plain view -- true, and the wrong thing to
+	# tell somebody who has just put it there.
+	check("Copyright" not in out[0],
+	      f"the attribution was appended to the line callers parse, which "
+	      f"is a change to that format: {out[0]!r}")
+	line = [x for x in out if x.startswith("Copyright (C) ")]
+	check(len(line) == 1,
+	      f"--version carries no copyright line of its own: {out}")
+	holder = line[0]
+	check("Nabeel Sowan <nabeel@vibes.se>" in holder,
+	      f"the copyright line does not name the holder: {holder!r}")
+
+	# The same line, not merely a copyright line, in the document a reader
+	# looks in. Two surfaces agreeing is the whole point of the rule.
+	with open(os.path.join(REPO, "README.md")) as fh:
+		readme = fh.read()
+	check(holder in readme,
+	      f"README.md does not carry the line the program prints: "
+	      f"{holder!r}")
+
+	man = subprocess.run([FMAKE, "--man"], capture_output=True,
+	                     text=True).stdout
+	check(holder in man,
+	      f"the man page does not carry it either: it is generated from "
+	      f"the parser, so a reader who never runs -V would not see it")
+
+
+@case
 def the_version_identifies_the_build_as_well_as_the_release(t):
 	"""VERSION says which release; the hash says which copy.
 

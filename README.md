@@ -890,7 +890,8 @@ binary that trade is a loss — measured at 39s against 27s on a 33-file app.
 
 GPL-3.0-or-later. Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>.
 
-`fmake -V` prints the version, author and licence.
+`fmake -V` prints the version, the copyright line and the licence, and
+`fmake --man` carries both in its COPYRIGHT section.
 
 ---
 
