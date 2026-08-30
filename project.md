@@ -181,7 +181,8 @@ that had been green about nothing for five commits ·
 [128. A symbol read that did not happen, believed](#128-a-symbol-read-that-did-not-happen-believed) ·
 [129. Rust, and the unit that is built and searched](#129-rust-and-the-unit-that-is-built-and-searched) ·
 [130. hydra's report: a build directory compiled because it was there](#130-hydras-report-a-build-directory-compiled-because-it-was-there) ·
-[131. The copyright line, and the surface that is an interface](#131-the-copyright-line-and-the-surface-that-is-an-interface)
+[131. The copyright line, and the surface that is an interface](#131-the-copyright-line-and-the-surface-that-is-an-interface) ·
+[132. Two weeks of red CI, and a path written down twice](#132-two-weeks-of-red-ci-and-a-path-written-down-twice)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10531,7 +10532,70 @@ its tooling. That is the case `code-style.md` names under *Filenames* --
 `fmake` IS fmake -- and the one `style_gate.py` carries a shebang
 special-case for. A probe whose scope excludes the thing being looked for
 returns a confident negative, which is the family this document keeps
-finding: a check that cannot fail, wearing the other sign. The same session numbered its own section §130 while this one was
-being drafted, which is the other half of the same lesson: the tree moves
-under you, and an edit that asserts where it is writing fails loudly rather
-than landing in the wrong place.
+finding: a check that cannot fail, wearing the other sign.
+
+The same session numbered its own section §130 while this one was being
+drafted, which is the other half of the same lesson: the tree moves under
+you, and an edit that asserts where it is writing fails loudly rather than
+landing in the wrong place.
+
+---
+
+## 132. Two weeks of red CI, and a path written down twice
+
+Surfaced by another session, which had CI access before this one did. Two
+jobs failing, and the cause of each is worth something different.
+
+### The install step was right and the README was wrong
+
+    E: Unsupported file ./build/fmake_*_all.deb given on commandline
+
+The glob matched nothing, so `sh` passed the pattern through unexpanded and
+apt refused it. The package has not been at that path since **8e4d19f,
+2026-08-14** -- *"land the packages in DEB_DIR, which is the settled
+spelling"* -- which moved it to `$(DEB_DIR)`, that is `build/deb/`. The last
+green run was the same day.
+
+Two places kept the old path: `.github/workflows/ci.yml` and **`README.md`**.
+So the step whose name is *install it the way the README says to* was doing
+exactly that, and finding that the documented command does not work. It
+worked as designed; nobody was reading it.
+
+That is §131's lesson one layer out and with the opposite sign. There, three
+surfaces stated one fact and a case was written so they could not drift.
+Here a *path* is stated in three places -- the Makefile that produces it, the
+README that documents it, and the workflow that consumes it -- and two of
+them drifted the moment the first moved. **A harmonizing change that moves an
+artifact has to move everything that names it**, and a settled-inventory
+rename is exactly the kind of change that looks local and is not.
+
+### The other job was this project's own bug, found where it could be
+
+    FAIL the_ejected_builds_agree_with_the_live_one_about_a_crate
+         the ejected ninja build rebuilds the crate every time
+
+§129's case, failing on a CI runner and passing here on ninja 1.12.1 and
+rustc 1.85. That is the case doing its job: it exists because the ejected
+ninja build once rebuilt a crate for ever, and it is now saying the same
+thing about an environment this machine cannot reproduce.
+
+**What it reported was the symptom, and a symptom is not a diagnosis.** So
+the case carries its evidence now: on failure it reports the rustc and ninja
+versions, `ninja -d explain` -- which names the file it thinks is dirty and
+why -- and the contents of every depfile in the build directory. Watched
+firing against the known cause before being relied on, where it prints
+
+    ninja explain: expected depfile 'build/lib.rs.d' to mention
+                   'build/lib.rs.a', got 'liblib.a'
+
+which is the §129 finding stated by the tool itself. Guessing at the CI
+failure from here would have been the mistake this document keeps recording;
+the next run answers it instead.
+
+### What the logs cost
+
+Nothing older than about a day has logs. `--log-failed` and `--job <id>
+--log` both return zero bytes for every run in the window, so the failure
+had to be re-triggered before it could be read at all. Worth knowing before
+a red run is left standing: **the evidence expires, and what survives says
+only which step failed.**

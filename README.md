@@ -23,7 +23,7 @@ Or install it properly:
 
 ```sh
 make install                 # to /usr/local, PREFIX= to change it
-make deb && sudo apt install ./build/fmake_*_all.deb
+make deb && sudo apt install ./build/deb/fmake_*_all.deb
 ```
 
 `apt install` rather than `dpkg -i` on purpose: `dpkg` does not resolve

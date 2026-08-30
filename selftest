@@ -13412,9 +13412,29 @@ pub extern "C" fn rust_seven() -> i32 { helper::seven() }
 		check(r.returncode == 0,
 		      f"the second {backend} run failed, which is where a depfile "
 		      f"ninja cannot read shows up: {r.stdout}{r.stderr}")
-		check("rustc" not in r.stdout and "RS" not in r.stdout,
-		      f"the ejected {backend} build rebuilds the crate every time: "
-		      f"{r.stdout}")
+		if "rustc" in r.stdout or "RS" in r.stdout:
+			# Carry the evidence rather than the symptom. This fired on a
+			# CI runner while passing here, and "rebuilds every time" is
+			# the observation -- what settles it is which tools were
+			# involved and what the build system says it is reacting to.
+			# ninja will name the file it thinks is dirty and why; make
+			# will not, so it gets the depfile instead.
+			why = [f"the ejected {backend} build rebuilds the crate every "
+			       f"time: {r.stdout}"]
+			for label, cmd in (("rustc", ["rustc", "--version"]),
+			                   (backend, [backend, "--version"])):
+				got = subprocess.run(cmd, capture_output=True, text=True)
+				why.append(f"{label}: {got.stdout.strip()}")
+			if backend == "ninja":
+				ex = subprocess.run(tool + ["-d", "explain", "-n"],
+				                    capture_output=True, text=True)
+				why.append("ninja -d explain: "
+				           + (ex.stderr + ex.stdout).strip()[:900])
+			for dep in sorted(glob.glob(os.path.join(t.dir, "build",
+			                                         "*.d"))):
+				with open(dep) as fh:
+					why.append(f"{os.path.basename(dep)}: {fh.read()!r}")
+			raise Failure("\n       ".join(why))
 
 
 @case

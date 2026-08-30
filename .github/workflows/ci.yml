@@ -51,8 +51,14 @@ jobs:
       # apt, not dpkg: dpkg does not resolve dependencies, so on a machine
       # missing the required python3 it leaves the package unpacked and
       # unconfigured, and the reader has to know to run apt-get -f install.
+      # The path is DEB_DIR, which is $(BUILD_DIR)/deb -- the settled
+      # spelling this workspace uses. It moved there in 8e4d19f and both
+      # this line and the README kept the old one, so the documented
+      # install command stopped working and this step went red for a
+      # fortnight. The step name is exact: it installs it the way the
+      # README says to, and the README was wrong.
       - name: install it the way the README says to
-        run: apt-get install -y ./build/fmake_*_all.deb
+        run: apt-get install -y ./build/deb/fmake_*_all.deb
 
       - name: run the installed binary
         run: |
