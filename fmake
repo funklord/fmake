@@ -9157,31 +9157,33 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# `$in' is the crate root alone. Its members are implicit inputs,
 		# because rustc takes one file and reads the rest -- naming them on
 		# the command line would compile each as a crate of its own.
-		# The depfile is an *implicit output* of the edge, which is why
-		# the required version above moves to 1.7. rustc's dep-info holds
-		# a second rule naming the depfile itself:
+		# rustc's dep-info carries a rule per emitted artifact -- one for
+		# the link output and one for the depfile itself -- and **the
+		# order is not stable across rustc versions**. 1.85 writes the
+		# link rule first; 1.98 writes the depfile's. Ninja takes the
+		# first target as authoritative and refuses anything else:
 		#
-		#     build/x.a: lib.rs helper.rs
-		#     build/x.a.d: lib.rs helper.rs
+		#     ninja explain: expected depfile 'build/x.d' to mention
+		#                    'build/x.a', got 'build/x.d'
 		#
-		# Make attaches that to a target it has never heard of and ignores
-		# it. Ninja reads every target in a depfile as an output of the
-		# edge and refuses one it was not told about -- and it refuses on
-		# the *second* run, after a first that looked perfectly fine.
-		# Declaring it is the honest fix: the file really is something
-		# this edge produces.
-		a("rule rustlib")
-		a("  command = $rustc $rustflags --crate-type=staticlib -o $out "
-		  "--emit=link,dep-info=$dep $in")
-		a("  depfile = $dep")
-		a("  description = RS $in")
-		a("")
-		a("rule rustbin")
-		a("  command = $rustc $rustflags -o $out "
-		  "--emit=link,dep-info=$dep $in")
-		a("  depfile = $dep")
-		a("  description = RS $out")
-		a("")
+		# so a build that is incremental on one toolchain rebuilds for
+		# ever on another, on the second run, after a first that looks
+		# fine. Make is unaffected -- it attaches the extra rule to a
+		# target it has never heard of and ignores it.
+		#
+		# So the rule keeps only the line naming what this edge builds,
+		# and depends on no ordering at all. The `-MP'-style phony
+		# targets go with it, which costs nothing: ninja handles a
+		# vanished prerequisite itself, and it is make that needs them.
+		for name, kind in (("rustlib", "--crate-type=staticlib "),
+		                   ("rustbin", "")):
+			a(f"rule {name}")
+			a(f"  command = $rustc $rustflags {kind}-o $out "
+			  f"--emit=link,dep-info=$dep.all $in"
+			  f" && grep -F \"$out: \" $dep.all > $dep")
+			a("  depfile = $dep")
+			a(f"  description = RS {'$in' if name == 'rustlib' else '$out'}")
+			a("")
 
 	gen_rules = gen_rules if gen_rules is not None else {}
 	gen_outs = []
@@ -9297,8 +9299,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		mods = (" | " + " ".join(_ninja(_eject_src(m))
 		                         for m in sorted(u.members))) if u.members else ""
 		dep = f"$build_dir/{_ninja(_eject_obj(rel))}.d"
-		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.a | {dep}: "
-		  f"rustlib {_ninja(_eject_src(rel))}{mods}")
+		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.a | {dep} "
+		  f"{dep}.all: rustlib {_ninja(_eject_src(rel))}{mods}")
 		a(f"  dep = {dep}")
 	a("")
 
@@ -9312,7 +9314,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# program's depfile is an intermediate, and the tree root is
 			# where the program goes.
 			dep = f"$build_dir/{_ninja(_eject_obj(root_unit.rel))}.d"
-			a(f"build {_ninja(t.filename)} | {dep}: rustbin "
+			a(f"build {_ninja(t.filename)} | {dep} {dep}.all: rustbin "
 			  f"{_ninja(_eject_src(root_unit.rel))}{mods}")
 			a(f"  dep = {dep}")
 			continue

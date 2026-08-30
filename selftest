@@ -13408,6 +13408,31 @@ pub extern "C" fn rust_seven() -> i32 { helper::seven() }
 		check(t.run(name).stdout.strip() == "7",
 		      f"the ejected {backend} build produced a different program")
 
+		if backend == "ninja":
+			# The invariant, not the symptom. rustc writes one rule per
+			# emitted artifact and the *order* is not stable across its
+			# versions -- 1.85 puts the link rule first, 1.98 the
+			# depfile's -- while ninja takes the first target as
+			# authoritative. Asserting "one rule, naming what this edge
+			# builds" holds on every toolchain; asserting "it did not
+			# rebuild" only holds on the one that happened to order them
+			# the convenient way, which is how this reached CI green
+			# here and red there.
+			deps = sorted(glob.glob(os.path.join(t.dir, "build", "*.d")))
+			check(deps, "the ninja build wrote no depfile to read")
+			for dep in deps:
+				with open(dep) as fh:
+					rules = [ln for ln in fh.read().splitlines()
+					         if ":" in ln and not ln.startswith((" ", "\t"))]
+				check(len(rules) == 1,
+				      f"{os.path.basename(dep)} has {len(rules)} rules, so "
+				      f"which one ninja believes depends on the order rustc "
+				      f"emitted them in: {rules}")
+				check(rules[0].split(":")[0].endswith(".a")
+				      or rules[0].split(":")[0] == name,
+				      f"the depfile names something other than what the "
+				      f"edge builds: {rules[0]!r}")
+
 		r = subprocess.run(tool, capture_output=True, text=True)
 		check(r.returncode == 0,
 		      f"the second {backend} run failed, which is where a depfile "

@@ -10299,6 +10299,11 @@ Only the last names the artifact. The first is the obvious spelling and the
 one this was written with, and it puts the *crate name* in the target line,
 so every `lib.rs` in every tree writes `liblib.a: lib.rs helper.rs`.
 
+**That table is true and was not the whole of it.** rustc writes one rule
+per emitted artifact, and the *order* of those rules is not stable across
+its versions -- which §132 found the hard way, on a runner. `-o` is still
+required; it is just not sufficient.
+
 **Make and ninja disagree about how bad that is, and the disagreement is the
 whole lesson.** Make attaches those prerequisites to a target it has never
 heard of and drops them without a word: the depfile is written, `-include`d,
@@ -10590,7 +10595,35 @@ firing against the known cause before being relied on, where it prints
 
 which is the §129 finding stated by the tool itself. Guessing at the CI
 failure from here would have been the mistake this document keeps recording;
-the next run answers it instead.
+the next run answered it instead.
+
+### The answer: an ordering rustc never promised
+
+    rustc 1.85 (here)      build/lib.rs.a: lib.rs helper.rs
+                           build/lib.rs.d: lib.rs helper.rs
+
+    rustc 1.98 (the CI)    build/lib.rs.d: lib.rs helper.rs
+                           build/lib.rs.a: lib.rs helper.rs
+
+The same two rules, **reversed**. Ninja takes the first target as
+authoritative and refuses anything else, so a build that is incremental on
+one toolchain rebuilds for ever on another. §129's `-o` fix was necessary
+and it was not sufficient: it made the link rule come first *on 1.85*, which
+is a property of that release rather than a guarantee.
+
+So the ejected ninja rule keeps only the line naming what the edge builds --
+`grep -F "$out: "` over the file rustc wrote -- and depends on no ordering
+at all. The phony targets go with it, which costs nothing here: ninja
+handles a vanished prerequisite itself, and it is make that needs them. Make
+was never affected either way, attaching the extra rule to a target it has
+never heard of and ignoring it.
+
+**The case now asserts the invariant rather than the symptom.** "It did not
+rebuild" is only true on the toolchain that happened to order the rules
+conveniently, which is exactly how this was green here and red there. "One
+rule, naming what this edge builds" holds everywhere -- and it fails on
+rustc 1.85 with the filter removed, so the fragility is now catchable on the
+machine that could not reproduce the failure.
 
 ### What the logs cost
 
