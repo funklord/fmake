@@ -10191,6 +10191,33 @@ measured and are **not** offered:
 - **`--target=elf64-x86-64`**, which does silence the plugin, gives that
   same bitcode view and hardcodes a target fmake would then have to guess.
 
+### What was done to the machine, and what will undo it
+
+Recorded because it is not in the tree and the next Rust build here depends
+on it. **`/usr/lib/bfd-plugins/LLVMgold-14.so` was removed.** With it gone,
+`nm` reads a rust staticlib with no plugin failures and refuses none of its
+244 members, and fmake builds a C-plus-Rust tree with no `$NM` set at all,
+resolving `-lgcc_s` and 162 externals -- character for character the answer
+`llvm-nm-19` gave when it was the only reader.
+
+**It was a bare `rm`, so it will come back.** `dpkg -V llvm-14-linker-tools`
+reports the file missing, and the next upgrade or reinstall of that package
+restores the symlink and the bug with it, silently. A `dpkg-divert` would
+have survived that and was not applied. If Rust builds here start refusing
+again with `Reader: 'LLVM 14.0.6'`, this is why.
+
+**Nothing else broke, and the reason is better than the one first given.**
+An audit of gcc 14 and clang 11, 14 and 19 -- `nm` on LTO objects, driver
+link and run, `ar` plus `nm` plus link and run, and `-fuse-ld=bfd` -- passed
+on all four, with controls proving the checks could fail (`nm --plugin
+/dev/null` on the same object gives `file format not recognized`). The
+structural reason is that **each compiler passes its own plugin to `ld` by
+absolute path**, so a link never consults `/usr/lib/bfd-plugins` at all --
+only `nm`, `ar` and `ranlib` do. That also retires the tidier-looking
+alternative: purging `llvm-14-linker-tools` would have taken
+`/usr/lib/llvm-14/lib/LLVMgold.so`, which is the file clang-14 names
+explicitly, and broken `clang-14 -flto` outright.
+
 ### Scoped to where the decision is made
 
 `lib_exports` reads `nm` too and ignores its status the same way, and it is
@@ -10624,6 +10651,38 @@ conveniently, which is exactly how this was green here and red there. "One
 rule, naming what this edge builds" holds everywhere -- and it fails on
 rustc 1.85 with the filter removed, so the fragility is now catchable on the
 machine that could not reproduce the failure.
+
+### Green, and what green was checked to mean
+
+Both jobs pass as of `8e951c0` -- the first green run since 2026-08-14. The
+package job runs in 38 seconds and the five steps that had been gated behind
+the broken install for a fortnight all pass, so nothing had rotted behind
+it. The suite job reports **334 passed, 9 skipped**, and all eight Rust
+cases are in the passed list rather than the skipped one, which is the part
+worth checking: a green suite that had skipped the work under test would
+read identically.
+
+### apt-emerge fails the same way, and it is not a coincidence
+
+Raised from outside as *either a shared cause or a coincidence, and cheap to
+tell apart*. Measured, read-only, rather than assumed:
+
+| | `make deb` writes | README says | CI says |
+|---|---|---|---|
+| fmake, before this | `build/deb/` | `build/` | `build/` |
+| **apt-emerge** | `build/deb/` | `build/` | **`dist/`** |
+
+Same cause: `DEB_DIR` is `$(BUILD_DIR)/deb` in both, and both READMEs kept
+the pre-`DEB_DIR` path. apt-emerge's workflow is worse off, naming a third
+path that matches neither -- `dist/` is netcfgd's spelling, so that line
+predates the settled inventory rather than merely lagging it.
+
+**Not fixed from here**, per `harmonization.md`: a fault in a sibling is
+signalled, not reached across into. Its tree already records the failure --
+`793f053`, *"record the CI install failure, found once gh access worked"* --
+and does not name `DEB_DIR`, `build/deb`, `dist/` or the `Unsupported file`
+message anywhere, so what it is missing is exactly the cause and not the
+symptom.
 
 ### What the logs cost
 
