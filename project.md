@@ -10455,6 +10455,52 @@ Declined deliberately, and each for a reason rather than for want of time:
   them. `@ldflags` still applies, because a link flag belongs to whatever
   contains the unit rather than to the compile.
 
+### Tried, and recorded so it is not tried again
+
+- **`#![no_std]` does not escape either cost.** It looks like the way out
+  of a 50MB archive whose members `nm` cannot read, and it is not: the
+  staticlib is still 12MB, because `core` and `compiler_builtins` come in
+  regardless and their objects carry the same embedded bitcode. Measured,
+  with `-C panic=abort`, which `no_std` also requires -- without it rustc
+  refuses outright with *unwinding panics are not supported without std*.
+- **`--print native-static-libs` is not used.** rustc will name the system
+  libraries a staticlib still needs, which is more direct than deriving
+  them from a symbol table. Declined because the symbol table is fmake's
+  premise and, with an `nm` that can read the archive, it got the right
+  answer unaided: 161 externals, 148 of them libc, and `-lgcc_s` for the
+  unwinder. Worth knowing it exists if the closure ever cannot.
+- **`--run` works on a crate**, single-file and multi-file both, which was
+  checked rather than assumed because the script mode stages a copy of the
+  source and a crate is more than one file.
+
+### Two spellings of one command, and a mutation that did not fail
+
+`link_cmd`'s docstring says the reason there is one implementation used
+both to link and to report: *two would drift, and a drifted `--explain` is
+worse than none*. **The ejected backends have always been the exception**,
+writing their rule text as literal strings, and Rust inherits that -- the
+live build's command comes from `crate_cmd` and the `make` and `ninja`
+rules are three separate spellings of it.
+
+Found by a mutation that did not fail. Reverting `crate_cmd` to the broken
+`--emit=link=` form left the ejected-builds case passing, because that case
+exercises the ejectors and the ejectors do not call `crate_cmd`. Mutating
+the ninja rule's own text is what turned it red.
+
+Nothing holds the three together today except the case that runs both
+ejected backends and compares their behaviour to the live build's. That is
+a real check rather than a formal one -- it caught the depfile ordering
+that §132 is about -- but it is behavioural, so a difference that both
+paths tolerate would go unseen.
+
+### A guard that has never fired
+
+`_rust_nm()` skips every Rust case when no `nm` on the machine can read a
+staticlib. It has never done so here: before `LLVMgold-14.so` was removed
+it found `llvm-nm-19`, and after, plain `nm`. So the branch is written and
+reasoned about and has not been watched working, which by this document's
+own standard is not the same as knowing it does.
+
 ## 130. hydra's report: a build directory compiled because it was there
 
 Reported from hydra 2026-08-27, with the reproduction rather than a
@@ -10661,6 +10707,20 @@ it. The suite job reports **334 passed, 9 skipped**, and all eight Rust
 cases are in the passed list rather than the skipped one, which is the part
 worth checking: a green suite that had skipped the work under test would
 read identically.
+
+### Why this repository's CI is worth reading at all
+
+**Second-hand, and marked as such**: relayed by another session and not
+measured here. Of the private repositories in this workspace, six report
+every run as `failure` with **zero steps executed**, annotated that the job
+was not started because of account payments or a spending limit -- private
+repositories meter Actions minutes and public ones do not. fmake and
+apt-emerge are public, which is why their jobs genuinely run and why a red
+result here is a code failure rather than a billing one.
+
+That is worth having written down because it changes what a red run means
+per project, and because a reader who checks another tree's CI and finds it
+red may be looking at nothing at all.
 
 ### apt-emerge fails the same way, and it is not a coincidence
 
