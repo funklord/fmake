@@ -501,8 +501,30 @@ RE_MEMBER_DEF = re.compile(
 # File-scope data. Anchored at column zero, since file-scope definitions are
 # conventionally unindented and locals are not; a miss only costs a widening
 # pass, so the heuristic is allowed to be loose.
+#
+# The type is a RUN of words, not one. It was one identifier, which reads
+# `const int rows[3] =` and does not read `const struct row rows[3] =`:
+# there the first word is the type and `row` is taken for the name, and the
+# match then wants `[` or `=` where ` rows` is. Same for every multi-word
+# builtin -- `unsigned long`, `long long`, `short int`.
+#
+# The cost of missing one is not a worse guess, it is the file never being
+# COMPILED. widen_candidates proposes a file from this scan, symbol closure
+# only reads objects, and a file nothing proposes is never an object -- so
+# the symbol it holds is undefined at the link with nothing to point at.
+# That is the assembly fault recorded at RE_ASM_GLOBAL, arriving again in a
+# language whose defs were merely incomplete rather than always empty.
+#
+# Found in fuzzypickles 2026-09-01: `const struct quirc_version_info
+# quirc_version_db[QUIRC_MAX_VERSION + 1]` in quirc/lib/version_db.c, the
+# one file of quirc's four that exports no function. Three were compiled
+# and it was not, and the link failed on the table all three read. The
+# minimal case is a data definition in a file with no matching header --
+# with a header of its own name the include graph reaches it and the scan
+# is never asked.
 RE_DATA_DEF = re.compile(
-    r'^(?:static[ \t]+|const[ \t]+|volatile[ \t]+)*'
+    r'^(?:(?:static|const|volatile)[ \t]+)*'
+    r'(?:(?:struct|union|enum|unsigned|signed|long|short)[ \t]+)*'
     r'[A-Za-z_][A-Za-z0-9_]*(?:[ \t]*[\*&][ \t]*|[ \t]+)'
     r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\[[^\]]*\])?[ \t]*[=;]', re.M)
 

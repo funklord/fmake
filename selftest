@@ -234,6 +234,99 @@ int main(void){ return 0; }
 
 
 @case
+def a_file_whose_only_export_is_data_is_still_compiled(t):
+	"""quirc's version_db.c: four library files, one exports no function.
+
+	widen_candidates proposes a file from the TEXT scan, symbol closure
+	only ever reads objects, and a file nothing proposes never becomes an
+	object -- so a missed definition in the scan is not a worse guess, it
+	is an undefined reference at the link with nothing to point at. That
+	is the assembly fault at RE_ASM_GLOBAL arriving in a language whose
+	defs were incomplete rather than always empty.
+
+	RE_DATA_DEF read the type as ONE identifier, so `const int rows[3] =`
+	matched and `const struct row rows[3] =` did not: `struct` was taken
+	for the type and `row` for the name. fuzzypickles 2026-09-01 --
+	`const struct quirc_version_info quirc_version_db[...]`, three of
+	quirc's four files compiled, and the link failing on the table all
+	three read.
+
+	The header must NOT be named for the source. With `rows.h` beside
+	`rows.c` the include graph reaches it and the scan is never asked,
+	which is why the first attempt at this case passed against the bug.
+	"""
+	t.write("table.h", """
+#pragma once
+struct row { int a; int b; };
+extern const struct row table[3];
+""")
+	t.write("rows.c", """
+#include "table.h"
+const struct row table[3] = { {1,2}, {3,4}, {5,6} };
+""")
+	t.write("main.c", """
+#include <stdio.h>
+#include "table.h"
+int main(void){ printf("%d\\n", table[1].a); return 0; }
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"a data-only provider must be compiled: {out}")
+	check("nothing reaches it" not in out,
+	      f"rows.c must not be declined: {out}")
+	prog = os.path.basename(t.dir)
+	check(t.run(prog).stdout == "3\n", "the linked program must read the table")
+
+
+@case
+def a_multi_word_builtin_type_is_data_too(t):
+	"""The same miss, without a struct: `unsigned long` is two words."""
+	t.write("counts.h", "#pragma once\nextern unsigned long counter;\n")
+	t.write("store.c", '#include "counts.h"\nunsigned long counter = 7;\n')
+	t.write("main.c", """
+#include <stdio.h>
+#include "counts.h"
+int main(void){ printf("%lu\\n", counter); return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a multi-word type is still a definition: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "7\n",
+	      "the linked program must read the counter")
+
+
+@case
+def a_struct_definition_is_not_a_data_definition(t):
+	"""The loosening must not turn a type into a provider.
+
+	`struct row { int a; };` declares a type and defines nothing linkable,
+	and `extern const struct row table[3];` is a declaration too. Proposing
+	the file holding either would widen the candidate set for a symbol it
+	does not have.
+	"""
+	import importlib.util, importlib.machinery, sys as _sys
+	# An explicit loader, because `fmake` has no .py suffix and
+	# spec_from_file_location returns None when it cannot infer one -- the
+	# failure then surfaces as AttributeError on NoneType, which reads like
+	# anything but a missing extension. And registered in sys.modules
+	# before exec, because @dataclass resolves cls.__module__ through it.
+	loader = importlib.machinery.SourceFileLoader("fmake_under_test", FMAKE)
+	spec = importlib.util.spec_from_loader("fmake_under_test", loader)
+	mod = importlib.util.module_from_spec(spec)
+	_sys.modules["fmake_under_test"] = mod
+	loader.exec_module(mod)
+	for line in ("struct row { int a; };", "long foo(void);",
+	             "int main(void) {", "extern const struct row table[3];",
+	             "	int local = 1;"):
+		check(mod.RE_DATA_DEF.match(line) is None,
+		      f"RE_DATA_DEF must not match {line!r}")
+	for line in ("const struct row table[3] = {", "unsigned long counter = 0;",
+	             "static char *name = 0;", "const int simple[3] = {"):
+		check(mod.RE_DATA_DEF.match(line) is not None,
+		      f"RE_DATA_DEF must match {line!r}")
+
+
+@case
 def closure_beats_include_graph(t):
 	"""The trees that defeat header-to-source matching.
 
