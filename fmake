@@ -891,12 +891,19 @@ def _expand_conf_files(data, root):
     inventing syntax for cases nobody has met -- which is what section 125
     refused, and this stays inside that.
     """
+	def one_value(v, where):
+		# $root first: a `$file($root/...)` would be a path leaving the
+		# tree by construction, and refusing it there reads better than
+		# refusing an absolute path the reader did not write.
+		v = RE_ROOT_REF.sub(lambda _: os.path.abspath(root), v)
+		return _sub_file(v, root, where)
+
 	def fix(table, where):
 		for key in ("defines", "define"):
 			vals = table.get(key)
 			if isinstance(vals, list):
-				table[key] = [_sub_file(v, root, where)
-				              if isinstance(v, str) else v for v in vals]
+				table[key] = [one_value(v, where) if isinstance(v, str)
+				              else v for v in vals]
 	fix(data.get("project", {}), f"{CONF_FILE} [project]")
 	for name, sub in (data.get("profile") or {}).items():
 		if isinstance(sub, dict):
@@ -1381,6 +1388,20 @@ RE_BIN_REF = re.compile(r"\$bin\(([^)]*)\)")
 # rather than one imagined. It is deliberately not a general substitution
 # syntax: it reads a file in this tree, in a define, and nothing else.
 RE_FILE_REF = re.compile(r"\$file\(([^)]*)\)")
+
+# `$root` in a define: the absolute path of the tree this build was pointed
+# at. qtty's test suite is the case -- `QTTY_SOURCE_DIR` is where its
+# snapshot fixtures live, and qmake spells it `$$PWD` from a .pri beside
+# them. A test that must find a file the repository ships cannot be handed
+# a relative path, because it does not run from a fixed directory.
+#
+# Bare rather than `$root()`, matching `[generate.*]`'s own `$in`, `$out`
+# and `$tool`: it takes no argument because there is nothing to name.
+#
+# It bakes an absolute path into the object, which is a real cost and is
+# the project's to accept -- the qmake build already does it, for the same
+# tests, and nothing that ships is compiled with it.
+RE_ROOT_REF = re.compile(r"\$root\b")
 
 
 def _sub_bin(item, where, paths):

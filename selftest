@@ -256,6 +256,31 @@ int main(void){ printf("%s\\n", PROBE_VERSION); return 0; }
 
 
 @case
+def a_define_can_name_the_tree_root(t):
+	"""`$root`: qtty's tests read snapshot fixtures out of the repository.
+
+	qmake spells it `$$QTTY_ROOT`, which is `$$PWD` from a .pri beside
+	them. A relative path cannot serve, because a test binary does not run
+	from a fixed directory.
+
+	This also pins that `$root` is the TREE and not the caller, without a
+	second case for it: the helper above always runs `fmake -C <tree>` from
+	wherever the suite itself was started, so the cwd is never the tree.
+	A `$root` that resolved to the caller would fail here.
+	"""
+	t.write("fmake.toml", '[project]\ndefines = [\'WHERE="$root"\']\n')
+	t.write("main.c", """
+#include <stdio.h>
+int main(void){ printf("%s\\n", WHERE); return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	got = t.run(os.path.basename(t.dir)).stdout.strip()
+	check(got == os.path.realpath(t.dir) or got == t.dir,
+	      f"expected the tree root, got {got!r}")
+
+
+@case
 def a_file_define_reaches_the_ejected_builds(t):
 	"""Expanded once at config load, so every backend sees a value.
 

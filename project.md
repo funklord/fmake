@@ -11011,10 +11011,40 @@ ones after the fact; this cannot drift the same way, and the case asserts
 the resolved value in both the make and ninja output rather than trusting
 that it does.
 
-### What it does not solve
+### `$root`, the sixth tree, and a bar the holder moved
 
-qtty's `QTTY_SOURCE_DIR` is the sixth tree and a different need: the value
-is the tree's own path, not a file's contents. One instance, and by §125's
-own standard that is a case that has turned up once rather than a case
-that has turned up. Recorded here so the next reader knows it was seen and
-declined, not missed.
+qtty's `QTTY_SOURCE_DIR` is a different need: the value is the tree's own
+path rather than a file's contents. Its tests read snapshot fixtures out
+of the repository, and qmake spells it `$$QTTY_ROOT`, which is `$$PWD`
+from a `.pri` beside them. A relative path cannot serve, because a test
+binary does not run from a fixed directory.
+
+This was recorded here as seen and declined -- one instance, where §125's
+standard is a case that has *turned up* rather than one that turned up
+once. **The copyright holder asked for it anyway, which is the right way
+round: the bar is a default for a tool deciding on its own, not a rule
+binding whoever owns the tool.**
+
+So `defines` may also say `$root`, resolving to the absolute path of the
+tree this build was pointed at. Bare rather than `$root()`, matching
+`[generate.*]`'s own `$in`, `$out` and `$tool`: it takes no argument
+because there is nothing to name.
+
+**It is the tree, never the caller.** Every case in `selftest` runs
+`fmake -C <tree>` from wherever the suite was started, so the cwd is never
+the tree and a `$root` resolving to the caller fails there without a case
+written for it -- which is why there is not one.
+
+`QTTY_SOURCE_DIR="$root"` builds qtty with a plain `fmake`:
+`test/suite_render.cpp` and `test/suite_widgets.cpp` compile, which were
+the two files that did not.
+
+**The cost is real and is the project's to accept.** An absolute source
+path goes into the object, which is what `-ffile-prefix-map` exists to
+undo. The qmake build already does it, for the same tests, and nothing
+that ships is compiled with it.
+
+A `$file($root/...)` is refused rather than quietly accepted: `$root`
+expands first, so the path is absolute by the time `$file` sees it and
+its "must name a file inside the tree" rule catches it. A path inside the
+tree is written relative, and there is one way to say each thing.
