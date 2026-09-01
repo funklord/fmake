@@ -183,7 +183,7 @@ that had been green about nothing for five commits ·
 [130. hydra's report: a build directory compiled because it was there](#130-hydras-report-a-build-directory-compiled-because-it-was-there) ·
 [131. The copyright line, and the surface that is an interface](#131-the-copyright-line-and-the-surface-that-is-an-interface) ·
 [132. Two weeks of red CI, and a path written down twice](#132-two-weeks-of-red-ci-and-a-path-written-down-twice) ·
-[133. A sixteen-tree sweep, and the name that is a directory](#133-a-sixteen-tree-sweep-and-the-name-that-is-a-directory)
+[133. A sixteen-tree sweep, most of which measured its own scratch directory](#133-a-sixteen-tree-sweep-most-of-which-measured-its-own-scratch-directory)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10753,82 +10753,83 @@ had to be re-triggered before it could be read at all. Worth knowing before
 a red run is left standing: **the evidence expires, and what survives says
 only which step failed.**
 
-## 133. A sixteen-tree sweep, and the name that is a directory
+## 133. A sixteen-tree sweep, most of which measured its own scratch directory
 
-A README rule landed in the guidelines on 2026-09-01: where a README shows
-how to build with make, it shows the fmake equivalent beside it, and **where
-fmake cannot do what the make line does, that is a finding here rather than a
-reason to leave the line out**. The rule also says try it before writing it.
+**Read the correction before the findings: the first version of this section
+was largely wrong, and the way it was wrong is the useful part.**
 
-So it was tried. Sixteen private trees, each unpacked clean from `git archive
-HEAD` into scratch, each given a plain `fmake -j4`, nothing written into any
-tree. One tree got a line. The other fifteen are this section.
+A guidelines rule landed 2026-09-01: a README showing how to build with make
+shows the fmake equivalent beside it, and where fmake cannot do what the make
+line does, that is a finding here. The rule also says try it before writing
+it. So sixteen private trees were unpacked clean from `git archive HEAD` and
+given a plain `fmake -j4`.
 
-### What happened, by class
+### What the first sweep reported, and why it was noise
 
-**Not fmake's language** — `fmake`, `apt-emerge`, `respec`. "no C, C++,
-assembly or Rust source files found here", instantly and clearly. Correct,
-and the message needs nothing.
+It reported that a target named after a directory was the most common
+blocker: qtty, beerssh and fuzzypickles fatal on `test/main.cpp` naming a
+target `test`, three more renamed non-fatally to `t_spike`, `t_daemon`,
+`t_gui`, and four trees exiting 0 while building `cli`, `c`, `t` and
+`icache_bench` instead of their products.
 
-**A target named after a directory that exists** — the single most common
-blocker, three trees fatal and three more renamed around it. qtty, beerssh
-and fuzzypickles all stop dead:
+Every tree was unpacked into a scratch directory called **`t`**. So
+`project_name` was `"t"`, and the guard that decides whether to qualify a
+colliding name --
 
-    !!! target 'test' (from test/main.cpp) would be written over a
-        directory of that name.
+    if chosen or not project_name or t.name.startswith(project_name):
 
-§62 already argues this refusal is right, and it is. What the sweep adds is
-how *common* the shape is: `test/main.cpp` is not an unusual layout, it is
-the ordinary one, and three of five C++ trees here hit it on the first
-command anybody would type. Two more collided non-fatally and were renamed
-(`spike` → `t_spike`, `daemon` → `t_daemon`, `gui` → `t_gui`), which is the
-same cause wearing a warning instead of an error.
+-- read `"test".startswith("t")` as true and skipped the rename, dropping the
+target through to the refusal. The `t_` in `t_spike` was not a fixed prefix.
+It was the scratch directory's name, printed back, and it should have been
+read as a signal that the instrument was in the output.
 
-**Two crates, one `lib.rs`** — netcfgd. `crates/netcfgd-cli/src/lib.rs` and
-`crates/netcfgd-daemon/src/lib.rs` are both called `lib`, and fmake refuses.
-A Cargo workspace names a crate by its directory, not by its file, so every
-multi-crate Rust tree will do this.
+Re-run with each tree unpacked into a directory named after the project:
+**none of the three fatal collisions occurs**, and bbq-predictor builds
+`bbq-predictor` rather than `t`. The most-reported finding was the harness.
 
-**Sources nothing reaches, dropped** — fuzznet (`local/peer_linux.c`),
-raidcfgd (`local/line.c`), anti-avx (`src/permd.c`, `src/permil.c`). The
-message names `--force-link`, so the behaviour is deliberate and documented.
-Worth knowing that it fires on three trees out of sixteen.
+### The defect that was real, found only because of the mistake
 
-**A source that requires a define the Makefile supplies** — openmlx4:
+The guard is still wrong, for the reason the accident exposed. It exists so a
+target already carrying the project's name is not given it twice -- `hydra`
+must not become `hydra_hydra`. What it asked is whether the name *begins
+with* the project's, which is true of any unrelated word sharing those
+letters: `t` swallows `test`, `q` would swallow `qtty`, `si` would swallow
+`situ`. The effect is to turn the rename into a fatal error for exactly the
+trees the rename was written to rescue.
 
-    #error "OMLX4_VERSION must be defined by the build; use the Makefile"
+Fixed: the guard now tests `t.name == project_name` or a `project_name + "_"`
+prefix, which is what "already carries the name" means. Two cases in
+`selftest` -- a project named `t` with a `test/main.c` must build `t_test`,
+and a target named exactly the project name colliding with a directory must
+still be refused, because there is nothing to qualify it to.
 
-There is nothing fmake can do here and it should not try. Recorded because
-it is the cleanest example of a build that is *not* derivable from source:
-the source says so in as many words.
+### What survives, measured with the harness named correctly
 
-**A name that builds but is not the product** — ossacli builds `cli`, situ
-builds `c`, bbq-predictor builds `t`, anti-avx builds `icache_bench`. All
-four exit 0. None is what `make` produces, because the target took the name
-of the directory the root TU sits in. This is the quietest failure in the
-sweep: it looks like success.
+- **Not fmake's language** -- `fmake`, `apt-emerge`, `respec`. Instant,
+  clear, correct.
+- **Two crates, one `lib.rs`** -- netcfgd. `crates/netcfgd-cli/src/lib.rs`
+  and `crates/netcfgd-daemon/src/lib.rs` are both `lib`. A Cargo workspace
+  names a crate by its directory, so every multi-crate Rust tree does this.
+- **A define the Makefile supplies** -- openmlx4's `src/main.c` carries
+  `#error "OMLX4_VERSION must be defined by the build; use the Makefile"`.
+  Nothing fmake can do, and the cleanest case of a build not derivable from
+  source: the source says so.
+- **Sources nothing reaches, dropped** -- fuzznet, raidcfgd, anti-avx, all
+  naming `--force-link` in the message. Deliberate and documented.
+- **Compile failures** -- hembygd (`src/qt/main.cpp`), qtty (2 files),
+  fuzznet (4), raidcfgd (2). Not yet diagnosed; they are real and are the
+  next thing to look at.
+- **A name that builds but is not the product** -- ossacli builds `cli`
+  (root TU under `src/cli/`), situ builds `c` (under `runtime/c/`). Both
+  exit 0. This one stands, and it is the quietest result in the sweep
+  because it looks like success. `src` and friends are skipped as names
+  that name nothing; `cli` and `c` are not, and arguably name as little.
 
-### The one that worked
+### Two numbers that are load, not fmake
 
-**hydra**, in 209 seconds, `LD hydra`, from a plain `fmake -j4` at the top of
-the tree -- skipping four Android-only sources and 83 test programs on its
-own, and getting the moc runs right. Its README already carried an fmake
-section before this sweep, which is presumably why: somebody had already
-tried it. That is the whole argument for the README rule in one data point.
+beerssh and hydra timed out at 420s in the corrected run. hydra had built in
+209s in the first, and the difference is that the second sweep ran beside
+fmake's own selftest on a 12-core machine carrying a load average of 113.
+Neither timeout is evidence about fmake, and both are recorded here only so
+the next reader does not treat them as such.
 
-### What this suggests, offered rather than asserted
-
-The `@target`/`fmake.toml` answer exists and is right. But three fatal
-collisions and three silent misnames out of sixteen trees say the DEFAULT is
-doing most of the harm: naming a target after its containing directory is
-correct for `src/main.c` and wrong for `test/main.cpp`, `tui/main.c` and
-`gui/src/main.cpp`, and the tree cannot tell fmake which it meant without
-being edited first. A default that more often needs overriding than not is
-worth a second look -- perhaps the project directory's name for a root TU
-under `src/`, or refusing only when the collision is with a directory that
-holds sources fmake itself compiled.
-
-Not a request to change it. The trees can carry `fmake.toml` instead, and
-that may be the better answer. But the count is the finding: **fifteen of
-sixteen trees cannot be built by the command a README would tell somebody to
-type**, and twelve of those fifteen are configuration rather than capability.

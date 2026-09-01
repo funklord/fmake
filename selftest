@@ -171,6 +171,69 @@ int main(void){ puts("hello"); return 0; }
 
 
 @case
+def a_project_name_that_prefixes_a_target_still_qualifies_it(t):
+	"""The guard against `hydra_hydra` was a bare prefix test.
+
+	A target whose name collides with a directory is renamed to
+	`<project>_<name>` rather than refused, because nobody chose the name --
+	it came from the directory the root TU sits in. The guard that stops
+	that happening twice asked whether the target's name BEGINS with the
+	project's, which is true of every unrelated word sharing those letters.
+	So a project called `t` swallowed `test`, and the target fell through
+	unqualified to the refusal the rename exists to avoid: the guard turned
+	the rescue into a fatal error for exactly the trees it was written for.
+
+	Found by a sweep that unpacked sixteen projects into a scratch directory
+	called `t` and reported three of them as unbuildable. They build; the
+	instrument was named `t`.
+	"""
+	t.write("fmake.toml", '[project]\nname = "t"\n')
+	t.write("test/main.c", """
+#include <stdio.h>
+int main(void){ puts("ok"); return 0; }
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a project named `t` must not die on a test/ target: {out}")
+	check("t_test" in out,
+	      f"expected the collision to be qualified to t_test: {out}")
+	# The binary is not on disk after a plain run and should not be: a
+	# target under test/ is a test, and tests are not built by default.
+	# That is a different rule from this one and it still applies -- which
+	# is worth asserting here, because the first version of this case
+	# looked for the file, found `libt.a` instead, and read a working fix
+	# as a failure.
+	check(not os.path.exists(os.path.join(t.dir, "t_test")),
+	      "a test target must still not be built by a default run")
+	rt = t.fmake("test")
+	check(os.path.exists(os.path.join(t.dir, "t_test")),
+	      f"`fmake test` must build it under the qualified name: "
+	      f"{rt.stdout}{rt.stderr}")
+
+
+@case
+def a_target_already_carrying_the_project_name_is_not_qualified_twice(t):
+	"""The half the guard gets right, pinned so the fix above cannot undo it.
+
+	Here the name IS the project's, so `<project>_<name>` would read
+	`demo_demo`. There is nothing to qualify it to, and refusing is the
+	right answer -- the collision is with a directory the author named.
+	"""
+	t.write("fmake.toml", '[project]\nname = "demo"\n')
+	t.write("demo/main.c", """
+#include <stdio.h>
+int main(void){ return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode != 0,
+	      "a target named exactly the project name, colliding with a "
+	      "directory, must still be refused rather than renamed")
+	check("would be written over" in (r.stdout + r.stderr),
+	      f"expected the refusal message: {r.stdout}{r.stderr}")
+
+
+@case
 def closure_beats_include_graph(t):
 	"""The trees that defeat header-to-source matching.
 

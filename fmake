@@ -7088,7 +7088,22 @@ def build(args, _bootstrapping=False):
 			continue
 		chosen = (t.ann.scalar("target") or t.conf.get("name")
 		          or t.conf.get("target"))
-		if chosen or not project_name or t.name.startswith(project_name):
+		# `startswith` was a bare prefix test, and a prefix is not a name.
+		# The guard exists so a target already carrying the project's name
+		# is not given it twice -- `hydra` must not become `hydra_hydra`,
+		# and `hydra_test` must not become `hydra_hydra_test`. What it
+		# actually asked was whether the target's name BEGINS with the
+		# project's, which is true of every unrelated word that happens to
+		# share those letters: a project called `t` swallowed `test`, `q`
+		# would swallow `qtty`, `si` would swallow `situ`. The target was
+		# then left unqualified and fell through to the refusal below, so
+		# the effect of the guard was to turn the rename into a fatal
+		# error for exactly the trees it was written to rescue.
+		#
+		# Measured 2026-09-01: a project named `t` with a `test/main.c`
+		# dies; the same tree named `proj` builds `proj_test`.
+		if (chosen or not project_name or t.name == project_name
+		        or t.name.startswith(project_name + "_")):
 			continue
 		alt = f"{project_name}_{t.name}"
 		if os.path.isdir(os.path.join(outdir, alt)):
