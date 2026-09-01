@@ -781,7 +781,7 @@ N = "int"                 # a whole number, for a count or a duration
 
 CONF_SCHEMA = {
     "project": {
-        "name": S, "std": S, "profile": S,
+        "name": S, "std": S, "profile": S, "needs": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
         "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
         "test-timeout": N, "test-env": L, "rustflags": L,
@@ -850,6 +850,42 @@ def _conf_check(table, spec, where, out):
 			elif value < 0:
 				out.append(f"{where}.{key}: expected 0 or more "
 				           f"(0 means no limit)")
+
+
+def _version_tuple(s):
+	"""A dotted version as a comparable tuple; non-numeric parts sort last."""
+	out = []
+	for part in str(s).split("."):
+		out.append((0, int(part)) if part.isdigit() else (1, 0))
+	return tuple(out)
+
+
+def _check_needs(data):
+	"""`[project] needs` -- the oldest fmake that understands this config.
+
+    An fmake that does not know a substitution leaves it in the value as
+    text. `$bin(typo)` is refused for exactly that reason: a literal
+    `$bin(typo)` in the environment is a test looking for a file of that
+    name, and it reports as something else entirely. The same thing one
+    layer out is worse, because it reaches a compiler: an fmake predating
+    `$file()` builds `-DVERSION="$file(VERSION)"` without complaint, and
+    the program then reports its version as the text of the reference.
+    Measured 2026-09-02, in a tree whose --version printed exactly that.
+
+    A version this fmake cannot meet is refused here. An fmake too old to
+    know this key refuses it as an unknown key, which is the point: both
+    ends stop, and the older one names `needs` while doing it.
+    """
+	want = (data.get("project") or {}).get("needs")
+	if not want:
+		return
+	if _version_tuple(want) > _version_tuple(VERSION):
+		die(f"{CONF_FILE}: [project] needs = {want!r}, and this is fmake "
+		    f"{VERSION}.\n"
+		    f"    the config uses something this build does not have, and "
+		    f"a version that does not know it\n"
+		    f"    would put the unexpanded text into the build rather than "
+		    f"stopping")
 
 
 def _sub_file(item, root, where):
@@ -947,6 +983,7 @@ def load_conf(root):
 
 	if problems:
 		die(f"{CONF_FILE} is not valid:\n    " + "\n    ".join(problems))
+	_check_needs(data)
 	# After validation, so a malformed file is reported as malformed rather
 	# than as an unreadable $file() inside it.
 	return _expand_conf_files(data, root)

@@ -184,7 +184,8 @@ that had been green about nothing for five commits ·
 [131. The copyright line, and the surface that is an interface](#131-the-copyright-line-and-the-surface-that-is-an-interface) ·
 [132. Two weeks of red CI, and a path written down twice](#132-two-weeks-of-red-ci-and-a-path-written-down-twice) ·
 [133. A sixteen-tree sweep, most of which measured its own scratch directory](#133-a-sixteen-tree-sweep-most-of-which-measured-its-own-scratch-directory) ·
-[134. `$file()`, and the version written a third time](#134-file-and-the-version-written-a-third-time)
+[134. `$file()`, and the version written a third time](#134-file-and-the-version-written-a-third-time) ·
+[135. The reference that reached a compiler as text](#135-the-reference-that-reached-a-compiler-as-text)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11048,3 +11049,54 @@ A `$file($root/...)` is refused rather than quietly accepted: `$root`
 expands first, so the path is absolute by the time `$file` sees it and
 its "must name a file inside the tree" rule catches it. A path inside the
 tree is written relative, and there is one way to say each thing.
+
+## 135. The reference that reached a compiler as text
+
+`$file()` and `$root` were added in §134 and the packaged fmake predates
+both. An fmake that does not know a substitution **leaves it in the value
+as text**, so the config is accepted, the build succeeds, and the compiler
+is handed the reference verbatim.
+
+    $ openmlx4 --version
+    openmlx4 $file(VERSION)
+
+Exit 0, a binary produced, and the only thing wrong with it is the answer
+it gives. §125 already refuses `$bin(typo)` for exactly this reason -- a
+literal `$bin(typo)` in the environment is a test looking for a file of
+that name, which reports as something else entirely -- and this is the
+same failure one layer further in, where the something else is a program
+telling its user the wrong version.
+
+### `[project] needs`, and why an old fmake stops too
+
+A config may now say `needs = "1.1"`, the oldest fmake that understands
+it. This build refuses a version it cannot meet, with the key and the
+version in the message.
+
+**The half that makes it work is that an fmake too old to know the key
+refuses it as an unknown key**, naming `needs` while it does so. So both
+ends stop, and the older one gives the reader the word to search for.
+That property is worth stating because it is not obvious and it is not
+free: it works only because `load_conf` validates against a closed schema
+rather than ignoring what it does not recognise, which §is a choice made
+long before there was anything to protect.
+
+**Not yet used by any tree, and that is honest rather than lazy.** These
+additions are in version 1.0, so `needs = "1.0"` is satisfied by both the
+build that has them and the build that does not. Making it discriminate
+means releasing 1.1 -- `VERSION`, the constant in `fmake`, and
+`debian/changelog`, which `version-check` holds together -- and a release
+is the copyright holder's to declare, not a tool's to award itself at the
+end of a long session.
+
+### What was measured, and what the measurement missed
+
+The trees' READMEs now name `python3 ~/src/fmake/fmake`, the wording
+raidcfgd already used for this trap, with the reason beside it.
+
+Worth recording how it got shipped, because the rule that should have
+caught it was followed. Each README line WAS run before it was written --
+but the clean-copy runs used the source fmake and the real-tree runs used
+the packaged one, and the second pair's exit 0 was read as confirming the
+first pair's output. **Running it is not enough if it is not the same
+it.**

@@ -234,6 +234,32 @@ int main(void){ return 0; }
 
 
 @case
+def a_config_can_say_which_fmake_it_needs(t):
+	"""`[project] needs`, and the silent failure it exists to stop.
+
+	An fmake that does not know a substitution leaves it in the value as
+	text. `$bin(typo)` is refused for exactly that reason. One layer out it
+	is worse, because it reaches a compiler: an fmake predating `$file()`
+	builds `-DVERSION="$file(VERSION)"` without complaint, and the program
+	reports its version as the text of the reference. Measured 2026-09-02
+	against the packaged build, whose `--version` printed `$file(VERSION)`.
+
+	Both ends stop now. A version this build cannot meet is refused here,
+	and an fmake too old to know the key refuses it as an unknown key --
+	naming `needs` while it does so, which is the hint a reader needs.
+	"""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", '[project]\nneeds = "0.9"\n')
+	check(t.fmake().returncode == 0, "a version this build meets must pass")
+	t.write("fmake.toml", '[project]\nneeds = "99.0"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a version this build cannot meet must stop: {out}")
+	check("needs" in out and "99.0" in out,
+	      f"the refusal must name the key and the version: {out}")
+
+
+@case
 def a_define_can_read_its_value_from_a_file(t):
 	"""`$file(VERSION)`: five of these projects pass a version in this way.
 
