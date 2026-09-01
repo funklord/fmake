@@ -10907,6 +10907,51 @@ Not fixed here: it is a change to the core rule that §3 argues carefully,
 and it deserves its own pass with its own fixtures rather than a patch at
 the end of a long evening.
 
+### fuzzypickles and thorvg: configuration, and fmake diagnosed it itself
+
+Chased to the end 2026-09-01. **fmake built the whole tree -- exit 0, and
+`fzp`, `fzpd`, `fzptui`, `fzp-gui` under the names the project ships** --
+and every step of getting there was configuration fmake had already named
+in its own output.
+
+The first message was the whole map:
+
+    * tvgCommon.h: No such file or directory
+        in thorvg/src/loaders/jpg/tvgJpgd.cpp and 15 other file(s)
+        it is in this tree, at thorvg/src/common/tvgCommon.h
+        [project] include-dirs = ['thorvg/src/common'] would find it
+
+What the config ended up saying, all of it read off `gui/gui.pro`: six
+include dirs, four defines, and the five thorvg directories that project
+actually compiles -- the rest are engines wanting `webgpu/webgpu.h`,
+`opencv2/videoio.hpp` and `turbojpeg.h`, which nobody here has.
+
+**Two things in it are worth carrying beyond this tree.**
+
+`thorvg/src/common/tvgCommon.h` does `#include "config.h"`, which thorvg's
+meson step generates and no vendored copy has. The qmake build works
+because `common/` is on the include path for fuzzypickles' OWN headers and
+`common/config.h` -- a different file, with a different guard -- satisfies
+the include, while the real thorvg configuration arrives as `-D` flags.
+fmake needs the same directory for the same accidental reason.
+
+And a tree that `make` has built in is not the tree fmake reads. Stale
+`libfzp_common.a` beside its own sources is a second definition of every
+symbol; qmake's `moc_*.cpp` beside the class is a second metaobject. Both
+are gitignored, which is the shape: **fmake reads what a native build left
+behind, because it has no reason to know git was told to ignore it.**
+
+**Not committed, and the reason is the useful part.** The exclude that
+cleared the stale moc was written `*moc_*.cpp`, which also matches fmake's
+OWN generated moc under `.fmake/moc/` and removed the metaobjects the Qt
+target needs -- a loose exclude quietly removing real sources, which is the
+direction that costs a build. Anchored at `gui/` it is right. But by then
+the tree had moved: two commits landed while this ran, one sealing the peer
+wire in fuzznet's frame, which adds cross-submodule includes that need more
+configuration again. A config verified against a HEAD that no longer exists
+is not a config, so it is kept in the scratchpad rather than committed to a
+tree whose owner is mid-change in exactly that area.
+
 ### Two numbers that are load, not fmake
 
 beerssh and hydra timed out at 420s in the corrected run. hydra had built in
