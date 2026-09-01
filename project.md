@@ -10851,6 +10851,62 @@ still be refused, because there is nothing to qualify it to.
   because it looks like success. `src` and friends are skipped as names
   that name nothing; `cli` and `c` are not, and arguably name as little.
 
+### The sweep was wrong three more times, and each copying method lied differently
+
+Recorded before the results, because the results are only worth what the
+method is. **Copying a working tree faithfully is harder than it looks, and
+each way of doing it has its own bias:**
+
+- **`git archive HEAD` omits submodules.** Five of these trees have them --
+  hydra, fuzzypickles, beerssh, raidcfgd, fuzznet -- so every one was
+  under-copied, and fuzznet's "4 files did not compile" was entirely a
+  missing `monocypher/src/monocypher.h`. **fuzznet builds clean with a
+  plain `fmake` and needs no config at all.**
+- **`rsync` carries stale build output.** Re-copying that way put a
+  `common/libfzp_common.a` from an old `make` beside its own sources, and
+  fmake correctly refused: `symbol 'fzp_base58_decode' is defined by more
+  than one file`. A true report about a tree nobody has.
+- **The scratch directory names the project.** Twice more: a copy in `t/`
+  produced `t_test`, and one in `ff/` produced `ff_daemon` and `ff_cli`.
+
+What works is tracked files plus each submodule's tracked files at the
+recorded commit -- which is what a fresh clone is, and what neither of the
+first two methods produces.
+
+### The corrected results
+
+    raidcfgd      local/peer.h -- fuzznet's, via FUZZNET_DIR
+    fuzznet       OK
+    beerssh       BSSH_VERSION_STRING undeclared
+    hydra         OK, and its src/main.cpp carries `@target hydra`
+    fuzzypickles  quirc_version_db undefined at link
+
+So the define class is four trees, not three: openmlx4, hembygd, qtty and
+beerssh. The sibling-header class is one, not two: raidcfgd alone.
+
+### A closure that follows functions and misses data
+
+fuzzypickles is its own class and the sharpest finding in the sweep. fmake
+compiled three of quirc's four library sources -- `decode.c`, `identify.c`,
+`quirc.c` -- and not `version_db.c`, then failed to link:
+
+    identify.c:(.text+0x915): undefined reference to `quirc_version_db'
+
+`version_db.c` exports one thing, and it is not a function:
+
+    const struct quirc_version_info quirc_version_db[QUIRC_MAX_VERSION + 1]
+
+declared `extern const ... []` in `quirc_internal.h` and read by the three
+files that were compiled. It drew no "nothing reaches it" notice either, so
+it was not declined -- it was never a candidate. **The closure appears to
+follow a symbol into a file that defines functions and to miss a file whose
+only export is data**, which no `--force-link` should be needed to fix and
+which `[target.*] sources` would only paper over.
+
+Not fixed here: it is a change to the core rule that §3 argues carefully,
+and it deserves its own pass with its own fixtures rather than a patch at
+the end of a long evening.
+
 ### Two numbers that are load, not fmake
 
 beerssh and hydra timed out at 420s in the corrected run. hydra had built in
