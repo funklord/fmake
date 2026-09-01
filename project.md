@@ -11100,3 +11100,62 @@ but the clean-copy runs used the source fmake and the real-tree runs used
 the packaged one, and the second pair's exit 0 was read as confirming the
 first pair's output. **Running it is not enough if it is not the same
 it.**
+
+## 136. situ's report: a deliverable nothing in the tree links
+
+Reported from situ 2026-09-02, with the reproduction rather than a
+diagnosis. Both halves are configuration questions rather than bugs, and
+one of them may not want fixing at all.
+
+**What happens.** situ's `make` default target builds `libsitu.a` from a
+single translation unit, `runtime/c/situ.c`. Nothing in that tree links it:
+the things that do are C files a generator writes into a build directory,
+so the archive is consumed by builds that do not exist yet and by
+`debian/libsitu-dev`, which ships it. fmake, discovering targets by finding
+`main()` and computing closures from symbols, therefore built the tree's one
+program and said so accurately:
+
+      runtime/c/situ.c not compiled: nothing reaches it (--force-link if it
+      is needed anyway)
+
+That is correct on the evidence available and it leaves `make`'s default
+target with no fmake equivalent whatsoever. The fix is a config that already
+exists and is documented -- `kind = "static"` with explicit `sources` --
+and it produced an archive with the same single member. **So the report is
+not that fmake got it wrong; it is that "the deliverable" and "what the
+tree links" are different questions, and only the second is answerable from
+source.** A tree can be entirely correct and entirely silent about the
+thing it exists to ship. Worth knowing that the shape exists, and that
+nothing short of being told resolves it.
+
+The second half is the naming one again, and it is another instance of what
+§46 already had two projects reporting: `walker/c/main.c` gave a target
+called `c`, after its directory. `[target.c] name = "situ-walk-c"` settles it. Noted only because
+`c` is a directory name that will recur -- `runtime/c` is the other one in
+that same tree, and a project that puts a language's sources under a
+directory named for the language will hit this every time.
+
+**Where fmake genuinely stops, and situ's README now says so rather than
+implying otherwise.** `fmake test` cannot run that project's C suite:
+
+      * sqlite.h: No such file or directory
+        in test/generated/test_sqlite.c
+        sqlite.h is on no include path here
+      * 'SITU_TIFF_HEADER_SIZE_FIXED' undeclared here (not in a function)
+        in test/generated/test_tiff.c
+
+Eleven of twelve test programs failed that way. The headers are absent
+because situ generates them, deliberately: the test `.c` files are checked
+in and their headers are written into the build tree from thirty-odd
+`.situ` schemas, so that a codegen change cannot leave a stale committed
+copy behind. `[generate]` is the right feature and the gap is one of
+shape rather than capability -- the suite wants one rule applied to thirty
+inputs producing thirty outputs, plus cmocka found as a package, plus each
+test compiled twice, once checked and once released, because half of what
+that suite proves is that the checked assertions compile out.
+
+**The question, which is yours:** whether `[generate]` should be able to
+express a rule over a set rather than a stanza per output. situ did not
+attempt it and wrote `make test` into its README instead, which is the
+honest answer for that tree today and is not a workaround anybody should
+copy if the answer here is yes.
