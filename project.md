@@ -183,7 +183,8 @@ that had been green about nothing for five commits ·
 [130. hydra's report: a build directory compiled because it was there](#130-hydras-report-a-build-directory-compiled-because-it-was-there) ·
 [131. The copyright line, and the surface that is an interface](#131-the-copyright-line-and-the-surface-that-is-an-interface) ·
 [132. Two weeks of red CI, and a path written down twice](#132-two-weeks-of-red-ci-and-a-path-written-down-twice) ·
-[133. A sixteen-tree sweep, most of which measured its own scratch directory](#133-a-sixteen-tree-sweep-most-of-which-measured-its-own-scratch-directory)
+[133. A sixteen-tree sweep, most of which measured its own scratch directory](#133-a-sixteen-tree-sweep-most-of-which-measured-its-own-scratch-directory) ·
+[134. `$file()`, and the version written a third time](#134-file-and-the-version-written-a-third-time)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10960,3 +10961,60 @@ fmake's own selftest on a 12-core machine carrying a load average of 113.
 Neither timeout is evidence about fmake, and both are recorded here only so
 the next reader does not treat them as such.
 
+
+## 134. `$file()`, and the version written a third time
+
+§125 added `$bin()` for one case that had turned up, and closed with the
+rule that it is not a general substitution syntax and that inventing more
+for cases nobody has met is a guess. A second case has turned up, measured
+across the sixteen private trees rather than imagined.
+
+**Five of them pass a version macro in from the build** -- beerssh
+(`BSSH_VERSION_STRING`), bbq-predictor (`BBQ_VERSION_STRING`), raidcfgd
+(`RAIDTRAY_VERSION`), openmlx4 (`OMLX4_VERSION`) and hembygd
+(`HEMBYGD_VERSION`) -- and every one reads it the same way, `$(shell cat
+VERSION)`, from a file **all sixteen carry.** openmlx4 states the
+consequence in its own source rather than leaving it to be discovered:
+
+    #error "OMLX4_VERSION must be defined by the build; use the Makefile"
+
+Spelled literally in `fmake.toml`, that version is written a **third**
+time -- beside `VERSION` and `debian/changelog`, which several of these
+trees already have a `version-check` target to keep in step -- and the
+copy in the config is the one that goes stale, since nothing checks it.
+That is §125's own complaint about a filename written twice, with a number
+two other files already agree about.
+
+So `defines` may say `$file(PATH)`, resolving to that file's contents,
+stripped. `OMLX4_VERSION="$file(VERSION)"` builds openmlx4 with a plain
+`fmake` and `--version` reports 1.0.0.
+
+### What it refuses, and why each one is a refusal
+
+A define is one token to the compiler, and a version macro quietly set to
+the wrong thing is worse than a build that stops. So: a path that leaves
+the tree, absolute or `..`; a file that is not there; one that is empty;
+one holding more than a line; and an empty `$file()`. Six cases, six
+messages, one test.
+
+### Where it is allowed, deliberately narrowly
+
+`defines` and `define`, in `[project]` and `[profile.*]`. Not
+`include-dirs`, not `libs`, not `test-env`. The need that turned up is a
+version macro, and widening the substitution to every value list would be
+the guess §125 refused -- this stays inside that rule rather than
+weakening it.
+
+**Expanded once, at config load**, so no backend ever sees the reference.
+`$bin()` had to be made to agree between the live build and the ejected
+ones after the fact; this cannot drift the same way, and the case asserts
+the resolved value in both the make and ninja output rather than trusting
+that it does.
+
+### What it does not solve
+
+qtty's `QTTY_SOURCE_DIR` is the sixth tree and a different need: the value
+is the tree's own path, not a file's contents. One instance, and by §125's
+own standard that is a case that has turned up once rather than a case
+that has turned up. Recorded here so the next reader knows it was seen and
+declined, not missed.

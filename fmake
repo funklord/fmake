@@ -852,6 +852,58 @@ def _conf_check(table, spec, where, out):
 				           f"(0 means no limit)")
 
 
+def _sub_file(item, root, where):
+	"""Resolve `$file(PATH)' to the contents of PATH, stripped.
+
+    Refused rather than guessed at, in every direction that could put a
+    surprising string into a -D: a path that leaves the tree, a file that
+    is not there, one that is empty, and one holding more than a line. A
+    define is a single token to the compiler, and a version macro silently
+    set to "" or to two lines is worse than a build that stops.
+    """
+	def one(m):
+		rel = m.group(1).strip()
+		if not rel:
+			die(f"{where}: $file() names no path")
+		if os.path.isabs(rel) or os.path.normpath(rel).startswith(os.pardir):
+			die(f"{where}: $file({rel}) must name a file inside the tree")
+		full = os.path.join(root, rel)
+		try:
+			with open(full, "r", encoding="utf-8") as fh:
+				text = fh.read()
+		except OSError as exc:
+			die(f"{where}: $file({rel}) cannot be read: {exc.strerror}")
+		value = text.strip()
+		if not value:
+			die(f"{where}: $file({rel}) is empty")
+		if "\n" in value:
+			die(f"{where}: $file({rel}) holds more than one line, and a "
+			    f"define is one token")
+		return value
+	return RE_FILE_REF.sub(one, item)
+
+
+def _expand_conf_files(data, root):
+	"""`$file()` in the define lists, project-wide and per profile.
+
+    Only the defines, and only these sections: the need that turned up is a
+    version macro, and widening a substitution to every value list would be
+    inventing syntax for cases nobody has met -- which is what section 125
+    refused, and this stays inside that.
+    """
+	def fix(table, where):
+		for key in ("defines", "define"):
+			vals = table.get(key)
+			if isinstance(vals, list):
+				table[key] = [_sub_file(v, root, where)
+				              if isinstance(v, str) else v for v in vals]
+	fix(data.get("project", {}), f"{CONF_FILE} [project]")
+	for name, sub in (data.get("profile") or {}).items():
+		if isinstance(sub, dict):
+			fix(sub, f"{CONF_FILE} [profile.{name}]")
+	return data
+
+
 def load_conf(root):
 	"""Read and validate fmake.toml. Returns {} when there is no file."""
 	path = os.path.join(root, CONF_FILE)
@@ -888,7 +940,9 @@ def load_conf(root):
 
 	if problems:
 		die(f"{CONF_FILE} is not valid:\n    " + "\n    ".join(problems))
-	return data
+	# After validation, so a malformed file is reported as malformed rather
+	# than as an unreadable $file() inside it.
+	return _expand_conf_files(data, root)
 
 
 class Conf:
@@ -1311,6 +1365,22 @@ DEFAULT_TEST_TIMEOUT = 60
 
 
 RE_BIN_REF = re.compile(r"\$bin\(([^)]*)\)")
+
+# `$file(PATH)` in a define, resolving to that file's contents.
+#
+# Five of these sixteen projects pass a version macro in from the build --
+# beerssh, bbq-predictor, raidcfgd, openmlx4 and hembygd -- and every one
+# reads it the same way, `$(shell cat VERSION)`, from a file all sixteen
+# carry. Spelled literally in fmake.toml that version is written a third
+# time, beside VERSION and debian/changelog, and the copy in the config is
+# the one that goes stale: exactly what section 125 says about a filename
+# written twice, with a number that two other files already agree about.
+#
+# So this is the same trade as `$bin()` and earns its place the same way --
+# asking the build rather than repeating it, for a case that turned up
+# rather than one imagined. It is deliberately not a general substitution
+# syntax: it reads a file in this tree, in a define, and nothing else.
+RE_FILE_REF = re.compile(r"\$file\(([^)]*)\)")
 
 
 def _sub_bin(item, where, paths):

@@ -234,6 +234,74 @@ int main(void){ return 0; }
 
 
 @case
+def a_define_can_read_its_value_from_a_file(t):
+	"""`$file(VERSION)`: five of these projects pass a version in this way.
+
+	Every one reads it as `$(shell cat VERSION)` from a file all sixteen
+	carry, so spelling it literally in fmake.toml writes the version a
+	third time -- beside VERSION and debian/changelog -- and the copy in
+	the config is the one that goes stale. Same trade as `$bin()`: ask the
+	build rather than repeat it.
+	"""
+	t.write("VERSION", "1.2.3\n")
+	t.write("fmake.toml", '[project]\ndefines = [\'PROBE_VERSION="$file(VERSION)"\']\n')
+	t.write("main.c", """
+#include <stdio.h>
+int main(void){ printf("%s\\n", PROBE_VERSION); return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1.2.3\n",
+	      "the program must print the version the file holds")
+
+
+@case
+def a_file_define_reaches_the_ejected_builds(t):
+	"""Expanded once at config load, so every backend sees a value.
+
+	The `$bin()` case had to be made to agree between backends after the
+	fact; this cannot drift the same way, because nothing downstream ever
+	sees the reference. Asserted rather than assumed, since that is the
+	shape section 125 got wrong first.
+	"""
+	t.write("VERSION", "4.5.6\n")
+	t.write("fmake.toml", '[project]\ndefines = [\'V="$file(VERSION)"\']\n')
+	t.write("main.c", "int main(void){ return 0; }\n")
+	for backend in ("make", "ninja"):
+		r = t.fmake("--eject", backend)
+		check('-DV="4.5.6"' in r.stdout,
+		      f"the ejected {backend} build must carry the resolved value, "
+		      f"not the reference")
+
+
+@case
+def a_file_define_refuses_rather_than_guesses(t):
+	"""Six ways it can go wrong, and none of them may reach a -D.
+
+	A version macro silently set to "" or to two lines is worse than a
+	build that stops, and a path leaving the tree is a config reading
+	something the tree does not own.
+	"""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("EMPTY", "")
+	t.write("TWO", "one\ntwo\n")
+	cases = [("$file(nope)", "cannot be read"),
+	         ("$file(/etc/passwd)", "inside the tree"),
+	         ("$file(../outside)", "inside the tree"),
+	         ("$file()", "names no path"),
+	         ("$file(EMPTY)", "is empty"),
+	         ("$file(TWO)", "more than one line")]
+	for ref, want in cases:
+		t.write("fmake.toml",
+		        '[project]\ndefines = [\'X="%s"\']\n' % ref)
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"{ref} must be refused: {out}")
+		check(want in out,
+		      f"{ref} must say {want!r}, said: {out.strip()[:120]}")
+
+
+@case
 def a_file_whose_only_export_is_data_is_still_compiled(t):
 	"""quirc's version_db.c: four library files, one exports no function.
 
