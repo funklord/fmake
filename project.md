@@ -10810,15 +10810,41 @@ still be refused, because there is nothing to qualify it to.
 - **Two crates, one `lib.rs`** -- netcfgd. `crates/netcfgd-cli/src/lib.rs`
   and `crates/netcfgd-daemon/src/lib.rs` are both `lib`. A Cargo workspace
   names a crate by its directory, so every multi-crate Rust tree does this.
-- **A define the Makefile supplies** -- openmlx4's `src/main.c` carries
-  `#error "OMLX4_VERSION must be defined by the build; use the Makefile"`.
-  Nothing fmake can do, and the cleanest case of a build not derivable from
-  source: the source says so.
 - **Sources nothing reaches, dropped** -- fuzznet, raidcfgd, anti-avx, all
   naming `--force-link` in the message. Deliberate and documented.
-- **Compile failures** -- hembygd (`src/qt/main.cpp`), qtty (2 files),
-  fuzznet (4), raidcfgd (2). Not yet diagnosed; they are real and are the
-  next thing to look at.
+- **The compile failures, diagnosed 2026-09-01, and there are only two
+  causes behind all five trees.** They looked like five problems and are
+  two, both of which `fmake.toml` already has a key for:
+
+  **A define the build supplies** -- three trees, and none of it is
+  derivable from source:
+
+      openmlx4  src/main.c   #error "OMLX4_VERSION must be defined by
+                             the build; use the Makefile"
+      hembygd   src/qt/main.cpp:15   HEMBYGD_VERSION undeclared
+      qtty      test/suite_render.cpp:83   QTTY_SOURCE_DIR undeclared
+
+  openmlx4 is the honest one: the source says in as many words that the
+  build owns this. The other two just use the macro. `[project] defines`
+  is the answer, and the version cases are worth a thought -- the number
+  exists in `debian/changelog` and in the Makefile, so a tree that agrees
+  with itself about its own version is being asked to write it a third
+  time.
+
+  **A header in a sibling project** -- two trees, and the same shape
+  twice:
+
+      raidcfgd  local/socket.h:76   local/peer.h   -- fuzznet's half of a
+                shared protocol, reached through FUZZNET_DIR
+      fuzznet   chain/sign_monocypher.c:5   monocypher.h   -- vendored at
+                monocypher/src, and `../fuzzypickles/monocypher` in
+                practice, which harmonization.md names
+
+  Neither is a defect here. fmake builds a directory containing source,
+  and a header outside that directory is exactly what a build file exists
+  to declare; `[project] include-dirs` is the key. Worth recording because
+  it is the one class where the README rule cannot ever produce a plain
+  `fmake` line: the tree genuinely does not contain its own build.
 - **A name that builds but is not the product** -- ossacli builds `cli`
   (root TU under `src/cli/`), situ builds `c` (under `runtime/c/`). Both
   exit 0. This one stands, and it is the quietest result in the sweep
