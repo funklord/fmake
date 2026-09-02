@@ -13840,6 +13840,101 @@ fn main() { println!("{}", shared()); }
 
 
 # ---------------------------------------------------------------------------
+# Build directories
+# ---------------------------------------------------------------------------
+
+def _stale_build_dir(t, ignore=True):
+	"""A tree with a build directory in it, holding a second `helper'.
+
+    hydra's shape: one tree, two kits, and the second one is output. What
+    makes it a build failure rather than clutter is that the leftovers are
+    compilable source defining things the real sources also define.
+    """
+	t.write("src/main.c", """
+#include <stdio.h>
+int helper(void);
+int main(void){ printf("%d\\n", helper()); return 0; }
+""")
+	t.write("src/helper.c", "int helper(void){ return 1; }\n")
+	t.write("build-android-arm64-v8a/helper.c", "int helper(void){ return 2; }\n")
+	if ignore:
+		t.write(".gitignore", "/build-android*/\n")
+	subprocess.run(["git", "init", "-q", t.dir], capture_output=True)
+
+
+@case
+def a_build_directory_git_ignores_is_not_source(t):
+	"""Reported from hydra: one tree, two kits, one of them output.
+
+    fmake found fifty moc outputs under build-android-arm64-v8a/, compiled
+    them against the desktop Qt and stopped on a version mismatch that tree
+    does not have. Asked of git rather than guessed from the name, because
+    a project whose sources genuinely live under `build/` commits them."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	_stale_build_dir(t)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1\n",
+	      "the build directory's copy was the one that got linked")
+	out = r.stdout + r.stderr
+	check("build-android-arm64-v8a" in out and "ignore" in out,
+	      f"nothing said which directory was skipped, or why: {out}")
+
+
+@case
+def a_build_directory_nothing_ignores_is_still_source(t):
+	"""git is the only authority here, and an unignored copy is a real find.
+
+    Without this the rule would be a guess about directory names -- which
+    section 130 declined to make, because a project whose sources live
+    under `build/` would be broken by it. Two definitions of one symbol in
+    a tree that committed both is section 3's question, and it stays."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	_stale_build_dir(t, ignore=False)
+	r = t.fmake()
+	check(r.returncode != 0,
+	      f"two committed definitions of `helper' is still ambiguous: "
+	      f"{r.stdout}{r.stderr}")
+	check("more than one file" in (r.stdout + r.stderr),
+	      f"the refusal is not the ambiguity one: {r.stdout}{r.stderr}")
+
+
+@case
+def a_generator_writing_into_an_ignored_directory_is_still_built(t):
+	"""The one case the rule must not take with it.
+
+    A generated source is build output and is ignored for that reason, and
+    it is also the thing fmake just made. What settles it is that generator
+    outputs are added back by name after the generators run, whatever the
+    walk decided about the directory they landed in."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	t.write("src/mk.py", """
+import sys
+open(sys.argv[1], "w").write("int table_value(void){ return 42; }\\n")
+""")
+	t.write("main.c", """
+#include <stdio.h>
+int table_value(void);
+int main(void){ printf("%d\\n", table_value()); return 0; }
+""")
+	t.write(".gitignore", "/gen/\n")
+	t.write("fmake.toml", """
+[generate.table]
+command = "python3 src/mk.py gen/table.c"
+inputs  = ["src/mk.py"]
+outputs = ["gen/table.c"]
+""")
+	subprocess.run(["git", "init", "-q", t.dir], capture_output=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "42\n",
+	      "the generated source was dropped with the directory it is in")
+
+
+# ---------------------------------------------------------------------------
 # situ schemas
 #
 # The compiler is a stand-in rather than the real situc, and deliberately.

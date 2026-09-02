@@ -188,7 +188,8 @@ that had been green about nothing for five commits ·
 [135. The reference that reached a compiler as text](#135-the-reference-that-reached-a-compiler-as-text) ·
 [136. situ's report: a deliverable nothing in the tree links](#136-situs-report-a-deliverable-nothing-in-the-tree-links) ·
 [137. netcfgd again, and sixteen targets called `lib`](#137-netcfgd-again-and-sixteen-targets-called-lib) ·
-[138. fmake understands `.situ`, and the object list nobody has to write](#138-fmake-understands-situ-and-the-object-list-nobody-has-to-write)
+[138. fmake understands `.situ`, and the object list nobody has to write](#138-fmake-understands-situ-and-the-object-list-nobody-has-to-write) ·
+[139. The build directory, and the authority that was already in the tree](#139-the-build-directory-and-the-authority-that-was-already-in-the-tree)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10540,13 +10541,13 @@ refuses to regenerate at all while a `build-android*` directory is present
 and says why. That is hydra declining to ask fmake something it cannot
 answer, not a criticism of the answer.
 
-**The question, which is yours:** whether a tool that discovers sources by
-walking a tree should walk directories that are plainly build output. The
-cheap forms would be an exclude flag, or skipping directories that a
-`.gitignore` names, or skipping any directory holding no source that is not
-generated. Each has a cost fmake is better placed to weigh than hydra is --
-in particular, a project whose real sources live under a directory called
-`build` would be broken by the crude version of any of them.
+**The question this raised** -- whether a tool that discovers sources by
+walking a tree should walk directories that are plainly build output --
+**is answered in §139.** It named three cheap forms, and the objection
+recorded here, that a project whose real sources live under `build` would be
+broken by the crude version, turns out to rule out two of them and to be
+exactly what the third cannot fall foul of. A source whose directory git is
+told to ignore is not built.
 
 **One thing worth knowing before choosing:** the same shape will reach
 every Android adopter, since `tool/android.mk` is shared and the build
@@ -11389,3 +11390,105 @@ std/kernels.situ` writes `kernels_derived.c`, and that is what defines both
 `situ_base16_decode` and `situ_reed_solomon_255_223_encode`. **A "not
 compiled" line early in a log is not a claim about the end of it**, and a
 build log is one document read out of order.
+
+## 139. The build directory, and the authority that was already in the tree
+
+§130 reported this from hydra and left the design question open, because it
+is fmake's: **should a tool that discovers sources by walking a tree walk
+directories that are plainly build output?** It named three cheap forms --
+an exclude flag, skipping what `.gitignore` names, skipping a directory
+holding no source that is not generated -- and declined to pick one, on the
+grounds that a project whose real sources live under `build/` would be
+broken by the crude version of any of them.
+
+**That objection kills two of the three and not the middle one, and the
+difference is the whole entry.** Skipping `build*` by name is a guess about
+a word. Skipping a directory with no committed source is a guess about a
+tree's state. Asking git whether it ignores the directory is not a guess at
+all: it is **the project's own written statement that nothing in there is
+source**, and a project whose sources live under `build/` has committed them
+and is therefore untouched by construction. The rule cannot break the case
+that made §130 decline, because that case is the one it asks about.
+
+So: **a source file whose directory git is told to ignore is not built**,
+counted and with the directory named. hydra's `build-android-arm64-v8a/`
+holds 57 compilable sources, 55 of them moc output; a reproduction carrying
+those 55 reports
+
+    * 55 source file(s) not built: git is told to ignore
+      build-android-arm64-v8a
+
+and plans hydra's own sources and nothing else. A full build of that tree
+was not run here -- it is Qt WebEngine and the machine was loaded -- so what
+is measured is the source set, which is where the fault was.
+
+### What the rule deliberately does not do
+
+- **Directories, not files.** A single ignored file beside real sources is a
+  different question with different answers -- a generator's output, an
+  object from a native build, somebody's scratch copy -- and the harm
+  reported was a whole tree of it. §133's stale `common/libfzp_common.a` is
+  in that other class and is untouched here.
+- **Sources, not headers.** A build tree is also where a configure step
+  writes the `config.h` somebody's source includes. Dropping those would
+  turn a resolved include into a missing one and take the *"it is in this
+  tree, at ..."* message with it -- trading a rare wrong build for a common
+  worse diagnostic.
+- **Nothing fmake generated is at risk.** Its state directory is never
+  walked, and a `[generate]` rule's outputs are added back by name after the
+  generators run, whatever the walk decided about the directory they landed
+  in. That is not a special case added for this: it is how that loop already
+  worked, and a case now holds it there.
+- **No repository, no rule.** Every failure returns the empty answer -- no
+  git, not a repository, a git that could not answer -- so nothing is ever
+  skipped on a guess.
+
+### The docstring that had to be rewritten with it
+
+`git_ignored()` has been in fmake for some time as a *diagnostic*, and its
+docstring said so in as many words: *"Not a signal fmake builds with -- what
+to compile is decided from the source, and adding a second authority for it
+is a design change rather than a diagnostic."*
+
+That was right when written and is now false, and the reason it is worth a
+paragraph is that **nothing would have caught it.** A comment that has
+stopped being true passes every gate, every test and every review that is
+looking at the code beside it; it is read by whoever arrives next, believed,
+and reasoned from. The docstring now records the change and points here.
+
+### Measured across the sixteen trees, and one tree that already knew
+
+**Nine of the sixteen hold source files in directories git ignores today**
+-- desktop and Android build trees in hydra, qtty, beerssh, bbq-predictor,
+raidcfgd, anti-avx and fuzzypickles; a vendored OpenSSL and libssh under
+beerssh's `build-deps-android`; cargo's `target/debug/build/*/out` in
+netcfgd; and situ's own `make` output under `build/host/*/gen`. So this is
+not one tree's problem with one Android kit.
+
+**And beerssh had already worked the rule out by hand.** Its `fmake.toml`
+excludes `deps`, `build-deps-android` and `build-*`, and the comments give
+the criterion twice in as many words -- *"Nothing tracked lives under
+either"*, *"Nothing tracked lives under any of them"*. That is this rule,
+derived independently, written out as three patterns because fmake could not
+be asked the question. bbq-predictor has `exclude = ["build-*"]` for the same
+reason. Both stay correct and both are now redundant.
+
+**What it did not do, checked rather than assumed.** situ's tree carries its
+`make` output under `test/generated/build/gen`, which looked like the same
+shape, so the obvious claim was that this rule is what makes `fmake test`
+work there. It is not: the same tree with its `.git` removed -- the rule
+inert, everything else identical -- builds and links exactly the same eleven
+programs. §138's schema support is what changed that tree, and this changed
+nothing in it. Recorded because the two landed together and would otherwise
+be credited together.
+
+### Where it leaves hydra
+
+hydra refuses to regenerate its object sets while a `build-android*`
+directory is present, and says why -- that is hydra declining to ask fmake
+something it could not answer. It can stop: the answer exists now, and the
+reason `tool/objsets.py` gives is no longer true. **Not fixed from here**,
+per `harmonization.md`: a fault in a sibling is that tree's to fix, and this
+is a note for whoever is next in it rather than a change made across the
+fence. The same holds for bbq-predictor, beerssh and fuzzypickles, which
+produce the same directory from the same shared `tool/android.mk`.

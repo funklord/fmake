@@ -70,6 +70,16 @@ anything else: `_win32` yes, `_win` no, because that could be a window;
 `_posix` and `_unix` never, because a family is not a platform. `@os` and
 `@arch` override the name in both directions.
 
+**A directory git is told to ignore holds no source.** A `build/` from
+another kit is compilable source to a tool that discovers sources by walking
+a tree, and to nobody else: fmake found the fifty moc outputs under hydra's
+`build-android-arm64-v8a/`, compiled them against the desktop Qt and stopped
+on a version mismatch that tree does not have. Asked of git rather than
+guessed from the name, so a project whose sources genuinely live under
+`build/` — and therefore commits them — is untouched. Directories only, and
+what a generator writes is added back by name whatever the walk decided.
+Skipped files are counted and the directory named.
+
 **C, C++, assembly and Rust.** The first three are one file per object, and
 they mix in a single link set because the closure reads symbol tables rather
 than source. Rust is not one file per object: a crate root — `main.rs` or

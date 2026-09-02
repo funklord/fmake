@@ -6941,6 +6941,19 @@ def build(args, _bootstrapping=False):
 	# unnecessary turns out to be exactly what putting rules in comments
 	# costs.
 	srcs, hdrs = walk_tree(root)
+	# Before the scan, so a build directory's contents are not read either.
+	# Headers are left where they are: a build tree is also where a
+	# configure step writes the config.h somebody's source includes, and
+	# dropping those would turn a resolved include into a missing one and
+	# take the "it is in this tree, at ..." message with it.
+	ignored_dirs = ignored_source_dirs(root, srcs)
+	ignored_srcs = [r for r in srcs if os.path.dirname(r) in ignored_dirs]
+	srcs = [r for r in srcs if os.path.dirname(r) not in ignored_dirs]
+	if ignored_srcs:
+		where = sorted({os.path.dirname(r) for r in ignored_srcs})
+		info(f"{len(ignored_srcs)} source file(s) not built: git is told "
+		     f"to ignore {', '.join(where[:2])}"
+		     f"{f' and {len(where) - 2} more directory(ies)' if len(where) > 2 else ''}")
 	if args.run:
 		# Staged like a generated source, and for the same reason: from
 		# here on it is an ordinary source that the include graph, the
@@ -6977,6 +6990,7 @@ def build(args, _bootstrapping=False):
 
 	if generated:
 		srcs, hdrs = walk_tree(root)
+		srcs = [r for r in srcs if os.path.dirname(r) not in ignored_dirs]
 		for rel in generated:
 			ext = os.path.splitext(rel)[1]
 			if ext in SRC_EXTS and rel not in srcs:
@@ -10274,16 +10288,20 @@ def do_install(targets, closures, root, outdir, conf, args):
 def git_ignored(root, paths):
 	"""Which of these git is already told to ignore, or an empty set.
 
-    Not a signal fmake builds with -- what to compile is decided from the
-    source, and adding a second authority for it is a design change rather
-    than a diagnostic. This is only ever consulted while explaining a
-    failure, where it costs one subprocess on a path that is about to exit
-    anyway.
+    This was a diagnostic only, and said so: what to compile is decided from
+    the source, and a second authority for it is a design change rather than
+    a message. The change was made deliberately -- see ignored_source_dirs
+    below and section 139 -- and this is now consulted twice: once to decide
+    which directories hold no source, and once to explain a failure.
 
-    It earns that on the commonest confusing case there is: a build output
-    left in the tree, colliding with the file it was generated from. The
-    reader is shown two files defining one symbol and no reason to prefer
-    either, when git has known all along that one of them is not source.
+    It earned the second use first, on the commonest confusing case there
+    is: a build output left in the tree, colliding with the file it was
+    generated from. The reader is shown two files defining one symbol and no
+    reason to prefer either, when git has known all along that one of them is
+    not source.
+
+    An empty answer is the safe one and every failure returns it: no git, no
+    repository, a git that could not answer. Nothing is skipped on a guess.
     """
 	if not os.path.isdir(os.path.join(root, ".git")) or not shutil.which("git"):
 		return set()
@@ -10299,6 +10317,38 @@ def git_ignored(root, paths):
 	if r.returncode not in (0, 1):
 		return set()
 	return {l.strip() for l in r.stdout.splitlines() if l.strip()}
+
+
+def ignored_source_dirs(root, srcs):
+	"""Directories holding source that git is told to ignore entirely.
+
+    A build directory is source to a tool that discovers sources by walking
+    a tree, and it is not source to anybody else. hydra reported the cost:
+    `fmake --eject` at its root found the fifty moc outputs under
+    build-android-arm64-v8a/, compiled them against the desktop Qt, and
+    stopped on a version mismatch that tree does not have -- one tree, two
+    kits, and one of them build output. Every Android build in this
+    workspace produces such a directory, so the shape reaches all of them.
+
+    **Asked of git rather than guessed from the name.** The obvious cheap
+    rules -- skip `build*`, skip a directory with no committed file -- break
+    a project whose sources genuinely live under `build/`, which is why
+    section 130 declined to pick one. This rule cannot: a directory whose
+    sources git ignores holds nothing anybody has, since a source nobody can
+    check out is not one fmake could have built for them either.
+
+    Directories, not files. A single ignored file beside real sources is a
+    different question with different answers -- a generator's output, a
+    stale object from a native build -- and the harm reported here was a
+    whole tree of it.
+
+    Nothing fmake generates is at risk. Its own state directory is never
+    walked, and a [generate] rule's outputs are added back by name after the
+    generators have run, whatever the walk decided about the directory they
+    landed in.
+    """
+	dirs = sorted({os.path.dirname(r) for r in srcs} - {""})
+	return git_ignored(root, dirs) if dirs else set()
 
 
 def ensure_gitignore(root):
