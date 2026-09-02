@@ -1684,6 +1684,47 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 	check("reports a version it made up" not in out,
 	      f"an include guard was read as a version fallback: {out}")
 
+	# Three more refusals, all of them reported from fuzzypickles, which
+	# got eleven of these notes and not one was about a version.
+	#
+	# A feature-test macro. VERSION is a component of GL_VERSION_1_1 and
+	# the name tests cannot separate it from a real one; what does is that
+	# a version a program *reports* is text, and this is a 1.
+	t.write("main.c", '#include <stdio.h>\n'
+	        "#ifndef GL_VERSION_1_1\n"
+	        "#define GL_VERSION_1_1 1\n"
+	        "#endif\n"
+	        'int main(void){ printf("%d\\n", GL_VERSION_1_1); return 0; }\n')
+	out = t.fmake("-B").stdout
+	check("reports a version it made up" not in out,
+	      f"a feature-test macro was read as a version: {out}")
+
+	# And the substring. *Conversion* contains *version*, which is the
+	# whole of why JERRY_UNICODE_CASE_CONVERSION was told it should have
+	# come from the build. Given a string value here, so that it is the
+	# name rule being checked and not the value rule twice.
+	t.write("main.c", '#include <stdio.h>\n'
+	        "#ifndef APP_CASE_CONVERSION\n"
+	        '#define APP_CASE_CONVERSION "upper"\n'
+	        "#endif\n"
+	        'int main(void){ puts(APP_CASE_CONVERSION); return 0; }\n')
+	out = t.fmake("-B").stdout
+	check("reports a version it made up" not in out,
+	      f"VERSION inside CONVERSION was read as a version macro: {out}")
+
+	# And a fallback in a header no program compiles. "This binary reports
+	# a version it made up" is a claim about a binary, so the file has to
+	# be in one -- all eleven of fuzzypickles' were in vendored code that
+	# configuration does not build, and advice about a program nobody made
+	# is worse than unhelpful, because acting on it changes a build that
+	# was right.
+	t.write("vendor/spare.h", "#ifndef SPARE_VERSION_STRING\n"
+	        '#define SPARE_VERSION_STRING "unknown"\n#endif\n')
+	t.write("main.c", "int main(void){ return 0; }\n")
+	out = t.fmake("-B").stdout
+	check("reports a version it made up" not in out,
+	      f"a header no program compiles is not in any binary: {out}")
+
 
 @case
 def a_version_the_build_system_injects_is_named_with_its_value(t):
@@ -2579,6 +2620,38 @@ def generated_sources_are_built(t):
 	      "the generator did not produce its output")
 	check(t.run(os.path.basename(t.dir)).stdout == "42\n",
 	      "the generated code was not linked in")
+
+
+@case
+def a_generated_source_puts_its_own_includes_on_the_path(t):
+	"""A generated file is in nobody's layout.
+
+    Include directories accumulate as includes resolve, so whether generated
+    code compiles was decided by whether some *unrelated* file happened to
+    include the same header from another directory. situ's tree resolves its
+    runtime header because its walker includes it from elsewhere; a tree
+    without a walker does not, and neither does this. Written for schema
+    output first and recorded as unmeasured for [generate] -- it fails the
+    same way, which is why the case is here rather than the note."""
+	t.write("src/mk.py", """
+import sys
+open(sys.argv[1], "w").write(
+    '#include "helper.h"\\nint table_value(void){ return helper() + 1; }\\n')
+""")
+	t.write("lib/helper.h", "int helper(void);\n")
+	t.write("lib/helper.c", '#include "helper.h"\nint helper(void){ return 41; }\n')
+	t.write("main.c", '#include <stdio.h>\nint table_value(void);\n'
+	        'int main(void){ printf("%d\\n", table_value()); return 0; }\n')
+	t.write("fmake.toml", """
+[generate.table]
+command = "python3 src/mk.py gen/table.c"
+inputs  = ["src/mk.py"]
+outputs = ["gen/table.c"]
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "42\n",
+	      "the generated source did not find the header it includes")
 
 
 @case

@@ -637,9 +637,29 @@ def version_fallbacks(code):
 
     Reported rather than resolved: fmake cannot know that "unknown" is wrong,
     only that the tree carries a VERSION file saying something else.
+
+    **Two tests on the name, and one on the value, each for a misfire that
+    was measured rather than imagined.** Reported from fuzzypickles, which
+    got eleven of these and not one of them was about a version.
+
+    VERSION has to be a component of the name and not a substring of one,
+    because *conversion* contains *version*: that is the whole of why
+    `JERRY_UNICODE_CASE_CONVERSION` was told it should have come from the
+    build.
+
+    And the value has to be a string literal. `GL_VERSION_1_1` is an OpenGL
+    feature-test macro whose fallback is `1`, and it passes every test on the
+    name -- VERSION is a component of it. What separates it from
+    `RAIDTRAY_VERSION "unknown (built without a version)"` is that a version
+    a program *reports* is text. This also keeps the finding and the remedy
+    in step: the advice offered is `-DNAME="<contents of VERSION>"`, which is
+    the wrong shape for a macro holding a number, so anything this reports
+    that is not a string was going to be advised wrongly anyway.
     """
-	guarded = {n for n in RE_IFNDEF_ANY.findall(code) if "VERSION" in n}
-	valued = {n for n, _v in RE_DEFINE_VALUED.findall(code)}
+	guarded = {n for n in RE_IFNDEF_ANY.findall(code)
+	           if "VERSION" in n.split("_")}
+	valued = {n for n, v in RE_DEFINE_VALUED.findall(code)
+	          if v.lstrip().startswith('"')}
 	return sorted(guarded & valued)
 
 
@@ -7930,14 +7950,20 @@ def build(args, _bootstrapping=False):
 	               and r not in crates}
 	candidates |= set(crates)
 
-	# Resolve what the generated schema sources include, before the include
-	# path is fixed. A generated file is in nobody's layout and nothing else
-	# need include what it includes, so leaving this to whatever walked
-	# first makes the build depend on an unrelated file: situ's own tree
-	# resolves the runtime header because its walker includes it from
-	# another directory, and the same tree without a walker does not.
-	if situ_outs:
-		proj.reachable_headers(situ_outs)
+	# Resolve what the generated sources include, before the include path is
+	# fixed. A generated file is in nobody's layout and nothing else need
+	# include what it includes, so leaving this to whatever walked first
+	# makes the build depend on an unrelated file: situ's own tree resolves
+	# the runtime header because its walker includes it from another
+	# directory, and the same tree without a walker does not.
+	#
+	# Schema output and [generate] output alike. This was written for the
+	# first and recorded as unmeasured for the second, which was the honest
+	# thing to say and not the end of it -- a [generate] rule writing a .c
+	# that includes a header from a directory nothing else includes from
+	# fails exactly the same way, measured rather than argued.
+	if situ_outs or generated:
+		proj.reachable_headers(list(situ_outs) + list(generated))
 
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in sorted(proj.incdirs | {"."})]
@@ -8770,13 +8796,22 @@ def build(args, _bootstrapping=False):
 		# again, which is exactly how a binary saying "unknown" gets
 		# shipped by somebody who saw the warning a week ago. Measured:
 		# three runs, one message.
-		for rel, name in version_fallen[:3]:
+		# "this binary" is a claim about a binary, so the file has to be
+		# in one. The scan reaches every header in the tree, vendored
+		# subtrees included, and eleven of fuzzypickles' were in code that
+		# configuration does not compile at all -- advice about a program
+		# that was never built, which is a worse kind of wrong than being
+		# unhelpful, because acting on it changes a build that was right.
+		in_artifact = {u.rel for _n, cl, _r in built for u in cl.link}
+		fallen = [(rel, name) for rel, name in version_fallen
+		          if rel in in_artifact]
+		for rel, name in fallen[:3]:
 			note(f"{rel} defines {name} itself because the build did "
 			     f"not, so this binary reports a version it made up")
 			note(f"VERSION here says {version_says}; [project] cflags "
 			     f"= ['-D{name}=\"{version_says}\"'] supplies it")
-		if len(version_fallen) > 3:
-			note(f"... and {len(version_fallen) - 3} more")
+		if len(fallen) > 3:
+			note(f"... and {len(fallen) - 3} more")
 
 		names = ", ".join(n for n, _, _ in built)
 		if built:

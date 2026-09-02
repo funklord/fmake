@@ -193,7 +193,8 @@ that had been green about nothing for five commits ·
 [140. anti-avx builds, and two claims in §123 that do not reproduce](#140-anti-avx-builds-and-two-claims-in-123-that-do-not-reproduce) ·
 [141. The half of a schema that was written and then deleted](#141-the-half-of-a-schema-that-was-written-and-then-deleted) ·
 [142. Two more from the same session, one of them fixed](#142-two-more-from-the-same-session-one-of-them-fixed) ·
-[143. One source, two programs, and the object list keyed on a path](#143-one-source-two-programs-and-the-object-list-keyed-on-a-path)
+[143. One source, two programs, and the object list keyed on a path](#143-one-source-two-programs-and-the-object-list-keyed-on-a-path) ·
+[144. Advice about a program nobody built, and two entries that had gone stale](#144-advice-about-a-program-nobody-built-and-two-entries-that-had-gone-stale)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -10922,9 +10923,29 @@ follow a symbol into a file that defines functions and to miss a file whose
 only export is data**, which no `--force-link` should be needed to fix and
 which `[target.*] sources` would only paper over.
 
-Not fixed here: it is a change to the core rule that §3 argues carefully,
-and it deserves its own pass with its own fixtures rather than a patch at
-the end of a long evening.
+**Fixed the same night, in d9a5471, and the diagnosis above is wrong in a
+way worth keeping.** This entry deferred it as a change to the core rule
+that §3 argues carefully. The closure was never at fault. `widen_candidates`
+proposes a file from the *scan*, symbol closure only ever reads objects, and
+a file nothing proposes never becomes an object -- so `RE_DATA_DEF` was the
+whole of it: it read the type as one identifier, so `const int rows[3] =`
+matched and `const struct row rows[3] =` did not, `struct` being taken for
+the type and `row` for the name. Every multi-word builtin missed the same
+way -- `unsigned long`, `long long`, `short int`.
+
+The type is now a run of words, closed to `struct`, `union`, `enum` and the
+size and sign keywords. A struct definition, a function declaration, `main`
+and an `extern` declaration are all still misses, asserted rather than
+assumed: loosening a heuristic that proposes providers is the direction that
+invents them.
+
+**Two things about the deferral rather than the bug.** It named the wrong
+layer -- a symptom at the link read as a fault in the rule that computes the
+link, when the fault was one step earlier, in what had been offered to it.
+And it was written as "deserves its own pass", which is the shape
+`working-practice.md` warns decays quietest: the pass happened four hours
+later, and this paragraph went on saying it had not for a day, because
+nobody re-reads an open question while closing one.
 
 ### fuzzypickles and thorvg: configuration, and fmake diagnosed it itself
 
@@ -11342,9 +11363,12 @@ generated file is in nobody's layout, so its own includes have to be
 resolved rather than left to whatever walked first.** One line, before the
 include path is fixed.
 
-Recorded because the general shape is untested here: the same is true of a
-`[generate]` output's includes, and that has not been measured. It is not
-fixed on the strength of an argument.
+Recorded here as untested for the general shape -- a `[generate]` output's
+includes -- and **measured afterwards rather than left as a note: it fails
+in exactly the same way.** A rule writing a `.c` that includes a header from
+a directory nothing else includes from produces the same message, naming the
+same remedy, and the same one line fixes both. The fix now covers generated
+output of either kind, and there is a case rather than a paragraph.
 
 ### Measured, on situ's tree, with no configuration at all
 
@@ -11769,9 +11793,11 @@ wrong. In a tree that did compile `gl_engine`, `-DGL_VERSION_1_0="0.1"` would
 enable GL paths on a false pretext. That tree has not been met, and the claim
 is not being made for it.
 
-Not fixed here: it is a third thing, arriving from a sibling while two others
-were being closed, and it belongs in a pass that can measure the change
-against the trees that raise the advisory legitimately.
+Not fixed here, because it was a third thing arriving from a sibling while
+two others were being closed, and it wanted a pass that could measure the
+change against the trees raising the advisory. **§144 is that pass**: three
+faults rather than two, and on this tree eleven advisories become none with
+the four binaries unchanged.
 
 ## 143. One source, two programs, and the object list keyed on a path
 
@@ -11857,3 +11883,107 @@ test, each naming the target that asked for it -- which is the measurement
 that says the shared objects stayed shared. The suite grew by eleven compiles
 rather than by a second build, which is what situ's Makefile arranges by hand
 and what fmake now does from three lines a stanza.
+
+## 144. Advice about a program nobody built, and two entries that had gone stale
+
+§142 recorded the version advisory as diagnosed and deliberately unfixed,
+wanting a pass that could measure the change against trees where it fires
+legitimately. This is that pass, and it took two other recorded-and-unfixed
+items with it.
+
+### Three faults, and each one excludes a different real macro
+
+Reported from fuzzypickles: eleven advisories in one build, not one of them
+about a version.
+
+    thorvg/src/renderer/gl_engine/tvgGl.h defines GL_VERSION_1_1 itself
+    because the build did not, so this binary reports a version it made up
+    VERSION here says 0.1; [project] cflags = ['-DGL_VERSION_1_1="0.1"']
+
+**The name test was a substring.** *Conversion* contains *version*, which is
+the whole of why `JERRY_UNICODE_CASE_CONVERSION` was told it should have come
+from the build. VERSION must be a component of the name.
+
+**That is not enough on its own, and this is the part worth reading.**
+`GL_VERSION_1_1` passes every test anybody would write on the name -- VERSION
+*is* a component of it. What separates it from
+`RAIDTRAY_VERSION "unknown (built without a version)"` is the value: a version
+a program **reports** is text, and a feature-test macro is `1`. So the
+fallback has to be a string literal.
+
+That test also keeps the finding and its remedy in step, which is the
+argument for it beyond the two cases. The advice offered is
+`-DNAME="<contents of VERSION>"`. For a macro holding a number that advice is
+the wrong shape, so **anything this reported that was not a string was going
+to be advised wrongly anyway** -- the detection and the remedy disagreed, and
+only one of them could be right.
+
+**And the report is about a binary, so the file has to be in one.** The scan
+reaches every header in the tree, vendored subtrees included. All eleven of
+fuzzypickles' were in code that configuration does not compile at all --
+jerryscript and the GL engine are neither of them built there. Advice about a
+program that was never made is worse than unhelpful: acting on it changes a
+build that was right, and the session that reported this measured exactly
+that, putting `-DJERRY_UNICODE_CASE_CONVERSION="0.1"` in verbatim and getting
+exit 0 and four binaries, because none of it is compiled.
+
+### Measured, before and after, on the tree that raised it
+
+A clean fuzzypickles at 8a2bbe3, submodules at their recorded commits:
+
+    before   11 advisories   built fzp, fzpd, fzp-gui, fzptui
+    after     0 advisories   built fzp, fzpd, fzp-gui, fzptui
+
+Seven fewer lines of output, which is the three shown pairs plus the *and 8
+more* -- the whole of the difference and nothing else moved.
+
+**What is not claimed: a real tree confirming it still fires.** The two trees
+that carry a genuine fallback are bbq-predictor and raidcfgd, and both now
+supply the macro from `fmake.toml` with `$file(VERSION)`, so the advisory is
+correctly silent in each. A tree that has the fallback and does not supply it
+is the fixture in `selftest`, which is where the positive case is pinned, and
+the five discriminating inputs are asserted there by name rather than
+described here.
+
+### A `[generate]` output's includes, measured rather than argued
+
+§138 fixed include resolution for schema output and recorded the general
+shape as untested: the same might be true of a `[generate]` output, and it
+was not fixed on the strength of an argument. **It reproduces exactly.** A
+rule writing a `.c` that includes a header from a directory nothing else
+includes from:
+
+    * helper.h: No such file or directory
+      in gen/table.c
+      helper.h is on no include path here
+      it is in this tree, at lib/helper.h
+
+Same message, same remedy named, and the same one line fixes both -- the
+resolution now runs over generated output of either kind. Recording an
+uncertainty was right; leaving it recorded once it cost ten minutes to
+settle would not have been.
+
+### Two entries that had gone stale, and one of them named the wrong layer
+
+**§133's closure finding was fixed four hours after it was written** and the
+entry said "not fixed here" for a day. Worse, the deferral was wrong about
+where the fault was: it called for "its own pass" at "the core rule that §3
+argues carefully", and §3 was never involved. `widen_candidates` proposes
+from the *scan*; symbol closure only ever reads objects; a file nothing
+proposes never becomes one. `RE_DATA_DEF` read the type as a single
+identifier, so `const int rows[3] =` matched and `const struct row rows[3] =`
+did not. A regex, one layer earlier than the layer the symptom appeared in.
+
+The fix was in `d9a5471`'s commit message and **nowhere in this document**,
+which is the other half of the same failure: the entry that recorded the
+problem was not the entry that got the answer, because the answer arrived
+through a different door.
+
+`working-practice.md` says a deliberate non-decision decays like a fix
+record and more quietly, since nobody re-reads the open questions while
+closing one. Two instances in one file in two days is enough to say what the
+tell is: **an entry that defers to "its own pass" is making a prediction
+about the size of the work**, and both of these were wrong about it -- four
+hours and a regex, ten minutes and one line. A deferral that names a cost is
+a deferral that can be checked against what the work actually took, and
+neither of these was ever checked.
