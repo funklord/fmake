@@ -11159,3 +11159,59 @@ express a rule over a set rather than a stanza per output. situ did not
 attempt it and wrote `make test` into its README instead, which is the
 honest answer for that tree today and is not a workaround anybody should
 copy if the answer here is yes.
+
+## 137. netcfgd again, and sixteen targets called `lib`
+
+Reported from netcfgd 2026-09-02, and it is §121 revisited rather than a
+new tree: that evaluation found "most of the tree is not fmake's to build"
+and recorded that `.rs` was not read at all, so the Rust never came up.
+§129 changed that, and the same tree now says something different.
+
+**What happens.** `fmake` at the root of netcfgd stops before compiling:
+
+    !!! two targets are both called 'lib':
+        crates/netcfgd-cli/src/lib.rs
+        crates/netcfgd-daemon/src/lib.rs
+    give one of them a different @target, or a name in fmake.toml.
+
+netcfgd is a Cargo workspace of twenty-one crates. Eighteen have a root;
+sixteen of those are `src/lib.rs`. The message names two of them, which is
+the right message for the general collision and understates this one: the
+answer it suggests is sixteen stanzas, or sixteen annotations in files
+Cargo owns.
+
+**The naming rule is the whole of it, and it is a rule that works
+everywhere else.** A target is named for what it is rooted in, and for C
+that is a directory carrying a meaningful name -- §46, §120 and situ's
+§136 are all instances of it doing something reasonable or falling back
+gracefully. Cargo's layout defeats it in a way none of those did, because
+the crate root's *path* carries no name at all: every crate in every Cargo
+project on earth is rooted at `src/lib.rs` or `src/main.rs`. The name is
+one directory up, and it is also stated exactly in the `Cargo.toml` beside
+it -- `[package] name`, which is authoritative in a way an inferred name
+never is.
+
+**The question, which is yours:** whether a crate root should take its name
+from the enclosing directory rather than the file, or whether fmake should
+read `[package] name` out of a `Cargo.toml` when one sits beside a crate
+root. The second is a better name and costs an exception to "fmake reads no
+other build system's files", which is a real property and not one to spend
+casually -- especially as reading the name would tempt reading the
+dependencies, which is where it stops being fmake.
+
+**What netcfgd did, and why it is not a workaround to copy.** It excluded
+the four directories holding `.rs` and kept fmake for the C and C++ half,
+which builds `netcfgd-gui` and returns 0. That is not fmake failing at
+Rust: a twenty-one crate workspace with registry dependencies and features
+is Cargo's, and driving rustc a crate at a time would not build it whatever
+the targets were called. The naming collision is worth fixing because it is
+the first thing anyone with a Rust project sees; it is not what stands
+between fmake and this tree's daemon.
+
+**One measurement note, since §133 and §135 were both about instruments.**
+The first run reported here was backgrounded with a trailing `&`, so the
+exit status that came back was the launching shell's rather than the
+build's, and it was 0 while the log was empty and no artifact existed. The
+build genuinely did succeed later. Nothing was published on the strength of
+the wrong 0, but only because the missing artifact was checked -- the exit
+code alone would have been believed.
