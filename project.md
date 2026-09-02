@@ -194,7 +194,8 @@ that had been green about nothing for five commits ·
 [141. The half of a schema that was written and then deleted](#141-the-half-of-a-schema-that-was-written-and-then-deleted) ·
 [142. Two more from the same session, one of them fixed](#142-two-more-from-the-same-session-one-of-them-fixed) ·
 [143. One source, two programs, and the object list keyed on a path](#143-one-source-two-programs-and-the-object-list-keyed-on-a-path) ·
-[144. Advice about a program nobody built, and two entries that had gone stale](#144-advice-about-a-program-nobody-built-and-two-entries-that-had-gone-stale)
+[144. Advice about a program nobody built, and two entries that had gone stale](#144-advice-about-a-program-nobody-built-and-two-entries-that-had-gone-stale) ·
+[145. `-i`, and writing for somebody who did not write the project](#145--i-and-writing-for-somebody-who-did-not-write-the-project)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11987,3 +11988,97 @@ about the size of the work**, and both of these were wrong about it -- four
 hours and a regex, ten minutes and one line. A deferral that names a cost is
 a deferral that can be checked against what the work actually took, and
 neither of these was ever checked.
+
+## 145. `-i`, and writing for somebody who did not write the project
+
+Proposed by the copyright holder: when fmake refuses to decide, ask, and let
+the next run use the answer. The first version considered was interactive by
+default and the objection to it was structural -- fmake runs non-interactively
+in four of its five modes, and a prompt is a hang in CI, in a `make` recipe,
+under `--eject` and in hydra's `objsets.py`. **`-i` is the holder's answer to
+that and it is the right one**, and specifically the one §80 argues for: an
+explicit flag rather than a check that depends on how the program was started.
+
+### What it does, and what it deliberately does not
+
+fmake already computed the answer. When two files define one symbol it prints
+the `sources` stanza that settles it, labelled *"a guess, not a decision"*.
+**`-i` removes the transcription, not the judgement.** The build still stops
+after an answer is recorded, because the answer is for the next run and one
+worth recording is worth reading before it is built on.
+
+It answers exactly one question: the ambiguity that already prints a stanza.
+Not `--force-link` candidates, not missing libraries. The moment it answers
+two it is a wizard, and a wizard is a thing people run instead of reading.
+
+**Appended, never merged.** TOML tables are order-independent, so a block at
+the end of the file is as good as one in the middle, every comment already
+there is untouched, and a table that already exists becomes a parse error the
+reader sees rather than a silent second opinion. That is what makes writing
+into a hand-written config safe without this file growing a serialiser --
+hydra's `fmake.toml` is ten lines of prose to two of settings, and fmake is
+one file and stdlib only, which Python gives no TOML writer for.
+
+**And the preamble is a list of plain lines rather than one f-string**, which
+is not style. A multi-line f-string needs Python 3.12 and `debian/control`
+declares 3.11; `make check` refused the first version for it. That gate reads
+the source with the tokeniser rather than looking at the text, because
+reading the text for it is how the same mistake passed once before -- and it
+is the only thing in this session that caught a fault I had no measurement
+for, since the machine here has no 3.11 to run against.
+
+Three refusals. **No terminal**, which is what keeps it out of CI and out of a
+recipe. **`--explain`, `--eject`, `-n`**, refused where the arguments are
+parsed rather than ignored later: none of them builds anything, so there would
+be nothing to unblock and the question would be asked for no reason. **A
+target that already has a section**, left alone with the key it needs named.
+
+That last guard is asked of the target and not of the file's text, and the
+reason is worth keeping: a section that renames its target is keyed under the
+name discovery gave it rather than the one it chose, so searching for
+`[target.<name>]` would miss it and append a second section that fmake then
+rejects for having neither root nor sources. `t.conf` is empty exactly when
+nobody has written about that target.
+
+### The reader it is written for
+
+**The holder's instruction, and it changed the shape of the feature:** the
+information surrounding a decision is for somebody unfamiliar with the project
+they are building, *because that is what fmake is often going to be used for*.
+A tree you have just cloned, built from no build file, is the case fmake
+exists for -- and a stanza reading only `sources = [...]` is an answer with no
+question attached, found later by a person with no way to tell a decision
+somebody made from a suggestion somebody accepted.
+
+So what is written says four things a stranger needs and an author would not
+bother with: what fmake was trying to do (link by reading symbol tables), what
+the suggestion is worth (an `#include` says a declaration was wanted, not that
+a file should be linked), what naming `sources` **costs** (it replaces symbol
+closure for that target, so a file added later will not reach it), and where
+to look if it is wrong (usually not in that file at all -- two files defining
+one symbol is most often a copy nobody meant to keep, or output from another
+build system left in the tree).
+
+**Written once, though.** The first version repeated all of that per target,
+which for two answers was forty-six lines of near-identical comment -- the
+same failure the ambiguity message itself records, where eight colliding
+meta-objects turned a readable refusal into 252 lines of identical text. A
+file nobody reads to the end explains nothing. The explanation is a preamble
+written once per config; each answer carries two lines of its own provenance,
+naming the symbol, the candidates, and the root the suggestion was followed
+from.
+
+### What it does not solve, and is not meant to
+
+An ambiguity fmake reports is **as often a defect in fmake's model as a real
+question**. §138's schema collision looked like a choice and was not --
+provenance settled it and nobody should have been asked. §133's missing
+`version_db.c` looked like a closure fault and was a regex in the scan. A
+prompt lets either be answered, correctly even, and recorded as intent while
+the bug goes unfound.
+
+`-i` does not fix that and cannot. What it does is leave the friction where
+the friction belongs: the flag is opt-in, so somebody typing it has decided to
+answer, and what gets written says in its own words that it was a guess
+somebody agreed to. That is the most a tool can do about a question it should
+not have asked.

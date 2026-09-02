@@ -680,7 +680,23 @@ fmake --explain          print every decision and why
 fmake --install          install artifacts and @headers
 fmake --eject > Makefile leave, taking the build with you
 fmake --clean            remove .fmake/
+fmake -i                 answer what it will not guess, once
 ```
+
+**`-i` is for a build that has stopped on something fmake refuses to
+decide.** Two files defining one symbol is the case: fmake links whatever
+defines a symbol something needs, and with two definitions it will not
+choose. It already prints the stanza that settles it; `-i` puts the same
+question to you and writes the answer into `fmake.toml`, with a paragraph
+saying what the collision was, where the suggestion came from and what
+naming `sources` gives up — because the person who reads that file next is
+usually not the person who wrote the project.
+
+It asks nothing when stdin is not a terminal, which is what keeps it out of
+CI and out of a Makefile recipe, and it is refused outright alongside
+`--explain`, `--eject` and `-n`, none of which build anything. The build
+still stops after an answer is recorded: the answer is for the next run, and
+one worth recording is worth reading before it is built on.
 
 Every flag the program accepts, which is the same list `--man` and
 `--completion` are generated from:
@@ -693,6 +709,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `-p NAME` | build profile from `[profile.NAME]` |
 | `-n` | print commands, run nothing |
 | `-B` | ignore the cache and rebuild |
+| `-i` | ask about what fmake will not guess, and write the answers into `fmake.toml` |
 | `--cflags 'FLAGS'` | replace the default `-Os`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
 | `--explain` | print every decision and why, and build nothing |

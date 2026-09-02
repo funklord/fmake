@@ -105,6 +105,7 @@ none of it.
 import argparse
 import errno
 import concurrent.futures
+import datetime
 import hashlib
 import json
 import fnmatch
@@ -8420,7 +8421,11 @@ def build(args, _bootstrapping=False):
 		# on the target, so writing one per symbol printed the same block
 		# eight times and turned a readable refusal into 252 lines of
 		# identical text. Said once each.
-		advice, stanzas = [], []
+		# `offers' carries the same suggestion as `stanzas' in parts rather
+		# than rendered, because -i has to put the question in words before
+		# it writes the answer, and re-parsing a block fmake just built
+		# would be a second place for the two to disagree.
+		advice, stanzas, offers = [], [], []
 		seen_advice, seen_stanza = set(), set()
 		for t, _sym, providers in trouble:
 			reach = proj.candidates(t.rel)
@@ -8436,6 +8441,9 @@ def build(args, _bootstrapping=False):
 			members = sorted(r for r in reach if r in proj.src_set)
 			stanzas.append(f"[target.{t.name}]\nsources = ["
 			               + ", ".join(f'"{m}"' for m in members) + "]")
+			offers.append({"name": t.name, "root": t.rel, "sym": _sym,
+			               "providers": list(providers), "chosen": mine[0],
+			               "members": members, "configured": bool(t.conf)})
 		if advice:
 			lines += ["",
 			          "The include graph reaches exactly one of them from "
@@ -8481,6 +8489,19 @@ def build(args, _bootstrapping=False):
 			lines.append("\n@os or @arch on the platform-specific one will "
 			             "settle it, or name the sources of each target in "
 			             f"{CONF_FILE}.")
+		# Said before the question, not instead of it: -i does not spare
+		# anybody the explanation, it spares them the transcription. The
+		# build still stops, because the answer is for the next one -- and
+		# because a decision worth recording is worth reading before it is
+		# built on.
+		if args.interactive:
+			say("\n".join(lines))
+			taken = offer_answers(root, offers)
+			if taken:
+				die(f"{CONF_FILE} now answers for "
+				    f"{', '.join(sorted(taken))}. Read what was written, "
+				    f"then run fmake again.")
+			die("nothing was answered, so the build is still stuck")
 		die("\n".join(lines))
 
 	# ---- one program's root inside another's link set -----------------
@@ -10596,6 +10617,153 @@ def ignored_source_dirs(root, srcs):
 	return git_ignored(root, dirs) if dirs else set()
 
 
+def offer_answers(root, offers):
+	"""Put fmake's own suggestion to whoever ran it, and write what they take.
+
+    Everything written here is addressed to somebody who did not write the
+    project. That is who fmake is for -- a tree you have just cloned, built
+    with no build file -- so a stanza saying only `sources = [...]` would be
+    an answer with no question attached, found later by a person with no way
+    to tell a decision somebody made from a suggestion somebody accepted.
+
+    Appended rather than merged. TOML tables are order-independent, so a
+    block at the end of the file is as good as one in the middle, every
+    comment already there is untouched, and a table that already exists
+    becomes a parse error the reader sees rather than a silent second
+    opinion. Writing into a config that is mostly prose -- hydra's is ten
+    lines of comment to two of settings -- is not something to attempt with
+    a serialiser this file would have to grow.
+    """
+	if not sys.stdin.isatty():
+		info("-i needs a terminal to ask in; nothing was written")
+		return []
+	path = os.path.join(root, CONF_FILE)
+	try:
+		existing = open(path).read() if os.path.exists(path) else ""
+	except OSError as exc:
+		die(f"-i cannot read {CONF_FILE}: {exc.strerror or exc}")
+
+	taken, blocks = [], []
+	for o in offers:
+		# Asked of the target rather than of the file's text, because a
+		# section that renames its target is keyed under the name the
+		# discovery pass gave it and not under the one it chose -- so
+		# looking for `[target.<name>]' would miss it and append a second
+		# section that fmake then rejects for having neither root nor
+		# sources. A target with any section at all is one somebody has
+		# already written about.
+		if o["configured"]:
+			info(f"{CONF_FILE} already has a section for {o['name']}; "
+			     f"leaving it alone. Add `sources' to that section if "
+			     f"{o['chosen']} is the answer.")
+			continue
+		say("")
+		say(f"{BOLD(o['name'])} cannot be linked until this is settled.")
+		say("")
+		say(f"  Two or more files define {o['sym']!r}, and this build has "
+		    f"all of them:")
+		for p in o["providers"][:6]:
+			say(f"      {p}")
+		if len(o["providers"]) > 6:
+			say(f"      ... and {len(o['providers']) - 6} more")
+		say("")
+		say("  fmake decides what to link by reading symbol tables: whatever")
+		say("  defines a symbol something needs gets linked. With two")
+		say("  definitions it has no way to choose, and choosing wrongly")
+		say("  would build a program out of the wrong half of the tree")
+		say("  without saying so.")
+		say("")
+		say(f"  Following #include from {o['root']} reaches exactly one:")
+		say(f"      {BOLD(o['chosen'])}")
+		say("")
+		say("  That is a good guess and it is not proof. An #include says a")
+		say("  declaration was wanted, not that a file should be linked.")
+		say("")
+		say(f"  Answering y writes a source list for {o['name']} into "
+		    f"{CONF_FILE}.")
+		say("  That REPLACES symbol closure for this one target: it will")
+		say("  link exactly the files named there, so a source added to the")
+		say("  project later will not reach it until it is added there too.")
+		say("")
+		try:
+			answer = input(f"  Accept {o['chosen']} for {o['name']}? [y/N] ")
+		except (EOFError, KeyboardInterrupt):
+			say("")
+			info("nothing written")
+			return taken
+		if answer.strip().lower() not in ("y", "yes"):
+			continue
+		taken.append(o["name"])
+		blocks.append(_answer_block(o))
+
+	if not blocks:
+		return taken
+	try:
+		with open(path, "a") as fh:
+			if existing and not existing.endswith("\n"):
+				fh.write("\n")
+			if ANSWER_MARK not in existing:
+				fh.write("\n" + ANSWER_PREAMBLE)
+			fh.write("\n" + "\n".join(blocks))
+	except OSError as exc:
+		die(f"-i cannot write {CONF_FILE}: {exc.strerror or exc}")
+	return taken
+
+
+ANSWER_MARK = "Answers written by `fmake -i`"
+
+# Built as a list of plain lines rather than one f-string. A multi-line
+# f-string needs Python 3.12 and debian/control declares 3.11, which the
+# suite checks with the tokeniser because reading the source for it is how
+# the same mistake passed before.
+ANSWER_PREAMBLE = "\n".join([
+    "# " + "-" * 74,
+    "# " + ANSWER_MARK + ". Worth reading before trusting them.",
+    "#",
+    "# fmake works out what to link by reading symbol tables: whatever",
+    "# defines a symbol something needs gets linked. Two files defining one",
+    "# symbol leave it nothing to choose between, so it stops rather than",
+    "# build a program out of the wrong half of the tree without saying so.",
+    "#",
+    "# Each `sources' list below came from following #include from that",
+    "# program's own root and finding exactly one of the candidates. That is",
+    "# a good guess and it is not proof: an #include says a declaration was",
+    "# wanted, not that a file should be linked.",
+    "#",
+    "# What they cost. Naming `sources' replaces symbol closure for that",
+    "# target: fmake then links exactly the files listed and no others, so a",
+    "# source added to the project later will not reach it until it is added",
+    "# here too.",
+    "#",
+    "# If one of these is wrong, the cause is probably not in this file. Two",
+    "# files defining one symbol is most often a copy nobody meant to keep,",
+    "# or output from another build system left in the tree -- deleting it,",
+    "# or naming it in `[project] exclude', is a better answer than a list",
+    "# here.",
+    "# " + "-" * 74,
+    "",
+])
+
+
+def _answer_block(o):
+	"""One answer: the stanza, and two lines saying where it came from.
+
+    The explanation is in the preamble and is written once. Repeating it per
+    target is the failure the ambiguity message itself records -- eight
+    colliding meta-objects turned a readable refusal into 252 lines of
+    identical text -- and a file nobody reads to the end explains nothing.
+    """
+	when = datetime.date.today().isoformat()
+	sources = ", ".join(f'"{m}"' for m in o["members"])
+	among = o["providers"][:4]
+	listed = ", ".join(among) + (f" and {len(o['providers']) - 4} more"
+	                             if len(o["providers"]) > len(among) else "")
+	return (f"# {o['name']}, {when}: {o['sym']!r} was defined by {listed};\n"
+	        f"# the include graph from {o['root']} reached {o['chosen']}.\n"
+	        f"[target.{o['name']}]\n"
+	        f"sources = [{sources}]\n")
+
+
 def ensure_gitignore(root):
 	if not os.path.isdir(os.path.join(root, ".git")):
 		return
@@ -10720,6 +10888,9 @@ def parse_args(argv):
 	               help="print the inferred build and exit")
 	p.add_argument("-n", "--dry-run", action="store_true",
 	               help="print commands without running them")
+	p.add_argument("-i", "--interactive", action="store_true",
+	               help=f"ask about what fmake will not guess, and write "
+	                    f"the answers into {CONF_FILE}")
 	p.add_argument("-B", "--always-make", action="store_true",
 	               help="ignore the object cache and rebuild everything")
 	p.add_argument("--clean", action="store_true",
@@ -10823,6 +10994,18 @@ def parse_args(argv):
 	args.force_link = [f for chunk in args.force_link
 	                   for f in shlex.split(chunk)]
 	args.run_args = run_args
+	# Refused here rather than ignored later. -i writes an answer into the
+	# config so that the *next* build uses it, and none of these three
+	# builds anything: --explain and --eject describe what would happen and
+	# --dry-run prints commands, so there is nothing to be unblocked and the
+	# question would be asked for no reason.
+	if args.interactive:
+		for flag, on in (("--explain", args.explain), ("--eject", args.eject),
+		                 ("--dry-run", args.dry_run)):
+			if on:
+				p.error(f"-i is for a build that is stuck; {flag} does not "
+				        f"build anything, so there would be nothing to "
+				        f"unblock")
 	return args
 
 

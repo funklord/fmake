@@ -41,6 +41,7 @@ import hashlib
 import os
 import platform
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -13910,6 +13911,197 @@ fn main() { println!("{}", shared()); }
 	check("--ldflags" not in out,
 	      f"a target rustc links has no library to name, and offering one "
 	      f"sends the reader to install something: {out}")
+
+
+# ---------------------------------------------------------------------------
+# Answering what fmake will not guess
+# ---------------------------------------------------------------------------
+
+def _pty_fmake(t, keys, *args, timeout=FMAKE_TIMEOUT):
+	"""Run fmake under a pseudo-terminal and type `keys' at it.
+
+    -i refuses to ask anything when stdin is not a terminal, which is the
+    whole of what keeps it out of CI and out of a Makefile recipe. So the
+    only way to exercise the asking is to give it one.
+    """
+	import pty
+	env = dict(os.environ)
+	for name in ("CFLAGS", "LDFLAGS", "DEBUG", "SANITIZE"):
+		env.pop(name, None)
+	pid, fd = pty.fork()
+	if pid == 0:                            # child: becomes fmake
+		os.environ.clear()
+		os.environ.update(env)
+		# -i is always passed: this helper exists for the one flag that
+		# needs a terminal, and a run without it is `t.fmake' already.
+		os.execvp(sys.executable,
+		          [sys.executable, FMAKE, "-C", t.dir, "-i", *args])
+	os.write(fd, keys.encode())
+	out, deadline = b"", time.time() + timeout
+	while time.time() < deadline:
+		ready, _, _ = select.select([fd], [], [], deadline - time.time())
+		if not ready:
+			break
+		try:
+			chunk = os.read(fd, 4096)
+		except OSError:                     # the child closed the pty
+			break
+		if not chunk:
+			break
+		out += chunk
+	try:
+		os.waitpid(pid, 0)
+	except ChildProcessError:
+		pass
+	os.close(fd)
+	return out.decode(errors="replace")
+
+
+def _ambiguous(t):
+	"""Two programs, one symbol, and one provider reachable from each.
+
+    situ's shape, and the only one where -i has anything to offer: the
+    include graph has to reach exactly one candidate from a target's own
+    root, or there is no suggestion to put to anybody.
+    """
+	t.write("a/impl.h", "int value(void);\n")
+	t.write("a/impl.c", '#include "impl.h"\nint value(void){ return 1; }\n')
+	t.write("b/impl.h", "int value(void);\n")
+	t.write("b/impl.c", '#include "impl.h"\nint value(void){ return 2; }\n')
+	t.write("prog_a.c", '#include <stdio.h>\n#include "a/impl.h"\n'
+	        'int main(void){ printf("%d\\n", value()); return 0; }\n')
+	t.write("prog_b.c", '#include <stdio.h>\n#include "b/impl.h"\n'
+	        'int main(void){ printf("%d\\n", value()); return 0; }\n')
+
+
+@case
+def an_answer_given_to_i_is_what_the_next_build_uses(t):
+	"""The whole point: the decision persists, and it persists in the config.
+
+    fmake already computed this answer and printed the stanza to paste. What
+    -i removes is the transcription, not the judgement -- the build still
+    stops, because an answer worth recording is worth reading before it is
+    built on."""
+	_ambiguous(t)
+	stuck = t.fmake()
+	check(stuck.returncode != 0,
+	      "two providers and no configuration should stop the build")
+
+	out = _pty_fmake(t, "y\ny\n")
+	check("Accept a/impl.c for prog_a?" in out,
+	      f"the question was not put: {out[-800:]}")
+	check("now answers for prog_a, prog_b" in out,
+	      f"the answers were not recorded: {out[-800:]}")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the recorded answer did not build: {r.stdout}")
+	check(t.run("prog_a").stdout == "1\n", "prog_a linked the wrong provider")
+	check(t.run("prog_b").stdout == "2\n", "prog_b linked the wrong provider")
+
+
+@case
+def what_i_writes_is_addressed_to_somebody_who_did_not_write_the_project(t):
+	"""That is who fmake is for, and a bare `sources' list tells them
+	nothing.
+
+    A stanza with no question attached is found later by a person with no
+    way to tell a decision somebody made from a suggestion somebody
+    accepted. The explanation is written once and each answer carries its
+    own provenance -- repeating the whole thing per target is the failure
+    the ambiguity message itself records, where eight colliding
+    meta-objects turned a readable refusal into 252 lines of identical
+    text."""
+	_ambiguous(t)
+	_pty_fmake(t, "y\ny\n")
+	with open(os.path.join(t.dir, "fmake.toml")) as fh:
+		conf = fh.read()
+
+	check(conf.count("Answers written by `fmake -i`") == 1,
+	      f"the explanation should be written once, not per answer: {conf}")
+	for owed in ("reading symbol tables",      # what fmake was trying to do
+	             "it is not proof",            # what the suggestion is worth
+	             "What they cost",             # what naming sources gives up
+	             "probably not in this file"): # where to look if it is wrong
+		check(owed in conf, f"the record does not say {owed!r}: {conf}")
+	# And each answer says which symbol, which candidates, and which root
+	# the suggestion was followed from.
+	check("'value' was defined by a/impl.c, b/impl.c" in conf,
+	      f"an answer does not name the collision it settled: {conf}")
+	check("from prog_a.c reached a/impl.c" in conf,
+	      f"an answer does not say where the suggestion came from: {conf}")
+
+
+@case
+def i_refuses_where_there_is_nothing_to_unblock(t):
+	"""Three flags describe a build rather than making one.
+
+    Refused when the arguments are parsed rather than ignored later: -i
+    writes an answer so that the *next* build uses it, and none of these
+    builds anything, so the question would be asked for no reason."""
+	_ambiguous(t)
+	for flag in ("--explain", "--eject", "--dry-run"):
+		r = t.fmake("-i", flag)
+		check(r.returncode != 0, f"-i {flag} should be refused")
+		check("nothing to" in (r.stdout + r.stderr),
+		      f"-i {flag} was refused without saying why: {r.stderr}")
+
+
+@case
+def i_asks_nothing_when_there_is_no_terminal(t):
+	"""Which is what keeps it out of CI, out of a Makefile recipe, and out
+	of the programmatic callers.
+
+    A prompt in any of those is a hang. The flag exists so that the default
+    path is untouched and nothing has to guess from how it was started --
+    section 80's shape, and the one remedy that entry argues for."""
+	_ambiguous(t)
+	r = t.fmake("-i")
+	check(r.returncode != 0, "the build is still stuck, so it must not pass")
+	check("needs a terminal" in (r.stdout + r.stderr),
+	      f"the refusal does not say what was missing: {r.stdout}{r.stderr}")
+	check(not os.path.exists(os.path.join(t.dir, "fmake.toml")),
+	      "nothing should have been written without an answer")
+
+
+@case
+def declining_i_leaves_the_build_stuck_and_the_config_alone(t):
+	"""n is an answer too, and it must not write a thing."""
+	_ambiguous(t)
+	out = _pty_fmake(t, "n\nn\n")
+	check("nothing was answered" in out,
+	      f"declining should say the build is still stuck: {out[-400:]}")
+	check(not os.path.exists(os.path.join(t.dir, "fmake.toml")),
+	      "declining wrote a config anyway")
+
+
+@case
+def i_leaves_an_answer_that_is_already_there_alone(t):
+	"""Appending is what makes writing into a hand-written config safe, and
+	appending a table that already exists is a parse error rather than a
+	second opinion.
+
+    So the one that is there wins, and it is said out loud: a person who
+    wrote that stanza themselves should not have it quietly re-decided."""
+	_ambiguous(t)
+	# A section that says something else entirely. `sources' would settle
+	# the ambiguity and there would be nothing left to ask about, so the
+	# case that reaches this guard is a target somebody has written about
+	# for another reason -- and appending a second table for it is a TOML
+	# parse error rather than a second opinion.
+	t.write("fmake.toml",
+	        '[target.prog_a]\ndescription = "the interesting one"\n')
+	out = _pty_fmake(t, "y\ny\n")
+	check("already has a section for prog_a" in out,
+	      f"the existing section was not left alone: {out[-700:]}")
+	check("Add `sources'" in out,
+	      f"the reader was not told how to answer it themselves: "
+	      f"{out[-700:]}")
+	with open(os.path.join(t.dir, "fmake.toml")) as fh:
+		conf = fh.read()
+	check(conf.count("[target.prog_a]") == 1,
+	      f"the table was written twice: {conf}")
+	check("[target.prog_b]" in conf,
+	      f"the other target should still have been offered: {conf}")
 
 
 # ---------------------------------------------------------------------------
