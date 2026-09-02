@@ -13840,6 +13840,133 @@ fn main() { println!("{}", shared()); }
 
 
 # ---------------------------------------------------------------------------
+# One source, two programs
+# ---------------------------------------------------------------------------
+
+def _double(t, extra=""):
+	"""A program whose behaviour turns on a define, and a shared helper."""
+	t.write("t.c", """
+#include <stdio.h>
+int helper(void);
+int main(void)
+{
+#ifdef CHECKED
+	printf("checked %d\\n", helper());
+#else
+	printf("plain %d\\n", helper());
+#endif
+	return 0;
+}
+""")
+	t.write("helper.c", "int helper(void){ return 7; }\n")
+	t.write("fmake.toml", '[target.t_checked]\nroot    = "t.c"\n'
+	        'defines = ["CHECKED"]\n' + extra)
+
+
+@case
+def one_source_becomes_two_programs_with_different_defines(t):
+	"""situ compiles every test twice, and that was the last thing it
+	needed from a config rather than from a build.
+
+    Half of what that suite proves is that the checked assertions compile
+    out, so `test_bmp' and `test_bmp_checked' are the same file with one -D
+    between them. Nothing else about them differs, which is why the defines
+    reach the root translation unit and not the closure: the shared objects
+    are shared, exactly as situ's own Makefile has it, and its runtime
+    header declares the two ABI-compatible in as many words."""
+	_double(t)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run("t").stdout == "plain 7\n", "the plain program took a define")
+	check(t.run("t_checked").stdout == "checked 7\n",
+	      "the variant program did not get its define")
+
+
+@case
+def a_variant_is_not_a_second_definition_of_its_own_file(t):
+	"""The one way this could have gone wrong quietly.
+
+    A variant defines exactly what the plain unit defines, so a pool
+    holding both would be section 3 refusing to choose between a file and
+    itself. It is compiled with the pool and closed over without it."""
+	_double(t)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("more than one file" not in (r.stdout + r.stderr),
+	      f"the variant was offered as a competing provider: {r.stdout}")
+	# And the shared half is compiled once, not once per program.
+	check(compiled(r).count("helper.c") == 1,
+	      f"the shared object should be built once: {compiled(r)}")
+	check(len([c for c in compiled(r) if c.startswith("t.c")]) == 2,
+	      f"the root should be built twice: {compiled(r)}")
+
+
+@case
+def a_variant_names_the_target_that_asked_for_it(t):
+	"""Two `CC t.c' lines say nothing about which is which."""
+	_double(t)
+	r = t.fmake()
+	check("t.c (t_checked)" in r.stdout,
+	      f"the second compile does not name the target: {r.stdout}")
+	e = t.fmake("--explain")
+	check("compiled with -DCHECKED" in e.stdout,
+	      f"--explain does not say what makes the variant different: "
+	      f"{e.stdout}")
+
+
+@case
+def defines_on_a_library_target_are_refused(t):
+	"""`defines' is about a root translation unit, and a library has none
+	in the sense that matters -- its members are the artifact."""
+	_double(t, extra='kind = "static"\n')
+	r = t.fmake()
+	check(r.returncode != 0, "defines on a library should stop the build")
+	out = r.stdout + r.stderr
+	check("root translation unit" in out and "static" in out,
+	      f"the refusal does not say why it does not apply: {out}")
+
+
+@case
+def the_ejected_builds_keep_both_objects(t):
+	"""The failure this was written against: one source, two sets of
+	flags, and an object list keyed on the path.
+
+    Keying on the path collapsed the two rules into one -- a valid build
+    file, one set of flags, and nothing anywhere to say the other had ever
+    been wanted."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	_double(t)
+
+	mk = t.fmake("--eject").stdout
+	check(mk.count("t.c.o:") == 1 and "t.c.t_checked.o:" in mk,
+	      f"the ejected make build lost one of the two objects: {mk}")
+	t.write("Makefile", mk)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	for name in ("t", "t_checked"):
+		if os.path.exists(os.path.join(t.dir, name)):
+			os.unlink(os.path.join(t.dir, name))
+	r = subprocess.run(["make", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"the ejected make build failed: {r.stderr}")
+	check(t.run("t").stdout == "plain 7\n"
+	      and t.run("t_checked").stdout == "checked 7\n",
+	      "the ejected make build produced the wrong pair")
+
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("build.ninja", t.fmake("--eject", "ninja").stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+	for name in ("t", "t_checked"):
+		os.unlink(os.path.join(t.dir, name))
+	r = subprocess.run(["ninja", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"the ejected ninja build failed: {r.stdout}")
+	check(t.run("t").stdout == "plain 7\n"
+	      and t.run("t_checked").stdout == "checked 7\n",
+	      "the ejected ninja build produced the wrong pair")
+
+
+# ---------------------------------------------------------------------------
 # What a refusal leaves behind
 # ---------------------------------------------------------------------------
 

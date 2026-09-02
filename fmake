@@ -795,6 +795,13 @@ CONF_SCHEMA = {
 	# file. Same reason [project] takes `define` beside `defines`.
     "target": {"*": {
         "name": S, "target": S, "kind": S, "root": S,
+		# Applied to this target's *root* translation unit, which is what
+		# makes one source into two programs: situ compiles every test
+		# twice, once with -DSITU_CHECKED, because half of what that suite
+		# proves is that the checked assertions compile out. Not the whole
+		# closure -- the shared objects are shared, which is what its own
+		# Makefile does and what its runtime header declares safe.
+        "defines": L, "define": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "version": S, "description": S,
@@ -4218,10 +4225,10 @@ class Unit:
 	# arrived, which fmake did not build and which is not searched like an
 	# archive either.
 	__slots__ = ("rel", "abs", "cxx", "lang", "obj", "dep", "scan", "ann",
-	             "own", "prebuilt", "members",
+	             "own", "prebuilt", "members", "variant",
 	             "undef", "strong", "weak", "compiled", "archive")
 
-	def __init__(self, rel, root, objdir, scan, members=None):
+	def __init__(self, rel, root, objdir, scan, members=None, variant=None):
 		self.rel  = rel
 		self.abs  = os.path.join(root, rel)
 		self.lang = LANGS.get(os.path.splitext(rel)[1], _C)
@@ -4231,8 +4238,16 @@ class Unit:
 		# itself. Empty for every other language, where the unit is the
 		# file.
 		self.members = list(members or [])
-		self.obj  = os.path.join(objdir, rel + ".o")
-		self.dep  = os.path.join(objdir, rel + ".d")
+		# One source, two objects. A target may ask for its root translation
+		# unit to be compiled with defines of its own, which makes a second
+		# object out of a file that already has one -- so the tag is part of
+		# the object's name, here and in an ejected build, and `rel' stays
+		# the real path so that every diagnostic still names a file somebody
+		# can open.
+		self.variant = variant
+		tag = ("." + variant) if variant else ""
+		self.obj  = os.path.join(objdir, rel + tag + ".o")
+		self.dep  = os.path.join(objdir, rel + tag + ".d")
 		self.scan = scan
 		self.ann  = Ann(scan.get("dirs"))
 		self.own  = []            # compile flags this TU asked for itself
@@ -4587,13 +4602,17 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		for u, rc, err in pool.map(run_one, todo):
 			done[0] += 1
 			tag = u.lang.tag
+			# A variant is the same file compiled again with a define of
+			# its own, so the path alone prints twice and says nothing
+			# about which is which. Name the target that asked for it.
+			shown = u.rel + (f" ({u.variant})" if u.variant else "")
 			if rc != 0:
 				failures.append((u, err))
 				if not quiet:
-					say(f"[{done[0]:>{width}}/{len(todo)}] {RED(tag)} {u.rel}")
+					say(f"[{done[0]:>{width}}/{len(todo)}] {RED(tag)} {shown}")
 			elif not dry_run:
 				if not quiet:
-					say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {u.rel}")
+					say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {shown}")
 				if err.strip():
 					PROGRESS.write(err)
 				# An archive is not an ELF file, so the 20-byte header read
@@ -6685,6 +6704,18 @@ def _show_cmd(cmd, root):
 	return " ".join(out)
 
 
+def units_own(all_units, variant):
+	"""The flags the plain unit for this source already carried.
+
+    So that a variant's line names what is different about it rather than
+    repeating every flag the file would have had anyway.
+    """
+	for u in all_units:
+		if u.rel == variant.rel and not u.variant:
+			return u.own
+	return []
+
+
 def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
             res=None, excluded=None, conf=None, moc=None, uic=None,
             rcc=None, situ=None):
@@ -6809,7 +6840,14 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 				print(f"    {_col(m, W-4)}{DIM('module of the crate')}")
 	for u in cl.link if not cl.root.crate_exe else []:
 		if u is cl.root and t.kind == "exe":
-			print(f"    {_col(u.rel, W-4)}{DIM('root: defines main()')}")
+			# A variant root is the same file as another target's, so the
+			# path alone does not say which of the two this is. The defines
+			# are what makes it a different program.
+			what = "root: defines main()"
+			if u.variant:
+				only = [f for f in u.own if f not in units_own(all_units, u)]
+				what += ", compiled with " + " ".join(only or u.own)
+			print(f"    {_col(u.rel, W-4)}{DIM(what)}")
 		elif u is cl.root:
 			print(f"    {_col(u.rel, W-4)}{DIM('part of the library')}")
 		else:
@@ -7963,6 +8001,29 @@ def build(args, _bootstrapping=False):
 	for rel in sorted(units):
 		units[rel].own = own_flags(units[rel])
 
+	# A target whose stanza carries defines gets its own object for its root
+	# translation unit: same source, same everything else, one -D more. The
+	# variant is compiled but is never a candidate for anybody's closure --
+	# it defines exactly what the plain unit defines, so offering both would
+	# be section 3 refusing to choose between a file and itself.
+	variants = {}
+	for t in targets:
+		want = t.conf.get("defines", []) + t.conf.get("define", [])
+		if not want or t.rel not in units:
+			continue
+		if t.kind != "exe":
+			die(f"{CONF_FILE}: [target.{t.name}] defines applies to the "
+			    f"root translation unit of a program, and this target is "
+			    f"{t.kind}")
+		flags = ["-D" + d for d in want]
+		# Named for the target rather than hashed, because this path is
+		# read by whoever is looking at why two objects came out of one
+		# file, and a hash answers that with another question.
+		v = Unit(t.rel, root, objdir, scans[t.rel],
+		         members=crates.get(t.rel, [])[1:], variant=_mk_ident(t.name))
+		v.own = list(units[t.rel].own) + flags
+		variants[t.name] = v
+
 	# Which optional features this build has, and which it does not. Said
 	# once per package rather than per file, and said whether the answer is
 	# yes or no: "built without keyring support" is the sentence hydra's
@@ -8064,7 +8125,10 @@ def build(args, _bootstrapping=False):
 
 	while True:
 		pool = [units[r] for r in sorted(units)]
-		compile_units(pool, cfg, cache, root, incflags, jobs, args.dry_run,
+		# Compiled with the pool and closed over without it, which is the
+		# whole of what makes a variant work.
+		compile_units(pool + [variants[k] for k in sorted(variants)],
+		              cfg, cache, root, incflags, jobs, args.dry_run,
 		              broken, tree_headers=hdrs, quiet=args.quiet,
 		              origins=generated_from)
 		# The architecture to require is whatever fmake just compiled. Asking
@@ -8219,7 +8283,8 @@ def build(args, _bootstrapping=False):
 				# came out empty but one that was never fmake's to compute.
 				closures[t] = Closure(units[t.rel])
 			elif t.kind == "exe":
-				closures[t] = close_over_symbols(units[t.rel],
+				closures[t] = close_over_symbols(variants.get(t.name)
+				                                 or units[t.rel],
 				                                 schema_pool(t), forced,
 				                                 forced_why)
 				# A resource is asserted, not deduced -- nothing references
@@ -8241,7 +8306,7 @@ def build(args, _bootstrapping=False):
 					extra_why = dict(forced_why)
 					extra_why.update(add)
 					closures[t] = close_over_symbols(
-					    units[t.rel], schema_pool(t),
+					    variants.get(t.name) or units[t.rel], schema_pool(t),
 					    forced + [units[o] for o in sorted(add)], extra_why)
 			else:
 				members = [u for u in pool
@@ -8930,9 +8995,21 @@ def _eject_src(rel):
 	return os.path.join(EJECT_BUILD_DIR, sub) if sub else rel
 
 
-def _eject_obj(rel):
+def _eject_obj(rel, variant=None):
 	"""A source's object path, relative to the ejected object directory."""
-	return _eject_gen(rel) or rel
+	return (_eject_gen(rel) or rel) + (("." + variant) if variant else "")
+
+
+def _obj_of(u):
+	"""Where a unit's object goes in an ejected build.
+
+    Keyed on the unit rather than on its path, because one source can produce
+    two objects: a target may compile its root translation unit with defines
+    of its own. Keying on the path collapsed the two into one rule, which is
+    the failure worth naming -- a valid build file, one set of flags, and
+    nothing to say the other was ever wanted.
+    """
+	return _eject_obj(u.rel, u.variant)
 
 
 def _eject_flags(flags, root):
@@ -9302,7 +9379,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				if not u.crate_exe:
 					crate_libs[u.rel] = u
 				continue
-			every[u.rel] = u
+			every[_obj_of(u)] = u
 
 	# Only the moc outputs this build actually reaches. The caller has
 	# already dropped the inputs that produced nothing -- a rule promising a
@@ -9310,8 +9387,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# what is left still includes the classes no target links, which belong
 	# in fmake's own report but not in a Makefile that would never run them.
 	moc = moc or {}
+	# Asked of the source paths rather than of `every', which is keyed by
+	# object name: a variant means one source can produce two objects, and
+	# neither key is the path moc was handed.
+	built = {u.rel for u in every.values()}
 	moc_jobs = [j for j in (moc.get("jobs") or [])
-	            if (j["src"] if j["inline"] else j["out"]) in every]
+	            if (j["src"] if j["inline"] else j["out"]) in built]
 	# Every uic job was triggered by an include that some file makes, so
 	# unlike moc there is nothing to filter -- a header nothing wanted would
 	# never have been generated.
@@ -9347,7 +9428,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t$({P}UIC) $< -o $@")
 			a("")
 	rcc = rcc or {}
-	rcc_jobs = [j for j in (rcc.get("jobs") or []) if j["out"] in every]
+	rcc_jobs = [j for j in (rcc.get("jobs") or []) if j["out"] in built]
 	if rcc_jobs:
 		a("# ---- rcc " + "-" * 54)
 		a("#")
@@ -9407,9 +9488,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# express them.
 	a("# ---- objects " + "-" * 50)
 	a("")
-	for rel in sorted(every):
-		u = every[rel]
-		obj = f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o"
+	for name in sorted(every):
+		u = every[name]
+		rel = u.rel
+		obj = f"$({P}BUILD_DIR)/{name}.o"
 		# CC pairs with CFLAGS, not CCFLAGS. Getting this wrong expands to an
 		# undefined variable, so every compile silently loses its flags and
 		# only a project that actually needs an -I notices.
@@ -9468,7 +9550,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			  f"{_eject_obj(root_unit.rel)}.d {_eject_src(root_unit.rel)}")
 			a("")
 			continue
-		objs = [f"$({P}BUILD_DIR)/{_eject_obj(u.rel)}.o" for u in closures[t].link
+		objs = [f"$({P}BUILD_DIR)/{_obj_of(u)}.o" for u in closures[t].link
 		        if not u.prebuilt and not u.crate]
 		a(f"{P}{ident}_OBJS = \\")
 		for i, o in enumerate(objs):
@@ -9602,7 +9684,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 					a(f"\trm -f $(DESTDIR)$({directory.upper()})/{name}")
 		a("")
 
-	all_objs = sorted({f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in every})
+	all_objs = sorted({f"$({P}BUILD_DIR)/{name}.o" for name in every})
 	# Every file this build creates, named. Not `rm -rf $(BUILD_DIR)`: BUILD_DIR
 	# is an ordinary Make variable and overriding it is expected usage, so
 	# an empty or mistyped one removes something else entirely -- and this
@@ -9628,8 +9710,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		return full.startswith(os.path.join(root, ""))
 
 	a(f"{P}CLEAN = \\")
-	leavings = ([f"$({P}BUILD_DIR)/{_eject_obj(rel)}.o" for rel in sorted(every)]
-	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d" for rel in sorted(every)]
+	leavings = ([f"$({P}BUILD_DIR)/{name}.o" for name in sorted(every)]
+	            + [f"$({P}BUILD_DIR)/{name}.d" for name in sorted(every)]
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.a"
 	               for rel in sorted(crate_libs)]
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d"
@@ -9668,7 +9750,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# graph, so a crate goes stale on a member the `mod' scan above")
 		a("# never saw -- which is the half that would have rotted quietly.")
 		a(f"{P}CRATE_DEPS = \\")
-		names = [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d"
+		names = [f"$({P}BUILD_DIR)/{name}.d"
 		         for rel in sorted(crate_deps)]
 		for n, o in enumerate(names):
 			a(f"\t{o}" + (" \\" if n < len(names) - 1 else ""))
@@ -9833,7 +9915,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				if not u.crate_exe:
 					ninja_crates[u.rel] = u
 				continue
-			every[u.rel] = u
+			every[_obj_of(u)] = u
+	# Asked of the source paths rather than of `every', which is keyed by
+	# object name: a variant means one source can produce two objects, and
+	# neither key is the path moc or rcc was handed.
+	built = {u.rel for u in every.values()}
 
 	situ = situ or {}
 	situ_jobs = situ.get("jobs") or []
@@ -9873,7 +9959,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("")
 
 	rcc = rcc or {}
-	rcc_jobs = [j for j in (rcc.get("jobs") or []) if j["out"] in every]
+	rcc_jobs = [j for j in (rcc.get("jobs") or []) if j["out"] in built]
 	if rcc_jobs:
 		a("# Selected by what the source opens, not by a list.")
 		a(f"rcc = {rcc['exe']}")
@@ -9889,7 +9975,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 
 	moc = moc or {}
 	moc_jobs = [j for j in (moc.get("jobs") or [])
-	            if (j["src"] if j["inline"] else j["out"]) in every]
+	            if (j["src"] if j["inline"] else j["out"]) in built]
 	if moc_jobs:
 		a("# Selected by Q_OBJECT in the source, not by a list.")
 		a(f"moc = {moc['exe']}")
@@ -9929,10 +10015,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# Order-only: a generated header must exist before anything compiles,
 	# but the depfiles decide when a change to it forces a rebuild.
 	after = (" || " + " ".join(_ninja(g) for g in gen_outs)) if gen_outs else ""
-	for rel in sorted(every):
-		u = every[rel]
-		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.o: "
-		  f"{u.lang.rule} {_ninja(_eject_src(rel))}{after}")
+	for name in sorted(every):
+		u = every[name]
+		a(f"build $build_dir/{_ninja(name)}.o: "
+		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}{after}")
 		if u.own:
 			a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
 	# One edge per crate, with the members as implicit inputs. The depfile
@@ -9962,7 +10048,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			  f"{_ninja(_eject_src(root_unit.rel))}{mods}")
 			a(f"  dep = {dep}")
 			continue
-		objs = " ".join(f"$build_dir/{_ninja(_eject_obj(u.rel))}.o"
+		objs = " ".join(f"$build_dir/{_ninja(_obj_of(u))}.o"
 		                for u in closures[t].link
 		                if not u.prebuilt and not u.crate)
 		# A prebuilt .o is an ordinary input, beside the objects fmake

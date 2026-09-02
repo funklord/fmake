@@ -192,7 +192,8 @@ that had been green about nothing for five commits ·
 [139. The build directory, and the authority that was already in the tree](#139-the-build-directory-and-the-authority-that-was-already-in-the-tree) ·
 [140. anti-avx builds, and two claims in §123 that do not reproduce](#140-anti-avx-builds-and-two-claims-in-123-that-do-not-reproduce) ·
 [141. The half of a schema that was written and then deleted](#141-the-half-of-a-schema-that-was-written-and-then-deleted) ·
-[142. Two more from the same session, one of them fixed](#142-two-more-from-the-same-session-one-of-them-fixed)
+[142. Two more from the same session, one of them fixed](#142-two-more-from-the-same-session-one-of-them-fixed) ·
+[143. One source, two programs, and the object list keyed on a path](#143-one-source-two-programs-and-the-object-list-keyed-on-a-path)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11361,11 +11362,13 @@ gen-derived`. **That is fixed in §141**, which argues the line falls in a
 different place than this entry supposed: `gen-derived` emits the schema's
 own code and belongs here, while `gen-checks`, `gen-fuzz` and `gen-tests`
 emit programs that test the schema and are `[generate]`'s to declare. All
-twelve programs now build and run. What remains is that situ compiles every
-test twice, once with `-DSITU_CHECKED`, because half of what that suite
-proves is that the checked assertions compile out -- two targets over one
-source, which fmake still has no way to say. That was the only one of the
-three that was ever a capability gap.
+twelve programs now build and run. The last of the three -- situ compiling
+every test twice, once with `-DSITU_CHECKED`, because half of what that
+suite proves is that the checked assertions compile out -- was the only one
+that was ever a capability gap rather than a stanza nobody had written, and
+**§143 closes it**: `[target.*] defines` compiles a target's root
+translation unit with flags of its own, and situ's suite now builds and runs
+23 programs from eleven added stanzas.
 
 ### The message that points at libraries for a symbol the tree owns
 
@@ -11769,3 +11772,88 @@ is not being made for it.
 Not fixed here: it is a third thing, arriving from a sibling while two others
 were being closed, and it belongs in a pass that can measure the change
 against the trees that raise the advisory legitimately.
+
+## 143. One source, two programs, and the object list keyed on a path
+
+The last of situ's three, and the only one of them that was ever a capability
+gap rather than a stanza nobody had written. §138 recorded it as *two targets
+over one source, which fmake still has no way to say.*
+
+**What situ needs.** Every test compiled twice, once with `-DSITU_CHECKED`,
+because half of what that suite proves is that the checked assertions compile
+out. `test_bmp` and `test_bmp_checked` are the same file with one `-D` between
+them.
+
+### Why this is not just another key in the schema
+
+fmake compiles each translation unit once and closes over the symbols. **Per-
+target flags break that invariant at its centre**: a TU's symbols could differ
+per target, so in general the whole tree would have to be compiled once per
+target that wanted a flag of its own -- which is not a build system, it is
+several.
+
+**What makes it tractable is that the case does not ask for that.** situ's own
+Makefile compiles only the test file twice:
+
+    $(BUILD_DIR)/%_checked: %.c $(RUNTIME_LIB) $(GEN_OBJS) $$(OBJS_$$*)
+            $(CC) $(CFLAGS) -DSITU_CHECKED ... $< $(OBJS_$*) $(RUNTIME_LIB)
+
+`$(GEN_OBJS)` and `$(RUNTIME_LIB)` are the *same objects* in both. And the
+runtime header says why that is sound, in its own words rather than as
+something inferred here:
+
+    SITU_CHECKED enables bounds and generation checking. Checked and
+    unchecked builds are ABI-compatible: no structure layout below depends
+    on the flag, so a checked caller can link against an unchecked library
+    and vice versa.
+
+So `[target.*] defines` applies to that target's **root translation unit** and
+to nothing else. That is a narrower rule than the obvious one and it is the
+rule the case actually has -- and where it is wrong for some project, where a
+define moves a struct, two builds are two builds and fmake is not the tool for
+saying otherwise. Stated in the README rather than left to be discovered.
+
+### What was already there, and what was not
+
+**Two targets over one source needed no new mechanism at all.** A
+`[target.NAME]` stanza carrying `root` already creates a target for a source
+the discovery pass has claimed under another name -- the loop that reads those
+stanzas skips only names already claimed, and `test_bmp_checked` is not one.
+That half had been sitting there since `root` was added.
+
+What was missing was one object per *unit* rather than one per *path*. A Unit
+now carries a variant tag, which goes into its object and depfile names and
+into the ejected build's, while `rel` stays the real path so every diagnostic
+still names a file somebody can open. The progress line names the target too:
+two `CC t.c` lines say nothing about which is which.
+
+**The variant is compiled with the pool and closed over without it**, and that
+sentence is the whole design. It defines exactly what the plain unit defines,
+so a pool holding both would be §3 refusing to choose between a file and
+itself -- correctly, and about a question nobody asked.
+
+### The failure that would have been silent
+
+`eject_make` and `eject_ninja` both keyed their object tables on the source
+path: `every[u.rel] = u`. One source, two units, and the second overwrites the
+first -- **a valid build file carrying one set of flags, with nothing anywhere
+to say the other had ever been wanted.** Both backends now key on the object
+name, which is what a variant makes distinct.
+
+That re-keying broke something else in passing, and it is the more useful half.
+The moc and rcc job filters ask `if j["out"] in every` -- a question about a
+*source path*, asked of a table that had been keyed by source path and now is
+not. The tests caught it; the point is that nothing about the change looked
+like it touched Qt. **A dictionary whose keys change meaning is a rename that
+the type system cannot see**, and every membership test against it is a caller
+that has to be found by reading rather than by failing to compile.
+
+### Measured
+
+`fmake test` on situ, with eleven `_checked` stanzas added to `fmake.toml`
+and nothing else changed: **23 programs built, 23 run, 23 passed.** The
+progress log carries exactly **eleven** extra compile lines -- one per checked
+test, each naming the target that asked for it -- which is the measurement
+that says the shared objects stayed shared. The suite grew by eleven compiles
+rather than by a second build, which is what situ's Makefile arranges by hand
+and what fmake now does from three lines a stanza.

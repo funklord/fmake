@@ -392,6 +392,10 @@ headers = ["greet.h"]
 [situ]                          # what to pass situc, for a tree of .situ
 flags = ["--layer", "converse"] # schemas; which situc is [toolchain]
 
+[target.test_bmp_checked]       # one source, two programs
+root    = "test/test_bmp.c"
+defines = ["SITU_CHECKED"]      # applied to the root TU, not the closure
+
 [install]
 prefix = "/usr/local"
 
@@ -414,6 +418,16 @@ answer for the host while compiling for the target.
 Declare `arch` whenever the compiler targets by flag. Without it the build
 is refused — from fmake's side, a compiler cross-compiling by flag looks
 exactly like the wrong compiler.
+
+**`defines` on a target compiles its root twice.** A second `[target.*]`
+naming an existing source with `root` is a second program from that file,
+and `defines` is what makes it a different one — the shape a test suite
+needs when half of what it proves is that its assertions compile out. The
+defines reach the **root translation unit only**; everything the closure
+brings in is the same object both programs link, which is what makes the
+second program cost one compile rather than a second build. Where that is
+wrong for a project — where a define changes a layout — the two builds are
+two builds, and fmake is not the tool for saying so.
 
 **A `version` also versions a shared library.** `libgreet.so.1.2.3` is
 installed, with `libgreet.so.1` and `libgreet.so` pointing at it, and the
