@@ -13840,6 +13840,260 @@ fn main() { println!("{}", shared()); }
 
 
 # ---------------------------------------------------------------------------
+# situ schemas
+#
+# The compiler is a stand-in rather than the real situc, and deliberately.
+# What is being checked here is fmake's half -- which schemas it decides to
+# compile, what it does with the files that come back, and what it refuses --
+# and a suite that needed situ installed would check none of that on a machine
+# that has not got it. The stand-in reproduces the two things about situc that
+# fmake actually depends on: it reports each file it wrote, and how many files
+# there are depends on the layer.
+# ---------------------------------------------------------------------------
+
+FAKE_SITUC = """#!/usr/bin/env python3
+import os, sys
+argv = sys.argv[1:]
+assert argv[0] == "build", argv
+schema = argv[1]
+out = argv[argv.index("--out") + 1]
+layer = argv[argv.index("--layer") + 1] if "--layer" in argv else "view"
+name = os.path.basename(schema).rsplit(".", 1)[0]
+os.makedirs(out, exist_ok=True)
+
+def wrote(rel, text):
+    path = os.path.join(out, rel)
+    with open(path, "w") as fh:
+        fh.write(text)
+    sys.%(stream)s.write("situc: wrote " + path + "\\n")
+
+wrote(name + ".h",
+      "int " + name + "_check(void);\\nint common_check(void);\\n")
+wrote(name + ".c",
+      '#include "' + name + '.h"\\n'
+      "int " + name + "_check(void) { return " + str(len(layer)) + "; }\\n"
+      "int common_check(void) { return 1; }\\n")
+if layer == "converse":
+    wrote(name + "_frame.h", "/* the rung above */\\n")
+"""
+
+
+def _situc(t, stream="stderr"):
+	"""Install the stand-in compiler at bin/situc, as situ ships one."""
+	path = t.write("bin/situc", FAKE_SITUC % {"stream": stream})
+	os.chmod(path, 0o755)
+	return path
+
+
+def _situ_tree(t, **kw):
+	_situc(t, **kw)
+	t.write("schema/msg.situ", "// a schema the stand-in does not read\n")
+	t.write("main.c", """
+#include "msg.h"
+#include <stdio.h>
+int main(void){ printf("%d\\n", msg_check()); return 0; }
+""")
+
+
+@case
+def a_schema_is_compiled_because_a_source_includes_its_header(t):
+	"""The discovery, end to end: no configuration, and the program runs.
+
+    fmake knows nothing about this tree beyond what is in it -- a .situ file
+    and a main.c that includes the header its name implies. The compiler is
+    found in the tree, at the path situ installs one to."""
+	_situ_tree(t)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("SITU schema/msg.situ" in r.stdout,
+	      f"the schema was not compiled: {r.stdout}")
+	check(t.run(os.path.basename(t.dir)).stdout == "4\n",
+	      "the generated source was not compiled into the program")
+	# In the state directory, not beside the schema: it is build output.
+	check(os.path.exists(os.path.join(t.dir, ".fmake/situ/msg.c")),
+	      "the generated source is not under the state directory")
+
+
+@case
+def a_schema_is_not_recompiled_until_it_changes(t):
+	"""Hash-driven like everything else here, and keyed on the flags too."""
+	_situ_tree(t)
+	check(t.fmake().returncode == 0, "initial build failed")
+	r = t.fmake()
+	check("SITU" not in r.stdout, f"nothing changed: {r.stdout}")
+
+	os.utime(os.path.join(t.dir, "schema/msg.situ"), None)
+	check("SITU" not in t.fmake().stdout, "touch must not recompile")
+
+	t.write("schema/msg.situ", "// edited\n")
+	check("SITU" in t.fmake().stdout, "a real change must recompile")
+
+	# The layer decides what comes out, so it is part of the key. Without
+	# it a tree that adds `[situ] flags` keeps the previous rung's files
+	# and builds against them, which is the staleness bug that cannot be
+	# seen from the build log.
+	t.write("fmake.toml", '[situ]\nflags = ["--layer", "converse"]\n')
+	r = t.fmake()
+	check("SITU" in r.stdout, f"changing the flags must recompile: {r.stdout}")
+	check(os.path.exists(os.path.join(t.dir, ".fmake/situ/msg_frame.h")),
+	      "the rung's extra header was not produced")
+	check(t.run(os.path.basename(t.dir)).stdout == "8\n",
+	      "the program was not rebuilt against the new rung")
+
+	# And back: what the previous flags produced is not left behind to
+	# answer an #include nobody meant.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	check(t.fmake().returncode == 0, "reverting the flags failed")
+	check(not os.path.exists(os.path.join(t.dir, ".fmake/situ/msg_frame.h")),
+	      "a file the previous flags produced was left behind")
+
+
+@case
+def a_schema_nothing_includes_is_left_alone(t):
+	"""A tree of schemas is a library a program takes two from.
+
+    Compiling all of them would report errors about formats nobody here
+    parses, and link code nothing calls. Said out loud anyway, because the
+    shape it hides is a test meant to exercise a format that includes the
+    wrong header and passes."""
+	_situ_tree(t)
+	t.write("schema/unused.situ", "// nothing includes unused.h\n")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(not os.path.exists(os.path.join(t.dir, ".fmake/situ/unused.c")),
+	      "a schema nothing includes was compiled anyway")
+	out = r.stdout + r.stderr
+	check("unused.situ not compiled" in out and 'unused.h' in out,
+	      f"nothing said which schema was skipped or why: {out}")
+
+
+@case
+def a_schema_source_belongs_to_the_program_that_included_it(t):
+	"""Two schemas defining one symbol is ordinary, not an ambiguity.
+
+    Every generated file this tree has declares `common_check`, which is
+    what happens when two formats share a construct -- situ's own suite has
+    two schemas declaring a `header` and keeps a hand-written object list
+    per test to keep them apart. That list is the thing fmake exists to not
+    need: .fmake/situ/beta.c was generated *because* prog_b included
+    beta.h, so it is not a candidate for prog_a at all, and there is no
+    choice for section 3 to refuse."""
+	_situc(t)
+	t.write("schema/alpha.situ", "// alpha\n")
+	t.write("schema/beta.situ", "// beta\n")
+	t.write("prog_a.c", """
+#include "alpha.h"
+#include <stdio.h>
+int main(void){ printf("%d\\n", alpha_check() + common_check()); return 0; }
+""")
+	t.write("prog_b.c", """
+#include "beta.h"
+#include <stdio.h>
+int main(void){ printf("%d\\n", beta_check() + common_check()); return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("more than one file" not in (r.stdout + r.stderr),
+	      f"the schemas were treated as competing definitions: {r.stdout}")
+	check(t.run("prog_a").stdout == "5\n", "prog_a linked the wrong schema")
+	check(t.run("prog_b").stdout == "5\n", "prog_b linked the wrong schema")
+
+
+@case
+def two_schemas_of_one_name_are_refused(t):
+	"""The output directory is flat, so this is an ambiguity in the C.
+
+    Both would write .fmake/situ/msg.h and whichever ran second would win,
+    silently, leaving a program built against a schema nobody in it names.
+    Mirroring the tree would hide that rather than settle it -- the same
+    argument uic's flat output makes."""
+	_situ_tree(t)
+	t.write("other/msg.situ", "// the same name, elsewhere\n")
+	r = t.fmake()
+	check(r.returncode != 0, "two schemas of one name should stop the build")
+	out = r.stdout + r.stderr
+	check("schema/msg.situ" in out and "other/msg.situ" in out,
+	      f"the refusal does not name both schemas: {out}")
+
+
+@case
+def a_committed_header_is_not_generated_over(t):
+	"""A file in the tree is somebody's, and answers the same #include."""
+	_situ_tree(t)
+	t.write("msg.h", "int msg_check(void);\n")
+	t.write("msg.c", '#include "msg.h"\nint msg_check(void){ return 7; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("SITU" not in r.stdout,
+	      f"the schema was compiled over a header in the tree: {r.stdout}")
+	check(t.run(os.path.basename(t.dir)).stdout == "7\n",
+	      "the tree's own header was not the one used")
+
+
+@case
+def a_missing_situc_names_the_key_that_supplies_one(t):
+	"""Section 31: the remedy has to be one the reader can act on."""
+	if shutil.which("situc"):
+		raise Skip("situ is installed here, so there is one to find")
+	_situ_tree(t)
+	os.unlink(os.path.join(t.dir, "bin/situc"))
+	r = t.fmake()
+	check(r.returncode != 0, "a schema with no compiler should stop the build")
+	out = r.stdout + r.stderr
+	check("[toolchain] situc" in out,
+	      f"the message does not name the key that supplies one: {out}")
+	check("msg.h" in out and "schema/msg.situ" in out,
+	      f"the message names neither the include nor the schema: {out}")
+
+
+@case
+def a_schema_compiler_may_report_on_either_stream(t):
+	"""Which stream carries the `wrote' lines is situc's choice.
+
+    The real one puts them on stderr, beside a schema's warnings. Reading
+    only the other stream leaves fmake believing the run produced nothing,
+    which it reports as a compiler that exited 0 and wrote no header --
+    true, unhelpful, and wrong."""
+	_situ_tree(t, stream="stdout")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "4\n",
+	      "the generated source was not compiled into the program")
+
+
+@case
+def the_ejected_builds_compile_the_schema_themselves(t):
+	"""Both backends, from a clean tree, with no fmake to fall back on.
+
+    The generated header is #included rather than compiled, so nothing
+    declares a dependency on it until a depfile exists -- and the first
+    build of a clean tree is exactly the build that has no depfiles. Make
+    gets it from $(GENHDRS); ninja needs the same thing said with `||'."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	_situ_tree(t)
+	name = os.path.basename(t.dir)
+
+	t.write("Makefile", t.fmake("--eject").stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	if os.path.exists(os.path.join(t.dir, name)):
+		os.unlink(os.path.join(t.dir, name))
+	r = subprocess.run(["make", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"the ejected make build failed: {r.stderr}")
+	check(t.run(name).stdout == "4\n", "the ejected build linked no schema")
+
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("build.ninja", t.fmake("--eject", "ninja").stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+	os.unlink(os.path.join(t.dir, name))
+	r = subprocess.run(["ninja", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"the ejected ninja build failed: {r.stdout}")
+	check(t.run(name).stdout == "4\n", "the ejected build linked no schema")
+
+
+# ---------------------------------------------------------------------------
 
 def run_case(c):
 	"""Run one case in its own tree. Returns (status, detail)."""

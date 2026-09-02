@@ -379,6 +379,9 @@ kind    = "static"
 version = "1.2.3"               # declaring one asks for a greet.pc
 headers = ["greet.h"]
 
+[situ]                          # what to pass situc, for a tree of .situ
+flags = ["--layer", "converse"] # schemas; which situc is [toolchain]
+
 [install]
 prefix = "/usr/local"
 
@@ -583,6 +586,56 @@ is compiled once and linked into every program reaching it. The limit is a
 tree whose sibling programs reuse a class name — three of those examples each
 define a `Window`, which is genuinely ambiguous, and needs
 `[target.*] sources`.
+
+---
+
+## situ schemas
+
+A `.situ` file describes a wire format once, and situ's `situc` turns it into
+C. fmake treats that the way it treats `Q_OBJECT`: a schema, and a source
+including the header its name implies, is the whole declaration.
+
+```sh
+$ ls **/*.situ **/*.c
+example/bmp/bmp.situ  runtime/c/situ.c  test/test_bmp.c
+$ fmake test
+SITU example/bmp/bmp.situ
+[1/3] CC  .fmake/situ/bmp.c
+[2/3] CC  runtime/c/situ.c
+[3/3] CC  test/test_bmp.c
+LD  test_bmp
+* built test_bmp
+
+RUN test_bmp
+* 1 test passed
+```
+
+**Which schemas, decided by what includes their header.** A tree of schemas
+is a library a program takes two from, so compiling all of them would report
+errors about formats nobody here parses. situ's own tree carries 37 and its C
+suite reaches 11; the rest are named as skipped under `-v` and left alone.
+
+**Two schemas declaring the same construct are not an ambiguity.**
+`.fmake/situ/bmp.c` exists *because* something included `bmp.h`, so it is
+never a candidate for a program that did not — which is what makes the
+hand-written per-test object list unnecessary.
+
+**fmake knows the shape, not the flags.** `situc build` has options that
+change which files come out, and `--layer` is the one that matters: fmake
+passes what `[situ] flags` says and never invents a rung. `[toolchain]
+situc` names the compiler; without it, one on `$PATH` is used, and failing
+that `bin/situc` in the tree being built — which is how situ's own tree,
+holding both the schemas and the compiler, builds before anything is
+installed.
+
+**Where it stops.** One command is understood, `situc build`. A schema whose
+tests need a second artifact family — `gen-derived`, `gen-checks`,
+`gen-fuzz`, `gen-tests` — needs a `[generate]` stanza for it, and a suite
+that compiles each test twice (checked and released) is two targets over one
+source, which fmake has no way to say. On situ's own tree `fmake test`
+finds twelve programs and builds and runs eleven of them with no
+configuration at all, resolving cmocka from the symbols; the twelfth,
+`test_kernels`, is the one wanting `gen-derived`.
 
 ---
 

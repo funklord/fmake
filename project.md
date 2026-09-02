@@ -185,7 +185,10 @@ that had been green about nothing for five commits ·
 [132. Two weeks of red CI, and a path written down twice](#132-two-weeks-of-red-ci-and-a-path-written-down-twice) ·
 [133. A sixteen-tree sweep, most of which measured its own scratch directory](#133-a-sixteen-tree-sweep-most-of-which-measured-its-own-scratch-directory) ·
 [134. `$file()`, and the version written a third time](#134-file-and-the-version-written-a-third-time) ·
-[135. The reference that reached a compiler as text](#135-the-reference-that-reached-a-compiler-as-text)
+[135. The reference that reached a compiler as text](#135-the-reference-that-reached-a-compiler-as-text) ·
+[136. situ's report: a deliverable nothing in the tree links](#136-situs-report-a-deliverable-nothing-in-the-tree-links) ·
+[137. netcfgd again, and sixteen targets called `lib`](#137-netcfgd-again-and-sixteen-targets-called-lib) ·
+[138. fmake understands `.situ`, and the object list nobody has to write](#138-fmake-understands-situ-and-the-object-list-nobody-has-to-write)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9729,6 +9732,7 @@ against F16C and pass while checking nothing. This is a tree where a default
 flag set is not a safe guess, and it is the clearest argument met so far that
 `cflags` is a statement about correctness rather than a preference.
 
+
 ### The generator works; the file it writes does not get built
 
 The lowering test is checked against cases emitted by the rewriter itself, so
@@ -11154,11 +11158,12 @@ inputs producing thirty outputs, plus cmocka found as a package, plus each
 test compiled twice, once checked and once released, because half of what
 that suite proves is that the checked assertions compile out.
 
-**The question, which is yours:** whether `[generate]` should be able to
-express a rule over a set rather than a stanza per output. situ did not
-attempt it and wrote `make test` into its README instead, which is the
-honest answer for that tree today and is not a workaround anybody should
-copy if the answer here is yes.
+**The question this raised** -- whether `[generate]` should express a rule
+over a set rather than a stanza per output -- **was answered by not needing
+one.** §138 has fmake understanding `.situ` outright, the way it understands
+`Q_OBJECT`, and situ's suite then builds from no configuration whatever. The
+`make test` in situ's README was the honest answer for that tree on the day,
+and is not the answer any more.
 
 ## 137. netcfgd again, and sixteen targets called `lib`
 
@@ -11215,3 +11220,172 @@ build's, and it was 0 while the log was empty and no artifact existed. The
 build genuinely did succeed later. Nothing was published on the strength of
 the wrong 0, but only because the missing artifact was checked -- the exit
 code alone would have been believed.
+
+## 138. fmake understands `.situ`, and the object list nobody has to write
+
+§136 put a question to the copyright holder: whether `[generate]` should be
+able to express a rule over a set, since situ's suite wants one rule applied
+to thirty-odd schemas. **The answer came back as a different question --
+should fmake not understand situ and its files? -- and it is the better
+one.** With `.situ` understood, situ needs no fan-out syntax, no `[generate]`
+stanza and no configuration at all.
+
+### Where the line is, since this is the second tool fmake has learned
+
+The defensible version of fmake's existing line is that moc's input is a
+property of a header's *contents*, so no declarative rule can express it.
+But `.ui` and `.qrc` are plain extension matches and fmake knows those too,
+so the line was already crossed twice and the real reason is the one fmake
+is built on: **a Qt tree has dozens of them, and configuring dozens is what
+fmake exists to avoid.** situ's suite has thirty-seven schemas. It is on
+that side of the line.
+
+**What it costs is worth stating rather than discovering.** fmake now
+encodes situc's command. moc's has been stable for twenty-five years;
+`situc build` grew `--owned`, `--materialize` and `--driver` in the month
+this was written, and `--layer` changes *which files come out*. So the
+scoping matters: **fmake knows the shape and not the flags.** One key,
+`[situ] flags`, carries whatever situc is to be told, and `[toolchain]
+situc` names the program beside `moc`, `uic` and `rcc`. fmake never invents
+a rung, and a new situc option needs no release here.
+
+### What is discovered, and what is left alone
+
+A `.situ` schema is compiled when some source includes the header its name
+implies, and not otherwise -- rcc's rule, for rcc's reason. A tree of
+schemas is a library a program takes two from; compiling all thirty-seven
+would report errors about formats nobody in the tree parses. The skipped
+ones are named under `-v`, because the shape that hides is a test meant to
+exercise a format that includes the wrong header and passes.
+
+Three refusals, each for a case that would otherwise be silent:
+
+- **Two schemas of one name.** The output directory is flat, for UI_DIR's
+  reason -- the generated header is included unqualified, so two `bmp.situ`
+  are ambiguous in the C rather than merely awkward on disk. Both would
+  write `.fmake/situ/bmp.h` and the second would win without a word.
+- **A header the tree already carries.** That file is somebody's, and
+  generating over it would replace a source with a build artifact while
+  both answer the same `#include`.
+- **A situc that exits 0 without writing the header something asked for**,
+  which otherwise becomes a missing include much later, naming neither the
+  schema nor the tool.
+
+**What situc wrote is read back from situc rather than predicted.** The set
+depends on the layer -- `view` gives `<name>.h` and `<name>.c`, `converse`
+adds `<name>_edit.h` and `<name>_frame.h` -- so a rule naming the outputs
+would be right for the layer it was written under and wrong for the rest.
+Both streams are read: the real situc puts its `wrote` lines on stderr
+beside a schema's warnings, and which stream carries them is situc's choice
+rather than a promise. That was found by writing the fixture to stdout,
+where it worked, and then running the real thing, where it did not.
+
+### The finding worth carrying past situ: provenance, not symbols
+
+situ's own `test/generated/Makefile` keeps a hand-written object list per
+test, with the reason beside it: *"Linking all of them into every binary
+would collide: two schemas may both declare a `Header`, and each generates
+its own accessors for it."* That list is exactly the thing fmake exists not
+to need, and the first run reproduced the collision precisely --
+
+    symbol 'situ_header_validate' is defined by more than one file:
+        .fmake/situ/header.c
+        .fmake/situ/message.c
+        .fmake/situ/packet.c
+
+-- together with fmake's standard offer to write out the `sources` stanza,
+which is that same hand-written list under another name.
+
+**§3 was right to refuse and the refusal was about the wrong question.**
+`.fmake/situ/message.c` exists *because* `test_message.c` included
+`message.h`. `test_header.c` has no relationship to it whatever: it is not a
+second opinion the include graph happens to miss, it is a file generated on
+behalf of another program. So a schema's generated source is a candidate
+only for the programs whose include graph reaches the header it was
+generated for -- **which is ownership by provenance, and is `companions()`'
+argument for a meta-object, one generator further along.** Nothing here
+consults the include graph to *choose* between two providers; it establishes
+that only one of them was ever a candidate.
+
+That distinction is the reusable part. Where two files define one symbol and
+one of them was generated on some other file's behalf, the ambiguity is an
+artifact of pooling everything and not a question anybody has to answer.
+
+### What the demo tree found that situ's own tree could not
+
+A minimal tree was built for the README -- one schema, the runtime, one test
+-- and it failed where situ's did not:
+
+    * situ.h: No such file or directory
+      it is in this tree, at runtime/c/situ.h
+      [project] include-dirs = ['runtime/c'] would find it
+
+Correct advice, and a build that should not have needed it. The generated
+`bmp.h` includes `situ.h`, and include directories accumulate as includes
+resolve -- so whether the generated code compiles depended on whether some
+*unrelated* file happened to include the runtime header from a different
+directory. situ's tree has a walker that does; the demo did not. **A
+generated file is in nobody's layout, so its own includes have to be
+resolved rather than left to whatever walked first.** One line, before the
+include path is fixed.
+
+Recorded because the general shape is untested here: the same is true of a
+`[generate]` output's includes, and that has not been measured. It is not
+fixed on the strength of an argument.
+
+### Measured, on situ's tree, with no configuration at all
+
+`fmake test` finds twelve programs and builds and runs **eleven** of them.
+cmocka resolves from the symbols with nothing said about it, which was the
+second of the three things §136 listed as missing. Nine cases in `selftest`
+cover fmake's half with a stand-in compiler, so the suite checks what fmake
+decides on a machine with no situ installed; both ejected build files
+compile a schema themselves from a clean tree, which needed ninja to be
+told with `||` what make already knew from `$(GENHDRS)`.
+
+**Where it genuinely stops, and this is honest rather than deferred.** One
+command is understood, `situc build`. `test_kernels` is the twelfth program
+and wants `situ_reed_solomon_255_223_encode`, which comes from `situc
+gen-derived` -- a second artifact family over the same schema, along with
+`gen-checks`, `gen-fuzz` and `gen-tests`. Those are `[generate]`'s to
+declare. And situ compiles every test twice, once with `-DSITU_CHECKED`,
+because half of what that suite proves is that the checked assertions
+compile out: two targets over one source, which fmake still has no way to
+say. That last one is the only item of the three that is a capability gap
+rather than a stanza somebody has not written.
+
+### The message that points at libraries for a symbol the tree owns
+
+Run independently from the `claude-guidelines` session against the same
+working tree, which reached the same eleven programs -- **one witness for
+the code and two for the procedure**, since running one implementation twice
+is not corroboration of it. What that run added is the shape of the
+remaining failure rather than its cause:
+
+    * test_kernels did not link
+      resolved to: -lcmocka
+      no x86_64/64le library exports: situ_base16_decode, situ_base16_encode,
+      situ_base16_lower_encode ...
+
+Those symbols are situ's own. The advice offers `--ldflags` and missing
+libraries for a thing no package has ever defined, which is §31's shape
+again -- a remedy that sends the reader somewhere the answer is not.
+
+**Not fixed, and the reason is that the honest version needs a signal that
+is not there.** To say something better fmake would have to tell "a symbol
+nothing defines because a generator has not been declared" from "a symbol a
+library defines", and the only thing available is that the names share a
+prefix with a schema it just compiled. That is a guess, and §125's rule is
+that a case which has turned up once is not yet a case. Recorded so that a
+second instance in another tree moves it.
+
+The same run proposed a cause -- `test/generated/codec_impl.c not compiled:
+nothing reaches it` -- and it is worth writing down that it was wrong,
+because the way it was wrong is ordinary. That line is the *first* pass;
+widening compiles the file a few lines further down. And the file implements
+the tier-1 codecs `edges.situ` binds, which is why situ's Makefile lists it
+under `OBJS_test_spans` and not under test_kernels. `situc gen-derived
+std/kernels.situ` writes `kernels_derived.c`, and that is what defines both
+`situ_base16_decode` and `situ_reed_solomon_255_223_encode`. **A "not
+compiled" line early in a log is not a claim about the end of it**, and a
+build log is one document read out of order.

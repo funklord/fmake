@@ -803,12 +803,19 @@ CONF_SCHEMA = {
         "command": S, "inputs": L, "outputs": L, "depends": L,
         "uses": S, "description": S, "depfile": S,
     }},
+	# What to pass situc, and deliberately not which situc: the program is a
+	# tool and belongs in [toolchain] beside moc, while the flags are a fact
+	# about the schemas in this tree. One key rather than a key per option,
+	# because situc's options are situ's to grow and fmake should not need a
+	# release of its own to keep up with them.
+    "situ": {"flags": L},
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
     },
     "toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
-        "moc": S, "uic": S, "rcc": S, "rustc": S, "rust-edition": S,
+        "moc": S, "uic": S, "rcc": S, "situc": S,
+        "rustc": S, "rust-edition": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
     },
 	# The machine doing the building, as opposed to the one being built for.
@@ -2610,6 +2617,173 @@ def run_uic(root, jobs, uic, cache, dry_run=False):
 		produced.append(out)
 	return produced
 
+
+# ---------------------------------------------------------------------------
+# situ schemas
+# ---------------------------------------------------------------------------
+#
+# A .situ file describes a wire format once, and situc turns it into C that a
+# program includes by name. fmake knows about it for the same reason it knows
+# about moc: a tree carrying thirty-seven schemas cannot be built from its
+# sources alone, and a build system whose premise is that no build file is
+# needed cannot answer that with thirty-seven stanzas in a build file.
+#
+# Where the line is drawn, because this is the second tool fmake has learned
+# and there will be pressure for a third. fmake knows the *shape* -- a schema
+# beside a source that includes the header it emits -- and not the flags.
+# `situc build` grew four options in the month this was written, and --layer
+# alone changes which files come out, so what to pass it is [situ] flags and
+# fmake never invents a rung.
+
+# Flat, not mirrored like moc's. The generated header is included unqualified
+# -- `#include "bmp.h"` -- so two bmp.situ in one tree are ambiguous in the C
+# rather than merely awkward on disk. Mirroring the tree would hide that; this
+# reports it, which is the same argument UI_DIR makes.
+SITU_DIR = os.path.join(STATE_DIR, "situ")
+SITU_EXT = ".situ"
+
+# What situc prints for each file it wrote. Read rather than predicted: the
+# set depends on the layer -- `view` emits <name>.h and <name>.c, `converse`
+# adds <name>_edit.h and <name>_frame.h beside them -- so a rule naming the
+# outputs would be right for the one layer it was written under and wrong for
+# the rest. Same bargain as a depfile: the tool that did the writing is the
+# only thing that knows what it wrote.
+RE_SITU_WROTE = re.compile(r"^situc: wrote (.+)$")
+
+
+def situ_plan(root, hdrs, scans):
+	"""Which .situ schemas this tree's sources actually ask for.
+
+    Selected by what is included rather than by what is present, which is
+    rcc's rule and for rcc's reason: a tree of schemas is a library from
+    which a program takes two, and generating all of them compiles code
+    nothing calls and reports errors about formats nobody here parses.
+
+    A schema whose header the tree already carries is left alone. That file
+    is somebody's -- committed, readable, possibly edited -- and generating
+    over the top of it would replace a source with a build artifact while
+    both answer the same #include.
+    """
+	wanted = {}
+	for rel in sorted(scans):
+		for _kind, name, _line in scans[rel]["incs"]:
+			wanted.setdefault(os.path.basename(name), []).append(rel)
+	have = {os.path.basename(h) for h in hdrs}
+
+	jobs, unused, seen = [], [], {}
+	for path in sorted(glob.glob(os.path.join(root, "**", "*" + SITU_EXT),
+	                             recursive=True)):
+		rel = os.path.relpath(path, root)
+		name = os.path.basename(rel)[:-len(SITU_EXT)]
+		header = name + ".h"
+		if header not in wanted:
+			unused.append(rel)
+			continue
+		if header in have:
+			vinfo(f"{rel}: this tree carries {header} already, so the "
+			      f"schema is not compiled over it")
+			continue
+		# Both would write .fmake/situ/<name>.h, and whichever ran second
+		# would win silently -- a program built against a schema nobody in
+		# it names. The output directory is flat on purpose (see SITU_DIR),
+		# so this is the ambiguity that layout exists to surface.
+		if name in seen:
+			die(f"{seen[name]} and {rel} both generate {header}, and the "
+			    f"source that includes it cannot say which it meant.\n"
+			    f"Rename one of the schemas.")
+		seen[name] = rel
+		jobs.append({"src": rel, "name": name, "header": header,
+		             "includers": sorted(set(wanted[header]))})
+	return jobs, unused
+
+
+def find_situc(configured, root):
+	"""The situc to run: the one named, the one installed, or this tree's.
+
+    The third case is not a courtesy. situ's own tree holds both the schemas
+    and the compiler that reads them, and it is the tree most likely to be
+    built before anything has been installed -- so a compiler sitting at
+    bin/situc is found there rather than reported missing.
+    """
+	if configured:
+		return configured
+	found = shutil.which("situc")
+	if found:
+		return found
+	here = os.path.join(root, "bin", "situc")
+	if os.path.isfile(here) and os.access(here, os.X_OK):
+		return here
+	return None
+
+
+def run_situc(root, jobs, situc, flags, cache, dry_run=False):
+	"""Run situc where a schema changed. Returns what it wrote, tree-relative.
+
+    Keyed on the schema's contents and on the flags, like everything else
+    generated here, so changing the layer regenerates rather than leaving
+    the previous rung's files in place. What each run produced is remembered
+    with the key, because the file list is the tool's answer rather than a
+    rule's: a cache holding only the key would have to guess the names back
+    to decide whether they are still on disk.
+    """
+	store = cache.data.setdefault("situ", {})
+	produced = []
+	for job in jobs:
+		src = job["src"]
+		key = sha("|".join([situc, " ".join(flags), src,
+		                    cache.hash_of(os.path.join(root, src), src)
+		                    or "?"]))
+		was = store.get(src)
+		if (was and was.get("key") == key
+		        and all(os.path.isfile(os.path.join(root, o))
+		                for o in was["outs"])):
+			job["outs"] = list(was["outs"])
+			produced += was["outs"]
+			continue
+
+		cmd = [situc, "build", src] + list(flags) + ["--out", SITU_DIR]
+		if dry_run:
+			print(" ".join(shlex.quote(c) for c in cmd))
+			continue
+		say(f"{YELLOW('SITU')} {src}")
+		os.makedirs(os.path.join(root, SITU_DIR), exist_ok=True)
+		try:
+			res = subprocess.run(cmd, cwd=root, capture_output=True,
+			                     text=True, errors="replace")
+		except OSError as exc:
+			die(f"could not run situc ({situc}): {exc.strerror or exc}")
+		# Both streams, because which one carries the `wrote' lines is
+		# situc's choice and not a promise to anybody. A schema's warnings
+		# are situc's to phrase and the reader's to act on, so everything
+		# that is not a `wrote' line is passed through unchanged; the
+		# `wrote' lines are fmake's bookkeeping and would only be noise.
+		outs = []
+		kept = []
+		for line in (res.stdout + res.stderr).splitlines():
+			m = RE_SITU_WROTE.match(line.strip())
+			if m:
+				# --out is relative to the tree, but situc echoes back
+				# whatever path it wrote; join handles both spellings.
+				outs.append(os.path.relpath(
+				    os.path.join(root, m.group(1)), root))
+			else:
+				kept.append(line)
+		if "\n".join(kept).strip():
+			PROGRESS.write("\n".join(kept) + "\n")
+		if res.returncode != 0:
+			die(f"situc failed on {src} ({describe_exit(res.returncode)})")
+		# The header is the file that motivated the run: something included
+		# it. A situc that exits 0 having written no header has produced a
+		# build that fails later on a missing include, naming neither the
+		# schema nor the tool.
+		if job["header"] not in {os.path.basename(o) for o in outs}:
+			die(f"situc exited 0 on {src} without writing {job['header']}")
+		outs = sorted(set(outs))
+		store[src] = {"key": key, "outs": outs}
+		job["outs"] = list(outs)
+		produced += outs
+	return sorted(set(produced))
+
 # ---------------------------------------------------------------------------
 # Annotations
 #
@@ -3692,6 +3866,7 @@ class Config:
 		self.moc    = tool.get("moc")
 		self.uic    = tool.get("uic")
 		self.rcc    = tool.get("rcc")
+		self.situc  = tool.get("situc")
 		self.extra_libdirs = list(tool.get("lib-dirs", []))
 		self.ccver  = tool_version(self.cc)
 		self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
@@ -6407,7 +6582,7 @@ def _show_cmd(cmd, root):
 
 def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
             res=None, excluded=None, conf=None, moc=None, uic=None,
-            rcc=None):
+            rcc=None, situ=None):
 	W = 36
 	name = t.filename
 	if t.conf.get("name") or t.conf.get("kind") or t.conf.get("sources"):
@@ -6496,6 +6671,14 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 			           "")
 			mark = why if j["out"] in linked else "not opened by this program"
 			print(f"    {_col(j['src'], W-4)}{DIM(mark)}")
+	# Which source asked for it, because that is the question a reader has
+	# about a schema: fmake compiled thirty of them and this program links
+	# two, and the file that includes the header is the whole reason.
+	if situ and situ.get("jobs"):
+		print(f"  {CYAN('schemas')}")
+		for j in situ["jobs"]:
+			print(f"    {_col(j['src'], W-4)}"
+			      f"{DIM(j['header'] + ' included by ' + j['includers'][0])}")
 
 	if excluded:
 		print(f"  {CYAN('excluded here')}")
@@ -6891,6 +7074,41 @@ def build(args, _bootstrapping=False):
 	# still legitimately reach into such a directory.
 	gen_hdrs = [h for h in hdrs if not exclude_pattern(h)]
 
+	# ---- situ ---------------------------------------------------------
+	# Before uic, rcc and moc, so that what situc writes is an ordinary
+	# source from here on -- seen by the include graph, the closure and the
+	# symbol tables with no special case, which is what the "Generated
+	# sources" section asks of everything generated.
+	situ_jobs, situ_outs, situc_exe = [], [], None
+	situ_jobs, situ_unused = situ_plan(root, hdrs, scans)
+	if situ_jobs:
+		situc_exe = find_situc(cfg.situc, root)
+		if not situc_exe:
+			die(f"{situ_jobs[0]['includers'][0]} includes "
+			    f"{situ_jobs[0]['header']}, which is generated from "
+			    f"{situ_jobs[0]['src']} by situ's schema compiler.\n"
+			    f"Install situ, or name its situc with [toolchain] situc "
+			    f"in {CONF_FILE}.")
+		situ_outs = run_situc(root, situ_jobs, situc_exe,
+		                      conf.data.get("situ", {}).get("flags", []),
+		                      cache, args.dry_run)
+		if not args.dry_run:
+			prune_generated(root, SITU_DIR, situ_outs)
+		for rel in situ_outs:
+			ext = os.path.splitext(rel)[1]
+			if ext in SRC_EXTS and rel not in srcs:
+				srcs.append(rel)
+			elif ext in HDR_EXTS and rel not in hdrs:
+				hdrs.append(rel)
+		srcs.sort()
+		hdrs.sort()
+		scan_all(srcs + hdrs)
+		# Recomputed rather than appended to: the exclude patterns apply to
+		# a generated header exactly as to a written one, and a subtree
+		# somebody excluded should not come back as generated code -- which
+		# is the reason exclude_pattern looks at headers at all.
+		gen_hdrs = [h for h in hdrs if not exclude_pattern(h)]
+
 	# ---- uic ----------------------------------------------------------
 	# Before moc, so a widget header that includes its ui_ header is moc'd
 	# against the real thing rather than against a missing include. Nothing
@@ -6993,6 +7211,12 @@ def build(args, _bootstrapping=False):
 		generated_from[job["out"]] = job["src"]
 	for job in qrc_jobs:
 		generated_from[job["out"]] = job["src"]
+	# A schema produces several files, and which ones is situc's answer
+	# rather than a rule's here, so the mapping is read back off the job the
+	# run recorded them on.
+	for job in situ_jobs:
+		for out in job.get("outs", []):
+			generated_from[out] = job["src"]
 
 	# ---- moc ----------------------------------------------------------
 	# After the generators, so a generated header carrying Q_OBJECT is moc'd
@@ -7541,12 +7765,22 @@ def build(args, _bootstrapping=False):
 	               and r not in crates}
 	candidates |= set(crates)
 
+	# Resolve what the generated schema sources include, before the include
+	# path is fixed. A generated file is in nobody's layout and nothing else
+	# need include what it includes, so leaving this to whatever walked
+	# first makes the build depend on an unrelated file: situ's own tree
+	# resolves the runtime header because its walker includes it from
+	# another directory, and the same tree without a walker does not.
+	if situ_outs:
+		proj.reachable_headers(situ_outs)
+
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in sorted(proj.incdirs | {"."})]
 	# uic output is flat and its includes are unqualified, so one -I covers
 	# it. Added explicitly rather than left to the include graph to discover,
 	# because a header nothing has walked to yet still has to be findable.
-	for d in gen_dirs + ([UI_DIR] if ui_outs else []):
+	for d in (gen_dirs + ([UI_DIR] if ui_outs else [])
+	          + ([SITU_DIR] if situ_outs else [])):
 		flag = "-I" + os.path.join(root, d) if d else "-I" + root
 		if flag not in base_incflags:
 			base_incflags.append(flag)
@@ -7776,6 +8010,37 @@ def build(args, _bootstrapping=False):
 		# and it would now arrive by the one path that no longer names it.
 		other_roots = {t.rel for t in targets if t.kind == "exe"}
 		other_roots |= {rel for _, rel in passed_over} - {t.rel for t in targets}
+		# A schema's generated source belongs to the programs that included
+		# the header it was generated for, and to nothing else. Without
+		# this every schema in the tree is a candidate for every program,
+		# and two of them declaring a `header' struct define the same
+		# accessors -- which section 3 then correctly refuses to choose
+		# between, over a choice that was never there: .fmake/situ/
+		# message.c exists *because* test_message.c included message.h,
+		# and test_header.c has no relationship to it at all. situ's own
+		# Makefile keeps a hand-written object list per test for exactly
+		# this, and that list is the thing fmake is supposed to not need.
+		#
+		# This is provenance rather than the include graph deciding. The
+		# file would not exist had nothing included its header, and which
+		# header that is is fmake's own record of the run rather than an
+		# inference from it -- companions()' argument for a meta-object,
+		# one generator further along.
+		schema_src = {}
+		for job in situ_jobs:
+			for out in job.get("outs", []):
+				if os.path.splitext(out)[1] in SRC_EXTS:
+					schema_src[out] = job["header"]
+
+		def schema_pool(t):
+			"""`pool` without the schemas this target never included."""
+			if not schema_src:
+				return pool
+			reach = {os.path.basename(h)
+			         for h in proj.reachable_headers([t.rel])}
+			return [u for u in pool if u.rel not in schema_src
+			        or schema_src[u.rel] in reach]
+
 		closures = {}
 		for t in wanted:
 			# @sources cannot reach a library, and saying nothing about it
@@ -7827,7 +8092,8 @@ def build(args, _bootstrapping=False):
 				# came out empty but one that was never fmake's to compute.
 				closures[t] = Closure(units[t.rel])
 			elif t.kind == "exe":
-				closures[t] = close_over_symbols(units[t.rel], pool, forced,
+				closures[t] = close_over_symbols(units[t.rel],
+				                                 schema_pool(t), forced,
 				                                 forced_why)
 				# A resource is asserted, not deduced -- nothing references
 				# the object. Which program gets it comes from which of its
@@ -7848,7 +8114,7 @@ def build(args, _bootstrapping=False):
 					extra_why = dict(forced_why)
 					extra_why.update(add)
 					closures[t] = close_over_symbols(
-					    units[t.rel], pool,
+					    units[t.rel], schema_pool(t),
 					    forced + [units[o] for o in sorted(add)], extra_why)
 			else:
 				members = [u for u in pool
@@ -8170,7 +8436,10 @@ def build(args, _bootstrapping=False):
 		                       "jobs": [j for j in moc_jobs
 		                                if j["out"] in done]},
 		                      {"exe": uic_exe, "jobs": ui_jobs},
-		                      {"exe": rcc_exe, "jobs": qrc_jobs}, **extra))
+		                      {"exe": rcc_exe, "jobs": qrc_jobs},
+		                      {"exe": situc_exe, "jobs": situ_jobs,
+		                       "flags": conf.data.get("situ", {})
+		                                    .get("flags", [])}, **extra))
 		cache.save()
 		# Same answer the build path gives, and for a sharper reason. A
 		# build that drops targets leaves no binaries, which the next
@@ -8191,7 +8460,9 @@ def build(args, _bootstrapping=False):
 			        excluded, conf,
 			        {"exe": moc_exe, "jobs": moc_jobs} if moc_exe else None,
 			        {"exe": uic_exe, "jobs": ui_jobs} if uic_exe else None,
-			        {"exe": rcc_exe, "jobs": qrc_jobs} if rcc_exe else None)
+			        {"exe": rcc_exe, "jobs": qrc_jobs} if rcc_exe else None,
+			        {"exe": situc_exe, "jobs": situ_jobs}
+			        if situc_exe else None)
 		cache.save()
 		return 0
 
@@ -8280,6 +8551,16 @@ def build(args, _bootstrapping=False):
 				     f"(Q_INIT_RESOURCE({stem}) says so outright)")
 			if len(qrc_unused) > 5:
 				note(f"... and {len(qrc_unused) - 5} more resource(s)")
+			# A schema nothing includes is not an error -- a tree of
+			# them is a library a program takes two from -- but it is
+			# invisible, and what it hides is a test meant to exercise a
+			# format that includes the wrong header and passes.
+			for rel in situ_unused[:5]:
+				stem = os.path.basename(rel)[:-len(SITU_EXT)]
+				note(f"{rel} not compiled: nothing includes "
+				     f"\"{stem}.h\", which is what it would write")
+			if len(situ_unused) > 5:
+				note(f"... and {len(situ_unused) - 5} more schema(s)")
 		# Outside `if changed', unlike everything above it. Those report
 		# what THIS build decided, and repeating them on a no-op run is
 		# the noise that guard exists to stop. This reports what the
@@ -8488,7 +8769,8 @@ EJECT_BUILD_DIR = "build"
 # directory. A standalone build file should not write into the bookkeeping of
 # the tool it no longer needs, and `fmake --clean` must not be able to delete
 # something an ejected build depends on.
-EJECT_GENDIRS = ((MOC_DIR, "moc"), (UI_DIR, "ui"), (QRC_DIR, "qrc"))
+EJECT_GENDIRS = ((MOC_DIR, "moc"), (UI_DIR, "ui"), (QRC_DIR, "qrc"),
+                 (SITU_DIR, "situ"))
 
 
 def _eject_gen(rel):
@@ -8597,7 +8879,7 @@ def _refuse_whitespace(targets, closures, root):
 
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
-               gen_rules=None, moc=None, uic=None, rcc=None,
+               gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
                fragment=False):
 	"""A standalone Makefile, or a fragment for an existing one to include.
 
@@ -8899,13 +9181,19 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# never have been generated.
 	uic = uic or {}
 	uic_jobs = uic.get("jobs") or []
+	# Nothing to filter here either, and for uic's reason.
+	situ = situ or {}
+	situ_jobs = situ.get("jobs") or []
+	situ_hdrs = [o for j in situ_jobs for o in j.get("outs", [])
+	             if os.path.splitext(o)[1] in HDR_EXTS]
 
 	# The generated files that are #included rather than compiled: the uic
-	# headers and the .moc bodies. They must exist before anything compiles,
-	# and nothing declares that until a depfile does, so they are an
-	# order-only prerequisite of every object.
+	# headers, the .moc bodies and a schema's headers. They must exist
+	# before anything compiles, and nothing declares that until a depfile
+	# does, so they are an order-only prerequisite of every object.
 	genhdrs = ([_eject_src(j["out"]) for j in uic_jobs]
-	           + [_eject_src(j["out"]) for j in moc_jobs if j["inline"]])
+	           + [_eject_src(j["out"]) for j in moc_jobs if j["inline"]]
+	           + [_eject_src(o) for o in situ_hdrs])
 	if genhdrs:
 		a(f"{P}GENHDRS = {' '.join(genhdrs)}")
 		a("")
@@ -8935,6 +9223,31 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"{_eject_src(j['out'])}: {j['src']}")
 			a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}RCC) --name {j['name']} $< -o $@")
+			a("")
+
+	if situ_jobs:
+		a("# ---- situ " + "-" * 53)
+		a("#")
+		a("# Selected by the header each source includes, not by a list.")
+		a("# One schema produces several files; the rest hang off the first,")
+		a("# which is the portable way to say one command wrote them all.")
+		a("")
+		# Relative where it is in the tree: situ's own build finds its
+		# compiler at bin/situc, and an absolute path would tie the
+		# emitted file to the directory it was ejected from.
+		a(f"{P}SITUC     = {_rel(situ['exe'], root)}")
+		a(f"{P}SITUFLAGS = {' '.join(situ.get('flags') or [])}")
+		a("")
+		for j in situ_jobs:
+			outs = [_eject_src(o) for o in j.get("outs", [])]
+			if not outs:
+				continue
+			a(f"{outs[0]}: {j['src']}")
+			a("\t@mkdir -p $(@D)")
+			a(f"\t$({P}SITUC) build $< $({P}SITUFLAGS) --out $(@D)")
+			for extra in outs[1:]:
+				a(f"{extra}: {outs[0]}")
+				a("\t@:")
 			a("")
 
 	if moc_jobs:
@@ -9227,7 +9540,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
-                gen_rules=None, moc=None, uic=None, rcc=None):
+                gen_rules=None, moc=None, uic=None, rcc=None, situ=None):
 	"""A standalone build.ninja."""
 	# Both ejected forms run their tests from the tree root, so $bin(NAME)
 	# resolves to the same relative path the recipe below invokes.
@@ -9385,6 +9698,28 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				continue
 			every[u.rel] = u
 
+	situ = situ or {}
+	situ_jobs = situ.get("jobs") or []
+	if situ_jobs:
+		a("# Selected by the header each source includes, not by a list.")
+		a(f"situc = {_rel(situ['exe'], root)}")
+		a("")
+		a("rule situc")
+		# The output directory is named rather than derived: ninja has no
+		# $(@D), and every schema writes into the one flat directory.
+		flags = " ".join(situ.get("flags") or [])
+		a(f"  command = $situc build $in{' ' + flags if flags else ''} "
+		  f"--out {_ninja(_eject_src(SITU_DIR))}")
+		a("  description = SITU $in")
+		a("")
+		for j in situ_jobs:
+			outs = [_eject_src(o) for o in j.get("outs", [])]
+			if not outs:
+				continue
+			a(f"build {' '.join(_ninja(o) for o in outs)}: "
+			  f"situc {_ninja(j['src'])}")
+		a("")
+
 	uic = uic or {}
 	uic_jobs = uic.get("jobs") or []
 	if uic_jobs:
@@ -9429,10 +9764,16 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		for j in moc_jobs:
 			a(f"build {_ninja(_eject_src(j['out']))}: moc {_ninja(j['src'])}")
 		a("")
-	# The uic headers and .moc bodies are #included rather than compiled, so
-	# nothing declares a dependency on them until a depfile exists.
-	gen_outs = gen_outs + [_eject_src(j["out"]) for j in uic_jobs] \
-	           + [_eject_src(j["out"]) for j in moc_jobs if j["inline"]]
+	# The uic headers, the .moc bodies and a schema's headers are #included
+	# rather than compiled, so nothing declares a dependency on them until a
+	# depfile exists. Left out, the first build of a clean tree compiles a
+	# source whose generated header ninja has not written yet -- which make
+	# gets right only because $(GENHDRS) says the same thing there.
+	gen_outs = (gen_outs + [_eject_src(j["out"]) for j in uic_jobs]
+	            + [_eject_src(j["out"]) for j in moc_jobs if j["inline"]]
+	            + [_eject_src(o) for j in situ_jobs
+	               for o in j.get("outs", [])
+	               if os.path.splitext(o)[1] in HDR_EXTS])
 
 	# The Makefile side drops an out-of-tree generated output from its
 	# clean list, because that rule is fmake's to write. Here it cannot:
