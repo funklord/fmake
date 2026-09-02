@@ -189,7 +189,8 @@ that had been green about nothing for five commits ·
 [136. situ's report: a deliverable nothing in the tree links](#136-situs-report-a-deliverable-nothing-in-the-tree-links) ·
 [137. netcfgd again, and sixteen targets called `lib`](#137-netcfgd-again-and-sixteen-targets-called-lib) ·
 [138. fmake understands `.situ`, and the object list nobody has to write](#138-fmake-understands-situ-and-the-object-list-nobody-has-to-write) ·
-[139. The build directory, and the authority that was already in the tree](#139-the-build-directory-and-the-authority-that-was-already-in-the-tree)
+[139. The build directory, and the authority that was already in the tree](#139-the-build-directory-and-the-authority-that-was-already-in-the-tree) ·
+[140. anti-avx builds, and two claims in §123 that do not reproduce](#140-anti-avx-builds-and-two-claims-in-123-that-do-not-reproduce)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -9733,6 +9734,14 @@ against F16C and pass while checking nothing. This is a tree where a default
 flag set is not a safe guess, and it is the clearest argument met so far that
 `cflags` is a statement about correctness rather than a preference.
 
+**Neither half of that paragraph reproduces, and §140 has the measurement.**
+The compile error came from dropping `-msse4.1` as well, not from the
+`-mno-` pair; and the binary built without `-mno-f16c` carries no F16C
+instruction to compare against itself, because `-msse4.1` already excludes
+it. The flags defend against a raised baseline rather than doing the work
+today. The conclusion above -- that `cflags` here is correctness rather than
+preference -- survives on `-msse4.1` alone; the mechanism offered for it did
+not.
 
 ### The generator works; the file it writes does not get built
 
@@ -11492,3 +11501,137 @@ per `harmonization.md`: a fault in a sibling is that tree's to fix, and this
 is a note for whoever is next in it rather than a change made across the
 fence. The same holds for bbq-predictor, beerssh and fuzzypickles, which
 produce the same directory from the same shared `tool/android.mk`.
+
+## 140. anti-avx builds, and two claims in §123 that do not reproduce
+
+Reported 2026-09-02 from the session working in `claude-guidelines`, with
+the measurement rather than a diagnosis, and folded in here rather than
+written there because this file was open.
+
+**§123's open item is closed.** anti-avx 9aab429, built with the source
+fmake at 97047e4 in a clean copy: `fmake` exit 0, `fmake test` exit 0,
+`* 5 tests passed`. §123 got four of five, and the fifth was blocked on
+`gen/lowering_cases.s` -- the 218K file fmake wrote itself and then dropped,
+leaving the reader a link failure naming 233 `case_N` symbols under *"name
+the missing libraries with --ldflags"*. §126's assembly support is what
+fixed it: one `[generate]` stanza emits both halves, the `.inc` is included
+and the `.s` is assembled, and the link failure is gone. Four keys of
+configuration in all -- `cflags`, `include-dirs = ["gen"]`, and the one
+stanza naming two outputs.
+
+### The claim about semantics was wrong, and it was the interesting one
+
+§123 said that without the ISA flags "the intrinsics do not compile at all",
+citing gcc's `always_inline` target mismatch. **That does not reproduce.**
+With `cflags = ["-std=c11", "-msse4.1"]` and both `-mno-` flags removed, all
+five tests compile and pass. The error came from dropping `-msse4.1` as
+well, not from the `-mno-` pair -- two changes made together and attributed
+to one of them.
+
+**The quiet failure §123 warned about does not occur either**, and this half
+was checked rather than argued: the binary built without `-mno-f16c`
+disassembles to zero `vcvtph2ps`, zero `vcvtps2ph` and no VEX encoding of
+any kind, because `-msse4.1` already excludes them. So the reference
+implementation cannot be handed F16C, and the pass was real either way. The
+`-mno-` flags defend against a *raised baseline* rather than doing the work
+today -- worth keeping, and not for the reason recorded here. anti-avx's own
+`fmake.toml` now says so, and its commit ca387d7 carries the detail.
+
+That §123's flag paragraph survived a year and a re-read is the point worth
+keeping: it was a plausible mechanism, written up carefully, and the
+write-up is what made it look checked.
+
+### A wrong instrument that gave a reassuring answer
+
+Worth recording as a method note, because it nearly became a bug report
+against fmake. To check whether `[project] cflags` reach the compiler, the
+first attempt grepped `fmake -v` output for `-mno-f16c` and found nothing --
+which looks exactly like the flags being ignored. **`-v` prints progress
+lines, not compile commands**, so the instrument could not have found them
+whether they were there or not. What settled it was passing
+`-mno-such-flag-exists` and watching the build fail with gcc's
+"unrecognized command-line option": the flags reach.
+
+`--explain` prints the exact command line and is the instrument that was
+wanted; `--dry-run` prints them too. Neither is discoverable from `-v`
+appearing to be the verbose one.
+
+### The sweep is closed, and a directory left behind by a refusal
+
+Reported with it: apt-emerge is the sixteenth tree and the one with no
+`fmake` line in its README, because there is nothing to build -- three
+Python files and a script. fmake says so and stops:
+
+    !!! no C, C++, assembly or Rust source files found here
+
+That is the right answer, and its README now carries the sentence rather
+than a blank that reads like an omission beside fifteen siblings. Every tree
+in the workspace has now been run against fmake and says in its own README
+what came of it.
+
+**The wart that came with it:** `.fmake/` and its lock are created before
+fmake discovers there is nothing to build, so a reader following that README
+is left with a directory in a tree fmake declined. apt-emerge ignores it,
+which is the right local answer and not the right one here.
+
+Not fixed, and the reason is worth stating rather than leaving as silence:
+the state directory is where the scan cache lives and the lock is what makes
+two concurrent fmakes safe, so moving either behind the walk is a change to
+the order in which those two are established -- small, and not the kind of
+small that should ride along at the end of an evening spent elsewhere. It is
+a one-line effect and a load-bearing reorder, which is exactly the pairing
+that gets done carelessly.
+
+### The gate that reads project.md does not read its index
+
+Found while attributing the failure above, and it is a fact about this
+tree's gates rather than about whoever tripped over it.
+
+`make check` failed on `the_contents_index_lists_every_section`: the index
+had stopped at §135 and was missing five sections, three of them written
+elsewhere. It is now extended over all five, which is the fix that makes the
+next failure belong to whoever caused it.
+
+**What is worth recording is why nobody noticed.** `style_gate.py docs` is
+the fast gate, it is what a session runs after editing a document, and it
+holds project.md to two properties: it says nothing twice, and it names no
+missing file. **It does not look at the index at all.** The index check
+lives here in `selftest`, which is a twenty-five-minute suite nobody runs to
+check a README edit -- so the cheap gate that reads the document is silent
+about the part of it most likely to rot, and passes, and reads as a complete
+answer about that file.
+
+An index is a hand-kept list, the fourth one in this document by its own
+case's account, and hand-kept lists are what these gates exist for. Two
+sessions in one evening ran the docs gate, saw it pass, and had no reason to
+think anything about project.md was unchecked.
+
+**Not fixed here, deliberately.** `style_gate.py` is copied verbatim into
+sixteen trees and moving a check into it is a convention change rather than
+a repair, which `working-practice.md` says to signal in `claude-guidelines`
+rather than decide from inside the project that noticed. Signalled there.
+
+**And the scope this was signalled with was wrong, which is the sharpest
+thing in the entry.** It was written here as "several of those trees carry a
+project.md with an index, and none of their fast gates would catch one that
+had stopped". Counted -- by the receiving session, and again here
+independently -- **exactly one of the seventeen has a contents index, and it
+is this one.** Eight more have numbered sections and no index of them. A
+check for that structure would be dead code in sixteen trees, and the
+convention question does not arise in the form it was posed.
+
+What is real is smaller and wider at once: **three trees assert something
+about their own documents outside the shared gate** -- situ's
+`test/unit/`, fuzzypickles' `check_doc_links.py` and
+`check_documented_commands.py`, and this `selftest` -- and each sits in a
+suite that a document-only edit does not obviously call for. That is the
+signal, and it is not the one that was sent.
+
+Worth keeping for the shape rather than the correction. The wrong half was a
+**scope number**, asserted in the same paragraph that was complaining about
+an unverified check, and it went out without anyone re-deriving it. The
+receiving session reports the same failure three times in four attempts on
+the same question, each wrong in the direction that made the finding look
+bigger. **A count of how widespread something is arrives already attached to
+a conclusion, which is what stops it being re-checked** -- and unlike a
+wrong mechanism, nothing downstream trips over it.
