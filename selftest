@@ -13949,21 +13949,34 @@ outputs = ["gen/table.c"]
 FAKE_SITUC = """#!/usr/bin/env python3
 import os, sys
 argv = sys.argv[1:]
-assert argv[0] == "build", argv
+assert argv[0] in ("build", "gen-derived"), argv
 schema = argv[1]
 out = argv[argv.index("--out") + 1]
 layer = argv[argv.index("--layer") + 1] if "--layer" in argv else "view"
 name = os.path.basename(schema).rsplit(".", 1)[0]
 os.makedirs(out, exist_ok=True)
 
-def wrote(rel, text):
+def wrote(rel, text, note=""):
     path = os.path.join(out, rel)
     with open(path, "w") as fh:
         fh.write(text)
-    sys.%(stream)s.write("situc: wrote " + path + "\\n")
+    sys.%(stream)s.write("situc: wrote " + path + note + "\\n")
+
+if argv[0] == "gen-derived":
+    # The second half of a schema: implementations of the codecs it
+    # describes, in their own translation unit. The count in parentheses
+    # is what the real one appends, and is the whole reason this line is
+    # spelt out rather than shortened -- a greedy read of it took the
+    # annotation as part of the filename.
+    wrote(name + "_derived.c",
+          '#include "' + name + '.h"\\n'
+          "int " + name + "_derived(void) { return 9; }\\n",
+          note=" (1 derived binding(s))")
+    raise SystemExit(0)
 
 wrote(name + ".h",
-      "int " + name + "_check(void);\\nint common_check(void);\\n")
+      "int " + name + "_check(void);\\nint common_check(void);\\n"
+      "int " + name + "_derived(void);\\n")
 wrote(name + ".c",
       '#include "' + name + '.h"\\n'
       "int " + name + "_check(void) { return " + str(len(layer)) + "; }\\n"
@@ -14041,6 +14054,104 @@ def a_schema_is_not_recompiled_until_it_changes(t):
 	check(t.fmake().returncode == 0, "reverting the flags failed")
 	check(not os.path.exists(os.path.join(t.dir, ".fmake/situ/msg_frame.h")),
 	      "a file the previous flags produced was left behind")
+
+
+@case
+def a_schemas_derived_half_is_generated_and_linked(t):
+	"""A schema compiles to two things, and the second is not optional.
+
+    situc emits the accessors with `build' and the implementations of the
+    codecs the schema describes with `gen-derived'. Both come from one
+    description -- nothing supplies the implementation, the same text the
+    accessors came from does -- so running only the first leaves a program
+    that compiles and does not link, which is where situ's test_kernels
+    stopped."""
+	_situc(t)
+	t.write("schema/msg.situ", "// a schema with something derived\n")
+	t.write("main.c", """
+#include "msg.h"
+#include <stdio.h>
+int main(void){ printf("%d\\n", msg_derived()); return 0; }
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, ".fmake/situ/msg_derived.c")),
+	      "the derived half of the schema was not generated")
+	check(t.run(os.path.basename(t.dir)).stdout == "9\n",
+	      "the derived implementation was not linked in")
+
+
+@case
+def a_derived_half_nothing_calls_costs_nothing(t):
+	"""What the second command costs when nothing needs its output.
+
+    situc emits a derived unit for every schema, including the ones with
+    nothing derived -- a translation unit with no external definitions is
+    not valid C, so it writes one integer instead of no file. That it can be
+    run unconditionally rests on this: nothing reaches it, so it is never
+    compiled, and it is not reported as an orphan either. A tree with eleven
+    schemas would otherwise print ten notices about fmake's own files, each
+    offering --force-link for something nobody wrote."""
+	_situ_tree(t)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, ".fmake/situ/msg_derived.c")),
+	      "the derived half was not generated")
+	check("msg_derived.c" not in compiled(r),
+	      f"an unreferenced derived unit should not be compiled: {r.stdout}")
+	check("msg_derived.c" not in (r.stdout + r.stderr),
+	      f"fmake's own generated file is not the reader's oversight: "
+	      f"{r.stdout}{r.stderr}")
+	# The schema is still accounted for, which is the accountability that
+	# matters: a file under .fmake that no program reached is fmake's own
+	# bookkeeping, and --clean is what takes it away.
+	e = t.fmake("--explain")
+	check("schema/msg.situ" in e.stdout,
+	      f"--explain should name the schema it compiled: {e.stdout}")
+
+
+@case
+def the_ejected_builds_run_both_situc_commands(t):
+	"""An ejected build reproduces the schema, not half of it.
+
+    The two commands are one rule with two recipe lines in make and one
+    `&&' in ninja, because they write into the same directory from the same
+    input and neither backend has a way to say `these two files come from
+    those two runs' that is worth the words."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	_situc(t)
+	t.write("schema/msg.situ", "// a schema with something derived\n")
+	t.write("main.c", """
+#include "msg.h"
+#include <stdio.h>
+int main(void){ printf("%d\\n", msg_derived()); return 0; }
+""")
+	name = os.path.basename(t.dir)
+
+	mk = t.fmake("--eject").stdout
+	check("gen-derived" in mk, f"the ejected make build runs one command: {mk}")
+	t.write("Makefile", mk)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	if os.path.exists(os.path.join(t.dir, name)):
+		os.unlink(os.path.join(t.dir, name))
+	r = subprocess.run(["make", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"the ejected make build failed: {r.stderr}")
+	check(t.run(name).stdout == "9\n",
+	      "the ejected build did not link the derived half")
+
+	nj = t.fmake("--eject", "ninja").stdout
+	check("gen-derived" in nj, f"the ejected ninja build runs one command: {nj}")
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("build.ninja", nj)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+	os.unlink(os.path.join(t.dir, name))
+	r = subprocess.run(["ninja", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0, f"the ejected ninja build failed: {r.stdout}")
+	check(t.run(name).stdout == "9\n",
+	      "the ejected build did not link the derived half")
 
 
 @case

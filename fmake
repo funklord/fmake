@@ -2648,7 +2648,19 @@ SITU_EXT = ".situ"
 # outputs would be right for the one layer it was written under and wrong for
 # the rest. Same bargain as a depfile: the tool that did the writing is the
 # only thing that knows what it wrote.
-RE_SITU_WROTE = re.compile(r"^situc: wrote (.+)$")
+#
+# The trailing parenthetical is not decoration to ignore. `gen-derived' says
+# `wrote <path> (38 derived binding(s))' where `build' says `wrote <path>',
+# and a greedy match took the whole line as the filename -- so the file was
+# written, recorded under a name nothing on disk had, and then *deleted* by
+# the prune that keeps only what was recorded. A parse slip in an output
+# name is not a missing record, it is a removal, which is why this pattern
+# is worth more care than it looks.
+#
+# Non-greedy, so a path that genuinely ends in a parenthesis still matches:
+# the optional group has to end the line, and where it cannot the whole line
+# is taken as the path.
+RE_SITU_WROTE = re.compile(r"^situc: wrote (.+?)(?: \(.*\))?$")
 
 
 def situ_plan(root, hdrs, scans):
@@ -2716,6 +2728,70 @@ def find_situc(configured, root):
 	return None
 
 
+def situc_commands(situc, src, flags):
+	"""The situc runs that turn one schema into C.
+
+    Two of them, because a schema compiles to two things and situc emits
+    them separately. `build` writes the accessors over the bytes;
+    `gen-derived` writes the implementations of the codecs the schema
+    describes -- both halves of one description, which is what situ means by
+    a derived codec: nothing supplies the implementation, the same text the
+    accessors came from does.
+
+    **Where the line is, since situc has eight generating commands and fmake
+    runs two of them.** These two emit *the schema's own code*. `gen-checks`,
+    `gen-fuzz`, `gen-tests` and `gen-codec-tests` emit **programs that test
+    the schema**, which is a different kind of artifact: a build system that
+    conjures test programs nobody asked for is inventing work, and those are
+    `[generate]`'s to declare. The test is not how many commands there are,
+    it is whether the output is the thing being built or a thing that checks
+    it.
+
+    A schema with nothing derived is not a special case. situc emits a valid
+    translation unit for it anyway -- one integer, with a comment saying a TU
+    with no external definitions is not C -- and the closure drops it
+    because nothing refers to it. That is the same bargain moc makes: a
+    meta-object is generated for a class no program constructs, compiled,
+    and then left out of the link.
+
+    `flags` reaches `build` alone. `gen-derived` takes `schema`, `--out` and
+    `--prefix`, and fmake supplies the first two; `--prefix` would have to
+    agree between the halves, and if somebody ever sets it the mismatch is a
+    link error naming the symbols rather than a wrong binary -- loud, which
+    is why this is documented rather than refused.
+    """
+	return [[situc, "build", src] + list(flags) + ["--out", SITU_DIR],
+	        [situc, "gen-derived", src, "--out", SITU_DIR]]
+
+
+def situc_wrote(res, root, cmd, src):
+	"""The files one situc run reported writing, passing its words through.
+
+    Both streams are read, because which one carries the `wrote' lines is
+    situc's choice and not a promise to anybody. A schema's warnings are
+    situc's to phrase and the reader's to act on, so everything that is not a
+    `wrote' line goes through unchanged; the `wrote' lines are fmake's
+    bookkeeping and would only be noise.
+    """
+	outs, kept = [], []
+	for line in (res.stdout + res.stderr).splitlines():
+		m = RE_SITU_WROTE.match(line.strip())
+		if m:
+			# --out is relative to the tree, but situc echoes back whatever
+			# path it wrote; join handles both spellings.
+			outs.append(os.path.relpath(os.path.join(root, m.group(1)), root))
+		else:
+			kept.append(line)
+	if "\n".join(kept).strip():
+		PROGRESS.write("\n".join(kept) + "\n")
+	if res.returncode != 0:
+		# The subcommand by name: `situc failed' is two commands away from
+		# telling the reader which half of the schema did not come out.
+		die(f"situc {cmd[1]} failed on {src} "
+		    f"({describe_exit(res.returncode)})")
+	return outs
+
+
 def run_situc(root, jobs, situc, flags, cache, dry_run=False):
 	"""Run situc where a schema changed. Returns what it wrote, tree-relative.
 
@@ -2730,7 +2806,11 @@ def run_situc(root, jobs, situc, flags, cache, dry_run=False):
 	produced = []
 	for job in jobs:
 		src = job["src"]
-		key = sha("|".join([situc, " ".join(flags), src,
+		# The command set is in the key, so a cache written when fmake ran
+		# only `build' regenerates once rather than staying fresh on a key
+		# that never covered the second half. Same move [generate] makes
+		# for `depfile:'.
+		key = sha("|".join([situc, "build+gen-derived", " ".join(flags), src,
 		                    cache.hash_of(os.path.join(root, src), src)
 		                    or "?"]))
 		was = store.get(src)
@@ -2741,37 +2821,22 @@ def run_situc(root, jobs, situc, flags, cache, dry_run=False):
 			produced += was["outs"]
 			continue
 
-		cmd = [situc, "build", src] + list(flags) + ["--out", SITU_DIR]
+		cmds = situc_commands(situc, src, flags)
 		if dry_run:
-			print(" ".join(shlex.quote(c) for c in cmd))
+			for cmd in cmds:
+				print(" ".join(shlex.quote(c) for c in cmd))
 			continue
 		say(f"{YELLOW('SITU')} {src}")
 		os.makedirs(os.path.join(root, SITU_DIR), exist_ok=True)
-		try:
-			res = subprocess.run(cmd, cwd=root, capture_output=True,
-			                     text=True, errors="replace")
-		except OSError as exc:
-			die(f"could not run situc ({situc}): {exc.strerror or exc}")
-		# Both streams, because which one carries the `wrote' lines is
-		# situc's choice and not a promise to anybody. A schema's warnings
-		# are situc's to phrase and the reader's to act on, so everything
-		# that is not a `wrote' line is passed through unchanged; the
-		# `wrote' lines are fmake's bookkeeping and would only be noise.
 		outs = []
-		kept = []
-		for line in (res.stdout + res.stderr).splitlines():
-			m = RE_SITU_WROTE.match(line.strip())
-			if m:
-				# --out is relative to the tree, but situc echoes back
-				# whatever path it wrote; join handles both spellings.
-				outs.append(os.path.relpath(
-				    os.path.join(root, m.group(1)), root))
-			else:
-				kept.append(line)
-		if "\n".join(kept).strip():
-			PROGRESS.write("\n".join(kept) + "\n")
-		if res.returncode != 0:
-			die(f"situc failed on {src} ({describe_exit(res.returncode)})")
+		for cmd in cmds:
+			try:
+				res = subprocess.run(cmd, cwd=root, capture_output=True,
+				                     text=True, errors="replace")
+			except OSError as exc:
+				die(f"could not run situc ({situc}): "
+				    f"{exc.strerror or exc}")
+			outs += situc_wrote(res, root, cmd, src)
 		# The header is the file that motivated the run: something included
 		# it. A situc that exits 0 having written no header has produced a
 		# build that fails later on a missing include, naming neither the
@@ -8527,9 +8592,18 @@ def build(args, _bootstrapping=False):
 			# fmake to compile a module on its own, which is an error.
 			# A .rs nothing reaches was already named, at the point the
 			# crates were worked out, with the remedy that fits it.
+			# A schema's own output is not the reader's file and not
+			# their oversight. situc emits a derived unit for every
+			# schema, including the ones with nothing derived, and a
+			# program that calls none of it is the design working --
+			# so this would be ten lines of notice about fmake's own
+			# files in a tree with eleven schemas, each offering
+			# --force-link for something nobody wrote and nobody
+			# wants linked. --explain still lists them.
 			ignored = sorted(set(srcs) - set(units)
 			                 - {t.rel for t in held}
 			                 - crate_members
+			                 - set(situ_outs)
 			                 - set(crate_orphans))
 			for rel in ignored[:5]:
 				note(f"{rel} not compiled: nothing reaches it "
@@ -9259,6 +9333,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"{outs[0]}: {j['src']}")
 			a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}SITUC) build $< $({P}SITUFLAGS) --out $(@D)")
+			a(f"\t$({P}SITUC) gen-derived $< --out $(@D)")
 			for extra in outs[1:]:
 				a(f"{extra}: {outs[0]}")
 				a("\t@:")
@@ -9722,8 +9797,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# The output directory is named rather than derived: ninja has no
 		# $(@D), and every schema writes into the one flat directory.
 		flags = " ".join(situ.get("flags") or [])
+		out = _ninja(_eject_src(SITU_DIR))
 		a(f"  command = $situc build $in{' ' + flags if flags else ''} "
-		  f"--out {_ninja(_eject_src(SITU_DIR))}")
+		  f"--out {out} && $situc gen-derived $in --out {out}")
 		a("  description = SITU $in")
 		a("")
 		for j in situ_jobs:

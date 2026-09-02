@@ -190,7 +190,8 @@ that had been green about nothing for five commits ·
 [137. netcfgd again, and sixteen targets called `lib`](#137-netcfgd-again-and-sixteen-targets-called-lib) ·
 [138. fmake understands `.situ`, and the object list nobody has to write](#138-fmake-understands-situ-and-the-object-list-nobody-has-to-write) ·
 [139. The build directory, and the authority that was already in the tree](#139-the-build-directory-and-the-authority-that-was-already-in-the-tree) ·
-[140. anti-avx builds, and two claims in §123 that do not reproduce](#140-anti-avx-builds-and-two-claims-in-123-that-do-not-reproduce)
+[140. anti-avx builds, and two claims in §123 that do not reproduce](#140-anti-avx-builds-and-two-claims-in-123-that-do-not-reproduce) ·
+[141. The half of a schema that was written and then deleted](#141-the-half-of-a-schema-that-was-written-and-then-deleted)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11353,16 +11354,17 @@ decides on a machine with no situ installed; both ejected build files
 compile a schema themselves from a clean tree, which needed ninja to be
 told with `||` what make already knew from `$(GENHDRS)`.
 
-**Where it genuinely stops, and this is honest rather than deferred.** One
-command is understood, `situc build`. `test_kernels` is the twelfth program
-and wants `situ_reed_solomon_255_223_encode`, which comes from `situc
-gen-derived` -- a second artifact family over the same schema, along with
-`gen-checks`, `gen-fuzz` and `gen-tests`. Those are `[generate]`'s to
-declare. And situ compiles every test twice, once with `-DSITU_CHECKED`,
-because half of what that suite proves is that the checked assertions
-compile out: two targets over one source, which fmake still has no way to
-say. That last one is the only item of the three that is a capability gap
-rather than a stanza somebody has not written.
+**Where it genuinely stops.** `test_kernels` was the twelfth program and
+wanted `situ_reed_solomon_255_223_encode`, which comes from `situc
+gen-derived`. **That is fixed in §141**, which argues the line falls in a
+different place than this entry supposed: `gen-derived` emits the schema's
+own code and belongs here, while `gen-checks`, `gen-fuzz` and `gen-tests`
+emit programs that test the schema and are `[generate]`'s to declare. All
+twelve programs now build and run. What remains is that situ compiles every
+test twice, once with `-DSITU_CHECKED`, because half of what that suite
+proves is that the checked assertions compile out -- two targets over one
+source, which fmake still has no way to say. That was the only one of the
+three that was ever a capability gap.
 
 ### The message that points at libraries for a symbol the tree owns
 
@@ -11635,3 +11637,70 @@ the same question, each wrong in the direction that made the finding look
 bigger. **A count of how widespread something is arrives already attached to
 a conclusion, which is what stops it being re-checked** -- and unlike a
 wrong mechanism, nothing downstream trips over it.
+
+## 141. The half of a schema that was written and then deleted
+
+§138 recorded this boundary as honest rather than deferred, and it was
+neither -- the line was drawn in the wrong place. The interesting part is not
+the feature, though: it is what the first version did while appearing to work.
+
+### A schema compiles to two things
+
+§138 understood `situc build` and stopped there, and `test_kernels` was the
+program that paid for it -- undefined references to
+`situ_reed_solomon_255_223_encode` and thirty-seven other codecs, which come
+from `situc gen-derived`. That was recorded as `[generate]`'s to declare.
+
+**It is not, and the line is worth drawing where it actually falls.** `build`
+writes the accessors over the bytes; `gen-derived` writes the implementations
+of the codecs the schema describes. Both are the schema's own code -- nothing
+supplies a derived codec, the same text the accessors came from does, which
+is what situ means by tier 2. `gen-checks`, `gen-fuzz`, `gen-tests` and
+`gen-codec-tests` are a different kind of artifact: they emit **programs that
+test the schema**, and a build system that conjures test programs nobody asked
+for is inventing work. **The test is not how many commands a tool has, it is
+whether the output is the thing being built or a thing that checks it.**
+
+So fmake runs two of situc's eight generating commands, unconditionally.
+Unconditionally is affordable because of what situc does with a schema that
+has nothing derived: it emits a translation unit anyway, carrying one integer
+and a comment saying that a TU with no external definitions is not valid C.
+Nothing reaches it, so fmake never compiles it -- and it is not reported as an
+uncompiled orphan either, because a file fmake generated for a program that
+turned out not to need it is the design working, and offering `--force-link`
+for it would be advice about a file the reader did not write. In situ's tree
+that is ten such notices avoided.
+
+**Measured: `fmake test` on situ now builds and runs all twelve programs, and
+all twelve pass.** No configuration at all. That was eleven of twelve in §138
+and none of twelve before it.
+
+### The parse slip that was a deletion
+
+The first version ran `gen-derived` correctly, and no derived file existed
+afterwards. situc reports what it wrote, and the two commands do not report it
+the same way:
+
+    situc: wrote .fmake/situ/bmp.h
+    situc: wrote .fmake/situ/kernels_derived.c (38 derived binding(s))
+
+`RE_SITU_WROTE` was `^situc: wrote (.+)$`, so the second line's filename came
+out as the whole tail, annotation included. **The file was written, recorded
+under a name nothing on disk had, and then deleted** -- by `prune_generated`,
+which keeps exactly what was recorded and removes the rest. That is the point
+worth carrying: in a directory a tool owns and prunes, **a mis-parsed output
+name is not a missing record, it is a removal.** The failure looked like
+`gen-derived` never running, which is where the first fifteen minutes went.
+
+Nothing would have caught it. The suite passed: nine cases exercised the
+report parsing and every one of them used a stand-in compiler that printed
+`situc: wrote <path>` and nothing else, because that is the form the real
+`build` uses and `build` was all fmake ran when they were written. **A
+stand-in reproduces the half of a tool's behaviour its author had met** -- and
+the case that would have caught this is the one that came out of it: the
+stand-in's `gen-derived` now appends the count, spelt out rather than
+shortened, with the reason beside it.
+
+The pattern is non-greedy with an optional trailing group, so a path that
+genuinely ends in a parenthesis still matches whole: the group has to end the
+line, and where it cannot the whole line is taken as the path.

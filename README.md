@@ -638,14 +638,21 @@ that `bin/situc` in the tree being built — which is how situ's own tree,
 holding both the schemas and the compiler, builds before anything is
 installed.
 
-**Where it stops.** One command is understood, `situc build`. A schema whose
-tests need a second artifact family — `gen-derived`, `gen-checks`,
-`gen-fuzz`, `gen-tests` — needs a `[generate]` stanza for it, and a suite
-that compiles each test twice (checked and released) is two targets over one
-source, which fmake has no way to say. On situ's own tree `fmake test`
-finds twelve programs and builds and runs eleven of them with no
-configuration at all, resolving cmocka from the symbols; the twelfth,
-`test_kernels`, is the one wanting `gen-derived`.
+**Two commands are understood, because a schema compiles to two things.**
+`situc build` writes the accessors over the bytes and `situc gen-derived`
+writes the implementations of the codecs the schema describes — nothing
+supplies those, the same text the accessors came from does. A schema with
+nothing derived still gets a translation unit, and nothing reaches it, so it
+is never compiled.
+
+**Where it stops.** `gen-checks`, `gen-fuzz`, `gen-tests` and
+`gen-codec-tests` emit *programs that test the schema* rather than the
+schema's own code, and a build system that conjures test programs nobody
+asked for is inventing work — those are `[generate]`'s to declare. A suite
+that compiles each test twice, checked and released, is two targets over one
+source, which fmake still has no way to say. On situ's own tree `fmake test`
+builds and runs all twelve programs with no configuration at all, resolving
+cmocka from the symbols.
 
 ---
 
