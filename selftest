@@ -13840,6 +13840,53 @@ fn main() { println!("{}", shared()); }
 
 
 # ---------------------------------------------------------------------------
+# What a refusal leaves behind
+# ---------------------------------------------------------------------------
+
+@case
+def a_tree_with_nothing_to_build_is_left_as_it_was(t):
+	"""Reported from apt-emerge: three Python files and a script.
+
+    fmake takes the tree lock before it walks, which is deliberate -- that
+    is where an unwritable tree is discovered, and a traceback from
+    os.makedirs is never the right answer to a mistyped argument. But it
+    meant a reader following that project's README was left with a .fmake/
+    in a tree fmake had just declined, and a line in their .gitignore about
+    it. The refusal is correct; the litter was not part of it."""
+	t.write("a.py", "x = 1\n")
+	t.write("README.md", "nothing to build here\n")
+	subprocess.run(["git", "init", "-q", t.dir], capture_output=True)
+	before = sorted(os.listdir(t.dir))
+
+	r = t.fmake()
+	check(r.returncode != 0, "a tree with no source should stop the build")
+	check("no C, C++, assembly or Rust source" in (r.stdout + r.stderr),
+	      f"the refusal does not say what was looked for: {r.stdout}{r.stderr}")
+	check(sorted(os.listdir(t.dir)) == before,
+	      f"the tree was changed by a build that did not happen: "
+	      f"{sorted(os.listdir(t.dir))} against {before}")
+
+
+@case
+def a_tree_that_does_build_keeps_its_state_directory(t):
+	"""The other half, because the tidying must not take a real build's.
+
+    A state directory holding nothing but the lock is the whole condition,
+    and it is stronger than it looks: a run that got as far as scanning
+    wrote a cache, and one that compiled wrote objects."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	subprocess.run(["git", "init", "-q", t.dir], capture_output=True)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(os.path.isdir(os.path.join(t.dir, ".fmake")),
+	      "a build that happened must keep its state directory")
+	with open(os.path.join(t.dir, ".gitignore")) as fh:
+		check(".fmake" in fh.read(),
+		      "a build that writes into the tree should say so to git")
+
+
+# ---------------------------------------------------------------------------
 # Build directories
 # ---------------------------------------------------------------------------
 

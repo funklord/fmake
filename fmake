@@ -4044,6 +4044,7 @@ class TreeLock:
 	def __init__(self, state):
 		self.path = os.path.join(state, "lock")
 		self.fh = None
+		self.made = False
 
 	def __enter__(self):
 		if fcntl is None:
@@ -4054,6 +4055,7 @@ class TreeLock:
 		# source and cannot build without it, so this is a refusal rather
 		# than something to work around, but it has to read as one.
 		try:
+			self.made = not os.path.isdir(os.path.dirname(self.path))
 			os.makedirs(os.path.dirname(self.path), exist_ok=True)
 			self.fh = open(self.path, "w")
 		except OSError as exc:
@@ -4072,11 +4074,49 @@ class TreeLock:
 	def __exit__(self, *_exc):
 		if self.fh:
 			try:
+				self._undo()
 				fcntl.flock(self.fh, fcntl.LOCK_UN)
 			finally:
 				self.fh.close()
 				self.fh = None
 		return False
+
+	def _undo(self):
+		"""Take the state directory away again if the build never used it.
+
+        Reported from apt-emerge, which has three Python files and a script:
+        fmake creates .fmake/ and then discovers there is nothing here to
+        build, so a reader following that project's README is left with a
+        directory in a tree fmake declined. The refusal is correct and the
+        litter is not part of it.
+
+        Only when the directory holds nothing but this lock, which is a
+        stronger condition than it looks: a run that got as far as scanning
+        wrote a cache, and one that compiled wrote objects. Nothing but the
+        lock means the run did nothing at all.
+
+        That condition is also what makes it safe to do while another fmake
+        may be blocked on this lock. Removing the file it is waiting on
+        costs the two of them their mutual exclusion -- but a run that
+        reaches here did nothing, and the waiter is about to do nothing for
+        the same reason, so there is nothing for them to race over. Done
+        before the unlock rather than after, to keep that window as small as
+        the argument needs it to be.
+
+        Errors are ignored throughout. This is tidying, and a build that
+        worked must not fail at the end of it because a directory would not
+        go.
+        """
+		if not self.made:
+			return
+		state = os.path.dirname(self.path)
+		try:
+			if os.listdir(state) != ["lock"]:
+				return
+			os.unlink(self.path)
+			os.rmdir(state)
+		except OSError:
+			pass
 
 def sha(data):
 	if isinstance(data, str):
@@ -7070,6 +7110,14 @@ def build(args, _bootstrapping=False):
 	                   if os.path.splitext(g)[1] in HDR_EXTS})
 	if not srcs:
 		die("no C, C++, assembly or Rust source files found here")
+
+	# Here rather than in main(), which is where it was: fmake edited a
+	# project's .gitignore before knowing it had anything to build, so a
+	# tree fmake correctly refuses was left carrying a line about a
+	# directory that should not have been there either. Past the refusal
+	# above, this build is going to write into the tree, and the line is
+	# then a courtesy rather than a mark left by a visitor.
+	ensure_gitignore(root)
 
 	for rel in list(unreadable):
 		if rel in srcs:
@@ -10708,7 +10756,6 @@ def main(argv):
 	root = os.path.abspath(args.directory)
 	if args.clean:
 		return do_clean(root)
-	ensure_gitignore(root)
 	if args.run:
 		if not os.path.isfile(args.run):
 			die(f"--run: no such file: {args.run}")

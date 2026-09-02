@@ -191,7 +191,8 @@ that had been green about nothing for five commits ·
 [138. fmake understands `.situ`, and the object list nobody has to write](#138-fmake-understands-situ-and-the-object-list-nobody-has-to-write) ·
 [139. The build directory, and the authority that was already in the tree](#139-the-build-directory-and-the-authority-that-was-already-in-the-tree) ·
 [140. anti-avx builds, and two claims in §123 that do not reproduce](#140-anti-avx-builds-and-two-claims-in-123-that-do-not-reproduce) ·
-[141. The half of a schema that was written and then deleted](#141-the-half-of-a-schema-that-was-written-and-then-deleted)
+[141. The half of a schema that was written and then deleted](#141-the-half-of-a-schema-that-was-written-and-then-deleted) ·
+[142. Two more from the same session, one of them fixed](#142-two-more-from-the-same-session-one-of-them-fixed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11576,13 +11577,15 @@ fmake discovers there is nothing to build, so a reader following that README
 is left with a directory in a tree fmake declined. apt-emerge ignores it,
 which is the right local answer and not the right one here.
 
-Not fixed, and the reason is worth stating rather than leaving as silence:
-the state directory is where the scan cache lives and the lock is what makes
-two concurrent fmakes safe, so moving either behind the walk is a change to
-the order in which those two are established -- small, and not the kind of
-small that should ride along at the end of an evening spent elsewhere. It is
-a one-line effect and a load-bearing reorder, which is exactly the pairing
-that gets done carelessly.
+Declined here, on the grounds that the state directory holds the scan cache
+and the lock is what makes two concurrent fmakes safe, so moving either
+behind the walk is a load-bearing reorder that should not ride along at the
+end of an evening spent elsewhere. **§142 fixes it without the reorder**,
+which is the part this entry did not think of: the lock stays exactly where
+it is and gives the directory back on the way out when it holds nothing but
+the lock. The reason for declining was sound and the conclusion drawn from
+it was not -- refusing the only fix that had been thought of is not the same
+as there being none.
 
 ### The gate that reads project.md does not read its index
 
@@ -11704,3 +11707,65 @@ shortened, with the reason beside it.
 The pattern is non-greedy with an optional trailing group, so a path that
 genuinely ends in a parenthesis still matches whole: the group has to end the
 line, and where it cannot the whole line is taken as the path.
+
+## 142. Two more from the same session, one of them fixed
+
+Both reported from the session working in `claude-guidelines`, and
+recorded here because they are fmake's rather than that tree's.
+
+### The directory a refusal left behind
+
+§140 recorded this from apt-emerge and declined to fix it, on the grounds that
+the state directory holds the scan cache and the lock is what makes two
+concurrent fmakes safe, so moving either behind the walk is a load-bearing
+reorder. **That was the right reason to decline the reorder and the wrong
+conclusion, because the reorder is not the only fix.** The lock stays exactly
+where it is -- it is deliberately taken before the walk, since that is where
+an unwritable tree is discovered and a traceback from `os.makedirs` is never
+the right answer to a mistyped argument. What is new is that it takes the
+directory away again on the way out, when the directory holds nothing but the
+lock.
+
+**That condition is stronger than it looks, and it is also the safety
+argument.** A run that got as far as scanning wrote a cache; one that compiled
+wrote objects. Nothing but the lock means the run did nothing at all. Removing
+the file another fmake may be blocked on costs the two of them their mutual
+exclusion -- and a run that reaches here did nothing, while the waiter is
+about to do nothing for the same reason, so there is nothing to race over. It
+is done before the unlock rather than after, to keep that window as small as
+the argument needs it.
+
+**The `.gitignore` line was the same wart one file over**, and was worse:
+`ensure_gitignore` ran in `main()`, before the walk, so fmake edited a
+project's `.gitignore` before knowing it had anything to build. It now runs
+past the refusal, where the build is going to write into the tree anyway and
+the line is a courtesy rather than a mark left by a visitor.
+
+`fmake` in a tree of Python files now leaves it byte for byte as it was, which
+a case asserts by listing the directory before and after.
+
+### Reported and not fixed: the version advisory over a scanned header
+
+From the same session, measured in fuzzypickles against the committed fmake.
+Eleven advisories of this shape, none of them about a version:
+
+    thorvg/src/renderer/gl_engine/tvgGl.h defines GL_VERSION_1_1 itself
+    because the build did not, so this is the fallback
+    VERSION here says 0.1; [project] cflags = ['-DGL_VERSION_1_1="0.1"']
+
+`GL_VERSION_1_1` is an OpenGL feature-test macro. `JERRY_UNICODE_CASE_CONVERSION`
+gets the same treatment, and the reason is plainer still: the guard asks
+whether `"VERSION" in name`, and *conversion* contains *version*.
+
+Two faults, one shallow and one not. The substring test is the shallow one.
+The other is that the advisory does not distinguish a macro in a translation
+unit being compiled from one in a header fmake merely scanned -- and all
+eleven of these are in vendored code this configuration does not build, which
+is why following the advice was measured to be harmless here rather than
+wrong. In a tree that did compile `gl_engine`, `-DGL_VERSION_1_0="0.1"` would
+enable GL paths on a false pretext. That tree has not been met, and the claim
+is not being made for it.
+
+Not fixed here: it is a third thing, arriving from a sibling while two others
+were being closed, and it belongs in a pass that can measure the change
+against the trees that raise the advisory legitimately.
