@@ -196,7 +196,8 @@ that had been green about nothing for five commits ·
 [143. One source, two programs, and the object list keyed on a path](#143-one-source-two-programs-and-the-object-list-keyed-on-a-path) ·
 [144. Advice about a program nobody built, and two entries that had gone stale](#144-advice-about-a-program-nobody-built-and-two-entries-that-had-gone-stale) ·
 [145. `-i`, and writing for somebody who did not write the project](#145--i-and-writing-for-somebody-who-did-not-write-the-project) ·
-[146. Why hydra compiled the build directory, which was not what §139 said](#146-why-hydra-compiled-the-build-directory-which-was-not-what-139-said)
+[146. Why hydra compiled the build directory, which was not what §139 said](#146-why-hydra-compiled-the-build-directory-which-was-not-what-139-said) ·
+[147. Three gates in the suite that passed without looking, and a skip that lied](#147-three-gates-in-the-suite-that-passed-without-looking-and-a-skip-that-lied)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12204,3 +12205,99 @@ will reach for leftover generated code, because widening matches names and
 generated code is named after the very classes the tree has.** §139 keeps
 that code out of `srcs` where git has been told about it. Where it is
 committed, or vendored, the defect above is still there.
+
+## 147. Three gates in the suite that passed without looking, and a skip that lied
+
+Reported 2026-09-03 from the session working in `claude-guidelines`, out of a
+sweep of all seventeen trees for gates that report success having checked
+nothing. All three were in `selftest`, all three verified here by running
+them rather than by reading the report, and all three fixed.
+
+The reporter volunteered that some of its demonstrations had been relayed
+from sub-agents rather than personally run, and marked its own denominator
+unaudited. That caveat cost it nothing -- every finding held -- and it is the
+reason each was re-derived here instead of taken.
+
+### A filter that matches nothing is not a suite that passed
+
+    $ ./selftest no_such_case_name_at_all
+    all 0 passed
+    EXIT=0
+
+`make test` passes no arguments, so this was never CI's problem. The victim
+is somebody narrowing to one case, or a script naming a case that has since
+been renamed -- which is how five of apt-emerge's tests skipped for
+twenty-seven commits with nobody reading the word "skipped".
+
+`tool/style_gate.py` already refuses exactly this, in as many words: *a clean
+tree and a collapsed file list are indistinguishable from the exit code*, so
+the tool has to tell them apart itself. The suite now does too, and returns 2.
+
+### A guard that names a capability and tests a binary
+
+    def _cross_available():
+        return shutil.which(CROSS_CC) is not None
+
+The thirteen cases behind it assert a finished compile **and link** -- "the
+cross build failed", "no binary was produced", an ELF machine read off the
+result. Linking needs the target libc, and on Debian the driver and
+`libc6-dev-arm64-cross` are separate packages, so `which` answers a question
+nobody asked.
+
+**This tree already knew and had answered it in the wrong place.** `ci.yml`
+says `libc6-dev-arm64-cross` "is not optional garnish", and that was settled
+by adding a package to CI's apt line rather than by fixing the guard -- so CI
+was green and a developer machine with the driver alone turned thirteen clean
+skips into thirteen failures. A fix applied where the symptom appeared, one
+layer from where the decision was made, which is this file's third instance
+of that shape in two days.
+
+It now trial-links. Not compiles: `-c` passes with no target libc at all,
+which is the entire distinction being drawn. Cached, because thirteen cases
+asking would otherwise cost thirteen link attempts.
+
+**Demonstrated rather than deduced**, with a shim `aarch64-linux-gnu-gcc` on
+`$PATH`:
+
+    exits 1            committed guard: FAIL "cross build failed"
+                       fixed guard:     skip
+    exits 0, no file   committed guard: FAIL
+                       fixed guard:     skip
+
+The second shim is what makes the `os.path.exists(out)` half necessary rather
+than decorative.
+
+### The finding that was not in the report
+
+The skip *message* was wrong in the same way the guard was. Thirteen sites
+said `f"{CROSS_CC} not installed"` of a compiler sitting on `$PATH`. They now
+ask `_cross_reason()`, which distinguishes "is not installed" from "is
+installed but cannot link a binary here; the target libc is a separate
+package".
+
+**A skip that gives the wrong reason is the same fault one step on -- it
+sends the reader to install something they already have.** That sentence
+turned out to be worth more than the three findings that produced it: the
+receiving session generalised it into a sweep and found the shape twice more
+in two other trees, by two different mechanisms -- a `version-check` reporting
+an unparseable changelog as a missing tool, and a rename that updated a skip
+message and left the constant, so the message became *true about the wrong
+file*. One shape, three trees, three mechanisms.
+
+The generalisation is theirs; what this tree contributes is the instance and
+the wording. It belongs in `claude-guidelines` rather than here, and is
+recorded there.
+
+### A check that errored on the interpreter it exists to defend
+
+The f-string span check reads `tokenize.FSTRING_START`, which does not exist
+before 3.12. 3.11 is this project's declared floor -- `debian/control` says
+`python3 (>= 3.11)` -- so on the very interpreter the case protects, the
+attribute lookup raised, `run_case` caught it as a generic exception, and it
+was counted as a **failure**. A check that errors on the configuration it
+defends reports the opposite of what it found. It skips now, saying that the
+span check needs 3.12 even though what it checks for is 3.11.
+
+**Not verified by running it.** There is no 3.11 on this machine. What was
+verified is that the attribute is genuinely absent before 3.12 and that
+nothing guarded it, which is the claim the evidence supports and no more.

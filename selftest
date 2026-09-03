@@ -3488,8 +3488,61 @@ def generated_sources_survive_ejection(t):
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
+_CROSS_OK = None
+_CROSS_WHY = ""
+
+
 def _cross_available():
-	return shutil.which(CROSS_CC) is not None
+	"""Whether a cross build can actually complete, not whether a driver is
+	installed.
+
+    The thirteen cases behind this assert a finished compile *and link* --
+    "the cross build failed", "no binary was produced", and an ELF machine
+    read off the result. Linking needs the target libc, and
+    gcc-aarch64-linux-gnu and libc6-dev-arm64-cross are separate Debian
+    packages, so `which' answers a question nobody asked and turns a clean
+    skip into thirteen failures on a machine that has the driver alone.
+
+    This tree already knew: ci.yml says libc6-dev-arm64-cross "is not
+    optional garnish", and it was settled by adding the package to CI rather
+    than by fixing the guard -- so CI was green and a developer machine was
+    not. The right idiom is three times over in this file already, where
+    clang is trial-compiled before being believed and _rust_nm builds a
+    staticlib to read.
+
+    Cached, because thirteen cases asking costs thirteen link attempts.
+    """
+	global _CROSS_OK, _CROSS_WHY
+	if _CROSS_OK is None:
+		if not shutil.which(CROSS_CC):
+			_CROSS_OK = False
+			_CROSS_WHY = f"{CROSS_CC} is not installed"
+		else:
+			with tempfile.TemporaryDirectory() as tmp:
+				out = os.path.join(tmp, "probe")
+				# Linked, not just compiled: -c would pass with no libc at
+				# all, which is the whole distinction being drawn.
+				probe = subprocess.run(
+				    [CROSS_CC, "-xc", "-", "-o", out],
+				    input="int main(void){return 0;}\n",
+				    capture_output=True, text=True)
+				_CROSS_OK = probe.returncode == 0 and os.path.exists(out)
+				if not _CROSS_OK:
+					_CROSS_WHY = (
+					    f"{CROSS_CC} is installed but cannot link a "
+					    f"binary here; the target libc is a separate "
+					    f"package (libc6-dev-arm64-cross)")
+	return _CROSS_OK
+
+
+def _cross_reason():
+	"""Why there is no cross build, for the Skip that has to say so.
+
+    A skip that gives the wrong reason is the same fault one step on: the
+    thirteen cases said "not installed" of a compiler sitting on $PATH.
+    """
+	_cross_available()
+	return _CROSS_WHY
 
 
 def _elf_machine(path):
@@ -3516,7 +3569,7 @@ def a_cross_build_derives_the_cxx_compiler(t):
 	prog'. Nothing was wrong anywhere a person would look, and the artifact
 	was for the wrong machine."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	if not shutil.which("aarch64-linux-gnu-g++"):
 		raise Skip("aarch64-linux-gnu-g++ not installed")
 	t.write("prog.cpp", "#include <string>\n"
@@ -3552,7 +3605,7 @@ def an_object_built_for_the_wrong_machine_is_refused(t):
 	of triplets. The guard only speaks when both sides are certain, so a
 	tree it cannot judge builds exactly as before."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	t.write("prog.cpp", "int main(){ return 0; }\n")
 	# The wrong C++ compiler, named outright, which is what the derivation
 	# cannot save anybody from.
@@ -3695,7 +3748,7 @@ def a_cross_built_test_is_not_run_rather_than_failed(t):
 	case rather than a fixture that cannot fail: it proves the test itself
 	is sound and the cross build is the only reason it did not run."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	# A registered interpreter would run the target binary happily, and the
 	# case would then be asserting nothing at all.
 	if glob.glob("/proc/sys/fs/binfmt_misc/*aarch64*") or \
@@ -3749,7 +3802,7 @@ def cross_builds_for_the_target_architecture(t):
     that library resolution has to answer for the target machine. The
     symbols come from the target's libraries or the link fails."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	t.write("main.c", """
 #include <stdio.h>
 #include <stdlib.h>
@@ -3792,7 +3845,7 @@ def cross_refuses_host_libraries(t):
     truthful answer is that the target has no zlib, and the message has to
     say which architecture it looked for."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	if not os.path.exists("/usr/include/zlib.h"):
 		raise Skip("zlib headers not installed")
 	if glob.glob("/usr/aarch64-linux-gnu/lib/libz.so"):
@@ -3833,7 +3886,7 @@ def cross_rejects_wrong_architecture_libraries(t):
     offering it would produce a link error about incompatible architectures.
     """
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	host_dir = subprocess.run(["cc", "-print-multiarch"],
 	                          capture_output=True, text=True).stdout.strip()
 	host_libs = f"/usr/lib/{host_dir}" if host_dir else "/usr/lib"
@@ -3867,7 +3920,7 @@ def cross_builds_generators_for_the_build_machine(t):
     cannot be executed, which is the classic build-versus-host distinction
     and the one place a cross build needs two toolchains rather than one."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	t.write("util/mktable.c", r"""
 #include <stdio.h>
 int main(int argc, char **argv){
@@ -3917,7 +3970,7 @@ outputs = ["gen/table.c"]
 def cross_rejects_an_unrunnable_generator(t):
 	"""Declared wrong, caught rather than trusted."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	t.write("util/mk.c", r"""
 #include <stdio.h>
 int main(int argc, char **argv){
@@ -3956,7 +4009,7 @@ def cross_generators_do_not_inherit_target_flags(t):
     the target's filesystem. So the tool build takes none of the target's
     flags, and carries its own if it needs any."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	t.write("util/mk.c", r"""
 #include <stdio.h>
 int main(int argc, char **argv){
@@ -4010,7 +4063,7 @@ def cross_derives_binutils_from_the_compiler(t):
     A host nm can often read foreign objects, but relying on that is luck.
     aarch64-linux-gnu-gcc implies aarch64-linux-gnu-nm and -ar."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	t.write("lib.c", '//! @kind static\n//! @target derived\n'
 	        "int twice(int x){ return x * 2; }\n")
 	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
@@ -4032,7 +4085,7 @@ def cross_derives_binutils_from_the_compiler(t):
 def cross_platform_filtering_uses_the_target(t):
 	"""@arch is tested against what is being built for."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	t.write("cpu.h", "const char *cpu(void);\n")
 	t.write("cpu_x86.c", '//! @arch x86_64\n#include "cpu.h"\n'
 	        'const char *cpu(void){ return "x86_64"; }\n')
@@ -10919,7 +10972,7 @@ def a_foreign_archive_is_refused_by_name(t):
     ELF header this question for installed libraries; archives were the one
     input that skipped it."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	_vendor(t, "vendor/libhelper.a", "helper",
 	        "int helper(void){ return 42; }\n")     # built with the host cc
 	t.write("fmake.toml",
@@ -10943,7 +10996,7 @@ def a_cross_built_archive_is_used(t):
     A check that refuses everything would pass the case above and be useless,
     which is the failure mode worth guarding against here."""
 	if not _cross_available():
-		raise Skip(f"{CROSS_CC} not installed")
+		raise Skip(_cross_reason())
 	if not shutil.which("qemu-aarch64"):
 		raise Skip("qemu-aarch64 not installed")
 	src = os.path.join(t.dir, "helper.c")
@@ -11814,6 +11867,16 @@ def the_source_runs_on_the_python_it_declares(t):
 	# one's opening quote and a multi-line outer reads as single-line. That
 	# is how this check passed on a file python3.11 refuses to parse.
 	import tokenize
+	# 3.11 is this project's declared floor -- debian/control says
+	# `python3 (>= 3.11)' -- and FSTRING_START does not exist as a token
+	# type before 3.12, so on the very interpreter this case defends the
+	# attribute lookup raises and run_case counts it as a failure. A check
+	# that errors on the configuration it exists to protect reports the
+	# opposite of what it found. The half below gets this right already.
+	if not hasattr(tokenize, "FSTRING_START"):
+		raise Skip("this interpreter has no FSTRING_START to read; the "
+		           "span check needs 3.12 even though what it checks for "
+		           "is 3.11")
 	stack, bad = [], []
 	with open(FMAKE, "rb") as fh:
 		for tok in tokenize.tokenize(fh.readline):
@@ -14770,6 +14833,21 @@ def main(argv):
 
 	cases = [c for c in CASES
 	         if not pats or any(p in c.__name__ for p in pats)]
+	# A filter that matches nothing is not a suite that passed. Reported
+	# from a sweep for gates that report success having checked nothing,
+	# and `make test' passes no arguments so CI never met it -- the victim
+	# is somebody narrowing to one case, or a script naming a case that has
+	# since been renamed, which is how five of apt-emerge's tests skipped
+	# for twenty-seven commits with nobody reading the word "skipped".
+	#
+	# tool/style_gate.py refuses the same shape in the same words: a clean
+	# tree and a collapsed file list are indistinguishable from the exit
+	# code, so the tool has to tell them apart itself.
+	if pats and not cases:
+		print(f"{RED}no case matches {' '.join(pats)}{OFF}")
+		print("       this reads as a clean run and is an empty one; "
+		      "`./selftest' with no arguments runs all of them")
+		return 2
 	failures = skipped = 0
 
 	with concurrent.futures.ThreadPoolExecutor(max_workers=JOBS) as pool:
