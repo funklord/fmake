@@ -11123,7 +11123,7 @@ refuses it as an unknown key**, naming `needs` while it does so. So both
 ends stop, and the older one gives the reader the word to search for.
 That property is worth stating because it is not obvious and it is not
 free: it works only because `load_conf` validates against a closed schema
-rather than ignoring what it does not recognise, which §is a choice made
+rather than ignoring what it does not recognise, which is a choice made
 long before there was anything to protect.
 
 **Not yet used by any tree, and that is honest rather than lazy.** These
