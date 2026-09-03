@@ -1756,8 +1756,10 @@ rather than code, and one lesson about testing.
   comes from.
 - ~~**LTO and `-ffunction-sections`.**~~ Closed; see §112. GCC's `-flto`
   was already checked by hand. Clang was called untested "because clang is
-  not installed here" — it is, just not on `$PATH`, and the entry is what
-  a wrong reason for not checking something looks like. It works: the
+  not installed here" — it is, and the entry is what a wrong reason for not
+  checking something looks like. (Both this bullet and §112 said "just not
+  on `$PATH`"; measured again 2026-09-03, `/usr/bin/clang` is a symlink to
+  the LLVM 19 driver and the suite's case runs rather than skipping.) It works: the
   objects really are bitcode, `nm` reads them via the LLVM BFD plugin, and
   the closure is unaffected. Guarded by two cases, one of which needs no
   clang. `-ffunction-sections` only changes what the linker discards,
@@ -8610,8 +8612,17 @@ to the closure -- so every file would look like it provides nothing and
 the link set would be empty. Untested, "because clang is not installed
 here".
 
-**Clang is installed here**, at `/usr/lib/llvm-19/bin/clang`, which is not
-on `$PATH`. `which clang` was the whole investigation. The same false
+**Clang is installed here**, at `/usr/lib/llvm-19/bin/clang`. `which clang`
+was the whole investigation.
+
+*Measured again 2026-09-03, because a peer sweep read this paragraph's own
+quotation as a live claim:* clang is on `$PATH` -- `/usr/bin/clang` is a
+symlink to that driver, Debian clang 19.1.7 -- and the suite's case runs
+rather than skipping. The "which is not on `$PATH`" this sentence used to
+carry may have been wrong on the day rather than having gone stale, since
+the `clang` metapackage's dpkg file list is dated the evening before this
+entry landed. Not chased further: which of the two it is changes nothing,
+and the finding was never about the path. The same false
 premise had been written down independently in §86, where it left the
 claim that clang treats `-Og` as roughly `-O1` unchecked -- measured, they
 are **byte-identical objects**, while gcc's five levels all differ.
@@ -12282,6 +12293,33 @@ asking would otherwise cost thirteen link attempts.
                        fixed guard:     skip
     exits 0, no file   committed guard: FAIL
                        fixed guard:     skip
+
+### The shape, stated once so it can be cited
+
+**A guard that names a capability and tests a binary.** The claim under it
+is "this machine can do X"; what it asks is "does a file called X exist".
+Every case behind such a guard inherits the gap between the two, and the gap
+is invisible on any machine where the two happen to agree -- which is every
+machine anybody develops on, because agreement is why the tool was installed.
+
+The numbers, so the shape has a size: **one guard, thirteen cases**, and it
+failed in the harder of the two directions. A guard that is too strict skips
+work that could have run, and somebody notices a skip. This one was too lax:
+it skipped *nothing* on a machine carrying the driver without the target
+libc, so the first person to meet it reads thirteen broken tests rather than
+one honest "not available here".
+
+The fix is to make the guard do the thing the cases assert -- not something
+adjacent to it. Not compile: `-c` succeeds with no target libc at all, and
+compiling is not what the cases claim. **Match the test to the claim, and
+cache it**, since thirteen cases asking would otherwise cost thirteen link
+attempts.
+
+Reported from `claude-guidelines` 2026-09-03 as one of three instances in
+three trees at three layers -- a floor gate that could run anywhere, a
+static detector in the same position, and this. Those two are their trees'
+to describe; what fmake contributes is this one, its numbers, and the
+direction it failed in.
 
 The second shim is what makes the `os.path.exists(out)` half necessary rather
 than decorative.
