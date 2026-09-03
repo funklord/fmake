@@ -339,6 +339,34 @@ NM_UNDEF    = "U"
 NM_WEAK     = set("WVwv")      # weak / vague linkage: satisfies, never pulls
 NM_COMMON   = set("Cc")        # tentative definitions, treated as weak
 
+# One line of `nm --format=posix': `name type value size', the last two
+# sometimes absent. Read from the right, because **the name is the only
+# field that can contain a space** -- an inline-asm label makes one, which
+# is how an ABI shim or a linker-script anchor gets its name, and `cc'
+# assembles it without complaint. Taking the first two whitespace-separated
+# fields read `a b U' as the symbol `a' of type `b': lowercase, so
+# file-local, so dropped entirely.
+#
+# Measured, and the third of three directions is the one that matters. A
+# dropped *undefined* fails the link loudly, though the summary then names
+# no missing symbol at all. A dropped *definition* fails the link loudly
+# where it is the only one. A dropped definition with a second provider
+# present is **silent**: section 3's refusal never fires, fmake picks the
+# survivor, and the build succeeds without a word. A dropped record does
+# not produce a wrong answer so much as suppress the check that would have
+# caught one -- which is exactly what a mis-parsed depfile did to a
+# rebuild.
+#
+# At most two trailing hex fields, which is what stops a type letter that
+# is also a hex digit -- B, D, b, d -- from being eaten as a size. The
+# anchor does the rest: `a b U' tries name `a', type `b', cannot reach the
+# end, and backtracks onto the right answer. Where a name genuinely could
+# be read either way -- `foo T 0' is the symbol `foo' at 0, or a symbol
+# called `foo T' -- the shorter name wins, which is the reading that is
+# almost always meant.
+RE_NM_POSIX = re.compile(r"(?P<name>.+?)\s+(?P<type>[A-Za-z?])"
+                         r"(?:\s+[0-9a-fA-F]+)?(?:\s+[0-9a-fA-F]+)?\s*\Z")
+
 # ---------------------------------------------------------------------------
 # Colours & message helpers
 # ---------------------------------------------------------------------------
@@ -5140,10 +5168,13 @@ def read_symbols(units, cfg, jobs):
 			    f"{want}, which reads the file the plugin could not.")
 		undef, strong, weak = set(), set(), set()
 		for line in r.stdout.splitlines():
-			parts = line.split()
-			if len(parts) < 2:
+			# Archive member headers -- `member.o:' -- carry no whitespace
+			# and no type, so they fail to match rather than needing a rule
+			# of their own.
+			m = RE_NM_POSIX.match(line)
+			if not m:
 				continue
-			name, typ = parts[0], parts[1]
+			name, typ = m.group("name"), m.group("type")
 			if typ == NM_UNDEF:
 				undef.add(name)
 			elif typ in NM_WEAK or typ in NM_COMMON:

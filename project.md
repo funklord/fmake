@@ -206,7 +206,8 @@ that had been green about nothing for five commits ·
 [153. The last line sent the reader to install a function this tree defines](#153-the-last-line-sent-the-reader-to-install-a-function-this-tree-defines) ·
 [154. Four faults in the exit, and one in the mode that changes nothing](#154-four-faults-in-the-exit-and-one-in-the-mode-that-changes-nothing) ·
 [155. §154's own fix was a blacklist, and the class was twice its size](#155-154s-own-fix-was-a-blacklist-and-the-class-was-twice-its-size) ·
-[156. A header nothing rebuilt on, in the file §148 called safe](#156-a-header-nothing-rebuilt-on-in-the-file-148-called-safe)
+[156. A header nothing rebuilt on, in the file §148 called safe](#156-a-header-nothing-rebuilt-on-in-the-file-148-called-safe) ·
+[157. The other parse §148 cleared, and the direction it fails in](#157-the-other-parse-148-cleared-and-the-direction-it-fails-in)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12436,6 +12437,10 @@ was there dropped a prerequisite and caused *no* rebuild, which is silent
 rather than merely wasteful. The severity class was right and the direction
 was never asked.
 
+**Nor was `read_symbols`, and §157 is that one.** Same sentence, same
+question never put: a dropped definition is silent wherever a second
+provider exists, because §3's refusal has nothing left to refuse.
+
 **And the exclusionary half is `git_ignored`, which is my own from §139.**
 It parses `git check-ignore --stdin` and a mis-parse there would silently
 drop sources from a build, which is the same severity by a different route.
@@ -13065,3 +13070,80 @@ than from a second bug report, and both are exercised: a directory with a
 dollar in its name is in the case beside the one with a space, because an
 escape written from another escape's evidence is a guess until something
 runs it.
+
+## 157. The other parse §148 cleared, and the direction it fails in
+
+§156 corrected §148's clearance of `parse_depfile` and left the sentence's
+other half standing. `read_symbols` reads `nm --format=posix` output, and
+the same question -- *which way does the error fall* -- had never been put
+to it either.
+
+**The name is the only one of the four fields that can contain a space**,
+and an inline-asm label makes one:
+
+    extern long ab __asm__("\"a b\"");          /* main.c    -> a b U      */
+    __asm__(".globl \"a b\"\n\"a b\": .quad 42\n");  /* provider.c -> a b T 0 */
+
+`cc` assembles both without complaint -- this is how an ABI shim or a
+linker-script anchor gets its name. Taking the first two whitespace-separated
+fields read `a b U` as the symbol `a` of type `b`: lowercase, so file-local,
+so **dropped**. Both halves of the connection went with it, main.c needing
+nothing and provider.c defining nothing.
+
+### Three directions, measured with a shim `nm`
+
+The instrument is the one the suite already uses for moc and for the cross
+compiler: a real tool with one line filtered out, which is a mis-parse
+without needing a pathological symbol to produce it.
+
+    dropped undefined        link fails -- and the summary names no
+                             missing symbol at all, because fmake's own
+                             table says nothing was needed
+    dropped definition,      link fails: "no x86_64/64le library exports:
+    sole provider            helper"
+    dropped definition,      builds, runs, says nothing
+    second provider present
+
+**The third is the one that matters.** With both definitions visible fmake
+refuses -- *symbol 'helper' is defined by more than one file* -- which is §3,
+the rule the whole project rests on. Hide one from the parse and the refusal
+never fires: two files compile, the link succeeds, and fmake has chosen a
+provider without telling anyone.
+
+So a dropped record does not produce a wrong answer so much as **suppress the
+check that would have caught one**, which is exactly what the mis-parsed
+depfile did to a rebuild. Two parses, two suppressed guards, one sentence in
+§148 that cleared both by asking about severity instead of direction.
+
+### The fix, and the two things that decide it
+
+Read from the right. The trailing fields are fixed and the name is what
+remains, so a regex anchored at the end settles it:
+
+    (?P<name>.+?)\s+(?P<type>[A-Za-z?])
+    (?:\s+[0-9a-fA-F]+)?(?:\s+[0-9a-fA-F]+)?\s*\Z
+
+**At most two trailing hex fields**, because a type letter can itself be a
+hex digit -- `B`, `D`, `b`, `d` -- and a parser that took three would read
+`counter D 0 8` as a symbol called `counter` of type `0`. The anchor does the
+rest: `a b U` tries name `a` and type `b`, cannot reach the end, and
+backtracks onto the right answer. Where a line is genuinely ambiguous --
+`foo T 0` is the symbol `foo` at address 0, or a symbol called `foo T` -- the
+shorter name wins, which is the reading that is almost always meant.
+
+Archive member headers (`member.o:`) carry no whitespace and no type, so they
+fail to match rather than needing a rule of their own.
+
+### The case had to be rewritten twice before it could fail
+
+First version: the spaced symbol and an ordinary variable in the same file.
+It passed against the broken parser, because provider.c was linked for the
+*variable* and the symbol rode in with it. Second: the variable moved to a
+file of its own, and then nothing reached provider.c at all -- widening
+proposes from the scanner's `defs`, and the scanner cannot see a name that
+exists only inside an `__asm__` string.
+
+What makes it discriminate is a header that declares nothing. It puts
+provider.c in the candidate set and gives the closure exactly one reason to
+link it, which is the symbol under test. Both of the first two versions
+would have gone in green.

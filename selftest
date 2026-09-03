@@ -14158,6 +14158,52 @@ fn main() { println!("{}", helper::seven()); }
 
 
 @case
+def a_symbol_whose_name_has_a_space_is_read_correctly(t):
+	"""`nm --format=posix\' prints `name type value size\', and the name is
+	the only one of the four that can contain a space.
+
+    An inline-asm label makes one, which is how an ABI shim or a
+    linker-script anchor gets its name, and cc assembles it without
+    complaint. Taking the first two whitespace-separated fields read
+    `a b U\' as the symbol `a\' of type `b\' -- lowercase, so file-local, so
+    dropped -- and with it went both halves of the connection: main.c
+    needed nothing and provider.c defined nothing, so provider.c was never
+    linked and the build failed on `undefined reference to \'a b\'\' while
+    the summary named no missing symbol at all.
+
+    The variable is here on purpose too. Its type letter is `D\', which is
+    also a hex digit, so it pins the rule that at most two trailing hex
+    fields may be taken from the right -- a parser that took three would
+    read the type as a size and the name as a type.
+
+    The program answers with both values, so a link that resolved the
+    wrong thing fails this rather than looking plausible."""
+	# The header declares nothing. It is here so that provider.c is a
+	# candidate at all -- the closure then has exactly one reason to link
+	# it, which is the symbol whose name has a space in it.
+	t.write("provider.h", "/* nothing, deliberately */\n")
+	t.write("provider.c",
+	        '#include "provider.h"\n'
+	        '__asm__(".globl \\"a b\\"\\n\\"a b\\":\\n.quad 42\\n");\n')
+	# In a file of its own, so that provider.c is reachable *only*
+	# through the spaced symbol. Beside it, this case passed against
+	# the broken parser: provider.c came in for the variable and
+	# brought the symbol with it, which is a check that cannot fail.
+	t.write("var.c", "long counter = 5;\n")
+	t.write("main.c",
+	        '#include "provider.h"\n'
+	        'extern long ab __asm__("\\"a b\\"");\n'
+	        "extern long counter;\n"
+	        "int main(void){ return (ab == 42 && counter == 5) ? 0 : 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build failed: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program did not see both the spaced symbol and the variable")
+
+
+@case
 def a_header_whose_path_needs_escaping_is_still_a_dependency(t):
 	"""A depfile is Makefile syntax, and the compiler escapes accordingly.
 
