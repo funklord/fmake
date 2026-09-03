@@ -9475,23 +9475,50 @@ def _ninja(path):
 #     we$rd.c   No rule to make target 'wed.c'
 #     ha#sh.c   missing separator
 #     a:b.c     target pattern contains no '%'
+#     a;b.c     missing separator, arriving from the other side
 #
 # Escaping exists for some of them in some positions, and none of it
 # survives the trip through the recipe's shell as well -- which is the same
 # reason whitespace has been refused here since the beginning. ninja was
-# measured to build all four.
+# measured to build every one.
 MAKE_CANNOT = {"$": "$ starts a variable reference",
                "#": "# starts a comment",
-               ":": ": separates a target from its prerequisites"}
+               ":": ": separates a target from its prerequisites",
+               ";": "; ends the target line and starts a recipe"}
+
+# What may appear in a path an ejected Makefile names, as a whitelist.
+#
+# The list of forbidden characters this replaces was wrong within a day of
+# being written, and wrong in an instructive way: it came from testing
+# Make's *parser*, and the recipe's shell was never asked. So `$', `#' and
+# `:' were refused while `;', a quote, a backtick, `&' and `(' each still
+# produced a Makefile that fmake wrote, exited 0 on, and that could not
+# build -- the same silent failure, out of the same function, one layer
+# further down.
+#
+# A whitelist cannot be wrong in that direction. It can only be too strict,
+# which costs a refusal naming a file somebody can rename, and `--eject
+# ninja' was measured to build every one of these.
+#
+# `\w' rather than [A-Za-z0-9_] because it is Unicode-aware. A source
+# file whose name carries a non-ASCII letter -- `caf\303\251.c' as git
+# prints it -- was measured to build through an ejected Makefile, and
+# refusing it would be a regression wearing the clothes of caution.
+MAKE_SAFE = re.compile(r"[\w.+=@,~/-]\Z")
 
 
 def _unmakeable(path):
 	"""Why Make cannot express this path, or None."""
 	if any(c.isspace() for c in path):
 		return "Make splits prerequisites on whitespace"
-	for ch, why in MAKE_CANNOT.items():
-		if ch in path:
-			return why
+	# Only at the start of a word, which is where a path in a recipe is.
+	if path.startswith("~"):
+		return "~ at the start of a word is expanded by the shell"
+	for ch in path:
+		if MAKE_SAFE.match(ch):
+			continue
+		return MAKE_CANNOT.get(ch, f"`{ch}' is special to the shell that "
+		                           f"runs the recipe")
 	return None
 
 

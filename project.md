@@ -204,7 +204,8 @@ that had been green about nothing for five commits ·
 [151. Widening reached for fifty-three files, and each of them said who wrote it](#151-widening-reached-for-fifty-three-files-and-each-of-them-said-who-wrote-it) ·
 [152. A quoted include is the compiler's to resolve, and fmake cannot outvote it](#152-a-quoted-include-is-the-compilers-to-resolve-and-fmake-cannot-outvote-it) ·
 [153. The last line sent the reader to install a function this tree defines](#153-the-last-line-sent-the-reader-to-install-a-function-this-tree-defines) ·
-[154. Four faults in the exit, and one in the mode that changes nothing](#154-four-faults-in-the-exit-and-one-in-the-mode-that-changes-nothing)
+[154. Four faults in the exit, and one in the mode that changes nothing](#154-four-faults-in-the-exit-and-one-in-the-mode-that-changes-nothing) ·
+[155. §154's own fix was a blacklist, and the class was twice its size](#155-154s-own-fix-was-a-blacklist-and-the-class-was-twice-its-size)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12907,6 +12908,11 @@ escaping differs by position and none of it survives the recipe's shell as
 well. **ninja was measured to build all four**, so the remedy is real rather
 than a shrug.
 
+**These four were a list of forbidden characters, and §155 is what that cost
+by the end of the day**: the four came from testing Make's parser, the
+recipe's shell reads the same path a second time, and six more names walked
+straight through. The refusal is a whitelist now.
+
 ### The one nothing can eject
 
     -weird.c
@@ -12947,3 +12953,58 @@ findings: the awkward-tree pass is cheap, it is repeatable, and its negative
 result is what says the planner is not where the fragility is. Every fault
 here was in the code that writes a build file for somebody else to run,
 which is the part with no user until somebody leaves.
+
+## 155. §154's own fix was a blacklist, and the class was twice its size
+
+Written the same day as the entry it corrects, which is the point of it.
+
+§154 refused four things a Makefile cannot name -- whitespace, `$`, `#`,
+`:` -- each measured, each with the failure it produces quoted next to it.
+Every one of those measurements was of **Make's parser**. The recipe's
+shell was never asked, and it reads the same path a second time:
+
+    a;b.c     missing separator          (Make, from the other side)
+    a'b.c     /bin/sh: Unterminated quoted string
+    a`b.c     /bin/sh: EOF in backquote substitution
+    a&b.c     cc: error: a: linker input file not found
+    a(b).c    /bin/sh: Syntax error: "(" unexpected
+    a*b.c     built, because the glob matched its own file
+
+Six more names, one tree each, and **fmake wrote the Makefile and exited 0
+for all six** -- the same silent failure §154 was written to end, out of the
+same function, one layer further down. `--eject ninja` builds every one.
+
+### The lesson is about the shape of the guard, not the characters
+
+A list of forbidden characters can only be as complete as the reasoning that
+produced it, and the reasoning here had a blind spot with a name: it tested
+one of the two readers. Nothing about the list said which reader it came
+from, so nothing about it could have prompted the second question.
+
+**A whitelist cannot be wrong in that direction.** It can only be too
+strict, and too strict costs a refusal naming a file somebody can rename --
+next to a backend that builds it. So the rule is now the set of characters
+allowed in a path an ejected Makefile names, and everything else is refused
+with the character quoted back.
+
+`a*b.c` is the honest cost: it built, and it is refused now. A glob that
+happens to match its own file is not a property worth keeping, and a
+whitelist that carves out the cases that accidentally work is a blacklist
+again.
+
+### The one thing the whitelist must not do
+
+    café.c    builds through an ejected Makefile, and must keep doing so
+
+`\w` rather than `[A-Za-z0-9_]`, because Python's is Unicode-aware. A
+whitelist written the obvious way would have refused a filename that
+**was measured to work** in §154's own battery, which is a regression
+wearing the clothes of caution. It is asserted in the case beside the six
+refusals, in the same case, so the two halves cannot drift apart.
+
+### Why this is a separate entry rather than an edit
+
+§154 is pushed and its measurements are correct. What was wrong is not any
+of its findings but the shape of the guard it chose, and an edit that
+quietly widened the character list would leave the file saying a blacklist
+had been adequate. It was not, for a day.

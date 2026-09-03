@@ -4282,9 +4282,16 @@ def a_makefile_is_refused_for_a_path_make_cannot_express(t):
     no '%'". Whitespace was already refused here for the same reason, so
     the guard existed and covered one character of four.
 
+    The first three were refused by a list of forbidden characters, which
+    was wrong within a day: it came from testing Make\'s parser, and the
+    recipe\'s shell was never asked -- so `;\', a quote and `&\' still wrote
+    a Makefile that exited 0 and could not build. What decides now is a
+    whitelist, which can only be too strict.
+
     ninja was measured to build all of them, which is what makes the
     refusal worth making rather than a dead end."""
-	for name, ch in (("we$rd.c", "$"), ("ha#sh.c", "#"), ("a:b.c", ":")):
+	for name, ch in (("we$rd.c", "$"), ("ha#sh.c", "#"), ("a:b.c", ":"),
+	                 ("a;b.c", ";"), ("a\'b.c", "\'"), ("a&b.c", "&")):
 		u = Tree("unmakeable")
 		try:
 			u.write("main.c", "int helper(void);\n"
@@ -4312,6 +4319,29 @@ def a_makefile_is_refused_for_a_path_make_cannot_express(t):
 			      f"{name} either: {n.stdout}{n.stderr}")
 		finally:
 			u.cleanup()
+
+	# And the direction a whitelist can be wrong in, which is why this one
+	# is Unicode-aware: a non-ASCII filename is expressible in a Makefile
+	# and was measured to build through one, so refusing it would be a
+	# regression wearing the clothes of caution.
+	v = Tree("non-ascii")
+	try:
+		v.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper(); }\n")
+		v.write("caf\u00e9.c", "int helper(void){ return 0; }\n")
+		e = v.fmake("--eject", "make")
+		check(e.returncode == 0,
+		      f"a non-ASCII path Make can express was refused: "
+		      f"{e.stdout}{e.stderr}")
+		if shutil.which("make"):
+			v.write("Makefile", e.stdout)
+			shutil.rmtree(os.path.join(v.dir, ".fmake"), ignore_errors=True)
+			b = _run_in(v.dir, "make")
+			check(b.returncode == 0,
+			      f"the ejected build of a non-ASCII path failed: "
+			      f"{b.stdout}{b.stderr}")
+	finally:
+		v.cleanup()
 
 
 @case
