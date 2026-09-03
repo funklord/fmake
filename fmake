@@ -8636,6 +8636,12 @@ def build(args, _bootstrapping=False):
 	# of sibling programs that each define a `Window` produces the same
 	# complaint once per program, and fixing them one build at a time is a
 	# bad way to spend an afternoon.
+	# Keyed by path: `broken' holds unit keys, which carry a variant tag
+	# for a target compiling its own root a second time, and this asks
+	# about the file somebody wrote. See Unit.key.
+	broken_rels = {k.split("\0", 1)[0] for k in broken}
+	blamed_broken = set()
+
 	trouble = [(t, sym, providers) for t, cl in closures.items()
 	           for sym, providers in cl.ambiguous]
 	if trouble:
@@ -9219,6 +9225,22 @@ def build(args, _bootstrapping=False):
 				if toks.intersection(scans.get(rel, {}).get("defs") or []):
 					note(f"{rel} is excluded ({why}) and appears to define "
 					     f"one of them")
+			# And the plainest reason there is, which nothing said: the
+			# file that defines it is right here and did not compile.
+			# fmake names it two lines above, under "did not compile", and
+			# then offered --ldflags for the symbol anyway -- so the last
+			# line, which is the one anybody acts on, sent the reader to
+			# install a library for a function this tree defines. Section
+			# 138 recorded this shape and left it, because there the only
+			# available signal was a shared name prefix and that is a
+			# guess. Here it is not a guess: the file failed in this
+			# build, and what it appears to define is the same scan
+			# widening already trusts to propose a file.
+			for rel in sorted(broken_rels):
+				if toks.intersection(scans.get(rel, {}).get("defs") or []):
+					note(f"{rel} did not compile, and appears to define "
+					     f"one of them")
+					blamed_broken.add(rel)
 			# A meta-object this tree was supposed to generate is not a
 			# missing library, and offering --ldflags for one sends the
 			# reader to install something. The warning above already said
@@ -9264,6 +9286,15 @@ def build(args, _bootstrapping=False):
 			# Every failure here was rustc's, and rustc has already said
 			# what was wrong in its own words.
 			pass
+		elif blamed_broken:
+			# Same shape as the .moc ending below it: name the cause that
+			# was actually observed, and keep the library door open for
+			# whatever is left rather than pretending this explains
+			# everything.
+			note("fix the compile error above -- what is undefined is "
+			     "defined in this tree, by a file that did not compile, "
+			     "and no library has it; if that is not it, name the "
+			     "missing libraries with --ldflags")
 		else:
 			note("name the missing libraries with --ldflags, or build only "
 			     "the targets you want")

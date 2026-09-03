@@ -7894,6 +7894,84 @@ int main() { Local l; return l.n; }
 		u.cleanup()
 
 
+@case
+def a_file_that_did_not_compile_is_named_instead_of_a_library(t):
+	"""The last line is the one anybody acts on, and it said the wrong thing.
+
+    A source with a syntax error is reported as not compiling, the link
+    then fails on the symbol it defines, and the summary ended with "name
+    the missing libraries with --ldflags" -- for a function two lines
+    above, in this tree, in a file fmake had just said did not compile.
+    Two files reproduce it.
+
+    Section 138 recorded the same shape and left it, because there the
+    only signal was that the symbols shared a prefix with a schema, which
+    is a guess. This is not one: the file failed in this build, and what
+    it appears to define comes from the scan widening already trusts to
+    propose a file. The ending keeps the library door open for whatever
+    is left over, rather than claiming to explain everything."""
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void) { return 0 }\n")
+
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"this cannot link: {said}")
+	check("helper.c did not compile, and appears to define" in said,
+	      f"the file that defines the missing symbol, and failed to "
+	      f"compile, is not connected to it: {said}")
+	tail = said.strip().splitlines()[-1]
+	check("fix the compile error" in tail,
+	      f"the last line does not name the cause that was observed: "
+	      f"{tail}")
+
+	# The negative, and the reason this is a diagnosis rather than a
+	# guess: with nothing broken, an unresolved symbol still gets the
+	# ordinary advice, because then a library really is the likeliest
+	# answer.
+	u = Tree("nothing-broken")
+	try:
+		u.write("prog.c", "extern int mystery_symbol(void);\n"
+		        "int main(void){ return mystery_symbol(); }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check(r.returncode != 0, "an undefined symbol should not link")
+		check("did not compile" not in said,
+		      f"nothing here fails to compile: {said}")
+		check(said.strip().splitlines()[-1].endswith(
+		          "the targets you want"),
+		      f"a genuine missing library lost its advice: {said}")
+	finally:
+		u.cleanup()
+
+	# And a file that did fail, but defines nothing anybody is missing,
+	# is not dragged into the explanation. Both halves have to be true at
+	# once for this to measure anything: a link that fails, and a broken
+	# file that has nothing to do with why -- so the symbol is genuinely
+	# absent and the ordinary advice is the right one.
+	v = Tree("broken-elsewhere")
+	try:
+		v.write("main.c", "extern int mystery_symbol(void);\n"
+		        "int main(void){ return mystery_symbol(); }\n")
+		v.write("side.c", "int unrelated(void) { return 0 }\n")
+		r = v.fmake("--force-link", "side.c")
+		said = r.stdout + r.stderr
+		check("did not link" in said, f"nothing failed to link, so the "
+		      f"advice under test was never printed: {said}")
+		check("side.c" in said and "did not compile" in said,
+		      f"the broken file was never compiled, so this measures "
+		      f"nothing: {said}")
+		check("side.c did not compile, and appears to define" not in said,
+		      f"a file that fails and defines something else is being "
+		      f"blamed for it: {said}")
+		check(said.strip().splitlines()[-1].endswith(
+		          "the targets you want"),
+		      f"the ordinary advice was replaced on the strength of an "
+		      f"unrelated compile failure: {said}")
+	finally:
+		v.cleanup()
+
+
 def _need_qt():
 	if not _moc_path():
 		raise Skip("Qt development files not installed")

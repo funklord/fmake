@@ -202,7 +202,8 @@ that had been green about nothing for five commits ·
 [149. A path stopped being a unit's name, and three places went on using it](#149-a-path-stopped-being-a-units-name-and-three-places-went-on-using-it) ·
 [150. `lib.rs` names nothing, and two tracebacks behind the message that said so](#150-librs-names-nothing-and-two-tracebacks-behind-the-message-that-said-so) ·
 [151. Widening reached for fifty-three files, and each of them said who wrote it](#151-widening-reached-for-fifty-three-files-and-each-of-them-said-who-wrote-it) ·
-[152. A quoted include is the compiler's to resolve, and fmake cannot outvote it](#152-a-quoted-include-is-the-compilers-to-resolve-and-fmake-cannot-outvote-it)
+[152. A quoted include is the compiler's to resolve, and fmake cannot outvote it](#152-a-quoted-include-is-the-compilers-to-resolve-and-fmake-cannot-outvote-it) ·
+[153. The last line sent the reader to install a function this tree defines](#153-the-last-line-sent-the-reader-to-install-a-function-this-tree-defines)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11431,6 +11432,12 @@ prefix with a schema it just compiled. That is a guess, and §125's rule is
 that a case which has turned up once is not yet a case. Recorded so that a
 second instance in another tree moves it.
 
+**Still recorded, and §153 is not it.** That entry fixes the same *ending*
+arriving by a different route -- the file that defines the symbol is in the
+tree and failed to compile, which is a signal fmake has and this case does
+not. Here nothing failed to compile and the symbols were undeclared
+generator output, so the question this paragraph leaves open is untouched.
+
 The same run proposed a cause -- `test/generated/codec_impl.c not compiled:
 nothing reaches it` -- and it is worth writing down that it was wrong,
 because the way it was wrong is ordinary. That line is the *first* pass;
@@ -12731,3 +12738,73 @@ directory and therefore cannot shadow.
 That is the whole reason this is a warning found by looking rather than a bug
 found by hurting: it has not cost anything here yet, and the shape is one
 checkout of somebody else's branch away.
+
+## 153. The last line sent the reader to install a function this tree defines
+
+Found while measuring §152 -- the Qt fixture's link failure ended by offering
+`--ldflags` for `widget::widget()` -- and reduced to two files of plain C,
+because a finding that only appears inside somebody else's fixture is not yet
+a finding:
+
+    * 1 file(s) did not compile
+      helper.c
+
+    * brokenprov did not link
+      no x86_64/64le library exports: helper
+      name the missing libraries with --ldflags, or build only the targets
+      you want
+
+`helper.c` is named two lines above as having failed. The symbol is the
+function it defines. And the last line -- **the one anybody acts on** -- sends
+the reader to install a library for it.
+
+### Why §138 left this and why this one does not have to be left
+
+§138 recorded the same shape from situ: a link failure whose undefined
+symbols were situ's own, ending in `--ldflags`. It was not fixed, and the
+reason given was that the honest version needs a signal that is not there --
+to say something better fmake would have to tell "a symbol nothing defines
+because a generator was never declared" from "a symbol a library defines",
+and all it had was a shared name prefix, which is a guess.
+
+**Here the signal exists.** The file failed *in this build*: fmake has the
+set, it printed it, and what the file appears to define comes from the same
+scan that widening already trusts to propose a file. So the connection is
+observed rather than inferred, which is the difference §125's rule is
+actually about.
+
+    * brokenprov did not link
+      no x86_64/64le library exports: helper
+      helper.c did not compile, and appears to define one of them
+      fix the compile error above -- what is undefined is defined in this
+      tree, by a file that did not compile, and no library has it; if that
+      is not it, name the missing libraries with --ldflags
+
+It is the same move the line directly above it already makes for an *excluded*
+file, and the ending is the shape the `.moc` ending already uses: name the
+cause that was observed, then leave the library door open for whatever is
+left, rather than claiming to explain everything.
+
+### The negatives are what make it a diagnosis
+
+Both are asserted in the case, because a message that fires whenever
+something is undefined is not a diagnosis, it is a decoration:
+
+- **Nothing broken.** An unresolved symbol in a tree that compiled cleanly
+  still gets the ordinary advice, because then a library really is the
+  likeliest answer.
+- **Broken, but elsewhere.** A file that fails to compile and defines nothing
+  anybody is missing is not dragged into the explanation, and the ordinary
+  ending survives. That case needs both halves true at once -- a link that
+  fails *and* an unrelated compile failure -- or it measures nothing, which
+  is how the first draft of it was wrong.
+
+`appears to define` is hedged deliberately, exactly as the excluded-file line
+beside it is. The match is by token, and §151 is the standing reminder that
+tokens are not always specific to what defines them -- a broken file full of
+boilerplate could in principle match a symbol it has nothing to do with. The
+second clause of the ending is what keeps that from being a dead end.
+
+**§138's own case stays open.** Its symbols were undefined because a generator
+had not been declared, and nothing failed to compile; this reaches it by a
+different route and does not discharge it.
