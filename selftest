@@ -14158,6 +14158,44 @@ fn main() { println!("{}", helper::seven()); }
 
 
 @case
+def a_header_whose_path_needs_escaping_is_still_a_dependency(t):
+	"""A depfile is Makefile syntax, and the compiler escapes accordingly.
+
+    A space in a path arrives as `\\ ' and a dollar as `$$'. Splitting the
+    right-hand side on whitespace turned one header into three names, none
+    of which existed, so a header under `inc dir/' was a dependency of
+    nothing: editing it rebuilt nothing and fmake said "up to date" while
+    the binary kept the old value.
+
+    The program answers with what the header said, so a stale binary fails
+    this rather than merely looking suspicious. Both escapes are exercised,
+    because the second was written from the first's evidence and would
+    otherwise be a guess."""
+	for d in ("inc dir", "inc$dir"):
+		u = Tree("depescape")
+		try:
+			u.write(f"{d}/hdr.h", "#define VALUE 7\n")
+			u.write("main.c", f'#include "{d}/hdr.h"\n'
+			        "int main(void){ return VALUE == 7 ? 0 : 1; }\n")
+			name = os.path.basename(u.dir)
+			r = u.fmake()
+			check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+			check(u.run(name).returncode == 0,
+			      f"the first build is already wrong for {d}/")
+
+			u.write(f"{d}/hdr.h", "#define VALUE 9\n")
+			r = u.fmake()
+			check(r.returncode == 0,
+			      f"rebuild failed: {r.stdout}{r.stderr}")
+			check(u.run(name).returncode == 1,
+			      f"editing {d}/hdr.h rebuilt nothing: the binary still "
+			      f"carries the old value, and the depfile is where that "
+			      f"dependency was supposed to come from")
+		finally:
+			u.cleanup()
+
+
+@case
 def a_crate_rebuilds_on_a_member_the_mod_scan_cannot_see(t):
 	"""The half section 126 called the one that would rot quietly.
 

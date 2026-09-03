@@ -205,7 +205,8 @@ that had been green about nothing for five commits ·
 [152. A quoted include is the compiler's to resolve, and fmake cannot outvote it](#152-a-quoted-include-is-the-compilers-to-resolve-and-fmake-cannot-outvote-it) ·
 [153. The last line sent the reader to install a function this tree defines](#153-the-last-line-sent-the-reader-to-install-a-function-this-tree-defines) ·
 [154. Four faults in the exit, and one in the mode that changes nothing](#154-four-faults-in-the-exit-and-one-in-the-mode-that-changes-nothing) ·
-[155. §154's own fix was a blacklist, and the class was twice its size](#155-154s-own-fix-was-a-blacklist-and-the-class-was-twice-its-size)
+[155. §154's own fix was a blacklist, and the class was twice its size](#155-154s-own-fix-was-a-blacklist-and-the-class-was-twice-its-size) ·
+[156. A header nothing rebuilt on, in the file §148 called safe](#156-a-header-nothing-rebuilt-on-in-the-file-148-called-safe)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12429,6 +12430,12 @@ consume names from `-MD` and from `nm`, and a mis-parse there causes a
 rebuild or a missing provider rather than a removal. Nothing else in fmake
 deletes on the strength of a parse.
 
+**`parse_depfile` was not benign, and §156 is the measurement.** The
+sentence above pictured a mis-parse causing an extra rebuild; the one that
+was there dropped a prerequisite and caused *no* rebuild, which is silent
+rather than merely wasteful. The severity class was right and the direction
+was never asked.
+
 **And the exclusionary half is `git_ignored`, which is my own from §139.**
 It parses `git check-ignore --stdin` and a mis-parse there would silently
 drop sources from a build, which is the same severity by a different route.
@@ -13008,3 +13015,53 @@ refusals, in the same case, so the two halves cannot drift apart.
 of its findings but the shape of the guard it chose, and an edit that
 quietly widened the character list would leave the file saying a blacklist
 had been adequate. It was not, for a day.
+
+## 156. A header nothing rebuilt on, in the file §148 called safe
+
+Found by pointing §155's lens -- *a rule derived from one of several
+readers* -- at the live build rather than at the exit, and it is the worst
+of the day: silent, in the everyday path, and in code an earlier sweep had
+looked at and cleared.
+
+A depfile is Makefile syntax, so the compiler escapes what Make would
+otherwise read as something else:
+
+    .../dephdr/inc\ dir/hdr.h
+
+`parse_depfile` split the right-hand side on whitespace. That turns one
+header into `inc\` and `dir/hdr.h`, neither of which exists, so **the header
+was a dependency of nothing.**
+
+    edit inc dir/hdr.h    * dephdr up to date        binary keeps the old value
+    edit incdir/hdr.h     LD dephdr                  binary follows the header
+
+The control is the same tree with the space removed, and it is what makes
+this a parser fault rather than a story about staleness. The program answers
+with what the header said, so the stale binary fails the case rather than
+merely looking suspicious.
+
+### §148 read this function and called it safe
+
+That entry swept for *a name parsed out of a tool's output that then drives
+a destructive or exclusionary action*, and recorded `parse_depfile` as one
+of two benign instances, because "a mis-parse there causes a rebuild or a
+missing provider rather than a removal".
+
+The reasoning was right about the severity class and wrong about the
+direction. A mis-parse that causes an *extra* rebuild is benign, and that is
+the one the sentence pictured. A mis-parse that drops a prerequisite causes
+**no** rebuild, which is not a removal and is not benign: it is a wrong
+answer that persists until somebody notices their edit did nothing. Nothing
+in the sweep asked which way the error would fall.
+
+So the lens was sound and its application stopped one question early -- and
+the question it stopped short of is the one §155 had just made explicit: not
+*is this parse used destructively* but *which of the two readers was this
+written against*. `-MD` output is read by Make, which unescapes, and by
+fmake, which did not.
+
+`$$` is handled too, from the same reading of the same specification rather
+than from a second bug report, and both are exercised: a directory with a
+dollar in its name is in the case beside the one with a space, because an
+escape written from another escape's evidence is a guess until something
+runs it.

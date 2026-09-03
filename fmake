@@ -4340,7 +4340,21 @@ class Cache:
 # ---------------------------------------------------------------------------
 
 def parse_depfile(path):
-	"""Read a `cc -MD` depfile and return the prerequisite paths."""
+	"""Read a `cc -MD` depfile and return the prerequisite paths.
+
+    A depfile is Makefile syntax, so the compiler escapes what Make would
+    otherwise read as something else: a space in a path arrives as `\\ ' and
+    a dollar as `$$'. Splitting on whitespace turned one header into three
+    names, none of which existed -- so a header under `inc dir/' was not a
+    dependency of anything, and editing it rebuilt nothing while fmake said
+    "up to date". Measured, with the same tree minus the space as the
+    control: that one rebuilds.
+
+    This is section 148's shape in the place that entry called safe. It is
+    not a deletion, which is what that sweep was looking for; it is a
+    staleness decision, and a wrong one is silent in the direction nobody
+    checks.
+    """
 	try:
 		with open(path) as fh:
 			text = fh.read()
@@ -4348,7 +4362,26 @@ def parse_depfile(path):
 		return []
 	text = text.replace("\\\n", " ")
 	_, _, rhs = text.partition(":")
-	return [p for p in rhs.split() if p and p != "\\"]
+	out, cur, i, n = [], [], 0, len(rhs)
+	while i < n:
+		c = rhs[i]
+		if c == "\\" and i + 1 < n and rhs[i + 1] in " \t\\#":
+			cur.append(rhs[i + 1])
+			i += 2
+		elif c == "$" and i + 1 < n and rhs[i + 1] == "$":
+			cur.append("$")
+			i += 2
+		elif c.isspace():
+			if cur:
+				out.append("".join(cur))
+				cur = []
+			i += 1
+		else:
+			cur.append(c)
+			i += 1
+	if cur:
+		out.append("".join(cur))
+	return [p for p in out if p and p != "\\"]
 
 # ---------------------------------------------------------------------------
 # Compiling
