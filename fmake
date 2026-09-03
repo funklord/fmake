@@ -174,7 +174,7 @@ def build_identity():
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
-CACHE_VER   = 8   # scans record a version macro's own fallback
+CACHE_VER   = 9   # scans record what generated the file, where it says so
 
 class Lang:
 	"""One source language: how to compile it and what its text means.
@@ -678,6 +678,39 @@ def version_fallbacks(code):
 RE_ASM_GLOBAL = re.compile(
     r"^[ \t]*\.(?:globl|global)[ \t]+([A-Za-z_.$][\w.$]*)", re.M)
 
+# What a generated file says about itself, for the three generators fmake
+# runs itself. Each writes a banner naming the tool, measured from the
+# installed ones rather than assumed:
+#
+#     ** Created by: The Qt Meta Object Compiler version 69 (Qt 6.12.0)
+#     ** Created by: Qt User Interface Compiler version 5.15.15
+#     ** Created by: The Resource Compiler for Qt version 5.15.15
+#
+# This is the one statement about a file's origin that is not an inference.
+# A name pattern would be a guess -- `moc_' is a convention -- and the
+# directory is a guess as well, which is what section 139 turned out to be.
+RE_GENERATED_BY = re.compile(
+    r"\*\* Created by:\s+(?:The\s+)?"
+    r"(Qt Meta Object Compiler|Qt User Interface Compiler|"
+    r"Resource Compiler for Qt)")
+
+
+def generated_by(comments):
+	"""The tool whose banner opens this file, or "".
+
+    Only a comment at the top counts. One further down naming a generator is
+    somebody writing *about* it -- this file does it twice -- and reading
+    that as a statement of origin would set aside a source file on the
+    strength of a sentence in it.
+    """
+	for line, body in comments:
+		if line > 10:
+			break
+		m = RE_GENERATED_BY.search(body)
+		if m:
+			return m.group(1)
+	return ""
+
 # A crate's module declarations, which are what say the crate is more than
 # one file. The semicolon is load-bearing: `mod name { ... }' is a module
 # written inline and names no file at all, so matching without it would
@@ -761,6 +794,9 @@ def scan_source(path):
 	    "qrc":      sorted(set(RE_QRC_PATH.findall(code))),
 	    "qrc_init": sorted(set(RE_QRC_INIT.findall(code))),
 	    "verfall":  version_fallbacks(code),
+	    # From the comments, which is where the banner is. "" for
+	    # everything anybody wrote by hand, which is nearly every file.
+	    "genby":    generated_by(comments),
 	    "defs":     sorted(defs),
 	    "dirs":     _dirs_and_typos[0],
 	    # Recorded with the scan rather than warned about while
@@ -8229,6 +8265,9 @@ def build(args, _bootstrapping=False):
 
 	# ---- compile, close, widen ----------------------------------------
 	tried, broken = set(), set()
+	# Generated files widening was offered and turned down. Kept so the
+	# report at the end does not give them a second, wrong reason.
+	declined_generated = set()
 	closures = {}
 	target_ident, vetted = None, False
 	# Computed once, over every source in the tree rather than over the
@@ -8480,10 +8519,57 @@ def build(args, _bootstrapping=False):
 			break
 		tried |= fresh
 
-		rest = [Unit(rel, root, objdir, scans[rel])
-		        for rel in srcs
+		# fmake runs moc, uic and rcc itself, so a file one of them wrote
+		# is never what a link is missing: the output for every class this
+		# tree has is already in the plan, generated from the header that
+		# declares it. Left-over output from somebody else's build is a
+		# second copy of that, and widening is the one pass that will
+		# reach for it -- because it matches *names*, and generated code
+		# is named after the very classes the tree has.
+		#
+		# Measured in hydra: 53 stray moc files compiled, all of them
+		# classes fmake had moc'd itself moments earlier. Every moc output
+		# defines the same five things -- metaObject,
+		# qt_create_metaobjectdata, qt_metacall, qt_metacast,
+		# qt_static_metacall -- so one unresolved metaobject symbol
+		# matches all of them at once, whatever class it belongs to. The
+		# guard this pass relies on, that a *definition* is specific to
+		# what defines it, is simply untrue of boilerplate.
+		#
+		# Excluded here rather than from `srcs': a file the tree includes
+		# and compiles is the tree's business, and section 3 already
+		# refuses when two files define one symbol. What is being declined
+		# is only fmake proposing one on its own initiative.
+		pool = [rel for rel in srcs
 		        if rel not in units and rel not in crate_members]
+		theirs = [rel for rel in pool if scans[rel].get("genby")
+		          and not rel.startswith(STATE_DIR + os.sep)]
+		mine = set(pool) - set(theirs)
+		rest = [Unit(rel, root, objdir, scans[rel])
+		        for rel in pool if rel in mine]
 		extra = widen_candidates(fresh, rest)
+		# Said only where it changed the answer. A tree with leftover
+		# generated code that nothing was going to propose anyway does not
+		# need a line about it.
+		would = widen_candidates(fresh, [Unit(rel, root, objdir, scans[rel])
+		                                 for rel in theirs])
+		if would:
+			tools = " and ".join(sorted({scans[u.rel]["genby"]
+			                             for u in would}))
+			shown = ", ".join(u.rel for u in would[:3])
+			if len(would) > 3:
+				shown += f", and {len(would) - 3} more"
+			info(f"{len(would)} file(s) written by the {tools} look like "
+			     f"they define a symbol nothing here provides; not "
+			     f"compiling them.\n"
+			     f"    fmake runs that itself, from this tree's own "
+			     f"headers, so another build's output is a second copy of "
+			     f"what is already in this one.\n"
+			     f"    every file it writes defines the same handful of "
+			     f"functions, so one missing symbol matches all of them "
+			     f"at once, whichever class it belongs to.\n"
+			     f"    {shown}")
+			declined_generated |= {u.rel for u in would}
 		if not extra:
 			break
 		vinfo(f"widening: {len(extra)} more file(s) may define "
@@ -8877,11 +8963,18 @@ def build(args, _bootstrapping=False):
 			# files in a tree with eleven schemas, each offering
 			# --force-link for something nobody wrote and nobody
 			# wants linked. --explain still lists them.
+			# Not a generated file widening declined: it was named
+			# already, with the reason that applies. Saying "nothing
+			# reaches it" as well would offer --force-link for a file
+			# fmake has just finished explaining it does not want --
+			# section 147's shape, a second message naming a cause
+			# nothing tested.
 			ignored = sorted(set(srcs) - set(units)
 			                 - {t.rel for t in held}
 			                 - crate_members
 			                 - set(situ_outs)
-			                 - set(crate_orphans))
+			                 - set(crate_orphans)
+			                 - declined_generated)
 			for rel in ignored[:5]:
 				note(f"{rel} not compiled: nothing reaches it "
 				     f"(--force-link if it is needed anyway)")

@@ -10914,6 +10914,78 @@ int main(void){ return helper_7() == 7 ? 0 : 1; }
 	check(t.run(os.path.basename(t.dir)).returncode == 0, "the program failed")
 
 
+MOC_BANNER = """
+/****************************************************************************
+** Meta object code from reading C++ file '%s.h'
+**
+** Created by: The Qt Meta Object Compiler version 69 (Qt 6.12.0)
+**
+** WARNING! All changes made in this file will be lost!
+*****************************************************************************/
+"""
+
+
+@case
+def widening_does_not_reach_for_another_builds_moc_output(t):
+	"""The same filter defeated by generated code, which section 146
+	measured in hydra: 55 stray moc files compiled, every one of them a
+	class fmake had moc'd itself moments earlier.
+
+    Widening proposes an unbuilt file whose apparent *definitions* match an
+    unresolved symbol, and that rests on a definition being specific to
+    whatever defines it. Every file moc writes defines the same five
+    things -- metaObject, qt_create_metaobjectdata, qt_metacall,
+    qt_metacast, qt_static_metacall -- so one unresolved metaobject symbol
+    matches all of them at once, whichever class it belongs to.
+
+    fmake runs moc itself, from the headers in the tree, so output from
+    somebody else's build is a second copy of what is already in the plan
+    and is never what a link is missing. The banner moc writes is what says
+    so: a name pattern would be a convention and a directory would be a
+    guess.
+
+    Both halves are asserted. Requiring the class token as well was
+    measured and is wrong -- hydra's own address_input.cpp records seven
+    free functions and no class name -- so the real provider must still be
+    found by the token it shares with the boilerplate."""
+	t.write("src/main.cpp", """
+struct alpha { int qt_metacall(int); };
+
+int main() { return alpha().qt_metacall(0); }
+""")
+	t.write("src/alpha.cpp", """
+struct alpha { int qt_metacall(int); };
+
+int alpha::qt_metacall(int x) { return x - x; }
+""")
+	for cls in ("beta", "gamma", "delta"):
+		t.write(f"leftover/moc_{cls}.cpp", (MOC_BANNER % cls) + f"""
+struct {cls} {{ int qt_metacall(int); int qt_metacast(int); }};
+
+int {cls}::qt_metacall(int x) {{ return x; }}
+int {cls}::qt_metacast(int x) {{ return x; }}
+""")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	built = compiled(r)
+	strays = [c for c in built if "moc_" in c]
+	check(not strays,
+	      f"widening compiled {len(strays)} file(s) another build's moc "
+	      f"wrote: {strays}")
+	check(any("alpha.cpp" in c for c in built),
+	      f"the file that really defines the symbol was not found; a "
+	      f"wrong-file bug has been traded for a missing-file one: {built}")
+	check("Meta Object Compiler" in out,
+	      f"nothing says why three files that match were left alone: {out}")
+	check("--force-link" not in out,
+	      f"the files fmake has just declined are also being offered as "
+	      f"files nothing reaches, which is two reasons for one skip: "
+	      f"{out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0, "the program failed")
+
+
 @case
 def a_shared_library_says_its_own_name(t):
 	"""Without DT_SONAME the consumer decides what to record, and it is wrong.

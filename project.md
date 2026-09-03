@@ -200,7 +200,8 @@ that had been green about nothing for five commits ·
 [147. Three gates in the suite that passed without looking, and a skip that lied](#147-three-gates-in-the-suite-that-passed-without-looking-and-a-skip-that-lied) ·
 [148. The lens from the worst bug: a name that decides a deletion](#148-the-lens-from-the-worst-bug-a-name-that-decides-a-deletion) ·
 [149. A path stopped being a unit's name, and three places went on using it](#149-a-path-stopped-being-a-units-name-and-three-places-went-on-using-it) ·
-[150. `lib.rs` names nothing, and two tracebacks behind the message that said so](#150-librs-names-nothing-and-two-tracebacks-behind-the-message-that-said-so)
+[150. `lib.rs` names nothing, and two tracebacks behind the message that said so](#150-librs-names-nothing-and-two-tracebacks-behind-the-message-that-said-so) ·
+[151. Widening reached for fifty-three files, and each of them said who wrote it](#151-widening-reached-for-fifty-three-files-and-each-of-them-said-who-wrote-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12550,3 +12551,92 @@ resolve and does not claim to. **netcfgd's exclusion stands** -- a
 twenty-one crate workspace with features and a registry is Cargo's -- and
 what changed is that the first thing a Rust project sees is no longer a name
 collision in files it does not own, and is no longer a traceback either.
+
+## 151. Widening reached for fifty-three files, and each of them said who wrote it
+
+§146 measured the defect and left three candidate fixes, none taken, because
+it changes what fmake compiles in every tree. Taken now: the third, which is
+the only one fmake has standing to make. **fmake runs moc, uic and rcc
+itself, from the headers in the tree, so a file one of them wrote is never
+what a link is missing** -- it is a second copy of something already in the
+plan.
+
+### Why this one, and not the other two
+
+- **A list of five boilerplate tokens** is a list fmake would own and have to
+  keep. moc's boilerplate is Qt's to change, and a version that adds a sixth
+  restores the bug silently. It also says nothing about uic or rcc.
+- **A token many files define is not a discriminator** needs a threshold,
+  which is a guess about how many files a tree has, and it would go on
+  guessing in every tree that is not the one it was tuned on.
+- The **banner** is the file's own statement of origin. It covers all three
+  generators at once, it does not depend on how many of them a tree holds,
+  and there is nothing for fmake to keep up to date.
+
+§146's other measurement stands, and is why none of this reaches for the
+class name: requiring a *qualifier* match does separate the fifty-three from
+each other, and it breaks the case widening exists for, because hydra's real
+`src/address_input.cpp` records seven free functions and no class token at
+all.
+
+### What identifies one, read from the tools rather than remembered
+
+    ** Created by: The Qt Meta Object Compiler version 69 (Qt 6.12.0)
+    ** Created by: Qt User Interface Compiler version 5.15.15
+    ** Created by: The Resource Compiler for Qt version 5.15.15
+
+Taken from the installed moc, uic and rcc by running them, because §141 was
+fifteen minutes spent on a pattern that matched what situc *probably*
+prints. **Only a comment in the first ten lines counts.** This file names all
+three tools in prose and so does the README; reading a sentence *about* a
+generator as a statement of origin would set aside a source file on the
+strength of what somebody wrote about it.
+
+A name pattern would have been a convention -- `moc_` is one, not a rule --
+and a directory would have been a guess, which is what §139 turned out to
+be.
+
+### What it changes, and what it deliberately does not
+
+Excluded from **widening only**, not from `srcs`. A file the tree itself
+includes and compiles is the tree's business, and §3 already refuses when two
+files define one symbol; what is being declined is fmake proposing one *on
+its own initiative*. `--widen-all` still compiles the whole tree, because
+that is what it says it does.
+
+And the report at the end no longer offers `--force-link` for these. They
+were named once already, with the reason that applies; a second line saying
+"nothing reaches it" would be §147's shape -- a message naming a cause
+nothing tested -- about a file fmake had just finished explaining it does not
+want.
+
+### Evidence
+
+hydra, the tree §146 measured, with its `.gitignore` rules for
+`build-android*/` and `moc_*.cpp` removed. That is deliberately **the
+committed or vendored case §139's rule cannot reach**, since the point of
+this fix is that it does not depend on git having been told.
+
+    committed fmake   [1/220] then [1/53], exit 1, and all 53 fail on
+                      moc's own version guard:
+                      #error "This file was generated using the moc
+                      from 6.12.0. It"
+    this one          [1/220], exit 0, and the 53 named once with why
+
+**The ejected fragments from the two runs are byte-identical**, 7750 lines
+each, and neither mentions a single one of the fifty-three. So those compiles
+were not merely wrong, they could not have contributed anything: the whole
+effect of that pass was to turn a build that had already worked out the right
+answer into exit 1. That is worth more than the count -- it says the strays
+never reached a link set, and the pass that proposed them was reaching for
+files the closure had no use for.
+
+In miniature, and in the suite: five files and no Qt at all -- a program
+needing `alpha::qt_metacall`, the file that defines it, and three
+banner-carrying leftovers defining `qt_metacall` for classes of their own.
+
+    committed fmake   compiles all three leftovers
+    this one          compiles none of them, finds src/alpha.cpp, links
+
+Both halves are asserted, because the failure mode of the obvious fix was to
+lose the second one.

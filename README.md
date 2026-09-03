@@ -560,6 +560,15 @@ A class declared inside a `.cpp` works too, on Qt's own terms: the output is
 `foo.moc` and that file must `#include` it. If it doesn't, fmake says so rather
 than letting it fail later on an undefined symbol.
 
+**Another build's moc output is left where it lies.** Since fmake runs moc
+itself, from the headers in the tree, a `moc_*.cpp` left behind by qmake or
+CMake is a second copy of something already in the plan and is never what a
+link is missing. It matters because every file moc writes defines the same five
+functions, so a single unresolved meta-object symbol looks like a match for all
+of them at once — 55 of them, in the tree this was found in. The banner moc
+writes at the top of its output is what identifies them; a name pattern would
+be a convention and a directory would be a guess.
+
 All three tools are found through pkg-config, so they match the Qt being
 linked rather than whatever happens to be on `$PATH` — on Debian none of them
 is. Override with `[toolchain] moc` / `uic` / `rcc`, or `$MOC` / `$UIC` /
