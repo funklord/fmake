@@ -4273,6 +4273,156 @@ int main(void){ printf("%d\\n", twice(21)); return 0; }
 
 
 @case
+def a_makefile_is_refused_for_a_path_make_cannot_express(t):
+	"""Make has no way to say `$', `#' or `:' in a target or prerequisite.
+
+    Each fails differently and none of them fails loudly at eject time: the
+    Makefile was written, fmake exited 0, and make then said "No rule to
+    make target 'wed.c'", "missing separator" and "target pattern contains
+    no '%'". Whitespace was already refused here for the same reason, so
+    the guard existed and covered one character of four.
+
+    ninja was measured to build all of them, which is what makes the
+    refusal worth making rather than a dead end."""
+	for name, ch in (("we$rd.c", "$"), ("ha#sh.c", "#"), ("a:b.c", ":")):
+		u = Tree("unmakeable")
+		try:
+			u.write("main.c", "int helper(void);\n"
+			        "int main(void){ return helper(); }\n")
+			u.write(name, "int helper(void){ return 0; }\n")
+			r = u.fmake("--eject", "make")
+			out = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"a Makefile naming {name} was emitted anyway: {out}")
+			check(name in out and ch in out,
+			      f"the refusal does not name the file or the character: "
+			      f"{out}")
+			check("ninja" in out,
+			      f"nothing points at the backend that can express it: "
+			      f"{out}")
+			if not shutil.which("ninja"):
+				continue
+			e = u.fmake("--eject", "ninja")
+			check(e.returncode == 0, f"ninja eject failed: {e.stderr}")
+			u.write("build.ninja", e.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			n = _run_in(u.dir, "ninja")
+			check(n.returncode == 0,
+			      f"ninja was offered as the answer and could not build "
+			      f"{name} either: {n.stdout}{n.stderr}")
+		finally:
+			u.cleanup()
+
+
+@case
+def a_path_that_reads_as_an_option_is_refused_by_both_backends(t):
+	"""`-weird.c' is an option to cc, and no build file can say otherwise.
+
+    Measured rather than worked around: gcc rejects `--', clang takes it
+    and eats the next argument, and both make and ninja canonicalise a
+    `./' prefix away before the recipe runs. The live build never meets
+    this because it passes absolute paths, which is why the tree builds
+    and the ejected copy of it does not.
+
+    So both backends refuse, and the message says the one thing that
+    works."""
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper(); }\n")
+	t.write("-weird.c", "int helper(void){ return 0; }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"fmake itself builds this: {r.stdout}{r.stderr}")
+
+	for backend in ("make", "ninja"):
+		e = t.fmake("--eject", backend)
+		out = e.stdout + e.stderr
+		check(e.returncode != 0,
+		      f"--eject {backend} emitted a build that cannot run: {out}")
+		check("-weird.c" in out and "Rename" in out,
+		      f"the refusal does not name the file or what to do: {out}")
+
+
+@case
+def a_flag_a_shell_would_split_survives_ejection(t):
+	"""Flags are text in a variable, and two layers read that text.
+
+    `-DMSG="hello world"' reached the compiler as two arguments and both
+    ejected builds failed on a program the live one builds; an include
+    directory called `d$ir' became `-Idr' by the time cc saw it, because
+    Make expanded `$i' first. The programs assert the value, so a flag that
+    arrives mangled but still compiles cannot pass this."""
+	t.write("fmake.toml",
+	        '[project]\ncflags = [\'-DMSG="hello world"\']\n')
+	t.write("main.c", '#include <string.h>\n'
+	        'int main(void){ return strcmp(MSG, "hello world") == 0 '
+	        '? 0 : 1; }\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the live build failed: {r.stdout}{r.stderr}")
+	name = os.path.basename(t.dir)
+	check(t.run(name).returncode == 0, "the live program is wrong")
+
+	for backend, out, tool in (("make", "Makefile", "make"),
+	                           ("ninja", "build.ninja", "ninja")):
+		if not shutil.which(tool):
+			continue
+		e = t.fmake("--eject", backend)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write(out, e.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		os.remove(os.path.join(t.dir, name))
+		b = _run_in(t.dir, tool)
+		check(b.returncode == 0,
+		      f"the ejected {backend} build failed: {b.stdout}{b.stderr}")
+		check(t.run(name).returncode == 0,
+		      f"the ejected {backend} build produced a program with the "
+		      f"wrong MSG, so the flag was mangled on the way out")
+
+
+@case
+def a_dry_run_leaves_the_tree_as_it_found_it(t):
+	"""`-n' prints the commands and runs none of them.
+
+    It was writing three things anyway: the scan cache, the lock beside it,
+    and a line in the project's .gitignore -- the last of those a tracked
+    file, in a tree somebody may only have been inspecting with -C. The
+    object directory came too, named after a configuration nothing was
+    built with.
+
+    `--explain' is not held to this and should not be: it compiles, so the
+    state directory it creates is one it needs and the .gitignore line is a
+    courtesy for it."""
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+	# A git repository, because one of the three writes is a line in
+	# .gitignore and fmake only offers it where git is in use.
+	check(subprocess.run(["git", "init", "-q", t.dir],
+	                     capture_output=True).returncode == 0,
+	      "git init failed")
+	before = sorted(os.listdir(t.dir))
+
+	r = t.fmake("-n")
+	check(r.returncode == 0, f"the dry run failed: {r.stdout}{r.stderr}")
+	check("cc " in r.stdout or "gcc" in r.stdout,
+	      f"a dry run that printed no commands is not measuring anything: "
+	      f"{r.stdout}")
+	check(sorted(os.listdir(t.dir)) == before,
+	      f"the dry run left something behind: "
+	      f"{sorted(set(os.listdir(t.dir)) - set(before))}")
+
+	# And the counterfactual, since a check that the tree is unchanged
+	# would also pass if fmake had done nothing at all.
+	r = t.fmake()
+	check(r.returncode == 0, f"the build failed: {r.stdout}{r.stderr}")
+	check(".fmake" in os.listdir(t.dir),
+	      "a real build writes its state directory")
+	check(".gitignore" in os.listdir(t.dir),
+	      "a real build leaves the courtesy line it always has")
+
+
+@case
 def eject_ninja_builds_without_fmake(t):
 	if not shutil.which("ninja"):
 		raise Skip("ninja not installed")

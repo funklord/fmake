@@ -736,7 +736,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `-j N` | parallel compile jobs (default: cpu count) |
 | `-o DIR` | where to put the artifacts |
 | `-p NAME` | build profile from `[profile.NAME]` |
-| `-n` | print commands, run nothing |
+| `-n` | print commands, run nothing, and change nothing in the tree |
 | `-B` | ignore the cache and rebuild |
 | `-i` | ask about what fmake will not guess, and write the answers into `fmake.toml` |
 | `--cflags 'FLAGS'` | replace the default `-Os`; overrides file directives |
@@ -844,6 +844,20 @@ DESTDIR=$PWD/stage PREFIX=/usr ninja install
 
 All three install the same set, to the same paths with the same modes,
 because all three read one list rather than three.
+
+**What cannot be ejected, said rather than emitted.** Make has no way to
+name a path containing whitespace, `$`, `#` or `:` — each fails differently
+and none of them fails at the moment the file is written — so ejecting a
+Makefile for one is refused, naming the character, and `--eject ninja`
+expresses all four. A path *beginning* with `-` is refused by both: a
+compiler reads it as an option, `--` is not accepted by gcc, and both tools
+canonicalise a `./` prefix away, so nothing can be written instead. fmake
+itself builds such a tree, because it passes absolute paths.
+
+Flags are quoted on the way out, which matters for the ordinary case of a
+define carrying a string: `[project] defines = ['NAME="$root"']` reaches the
+compiler as one argument here and did not survive an unquoted trip through a
+recipe's shell.
 
 ---
 

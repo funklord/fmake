@@ -203,7 +203,8 @@ that had been green about nothing for five commits ·
 [150. `lib.rs` names nothing, and two tracebacks behind the message that said so](#150-librs-names-nothing-and-two-tracebacks-behind-the-message-that-said-so) ·
 [151. Widening reached for fifty-three files, and each of them said who wrote it](#151-widening-reached-for-fifty-three-files-and-each-of-them-said-who-wrote-it) ·
 [152. A quoted include is the compiler's to resolve, and fmake cannot outvote it](#152-a-quoted-include-is-the-compilers-to-resolve-and-fmake-cannot-outvote-it) ·
-[153. The last line sent the reader to install a function this tree defines](#153-the-last-line-sent-the-reader-to-install-a-function-this-tree-defines)
+[153. The last line sent the reader to install a function this tree defines](#153-the-last-line-sent-the-reader-to-install-a-function-this-tree-defines) ·
+[154. Four faults in the exit, and one in the mode that changes nothing](#154-four-faults-in-the-exit-and-one-in-the-mode-that-changes-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12808,3 +12809,103 @@ second clause of the ending is what keeps that from being a dead end.
 **§138's own case stays open.** Its symbols were undefined because a generator
 had not been declared, and nothing failed to compile; this reaches it by a
 different route and does not discharge it.
+
+## 154. Four faults in the exit, and one in the mode that changes nothing
+
+A hunt rather than a report: a battery of deliberately awkward trees, run
+against the live build and both ejected ones. Ten trees produced no
+traceback at all -- a broken symlink, an unreadable source, an empty source,
+a directory called `looks.c`, a self-including header, mutually including
+headers -- and a non-ASCII filename built end to end through an ejected
+Makefile. What the battery found is all in `--eject`, and one thing beside
+it.
+
+### The one that is not hypothetical
+
+`[project] defines` carrying a quoted string is ordinary, and five of the
+seventeen trees do it:
+
+    qtty            QTTY_SOURCE_DIR="$root"
+    bbq-predictor   BBQ_VERSION_STRING="$file(VERSION)"
+    beerssh, hembygd, openmlx4                  likewise
+
+fmake passes that to the compiler as one argument and it is a C string. The
+ejected Makefile wrote it bare into `CXXFLAGS`, the recipe's shell then ate
+the inner quotes, and the macro arrived as a bare token. **Measured on
+qtty's own tree, with its own ejected Makefile:**
+
+    <command-line>: error: exponent has no digits
+    <command-line>: error: 'tmp' was not declared in this scope
+    <command-line>: error: 'claude' was not declared in this scope
+
+That is `QStringLiteral(QTTY_SOURCE_DIR)` receiving a path instead of a
+string. The same file compiles from the Makefile this change emits. So the
+ejected build of a real tree in this workspace was broken, and had been
+since `$root` was added.
+
+Two layers read a flag and each has its own escape: Make expands `$` and
+takes `#` as a comment, and the recipe's shell then splits on whitespace and
+expands `$` again. ninja escapes `$in` and `$out` for its shell -- which is
+why a *path* with a dollar in it already worked there -- but a flag arrives
+through a plain variable and nothing quoted it. Both now quote, and Make's
+own escapes go on top.
+
+### Three in the Makefile that fmake half-guarded already
+
+`--eject make` emitted a Makefile that cannot build, and exited 0 doing it:
+
+    we$rd.c    No rule to make target 'wed.c'
+    ha#sh.c    missing separator
+    a:b.c      target pattern contains no '%'
+
+Whitespace has been refused here since the beginning, for exactly this
+reason and with the right remedy attached -- `use --eject ninja, which can`.
+So the guard existed and covered one character of four, which is §146's
+shape again: a guard written against one way of being wrong, defeated by
+another.
+
+Refused now, each with the reason that applies to it, because Make's
+escaping differs by position and none of it survives the recipe's shell as
+well. **ninja was measured to build all four**, so the remedy is real rather
+than a shrug.
+
+### The one nothing can eject
+
+    -weird.c
+
+The live build compiles it, because fmake passes absolute paths and an
+absolute path begins with a slash. An ejected build passes the relative one,
+and a compiler reads it as an option. Everything that looks like a fix was
+measured and is not one: gcc rejects `--` outright, clang takes it and eats
+the next argument, and **both make and ninja canonicalise a `./` prefix
+away** before the recipe runs -- which is what makes this the one case ninja
+cannot take. Both backends refuse and say the only thing that works, which
+is to rename the file.
+
+### And `--dry-run`, which said it would do nothing
+
+    $ fmake -C somebody-elses-tree -n
+    $ git -C somebody-elses-tree status --porcelain
+     M .gitignore
+    ?? .fmake/
+
+Three writes from the mode documented as *print commands, run nothing*: the
+scan cache, the lock beside it, and a line appended to the project's
+`.gitignore` -- a tracked file. The object directory came too, named after a
+configuration nothing was built with. A dry run now takes no lock where
+there is no state directory to lock, keeps the cache in memory, and leaves
+the `.gitignore` alone.
+
+**`--explain` is deliberately not held to this.** It compiles -- that is how
+it knows what the link sets are -- so the state directory it creates is one
+it needs, and the ignore line is a courtesy for a directory that is really
+there. The wording each mode uses is what separates them: one runs nothing,
+the other builds no *artifacts*.
+
+### What the battery says about the rest
+
+Nothing else fired. That is worth recording with the same weight as the
+findings: the awkward-tree pass is cheap, it is repeatable, and its negative
+result is what says the planner is not where the fragility is. Every fault
+here was in the code that writes a build file for somebody else to run,
+which is the part with no user until somebody leaves.

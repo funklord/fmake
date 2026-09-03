@@ -4275,6 +4275,12 @@ class Cache:
 
 	def __init__(self, path):
 		self.path = path
+		# Set for a run that promised to change nothing. `--dry-run' prints
+		# the commands and runs none of them, and it was writing this file
+		# and the lock beside it -- two entries in a tree somebody may only
+		# have been inspecting, from the one mode that says it does not
+		# build. `--explain' keeps writing, and should: it compiles.
+		self.read_only = False
 		self.data = {"version": CACHE_VER, "files": {}, "objects": {},
 		             "units": []}
 		try:
@@ -4289,6 +4295,8 @@ class Cache:
 		self.objects = self.data["objects"]
 
 	def save(self):
+		if self.read_only:
+			return
 		os.makedirs(os.path.dirname(self.path), exist_ok=True)
 		tmp = self.path + ".tmp"
 		with open(tmp, "w") as fh:
@@ -4723,8 +4731,14 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	if not todo:
 		return False
 
-	for u in todo:
-		os.makedirs(os.path.dirname(u.obj), exist_ok=True)
+	# Not on a dry run, which compiles nothing and so needs nowhere to put
+	# it. The link below already guarded this; here it did not, so `-n'
+	# left an object directory behind in a tree it had promised only to
+	# read -- state/obj/<key>, empty, named after a configuration nobody
+	# built with.
+	if not dry_run:
+		for u in todo:
+			os.makedirs(os.path.dirname(u.obj), exist_ok=True)
 
 	width = len(str(len(todo)))
 	done = [0]
@@ -7130,6 +7144,7 @@ def build(args, _bootstrapping=False):
 
 	state  = os.path.join(root, STATE_DIR)
 	cache  = Cache(os.path.join(state, CACHE_FILE))
+	cache.read_only = bool(args.dry_run)
 	conf   = Conf(load_conf(root), args.profile)
 	# fmake.mk may carry project-scope directives beside its rules. They fold
 	# into [project], so the two files say the same things the same way and
@@ -7310,7 +7325,11 @@ def build(args, _bootstrapping=False):
 	# directory that should not have been there either. Past the refusal
 	# above, this build is going to write into the tree, and the line is
 	# then a courtesy rather than a mark left by a visitor.
-	ensure_gitignore(root)
+	# Not on a dry run, which is the same reasoning one step further: the
+	# line is a courtesy for a directory this build is about to create, and
+	# a run that creates nothing leaves no reason for it.
+	if not args.dry_run:
+		ensure_gitignore(root)
 
 	for rel in list(unreadable):
 		if rel in srcs:
@@ -9366,8 +9385,14 @@ def _obj_of(u):
 	return _eject_obj(u.rel, u.variant)
 
 
-def _eject_flags(flags, root):
-	"""Make in-tree paths relative so the emitted build is portable."""
+def _eject_flags(flags, root, esc=None):
+	"""Make in-tree paths relative so the emitted build is portable.
+
+    `esc` is the emitting backend's escape for one flag, applied last so
+    that it covers the rewritten -I as well as the flags passed through.
+    Absent, the flags come back as they went in -- which is what the
+    diagnostics want and what neither build file may have.
+    """
 	out = []
 	for f in flags:
 		for prefix in ("-I", "-L"):
@@ -9377,7 +9402,35 @@ def _eject_flags(flags, root):
 				break
 		else:
 			out.append(f)
-	return out
+	return [esc(f) for f in out] if esc else out
+
+
+def _mk_flag(f):
+	"""One flag, as a Makefile variable value.
+
+    Three layers read this text and each has its own escape. Make expands
+    `$' and takes `#' as the start of a comment; the recipe's shell then
+    splits on whitespace and expands `$' again. shlex.quote settles the
+    shell, and the doubling and the backslash settle Make.
+
+    Measured, because none of it is theoretical: `[project] cflags =
+    ['-DMSG="hello world"']' reached the compiler as two arguments and
+    the ejected build failed on a program the live one builds, and an
+    include directory called `d$ir' became `-Idr' by the time cc saw it.
+    """
+	return shlex.quote(f).replace("$", "$$").replace("#", "\\#")
+
+
+def _nj_flag(f):
+	"""One flag, as a ninja variable value.
+
+    Both layers apply here too. ninja reads `$' as the start of a variable
+    reference and hands the finished line to a shell -- it escapes `$in'
+    and `$out' for that shell itself, which is why a *path* with a dollar
+    or a space in it already worked, but a flag arrives through a plain
+    variable and nothing quoted it.
+    """
+	return shlex.quote(f).replace("$", "$$")
 
 
 def _mk_ident(name):
@@ -9414,35 +9467,96 @@ def _ninja(path):
 	return RE_NINJA_ESCAPE.sub(r"$\1", path)
 
 
-def _refuse_whitespace(targets, closures, root):
-	"""Make cannot express a filename containing whitespace.
+# What a path cannot contain and still be a Makefile target or
+# prerequisite. Each was measured against GNU make rather than assumed, and
+# each fails differently, which is the reason the reader is told which one
+# they have:
+#
+#     we$rd.c   No rule to make target 'wed.c'
+#     ha#sh.c   missing separator
+#     a:b.c     target pattern contains no '%'
+#
+# Escaping exists for some of them in some positions, and none of it
+# survives the trip through the recipe's shell as well -- which is the same
+# reason whitespace has been refused here since the beginning. ninja was
+# measured to build all four.
+MAKE_CANNOT = {"$": "$ starts a variable reference",
+               "#": "# starts a comment",
+               ":": ": separates a target from its prerequisites"}
 
-    Not a limitation worth working around: Make splits prerequisites on
-    spaces and has no escaping that survives every position one can appear
-    in. Emitting something that looks like a build file and silently means
-    something else is worse than saying so -- and ninja can express it, so
+
+def _unmakeable(path):
+	"""Why Make cannot express this path, or None."""
+	if any(c.isspace() for c in path):
+		return "Make splits prerequisites on whitespace"
+	for ch, why in MAKE_CANNOT.items():
+		if ch in path:
+			return why
+	return None
+
+
+def _eject_paths(targets, closures, root, extra=()):
+	"""Every path an ejected build file names.
+
+    Including the install rule's, which names @headers -- files no other
+    part of the emitted build mentions, and which reach install(1) as
+    arguments.
+    """
+	for p in extra:
+		yield p
+	for t in targets:
+		yield t.filename
+		for u in closures[t].link:
+			yield u.rel
+	for _, source, _, name, _ in install_plan(targets, closures, root):
+		yield source
+		yield name
+
+
+def _refuse_leading_dash(targets, closures, root, extra=()):
+	"""A path a compiler reads as an option, whatever the build file is.
+
+    `-weird.c' is an option to cc, and there is nothing to write instead:
+    gcc rejects `--' outright, clang takes it and eats the next argument,
+    and both make and ninja canonicalise a `./' prefix away before the
+    recipe runs. All four measured rather than assumed.
+
+    The live build never meets this because it passes absolute paths, which
+    begin with a slash. So this refuses rather than emitting a build file
+    that cannot run, and says the one thing that does work.
+    """
+	bad = sorted({p for p in _eject_paths(targets, closures, root, extra)
+	              if p.startswith("-")})
+	if bad:
+		die("cannot eject a build for a path that begins with `-':\n    "
+		    + "\n    ".join(bad[:5])
+		    + (f"\n    ... and {len(bad) - 5} more" if len(bad) > 5 else "")
+		    + "\nA compiler reads it as an option, and no build file can say "
+		      "otherwise:\nboth make and ninja drop a `./' prefix, and gcc "
+		      "rejects `--'.\nRename it. fmake itself builds this tree, "
+		      "because it passes absolute paths.")
+
+
+def _refuse_whitespace(targets, closures, root, extra=()):
+	"""Make cannot express some of the names a filesystem allows.
+
+    Not a limitation worth working around: what escaping exists differs by
+    position and none of it survives the recipe's shell as well. Emitting
+    something that looks like a build file and silently means something
+    else is worse than saying so -- and ninja can express all of these, so
     there is somewhere to send people.
     """
-	bad = set()
-	for t in targets:
-		if any(c.isspace() for c in t.filename):
-			bad.add(t.filename)
-		for u in closures[t].link:
-			if any(c.isspace() for c in u.rel):
-				bad.add(u.rel)
-	# The install rule names @headers, which no other part of the emitted
-	# file mentions -- so a header with a space in it would slip past a
-	# check that only looked at sources and reach the recipe as two
-	# arguments to install(1).
-	for _, source, _, name, _ in install_plan(targets, closures, root):
-		if any(c.isspace() for c in source) or any(c.isspace() for c in name):
-			bad.add(source)
+	bad = {}
+	for path in _eject_paths(targets, closures, root, extra):
+		why = _unmakeable(path)
+		if why:
+			bad[path] = why
 	if bad:
-		die("cannot eject a Makefile for paths containing whitespace:\n    "
-		    + "\n    ".join(sorted(bad)[:5])
-		    + ("\n    ..." if len(bad) > 5 else "")
-		    + "\nMake splits prerequisites on spaces and cannot express "
-		      "these.\nUse `--eject ninja`, which can.")
+		shown = sorted(bad)[:5]
+		die("cannot eject a Makefile for these paths:\n    "
+		    + "\n    ".join(f"{p}  ({bad[p]})" for p in shown)
+		    + (f"\n    ... and {len(bad) - 5} more" if len(bad) > 5 else "")
+		    + "\nUse `--eject ninja`, which can express all of them.")
 
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
@@ -9472,10 +9586,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	eject_bins = {x.name: "./" + x.filename for x in targets}
 	eject_files = {x.name: x.filename for x in targets}
 	P = "FM_" if fragment else ""
-	_refuse_whitespace(targets, closures, root)
+	gen_srcs = ([j["src"] for j in (moc or {}).get("jobs", [])]
+	            + [j["src"] for j in (uic or {}).get("jobs", [])]
+	            + [j["src"] for j in (rcc or {}).get("jobs", [])])
+	_refuse_leading_dash(targets, closures, root, gen_srcs)
+	_refuse_whitespace(targets, closures, root, gen_srcs)
 	any_crate = any(u.crate for t in targets for u in closures[t].link)
-	common = _eject_flags(cfg.base_cflags() + incflags, root)
-	override = _eject_flags(cfg.override, root)
+	common = _eject_flags(cfg.base_cflags() + incflags, root, _mk_flag)
+	override = _eject_flags(cfg.override, root, _mk_flag)
 	L = []
 	a = L.append
 
@@ -9585,7 +9703,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# out a second time -- a recursive `=' expands when the recipe runs, by
 	# which point every conditional in this file has been decided.
 	a(var("LDFLAGS", [f"$({P}CFLAGS)", f"$({P}CFLAGS_LAST)"]
-	      + _eject_flags(cfg.ldflags, root)))
+	      + _eject_flags(cfg.ldflags, root, _mk_flag)))
 	if any_crate:
 		# rustc has no CC/CFLAGS convention to inherit, so both are ours
 		# and both are plain assignments even in a fragment: a parent
@@ -9623,11 +9741,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# reports rather than a loop it runs.")
 		a("ifeq ($(filter-out 0,$(DEBUG)),)")
 		for name in ("CFLAGS", "CXXFLAGS"):
-			a(var(name, _eject_flags(DEFAULT_CFLAGS, root)
+			a(var(name, _eject_flags(DEFAULT_CFLAGS, root, _mk_flag)
 			      + [f"$({P}{name})"], ":="))
 		a("else")
 		for name in ("CFLAGS", "CXXFLAGS"):
-			a(var(name, _eject_flags(DEBUG_CFLAGS, root)
+			a(var(name, _eject_flags(DEBUG_CFLAGS, root, _mk_flag)
 			      + [f"$({P}{name})"], ":="))
 		a("endif")
 		a("")
@@ -9636,7 +9754,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("# so compiling with it and linking without leaves __asan_report_*")
 	a("# undefined and the link fails naming none of this.")
 	a(f"ifneq ($(filter-out 0,$(SANITIZE)),)")
-	san = " ".join(_eject_flags(SANITIZE_CFLAGS, root))
+	san = " ".join(_eject_flags(SANITIZE_CFLAGS, root, _mk_flag))
 	a(var("CFLAGS", san, "+="))
 	a(var("CXXFLAGS", san, "+="))
 	# No LDFLAGS line: it is defined as $(CFLAGS) above, so adding one here
@@ -9829,7 +9947,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# if Qt lives elsewhere on the machine doing the building.")
 		a("")
 		a(f"{P}MOC      = {moc['exe']}")
-		a(f"{P}MOCFLAGS = {' '.join(_eject_flags(moc.get('flags', []), root))}")
+		a(f"{P}MOCFLAGS = {' '.join(_eject_flags(moc.get('flags', []), root, _mk_flag))}")
 		a("")
 		for j in moc_jobs:
 			a(f"{_eject_src(j['out'])}: {j['src']}")
@@ -9850,7 +9968,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# undefined variable, so every compile silently loses its flags and
 		# only a project that actually needs an -I notices.
 		var, flags = ("CXX", "CXXFLAGS") if u.cxx else ("CC", "CFLAGS")
-		own = " ".join(_eject_flags(u.own, root))
+		own = " ".join(_eject_flags(u.own, root, _mk_flag))
 		after = ([f"$({P}GENERATED)"] if gen_outs else []) \
 		        + ([f"$({P}GENHDRS)"] if genhdrs else [])
 		order_only = (" | " + " ".join(after)) if after else ""
@@ -9911,7 +10029,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t{o}" + (" \\" if i < len(objs) - 1 else ""))
 		a("")
 		res = resolutions.get(t)
-		libs = " ".join(_eject_flags(res["ldflags"], root)) if res else ""
+		libs = " ".join(_eject_flags(res["ldflags"], root, _mk_flag)) if res else ""
 		driver = "CXX" if any(u.cxx for u in closures[t].link) else "CC"
 		# Vendored archives are prerequisites, so a changed one relinks, but
 		# they are named on the command line rather than taken from $^: they
@@ -10119,8 +10237,15 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# resolves to the same relative path the recipe below invokes.
 	eject_bins = {x.name: "./" + x.filename for x in targets}
 	eject_files = {x.name: x.filename for x in targets}
-	common = " ".join(_eject_flags(cfg.cflags + incflags, root))
-	override = " ".join(_eject_flags(cfg.override, root))
+	# ninja expresses everything Make cannot -- a space, a dollar, a hash, a
+	# colon -- and this is the one it cannot either, because the difficulty
+	# is downstream of the build file entirely.
+	_refuse_leading_dash(targets, closures, root,
+	                     [j["src"] for j in (moc or {}).get("jobs", [])]
+	                     + [j["src"] for j in (uic or {}).get("jobs", [])]
+	                     + [j["src"] for j in (rcc or {}).get("jobs", [])])
+	common = " ".join(_eject_flags(cfg.cflags + incflags, root, _nj_flag))
+	override = " ".join(_eject_flags(cfg.override, root, _nj_flag))
 	L = []
 	a = L.append
 
@@ -10157,7 +10282,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(f"cflags_last = {override}")
 	# Ninja has no conditionals, so this is baked -- but it is baked from
 	# link_flags(), so --coverage and friends reach the link here too.
-	a(f"ldflags = {' '.join(_eject_flags(cfg.link_flags(), root))}")
+	a(f"ldflags = {' '.join(_eject_flags(cfg.link_flags(), root, _nj_flag))}")
 	a(f"build_dir = {EJECT_BUILD_DIR}")
 	a("")
 	# `deps = gcc` lets ninja read the depfile and then discard it, which is
@@ -10203,7 +10328,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	if any(u.crate for t in targets for u in closures[t].link):
 		a(f"rustc = {cfg.rustc}")
 		a(f"rustflags = --edition {cfg.rust_edition} "
-		  + " ".join(_eject_flags(cfg.rustflags, root)))
+		  + " ".join(_eject_flags(cfg.rustflags, root, _nj_flag)))
 		a("")
 		# `$in' is the crate root alone. Its members are implicit inputs,
 		# because rustc takes one file and reads the rest -- naming them on
@@ -10333,7 +10458,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	if moc_jobs:
 		a("# Selected by Q_OBJECT in the source, not by a list.")
 		a(f"moc = {moc['exe']}")
-		a(f"mocflags = {' '.join(_eject_flags(moc.get('flags', []), root))}")
+		a(f"mocflags = {' '.join(_eject_flags(moc.get('flags', []), root, _nj_flag))}")
 		a("")
 		a("rule moc")
 		a("  command = $moc $mocflags $in -o $out")
@@ -10374,7 +10499,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"build $build_dir/{_ninja(name)}.o: "
 		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}{after}")
 		if u.own:
-			a(f"  extra = {' '.join(_eject_flags(u.own, root))}")
+			a(f"  extra = {' '.join(_eject_flags(u.own, root, _nj_flag))}")
 	# One edge per crate, with the members as implicit inputs. The depfile
 	# ninja reads afterwards is rustc's own and names the real module
 	# graph, so a member the `mod' scan missed still forces a rebuild.
@@ -10441,7 +10566,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				a(f"  arcs = {txt}")
 			res = resolutions.get(t)
 			if res and res["ldflags"]:
-				a(f"  libs = {' '.join(_eject_flags(res['ldflags'], root))}")
+				a(f"  libs = {' '.join(_eject_flags(res['ldflags'], root, _nj_flag))}")
 	a("")
 	# Same split as the Makefile: `ninja` builds the programs, `ninja test`
 	# builds and runs the test binaries. Ninja has no recipe for a phony
@@ -11334,7 +11459,16 @@ def _locked_build(args):
 		die(f"no such directory: {args.directory}")
 	if not os.path.isdir(root):
 		die(f"not a directory: {args.directory}")
-	with TreeLock(os.path.join(root, STATE_DIR)):
+	state = os.path.join(root, STATE_DIR)
+	if args.dry_run and not os.path.isdir(state):
+		# Taking the lock means creating the state directory, which is the
+		# one thing a dry run in an untouched tree must not leave behind.
+		# There is nothing to serialise against either: this run writes
+		# nothing for a concurrent build to collide with. Where the
+		# directory already exists the lock is taken as usual, because then
+		# it costs nothing and a real build may be running.
+		return build(args)
+	with TreeLock(state):
 		return build(args)
 
 
