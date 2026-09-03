@@ -11240,13 +11240,14 @@ one directory up, and it is also stated exactly in the `Cargo.toml` beside
 it -- `[package] name`, which is authoritative in a way an inferred name
 never is.
 
-**The question, which is yours:** whether a crate root should take its name
-from the enclosing directory rather than the file, or whether fmake should
-read `[package] name` out of a `Cargo.toml` when one sits beside a crate
-root. The second is a better name and costs an exception to "fmake reads no
-other build system's files", which is a real property and not one to spend
-casually -- especially as reading the name would tempt reading the
-dependencies, which is where it stops being fmake.
+**The question was the holder's and is answered in §150:** the enclosing
+directory. The alternative was reading `[package] name` out of the
+Cargo.toml beside the root -- authoritative, and costing an exception to
+"fmake reads no other build system's files", which is a real property and
+not one to spend casually, especially as reading the name would tempt
+reading the dependencies, which is where it stops being fmake. Measured
+across netcfgd's nineteen crate roots the directory *is* that name in every
+one, so the exception would have bought a name that was already there.
 
 **What netcfgd did, and why it is not a workaround to copy.** It excluded
 the four directories holding `.rs` and kept fmake for the C and C++ half,
@@ -12197,10 +12198,11 @@ Three shapes, none of them taken:
   is the thing that generates them. It would also cover committed and vendored
   moc output, which §139's rule does not reach.
 
-**Not chosen here.** It is a change to what fmake compiles in every tree,
-found at three in the morning, and §143's own commit message names this
-pairing: a small effect and a load-bearing rule is what gets done carelessly.
-The measurements above are what a decision needs and they will keep.
+**Not chosen here**, and taken up in §151, which chose the third. It is a
+change to what fmake compiles in every tree, found at three in the morning,
+and §143's own commit message names this pairing: a small effect and a
+load-bearing rule is what gets done carelessly. The measurements above are
+what a decision needs and they kept.
 
 ### What §139 should have said
 
@@ -12211,7 +12213,8 @@ rule changed nothing at all. What it fixes is narrower: **a build that widens
 will reach for leftover generated code, because widening matches names and
 generated code is named after the very classes the tree has.** §139 keeps
 that code out of `srcs` where git has been told about it. Where it is
-committed, or vendored, the defect above is still there.
+committed, or vendored, the defect above was still there until §151, which
+does not depend on git having been told anything.
 
 ## 147. Three gates in the suite that passed without looking, and a skip that lied
 
