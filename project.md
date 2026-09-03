@@ -201,7 +201,8 @@ that had been green about nothing for five commits ·
 [148. The lens from the worst bug: a name that decides a deletion](#148-the-lens-from-the-worst-bug-a-name-that-decides-a-deletion) ·
 [149. A path stopped being a unit's name, and three places went on using it](#149-a-path-stopped-being-a-units-name-and-three-places-went-on-using-it) ·
 [150. `lib.rs` names nothing, and two tracebacks behind the message that said so](#150-librs-names-nothing-and-two-tracebacks-behind-the-message-that-said-so) ·
-[151. Widening reached for fifty-three files, and each of them said who wrote it](#151-widening-reached-for-fifty-three-files-and-each-of-them-said-who-wrote-it)
+[151. Widening reached for fifty-three files, and each of them said who wrote it](#151-widening-reached-for-fifty-three-files-and-each-of-them-said-who-wrote-it) ·
+[152. A quoted include is the compiler's to resolve, and fmake cannot outvote it](#152-a-quoted-include-is-the-compilers-to-resolve-and-fmake-cannot-outvote-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12643,3 +12644,90 @@ banner-carrying leftovers defining `qt_metacall` for classes of their own.
 
 Both halves are asserted, because the failure mode of the obvious fix was to
 lose the second one.
+
+## 152. A quoted include is the compiler's to resolve, and fmake cannot outvote it
+
+Raised in §151's report as a suspicion and measured on request. It is real,
+and its worst form is silent.
+
+**A quoted include is resolved in the directory of the file doing the
+including, ahead of every `-I`.** So a `moc_*.cpp` or `*.moc` committed
+beside the source that includes it is what the compiler reads, and the file
+fmake generated from the header is never opened. Read off the compiler's own
+depfile rather than reasoned about: for `widget.cpp` it named
+`moc_widget.cpp`, not `.fmake/moc/moc_widget.cpp`.
+
+### The two spellings of the idiom fail in opposite directions
+
+Qt 6.8, a class with an `answer` slot, and a copy moc'd from the header as it
+stood before that slot existed:
+
+    #include "moc_widget.cpp"    no copy      correct
+    (class in a header)          current copy correct -- why this hides
+                                 stale copy   exit 0, nothing said, and the
+                                              program fails at run time:
+                                              QMetaObject::invokeMethod:
+                                              No such method widget::answer()
+
+    #include "thing.moc"         stale copy   thing.cpp did not compile
+    (class in the .cpp)                       !!! no target could be built
+
+The header spelling is silent because a stale meta-object still compiles --
+it simply describes fewer methods. The `.moc` spelling is loud because that
+output is compiled into the same translation unit as the class, so drift is
+usually a compile error.
+
+### Nothing fmake decides can reach it
+
+Measured, not assumed: with `moc_*.cpp` in `.gitignore` the program is still
+wrong. §139 is about directories by design, but that is not the reason --
+**the include is resolved by the compiler**, so no rule about which files
+fmake calls source can change which file `#include "moc_widget.cpp"` opens.
+§151 does not reach it either: this file arrives through the include graph,
+not through widening.
+
+It also costs something while it is harmless. fmake runs moc, whose output
+nothing reads, and compiles the tree's copy as a unit of its own that
+`--explain` then files under *compiled, not linked: defines nothing
+reachable*. Everything in the report looks healthy.
+
+### So it is a warning, and it names the remedy that works
+
+fmake already knows who includes each generated output -- `moc_plan` computes
+it -- so the check is `os.path.exists` against the includer's own directory,
+resolved the way the compiler resolves it. No guess, no threshold.
+
+    * widget.cpp:7 includes "moc_widget.cpp", and moc_widget.cpp exists
+      beside it -- so that file is what the compiler reads.
+        a quoted include is resolved in the including file's own directory
+        before any -I, so the .fmake/moc/moc_widget.cpp fmake generates
+        from widget.h is never opened.
+        while the two agree this builds and runs correctly. where the copy
+        has drifted the meta-object describes the older class, and the
+        program fails at run time with "No such method".
+        removing moc_widget.cpp is the fix: excluding it, or having git
+        ignore it, changes nothing, because the include is resolved by the
+        compiler and not by fmake
+
+**Not a refusal.** A tree whose committed copy is current builds correctly
+today, and refusing would break it over a hazard that has not fired. The
+warning changes nothing about what is compiled.
+
+**moc is alone in this**, which is worth recording as a negative. uic plans
+nothing for a `ui_*.h` the tree already carries -- deliberately, so that a
+checked-in one is left alone rather than overwritten -- so there is never a
+generated file for a committed one to shadow. rcc's output is compiled rather
+than included.
+
+### How much of this workspace is exposed
+
+Eighteen files use the idiom -- twelve in bbq-predictor, four in hydra, two
+in beerssh -- and **every one of them is the `.moc` spelling, with nothing
+shadowing it.** So the dangerous variant is the one nobody here writes, and
+the variant they do write fails loudly. The three trees that use it are also
+the three that produce `build-android*` output, which lands in another
+directory and therefore cannot shadow.
+
+That is the whole reason this is a warning found by looking rather than a bug
+found by hurting: it has not cost anything here yet, and the shape is one
+checkout of somebody else's branch away.

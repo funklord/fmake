@@ -569,6 +569,16 @@ of them at once — 55 of them, in the tree this was found in. The banner moc
 writes at the top of its output is what identifies them; a name pattern would
 be a convention and a directory would be a guess.
 
+**One copy fmake cannot ignore for you**, and it says so rather than letting it
+pass: a `moc_widget.cpp` or `widget.moc` sitting *beside* the source that
+includes it. A quoted include is resolved in the including file's own directory
+before any `-I`, so that file is what the compiler reads and the one fmake
+generated is never opened. While the two agree it builds and runs correctly,
+which is why it hides; where the copy has drifted, the meta-object describes
+the older class and the program fails at run time with `No such method`.
+Removing the copy is the fix — excluding it, or having git ignore it, changes
+nothing, because the include is resolved by the compiler and not by fmake.
+
 All three tools are found through pkg-config, so they match the Qt being
 linked rather than whatever happens to be on `$PATH` — on Debian none of them
 is. Override with `[toolchain] moc` / `uic` / `rcc`, or `$MOC` / `$UIC` /

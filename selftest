@@ -7943,6 +7943,102 @@ int main(int argc, char **argv) {
 
 
 @case
+def a_moc_output_committed_beside_its_includer_is_named(t):
+	"""The compiler resolves a quoted include, and fmake cannot outvote it.
+
+    `#include "moc_widget.cpp"' is resolved in widget.cpp's own directory
+    before any -I, so a copy committed there is what gets compiled and the
+    file fmake generated from the header is never opened. Measured on Qt
+    6.8 from the compiler's own depfile, which named the sibling.
+
+    It builds green while the copy agrees with the header, which is why it
+    hides. This fixture makes it disagree -- the copy is moc'd from a
+    version of the header with no `answer' slot -- and the result is exit
+    0, no diagnostic, and a program that fails at run time because the
+    meta-object it got describes the older class.
+
+    Nothing about which files fmake calls source can fix it, so this is a
+    warning rather than a rule: the include is resolved by the compiler,
+    and having git ignore the copy changes nothing. The counterfactual is
+    asserted too, because a warning that fires on a clean tree is worse
+    than the fault."""
+	_need_qt()
+	t.write("widget.h", """
+#pragma once
+#include <QObject>
+
+class widget : public QObject {
+	Q_OBJECT
+public:
+	widget();
+public slots:
+	int answer();
+};
+""")
+	t.write("widget.cpp", """
+#include "widget.h"
+
+widget::widget() {}
+
+int widget::answer() { return 42; }
+
+#include "moc_widget.cpp"
+""")
+	t.write("main.cpp", """
+#include "widget.h"
+#include <QMetaObject>
+
+int main() {
+	widget w;
+	int r = -1;
+	bool ok = QMetaObject::invokeMethod(&w, "answer", Q_RETURN_ARG(int, r));
+	return (ok && r == 42) ? 0 : 1;
+}
+""")
+	# The stale copy, made the way a real one is: moc reads the header as
+	# it stood, in place, so its own #include names widget.h and resolves
+	# to the tree's. Swapped back immediately, leaving the class and its
+	# meta-object out of step by one slot.
+	current = open(os.path.join(t.dir, "widget.h")).read()
+	t.write("widget.h", """
+#pragma once
+#include <QObject>
+
+class widget : public QObject {
+	Q_OBJECT
+public:
+	widget();
+};
+""")
+	made = subprocess.run([_moc_path(), "widget.h", "-o", "moc_widget.cpp"],
+	                      cwd=t.dir, capture_output=True, text=True)
+	check(made.returncode == 0, f"moc failed: {made.stderr}")
+	t.write("widget.h", current)
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"this builds, which is the point: {out}")
+	check("moc_widget.cpp exists beside it" in out,
+	      f"nothing said that the committed copy is what gets compiled: "
+	      f"{out}")
+	check(".fmake/moc/moc_widget.cpp" in out and "widget.h" in out,
+	      f"the warning does not name the file fmake generated, or where "
+	      f"it came from: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode != 0,
+	      "the fixture is meant to be stale by one slot; if the program "
+	      "passes, it is not measuring what the warning is about")
+
+	os.remove(os.path.join(t.dir, "moc_widget.cpp"))
+	r = t.fmake("-B")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed without the copy: {out}")
+	check("exists beside it" not in out,
+	      f"a tree with nothing shadowed is being warned at: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      f"the program is wrong with fmake's own moc output: {out}")
+
+
+@case
 def a_qtest_main_roots_a_program(t):
 	"""Qt declares a test's entry point with a macro.
 

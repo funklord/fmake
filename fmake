@@ -2310,6 +2310,45 @@ def moc_plan(srcs, hdrs, scans):
 	return jobs, unreachable
 
 
+def shadowed_generated(root, jobs, scans):
+	"""Generated files that a copy in the tree will be compiled instead of.
+
+    A quoted include is resolved in the directory of the file doing the
+    including, ahead of every -I. So `#include "moc_widget.cpp"' next to a
+    committed moc_widget.cpp reads that one, and the file fmake generated
+    from the header is never opened. Measured on Qt 6.8 from the compiler's
+    own depfile, which named the sibling.
+
+    It builds green for as long as the copy agrees with the header, which is
+    why it hides. Where the copy has drifted the meta-object describes the
+    older class, the build says nothing, and the program fails at run time --
+    `QMetaObject::invokeMethod: No such method'. The `foo.moc' spelling of
+    the idiom is louder: that output is compiled into the same translation
+    unit as the class, so drift is usually a compile error instead.
+
+    **Nothing fmake decides can reach this**, which is why it is a warning
+    and not a rule about sources. The compiler resolves the include, so
+    excluding the file or having git ignore it changes nothing at all;
+    removing it is the fix, and the message says so.
+
+    moc is alone in this. uic plans nothing for a `ui_*.h' the tree already
+    carries -- by design, so that a checked-in one is left alone rather than
+    overwritten -- and rcc's output is compiled rather than included.
+    """
+	out = []
+	for job in jobs:
+		base = os.path.basename(job["out"])
+		for rel in job.get("includers", ()):
+			for kind, name, line in scans.get(rel, {}).get("incs", ()):
+				if kind != '"' or os.path.basename(name) != base:
+					continue
+				sib = os.path.normpath(
+				    os.path.join(os.path.dirname(rel), name))
+				if os.path.exists(os.path.join(root, sib)):
+					out.append((rel, line, name, sib, job))
+	return out
+
+
 def include_root_for(resolved, inc_name):
 	"""The -I that makes this include text find this file.
 
@@ -7512,6 +7551,20 @@ def build(args, _bootstrapping=False):
 	moc_incflags, src_set = [], set(srcs)
 	moc_exe = None
 	moc_jobs, moc_unreachable = moc_plan(srcs, gen_hdrs, scans)
+	for rel, line, spell, sib, job in shadowed_generated(root, moc_jobs,
+	                                                     scans):
+		warn(f'{rel}:{line} includes "{spell}", and {sib} exists beside '
+		     f'it -- so that file is what the compiler reads.\n'
+		     f'    a quoted include is resolved in the including file\'s '
+		     f'own directory before any -I, so the {job["out"]} fmake '
+		     f'generates from {job["src"]} is never opened.\n'
+		     f'    while the two agree this builds and runs correctly. '
+		     f'where the copy has drifted the meta-object describes the '
+		     f'older class, and the program fails at run time with '
+		     f'"No such method".\n'
+		     f'    removing {sib} is the fix: excluding it, or having git '
+		     f'ignore it, changes nothing, because the include is resolved '
+		     f'by the compiler and not by fmake')
 	for job in moc_jobs:
 		generated_from[job["out"]] = job["src"]
 	# Swept before the guard, not inside it: a tree that stops using Qt
