@@ -198,7 +198,8 @@ that had been green about nothing for five commits ·
 [145. `-i`, and writing for somebody who did not write the project](#145--i-and-writing-for-somebody-who-did-not-write-the-project) ·
 [146. Why hydra compiled the build directory, which was not what §139 said](#146-why-hydra-compiled-the-build-directory-which-was-not-what-139-said) ·
 [147. Three gates in the suite that passed without looking, and a skip that lied](#147-three-gates-in-the-suite-that-passed-without-looking-and-a-skip-that-lied) ·
-[148. The lens from the worst bug: a name that decides a deletion](#148-the-lens-from-the-worst-bug-a-name-that-decides-a-deletion)
+[148. The lens from the worst bug: a name that decides a deletion](#148-the-lens-from-the-worst-bug-a-name-that-decides-a-deletion) ·
+[149. A path stopped being a unit's name, and three places went on using it](#149-a-path-stopped-being-a-units-name-and-three-places-went-on-using-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12395,3 +12396,77 @@ rather than this tree's: the same shape was already found tonight in a skip
 that named a cause the code never tested. Recorded here so the negative --
 that fmake's own remaining parses cannot delete -- is on the record rather
 than assumed.
+
+## 149. A path stopped being a unit's name, and three places went on using it
+
+§148 worked one lens from the night's bugs. This is the next one, and it was
+pointed at the code the lens had just been derived from: **a collection keyed
+by one thing and queried by another.**
+
+The instance it came from is §143's, where both eject backends kept their
+object tables under `u.rel` and one source could produce two objects, so the
+second silently replaced the first. That was found and fixed there. The
+question this asks is where else `rel` is still standing in for a unit.
+
+### Three places, one cause
+
+`[target.*] defines` compiles a target's root a second time. From that
+commit onward **a path is not a unit's name**, and three things went on
+treating it as one:
+
+- `broken.add(u.rel)` -- a variant that fails takes the plain unit's path
+  down with it.
+- `made = [u for u in todo if u.rel not in broken]` -- so the plain unit is
+  excluded from `read_symbols` and has no symbol tables at all.
+- `cache.objects[u.rel]` -- the two objects share one cache entry and
+  overwrite each other on every build.
+
+The first is the one with a face. A `t.c` that is fine and a `t_checked` that
+is not -- because the define is what breaks it -- produced:
+
+    * t skipped: t.c did not compile
+    * t_checked skipped: t.c did not compile
+
+**Both untrue of the first target and the second sentence untrue of the
+file.** `t.c` compiled perfectly; what did not compile was `t.c` with a
+define the reader may not know exists. A working program lost, and the reason
+given for losing it pointing at a file with nothing wrong in it -- which is
+§147's shape, a diagnostic naming a cause the code never tested, arriving
+this time in code written the same night as that entry.
+
+### The fix is a name for the thing that was being confused
+
+`Unit.key` is the path when there is no variant and path-plus-variant when
+there is. Everything asking about the **unit** -- did it compile, what did
+nm say, what is its cache entry -- asks that; everything asking about the
+file somebody wrote still asks `rel`. Written as a property with the
+distinction in its docstring, because the two were the same thing for the
+life of the project until they were not, and the next reader has no reason
+to suspect otherwise.
+
+    * t_checked skipped: t.c did not compile with this target's own defines
+    * built t
+
+**And the summary was printing the key raw.** A variant's key carries the
+target behind a NUL, so `broken` rendered as `t.c t_checked` -- which reads
+as two files and is one. It says `t.c (t_checked)` now. An internal
+identifier reaching the output is its own small instance of the same
+confusion: the key was designed to be unambiguous to the program and nobody
+asked what it looked like to a person.
+
+### What this says about the lens
+
+It paid out on the second aim, on code four hours old, written by the same
+hand that had just recorded the lens. That is worth stating plainly rather
+than as a lesson: **the entry describing a shape is not protection against
+it.** §143's own commit message names the failure -- "a dictionary whose keys
+change meaning is a rename the language cannot see" -- and the rename it
+describes had already happened three more times in the same commit, unseen,
+because nothing about `u.rel` looked different afterwards.
+
+The remaining uses of `rel` were read rather than assumed: `units` is keyed
+by path and holds only plain units, `scans` and `generated_from` are about
+files rather than units, and `cache.data["units"]` compares paths with
+paths. Those are correct, and correct for a reason worth having on the
+record -- they are questions about a file, which is exactly what `rel` still
+means.

@@ -4330,6 +4330,19 @@ class Unit:
 				self.archive = True
 
 	@property
+	def key(self):
+		"""What identifies this unit, as against the file it came from.
+
+        They were the same thing until a target could ask for its root to be
+        compiled with defines of its own. Everything that is about the
+        *unit* -- did it compile, what did nm say, what is its cache entry --
+        has to ask this; everything that is about the file somebody wrote
+        still asks `rel'. Getting that wrong is invisible in a tree with no
+        variants and wrong in every tree with one.
+        """
+		return self.rel if not self.variant else f"{self.rel}\0{self.variant}"
+
+	@property
 	def crate(self):
 		return self.lang.unit == "crate"
 
@@ -4620,7 +4633,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	for u in units:
 		if u.compiled:
 			continue
-		ent = cache.objects.get(u.rel)
+		ent = cache.objects.get(u.key)
 		key = object_key(u, cfg, cache, root, incflags)
 		if (ent and ent.get("key") == key and key is not None
 		        and os.path.exists(u.obj)):
@@ -4809,8 +4822,8 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		for u, _err in failures:
 			u.undef, u.strong, u.weak = set(), set(), set()
 			u.compiled = True
-			broken.add(u.rel)
-			cache.objects.pop(u.rel, None)
+			broken.add(u.key)
+			cache.objects.pop(u.key, None)
 
 	if dry_run:
 		for u in todo:
@@ -4822,10 +4835,10 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	# actually compiled: a failed unit has no object file, and asking nm to
 	# read one that is not there is a different error from the one the user
 	# needs to see.
-	made = [u for u in todo if u.rel not in broken]
+	made = [u for u in todo if u.key not in broken]
 	read_symbols(made, cfg, jobs)
 	for u in made:
-		cache.objects[u.rel] = {
+		cache.objects[u.key] = {
 		    "key": object_key(u, cfg, cache, root, incflags),
 		    "u": sorted(u.undef), "s": sorted(u.strong), "w": sorted(u.weak),
 		}
@@ -8234,8 +8247,19 @@ def build(args, _bootstrapping=False):
 		# confirm main() against the symbol tables now that objects exist
 		if not args.dry_run:
 			for t in list(wanted):
-				if t.rel in broken:
-					warn(f"{t.name} skipped: {t.rel} did not compile")
+				# Asked of the unit this target actually roots. A target
+				# with its own defines compiles a second object out of the
+				# same file, and keying this on the path dropped the plain
+				# program when the variant failed -- saying "t.c did not
+				# compile" of a file that had compiled perfectly, which is
+				# advice pointing at the wrong thing as well as a program
+				# lost for no reason.
+				root_unit = variants.get(t.name) or units.get(t.rel)
+				if root_unit is not None and root_unit.key in broken:
+					why = (f"{t.rel} did not compile" if not root_unit.variant
+					       else f"{t.rel} did not compile with this "
+					            f"target's own defines")
+					warn(f"{t.name} skipped: {why}")
 					wanted.remove(t)
 					continue
 				# A Rust program has no object here to disagree with: it
@@ -8931,8 +8955,12 @@ def build(args, _bootstrapping=False):
 	if broken:
 		say()
 		warn(f"{len(broken)} file(s) did not compile")
-		for rel in sorted(broken)[:5]:
-			note(rel)
+		# `broken' holds unit keys, and a variant's carries the target it
+		# was compiled for behind a NUL. Printing the key raw showed
+		# `t.c t_checked', which reads as two files and is one.
+		for key in sorted(broken)[:5]:
+			rel, _, variant = key.partition("\0")
+			note(f"{rel} ({variant})" if variant else rel)
 		if len(broken) > 5:
 			note(f"... and {len(broken) - 5} more")
 

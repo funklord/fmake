@@ -14230,6 +14230,48 @@ def a_variant_is_not_a_second_definition_of_its_own_file(t):
 
 
 @case
+def a_variant_that_fails_does_not_take_the_plain_one_with_it(t):
+	"""One source, two units, and `broken' was keyed on the source.
+
+    The defines belong to one of the two, so an error they introduce is the
+    variant's alone -- and keying the "did this target's root compile"
+    question on the path dropped the plain program as well, saying "t.c did
+    not compile" of a file that had compiled perfectly. Advice pointing at
+    the wrong thing, and a program lost for no reason.
+
+    Found by pointing last night's lens -- a collection keyed by one thing
+    and queried by another -- at the code that lens had just been derived
+    from."""
+	t.write("t.c", """
+#include <stdio.h>
+int helper(void);
+int main(void)
+{
+#ifdef CHECKED
+	this is not valid C at all;
+#endif
+	printf("%d\\n", helper());
+	return 0;
+}
+""")
+	t.write("helper.c", "int helper(void){ return 7; }\n")
+	t.write("fmake.toml", '[target.t_checked]\nroot    = "t.c"\n'
+	        'defines = ["CHECKED"]\n')
+	r = t.fmake()
+	check(t.run("t").stdout == "7\n",
+	      f"the plain program was lost to the variant's error: {r.stdout}"
+	      f"{r.stderr}")
+	out = r.stdout + r.stderr
+	check("t_checked skipped" in out and "own defines" in out,
+	      f"the skip does not say whose defines broke it: {out}")
+	check("t skipped" not in out,
+	      f"the plain target was reported as failing too: {out}")
+	# And the summary names one file rather than reading as two.
+	check("t.c (t_checked)" in out,
+	      f"the unit key was printed raw: {out}")
+
+
+@case
 def a_variant_names_the_target_that_asked_for_it(t):
 	"""Two `CC t.c' lines say nothing about which is which."""
 	_double(t)
