@@ -187,7 +187,7 @@ that had been green about nothing for five commits ·
 [134. `$file()`, and the version written a third time](#134-file-and-the-version-written-a-third-time) ·
 [135. The reference that reached a compiler as text](#135-the-reference-that-reached-a-compiler-as-text) ·
 [136. situ's report: a deliverable nothing in the tree links](#136-situs-report-a-deliverable-nothing-in-the-tree-links) ·
-[137. netcfgd again, and sixteen targets called `lib`](#137-netcfgd-again-and-sixteen-targets-called-lib) ·
+[137. netcfgd again, and two targets called `lib`](#137-netcfgd-again-and-two-targets-called-lib) ·
 [138. fmake understands `.situ`, and the object list nobody has to write](#138-fmake-understands-situ-and-the-object-list-nobody-has-to-write) ·
 [139. The build directory, and the authority that was already in the tree](#139-the-build-directory-and-the-authority-that-was-already-in-the-tree) ·
 [140. anti-avx builds, and two claims in §123 that do not reproduce](#140-anti-avx-builds-and-two-claims-in-123-that-do-not-reproduce) ·
@@ -199,7 +199,8 @@ that had been green about nothing for five commits ·
 [146. Why hydra compiled the build directory, which was not what §139 said](#146-why-hydra-compiled-the-build-directory-which-was-not-what-139-said) ·
 [147. Three gates in the suite that passed without looking, and a skip that lied](#147-three-gates-in-the-suite-that-passed-without-looking-and-a-skip-that-lied) ·
 [148. The lens from the worst bug: a name that decides a deletion](#148-the-lens-from-the-worst-bug-a-name-that-decides-a-deletion) ·
-[149. A path stopped being a unit's name, and three places went on using it](#149-a-path-stopped-being-a-units-name-and-three-places-went-on-using-it)
+[149. A path stopped being a unit's name, and three places went on using it](#149-a-path-stopped-being-a-units-name-and-three-places-went-on-using-it) ·
+[150. `lib.rs` names nothing, and two tracebacks behind the message that said so](#150-librs-names-nothing-and-two-tracebacks-behind-the-message-that-said-so)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11204,7 +11205,7 @@ one.** §138 has fmake understanding `.situ` outright, the way it understands
 `make test` in situ's README was the honest answer for that tree on the day,
 and is not the answer any more.
 
-## 137. netcfgd again, and sixteen targets called `lib`
+## 137. netcfgd again, and two targets called `lib`
 
 Reported from netcfgd 2026-09-02, and it is §121 revisited rather than a
 new tree: that evaluation found "most of the tree is not fmake's to build"
@@ -11219,10 +11220,13 @@ and recorded that `.rs` was not read at all, so the Rust never came up.
     give one of them a different @target, or a name in fmake.toml.
 
 netcfgd is a Cargo workspace of twenty-one crates. Eighteen have a root;
-sixteen of those are `src/lib.rs`. The message names two of them, which is
-the right message for the general collision and understates this one: the
-answer it suggests is sixteen stanzas, or sixteen annotations in files
-Cargo owns.
+sixteen of those are `src/lib.rs`. The message names two of them, and two
+is also the whole of it -- corrected here from "sixteen stanzas", which was
+inferred from the count of roots and never checked. A crate root becomes a
+target only if it defines a `main`, and two of these do: the idiom where a
+thin `main.rs` calls into its own library. The other fourteen were never
+named at all. See §150, where this was measured and the naming was
+settled.
 
 **The naming rule is the whole of it, and it is a rule that works
 everywhere else.** A target is named for what it is rooted in, and for C
@@ -12470,3 +12474,79 @@ files rather than units, and `cache.data["units"]` compares paths with
 paths. Those are correct, and correct for a reason worth having on the
 record -- they are questions about a file, which is exactly what `rel` still
 means.
+
+## 150. `lib.rs` names nothing, and two tracebacks behind the message that said so
+
+§137 asked which of two answers a crate root should take its name from, and
+left it as the holder's. Answered: **the enclosing directory**, which is the
+rule fmake already applies to `main`, rather than the `[package] name` in the
+Cargo.toml beside it.
+
+The exception was the whole cost of the second answer -- fmake reads no other
+build system's files -- and the measurement is that it buys nothing. Across
+netcfgd's nineteen crate roots the enclosing directory **is** the
+`[package] name`, every one:
+
+    crates/netcfgd-cli/src/lib.rs      ->  netcfgd-cli
+    backend/netcfgd-hostapd/src/lib.rs ->  netcfgd-hostapd
+    adapter/netcfgd-nm/src/main.rs     ->  netcfgd-nm
+    ... 19 of 19 agree
+
+So the authoritative name was already reachable without reading the file that
+states it. Where a project disagrees with its own layout, `@target` and
+`[target.*] name` say so, which is how every other inferred name here is
+overridden. `lib.rs` names nothing for exactly the reason `main` does not:
+Cargo requires a library crate to be rooted there, so every crate ever
+written has one.
+
+### §137's own scope was inferred, and it is two, not sixteen
+
+The entry says the message "understates this one: the answer it suggests is
+sixteen stanzas, or sixteen annotations in files Cargo owns". Measured: of
+netcfgd's seventeen `lib.rs` files, **two** collide. A crate root becomes a
+target only if it defines a `main`, and exactly two do -- `netcfgd-cli` and
+`netcfgd-daemon`, the idiom where a thin `main.rs` calls into its own
+library. The other fifteen were never targets and never named. §137 has been
+corrected in place.
+
+Second time in two days that a number in this file was reasoned rather than
+counted (§140 was the other), and both times the reasoning was plausible and
+the count was one command.
+
+### The message was standing in front of two tracebacks
+
+A refusal that stops before the rest of the code runs is also a refusal that
+nobody gets past, and behind this one were two `KeyError`s. Both are in the
+committed fmake, both predate this change, and each reproduces in three
+files or fewer:
+
+**A module rooting the library.** A tree with no `main()` is built as an
+archive, rooted in the first source that is not a test. `src/foo.rs` sorts
+before `src/lib.rs` and is a *module* -- rustc reads it from the root that
+declares it with `mod` -- so the archive was rooted in a file that never
+becomes a unit, and the closure raised `KeyError: 'src/foo.rs'`. That is a
+`lib.rs` with one `mod` in it: the plainest Rust library anybody writes, two
+files, no configuration.
+
+**Cargo's other roots.** `examples/demo.rs`, `benches/*.rs` and
+`tests/*.rs` are programs to Cargo, by a rule that lives in the Cargo.toml.
+Each has a `fn main()`, each rooted a target, and none of them is a crate
+root -- so `units[t.rel]` again. netcfgd's crash was on
+`crates/netcfgd-host/examples/live_association.rs`.
+
+Both now do the thing that was already right elsewhere in the file: a `.rs`
+that roots no crate is not a program, and is reported after the build as
+reached by no crate root, with the remedy that fits. Naming one by hand in
+`[target.*] root` says what a crate root is instead of tracing back.
+
+### What netcfgd hits now, which is the boundary §137 already named
+
+    * cannot find attribute `serde` in this scope
+      in crates/netcfgd-apply/src/lib.rs and 5 other file(s)
+
+Four programs planned, named `netcfgd-bin`, `netcfgd-cli`, `netcfgd-daemon`
+and `netcfgd-nm`, and then registry dependencies, which fmake does not
+resolve and does not claim to. **netcfgd's exclusion stands** -- a
+twenty-one crate workspace with features and a registry is Cargo's -- and
+what changed is that the first thing a Rust project sees is no longer a name
+collision in files it does not own, and is no longer a traceback either.

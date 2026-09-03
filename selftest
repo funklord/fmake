@@ -13976,6 +13976,104 @@ fn main() { println!("{}", shared()); }
 	      f"sends the reader to install something: {out}")
 
 
+@case
+def two_library_crates_are_not_both_called_lib(t):
+	"""`lib.rs' names nothing, exactly as `main' does.
+
+	Cargo requires a library crate to be rooted at src/lib.rs, so every
+	crate ever written has one, and a target named for the file it is
+	rooted in called them all `lib'. Two library crates that each export a
+	`pub fn main' -- the idiom where a thin bin calls into its own
+	library -- collided and fmake refused to build either.
+
+	The name is the directory above, which is where Cargo keeps it too:
+	measured across netcfgd's nineteen crate roots, the enclosing
+	directory is the `[package] name' in every one, so the authoritative
+	name is reached without fmake reading a Cargo.toml."""
+	env = _rust(t)
+	for crate in ("alpha", "beta"):
+		t.write(f"crates/{crate}/src/lib.rs",
+		        'pub fn main() { println!("%s"); }\n' % crate)
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the two crates did not build: {out}")
+	check("both called 'lib'" not in out,
+	      f"the crates still collide over the name of the file Cargo "
+	      f"requires them to be rooted in: {out}")
+	for crate in ("alpha", "beta"):
+		check(os.path.exists(os.path.join(t.dir, crate)),
+		      f"no program called {crate}, which is what its directory "
+		      f"and its Cargo.toml both call it: {out}")
+
+
+@case
+def a_module_does_not_root_the_library_of_its_own_tree(t):
+	"""A lib.rs with one `mod' is the plainest Rust library there is, and
+	it ended in a traceback.
+
+	A tree with no main() anywhere is built as a library, rooted in the
+	first source that is not a test. `src/foo.rs' sorts before
+	`src/lib.rs' and is a module rather than a translation unit -- rustc
+	reads it from the root that declares it -- so the library was rooted
+	in a file that never becomes a unit, and the closure raised KeyError
+	on it. Two files, and no configuration."""
+	env = _rust(t)
+	t.write("src/lib.rs", "mod foo;\npub fn hi() -> u32 { foo::n() }\n")
+	t.write("src/foo.rs", "pub fn n() -> u32 { 3 }\n")
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"fmake traced back: {out}")
+	check(r.returncode == 0, f"the library did not build: {out}")
+	name = "lib" + os.path.basename(t.dir) + ".a"
+	check(os.path.exists(os.path.join(t.dir, name)),
+	      f"no {name} was written: {out}")
+
+
+@case
+def a_rust_file_that_roots_no_crate_is_not_a_program(t):
+	"""Cargo builds `examples/demo.rs' as its own program, by a rule that
+	lives in the Cargo.toml. fmake is handed a crate root, and only
+	main.rs or lib.rs is one -- so the `fn main()' in there roots nothing,
+	and it used to root a target with no unit behind it and trace back.
+	Every Cargo tree with an examples/, benches/ or tests/ directory has
+	these; netcfgd's crash was on one of them.
+
+	The file is named after the build, with the remedy that fits it,
+	rather than passed over in silence."""
+	env = _rust(t)
+	t.write("src/lib.rs", "pub fn hello() -> u32 { 7 }\n")
+	t.write("examples/demo.rs", 'fn main() { println!("{}", 1); }\n')
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"fmake traced back: {out}")
+	check(r.returncode == 0, f"the library did not build: {out}")
+	check("examples/demo.rs" in out and "roots no crate" in out
+	      or "reached by no crate root" in out,
+	      f"the file nothing reaches is not reported: {out}")
+
+
+@case
+def a_named_root_that_roots_no_crate_is_refused(t):
+	"""The same file reached by hand rather than by inference. A config
+	naming a module as a target's root asks fmake to compile a module on
+	its own, which is an error rustc reports in its own words and a
+	traceback here."""
+	env = _rust(t)
+	t.write("src/lib.rs", "mod foo;\npub fn hi() -> u32 { foo::n() }\n")
+	t.write("src/foo.rs", "pub fn n() -> u32 { 3 }\n")
+	t.write("fmake.toml", '[target.thing]\nroot = "src/foo.rs"\n')
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"fmake traced back: {out}")
+	check(r.returncode != 0, f"a module cannot root a target: {out}")
+	check("roots no crate" in out,
+	      f"the refusal does not say what a crate root is: {out}")
+
+
 # ---------------------------------------------------------------------------
 # Answering what fmake will not guess
 # ---------------------------------------------------------------------------

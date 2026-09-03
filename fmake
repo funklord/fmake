@@ -6390,9 +6390,24 @@ def default_name(rel, root):
     and writing it into the project root collides with the directory it came
     from. Conventional source-directory names are skipped in favour of
     whatever encloses them, ending at the project's own name.
+
+    A crate root is that same case wearing a different filename. `lib.rs'
+    names nothing either: it is where Cargo requires a library crate to be
+    rooted, so every crate ever written has one, and the name belongs to the
+    directory above. Two library crates that each define a `pub fn main'
+    collided at `lib' -- measured in netcfgd, which excluded four
+    directories over it.
+
+    The enclosing directory is taken rather than the `[package] name' in
+    the Cargo.toml beside it, which would be authoritative and would cost an
+    exception to fmake reading no other build system's files. In netcfgd the
+    two agree for all nineteen crate roots, so the exception buys a name
+    that is already there; where a project disagrees with its directory,
+    @target and [target.*] say so, which is how every other inferred name
+    here is overridden.
     """
 	stem = os.path.splitext(os.path.basename(rel))[0]
-	if stem != "main":
+	if stem != "main" and os.path.basename(rel) not in CRATE_ROOTS:
 		return stem
 	d = os.path.dirname(rel)
 	while d:
@@ -7562,6 +7577,22 @@ def build(args, _bootstrapping=False):
 		if rel in crate_members:
 			continue
 		ann = Ann(scans[rel].get("dirs"))
+		# Nor is any other .rs that roots no crate. rustc is handed a
+		# root, and only main.rs or lib.rs is one -- so a `fn main()' in
+		# `examples/demo.rs' is a program to Cargo, by a rule written in
+		# the Cargo.toml, and nothing at all to fmake. Every one of them
+		# became a target with no unit behind it and reached
+		# `units[t.rel]', which is a traceback rather than a message:
+		# three files reproduce it, and Cargo's examples/, benches/ and
+		# tests/ are full of them. They are already reported after the
+		# build, as reached by no crate root, with the remedy that fits.
+		if (os.path.splitext(rel)[1] in CRATE_EXTS
+		        and os.path.basename(rel) not in CRATE_ROOTS):
+			if ann.scalar("kind") or ann.scalar("target"):
+				warn(f"{rel}: @kind and @target are ignored here; "
+				     f"{' or '.join(sorted(CRATE_ROOTS))} roots a crate, "
+				     f"and rustc is handed the root")
+			continue
 		if ann.scalar("kind") is None and scans[rel]["has_main"] \
 		        and main_is_a_mirage(rel):
 			continue
@@ -7615,6 +7646,15 @@ def build(args, _bootstrapping=False):
 		elif rel not in proj.src_set:
 			die(f"{CONF_FILE}: [target.{name}] root = {rel!r} is not a "
 			    f"source file in this tree")
+		elif (os.path.splitext(rel)[1] in CRATE_EXTS
+		      and os.path.basename(rel) not in CRATE_ROOTS):
+			# Reachable by hand as well as by inference, and it arrives at
+			# the same missing unit. rustc compiles a root; a module is
+			# read *by* one.
+			die(f"{CONF_FILE}: [target.{name}] root = {rel!r} roots no "
+			    f"crate. rustc is handed a crate root, and only "
+			    f"{' or '.join(sorted(CRATE_ROOTS))} is one -- a module is "
+			    f"read from the root that declares it with `mod'.")
 		t = Target(rel or "", root, Ann(), section)
 		t.name = section.get("name", name)
 		if not rel:
@@ -7668,11 +7708,30 @@ def build(args, _bootstrapping=False):
 		name = conf.project.get("name") or os.path.basename(root) or "lib"
 		# Not srcs[0]: a test's own source must not root the library, and
 		# with tests present srcs[0] may well be one.
+		#
+		# Nor may a .rs that roots no crate. `src/foo.rs' beside a
+		# `src/lib.rs' that says `mod foo;' sorts first, and it is a
+		# module rather than a translation unit -- so the library was
+		# rooted in a file that never becomes a unit, and the closure
+		# reached `units[t.rel]' and traced back. Two files reproduce it,
+		# and they are the plainest Rust library anyone writes.
+		roots_nothing = lambda r: (os.path.splitext(r)[1] in CRATE_EXTS
+		                           and os.path.basename(r) not in CRATE_ROOTS)
 		body = [r for r in srcs
-		        if r not in {t.rel for t in targets if t.test}]
-		t = Target(body[0] if body else srcs[0], root, ann,
-		           conf.target(name))
-		t.rel = body[0] if body else srcs[0]
+		        if r not in {t.rel for t in targets if t.test}
+		        and not roots_nothing(r)]
+		if not body:
+			# Held by tests to the last file, which is the case the
+			# fallback to srcs[0] was for: a test's own source roots the
+			# archive rather than nothing doing.
+			body = [r for r in srcs if not roots_nothing(r)]
+		if not body:
+			vinfo("nothing here roots a crate, and a .rs that roots none "
+			      "is not a translation unit; no library to build")
+			whole_tree_library = False
+	if whole_tree_library:
+		t = Target(body[0], root, ann, conf.target(name))
+		t.rel = body[0]
 		t.kind = t.conf.get("kind", "static")
 		t.name = t.conf.get("name", name)
 		targets.append(t)

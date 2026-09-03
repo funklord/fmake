@@ -480,7 +480,17 @@ A **crate is one unit, not one per file.** `mod name;` draws a file in, and so
 does `#[path = "..."] mod name;`; those files are inputs to one `rustc` call
 and are never compiled separately, because a module handed to rustc on its own
 is a crate with no `main()`. A `.rs` that no root reaches is reported the way
-an unreferenced C source is.
+an unreferenced C source is — including the ones Cargo would build as programs
+of their own, in `examples/`, `benches/` and `tests/`, since what makes those
+roots is a rule in the `Cargo.toml` rather than anything in the file.
+
+A **crate is named for its directory**, not for the file it is rooted in.
+`lib.rs` names nothing — Cargo requires a library crate to be rooted there, so
+every crate has one — so `crates/parser/src/lib.rs` builds `libparser.a` and
+`crates/parser/src/main.rs` builds `parser`. That is the same name Cargo uses:
+in a twenty-one crate workspace the enclosing directory was the `[package]
+name` in every one. `@target` and `[target.*] name` override it where a
+project disagrees with its own layout.
 
 A **Rust program is linked by rustc**, not by fmake. That is measured rather
 than deferential: rustc ships `std` as `.rlib` files with no shared object, so
