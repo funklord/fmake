@@ -207,7 +207,8 @@ that had been green about nothing for five commits ·
 [154. Four faults in the exit, and one in the mode that changes nothing](#154-four-faults-in-the-exit-and-one-in-the-mode-that-changes-nothing) ·
 [155. §154's own fix was a blacklist, and the class was twice its size](#155-154s-own-fix-was-a-blacklist-and-the-class-was-twice-its-size) ·
 [156. A header nothing rebuilt on, in the file §148 called safe](#156-a-header-nothing-rebuilt-on-in-the-file-148-called-safe) ·
-[157. The other parse §148 cleared, and the direction it fails in](#157-the-other-parse-148-cleared-and-the-direction-it-fails-in)
+[157. The other parse §148 cleared, and the direction it fails in](#157-the-other-parse-148-cleared-and-the-direction-it-fails-in) ·
+[158. The third parse, which fails in the direction the other two were assumed to](#158-the-third-parse-which-fails-in-the-direction-the-other-two-were-assumed-to)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12441,6 +12442,11 @@ was never asked.
 question never put: a dropped definition is silent wherever a second
 provider exists, because §3's refusal has nothing left to refuse.
 
+**The third is the diagnostic grouping, and §158 is the one this reasoning
+fits.** It degrades loudly: every message stays true and the collapsing
+stops. One right answer out of three, arrived at by an argument about
+severity when the question was direction.
+
 **And the exclusionary half is `git_ignored`, which is my own from §139.**
 It parses `git check-ignore --stdin` and a mis-parse there would silently
 drop sources from a build, which is the same severity by a different route.
@@ -13147,3 +13153,58 @@ What makes it discriminate is a header that declares nothing. It puts
 provider.c in the candidate set and gives the closure exactly one reason to
 link it, which is the symbol under test. Both of the first two versions
 would have gone in green.
+
+## 158. The third parse, which fails in the direction the other two were assumed to
+
+§156 and §157 found that the two parses §148 cleared both suppress a check
+rather than merely wasting work. This is the last member of the family, and
+it does what that sentence assumed all three would: it degrades loudly.
+
+**fmake groups compiler failures by message**, because one missing header
+fails every file that includes it and 248 identical copies bury everything
+else. The key is the text after `error:` in the first line that contains it.
+
+**The word is translated and the shape is not.** gcc ships message
+catalogues; where one is installed the line reads `schwerwiegender Fehler:`,
+nothing matches, and the key falls back to two hundred characters of raw
+stderr -- which begin with an absolute path. Every file becomes its own
+group.
+
+    real cc          * missing_thing.h: No such file or directory
+                       in a.c and 3 other file(s)
+
+    same, translated * /tmp/.../errloc/a.c:2:10: fatal Fehler: missing_th...
+                       in a.c
+                     * /tmp/.../errloc/b.c:2:10: fatal Fehler: missing_th...
+                       in b.c
+                     ... one per file
+
+Measured with a stand-in that rewrites gcc's own output, because no message
+catalogue is installed on this machine -- and that is the point of the
+finding rather than an obstacle to it. **The failure is invisible from here
+by construction**, and it lands on the machines least able to afford it:
+four files became four groups, and hydra compiles 220.
+
+### The fix keeps the compiler's own words
+
+Not `LC_ALL=C`, which would have been one line and would have taken a German
+reader's German diagnostics away from them: fmake prints the compiler's
+stderr verbatim, and it should go on doing that. What changes is the
+*grouping key*, which falls back to the shape when the word is not there:
+
+    <path>:<line>:<col>: <severity>: <message>
+
+The severity is skipped rather than read, since telling a warning from an
+error by its name is precisely the part that does not survive translation.
+`error:` is still tried first, so the common case produces byte-identical
+output to before.
+
+### Where this leaves §148's sentence
+
+Three parses, cleared in one clause on the grounds that a mis-parse "causes
+a rebuild or a missing provider rather than a removal". Two of the three
+were silent -- a stale binary, a link set chosen without the refusal firing
+-- and the third is this one, which is noisy and true and merely useless.
+The sentence was right once out of three, and it was right by luck rather
+than by the argument it gave, since the argument was about severity and the
+answer turns on direction.

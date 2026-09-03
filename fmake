@@ -335,6 +335,16 @@ def default_rustflags(env=None):
 LINK_ERR_LINES = 8              # linker output shown before truncating
 
 # nm symbol type letters. Uppercase is global, lowercase is file-local.
+# A compiler diagnostic, in whatever language the toolchain speaks:
+#
+#     <path>:<line>:<col>: <severity>: <message>
+#
+# Only the shape is portable across locales, and only the message is worth
+# grouping on -- the path is what makes every file its own group. The
+# severity word is skipped rather than read, since telling a warning from
+# an error by its name is exactly the thing that does not translate.
+RE_DIAG_LINE = re.compile(r".+?:\d+(?::\d+)?:\s+[^:]+:\s*(?P<msg>.+)$")
+
 NM_UNDEF    = "U"
 NM_WEAK     = set("WVwv")      # weak / vague linkage: satisfies, never pulls
 NM_COMMON   = set("Cc")        # tentative definitions, treated as weak
@@ -4847,6 +4857,20 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				if "error:" in line:
 					first = line.split("error:", 1)[1].strip()
 					break
+			# The word is translated and the shape is not, so fall back to
+			# the shape. Measured with `error:' rewritten to `Fehler:',
+			# which is what a German gcc prints: four files failing on one
+			# missing header produced four groups rather than one, each
+			# keyed by 200 characters of raw stderr beginning with an
+			# absolute path -- so the grouping this block exists for
+			# stopped happening, and it stopped on the machines least able
+			# to afford it. hydra compiles 220 files.
+			if not first:
+				for line in err.splitlines():
+					m = RE_DIAG_LINE.match(line)
+					if m:
+						first = m.group("msg").strip()
+						break
 			groups.setdefault(first or err.strip()[:200], []).append((u, err))
 		say()
 		for msg, hit in sorted(groups.items(), key=lambda kv: -len(kv[1])):

@@ -2569,6 +2569,62 @@ def repeated_compiler_errors_are_grouped(t):
 
 
 @case
+def diagnostics_are_grouped_in_a_language_fmake_does_not_know(t):
+	"""The grouping keyed on the word `error:\', and the word is translated.
+
+    gcc ships message catalogues; where one is installed the line reads
+    `schwerwiegender Fehler:\' and nothing matches. The key then fell back
+    to two hundred characters of raw stderr, which begin with an absolute
+    path -- so every file became its own group and the collapsing this
+    exists for stopped happening, on exactly the machines least able to
+    afford it. Measured at four files; hydra compiles 220.
+
+    The shape is portable where the word is not: `<path>:<line>:<col>:
+    <severity>: <message>\'. The severity is skipped rather than read,
+    since telling a warning from an error by its name is the part that
+    does not translate.
+
+    The stand-in rewrites gcc\'s own output rather than needing a locale
+    installed, which is what makes this runnable anywhere. It calls the
+    real compiler by absolute path and is never on $PATH, so nothing here
+    can recurse."""
+	cc = shutil.which("cc")
+	if not cc:
+		raise Skip("no cc")
+	shim = t.write("cc-translated", "#!/usr/bin/env python3\n"
+	               "import subprocess, sys\n"
+	               f"r = subprocess.run([{cc!r}] + sys.argv[1:],\n"
+	               "                   capture_output=True, text=True)\n"
+	               "sys.stdout.write(r.stdout)\n"
+	               "sys.stderr.write(r.stderr.replace('error:', 'Fehler:'))\n"
+	               "sys.exit(r.returncode)\n")
+	os.chmod(shim, 0o755)
+
+	for name in ("a", "b", "c"):
+		t.write(f"{name}.h", f"int {name}_fn(void);\n")
+		t.write(f"{name}.c", f'#include "{name}.h"\n'
+		        '#include "missing_thing.h"\n'
+		        f"int {name}_fn(void){{ return 1; }}\n")
+	t.write("main.c", '#include "a.h"\n#include "b.h"\n#include "c.h"\n'
+	        '#include "missing_thing.h"\n'
+	        "int main(void){ return a_fn() + b_fn() + c_fn(); }\n")
+
+	r = t.fmake(env={"CC": shim})
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"this cannot build: {out}")
+	groups = [l for l in r.stdout.splitlines()
+	          if "missing_thing.h" in l and l.startswith("*")]
+	check(len(groups) == 1,
+	      f"four files failing on one header produced {len(groups)} "
+	      f"summary lines rather than one: {groups}")
+	check("other file(s)" in r.stdout,
+	      f"the other affected files were not summarised: {r.stdout}")
+	check(t.dir not in "".join(groups),
+	      f"the summary carries an absolute path, which is what happens "
+	      f"when the key falls back to raw stderr: {groups}")
+
+
+@case
 def one_failed_target_does_not_sink_the_rest(t):
 	"""Targets are discovered, not requested, so failures are per-target."""
 	t.write("main.c", "int main(void){ return 0; }\n")
