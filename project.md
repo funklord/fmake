@@ -195,7 +195,8 @@ that had been green about nothing for five commits ·
 [142. Two more from the same session, one of them fixed](#142-two-more-from-the-same-session-one-of-them-fixed) ·
 [143. One source, two programs, and the object list keyed on a path](#143-one-source-two-programs-and-the-object-list-keyed-on-a-path) ·
 [144. Advice about a program nobody built, and two entries that had gone stale](#144-advice-about-a-program-nobody-built-and-two-entries-that-had-gone-stale) ·
-[145. `-i`, and writing for somebody who did not write the project](#145--i-and-writing-for-somebody-who-did-not-write-the-project)
+[145. `-i`, and writing for somebody who did not write the project](#145--i-and-writing-for-somebody-who-did-not-write-the-project) ·
+[146. Why hydra compiled the build directory, which was not what §139 said](#146-why-hydra-compiled-the-build-directory-which-was-not-what-139-said)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11522,6 +11523,15 @@ programs. §138's schema support is what changed that tree, and this changed
 nothing in it. Recorded because the two landed together and would otherwise
 be credited together.
 
+**And the reason given for this rule is wrong, which §146 has in full.** The
+entry says fmake reads a build directory as source. It does not: hydra's
+strays are never candidates, and qtty's qmake `moc_chat.cpp` is not compiled
+by the old fmake either. They arrive on a *widening* pass, because widening
+matches an unresolved symbol's name tokens against what a file defines, and
+every moc output defines the same five boilerplate names. The rule below is
+right and worth having; what it fixes is narrower than this entry claims, and
+the defect underneath it is still there for moc output a tree has committed.
+
 ### Where it leaves hydra
 
 hydra refuses to regenerate its object sets while a `build-android*`
@@ -12082,3 +12092,115 @@ the friction belongs: the flag is opt-in, so somebody typing it has decided to
 answer, and what gets written says in its own words that it was a guess
 somebody agreed to. That is the most a tool can do about a question it should
 not have asked.
+
+## 146. Why hydra compiled the build directory, which was not what §139 said
+
+§139 fixed hydra's report by not walking source into a directory git ignores,
+and described the fault as fmake reading a build directory as source. **That
+is where the symptom appeared and not where the decision was made.** Chased to
+the end because §139 rested on one report that had never been reproduced here,
+which is the shape two entries in this file had already gone stale in.
+
+### It reproduces, and it is a widening pass
+
+A hydra copy carrying its 55 Android moc outputs, built with the fmake from
+just before §139 (a168238), `--eject make-fragment`: all 55 compiled, exit 1,
+exactly as reported. The useful part is the numbering:
+
+    [  1/220] CXX .fmake/moc/src/moc_address_input.cpp
+    ...
+    [220/220] CXX test/test_ytdlp_live.cpp
+    [ 1/55]   CXX build-android-arm64-v8a/moc_address_input.cpp
+
+**Two passes.** The strays are not candidates -- the include graph never
+reaches them, and a plain build, a dry run and a dry run naming one test
+target all leave them alone. They arrive on the *widening* pass, after the
+first 220 have been compiled and closed over.
+
+And it is not a missing meta-object. All 55 correspond to classes fmake moc'd
+itself in that first batch; the set difference between the `MOC` lines and the
+stray names is empty.
+
+### One unresolved symbol matches every moc file in the tree
+
+`widen_candidates` proposes an unbuilt file whose scanned *definitions*
+intersect the tokens of an unresolved symbol, and `symbol_tokens` splits an
+Itanium-mangled name into its identifier components. So
+`_ZN12address_line11qt_metacastEPKc` yields `{address_line, qt_metacast}`.
+
+Every moc output in that tree defines the same five things:
+
+    metaObject   qt_create_metaobjectdata   qt_metacall
+    qt_metacast  qt_static_metacall
+
+**So a single unresolved metaobject symbol matches all 55 at once, whatever
+class it belongs to.** Measured twice: the widening batch is 55, and with the
+two Android-named strays deleted it is 53. The class never mattered, which is
+what kills the obvious explanation that the platform-excluded `android_*`
+sources were the seed.
+
+qtty is the control and it widens too -- 13 candidates then a pass of 17 --
+while never touching the qmake `moc_chat.cpp` sitting in its git-ignored
+`build/`. So widening is not the discriminator either. What decides is whether
+anything unresolved demangles to one of those five tokens.
+
+**This is the failure `widen_candidates`' own docstring is written against:**
+
+> Candidates are the unbuilt files that appear to *define* the symbol. The
+> distinction matters: filtering on any mention instead would match every file
+> that merely calls printf.
+
+The guard assumes a definition is specific to what defines it. For generated
+code it is not -- the definitions **are** the boilerplate, identical in every
+file of that kind -- so the rule reaches for fifty-five wrong files with the
+same confidence it reaches for one right one. `widening_does_not_compile_the_
+whole_tree` exists to catch exactly this and cannot: it gives each of its 60
+files a distinct symbol, so shared definitions never arise. A guard written
+against one way of being too broad, defeated by another.
+
+### The obvious fix is wrong, and measuring it first is what showed that
+
+Require a *qualifier* match: for `_ZN12address_line11qt_metacastEPKc`, insist
+the file define `address_line` and not merely `qt_metacast`. It separates the
+55 from each other and it breaks the case it exists to serve.
+
+    src/address_input.cpp        7 defs: carries_scheme, has_tld,
+                                 is_ip_literal, ... -- no `address_line'
+    moc_address_input.cpp        7 defs: address_line, metaObject,
+                                 qt_metacall, qt_metacast, ...
+
+**The real implementation file records no class token at all.** The scanner
+reads free functions; the class name appears only in the moc output, where
+`const QMetaObject address_line::staticMetaObject` puts it at file scope. So
+the qualifier rule would stop widening finding the true provider -- trading a
+wrong-file bug for a missing-file one, which is the worse direction.
+
+### What is left, and whose it is
+
+Three shapes, none of them taken:
+
+- **Boilerplate tokens are not evidence.** A short list -- the five above --
+  excluded from matching. Exact, and the same move `STANDARD_HEADERS` makes
+  for the basename fallback: names the tool owns and must not guess from.
+- **A token many files define is not a discriminator**, computed rather than
+  listed. Self-tuning, and it needs a threshold, which is a guess.
+- **fmake runs moc itself, so it never needs anybody else's output.** The
+  strongest claim available and the one fmake has standing to make, since it
+  is the thing that generates them. It would also cover committed and vendored
+  moc output, which §139's rule does not reach.
+
+**Not chosen here.** It is a change to what fmake compiles in every tree,
+found at three in the morning, and §143's own commit message names this
+pairing: a small effect and a load-bearing rule is what gets done carelessly.
+The measurements above are what a decision needs and they will keep.
+
+### What §139 should have said
+
+Its rule is right and its reason was wrong. A directory git ignores holds no
+source, and that is worth doing on its own. But it does not fix "fmake
+compiles build directories" -- fmake never compiled qtty's, and on situ the
+rule changed nothing at all. What it fixes is narrower: **a build that widens
+will reach for leftover generated code, because widening matches names and
+generated code is named after the very classes the tree has.** §139 keeps
+that code out of `srcs` where git has been told about it. Where it is
+committed, or vendored, the defect above is still there.
