@@ -117,6 +117,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import time
 import sys
 import tomllib
 import xml.etree.ElementTree as ET
@@ -2502,8 +2503,27 @@ def qrc_inputs(path, root):
 	return out
 
 
-def prune_generated(root, subdir, keep):
+def prune_generated(root, subdir, keep, since=None):
 	"""Delete generated files whose input is gone.
+
+    `since` is a guard rather than a filter, and it exists because of what
+    this function did once. A file written *after* that time is one the tool
+    produced during this very run, so a keep list that does not mention it is
+    a keep list that is wrong -- and the answer to a wrong record is to say
+    so, not to delete what it failed to describe.
+
+    Measured: situc reports `wrote <path>' for one command and
+    `wrote <path> (38 derived binding(s))' for another, a greedy pattern took
+    the annotation as part of the filename, and the file was written,
+    recorded under a name nothing on disk had, and removed here. The symptom
+    was indistinguishable from the command never having run. Three of the
+    four callers compute their output names and cannot be wrong this way;
+    the fourth reads them out of another program's words.
+
+    Coarse mtimes make this err towards refusing rather than deleting: a
+    stale file written inside the same second as `since` reads as fresh and
+    stops the build instead of going quietly. That is the right direction to
+    be wrong in, for a function whose other outcome is removal.
 
     Generated output outlives its input, and for uic that is not merely
     untidy. A ui_*.h is reached through an include path rather than by being
@@ -2525,6 +2545,17 @@ def prune_generated(root, subdir, keep):
 		for f in filenames:
 			path = os.path.join(dirpath, f)
 			if path not in wanted:
+				if since is not None:
+					try:
+						fresh = os.stat(path).st_mtime >= since
+					except OSError:
+						fresh = False
+					if fresh:
+						die(f"{os.path.relpath(path, root)} was written by "
+						    f"this build and is not in what produced it "
+						    f"reported writing.\nfmake would have deleted "
+						    f"it, and the missing file would have looked "
+						    f"like the tool never ran. Refusing instead.")
 				vinfo(f"removing stale {os.path.relpath(path, root)}")
 				try:
 					os.unlink(path)
@@ -7266,6 +7297,9 @@ def build(args, _bootstrapping=False):
 	# symbol tables with no special case, which is what the "Generated
 	# sources" section asks of everything generated.
 	situ_jobs, situ_outs, situc_exe = [], [], None
+	# Taken before anything runs, so that the prune below can tell a file
+	# this build wrote from one left over by an earlier one.
+	situ_started = time.time()
 	situ_jobs, situ_unused = situ_plan(root, hdrs, scans)
 	if situ_jobs:
 		situc_exe = find_situc(cfg.situc, root)
@@ -7279,7 +7313,7 @@ def build(args, _bootstrapping=False):
 		                      conf.data.get("situ", {}).get("flags", []),
 		                      cache, args.dry_run)
 		if not args.dry_run:
-			prune_generated(root, SITU_DIR, situ_outs)
+			prune_generated(root, SITU_DIR, situ_outs, since=situ_started)
 		for rel in situ_outs:
 			ext = os.path.splitext(rel)[1]
 			if ext in SRC_EXTS and rel not in srcs:
@@ -10572,8 +10606,19 @@ def git_ignored(root, paths):
 	if not os.path.isdir(os.path.join(root, ".git")) or not shutil.which("git"):
 		return set()
 	try:
-		r = subprocess.run(["git", "-C", root, "check-ignore", "--stdin"],
-		                   input="\n".join(paths), capture_output=True,
+		# -z on both halves. Without it git quotes any path that is not
+		# plain ASCII -- a directory whose name carries an accent comes
+		# back as `"caf\303\251"', quotes included -- and the answer then
+		# matches none of the strings that were sent, so the directory is
+		# built after all. Measured: a tree with such a directory ignored
+		# compiled its contents, silently, because the rule below could
+		# not recognise git's own spelling of the name it had just been
+		# handed. The failure was an under-skip, which is why nothing had
+		# noticed.
+		r = subprocess.run(["git", "-C", root, "check-ignore", "-z",
+		                    "--stdin"],
+		                   input="\0".join(paths) + "\0",
+		                   capture_output=True,
 		                   text=True, errors="replace", timeout=10)
 	except (OSError, subprocess.SubprocessError):
 		return set()
@@ -10582,7 +10627,7 @@ def git_ignored(root, paths):
 	# silence.
 	if r.returncode not in (0, 1):
 		return set()
-	return {l.strip() for l in r.stdout.splitlines() if l.strip()}
+	return {p for p in r.stdout.split("\0") if p}
 
 
 def ignored_source_dirs(root, srcs):

@@ -197,7 +197,8 @@ that had been green about nothing for five commits ·
 [144. Advice about a program nobody built, and two entries that had gone stale](#144-advice-about-a-program-nobody-built-and-two-entries-that-had-gone-stale) ·
 [145. `-i`, and writing for somebody who did not write the project](#145--i-and-writing-for-somebody-who-did-not-write-the-project) ·
 [146. Why hydra compiled the build directory, which was not what §139 said](#146-why-hydra-compiled-the-build-directory-which-was-not-what-139-said) ·
-[147. Three gates in the suite that passed without looking, and a skip that lied](#147-three-gates-in-the-suite-that-passed-without-looking-and-a-skip-that-lied)
+[147. Three gates in the suite that passed without looking, and a skip that lied](#147-three-gates-in-the-suite-that-passed-without-looking-and-a-skip-that-lied) ·
+[148. The lens from the worst bug: a name that decides a deletion](#148-the-lens-from-the-worst-bug-a-name-that-decides-a-deletion)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -12301,3 +12302,96 @@ span check needs 3.12 even though what it checks for is 3.11.
 **Not verified by running it.** There is no 3.11 on this machine. What was
 verified is that the attribute is genuinely absent before 3.12 and that
 nothing guarded it, which is the claim the evidence supports and no more.
+
+## 148. The lens from the worst bug: a name that decides a deletion
+
+`working-practice.md` says the shape of the last bug is the best available
+guess at where the next one is. §141's was the worst of the night, so it is
+the one worth pointing back at the tree: **a name read out of another
+program's output, which then decides whether a file is deleted.**
+
+### The audit, and what it found
+
+fmake prunes four directories it owns, and the question is whether the keep
+list can ever disagree with what is on disk.
+
+    MOC_DIR    keep = [j["out"] for j in moc_jobs]     computed
+    UI_DIR     keep = [j["out"] for j in ui_jobs]      computed
+    QRC_DIR    keep = [j["out"] for j in qrc_jobs]     computed
+    SITU_DIR   keep = situ_outs                        parsed
+
+**Three of the four cannot be wrong.** The same `job["out"]` that the runner
+writes to is the one the sweep keeps, so the record is not a second statement
+about the disk -- it is the same statement. The fourth reads the names out of
+situc's own words, which is the only place the two can diverge, and is where
+they did.
+
+That is a negative result about three quarters of the surface, and it is
+worth writing down: the reason moc, uic and rcc are safe is not care, it is
+that nobody ever had the opportunity to introduce a second source of truth.
+
+### What was added, and which way it errs
+
+`prune_generated` now takes the time the phase started and **refuses to
+remove anything written after it.** A file this build produced that the
+record does not mention means the record is wrong, and the answer to a wrong
+record is to say so:
+
+    !!! .fmake/situ/msg_extra.c was written by this build and is not in what
+        produced it reported writing.
+        fmake would have deleted it, and the missing file would have looked
+        like the tool never ran. Refusing instead.
+
+The second sentence is the one that matters. §141's fifteen minutes went on a
+symptom that looked like `gen-derived` never running, and the message now
+names that reading so the next reader does not have to reach it themselves.
+
+**Coarse filesystem mtimes make this err towards refusing rather than
+deleting** -- a stale file written inside the same second as the start time
+reads as fresh and stops the build instead of going quietly. For a function
+whose other outcome is removal, that is the right direction to be wrong in,
+and it is stated in the docstring rather than left to be discovered.
+
+### Demonstrated both ways
+
+A stand-in compiler that writes one file and does not report it:
+
+    committed fmake   builds green; msg_extra.c is gone
+    this one          stops, names the file, says what it would have done,
+                      and the file is still there
+
+The counterfactual is half the evidence. A guard that fires proves it can
+fire; only the old behaviour beside it proves it was needed.
+
+### The lens is not exhausted, and the rest of it is not fmake's
+
+The wider form -- **a value parsed out of a tool's output that then drives a
+destructive or exclusionary action** -- has two more instances in this file
+already, both benign for the same reason: `parse_depfile` and `read_symbols`
+consume names from `-MD` and from `nm`, and a mis-parse there causes a
+rebuild or a missing provider rather than a removal. Nothing else in fmake
+deletes on the strength of a parse.
+
+**And the exclusionary half is `git_ignored`, which is my own from §139.**
+It parses `git check-ignore --stdin` and a mis-parse there would silently
+drop sources from a build, which is the same severity by a different route.
+**And it was broken.** The result was compared against the exact directory
+strings fmake sent in, and git does not answer in those strings: without
+`-z` it quotes anything that is not plain ASCII, so a directory called
+`café` comes back as `"caf\303\251"`, quotes included, and matches nothing.
+Measured rather than reasoned, after writing the reasoning down and not
+liking how comfortable it was: a tree with an ignored `café/` holding the
+only definition of `helper` compiled it and linked, exactly as though §139
+had never been written.
+
+The failure is an **under-skip** -- the behaviour from before the rule
+existed -- which is why nothing noticed and why no tree in this workspace
+would have. `-z` on both halves fixes it, and the same tree now refuses to
+link with `helper` undefined, which is the right answer for a definition
+git says is not source.
+
+Where it goes next is other tools, and that is the receiving session's sweep
+rather than this tree's: the same shape was already found tonight in a skip
+that named a cause the code never tested. Recorded here so the negative --
+that fmake's own remaining parses cannot delete -- is on the record rather
+than assumed.
