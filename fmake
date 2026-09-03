@@ -5761,6 +5761,21 @@ def lib_exports(cfg, path):
     Unlike an object file, every name in a dynamic symbol table is exported,
     so the lowercase-is-local rule does not apply here -- glibc exports cos
     as an ifunc, type `i`. Version suffixes (cos@@GLIBC_2.2.5) are stripped.
+
+    Same line format and therefore the same reader as `read_symbols`: two
+    parses of one tool by two rules is a difference that can only be a
+    liability, and one of the two rules was measured wrong for a name with
+    a space in it. Nothing a system library exports has one -- these are C
+    ABI symbols -- so this is consistency rather than a repair, and it was
+    checked to be exactly that: over libm and libc the two rules agree
+    symbol for symbol, 1263 and 2898 of them.
+
+    On a static archive it also drops the 2216 entries that were never
+    symbols. `nm` prints `libc.a[member.o]:` before each member's table and
+    the old rule took that line's first field, so the export set carried
+    one bogus name per member. Harmless -- nothing asks for a symbol called
+    `libc.a[dso_handle.o]:` -- and every lost entry was checked to be one
+    of those rather than something real.
     """
 	dyn = not path.endswith(".a")
 	cmd = [cfg.nm, "--defined-only", "--format=posix"]
@@ -5769,9 +5784,9 @@ def lib_exports(cfg, path):
 	r = subprocess.run(cmd + [path], capture_output=True, text=True, errors="replace")
 	out = set()
 	for line in r.stdout.splitlines():
-		parts = line.split()
-		if parts:
-			out.add(parts[0].split("@")[0])
+		m = RE_NM_POSIX.match(line)
+		if m:
+			out.add(m.group("name").split("@")[0])
 	return out
 
 

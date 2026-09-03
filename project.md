@@ -13154,6 +13154,42 @@ provider.c in the candidate set and gives the closure exactly one reason to
 link it, which is the symbol under test. Both of the first two versions
 would have gone in green.
 
+### A fourth parse, and a claim of completeness that was not earned
+
+Reporting §158 I said the family was "fully re-examined". It was not:
+`lib_exports` reads `nm --defined-only --format=posix` on a `.so` or an
+`.a` and had its own copy of the split-from-the-left rule -- a fourth
+instance, in a function neither §148 nor any of these three entries had
+looked at. Found by enumerating every `subprocess.run` in the file, which
+is a minute's work and is what the claim should have rested on.
+
+It is not a defect and it is worth saying why rather than fixing it
+quietly. Both ways of being wrong here are loud: a name read short means
+declining a library that does have the symbol, and a fragment colliding
+with something else means adding a `-l` that does not help. Either way the
+link fails and says so. And the input cannot carry the space that breaks
+the rule -- these are C ABI symbols out of system libraries, not
+inline-asm labels.
+
+So it is now the same reader as `read_symbols`, on the ground that two
+parses of one tool by two rules is a difference that can only ever be a
+liability. **Checked to be exactly a no-op where it matters**: over libm
+and libc the two rules agree symbol for symbol, 1263 and 2898 of them,
+with nothing gained and nothing lost.
+
+On a static archive the new rule also drops 2216 entries that were never
+symbols. `nm` prints `libc.a[member.o]:` ahead of each member's table, and
+the old rule took that line's first field -- so the export set carried one
+bogus name per member. Harmless, since nothing asks for a symbol called
+`libc.a[dso_handle.o]:`, and every dropped entry was checked to be one of
+those rather than something real.
+
+**No case was added**, and that is a decision rather than an oversight. The
+behaviour under test is already covered by the library-resolution cases;
+what is new is an equivalence between two parsers, and the honest way to
+assert it is the measurement above rather than a case that would depend on
+whichever libc the machine happens to carry.
+
 ## 158. The third parse, which fails in the direction the other two were assumed to
 
 §156 and §157 found that the two parses §148 cleared both suppress a check
