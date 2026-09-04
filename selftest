@@ -1286,6 +1286,78 @@ def an_order_only_prerequisite_orders_without_dating(t):
 
 
 @case
+def a_doubled_dollar_is_a_dollar(t):
+	"""`$$\' in a recipe is a literal dollar, in every Makefile there is.
+
+    It was passed through instead, so the shell read it as its own: a
+    recipe writing `return $$x\' put the *process id* followed by an x into
+    the generated file. Not an error -- a file quietly containing something
+    else, which is the failure this project exists to avoid.
+
+    The program answers with the value the recipe meant, so a file
+    containing a pid fails this rather than looking odd in a diff."""
+	t.write("main.c", "int table_value(void);\n"
+	        "int main(void){ return table_value(); }\n")
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.mk", "gen/table.c: seed.txt\n"
+	        "\t@mkdir -p gen\n"
+	        '\tx=5; printf "int table_value(void){ return $$x; }\\n" > $@\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build failed: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 5,
+	      "the recipe's $$x did not reach the shell as $x")
+	written = open(os.path.join(t.dir, "gen", "table.c")).read()
+	check("$" not in written and "return 5" in written,
+	      f"the generated file is not what the recipe says: {written!r}")
+
+
+@case
+def two_makefile_forms_fmake_does_not_read_say_so(t):
+	"""Both were refused, and neither refusal was about the thing.
+
+    `out:: in\' is a legal Make rule fmake does not read. The regex matched
+    it with a target ending in a colon, and the stray colon travelled as
+    far as the generator, which said `[generate.gen_table_c] input \':\'
+    matched nothing\' and named **fmake.toml** -- a file the reader may not
+    have.
+
+    A recipe indented with spaces is Make\'s own classic mistake, and Make
+    answers it with "missing separator". It fell through to the directive
+    parser here, which reported `unknown directive @mkdir\' about a line
+    that is a recipe."""
+	t.write("main.c", "int table_value(void);\n"
+	        "int main(void){ return table_value(); }\n")
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.mk", "gen/table.c:: seed.txt\n\t@true\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"`::' is not read here: {out}")
+	check("fmake.mk:1" in out and "`::'" in out,
+	      f"the refusal names neither the file nor the syntax: {out}")
+	check("fmake.toml" not in out,
+	      f"the refusal names a file the reader may not even have: {out}")
+
+	u = Tree("space-recipe")
+	try:
+		u.write("main.c", "int table_value(void);\n"
+		        "int main(void){ return table_value(); }\n")
+		u.write("seed.txt", "seed\n")
+		u.write("fmake.mk", "gen/table.c: seed.txt\n"
+		        "    @mkdir -p gen\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"a space-indented recipe is refused: {out}")
+		check("must begin with a tab" in out,
+		      f"the refusal does not name the actual problem: {out}")
+		check("unknown directive" not in out,
+		      f"a recipe is still being read as a directive: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_rule_that_cannot_be_dated_says_why(t):
 	"""Two refusals that were true and unactionable.
 

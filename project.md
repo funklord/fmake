@@ -216,7 +216,8 @@ that had been green about nothing for five commits ·
 [163. Concurrency, and the compilers that outlived the build](#163-concurrency-and-the-compilers-that-outlived-the-build) ·
 [164. The lenses, turned on the code that came out of them](#164-the-lenses-turned-on-the-code-that-came-out-of-them) ·
 [165. Whose rule it is, said out loud](#165-whose-rule-it-is-said-out-loud) ·
-[166. `out: in | dir`, which is what every Makefile writes](#166-out-in-dir-which-is-what-every-makefile-writes)
+[166. `out: in | dir`, which is what every Makefile writes](#166-out-in-dir-which-is-what-every-makefile-writes) ·
+[167. The rest of the Makefile forms, and a dollar that became a process id](#167-the-rest-of-the-makefile-forms-and-a-dollar-that-became-a-process-id)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13752,3 +13753,66 @@ checked.** §160 recorded the version of this that passes when it should
 fail; this is the version that fails when it should pass, and the same
 habit answers both, which is to run it against a case whose answer is
 already known.
+
+## 167. The rest of the Makefile forms, and a dollar that became a process id
+
+§166 stopped after four forms because the first one tracebacked. Seven more,
+one tree each. Three were already right -- a blank line inside a recipe, a
+`-@` prefixed command, `.PHONY` written after the rules it names -- and four
+were not.
+
+### The silent one
+
+    gen/table.c: seed.txt
+    	x=5; printf "int table_value(void){ return $$x; }\n" > $@
+
+    int table_value(void){ return 7220x; }
+
+`$$` is a literal dollar in every Makefile there is. fmake passed it through
+untouched, so the shell read `$$` as **its own process id** and the
+generated file got a pid with an `x` after it. Not an error: a file quietly
+containing something else, which is the failure this document is mostly
+about. Here it happened to be a syntax error downstream; inside a string it
+would have compiled and been wrong.
+
+The substitution is one left-to-right scan now rather than a series of
+replacements, because either order is wrong on its own -- collapsing `$$`
+first leaves a `$` the next pass reads as an automatic variable, and
+collapsing it last has already eaten the `$` of a `$$@`.
+
+### Two refusals that pointed somewhere else
+
+    gen/table.c:: seed.txt
+    !!! fmake.toml: [generate.gen_table_c] input ':' matched nothing
+
+A double-colon rule is legal Make that fmake does not read. Left to the
+regex it matched with a target ending in a colon, and the stray colon
+travelled as far as the generator -- which reported it as a missing *input*
+and named **fmake.toml**, a file the reader may not even have. Refused at
+the line it is on now, saying what is not read and what to write instead.
+
+    gen/table.c: seed.txt
+        @mkdir -p gen
+    !!! fmake.mk:2: unknown directive @mkdir
+
+A recipe indented with spaces is Make's own classic mistake -- Make answers
+it with "missing separator" -- and here it fell past the recipe branch into
+the directive parser, which reported `@mkdir` as an unknown directive about
+a line that is a recipe. It now says a recipe must begin with a tab, which
+is the whole of the problem and the whole of the fix.
+
+### And one that is honest but thin
+
+`DIR = gen` is refused with "expected `targets: prerequisites`". True --
+fmake.mk has no variables, deliberately -- and the message describes the
+parser's disappointment rather than the missing feature. Left alone: the
+line is quoted back, `=` is visible in it, and inventing a sentence about
+variables risks implying they are coming.
+
+### Yield
+
+Eleven forms across the two entries, seven findings. This was the most
+productive seam of the sweep and the reason is worth naming: **`fmake.mk` is
+the one input whose language somebody else defined**, so every assumption in
+the parser is a guess about a specification that already exists and can be
+checked against.

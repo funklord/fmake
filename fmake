@@ -1205,6 +1205,7 @@ class Conf:
 MK_FILE = "fmake.mk"
 
 RE_MK_RULE = re.compile(r"^([^\t#][^:=]*?)\s*:\s*([^=].*)?$")
+RE_MK_DOUBLE = re.compile(r"^[^\t#][^:=]*::")
 RE_MK_UNSUPPORTED = re.compile(
     r"^\s*(?:ifeq|ifneq|ifdef|ifndef|else|endif|include|sinclude|"
     r"vpath|export|unexport|define|override)\b")
@@ -1256,6 +1257,15 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 			current["commands"].append(line.strip())
 			continue
 
+		# Make's own classic mistake, and Make answers it with "missing
+		# separator". Indented with spaces, a recipe line fell through to
+		# the directive parser below, which reported `unknown directive
+		# @mkdir' about a line that is a recipe -- true of the parser and
+		# no help at all to somebody looking straight at their recipe.
+		if current is not None and raw[:1].isspace():
+			die(f"{where}:{n}: a recipe line must begin with a tab, not "
+			    f"spaces: {line.strip()!r}")
+
 		# A directive line, the same spelling a comment uses. fmake.mk then
 		# holds everything a simple project needs in one file, instead of
 		# splitting a pattern rule and a project flag across two.
@@ -1286,6 +1296,15 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 			    f"conditionals.\nAnything needing those is a script, and a "
 			    f"rule can call one.")
 
+		# `out:: in' is a legal Make rule fmake does not read. Left to the
+		# regex it matched with a target ending in `:', and the stray colon
+		# travelled as far as the generator, which reported `input ':'
+		# matched nothing' and named fmake.toml -- a file the reader may
+		# not even have.
+		if RE_MK_DOUBLE.match(line):
+			die(f"{where}:{n}: `::' rules are not read here. Write one "
+			    f"rule with `:', which is what fmake does with it anyway "
+			    f"-- there is no second recipe for the same target.")
 		m = RE_MK_RULE.match(line)
 		if m and m.group(1).strip() == ".PHONY":
 			phony.update((m.group(2) or "").split())
@@ -1397,17 +1416,48 @@ def _gen_command(command, ins, outs, tool=None, stem=None):
 
     Quoted on the way in, so a path containing a space survives being
     interpolated into text that a shell will re-split.
+
+    `$$' is a literal dollar, which is what it means in every Makefile and
+    what anybody writing a recipe expects. It was passed through instead,
+    and the shell read it as its own -- `printf "... $$x ..."' wrote the
+    *process id* followed by an x into a generated file. Not an error: a
+    file quietly containing something else, which is the failure this whole
+    document is about.
+
+    One left-to-right scan rather than a series of replacements, because
+    replacing `$$' first would leave a `$' the next pass reads as an
+    automatic variable, and replacing it last would have already consumed
+    the `$' of a `$$@'.
     """
 	q = shlex.quote
-	for key, val in (("$^", " ".join(q(i) for i in ins)),
-	                 ("$@", " ".join(q(o) for o in outs)),
-	                 ("$in", " ".join(q(i) for i in ins)),
-	                 ("$out", " ".join(q(o) for o in outs)),
-	                 ("$<", q(ins[0]) if ins else ""),
-	                 ("$*", q(stem) if stem else ""),
-	                 ("$tool", q(tool) if tool else "")):
-		command = command.replace(key, val)
-	return command
+	table = {"^": " ".join(q(i) for i in ins),
+	         "@": " ".join(q(o) for o in outs),
+	         "<": q(ins[0]) if ins else "",
+	         "*": q(stem) if stem else "",
+	         "$": "$"}
+	words = {"in": " ".join(q(i) for i in ins),
+	         "out": " ".join(q(o) for o in outs),
+	         "tool": q(tool) if tool else ""}
+	out, i, n = [], 0, len(command)
+	while i < n:
+		if command[i] != "$" or i + 1 >= n:
+			out.append(command[i])
+			i += 1
+			continue
+		for word, val in words.items():
+			if command.startswith("$" + word, i):
+				out.append(val)
+				i += 1 + len(word)
+				break
+		else:
+			ch = command[i + 1]
+			if ch in table:
+				out.append(table[ch])
+				i += 2
+			else:
+				out.append(command[i])
+				i += 1
+	return "".join(out)
 
 
 def _gen_argv(command, ins, outs, tool=None, stem=None):
