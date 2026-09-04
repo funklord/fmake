@@ -830,7 +830,7 @@ def scan_source(path):
 		for m in RE_TEMPLATE_SPEC.finditer(code):
 			defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
 		defs -= DECL_WORDS
-	_dirs_and_typos = parse_directives(comments)
+	_dirs_and_typos = parse_directives(comments, os.path.basename(path))
 
 	return {
 	    "incs":     incs,
@@ -3379,9 +3379,13 @@ def near_directive(name):
 	return sorted(hits)[0] if len(hits) == 1 else None
 
 
-def parse_directives(comments):
+def parse_directives(comments, where=""):
 	"""Directives found in Doxygen comments: {name: [[line, [args]], ...]},
-    and the near misses worth mentioning: [[line, written, meant], ...]."""
+    and the near misses worth mentioning: [[line, written, meant], ...].
+
+    `where` is the file, for the one message here that refuses: a line
+    number on its own names nothing in a tree of a hundred files.
+    """
 	found, typos = {}, []
 	for lineno, body in comments:
 		if not RE_DOXY_OPEN.match(body):
@@ -3417,10 +3421,31 @@ def parse_directives(comments):
 				    [lineno + offset, ["\n".join(block)]])
 				continue
 
+			# A directive line is a command line: quotes group and a
+			# backslash escapes, which is what anybody writing `@cflags'
+			# assumes. Where that cannot be parsed the old fallback split
+			# on whitespace instead and handed the pieces on -- so a
+			# doxygen block wrapped with a trailing backslash,
+			#
+			#     /*! @cflags -DA=1 \
+			#      *  @cflags -DB=2
+			#      */
+			#
+			# passed `\' to the compiler as a flag, and the build failed
+			# with `linker input file not found: \'. A file nobody wrote,
+			# named as the problem.
+			#
+			# Refused instead, with what shlex objected to: a directive is
+			# hand-written and short, and guessing at one whose quoting is
+			# broken puts the guess on a compiler command line.
 			try:
 				args = shlex.split(rest)
-			except ValueError:
-				args = rest.split()
+			except ValueError as exc:
+				die(f"{where + ':' if where else ''}{lineno + offset}: "
+				    f"@{name} {rest!r} cannot be read: "
+				    f"{exc}.\n    a directive is one line, and quotes and "
+				    f"backslashes in it work as they do in a shell -- a "
+				    f"trailing backslash is not a continuation here.")
 			found.setdefault(name, []).append([lineno + offset, args])
 	return found, typos
 

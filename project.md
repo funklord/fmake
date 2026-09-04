@@ -219,7 +219,8 @@ that had been green about nothing for five commits ·
 [166. `out: in | dir`, which is what every Makefile writes](#166-out-in-dir-which-is-what-every-makefile-writes) ·
 [167. The rest of the Makefile forms, and a dollar that became a process id](#167-the-rest-of-the-makefile-forms-and-a-dollar-that-became-a-process-id) ·
 [168. Both parsers finished: four more in fmake.mk, one in the TOML](#168-both-parsers-finished-four-more-in-fmakemk-one-in-the-toml) ·
-[169. Quoting is not escaping, and the fix was an hour old](#169-quoting-is-not-escaping-and-the-fix-was-an-hour-old)
+[169. Quoting is not escaping, and the fix was an hour old](#169-quoting-is-not-escaping-and-the-fix-was-an-hour-old) ·
+[170. The last three surfaces: one finding, and the rest holding](#170-the-last-three-surfaces-one-finding-and-the-rest-holding)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13942,3 +13943,53 @@ express them. That refusal says nothing about what fmake builds, and
 nothing about what it writes into a config: the file compiles, links, and
 gets a stanza suggested for it like any other. A limitation in one exit is
 not a constraint on the tree.
+
+## 170. The last three surfaces: one finding, and the rest holding
+
+The directive parser, `--explain` against the build it describes, and the
+two small commands. Ten probes, one finding.
+
+### A directive is a command line, and one that would not parse was guessed
+
+    /*! @cflags -DA=1 \
+     *  @cflags -DB=2
+     */
+
+    cc: error: \: linker input file not found: No such file or directory
+
+A doxygen block wrapped with a trailing backslash. `shlex.split` raises on
+that -- "No escaped character" -- and the fallback split on whitespace
+instead and passed the pieces on, so `\` reached the compiler as a flag and
+the build failed naming a file nobody wrote.
+
+Refused now, with what shlex objected to, and with the file: the message
+said `1:` before, which names nothing in a tree of a hundred files.
+
+**Guessing is the wrong direction here** even though a fallback usually is
+not. A directive is hand-written, short, and its words go onto a compiler
+command line; a guess at broken quoting is a guess that gets compiled.
+
+### Nine that held
+
+- A directive inside a **string literal** -- `const char *s = "/*! @target
+  stolen */";` -- is not read. `strip_comments` knows what a string is.
+- `///` and `/**` carry directives; a plain `//` does not, which is the
+  documented design rather than an oversight.
+- Quoting works as a shell's does: `@cflags -DMSG='"a b"'` reaches the
+  compiler as one flag with the quotes intact, and `-DMSG="a b"` as one
+  flag without them.
+- `@targt` is caught: *did you mean @target?*
+- `@sources 'nosuch*.c'` names the pattern and the file.
+- Two directives on one line are refused, which is why that message exists.
+- **`--explain` agrees with the ejected Makefile** on the link set and on
+  the libraries, checked by extracting both and comparing rather than by
+  reading either: two implementations of "what does this program link",
+  saying the same thing.
+- `--run` passes its arguments through and returns the program's own exit
+  status; a missing file is named as one.
+- `--clean` removes its own directory and says what it removed, and refuses
+  a symlinked one: *"it is a symlink, and what it points at is not fmake's
+  to remove"*.
+
+That last one is worth the space because it is the only remaining path that
+deletes, and it was written to be read this way.

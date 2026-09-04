@@ -1386,6 +1386,52 @@ def makes_own_special_targets_are_not_errors(t):
 
 
 @case
+def a_directive_that_cannot_be_read_is_refused(t):
+	"""A directive line is a command line, and one that will not parse was
+	split on whitespace instead.
+
+    A doxygen block wrapped with a trailing backslash --
+
+        /*! @cflags -DA=1 \\
+         *  @cflags -DB=2
+         */
+
+    -- passed `\\' to the compiler as a flag, and the build failed with
+    `linker input file not found: \\': a file nobody wrote, named as the
+    problem. Refused now, with what shlex objected to and where.
+
+    The quoting itself is not the fault and is asserted here too: quotes
+    group and are removed, exactly as a shell does it, so a define whose
+    value has a space in it needs the inner quotes written."""
+	t.write("main.c", "/*! @cflags -DA=1 \\\n *  @cflags -DB=2\n */\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"this cannot be read: {out}")
+	check("main.c:1" in out,
+	      f"the refusal names a line without a file: {out}")
+	check("not a continuation" in out,
+	      f"the refusal does not say what the backslash did: {out}")
+	check("linker input file" not in out,
+	      f"the backslash still reached the compiler: {out}")
+
+	# And the ordinary quoting works, which is what makes the refusal a
+	# refusal of something wrong rather than of something unsupported.
+	u = Tree("quoted-define")
+	try:
+		u.write("main.c", "/*! @cflags -DMSG='\"a b\"' */\n"
+		        "#include <string.h>\n"
+		        'int main(void){ return strcmp(MSG, "a b") == 0 ? 0 : 1; }\n')
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"a quoted define was refused: {r.stdout}{r.stderr}")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "the quoted value did not reach the compiler intact")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_suggested_stanza_is_valid_toml(t):
 	"""fmake prints a stanza for somebody to paste, and `-i` writes the
 	same text into their fmake.toml. Both have to be TOML.
