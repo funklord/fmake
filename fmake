@@ -10904,6 +10904,44 @@ def pc_text(t, conf):
 	return "\n".join(lines) + "\n"
 
 
+def refuse_install_escapes(conf, args):
+	"""An install directory is a place, not a path back out of one.
+
+    `[install] bindir = "../../../outside"` was joined onto the prefix as
+    written and installed there: measured, with DESTDIR set, the binary
+    landed outside the staging root entirely while the summary said
+    "installed 1 file(s) under /usr/local". A package build would put files
+    where nothing packaged them, and the one line anybody reads would say
+    they went somewhere else.
+
+    This is the rule §29 already applies to a target name -- "it would be
+    built at that path rather than in the tree, and installed to it as
+    written" -- reaching the other half of the same question. That one was
+    fixed when a comment in a source file could relocate an install; this
+    is a key in a config file doing it, which nothing had asked about.
+
+    An absolute directory is fine and stays: `/etc` is where a
+    distribution's sysconfdir goes, and DESTDIR is prepended to it like
+    everything else. What is refused is a component that climbs.
+    """
+	values = dict(conf.install)
+	if args.prefix:
+		values["prefix"] = args.prefix
+	for key in ("prefix", "bindir", "libdir", "includedir"):
+		value = values.get(key)
+		if not value or os.pardir not in value.replace("\\", "/").split("/"):
+			continue
+		where = (f"--prefix {value!r}" if key == "prefix" and args.prefix
+		         else f"{CONF_FILE}: [install] {key} = {value!r}")
+		die(f"{where} climbs out of the directory it is relative to.\n"
+		    f"    an install directory is a place, not a path back out of "
+		    f"one: with --destdir set this writes outside the staging "
+		    f"root,\n"
+		    f"    and the summary still says the files went under the "
+		    f"prefix.\n"
+		    f"    name it absolutely if it belongs outside the prefix.")
+
+
 def install_paths(conf, args):
 	p = dict(INSTALL_DEFAULTS)
 	p.update({k: v for k, v in conf.install.items() if v})
@@ -11044,6 +11082,7 @@ def do_uninstall(targets, closures, root, conf, args):
     Directories are left alone. Removing a directory means removing
     something this list did not name, and `bin` was not ours to begin with.
     """
+	refuse_install_escapes(conf, args)
 	paths = install_paths(conf, args)
 	planned = [os.path.join(paths[directory], name)
 	           for _origin, _source, directory, name, _mode
@@ -11078,6 +11117,7 @@ def do_uninstall(targets, closures, root, conf, args):
 
 
 def do_install(targets, closures, root, outdir, conf, args):
+	refuse_install_escapes(conf, args)
 	paths = install_paths(conf, args)
 	planned = []
 
@@ -11134,7 +11174,19 @@ def do_install(targets, closures, root, outdir, conf, args):
 		print(f"{GREEN('->')} {dst}")
 
 	if not args.dry_run:
-		info(f"installed {len(planned)} file(s) under {paths['prefix']}")
+		# Only where it is true. An absolute [install] libdir -- /opt/thing
+		# is somebody's ordinary layout -- puts files outside the prefix,
+		# and the summary went on naming the prefix anyway. The `->' lines
+		# above say where each one went, so the clause is dropped rather
+		# than replaced when it would be a claim about somewhere the files
+		# are not.
+		stem = paths["prefix"].rstrip("/")
+		dests = {os.path.dirname(dst) for _s, dst, _m in planned}
+		if args.destdir:
+			stem = os.path.join(args.destdir, stem.lstrip("/"))
+		under = all(d == stem or d.startswith(stem + "/") for d in dests)
+		where = f" under {paths['prefix']}" if under else ""
+		info(f"installed {len(planned)} file(s){where}")
 	return 0
 
 # ---------------------------------------------------------------------------

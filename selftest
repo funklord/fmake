@@ -4922,6 +4922,56 @@ def _same_install(mine, theirs, who):
 
 
 @case
+def an_install_directory_cannot_climb_out_of_the_prefix(t):
+	"""`[install] bindir` was joined onto the prefix exactly as written.
+
+    With `../../../outside` it left the staging root altogether: measured,
+    the binary landed beside the tree rather than under --destdir, and the
+    summary said "installed 1 file(s) under /usr/local" while it had done
+    nothing of the sort. A package build stages into DESTDIR precisely so
+    that nothing escapes it, and this wrote where nothing would package it.
+
+    Section 29 refuses the same shape in a target name -- "it would be
+    built at that path rather than in the tree, and installed to it as
+    written". This is the other half of that question, in a config key,
+    which nothing had asked about.
+
+    An absolute directory stays legal, because /opt and /etc are where
+    real layouts put things and DESTDIR is prepended to them like
+    everything else."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", '[install]\nbindir = "../../../outside"\n')
+	stage = os.path.join(t.dir, "stage")
+
+	r = t.fmake("--install", "--destdir", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the install should be refused: {out}")
+	check("climbs out of" in out,
+	      f"the refusal does not say what is wrong with it: {out}")
+	# Where it actually lands: stage/usr/local climbed three times is the
+	# tree root, one level *inside* /tmp rather than beside it. The first
+	# version of this check named /tmp/outside, which nothing would ever
+	# have written, so it could not fail.
+	escaped = os.path.join(t.dir, "outside")
+	check(not os.path.exists(escaped),
+	      f"something was written outside the staging root at {escaped}")
+
+	# An absolute directory is not the same thing and must still work --
+	# and the summary must stop claiming the prefix, since that is where
+	# the files are not.
+	t.write("fmake.toml", '[install]\nbindir = "/opt/thing/bin"\n')
+	r = t.fmake("--install", "--destdir", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"an absolute bindir was refused: {out}")
+	landed = os.path.join(stage, "opt/thing/bin",
+	                      os.path.basename(t.dir))
+	check(os.path.exists(landed), f"nothing landed at {landed}: {out}")
+	check("under /usr/local" not in out,
+	      f"the summary says the files went under the prefix, and they "
+	      f"went to /opt/thing/bin: {out}")
+
+
+@case
 def uninstall_removes_exactly_what_install_placed(t):
 	"""The inverse, held to `clean`'s rule rather than to a pattern.
 

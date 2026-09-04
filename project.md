@@ -209,7 +209,8 @@ that had been green about nothing for five commits ·
 [156. A header nothing rebuilt on, in the file §148 called safe](#156-a-header-nothing-rebuilt-on-in-the-file-148-called-safe) ·
 [157. The other parse §148 cleared, and the direction it fails in](#157-the-other-parse-148-cleared-and-the-direction-it-fails-in) ·
 [158. The third parse, which fails in the direction the other two were assumed to](#158-the-third-parse-which-fails-in-the-direction-the-other-two-were-assumed-to) ·
-[159. §138's message, written without the signal it was waiting for](#159-138s-message-written-without-the-signal-it-was-waiting-for)
+[159. §138's message, written without the signal it was waiting for](#159-138s-message-written-without-the-signal-it-was-waiting-for) ·
+[160. An install directory that climbed out of the staging root](#160-an-install-directory-that-climbed-out-of-the-staging-root)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13310,3 +13311,60 @@ two named places, and lists the two things that produce that. §138's
 requirement -- a signal telling the causes apart -- is still absent and is
 still worth waiting for; what changed is the recognition that the message
 did not need it in order to stop being wrong.
+
+## 160. An install directory that climbed out of the staging root
+
+A hunt in the one part of the tool that writes outside its own tree.
+Staleness came first and found nothing -- a project flag change, a compiler
+change, a link flag change and a generator rule change each rebuild what
+they should, measured one at a time -- so the lens moved to `--install`,
+and there it was.
+
+    [install]
+    bindir = "../../../outside"
+
+    $ fmake --install --destdir stage
+    -> .../stage/usr/local/../../../outside/inst2
+    * installed 1 file(s) under /usr/local
+
+The file landed **outside the staging root entirely**, beside the tree, and
+the one line anybody reads said it went under the prefix. A distribution
+stages into DESTDIR precisely so that nothing escapes it; this wrote where
+nothing would package it and then reported somewhere else.
+
+**§29 already refuses this shape.** A target name that is a path was stopped
+because "it would be built at that path rather than in the tree, and
+installed to it as written ... a build tool cannot promise much about a tree
+it was pointed at, but it can promise that a name in a comment stays a
+name." The same sentence is true of a key in a config file, and nobody had
+asked the question there.
+
+A directory component that climbs is refused now, in `[install]` and in
+`--prefix` alike. **An absolute directory is not the same thing and stays
+legal** -- `/opt/thing/bin` and `/etc` are where real layouts put things,
+and DESTDIR is prepended to them like everything else.
+
+### The second fault was the sentence underneath
+
+    * installed 1 file(s) under /usr/local        <- with bindir=/opt/thing/bin
+
+Absolute directories were already legal, so this was wrong before the
+climbing case existed. The summary named the prefix whether or not anything
+went there. It says the count alone when the destinations are not under the
+prefix, because the `->` lines above have already named each one -- a clause
+that is sometimes false is worth less than no clause.
+
+### Third time in one day that a first draft could not fail
+
+The case checked for the escaped file at `/tmp/outside`. The real landing
+place is one level inside: `stage/usr/local` climbed three times is the tree
+root, not the directory above it. Nothing would ever have written the path
+the check named, so it passed against both versions and proved nothing --
+found by running it against the previous commit, which is the only reason
+any of the three were found.
+
+The other two were §157's, where a variable beside the symbol under test
+linked the file for its own reasons, and where moving it out left nothing
+reaching the file at all. **A check that cannot fail is the default outcome
+of writing one**, and running it against the code it was written for is not
+optional.
