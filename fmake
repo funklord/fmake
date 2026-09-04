@@ -9132,7 +9132,8 @@ def build(args, _bootstrapping=False):
 			seen_stanza.add(t.name)
 			members = sorted(r for r in reach if r in proj.src_set)
 			stanzas.append(f"{tgt_section(t.name)}\nsources = ["
-			               + ", ".join(f'"{m}"' for m in members) + "]")
+			               + ", ".join(toml_string(m) for m in members)
+			               + "]")
 			offers.append({"name": t.name, "root": t.rel, "sym": _sym,
 			               "providers": list(providers), "chosen": mine[0],
 			               "members": members, "configured": bool(t.conf)})
@@ -9996,9 +9997,34 @@ def _nj_flag(f):
 # A TOML bare key: anything else has to be quoted when it names a table.
 RE_TOML_BARE = re.compile(r"[A-Za-z0-9_-]+\Z")
 
+# What a TOML basic string escapes. Backslash first, or it doubles the
+# backslashes the others put in.
+TOML_ESCAPES = (("\\", "\\\\"), ('"', '\\"'), ("\b", "\\b"),
+                ("\t", "\\t"), ("\n", "\\n"), ("\f", "\\f"),
+                ("\r", "\\r"))
+
+
+def toml_string(s):
+	"""`s` as a TOML basic string: quoted, and escaped inside the quotes.
+
+    Quoting without escaping is what the first version of `tgt_section`
+    did, and a file called `od"d.c` turned into
+
+        [target."od"d"]
+        sources = ["a.c", "od"d.c"]
+
+    which is not TOML at all -- neither half of it. A path may contain a
+    quote or a backslash; the whitelist that refuses such names is the
+    *Makefile* ejector's, and has nothing to say about what fmake builds
+    or what it writes into a config.
+    """
+	for ch, esc in TOML_ESCAPES:
+		s = s.replace(ch, esc)
+	return '"' + s + '"'
+
 
 def tgt_section(name):
-	"""`[target.NAME]`, with NAME quoted where TOML needs it.
+	"""`[target.NAME]`, with NAME quoted and escaped where TOML needs it.
 
     A target is named after what roots it, so `odd.name.c` gives one called
     `odd.name`. Written bare, `[target.odd.name]` is a *nested table* and
@@ -10007,7 +10033,7 @@ def tgt_section(name):
     and said nothing about it.
     """
 	return (f"[target.{name}]" if RE_TOML_BARE.match(name)
-	        else f'[target."{name}"]')
+	        else f"[target.{toml_string(name)}]")
 
 
 def _mk_ident(name):
@@ -11847,7 +11873,7 @@ def _answer_block(o):
     identical text -- and a file nobody reads to the end explains nothing.
     """
 	when = datetime.date.today().isoformat()
-	sources = ", ".join(f'"{m}"' for m in o["members"])
+	sources = ", ".join(toml_string(m) for m in o["members"])
 	among = o["providers"][:4]
 	listed = ", ".join(among) + (f" and {len(o['providers']) - 4} more"
 	                             if len(o["providers"]) > len(among) else "")

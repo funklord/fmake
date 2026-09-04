@@ -50,6 +50,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 
 FMAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fmake")
 
@@ -1382,6 +1383,53 @@ def makes_own_special_targets_are_not_errors(t):
 		      "the last recipe should win, as it does in Make")
 	finally:
 		u.cleanup()
+
+
+@case
+def a_suggested_stanza_is_valid_toml(t):
+	"""fmake prints a stanza for somebody to paste, and `-i` writes the
+	same text into their fmake.toml. Both have to be TOML.
+
+    Quoting the table name without escaping inside it was half a fix: a
+    file called `od"d.c` produced
+
+        [target."od"d"]
+        sources = ["a.c", "od"d.c"]
+
+    which is not TOML in either half. The check parses what fmake printed
+    rather than looking for a substring, and then pastes it back and builds
+    with it -- the round trip is the property, and a string match would
+    pass on text nothing can read."""
+	t.write("a.h", "int helper(void);\n")
+	t.write("b.h", "int helper(void);\n")
+	t.write('od"d.c', '#include "a.h"\nint main(void){ return helper(); }\n')
+	t.write("other.c", '#include "b.h"\nint main(void){ return helper()+1; }\n')
+	t.write("a.c", "int helper(void){ return 0; }\n")
+	t.write("b.c", "int helper(void){ return 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two providers should be refused: {out}")
+	lines = [l.strip() for l in out.splitlines()
+	         if l.strip().startswith(("[target.", "sources = ["))]
+	check(lines, f"no stanza was suggested: {out}")
+	text = "\n".join(lines) + "\n"
+	try:
+		parsed = tomllib.loads(text)
+	except Exception as exc:
+		raise AssertionError(f"the suggested stanza is not TOML: {exc}\n"
+		                     f"{text}")
+	check('od"d' in parsed.get("target", {}),
+	      f"the stanza does not name the target it is for: {parsed}")
+
+	# The round trip: paste it back and the tree builds.
+	t.write("fmake.toml", text)
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"fmake will not accept the stanza it just printed: "
+	      f"{r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, 'od"d')),
+	      "the target the stanza names was not built")
 
 
 @case

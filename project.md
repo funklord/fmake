@@ -218,7 +218,8 @@ that had been green about nothing for five commits ·
 [165. Whose rule it is, said out loud](#165-whose-rule-it-is-said-out-loud) ·
 [166. `out: in | dir`, which is what every Makefile writes](#166-out-in-dir-which-is-what-every-makefile-writes) ·
 [167. The rest of the Makefile forms, and a dollar that became a process id](#167-the-rest-of-the-makefile-forms-and-a-dollar-that-became-a-process-id) ·
-[168. Both parsers finished: four more in fmake.mk, one in the TOML](#168-both-parsers-finished-four-more-in-fmakemk-one-in-the-toml)
+[168. Both parsers finished: four more in fmake.mk, one in the TOML](#168-both-parsers-finished-four-more-in-fmakemk-one-in-the-toml) ·
+[169. Quoting is not escaping, and the fix was an hour old](#169-quoting-is-not-escaping-and-the-fix-was-an-hour-old)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13898,3 +13899,46 @@ from six. The difference is not care, it is that **TOML is parsed by
 parser does the reading, the only thing left to get wrong is what the values
 mean -- and the one fault found is in *writing* the format rather than
 reading it, which is the half no library was doing.
+
+## 169. Quoting is not escaping, and the fix was an hour old
+
+§168 fixed the table name in the stanza fmake prints for somebody to paste
+-- and which `-i` writes into their `fmake.toml` on request. It quoted the
+name where TOML needs quoting. It did not escape inside the quotes, and the
+same lens that found the first half found the second within the hour:
+
+    [target."od"d"]
+    sources = ["a.c", "od"d.c"]
+
+for a file called `od"d.c`. **Neither half of that is TOML.** The values
+were never touched at all -- they were written `f'"{m}"'`, which is the
+same mistake one level down, in the same string, four characters away.
+
+The lens is §162's: *a guard written for two neighbouring cases and applied
+to one*. It has now paid three times in two days, twice on code less than a
+day old, and each time the neighbour was named in the same expression as
+the case that got fixed.
+
+### One writer, and a check that reads rather than matches
+
+`toml_string` escapes backslash first -- doing it later doubles what the
+other escapes insert -- then the quote and the control characters, and both
+the table name and every value go through it.
+
+The case parses what fmake printed with `tomllib` rather than looking for a
+substring, then **writes it back into the tree and builds with it**. That
+round trip is the property worth pinning: a string match would have passed
+on the broken output too, since `[target."od"d"]` contains everything an
+assertion would have looked for.
+
+    fmake prints    [target."od\\"d"]
+    tomllib reads   {'target': {'od"d': {'sources': ['a.c', 'od"d.c']}}}
+    fmake builds    od"d, other
+
+### Why a path like that reaches here at all
+
+§155 refuses such names when ejecting a *Makefile*, because Make cannot
+express them. That refusal says nothing about what fmake builds, and
+nothing about what it writes into a config: the file compiles, links, and
+gets a stanza suggested for it like any other. A limitation in one exit is
+not a constraint on the tree.
