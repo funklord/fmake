@@ -215,7 +215,8 @@ that had been green about nothing for five commits ·
 [162. A sweep of cross builds, and the check that closed a class it did not reach](#162-a-sweep-of-cross-builds-and-the-check-that-closed-a-class-it-did-not-reach) ·
 [163. Concurrency, and the compilers that outlived the build](#163-concurrency-and-the-compilers-that-outlived-the-build) ·
 [164. The lenses, turned on the code that came out of them](#164-the-lenses-turned-on-the-code-that-came-out-of-them) ·
-[165. Whose rule it is, said out loud](#165-whose-rule-it-is-said-out-loud)
+[165. Whose rule it is, said out loud](#165-whose-rule-it-is-said-out-loud) ·
+[166. `out: in | dir`, which is what every Makefile writes](#166-out-in-dir-which-is-what-every-makefile-writes)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13691,3 +13692,63 @@ back the twenty minutes somebody would spend wondering why their example is
 exception to reading no other build system's files; this is the other half
 of that answer -- **fmake can be fluent in Cargo's conventions without
 reading Cargo's files.**
+
+## 166. `out: in | dir`, which is what every Makefile writes
+
+A hunt in the one input fmake reads that somebody else's tool defined:
+`fmake.mk` is Makefile syntax, and a parser for somebody else's language is
+where the assumptions live.
+
+Four legal forms, one tree each. Two worked -- a line continuation inside a
+recipe, and several targets on one rule. The other two did not, and the
+first is the serious one:
+
+    gen/table.c: seed.txt | gen
+
+    IsADirectoryError: [Errno 21] Is a directory: '.../oo2/gen'
+
+**Order-only prerequisites were hashed into the rule's freshness key**,
+which is the opposite of what `|` means: it orders the work and does not
+date it. And the commonest order-only prerequisite there is names a
+*directory* -- `| build` is in half the Makefiles ever written -- so the
+hash reached `open(dir, "rb")` and a build tool answered with a Python
+traceback.
+
+Two fixes, because either alone leaves the other standing. Order-only
+prerequisites are out of the key and still order the rules and still reach
+both ejected forms after a `|`. And a directory has no content hash rather
+than an exception, which is the honest answer for a path that has no
+contents.
+
+### Two refusals that were true and unactionable
+
+    fmake.mk:1: rule for gen/table.c has no recipe
+
+for `gen/table.c: seed.txt; @printf ...`. Make takes a recipe after a
+semicolon on the target line; fmake does not read that form. Saying "has no
+recipe" about a line that visibly has one sends the reader to look at the
+recipe they are already looking at. It now says where the recipe has to go.
+
+    fmake.mk:4 needs inputs
+
+for `gen:` with a `mkdir` in it -- the other half of the `| build` idiom,
+and a rule fmake genuinely cannot date, since freshness here is a hash of
+what a rule reads. True, and it neither says why nor what to do instead. It
+now says both, and the remedy is the one fmake's own examples use: make the
+directory in the recipe that needs it.
+
+### The instrument was wrong three times before the finding
+
+Checking that `--help`, `--man` and `--completion` agree took three
+attempts: the first regex missed roff's `\-`, the second missed `\fB`
+gluing a word character to the flag, and only the third stripped the markup
+before comparing. All three "found" missing flags; none of them existed.
+The measurement is a negative -- 27 flags, three agreeing lists -- and it
+took longer than the bug did.
+
+Sixth instrument error of the day, and the pattern is not carelessness
+about the subject: **the check gets written faster than the check gets
+checked.** §160 recorded the version of this that passes when it should
+fail; this is the version that fails when it should pass, and the same
+habit answers both, which is to run it against a case whose answer is
+already known.

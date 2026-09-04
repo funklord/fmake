@@ -1247,6 +1247,83 @@ int main(int argc, char **argv) {
 
 
 @case
+def an_order_only_prerequisite_orders_without_dating(t):
+	"""`out: in | dir\' is the commonest thing a Makefile writes, and it
+	crashed.
+
+    The order-only half was hashed into the rule\'s freshness key, which is
+    the opposite of what `|\' means -- and the commonest order-only
+    prerequisite there is names a *directory*, so hashing it raised
+    IsADirectoryError with a traceback attached. Three files reproduce it.
+
+    Two fixes, because either alone leaves the other: order-only
+    prerequisites order the work and do not date it, and a directory has no
+    content hash rather than an exception."""
+	t.write("main.c", "int table_value(void);\n"
+	        "int main(void){ return table_value(); }\n")
+	t.write("seed.txt", "seed\n")
+	os.makedirs(os.path.join(t.dir, "gen"), exist_ok=True)
+	t.write("fmake.mk",
+	        "gen/table.c: seed.txt | gen\n"
+	        '\tprintf "int table_value(void){ return 5; }\\n" > $@\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"fmake traced back: {out}")
+	check(r.returncode == 0, f"the build failed: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 5,
+	      "the generated file was not the one the rule writes")
+
+	# And the ordering half still holds: nothing re-runs when the
+	# order-only directory changes, which is the whole of what `|' buys.
+	before = os.path.getmtime(os.path.join(t.dir, "gen", "table.c"))
+	t.write("gen/marker", "touched\n")
+	r = t.fmake()
+	check(r.returncode == 0, f"the second build failed: {r.stdout}{r.stderr}")
+	check(os.path.getmtime(os.path.join(t.dir, "gen", "table.c")) == before,
+	      "a change inside the order-only directory re-ran the rule, which "
+	      "is what `|' exists to prevent")
+
+
+@case
+def a_rule_that_cannot_be_dated_says_why(t):
+	"""Two refusals that were true and unactionable.
+
+    A rule with no prerequisites -- `build:` with a mkdir in it, named
+    order-only by everything that writes there -- got "needs inputs", which
+    says nothing about why or what to do instead. And a recipe written
+    after a semicolon on the target line, which Make accepts and fmake does
+    not read, got "has no recipe" about a line that visibly has one."""
+	t.write("main.c", "int table_value(void);\n"
+	        "int main(void){ return table_value(); }\n")
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.mk", "gen/table.c: seed.txt; @printf 'x' > $@\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"this is not a rule fmake reads: {out}")
+	check("on the target line" in out,
+	      f"the refusal does not say where the recipe has to go: {out}")
+
+	u = Tree("no-inputs")
+	try:
+		u.write("main.c", "int table_value(void);\n"
+		        "int main(void){ return table_value(); }\n")
+		u.write("seed.txt", "seed\n")
+		u.write("fmake.mk", "gen/table.c: seed.txt | gen\n"
+		        '\tprintf "int table_value(void){ return 5; }\\n" > $@\n'
+		        "\ngen:\n\t@mkdir -p gen\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"a rule with no inputs is refused: {out}")
+		check("can never be known to be stale" in out,
+		      f"the refusal does not say why inputs are required: {out}")
+		check("mkdir" in out,
+		      f"the refusal does not name what to do instead: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def an_ejected_build_gets_a_rule_per_group(t):
 	"""One rule per group, and `all` depends on none of them."""
 	if not shutil.which("make"):

@@ -116,6 +116,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import threading
 import subprocess
 import time
@@ -1299,13 +1300,26 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 		prereqs = rest[0].split()
 		order_only = rest[1].split() if len(rest) > 1 else []
 		current = {"line": n, "origin": where, "outputs": targets,
-		           "inputs": prereqs, "depends": order_only, "commands": []}
+		           "inputs": prereqs, "depends": order_only, "commands": [],
+		           # Kept for the diagnosis below, which needs to know
+		           # whether the recipe was written somewhere fmake does
+		           # not look.
+		           "target_line": line}
 		rules.append(current)
 
 	for r in rules:
 		if not r["commands"]:
+			# Make also takes a recipe after a semicolon on the target
+			# line. fmake does not read that form, and saying "has no
+			# recipe" about a line that visibly has one names a cause
+			# nobody can act on -- the reader looks at their recipe,
+			# which is right there.
+			semi = ";" in r.get("target_line", "")
 			die(f"{r['origin']}:{r['line']}: rule for "
-			    f"{' '.join(r['outputs'])} has no recipe")
+			    f"{' '.join(r['outputs'])} has no recipe"
+			    + ("\n    a recipe after `;' on the target line is not "
+			       "read here: put it on the next line, indented with a "
+			       "tab" if semi else ""))
 		r["phony"] = any(o in phony for o in r["outputs"])
 	return rules
 
@@ -1935,7 +1949,19 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			die(f"{_gen_where(r, name)} needs a command")
 		for key in ("inputs", "outputs"):
 			if not r.get(key):
-				die(f"{_gen_where(r, name)} needs {key}")
+				# `mkdir` rules are the common shape here -- `build:` with
+				# no prerequisites, named order-only by everything that
+				# writes into it -- and "needs inputs" is true without
+				# saying why or what to do instead. Freshness here is a
+				# hash of what a rule reads; a rule that reads nothing has
+				# nothing to be stale against.
+				how = ("" if key == "outputs" else
+				       "\n    freshness is a hash of what a rule reads, so "
+				       "one that reads nothing can never be known to be "
+				       "stale.\n    a directory wanted by another rule is "
+				       "made in that rule's own recipe -- `@mkdir -p gen' "
+				       "-- rather than by a rule of its own")
+				die(f"{_gen_where(r, name)} needs {key}{how}")
 
 	store = cache.data.setdefault("generated", {})
 	# Kept beside the keys rather than inside them: a cache written before
@@ -2004,7 +2030,16 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 				parts.append(rel + ":" + (cache.hash_of(full, rel) or "?"))
 			return sha("|".join(parts))
 
-		read_paths = [os.path.relpath(p, root) for p in ins + deps]
+		# Inputs only. An order-only prerequisite orders the work and
+		# does not date it -- that is the whole of what `|' means in a
+		# Makefile -- and hashing one made `gen/table.c: seed.txt | gen'
+		# re-run whenever anything in `gen' changed, which is the rule's
+		# own output. It also crashed: the commonest order-only
+		# prerequisite there is names a *directory*, and hashing a
+		# directory raised IsADirectoryError with a traceback attached.
+		# `deps' still orders the rules above, and still reaches both
+		# ejected forms after a `|'.
+		read_paths = [os.path.relpath(p, root) for p in ins]
 		key = gen_key(read_paths + recorded)
 
 		fresh = (store.get(name) == key
@@ -4438,10 +4473,19 @@ class Cache:
 		os.replace(tmp, self.path)
 
 	def hash_of(self, abspath, rel):
-		"""Content hash, avoiding the read when size+mtime are unchanged."""
+		"""Content hash, avoiding the read when size+mtime are unchanged.
+
+        None where there is nothing to hash: a path that cannot be stat'd,
+        and a directory. The second was a traceback -- `open(dir, "rb")'
+        raises IsADirectoryError, which is an OSError the stat above never
+        sees -- and a directory reaching here is ordinary rather than
+        exotic, since a Makefile names one whenever it writes `| build'.
+        """
 		try:
 			st = os.stat(abspath)
 		except OSError:
+			return None
+		if stat.S_ISDIR(st.st_mode):
 			return None
 		ent = self.files.get(rel)
 		sig = [st.st_size, int(st.st_mtime_ns)]
