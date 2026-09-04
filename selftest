@@ -8131,6 +8131,59 @@ int main() { Local l; return l.n; }
 
 
 @case
+def a_symbol_nothing_here_defines_gets_both_explanations(t):
+	"""Section 138 left this message alone for a reason that has stopped
+	applying: fmake cannot tell "a symbol a library defines" from "a symbol
+	a generator was supposed to write", and guessing between them from a
+	shared name prefix is not a diagnosis.
+
+    It does not have to guess to say what it *checked*. Every library it
+    resolved, and every definition the scan can see in this tree -- when
+    both come back empty, `--ldflags\' on its own is advice for one of two
+    explanations, and it sent one project looking for a package that does
+    not exist.
+
+    The library half comes first, because it is the commoner cause; the
+    generated half is not a guess about which generator, it is what
+    "defined nowhere fmake can see" leaves once a library has been ruled
+    out."""
+	t.write("main.c", "extern int situ_base16_decode(void);\n"
+	        "int main(void){ return situ_base16_decode(); }\n")
+
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"this cannot link: {said}")
+	check("nothing in this tree appears to define them" in said,
+	      f"the failure does not say that fmake looked in the tree too: "
+	      f"{said}")
+	check("--ldflags" in said,
+	      f"the library explanation was dropped rather than joined: "
+	      f"{said}")
+	check("never generated" in said,
+	      f"the other explanation is missing, which is the one section 138 "
+	      f"was about: {said}")
+
+	# And the discrimination: where the tree *does* appear to define it,
+	# this ending must not fire, because then the answer is neither a
+	# library nor a generator but a file that was left out.
+	u = Tree("defined-here")
+	try:
+		u.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper(); }\n")
+		u.write("helper.c", "/*! @os plan9 */\nint helper(void){ return 0; }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check(r.returncode != 0, f"this cannot link either: {said}")
+		check("appears to define one of them" in said,
+		      f"the excluded file that defines it was not named: {said}")
+		check("nothing in this tree appears to define them" not in said,
+		      f"fmake said nothing here defines it, about a file it had "
+		      f"just named as defining it: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_file_that_did_not_compile_is_named_instead_of_a_library(t):
 	"""The last line is the one anybody acts on, and it said the wrong thing.
 
@@ -8174,9 +8227,10 @@ def a_file_that_did_not_compile_is_named_instead_of_a_library(t):
 		check(r.returncode != 0, "an undefined symbol should not link")
 		check("did not compile" not in said,
 		      f"nothing here fails to compile: {said}")
-		check(said.strip().splitlines()[-1].endswith(
-		          "the targets you want"),
-		      f"a genuine missing library lost its advice: {said}")
+		check("--ldflags" in said and "did not compile, and appears to "
+		      "define" not in said,
+		      f"a genuine missing library lost its advice, or was blamed "
+		      f"on a compile failure that did not happen: {said}")
 	finally:
 		u.cleanup()
 
@@ -8200,10 +8254,9 @@ def a_file_that_did_not_compile_is_named_instead_of_a_library(t):
 		check("side.c did not compile, and appears to define" not in said,
 		      f"a file that fails and defines something else is being "
 		      f"blamed for it: {said}")
-		check(said.strip().splitlines()[-1].endswith(
-		          "the targets you want"),
-		      f"the ordinary advice was replaced on the strength of an "
-		      f"unrelated compile failure: {said}")
+		check("--ldflags" in said,
+		      f"the advice was replaced on the strength of an unrelated "
+		      f"compile failure: {said}")
 	finally:
 		v.cleanup()
 

@@ -208,7 +208,8 @@ that had been green about nothing for five commits ·
 [155. §154's own fix was a blacklist, and the class was twice its size](#155-154s-own-fix-was-a-blacklist-and-the-class-was-twice-its-size) ·
 [156. A header nothing rebuilt on, in the file §148 called safe](#156-a-header-nothing-rebuilt-on-in-the-file-148-called-safe) ·
 [157. The other parse §148 cleared, and the direction it fails in](#157-the-other-parse-148-cleared-and-the-direction-it-fails-in) ·
-[158. The third parse, which fails in the direction the other two were assumed to](#158-the-third-parse-which-fails-in-the-direction-the-other-two-were-assumed-to)
+[158. The third parse, which fails in the direction the other two were assumed to](#158-the-third-parse-which-fails-in-the-direction-the-other-two-were-assumed-to) ·
+[159. §138's message, written without the signal it was waiting for](#159-138s-message-written-without-the-signal-it-was-waiting-for)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11448,6 +11449,12 @@ prefix with a schema it just compiled. That is a guess, and §125's rule is
 that a case which has turned up once is not yet a case. Recorded so that a
 second instance in another tree moves it.
 
+**The message is fixed in §159, without the signal.** fmake cannot tell the
+two causes apart and does not have to in order to say what it looked at:
+every library it resolved and every definition the scan can see. Both empty
+is a fact, and it names both explanations rather than one. The paragraph
+below stands as the reason a *diagnosis* is still not available.
+
 **Still recorded, and §153 is not it.** That entry fixes the same *ending*
 arriving by a different route -- the file that defines the symbol is in the
 tree and failed to compile, which is a signal fmake has and this case does
@@ -13244,3 +13251,62 @@ were silent -- a stale binary, a link set chosen without the refusal firing
 The sentence was right once out of three, and it was right by luck rather
 than by the argument it gave, since the argument was about severity and the
 answer turns on direction.
+
+## 159. §138's message, written without the signal it was waiting for
+
+§138 recorded a link failure whose undefined symbols were situ's own, ending
+in `name the missing libraries with --ldflags` -- advice about a package that
+does not exist, for code a generator was supposed to write. It was left
+unfixed with a reason: fmake would have to tell *a symbol a library defines*
+from *a symbol a generator was supposed to write*, and the only signal
+available was a shared name prefix, which is a guess.
+
+That reason was sound and it answered a question nobody had to ask. **fmake
+does not have to identify the cause to say what it checked.** It resolved
+every library it could find, and it holds a scan of every source in the
+tree. When both come back with nothing, that is a fact about this build, and
+it is the fact the reader needs:
+
+    * gen138 did not link
+      no x86_64/64le library exports: situ_base16_decode
+      no library here exports them, and nothing in this tree appears to
+      define them either
+      so either a library this build has not been told about -- --ldflags,
+      or @pkg on the file that needs it -- or something that was never
+      generated: a code generator that has not run leaves exactly this, a
+      name with no definition anywhere
+
+Both explanations, in the order of their frequency, and neither dressed as a
+diagnosis. The generated half is not a guess about *which* generator -- it
+is what "defined nowhere fmake can see" leaves once a library has been ruled
+out.
+
+### The discrimination is the whole of it, and the case is where it lives
+
+A message that fires on every unresolved symbol would be decoration. This
+one must not fire when fmake has just named a file that does appear to
+define the symbol -- excluded, or failed to compile -- because then the
+answer is neither a library nor a generator but a file that was left out,
+and those two notes already say so.
+
+The first implementation got that wrong, and the case caught it:
+
+    * gen did not link
+      no x86_64/64le library exports: helper
+      helper.c is excluded (@os plan9 (building for linux)) and appears
+      to define one of them
+      no library here exports them, and nothing in this tree appears to
+      define them either        <- untrue, two lines after naming what does
+
+**An excluded file is not in `srcs`**, so a scan over the tree's sources
+cannot see it, and the second sentence contradicted the first. The check now
+asks whether either of the two notes above it fired, which is the same
+question asked where the answer actually is.
+
+### What this does not claim
+
+It does not know that a generator is missing. It says nothing was found, in
+two named places, and lists the two things that produce that. §138's
+requirement -- a signal telling the causes apart -- is still absent and is
+still worth waiting for; what changed is the recognition that the message
+did not need it in order to stop being wrong.

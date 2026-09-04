@@ -8763,6 +8763,8 @@ def build(args, _bootstrapping=False):
 	# about the file somebody wrote. See Unit.key.
 	broken_rels = {k.split("\0", 1)[0] for k in broken}
 	blamed_broken = set()
+	# Symbols no library exports and nothing in the tree appears to define.
+	unprovided = set()
 
 	trouble = [(t, sym, providers) for t, cl in closures.items()
 	           for sym, providers in cl.ambiguous]
@@ -9343,10 +9345,12 @@ def build(args, _bootstrapping=False):
 			toks = set()
 			for s in missing:
 				toks |= symbol_tokens(s)
+			named = False
 			for rel, why in sorted(excluded.items()):
 				if toks.intersection(scans.get(rel, {}).get("defs") or []):
 					note(f"{rel} is excluded ({why}) and appears to define "
 					     f"one of them")
+					named = True
 			# And the plainest reason there is, which nothing said: the
 			# file that defines it is right here and did not compile.
 			# fmake names it two lines above, under "did not compile", and
@@ -9363,6 +9367,26 @@ def build(args, _bootstrapping=False):
 					note(f"{rel} did not compile, and appears to define "
 					     f"one of them")
 					blamed_broken.add(rel)
+					named = True
+			# And whether anything here looks like it defines them at all.
+			# Section 138 left this message alone because fmake cannot tell
+			# "a symbol a library defines" from "a symbol a generator was
+			# supposed to write", and guessing between them from a shared
+			# name prefix is not a diagnosis. It does not have to guess to
+			# say what it checked: every library it resolved, and every
+			# definition the scan can see in the tree. When both come back
+			# empty, `--ldflags' on its own is advice for one of two
+			# explanations, and the reader is sent to look for a package
+			# that may not exist.
+			# `named' is the other half of the same question. An
+			# excluded or broken file that appears to define one of these
+			# has just been named two lines above, and "nothing in this
+			# tree defines them" would contradict it -- excluded files are
+			# not in `srcs', so the scan below cannot see them.
+			if missing and not named and not any(
+			        toks.intersection(scans.get(rel, {}).get("defs") or [])
+			        for rel in srcs):
+				unprovided.update(missing)
 			# A meta-object this tree was supposed to generate is not a
 			# missing library, and offering --ldflags for one sends the
 			# reader to install something. The warning above already said
@@ -9408,6 +9432,19 @@ def build(args, _bootstrapping=False):
 			# Every failure here was rustc's, and rustc has already said
 			# what was wrong in its own words.
 			pass
+		elif unprovided:
+			# Both explanations, because fmake has ruled out neither and
+			# saying only the first is what sent one project looking for a
+			# package. The generated half is not a guess about which
+			# generator: it is what "defined nowhere fmake can see" leaves
+			# once a library has been excluded.
+			note("no library here exports them, and nothing in this tree "
+			     "appears to define them either")
+			note("so either a library this build has not been told about "
+			     "-- --ldflags, or @pkg on the file that needs it -- or "
+			     "something that was never generated: a code generator "
+			     "that has not run leaves exactly this, a name with no "
+			     "definition anywhere")
 		elif blamed_broken:
 			# Same shape as the .moc ending below it: name the cause that
 			# was actually observed, and keep the library door open for
