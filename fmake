@@ -411,6 +411,21 @@ def vinfo(m):
 	if VERBOSE:
 		say(f"{DIM('*')} {DIM(m)}")
 
+_SAID = set()
+
+
+def warn_once(m):
+	"""A warning about a file, said once however often the file is read.
+
+    `fmake.mk` is parsed more than once in a run -- the rules are wanted at
+    two different points -- so a warning about a line in it arrived two and
+    three times. Which is its own small lie: it reads as several problems.
+    """
+	if m not in _SAID:
+		_SAID.add(m)
+		warn(m)
+
+
 def die(m):
 	PROGRESS.flush()            # keep the error after the build output
 	print(f"{RED('!!!')} {m}", file=sys.stderr)
@@ -1205,6 +1220,21 @@ class Conf:
 MK_FILE = "fmake.mk"
 
 RE_MK_RULE = re.compile(r"^([^\t#][^:=]*?)\s*:\s*([^=].*)?$")
+# Special targets that carry no recipe and have no meaning in a build
+# that has no suffix rules, no default goal and its own answer to a failed
+# command. Ignored rather than refused: they are ordinary in a careful
+# Makefile, and a file is not wrong for saying something fmake does not
+# need.
+# `$(name` in a recipe, which in Makefile syntax is a variable or a
+# function call. Not `$$(`, which is the escaped form and means the shell's
+# own command substitution, and not `$(` followed by nothing nameable.
+RE_MK_FUNC = re.compile(r"(?<!\$)\$\([A-Za-z_][^)]*\)")
+
+MK_IGNORED_TARGETS = {".SUFFIXES", ".DELETE_ON_ERROR", ".SECONDARY",
+                      ".NOTPARALLEL", ".ONESHELL", ".EXPORT_ALL_VARIABLES",
+                      ".POSIX", ".IGNORE", ".SILENT", ".PRECIOUS",
+                      ".INTERMEDIATE", ".LOW_RESOLUTION_TIME"}
+
 RE_MK_DOUBLE = re.compile(r"^[^\t#][^:=]*::")
 RE_MK_UNSUPPORTED = re.compile(
     r"^\s*(?:ifeq|ifneq|ifdef|ifndef|else|endif|include|sinclude|"
@@ -1254,6 +1284,20 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 		if raw.startswith("\t"):
 			if current is None:
 				die(f"{where}:{n}: recipe line before any rule")
+			# `$(name ...)' is a Make variable or function, and fmake
+			# implements neither -- deliberately, since the premise is a
+			# build file short enough to read. Passed through, the shell
+			# reads it as command substitution instead: `$(dir $@)' runs a
+			# command called `dir', and `$(wildcard x)' runs one called
+			# `wildcard' and quietly substitutes nothing when it is not
+			# there. Said rather than refused, because the pass-through is
+			# well defined and somebody may be relying on it.
+			hit = RE_MK_FUNC.search(line)
+			if hit:
+				warn_once(f"{where}:{n}: {hit.group(0)!r} is Make's syntax for a "
+				     f"variable or function, and fmake has neither. The "
+				     f"shell will read it as command substitution; write "
+				     f"`$$(...)' if that is what you meant.")
 			current["commands"].append(line.strip())
 			continue
 
@@ -1310,6 +1354,17 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 			phony.update((m.group(2) or "").split())
 			current = None
 			continue
+		# The other special targets carry no recipe and mean nothing here:
+		# fmake has no suffix rules to disable, no default goal, and its
+		# own answer to a failed recipe. `.SUFFIXES:` in particular is in
+		# every careful Makefile, and refusing the file over it -- "rule
+		# for .SUFFIXES has no recipe" -- rejects a legal file for saying
+		# something fmake simply does not need to hear.
+		if m and m.group(1).strip() in MK_IGNORED_TARGETS:
+			vinfo(f"{where}:{n}: {m.group(1).strip()} is Make's own and "
+			      f"means nothing here; ignored")
+			current = None
+			continue
 		if not m:
 			die(f"{where}:{n}: expected `targets: prerequisites`, "
 			    f"got {line.strip()!r}")
@@ -1326,6 +1381,17 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 		           "target_line": line}
 		rules.append(current)
 
+	# Make warns here -- "overriding recipe for target" -- and takes the
+	# last. Taking the last silently is how a rule survives a merge that
+	# duplicated it, with the wrong half winning and nothing said.
+	seen_target = {}
+	for r in rules:
+		for o in r["outputs"]:
+			if o in seen_target:
+				warn_once(f"{r['origin']}:{r['line']}: a second recipe for "
+				     f"{o}, first written at line {seen_target[o]}. The "
+				     f"last one wins, which is what Make does with it too.")
+			seen_target[o] = r["line"]
 	for r in rules:
 		if not r["commands"]:
 			# Make also takes a recipe after a semicolon on the target
@@ -1379,8 +1445,25 @@ def expand_mk_rules(rules, root, src_set):
 
 		src = next(i for i in r["inputs"] if "%" in i)
 		head, _, tail = src.partition("%")
+		# A stem does not cross a directory separator here, and that is not
+		# the same limitation Make has. Make is demand-driven: `%' crosses
+		# because somebody asked for `gen/a/b.c' and Make works backwards
+		# to the input. fmake expands the other way, over every file the
+		# pattern matches, so a crossing stem would *generate* an output
+		# for every nested file that happens to match -- measured, on a
+		# tree carrying both `schemas/bmp.msg' and `schemas/bmp/bmp.msg',
+		# where it produced a second rule whose stem was `bmp/bmp' and
+		# whose output did not compile.
+		#
+		# So the glob stays flat, and what was actually missing is below:
+		# a rule matching nothing said nothing.
 		hits = sorted(glob.glob(os.path.join(root, head + "*" + tail),
 		                        recursive=True))
+		if not hits:
+			warn_once(f"{r['origin']}:{r['line']}: {src} matched no file, "
+			          f"so this rule generates nothing. A stem does not "
+			          f"cross a directory here: `proto/%.msg' matches "
+			          f"proto/a.msg and not proto/a/b.msg.")
 		for hit in hits:
 			rel = os.path.relpath(hit, root)
 			stem = rel[len(head):len(rel) - len(tail)] if tail else rel[len(head):]
@@ -1757,7 +1840,7 @@ def test_env_pairs(conf, t, paths=None):
     """
 	out = []
 	for where, src in (("[project]", conf.project.get("test-env", [])),
-	                   (f"[target.{t.name}]", t.conf.get("test-env", []))):
+	                   (f"{tgt_section(t.name)}", t.conf.get("test-env", []))):
 		for item in src:
 			if "=" not in item:
 				die(f"{where} test-env wants KEY=VALUE, not {item!r}")
@@ -1856,7 +1939,7 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None):
 			_kill_group(proc)
 			failed.append(t.name)
 			warn(f"{t.name} timed out after {limit}s "
-			     f"([target.{t.name}] test-timeout raises it, "
+			     f"({tgt_section(t.name)} test-timeout raises it, "
 			     f"0 removes the limit)")
 			continue
 		if rc:
@@ -2156,7 +2239,11 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 		missing = [os.path.relpath(o, root) for o in outs
 		           if not os.path.exists(o)]
 		if missing:
-			die(f"[generate.{name}] did not produce {', '.join(missing)}")
+			# `_gen_where', like every other message about a rule: this
+			# one named a [generate.*] section for a rule written in
+			# fmake.mk, and the reader may not have a fmake.toml at all.
+			die(f"{_gen_where(r, name)} did not produce "
+			    f"{', '.join(missing)}")
 
 		# Read back what the generator said it opened. Same shape as the
 		# compiler's -MD, and for the same reason: the tool that did the
@@ -6754,7 +6841,7 @@ def _expand_sources(patterns, root, proj, who):
 		        if r in proj.src_set
 		        or (r.endswith(".o") and os.path.isfile(os.path.join(root, r)))]
 		if not rels:
-			die(f"{CONF_FILE}: [target.{who}] sources {pat!r} matched no "
+			die(f"{CONF_FILE}: {tgt_section(who)} sources {pat!r} matched no "
 			    f"source file (excluded ones do not count)")
 		out += [r for r in rels if r not in out]
 	return out
@@ -8048,18 +8135,18 @@ def build(args, _bootstrapping=False):
 				        f"section is keyed by the name a target already has;"
 				        f" `name = ...` inside it renames one."
 				        if found else "")
-				die(f"{CONF_FILE}: [target.{name}] declares no root and no "
+				die(f"{CONF_FILE}: {tgt_section(name)} declares no root and no "
 				    f"sources, so fmake cannot tell what is in it{hint}")
 			rel = None
 		elif rel not in proj.src_set:
-			die(f"{CONF_FILE}: [target.{name}] root = {rel!r} is not a "
+			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is not a "
 			    f"source file in this tree")
 		elif (os.path.splitext(rel)[1] in CRATE_EXTS
 		      and os.path.basename(rel) not in CRATE_ROOTS):
 			# Reachable by hand as well as by inference, and it arrives at
 			# the same missing unit. rustc compiles a root; a module is
 			# read *by* one.
-			die(f"{CONF_FILE}: [target.{name}] root = {rel!r} roots no "
+			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} roots no "
 			    f"crate. rustc is handed a crate root, and only "
 			    f"{' or '.join(sorted(CRATE_ROOTS))} is one -- a module is "
 			    f"read from the root that declares it with `mod'.")
@@ -8071,7 +8158,7 @@ def build(args, _bootstrapping=False):
 			hits = _expand_sources(section["sources"], root, proj, name)
 			t.rel, t.members = hits[0], hits
 		if t.kind not in KINDS:
-			die(f"{CONF_FILE}: [target.{name}] kind = {t.kind!r} is not one "
+			die(f"{CONF_FILE}: {tgt_section(name)} kind = {t.kind!r} is not one "
 			    f"of {', '.join(KINDS)}")
 		targets.append(t)
 
@@ -8206,7 +8293,7 @@ def build(args, _bootstrapping=False):
 		if not name or (os.sep not in name and not os.path.isabs(name)
 		                and name not in (os.curdir, os.pardir)):
 			continue
-		die(f"target name {name!r} (from {t.rel or f'[target.{t.name}]'}) "
+		die(f"target name {name!r} (from {t.rel or f'{tgt_section(t.name)}'}) "
 		    f"is a path, and a target is a name.\n"
 		    f"    it would be built at that path rather than in the tree, "
 		    f"and installed to it as written\n"
@@ -8215,7 +8302,7 @@ def build(args, _bootstrapping=False):
 
 	clash = {}
 	for t in targets:
-		clash.setdefault(t.filename, []).append(t.rel or f"[target.{t.name}]")
+		clash.setdefault(t.filename, []).append(t.rel or f"{tgt_section(t.name)}")
 	for fn, rels in sorted(clash.items()):
 		if len(rels) > 1:
 			die(f"two targets are both called {fn!r}:\n    "
@@ -8228,7 +8315,7 @@ def build(args, _bootstrapping=False):
 			die(f"target {t.filename!r} (from {t.rel}) would be written over "
 			    f"a directory of that name.\n"
 			    f"name it with @target, or with "
-			    f"[target.{t.name}] name = \"...\" in {CONF_FILE}.")
+			    f"{tgt_section(t.name)} name = \"...\" in {CONF_FILE}.")
 
 	phony = phony_rules(root)
 	asked_phony = [n for n in args.targets if n in phony]
@@ -8553,7 +8640,7 @@ def build(args, _bootstrapping=False):
 		if not want or t.rel not in units:
 			continue
 		if t.kind != "exe":
-			die(f"{CONF_FILE}: [target.{t.name}] defines applies to the "
+			die(f"{CONF_FILE}: {tgt_section(t.name)} defines applies to the "
 			    f"root translation unit of a program, and this target is "
 			    f"{t.kind}")
 		flags = ["-D" + d for d in want]
@@ -9044,7 +9131,7 @@ def build(args, _bootstrapping=False):
 				continue
 			seen_stanza.add(t.name)
 			members = sorted(r for r in reach if r in proj.src_set)
-			stanzas.append(f"[target.{t.name}]\nsources = ["
+			stanzas.append(f"{tgt_section(t.name)}\nsources = ["
 			               + ", ".join(f'"{m}"' for m in members) + "]")
 			offers.append({"name": t.name, "root": t.rel, "sym": _sym,
 			               "providers": list(providers), "chosen": mine[0],
@@ -9904,6 +9991,23 @@ def _nj_flag(f):
     variable and nothing quoted it.
     """
 	return _nj_esc(shlex.quote(f))
+
+
+# A TOML bare key: anything else has to be quoted when it names a table.
+RE_TOML_BARE = re.compile(r"[A-Za-z0-9_-]+\Z")
+
+
+def tgt_section(name):
+	"""`[target.NAME]`, with NAME quoted where TOML needs it.
+
+    A target is named after what roots it, so `odd.name.c` gives one called
+    `odd.name`. Written bare, `[target.odd.name]` is a *nested table* and
+    not that target at all -- so the stanza fmake suggests, and the one
+    `-i` writes into fmake.toml on the reader's behalf, configured nothing
+    and said nothing about it.
+    """
+	return (f"[target.{name}]" if RE_TOML_BARE.match(name)
+	        else f'[target."{name}"]')
 
 
 def _mk_ident(name):
@@ -11749,7 +11853,7 @@ def _answer_block(o):
 	                             if len(o["providers"]) > len(among) else "")
 	return (f"# {o['name']}, {when}: {o['sym']!r} was defined by {listed};\n"
 	        f"# the include graph from {o['root']} reached {o['chosen']}.\n"
-	        f"[target.{o['name']}]\n"
+	        f"{tgt_section(o['name'])}\n"
 	        f"sources = [{sources}]\n")
 
 

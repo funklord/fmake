@@ -217,7 +217,8 @@ that had been green about nothing for five commits ·
 [164. The lenses, turned on the code that came out of them](#164-the-lenses-turned-on-the-code-that-came-out-of-them) ·
 [165. Whose rule it is, said out loud](#165-whose-rule-it-is-said-out-loud) ·
 [166. `out: in | dir`, which is what every Makefile writes](#166-out-in-dir-which-is-what-every-makefile-writes) ·
-[167. The rest of the Makefile forms, and a dollar that became a process id](#167-the-rest-of-the-makefile-forms-and-a-dollar-that-became-a-process-id)
+[167. The rest of the Makefile forms, and a dollar that became a process id](#167-the-rest-of-the-makefile-forms-and-a-dollar-that-became-a-process-id) ·
+[168. Both parsers finished: four more in fmake.mk, one in the TOML](#168-both-parsers-finished-four-more-in-fmakemk-one-in-the-toml)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13816,3 +13817,84 @@ productive seam of the sweep and the reason is worth naming: **`fmake.mk` is
 the one input whose language somebody else defined**, so every assumption in
 the parser is a guess about a specification that already exists and can be
 checked against.
+
+## 168. Both parsers finished: four more in fmake.mk, one in the TOML
+
+The rest of §167's list, and then the other input whose language somebody
+else defined.
+
+### fmake.mk, the last four forms
+
+**A rule that matched nothing said nothing.** `gen/%.c: proto/%.msg` does
+not see `proto/a/b.msg` -- a glob's `*` does not cross a separator where
+Make's `%` does -- and the rule then expanded to nothing at all: no
+message, no output, and a link failing later on a symbol whose generator
+had never run.
+
+**Making the stem cross was tried, and the suite reverted it.** Make is
+demand-driven: `%` crosses because somebody asked for `gen/a/b.c` and Make
+works backwards to the input. fmake expands the other way, over every file
+the pattern matches, so a crossing stem *generates* an output for every
+nested file that happens to match. `a_pattern_rule_may_not_mix_a_stem_with_
+a_glob` failed within the hour on a tree carrying both `schemas/bmp.msg`
+and `schemas/bmp/bmp.msg`: a second rule appeared, its stem was `bmp/bmp`,
+and its output did not compile.
+
+So the limitation stays -- it is a consequence of expanding rather than
+demanding, not an oversight -- and what goes is the silence. A pattern that
+matches no file now says so, and says which direction the stem does not
+reach.
+
+**`.SUFFIXES:` refused the file.** It carries no recipe, so it reached
+"rule for .SUFFIXES has no recipe" -- rejecting a legal Makefile for saying
+something fmake does not need to hear. It and its neighbours are ignored
+now, with a `-v` line: fmake has no suffix rules to disable, no default
+goal, and its own answer to a failed command.
+
+**Two recipes for one target, taken silently.** Make warns -- "overriding
+recipe for target" -- and takes the last. Taking the last without a word is
+how a rule survives a merge that duplicated it, with the wrong half winning.
+Warned now, once, whatever the parser is asked twice.
+
+**And `[generate.gen___c] did not produce gen/*.c`** for a rule written in
+fmake.mk: the one message in that path that did not go through
+`_gen_where`, and it named a file the reader may not have. Fixed by using
+the helper that exists for exactly this.
+
+A fifth, found while fixing the first: `$(dir $@)` and every other Make
+function is passed through to the shell, where `$(...)` is command
+substitution. `$(wildcard x)` runs a command called `wildcard`, finds
+nothing, and substitutes silence. Warned rather than refused -- the
+pass-through is well defined and somebody may be relying on it -- and the
+message names `$$(...)` as the way to ask for the shell's own.
+
+### fmake.toml, which held up
+
+Six shapes, five right: a dotted key, an inline table, an array of tables
+where a table is expected, a value of the wrong type, and an unknown key.
+The last three are refused with the section, the key and the expected type
+named, which is what a closed schema is for.
+
+The sixth is a fault, and it is not about reading:
+
+    [target.odd.name]
+    sources = ["a.c", "odd.name.c"]
+
+That is what fmake *prints for somebody to paste* when two programs share a
+symbol -- and what `-i` writes into their fmake.toml on request. A target is
+named after what roots it, so `odd.name.c` gives one called `odd.name`, and
+`[target.odd.name]` in TOML is a **nested table**, not that target. The
+stanza configured nothing and said nothing about it.
+
+Quoted where TOML needs it now, in all fourteen places that name a section,
+because the message a reader searches their file for has to be the string
+that is in it.
+
+### What the two parsers say about each other
+
+`fmake.mk` gave eleven findings from fifteen forms; `fmake.toml` gave one
+from six. The difference is not care, it is that **TOML is parsed by
+`tomllib` and the Makefile subset is parsed here.** Where somebody else's
+parser does the reading, the only thing left to get wrong is what the values
+mean -- and the one fault found is in *writing* the format rather than
+reading it, which is the half no library was doing.

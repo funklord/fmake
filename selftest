@@ -1286,6 +1286,133 @@ def an_order_only_prerequisite_orders_without_dating(t):
 
 
 @case
+def a_pattern_rule_that_matches_nothing_says_so(t):
+	"""A stem does not cross a directory here, and the silence was the bug.
+
+    `gen/%.c: proto/%.msg` does not see `proto/a/b.msg`, and the rule then
+    expanded to nothing at all: no message, no output, and a link failing
+    later on a symbol whose generator had never run.
+
+    Making `%` cross, which is what Make does, was tried and reverted. Make
+    is demand-driven -- `%` crosses because somebody asked for
+    `gen/a/b.c` -- and fmake expands the other way, over every file the
+    pattern matches, so a crossing stem *generates* an output per nested
+    file. Measured on a tree carrying both `schemas/bmp.msg` and
+    `schemas/bmp/bmp.msg`: a second rule appeared whose stem was `bmp/bmp`
+    and whose output did not compile. The suite caught it.
+
+    So the limitation stays and the silence goes."""
+	t.write("main.c", "int table_value(void);\n"
+	        "int main(void){ return table_value(); }\n")
+	t.write("proto/a/b.msg", "x\n")
+	t.write("fmake.mk", "gen/%.c: proto/%.msg\n"
+	        "\t@mkdir -p gen/a\n"
+	        '\tprintf "int table_value(void){ return 5; }\\n" > $@\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("matched no file" in out,
+	      f"a rule that generates nothing said nothing: {out}")
+	check("does not cross a directory" in out,
+	      f"the message does not say why the pattern missed: {out}")
+
+	# And a pattern that does match is silent about it.
+	u = Tree("stem-matches")
+	try:
+		u.write("main.c", "int table_value(void);\n"
+		        "int main(void){ return table_value(); }\n")
+		u.write("proto/b.msg", "x\n")
+		u.write("fmake.mk", "gen/%.c: proto/%.msg\n"
+		        "\t@mkdir -p gen\n"
+		        '\tprintf "int table_value(void){ return 5; }\\n" > $@\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the flat stem must still work: {out}")
+		check("matched no file" not in out,
+		      f"a rule that did match is being warned about: {out}")
+		check(u.run(os.path.basename(u.dir)).returncode == 5,
+		      "the generated file is not the one the rule writes")
+	finally:
+		u.cleanup()
+
+
+@case
+def makes_own_special_targets_are_not_errors(t):
+	"""`.SUFFIXES:` is in every careful Makefile and refused the file.
+
+    It carries no recipe, so it reached "rule for .SUFFIXES has no recipe"
+    -- rejecting a legal file for saying something fmake does not need to
+    hear. It has no suffix rules to disable, no default goal and its own
+    answer to a failed command, so these are ignored rather than refused.
+
+    A second recipe for one target is the other half: Make warns
+    ("overriding recipe for target") and takes the last, and taking the
+    last silently is how a rule survives a merge that duplicated it, with
+    the wrong half winning."""
+	t.write("main.c", "int table_value(void);\n"
+	        "int main(void){ return table_value(); }\n")
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.mk", ".SUFFIXES:\n\n"
+	        "gen/table.c: seed.txt\n"
+	        "\t@mkdir -p gen\n"
+	        '\tprintf "int table_value(void){ return 5; }\\n" > $@\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a legal .SUFFIXES: was refused: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 5,
+	      "the rule beside .SUFFIXES did not run")
+
+	u = Tree("two-recipes")
+	try:
+		u.write("main.c", "int table_value(void);\n"
+		        "int main(void){ return table_value(); }\n")
+		u.write("seed.txt", "seed\n")
+		u.write("fmake.mk",
+		        "gen/table.c: seed.txt\n\t@mkdir -p gen\n"
+		        '\tprintf "int table_value(void){ return 5; }\\n" > $@\n\n'
+		        "gen/table.c: seed.txt\n\t@mkdir -p gen\n"
+		        '\tprintf "int table_value(void){ return 9; }\\n" > $@\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the build failed: {out}")
+		check(out.count("a second recipe for") == 1,
+		      f"the overridden recipe was taken silently, or said more "
+		      f"than once: {out}")
+		check(u.run(os.path.basename(u.dir)).returncode == 9,
+		      "the last recipe should win, as it does in Make")
+	finally:
+		u.cleanup()
+
+
+@case
+def a_target_name_toml_must_quote_is_quoted(t):
+	"""A target is named after what roots it, and `odd.name.c` gives one
+	called `odd.name`.
+
+    Written bare, `[target.odd.name]` is a nested table and not that
+    target -- so the stanza fmake prints for somebody to paste, and the one
+    `-i` writes into fmake.toml on their behalf, configured nothing and
+    said nothing about it."""
+	t.write("a.h", "int helper(void);\n")
+	t.write("b.h", "int helper(void);\n")
+	t.write("odd.name.c", '#include "a.h"\nint main(void){ return helper(); }\n')
+	t.write("other.c", '#include "b.h"\nint main(void){ return helper() + 1; }\n')
+	t.write("a.c", "int helper(void){ return 0; }\n")
+	t.write("b.c", "int helper(void){ return 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two providers should be refused: {out}")
+	check('[target."odd.name"]' in out,
+	      f"the suggested stanza is not valid TOML for this target: {out}")
+	check("[target.odd.name]" not in out,
+	      f"the bare form is a nested table, not this target: {out}")
+	# And the ordinary name is left alone.
+	check("[target.other]" in out,
+	      f"a name TOML can write bare was quoted anyway: {out}")
+
+
+@case
 def a_doubled_dollar_is_a_dollar(t):
 	"""`$$\' in a recipe is a literal dollar, in every Makefile there is.
 
