@@ -15041,6 +15041,50 @@ def a_rust_file_that_roots_no_crate_is_not_a_program(t):
 
 
 @case
+def cargos_own_roots_are_named_as_cargos(t):
+	""""Nothing declares it with `mod\'" is true of fmake and unhelpful to
+	somebody holding a tree where the file *is* a program.
+
+    Cargo roots a crate at every .rs directly under examples/, benches/ or
+    tests/, by a rule that lives in the Cargo.toml. A reader who sees fmake
+    ignore `examples/demo.rs\' is not confused about `mod\'; they are using
+    a build system fmake does not read, and the line reads as an accusation
+    until it says whose rule is whose.
+
+    Directly under, and the discrimination is the point: `tests/common/
+    mod.rs\' is a module Cargo does not root either, so claiming it would
+    send somebody looking for a program their own build system does not
+    build."""
+	env = _rust(t)
+	t.write("src/lib.rs", "pub fn hello() -> u32 { 7 }\n")
+	t.write("examples/demo.rs", 'fn main() { println!("{}", 1); }\n')
+	t.write("tests/it.rs", "fn main() { }\n")
+	t.write("tests/common/mod.rs", "pub fn helper() {}\n")
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the library did not build: {out}")
+	check(out.count("Cargo roots one at every") == 2,
+	      f"expected the note for examples/demo.rs and tests/it.rs and "
+	      f"nothing else, got {out.count('Cargo roots one at every')}: "
+	      f"{out}")
+	check("under examples/" in out and "under tests/" in out,
+	      f"the note does not name the directory whose rule it is: {out}")
+	check("tests/common/mod.rs is reached by no crate root" in out,
+	      f"the module deeper down should still be reported as unreached: "
+	      f"{out}")
+	# The note must not be the line after that one, since Cargo does not
+	# root it either.
+	lines = out.splitlines()
+	for i, line in enumerate(lines):
+		if "tests/common/mod.rs" in line:
+			nxt = lines[i + 1] if i + 1 < len(lines) else ""
+			check("Cargo roots one at every" not in nxt,
+			      f"a module Cargo does not root is being called one of "
+			      f"its programs: {nxt}")
+
+
+@case
 def a_named_root_that_roots_no_crate_is_refused(t):
 	"""The same file reached by hand rather than by inference. A config
 	naming a module as a target's root asks fmake to compile a module on

@@ -482,7 +482,10 @@ and are never compiled separately, because a module handed to rustc on its own
 is a crate with no `main()`. A `.rs` that no root reaches is reported the way
 an unreferenced C source is — including the ones Cargo would build as programs
 of their own, in `examples/`, `benches/` and `tests/`, since what makes those
-roots is a rule in the `Cargo.toml` rather than anything in the file.
+roots is a rule in the `Cargo.toml` rather than anything in the file. Where
+the shape matches, the report says so rather than leaving "nothing declares it
+with `mod`" to read as an accusation: Cargo's rule is named as Cargo's, and
+`cargo build` is what builds those.
 
 A **crate is named for its directory**, not for the file it is rooted in.
 `lib.rs` names nothing — Cargo requires a library crate to be rooted there, so

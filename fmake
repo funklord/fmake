@@ -3802,6 +3802,26 @@ def _mod_dir(rel):
 	return os.path.join(d, stem) if d else stem
 
 
+# Where Cargo roots a crate without anything in the file saying so. The
+# rule is Cargo's and lives in the Cargo.toml: every `.rs` directly under
+# one of these is a program of its own. fmake does not read that file and
+# does not want to -- what it can do is recognise the shape well enough to
+# say whose rule the reader is holding.
+#
+# Directly under, not anywhere below: `tests/common/mod.rs` is a module
+# Cargo does *not* root, and saying otherwise would send somebody looking
+# for a program that its own build system does not build either.
+CARGO_TARGET_DIRS = ("examples", "benches", "tests")
+
+
+def cargo_target_dir(rel):
+	"""Which of Cargo's target directories holds this file, or None."""
+	parts = rel.replace(os.sep, "/").split("/")
+	if len(parts) >= 2 and parts[-2] in CARGO_TARGET_DIRS:
+		return parts[-2]
+	return None
+
+
 def crate_plan(root, srcs, scans):
 	"""Crate roots, what each draws in, and the .rs files nothing reaches.
 
@@ -9286,6 +9306,21 @@ def build(args, _bootstrapping=False):
 				note(f"{rel} is reached by no crate root: nothing declares "
 				     f"it with `mod', and only "
 				     f"{' or '.join(sorted(CRATE_ROOTS))} roots a crate")
+				# True of fmake and unhelpful to somebody holding a tree
+				# where this file *is* a program. Cargo roots a crate at
+				# every .rs directly under examples/, benches/ or tests/,
+				# by a rule that lives in the Cargo.toml -- so the reader
+				# is not confused, they are using a build system fmake
+				# does not read, and the line above reads as an accusation
+				# until it says so.
+				where = cargo_target_dir(rel)
+				if where:
+					note(f"   Cargo roots one at every .rs directly under "
+					     f"{where}/, by a rule in the Cargo.toml it does "
+					     f"not share with fmake. `cargo build' is what "
+					     f"builds these; fmake has no way to be told, "
+					     f"since a target here is named by a crate root "
+					     f"and this is not one.")
 			# The remedy names Q_INIT_RESOURCE rather than --force-link,
 			# which was what the documentation said and does not work: a
 			# .qrc is not a source file, so --force-link refuses it by

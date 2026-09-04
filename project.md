@@ -214,7 +214,8 @@ that had been green about nothing for five commits ·
 [161. Two shell contexts in one Makefile, and a rule that fits neither](#161-two-shell-contexts-in-one-makefile-and-a-rule-that-fits-neither) ·
 [162. A sweep of cross builds, and the check that closed a class it did not reach](#162-a-sweep-of-cross-builds-and-the-check-that-closed-a-class-it-did-not-reach) ·
 [163. Concurrency, and the compilers that outlived the build](#163-concurrency-and-the-compilers-that-outlived-the-build) ·
-[164. The lenses, turned on the code that came out of them](#164-the-lenses-turned-on-the-code-that-came-out-of-them)
+[164. The lenses, turned on the code that came out of them](#164-the-lenses-turned-on-the-code-that-came-out-of-them) ·
+[165. Whose rule it is, said out loud](#165-whose-rule-it-is-said-out-loud)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13645,3 +13646,48 @@ code covered one of them. That is a cheaper thing to look for than it
 sounds: **read what the comment claims, then check the claim rather than
 the code.** Both findings here were visible in a sentence somebody had
 already written.
+
+## 165. Whose rule it is, said out loud
+
+The last item on the list that was mine, and the smallest: a message that
+was true and read as an accusation.
+
+    examples/demo.rs is reached by no crate root: nothing declares it with
+    `mod', and only lib.rs or main.rs roots a crate
+
+Every word of that is true of fmake. To somebody holding a tree where that
+file **is** a program -- and it is, to Cargo, which roots a crate at every
+`.rs` directly under `examples/`, `benches/` or `tests/` -- it says their
+file is unreferenced when what is actually true is that fmake and Cargo
+disagree about what roots a crate, and Cargo's half of the disagreement
+lives in a file fmake does not read.
+
+    Cargo roots one at every .rs directly under examples/, by a rule in the
+    Cargo.toml it does not share with fmake. `cargo build' is what builds
+    these; fmake has no way to be told, since a target here is named by a
+    crate root and this is not one.
+
+**No remedy is offered because there is none to offer**, and saying so is
+the useful part. `[target.*] root` cannot take it: §150 refuses a root that
+roots no crate, which is the same fact arriving from the other side. What
+the reader can do is use the build system whose rule it is.
+
+### The discrimination is the whole of the feature
+
+`tests/common/mod.rs` gets the original line and no Cargo note. Cargo does
+not root that one either -- it is a module, one level down, compiled only
+where a test file declares `mod common;` -- so claiming it would send
+somebody looking for a program their own build system does not build. The
+rule is *directly under*, and the case asserts the absence as well as the
+two presences.
+
+### What this does not do
+
+It does not read a `Cargo.toml`, or look for one, or change what fmake
+builds. It recognises a directory layout well enough to name whose
+convention it is, which costs a sentence when the guess is wrong and buys
+back the twenty minutes somebody would spend wondering why their example is
+"unreferenced". §137 asked whether reading `[package] name` was worth an
+exception to reading no other build system's files; this is the other half
+of that answer -- **fmake can be fluent in Cargo's conventions without
+reading Cargo's files.**
