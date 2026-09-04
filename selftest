@@ -1200,6 +1200,53 @@ def a_plain_build_holds_back_every_group(t):
 
 
 @case
+def a_test_env_value_survives_ejection(t):
+	"""`NAME=value\' is assignment syntax, and quoting all of it destroys it.
+
+    The ejected recipe emitted `\'MSG=hello world\' ./test_env\' for
+    `[project] test-env = ["MSG=hello world"]\', at which point sh went
+    looking for a command of that name: `make: MSG=hello world: No such
+    file or directory\', exit 127. fmake\'s own runner passes the pair
+    correctly, so the ejected tests could not run at all where fmake\'s
+    could -- and an ejected build that cannot run its tests is the half of
+    the promise nobody notices until they have left.
+
+    Only the value may be quoted. The `$\' and the `#\' are here because a
+    recipe line is not a variable value: `$\' is doubled in both, and `#\'
+    must be escaped in one and left alone in the other, which is two rules
+    that looked like one."""
+	t.write("test_thing.c", """
+#include <stdlib.h>
+#include <string.h>
+int main(int argc, char **argv) {
+	const char *m = getenv("MSG");
+	if (!m || strcmp(m, "a $b #c d") != 0) return 1;
+	return (argc == 2 && strcmp(argv[1], "an arg") == 0) ? 0 : 2;
+}
+""")
+	t.write("fmake.toml",
+	        '[project]\ntest-env = ["MSG=a $b #c d"]\n\n'
+	        '[target.test_thing]\ntest-args = ["an arg"]\n')
+
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the live test run failed: {out}")
+
+	for backend, name, tool in (("make", "Makefile", "make"),
+	                            ("ninja", "build.ninja", "ninja")):
+		if not shutil.which(tool):
+			continue
+		e = t.fmake("--eject", backend)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write(name, e.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		b = _run_in(t.dir, tool, "test")
+		check(b.returncode == 0,
+		      f"the ejected {backend} test rule failed, so the environment "
+		      f"or the argument did not survive: {b.stdout}{b.stderr}")
+
+
+@case
 def an_ejected_build_gets_a_rule_per_group(t):
 	"""One rule per group, and `all` depends on none of them."""
 	if not shutil.which("make"):

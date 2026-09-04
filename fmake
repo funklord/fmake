@@ -9558,7 +9558,70 @@ def _mk_flag(f):
     the ejected build failed on a program the live one builds, and an
     include directory called `d$ir' became `-Idr' by the time cc saw it.
     """
-	return shlex.quote(f).replace("$", "$$").replace("#", "\\#")
+	return _mk_esc(shlex.quote(f))
+
+
+def _mk_esc(text):
+	"""Shell text, as a Makefile *variable value* reads it.
+
+    `#' starts a comment in a variable assignment and has to be escaped;
+    `$' is expanded in both contexts and has to be doubled in both.
+    """
+	return text.replace("$", "$$").replace("#", "\\#")
+
+
+def _mk_cmd(text):
+	"""Shell text, as a Makefile *recipe line* reads it.
+
+    Not the same escape, measured rather than assumed:
+
+        V = a\\#b            ->  a#b        the escape is required
+        recipe: 'x \\#y'      ->  x \\#y      the escape survives literally
+
+    A recipe line is handed to the shell with its `#' intact, so escaping
+    one there passes a backslash nobody asked for. `-DTAG="a\\#b"' reached
+    cc that way and only came out right because C treats `\\#' in a string
+    as an unknown escape and drops the backslash, with a warning to say so.
+    """
+	return text.replace("$", "$$")
+
+
+def _mk_cmd_flag(f):
+	"""One flag, as a Makefile recipe line."""
+	return _mk_cmd(shlex.quote(f))
+
+
+def _nj_esc(text):
+	"""Shell text, as a ninja command reads it."""
+	return text.replace("$", "$$")
+
+
+# A shell variable name, which is what decides whether `NAME=value' is an
+# assignment or an ordinary word.
+RE_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _sh_env(pair):
+	"""One `NAME=value' as a command prefix.
+
+    Only the value may be quoted. Quoting the whole thing defeats the
+    shell's assignment syntax, and the recipe emitted
+
+        'MSG=hello world' ./test_env
+
+    for `[project] test-env = ["MSG=hello world"]', at which point sh
+    looked for a command of that name: `make: MSG=hello world: No such
+    file or directory', exit 127. The live runner passes the same pair
+    correctly, so the ejected tests could not run at all where fmake's
+    could.
+
+    Anything that is not an assignment is quoted whole, because then it is
+    a word and was always meant to be one.
+    """
+	name, sep, value = pair.partition("=")
+	if sep and RE_ENV_NAME.match(name):
+		return f"{name}={shlex.quote(value)}"
+	return shlex.quote(pair)
 
 
 def _nj_flag(f):
@@ -9570,7 +9633,7 @@ def _nj_flag(f):
     or a space in it already worked, but a flag arrives through a plain
     variable and nothing quoted it.
     """
-	return shlex.quote(f).replace("$", "$$")
+	return _nj_esc(shlex.quote(f))
 
 
 def _mk_ident(name):
@@ -9967,9 +10030,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"{group_rule(g)}: $({group_var(g)})"
 		  + ("".join(" " + d for d in _dep) if _dep else ""))
 		for t in sorted(by_group[g], key=lambda x: x.name):
-			argv = " ".join(shlex.quote(x)
+			argv = " ".join(_mk_cmd(shlex.quote(x))
 			                for x in t.conf.get("test-args", []))
-			env = " ".join(shlex.quote(p)
+			env = " ".join(_mk_cmd(_sh_env(p))
 			               for p in test_env_pairs(conf, t, eject_bins))
 			a(f"\t{env + ' ' if env else ''}./{t.filename}"
 			  + (f" {argv}" if argv else ""))
@@ -10135,7 +10198,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# undefined variable, so every compile silently loses its flags and
 		# only a project that actually needs an -I notices.
 		var, flags = ("CXX", "CXXFLAGS") if u.cxx else ("CC", "CFLAGS")
-		own = " ".join(_eject_flags(u.own, root, _mk_flag))
+		# A recipe line rather than a variable: see _mk_cmd.
+		own = " ".join(_eject_flags(u.own, root, _mk_cmd_flag))
 		after = ([f"$({P}GENERATED)"] if gen_outs else []) \
 		        + ([f"$({P}GENHDRS)"] if genhdrs else [])
 		order_only = (" | " + " ".join(after)) if after else ""
@@ -10196,7 +10260,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t{o}" + (" \\" if i < len(objs) - 1 else ""))
 		a("")
 		res = resolutions.get(t)
-		libs = " ".join(_eject_flags(res["ldflags"], root, _mk_flag)) if res else ""
+		libs = (" ".join(_eject_flags(res["ldflags"], root, _mk_cmd_flag))
+		        if res else "")
 		driver = "CXX" if any(u.cxx for u in closures[t].link) else "CC"
 		# Vendored archives are prerequisites, so a changed one relinks, but
 		# they are named on the command line rather than taken from $^: they
@@ -10748,9 +10813,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		members = sorted(by_group[g], key=lambda x: x.name)
 		a("")
 		cmds = " && ".join(
-		    " ".join([shlex.quote(p)
+		    " ".join([_nj_esc(_sh_env(p))
 		              for p in test_env_pairs(conf, t, eject_bins)]
-		             + ["./" + " ".join(shlex.quote(x) for x in [t.filename]
+		             + ["./" + " ".join(_nj_esc(shlex.quote(x))
+		                                for x in [t.filename]
 		                                + list(t.conf.get("test-args", [])))])
 		    for t in members)
 		a(f"rule run_{_mk_ident(g)}")

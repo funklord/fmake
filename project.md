@@ -210,7 +210,8 @@ that had been green about nothing for five commits ·
 [157. The other parse §148 cleared, and the direction it fails in](#157-the-other-parse-148-cleared-and-the-direction-it-fails-in) ·
 [158. The third parse, which fails in the direction the other two were assumed to](#158-the-third-parse-which-fails-in-the-direction-the-other-two-were-assumed-to) ·
 [159. §138's message, written without the signal it was waiting for](#159-138s-message-written-without-the-signal-it-was-waiting-for) ·
-[160. An install directory that climbed out of the staging root](#160-an-install-directory-that-climbed-out-of-the-staging-root)
+[160. An install directory that climbed out of the staging root](#160-an-install-directory-that-climbed-out-of-the-staging-root) ·
+[161. Two shell contexts in one Makefile, and a rule that fits neither](#161-two-shell-contexts-in-one-makefile-and-a-rule-that-fits-neither)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13368,3 +13369,60 @@ linked the file for its own reasons, and where moving it out left nothing
 reaching the file at all. **A check that cannot fail is the default outcome
 of writing one**, and running it against the code it was written for is not
 optional.
+
+## 161. Two shell contexts in one Makefile, and a rule that fits neither
+
+A sweep of the test runner. Most of it held: a test that forks is killed
+with its whole group at the deadline and leaves nothing behind, the timeout
+message names the key that raises it, and the exit status distinguishes a
+signal from a return code. What did not hold is the same thing §154 was
+about, one layer along.
+
+### An assignment is not a word
+
+    [project]
+    test-env = ["MSG=hello world"]
+
+    ejected recipe:   'MSG=hello world' ./test_env
+    make test:        make: MSG=hello world: No such file or directory
+                      make: *** [Makefile:64: test] Error 127
+
+`shlex.quote` was applied to the whole pair, and quoting all of `NAME=value`
+destroys the shell's assignment syntax: what is left is a command name with
+a space in it. **fmake's own runner passes the pair correctly**, so the
+ejected tests could not run at all where fmake's could -- and an ejected
+build that cannot run its tests is the half of the promise nobody notices
+until they have left.
+
+Only the value is quoted now, and only where the name is one; anything else
+is a word and is quoted whole, which is what it always was.
+
+### And the escape that was right in the wrong place
+
+§154 added one Makefile escape and used it everywhere. Measured afterwards,
+there are two:
+
+    V = a\#b            ->  a#b       a variable value needs the backslash
+    recipe: 'x \#y'     ->  x \#y     a recipe keeps it, backslash and all
+
+A recipe line reaches the shell with its `#` intact, so escaping one there
+passes a character nobody asked for. `-DTAG="a#b"` from `[target.*] defines`
+became `'-DTAG="a\#b"'` on the compile line, and **only came out right
+because C treats `\#` in a string literal as an unknown escape and drops the
+backslash** -- with a warning that says so. In any other position it would
+simply have been wrong.
+
+So there are two escapes now, named for the two contexts, and the three
+recipe sites -- a file's own flags, a link's resolved libraries, and the
+test rule -- use the recipe one. `$` is doubled in both, which is the part
+that looked like one rule.
+
+### What the sweep did not find
+
+Worth the same weight as what it did. The kill path is `start_new_session`
+plus `killpg`, TERM then KILL, with a warning naming the pid if something
+survives both -- a test that forks a sleeping child leaves no process behind
+when the deadline passes, checked by name against the process table
+afterwards. `$bin(NAME)` resolves to the same relative path in both ejected
+forms and in fmake's own run, which is what makes a test that launches
+another program portable between them.
