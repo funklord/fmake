@@ -1490,9 +1490,15 @@ _RUNNING_LOCK = threading.Lock()
 def run_child(cmd, **kw):
 	"""`subprocess.run`, with the child remembered while it runs.
 
-    Only for the long ones -- compiling and linking. A probe that takes
-    milliseconds is not worth the bookkeeping, and cannot be caught in
-    flight often enough to matter.
+    For everything that can take a while: compiling, linking, moc, uic,
+    rcc, situc, and a `[generate]` rule, which runs whatever the project
+    said. The short probes -- `--version`, a trial compile -- stay on plain
+    `subprocess.run`: they cannot be caught in flight often enough to
+    matter, and the bookkeeping would be most of their cost.
+
+    The first version of this said "compiling and linking" and registered
+    only the compiles, which is the shape section 162 had recorded an hour
+    earlier: a guard written for two neighbouring cases and applied to one.
     """
 	proc = subprocess.Popen(cmd, **kw)
 	with _RUNNING_LOCK:
@@ -2053,8 +2059,9 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 		for o in outs:
 			os.makedirs(os.path.dirname(o) or root, exist_ok=True)
 		for line, ignore in lines:
-			res = subprocess.run(line, shell=True, cwd=root,
-			                     capture_output=True, text=True, errors="replace")
+			res = run_child(line, shell=True, cwd=root,
+			                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+			                text=True, errors="replace")
 			if res.stdout.strip():
 				PROGRESS.write(res.stdout)
 			if res.stderr.strip():
@@ -2651,7 +2658,9 @@ def run_rcc(root, jobs, rcc, cache, dry_run=False):
 		say(f"{YELLOW('RCC')} {src}")
 		os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
 		try:
-			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, errors="replace")
+			res = run_child(cmd, cwd=root, stdout=subprocess.PIPE,
+			                stderr=subprocess.PIPE, text=True,
+			                errors="replace")
 		except OSError as exc:
 			die(f"could not run rcc ({rcc}): {exc.strerror or exc}")
 		if res.stderr.strip():
@@ -2778,7 +2787,9 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
 		say(f"{YELLOW('MOC')} {src}")
 		os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
 		try:
-			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, errors="replace")
+			res = run_child(cmd, cwd=root, stdout=subprocess.PIPE,
+			                stderr=subprocess.PIPE, text=True,
+			                errors="replace")
 		except OSError as exc:
 			# Who chose this moc decides the advice. Where pkg-config found
 			# it, naming one is the fix; where the reader named it, saying so
@@ -2840,7 +2851,9 @@ def run_uic(root, jobs, uic, cache, dry_run=False):
 		say(f"{YELLOW('UIC')} {src}")
 		os.makedirs(os.path.dirname(abs_out) or root, exist_ok=True)
 		try:
-			res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, errors="replace")
+			res = run_child(cmd, cwd=root, stdout=subprocess.PIPE,
+			                stderr=subprocess.PIPE, text=True,
+			                errors="replace")
 		except OSError as exc:
 			die(f"could not run uic ({uic}): {exc.strerror or exc}")
 		if res.stderr.strip():
@@ -6981,7 +6994,13 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		tag = ("AR " if t.kind == "static"
 		       else cl.root.lang.tag if cl.root.crate_exe else "LD ")
 		say(f"{GREEN(tag)} {BOLD(name)}")
-	r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+	# Registered like a compile: `run_child's own docstring said "the long
+	# ones -- compiling and linking" while linking went through
+	# subprocess.run, so a signal during a big link left it running. The
+	# guard was written for two neighbouring cases and applied to one, which
+	# is the shape section 162 had just recorded about architecture.
+	r = run_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+	              text=True, errors="replace")
 	if r.stderr.strip():
 		# A missing library produces one linker line per call site, which
 		# buries everything else. fmake already knows the unresolved symbols
@@ -8849,6 +8868,8 @@ def build(args, _bootstrapping=False):
 	unprovided = set()
 	# Files whose architecture is why a symbol is missing.
 	blamed_arch = set()
+	# Generated files that were declined and that define what is missing.
+	blamed_generated = set()
 
 	trouble = [(t, sym, providers) for t, cl in closures.items()
 	           for sym, providers in cl.ambiguous]
@@ -9436,6 +9457,18 @@ def build(args, _bootstrapping=False):
 					     f"above: it is {what}, and this build is not")
 					named = True
 					blamed_arch.add(rel)
+			# The third category of "set aside", and the one that was still
+			# ending in --ldflags: a generated file fmake declined because
+			# it runs that generator itself. It was named eight lines
+			# earlier and then a library was offered for what it defines.
+			for rel in sorted(declined_generated):
+				if toks.intersection(scans.get(rel, {}).get("defs") or []):
+					note(f"{rel} defines one of them and was not compiled: "
+					     f"it is output from the "
+					     f"{scans[rel].get('genby') or 'generator'}, which "
+					     f"fmake runs itself")
+					named = True
+					blamed_generated.add(rel)
 			for rel, why in sorted(excluded.items()):
 				if toks.intersection(scans.get(rel, {}).get("defs") or []):
 					note(f"{rel} is excluded ({why}) and appears to define "
@@ -9522,6 +9555,16 @@ def build(args, _bootstrapping=False):
 			# Every failure here was rustc's, and rustc has already said
 			# what was wrong in its own words.
 			pass
+		elif blamed_generated:
+			# The remedy is upstream of the link. fmake generates that
+			# output from a header in this tree, so a class it cannot see
+			# declared is a class nothing will generate for -- and no
+			# package defines it either, which is what --ldflags would have
+			# sent the reader after.
+			note("fmake generates that output itself, from a header here "
+			     "declaring Q_OBJECT -- so either no header declares this "
+			     "class, or the one that does spells Q_OBJECT through "
+			     "another macro. A library will not supply it.")
 		elif blamed_arch:
 			# --ldflags is advice about a library, and what defines this is
 			# already here -- for another machine. Naming a package would

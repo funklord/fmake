@@ -2757,6 +2757,71 @@ exit $rc
 			except (OSError, ValueError):
 				pass
 
+	# The link is the other long job, and the first version of the registry
+	# said "compiling and linking" while registering only the compiles --
+	# the same shape as an architecture check that covered archives and not
+	# loose objects. The stand-in is slow for a link and fast for
+	# everything else, so what gets interrupted is the link and not a
+	# configuration probe, which is how the first measurement of this went
+	# wrong.
+	u = Tree("interrupt-link")
+	try:
+		lmarks = os.path.join(u.dir, "running")
+		os.makedirs(lmarks, exist_ok=True)
+		lshim = u.write("cc-linkslow", f"""#!/bin/sh
+slow=no
+for a in "$@"; do
+  case "$a" in *.o) slow=yes ;; -c) slow=no; break ;; esac
+done
+[ "$slow" = yes ] || exec {shutil.which("cc")} "$@"
+: > "{lmarks}/$$"
+sleep 6
+{shutil.which("cc")} "$@"
+rc=$?
+rm -f "{lmarks}/$$"
+exit $rc
+""")
+		os.chmod(lshim, 0o755)
+		u.write("main.c", "int main(void){ return 0; }\n")
+		lenv = dict(os.environ, CC=lshim)
+		for name in ("CFLAGS", "LDFLAGS", "DEBUG", "SANITIZE"):
+			lenv.pop(name, None)
+		lp = subprocess.Popen([sys.executable, FMAKE, "-C", u.dir],
+		                      stdout=subprocess.DEVNULL,
+		                      stderr=subprocess.DEVNULL, env=lenv)
+		try:
+			pids = []
+			for _ in range(80):
+				pids = os.listdir(lmarks)
+				if pids:
+					break
+				time.sleep(0.25)
+			check(pids, "the link never started, so nothing was interrupted")
+			lp.send_signal(signal.SIGTERM)
+			lp.wait(timeout=30)
+			deadline = time.time() + 5
+			def alive(pid):
+				try:
+					os.kill(int(pid), 0)
+				except (OSError, ValueError):
+					return False
+				return True
+			while time.time() < deadline and any(alive(p) for p in pids):
+				time.sleep(0.25)
+			left = [p for p in pids if alive(p)]
+			check(not left,
+			      f"fmake exited and left the link running: {left}")
+		finally:
+			if lp.poll() is None:
+				lp.kill()
+			for p in os.listdir(lmarks):
+				try:
+					os.kill(int(p), signal.SIGKILL)
+				except (OSError, ValueError):
+					pass
+	finally:
+		u.cleanup()
+
 
 @case
 def one_failed_target_does_not_sink_the_rest(t):
@@ -8439,6 +8504,49 @@ def a_symbol_nothing_here_defines_gets_both_explanations(t):
 		      f"just named as defining it: {said}")
 	finally:
 		u.cleanup()
+
+
+@case
+def a_declined_generated_file_is_not_a_missing_library(t):
+	"""Widening declines another build\'s moc output, and then the failure
+	offered --ldflags for what that file defines.
+
+    Section 151 taught fmake to leave a `moc_*.cpp\' it did not generate
+    alone, and to say so. Where that file is the *only* thing defining the
+    symbol, the link fails -- correctly -- and the summary went on to
+    suggest a library, eight lines after naming the file and explaining
+    why it was skipped. Third instance of one shape: a provider fmake set
+    aside deliberately, and an ending that recommends a package instead of
+    the thing that was set aside. The other two were an excluded file and
+    one of the wrong architecture.
+
+    The remedy is upstream of the link, which is why the ending is not
+    about libraries at all: fmake generates that output from a header here
+    declaring Q_OBJECT, so a class no header declares is a class nothing
+    will generate for."""
+	t.write("main.cpp", """
+struct alpha { int qt_metacall(int); };
+int main() { return alpha().qt_metacall(0); }
+""")
+	t.write("leftover/moc_alpha.cpp", MOC_BANNER % "alpha" + """
+struct alpha { int qt_metacall(int); };
+
+int alpha::qt_metacall(int x) { return x; }
+""")
+
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"this cannot link: {said}")
+	check("moc_alpha.cpp defines one of them and was not compiled" in said,
+	      f"the declined file is not connected to the missing symbol: "
+	      f"{said}")
+	tail = said.strip().splitlines()[-1]
+	check("--ldflags" not in tail,
+	      f"the last line offers a library for a symbol whose provider "
+	      f"fmake declined on purpose: {tail}")
+	check("Q_OBJECT" in tail,
+	      f"the ending does not name what would actually generate it: "
+	      f"{tail}")
 
 
 @case

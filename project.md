@@ -213,7 +213,8 @@ that had been green about nothing for five commits ·
 [160. An install directory that climbed out of the staging root](#160-an-install-directory-that-climbed-out-of-the-staging-root) ·
 [161. Two shell contexts in one Makefile, and a rule that fits neither](#161-two-shell-contexts-in-one-makefile-and-a-rule-that-fits-neither) ·
 [162. A sweep of cross builds, and the check that closed a class it did not reach](#162-a-sweep-of-cross-builds-and-the-check-that-closed-a-class-it-did-not-reach) ·
-[163. Concurrency, and the compilers that outlived the build](#163-concurrency-and-the-compilers-that-outlived-the-build)
+[163. Concurrency, and the compilers that outlived the build](#163-concurrency-and-the-compilers-that-outlived-the-build) ·
+[164. The lenses, turned on the code that came out of them](#164-the-lenses-turned-on-the-code-that-came-out-of-them)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13560,3 +13561,87 @@ None of those would have failed loudly; each produced a plausible number.
 The one that settled it names three pids, signals fmake by pid, and asks
 each of the three whether it is alive -- which is the shape the case now
 has.
+
+## 164. The lenses, turned on the code that came out of them
+
+Everything from §150 onward was written in one day, by the hand that had
+just recorded the shapes, and §149 is the standing warning about exactly
+that: *the entry describing a shape is not protection against it.* So the
+lenses were pointed back at it deliberately.
+
+Two of the seven found something, both in code less than a day old, and
+both are the same lens: **a guard written for two neighbouring cases and
+applied to one.**
+
+### A registry that named two jobs and held one
+
+§163's `run_child` says in its own docstring "only for the long ones --
+compiling and linking". It registered the compiles. The link went on
+through plain `subprocess.run`, so a signal during a link -- which for a
+big program is the longest single step there is -- left it running.
+
+Written an hour after §162, which is the same sentence about architecture:
+archives were screened and loose objects were not.
+
+The generators were the other half of the same omission: moc, uic, rcc,
+situc and a `[generate]` rule can each take as long as a compile, and a
+`[generate]` rule runs whatever the project wrote. All registered now, and
+the docstring says what is deliberately left out -- the sub-second probes,
+where the bookkeeping would be most of the cost.
+
+### A third provider set aside, and an ending that still said "library"
+
+§151 taught fmake to decline another build's moc output and to say so.
+§159 taught the summary to stop offering `--ldflags` where nothing defines
+the symbol. Where the *declined* file is the only definition, both were
+right and the ending was still wrong:
+
+    * lens1 did not link
+      no x86_64/64le library exports: _ZN5alpha11qt_metacallEi
+      name the missing libraries with --ldflags, or build only the targets
+      you want
+
+-- eight lines after naming that file and explaining why it was skipped.
+§159's ending did not fire, because `unprovided` asks whether any *scanned
+source* defines the symbol and the declined file is a scanned source. Every
+piece of the reasoning was right and the answer was the one sentence that
+sends the reader to install a package.
+
+That is the third category of "set aside" to reach this summary, after an
+excluded file (§159) and one of the wrong architecture (§162). The ending
+now names what would actually produce it:
+
+    leftover/moc_alpha.cpp defines one of them and was not compiled: it is
+    output from the Qt Meta Object Compiler, which fmake runs itself
+    fmake generates that output itself, from a header here declaring
+    Q_OBJECT -- so either no header declares this class, or the one that
+    does spells Q_OBJECT through another macro. A library will not supply
+    it.
+
+### The five that found nothing, and why that is worth the space
+
+- **Keying** (§149): `arch_declined`, `blamed_broken`, `declined_generated`
+  are all keyed by path and asked about paths; the one collection keyed by
+  unit still uses `Unit.key`.
+- **Direction of a mis-parse** (§156-158): the new parses are
+  `RE_DIAG_LINE`, `generated_by`, `_sh_env` and `MAKE_SAFE`. A wrong answer
+  from any of them is loud -- a refusal, a file compiled that need not have
+  been, or a group that does not collapse.
+- **A guard that tests something adjacent** (§147): the new guards test the
+  thing itself -- a banner in the file, a character in the path, an ELF
+  header.
+- **A check that cannot fail** (§147): every case added since §150 was run
+  against the commit before it. Three failed to fail on their first draft
+  and were rewritten; that is recorded in §157 and §160.
+- **Two contexts, one escaper** (§161): `_mk_esc` and `_mk_cmd` are now
+  separate, and ninja's two are `_ninja` for paths and `_nj_esc` for
+  command text.
+
+### What the exercise says
+
+The lens that paid out twice is the one about *neighbouring* cases, and
+both times the neighbour was named in the code's own docstring while the
+code covered one of them. That is a cheaper thing to look for than it
+sounds: **read what the comment claims, then check the claim rather than
+the code.** Both findings here were visible in a sentence somebody had
+already written.
