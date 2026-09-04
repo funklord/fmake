@@ -211,7 +211,8 @@ that had been green about nothing for five commits ·
 [158. The third parse, which fails in the direction the other two were assumed to](#158-the-third-parse-which-fails-in-the-direction-the-other-two-were-assumed-to) ·
 [159. §138's message, written without the signal it was waiting for](#159-138s-message-written-without-the-signal-it-was-waiting-for) ·
 [160. An install directory that climbed out of the staging root](#160-an-install-directory-that-climbed-out-of-the-staging-root) ·
-[161. Two shell contexts in one Makefile, and a rule that fits neither](#161-two-shell-contexts-in-one-makefile-and-a-rule-that-fits-neither)
+[161. Two shell contexts in one Makefile, and a rule that fits neither](#161-two-shell-contexts-in-one-makefile-and-a-rule-that-fits-neither) ·
+[162. A sweep of cross builds, and the check that closed a class it did not reach](#162-a-sweep-of-cross-builds-and-the-check-that-closed-a-class-it-did-not-reach)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13426,3 +13427,67 @@ when the deadline passes, checked by name against the process table
 afterwards. `$bin(NAME)` resolves to the same relative path in both ejected
 forms and in fmake's own run, which is what makes a test that launches
 another program portable between them.
+
+## 162. A sweep of cross builds, and the check that closed a class it did not reach
+
+Most of it held, and the negatives are worth as much as the finding: a plain
+cross build produces an aarch64 binary from an unannotated tree, host and
+cross objects live in separate directories keyed by the toolchain and neither
+disturbs the other across three alternating builds, the host's zlib is not
+offered to a cross link, and a host archive left in the tree is named and set
+aside with the reason.
+
+### The archive's own comment describes the case it did not cover
+
+    a host archive left in the tree during a cross build reads perfectly
+    well -- binutils nm will happily list symbols from a foreign object --
+    so it is offered, chosen, and then refused by the linker with `file in
+    wrong format', which names neither architecture nor whose decision it
+    was.
+
+A `.o` named in `@sources` is that sentence exactly, and nothing screened
+it:
+
+    /usr/lib/gcc-cross/.../ld: hostobj.o: Relocations in generic ELF (EM: 62)
+    ld: hostobj.o: error adding symbols: file in wrong format
+
+    * cross3 did not link
+      name the missing libraries with --ldflags, or build only the targets
+      you want
+
+Advice about a library, for a link that failed over a file fmake was told to
+use. **`check_object_arch` claims to close this class** -- "this closes the
+class, because the next one will be a compiler named by hand, a `[toolchain]
+arch` that does not match the `cc`, or a `$CXX` left over in a shell" -- and
+it asks only about objects fmake compiled itself. The archives had their own
+check, ten lines away, doing the right thing for the neighbouring case.
+
+Both are vetted together now, and both say the same thing.
+
+### And the summary was contradicting the warning above it
+
+    * libhost.a is x86_64/64le, but this build is aarch64/64le
+      not using it; anything it defines will be reported as missing
+    ...
+    * cross4 did not link
+      no aarch64/64le library exports: helper
+      nothing in this tree appears to define them either      <- eight lines later
+
+§159 added that sentence and asked the right question of the wrong sources:
+an archive set aside for its architecture is not in `srcs`, so a scan over
+the tree's sources cannot see it, and the message said nothing defines what
+the warning had just said something defines. Same shape as §159's own first
+draft, which could not see an *excluded* file for the same reason -- twice
+now, and the lesson is that "nothing in this tree defines it" has to be
+asked of everything fmake set aside, not of the sources alone.
+
+    hostobj.o defines one of them and was set aside above: it is
+    x86_64/64le, and this build is not
+    build it for this architecture, or keep it out of this build with
+    [project] exclude -- what defines the symbol is in this tree and is
+    for another machine, so no library will supply it
+
+The ending changed with it. `--ldflags` names a package, and what defines
+the symbol is already here; sending the reader to install something they
+have is §31's shape, which this file has now corrected in four separate
+messages.

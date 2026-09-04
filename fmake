@@ -8443,6 +8443,11 @@ def build(args, _bootstrapping=False):
 	# Generated files widening was offered and turned down. Kept so the
 	# report at the end does not give them a second, wrong reason.
 	declined_generated = set()
+	# What was set aside for having the wrong architecture: rel -> (what it
+	# is, what it defines). Filled while the pool is vetted, and read by the
+	# failure summary, which would otherwise contradict the warning that put
+	# it there.
+	arch_declined = {}
 	closures = {}
 	target_ident, vetted = None, False
 	# Computed once, over every source in the tree rather than over the
@@ -8503,18 +8508,31 @@ def build(args, _bootstrapping=False):
 		# symbols from a foreign object -- so it is offered, chosen, and then
 		# refused by the linker with `file in wrong format`, which names
 		# neither architecture nor whose decision it was.
-		if archives and not vetted:
-			vetted, keep = True, []
-			for a in archives:
+		# A named `.o' is the same sentence and was not covered by it. It
+		# reaches ld, which says `file in wrong format' about a path under
+		# .fmake and names neither architecture -- and fmake then offered
+		# --ldflags, which is advice about a library for a link that failed
+		# over an object it was told to use. Measured on a cross build with
+		# a host object in @sources. `check_object_arch' claims to close
+		# this class and asks only about objects fmake compiled itself.
+		if (archives or prebuilt) and not vetted:
+			vetted = True
+			keep_a, keep_p = [], []
+			for a in archives + prebuilt:
 				got = elf_identity(a.obj)
 				if target_ident and got and got != target_ident:
 					warn(f"{a.rel} is {describe_identity(got)}, but this "
 					     f"build is {describe_identity(target_ident)}")
 					note("not using it; anything it defines will be reported "
 					     "as missing")
+					# Kept so the failure below does not then say nothing
+					# here defines them, eight lines after naming what
+					# does.
+					arch_declined[a.rel] = (describe_identity(got),
+					                        set(a.strong) | set(a.weak))
 					continue
-				keep.append(a)
-			archives = keep
+				(keep_a if a.archive else keep_p).append(a)
+			archives, prebuilt = keep_a, keep_p
 		pool = pool + archives + prebuilt
 
 		# confirm main() against the symbol tables now that objects exist
@@ -8765,6 +8783,8 @@ def build(args, _bootstrapping=False):
 	blamed_broken = set()
 	# Symbols no library exports and nothing in the tree appears to define.
 	unprovided = set()
+	# Files whose architecture is why a symbol is missing.
+	blamed_arch = set()
 
 	trouble = [(t, sym, providers) for t, cl in closures.items()
 	           for sym, providers in cl.ambiguous]
@@ -9346,6 +9366,12 @@ def build(args, _bootstrapping=False):
 			for s in missing:
 				toks |= symbol_tokens(s)
 			named = False
+			for rel, (what, syms) in sorted(arch_declined.items()):
+				if syms.intersection(missing):
+					note(f"{rel} defines one of them and was set aside "
+					     f"above: it is {what}, and this build is not")
+					named = True
+					blamed_arch.add(rel)
 			for rel, why in sorted(excluded.items()):
 				if toks.intersection(scans.get(rel, {}).get("defs") or []):
 					note(f"{rel} is excluded ({why}) and appears to define "
@@ -9432,6 +9458,14 @@ def build(args, _bootstrapping=False):
 			# Every failure here was rustc's, and rustc has already said
 			# what was wrong in its own words.
 			pass
+		elif blamed_arch:
+			# --ldflags is advice about a library, and what defines this is
+			# already here -- for another machine. Naming a package would
+			# send the reader to install something they have.
+			note("build it for this architecture, or keep it out of this "
+			     "build with [project] exclude -- what defines the symbol "
+			     "is in this tree and is for another machine, so no library "
+			     "will supply it")
 		elif unprovided:
 			# Both explanations, because fmake has ruled out neither and
 			# saying only the first is what sent one project looking for a

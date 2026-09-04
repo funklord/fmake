@@ -3979,6 +3979,80 @@ def cross_refuses_host_libraries(t):
 
 
 @case
+def a_prebuilt_object_of_the_wrong_architecture_is_named(t):
+	"""An archive was screened for architecture and a loose object was not.
+
+    The comment on the archive check says why it exists: a host file left
+    in a tree during a cross build "is offered, chosen, and then refused by
+    the linker with `file in wrong format\', which names neither
+    architecture nor whose decision it was". A `.o\' named in @sources is
+    that same sentence, and it reached ld -- which said `Relocations in
+    generic ELF (EM: 62)\' about a path under .fmake, after which fmake
+    offered --ldflags: advice about a library, for a link that failed over
+    a file it had been told to use.
+
+    `check_object_arch\' claims to close this class and asks only about
+    objects fmake compiled itself.
+
+    The ending matters as much as the note. What defines the symbol is in
+    the tree and is for another machine, so no package supplies it and
+    naming one sends the reader to install something they have."""
+	if not _cross_available():
+		raise Skip(_cross_reason())
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+	host = subprocess.run(["cc", "-c", os.path.join(t.dir, "helper.c"),
+	                       "-o", os.path.join(t.dir, "hostobj.o")],
+	                      capture_output=True, text=True)
+	check(host.returncode == 0, f"could not build a host object: {host.stderr}")
+	os.remove(os.path.join(t.dir, "helper.c"))
+	t.write("main.c", "/*! @sources hostobj.o */\n"
+	        "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\n'
+	        'arch = "aarch64"\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"this cannot link: {out}")
+	check("hostobj.o is x86_64" in out or "hostobj.o is " in out,
+	      f"the object of the wrong architecture is not named: {out}")
+	check("hostobj.o defines one of them" in out,
+	      f"the failure does not connect the missing symbol to the file "
+	      f"that defines it: {out}")
+	tail = out.strip().splitlines()[-1]
+	check("--ldflags" not in tail,
+	      f"the last line still offers a library for a symbol this tree "
+	      f"defines for another machine: {tail}")
+
+	# And the archive it was modelled on keeps saying so too, including in
+	# the summary, which used to end "nothing in this tree appears to
+	# define them either" eight lines after naming what does.
+	u = Tree("host-archive")
+	try:
+		u.write("h.c", "int helper(void){ return 0; }\n")
+		obj = os.path.join(u.dir, "h.o")
+		subprocess.run(["cc", "-c", os.path.join(u.dir, "h.c"), "-o", obj],
+		               capture_output=True)
+		subprocess.run(["ar", "rcs", os.path.join(u.dir, "libhost.a"), obj],
+		               capture_output=True)
+		os.remove(os.path.join(u.dir, "h.c"))
+		os.remove(obj)
+		u.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper(); }\n")
+		u.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\n'
+		        'arch = "aarch64"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"this cannot link either: {out}")
+		check("libhost.a defines one of them" in out,
+		      f"the archive was set aside without the failure saying so: "
+		      f"{out}")
+		check("nothing in this tree appears to define them" not in out,
+		      f"the summary contradicts the warning above it: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def cross_rejects_wrong_architecture_libraries(t):
 	"""The architecture check itself, pointed straight at host libraries.
 
