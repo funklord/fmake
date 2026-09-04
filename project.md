@@ -212,7 +212,8 @@ that had been green about nothing for five commits ·
 [159. §138's message, written without the signal it was waiting for](#159-138s-message-written-without-the-signal-it-was-waiting-for) ·
 [160. An install directory that climbed out of the staging root](#160-an-install-directory-that-climbed-out-of-the-staging-root) ·
 [161. Two shell contexts in one Makefile, and a rule that fits neither](#161-two-shell-contexts-in-one-makefile-and-a-rule-that-fits-neither) ·
-[162. A sweep of cross builds, and the check that closed a class it did not reach](#162-a-sweep-of-cross-builds-and-the-check-that-closed-a-class-it-did-not-reach)
+[162. A sweep of cross builds, and the check that closed a class it did not reach](#162-a-sweep-of-cross-builds-and-the-check-that-closed-a-class-it-did-not-reach) ·
+[163. Concurrency, and the compilers that outlived the build](#163-concurrency-and-the-compilers-that-outlived-the-build)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -13491,3 +13492,71 @@ The ending changed with it. `--ldflags` names a package, and what defines
 the symbol is already here; sending the reader to install something they
 have is §31's shape, which this file has now corrected in four separate
 messages.
+
+## 163. Concurrency, and the compilers that outlived the build
+
+Swept against my own advice. I had said a negative result here would be
+worth less than the effort, because the honest experiments are racy. Two of
+the three were negatives and the third was not, which is the answer to that
+argument rather than a point against it.
+
+### What held
+
+**The tree lock.** Two builds started 0.3s apart in one tree: the second
+printed `waiting for another fmake in this tree`, waited, and then found the
+target up to date. One binary, both exit 0.
+
+**The cache under a lock.** `save()` writes a temporary file and renames it,
+so a reader sees the old file or the new one and never a half-written one --
+and the writers are serialised by the lock in any case.
+
+### What did not
+
+`kill -TERM` on fmake alone, three compilers in flight:
+
+    fmake gone
+      child 23507 STILL ALIVE
+      child 23508 STILL ALIVE
+      child 23509 STILL ALIVE
+    objects written after fmake exited: 3
+
+**Interactively this never shows.** Ctrl-C goes to the terminal's foreground
+process group, which is fmake and its children together, so the case that
+bites is every other way a build is stopped: a supervisor, an IDE's stop
+button, a CI timeout signalling the process it started, a `kill` from a
+script.
+
+The wasted CPU is not the cost. **An orphan writing `foo.c.o` while the next
+run compiles the same file to the same path is two writers on one output**,
+and gcc writes its object in place rather than by rename. The tree lock does
+not help: the orphan holds nothing.
+
+### The fix, and the one thing it must not do
+
+A registry of the children fmake starts for the long jobs, and a handler on
+SIGINT and SIGTERM that terminates them, waits, kills what is left, and then
+re-raises the signal with the default handler restored so the exit status is
+the signal's own.
+
+**Not `killpg`.** fmake's process group may be a Makefile recipe's, and a
+build tool that kills the `make` invoking it has replaced a leak with
+something far worse. Each child is signalled by pid, which is exactly the
+set fmake started and nothing else.
+
+    with the fix:   fmake gone / child 20100 gone / 20102 gone / 20104 gone
+
+### The measurement took four attempts, and each wrong one looked right
+
+- Killing `$!` killed a `timeout` wrapper, which puts its child in its own
+  group and forwards the signal to all of it -- so everything died, for the
+  wrong reason.
+- `pgrep -f cc-slow` matched the case's own shell, whose command line
+  contains the string.
+- A first stand-in slept on *every* invocation, including the configuration
+  probes, so the kill landed during a probe and only one child existed.
+- Counting marker files rather than pids read a previous run's leftovers.
+
+None of those would have failed loudly; each produced a plausible number.
+The one that settled it names three pids, signals fmake by pid, and asks
+each of the three whether it is alive -- which is the shape the case now
+has.

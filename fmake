@@ -116,6 +116,7 @@ import re
 import shlex
 import shutil
 import signal
+import threading
 import subprocess
 import time
 import sys
@@ -1469,6 +1470,68 @@ def phony_rules(root):
 			for target in r["outputs"]:
 				out[target] = r
 	return out
+
+
+# Compiles and links in flight, so that a signal can reach them. Measured:
+# `kill -TERM` on fmake alone left its three compilers running, and they
+# finished and wrote objects into the state directory *after* fmake had
+# exited. Interactively that never shows -- Ctrl-C goes to the terminal's
+# foreground group, which is fmake and its children together -- so what is
+# left is every other way a build is stopped: a supervisor, an IDE's stop
+# button, a CI timeout that signals the process it started.
+#
+# The cost is not the wasted CPU. An orphan writing `foo.c.o' while the
+# next run compiles the same file to the same path is two writers on one
+# output, and gcc writes its object in place rather than by rename.
+_RUNNING = set()
+_RUNNING_LOCK = threading.Lock()
+
+
+def run_child(cmd, **kw):
+	"""`subprocess.run`, with the child remembered while it runs.
+
+    Only for the long ones -- compiling and linking. A probe that takes
+    milliseconds is not worth the bookkeeping, and cannot be caught in
+    flight often enough to matter.
+    """
+	proc = subprocess.Popen(cmd, **kw)
+	with _RUNNING_LOCK:
+		_RUNNING.add(proc)
+	try:
+		out, err = proc.communicate()
+	finally:
+		with _RUNNING_LOCK:
+			_RUNNING.discard(proc)
+	return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def stop_children(signum, _frame):
+	"""Take the compilers with us, then die of the same signal.
+
+    Not `killpg`: fmake's process group may be a Makefile recipe's, and a
+    build tool that kills the make invoking it is worse than the leak. Each
+    child is signalled by pid, which is exactly the set fmake started.
+
+    The handler is restored to the default before re-raising, so the exit
+    status is the signal's own and nothing here has to invent one.
+    """
+	with _RUNNING_LOCK:
+		procs = list(_RUNNING)
+	for proc in procs:
+		try:
+			proc.terminate()
+		except OSError:
+			pass
+	for proc in procs:
+		try:
+			proc.wait(timeout=2)
+		except (subprocess.TimeoutExpired, OSError):
+			try:
+				proc.kill()
+			except OSError:
+				pass
+	signal.signal(signum, signal.SIG_DFL)
+	os.kill(os.getpid(), signum)
 
 
 def _kill_group(proc):
@@ -4820,7 +4883,8 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		if dry_run:
 			print(" ".join(cmd))
 			return u, 0, ""
-		r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+		r = run_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+		              text=True, errors="replace")
 		return u, r.returncode, r.stderr
 
 	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -11848,6 +11912,13 @@ def main(argv):
 
 
 if __name__ == "__main__":
+	# Before anything is started, so that a signal arriving during the first
+	# compile finds a handler rather than the default.
+	for _sig in (signal.SIGINT, signal.SIGTERM):
+		try:
+			signal.signal(_sig, stop_children)
+		except (ValueError, OSError):
+			pass
 	try:
 		sys.exit(main(sys.argv[1:]))
 	except KeyboardInterrupt:
