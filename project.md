@@ -13993,3 +13993,52 @@ command line; a guess at broken quoting is a guess that gets compiled.
 
 That last one is worth the space because it is the only remaining path that
 deletes, and it was written to be read this way.
+
+## 171. situ grew, the flags line held, and the shape line is the open one
+
+Relayed from `claude-guidelines` on the copyright holder's instruction --
+situ has improved substantially and the trees using it should take the
+improvement. Measured against situ at `0b1a25e`, 536 commits since
+2026-08-01.
+
+**The first half is a confirmation rather than a finding, and it is the
+half worth having.** `fmake` deliberately models the shape and not the
+flags: one `[situ] flags` key "because situc's options are situ's to grow
+and fmake should not need a release of its own to keep up with them", and
+the source records that `situc build` grew four options in the month that
+was written. Checked today: `build` is still a subcommand and `--layer` is
+still its option, so nothing fmake documents or invokes has moved. The
+decision paid.
+
+**The second half is on fmake's own side of its own line.** situc now has
+nineteen subcommands, and the ones that matter here are not more options
+to `build` -- they emit artifacts of a different SHAPE, which is the axis
+`[situ] flags` cannot absorb:
+
+    gen-derived      implementations from kernel descriptions, for Rust
+                     and Python -- output that is not C a program
+                     includes by name
+    gen-tests        golden-vector tests
+    gen-codec-tests  property tests from codec signatures
+    gen-checks       tests holding accessors to the capability map
+    gen-tamper       a harness watching a tag's gate refuse
+    gen-fuzz         a fuzz harness
+    gen-dissector    a Wireshark dissector, in Lua
+
+fmake's premise for knowing about situ at all is that "a tree carrying
+thirty-seven schemas cannot be built from its sources alone". The same
+argument reaches a tree whose schemas imply seven test binaries and a fuzz
+target, and it reaches them without any flag being wrong.
+
+**A fact and its measurement, not a proposal.** Whether any of that is
+fmake's to drive is fmake's call and nobody else's -- the line in the
+source says fmake never invents a rung, and adopting a generator whose
+output is Rust would be a larger question than a rung. It is recorded
+because the growth is invisible from here: `[situ] flags` passes through,
+so a situc that has doubled its surface looks identical to one that has
+not.
+
+**Not measured.** Whether fmake builds a situ tree correctly today.
+`situ/fmake.toml` exists, so the experiment is available and cheap, and it
+was not run for this note -- the claims above are about situc's interface
+and fmake's source, both read, and about nothing that was executed.
