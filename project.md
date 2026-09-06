@@ -14554,6 +14554,28 @@ silent: `objsets.py` reads fmake's stderr when the status is non-zero,
 and the status is non-zero. The stderr names the file, which is the one
 datum nobody has.
 
+**An empty link set is not this shape, and the two are worth telling
+apart.** hydra regenerated `objsets.mk` afterwards and found two
+programs with empty sets -- `try_frame` and `try_mse` -- and offered them
+as possibly the same fault on a current binary. They are not. fmake's
+answer for each is one object:
+
+    FM_TRY_FRAME_OBJS = \
+            $(FM_BUILD_DIR)/test/live/try_frame.cpp.o
+
+which is the correct set for a self-contained program. The emptiness
+arrives a layer later, in their `translate()`, which returns None for the
+program's own object because their link rule already names it first. So
+an empty `OBJS_` there means *this driver needs no object but itself*.
+
+**The distinguishing check is the block, not the list.** A dropped target
+emits no `FM_<NAME>_OBJS` at all, which is what their `missing` list
+catches and what §177 reported; a block that is present and translates to
+nothing is a self-contained driver. Their generator already separates the
+two, which is why one arrived as an error and the other as a quiet
+variable. The new status names only the first, and naming the second
+would be a false finding in a generator somebody runs on a schedule.
+
 **Not measured.** Why those five, in that tree, on that day. It needs
 the working tree as it was, and that is hydra's to hold rather than
 this project's to guess at.
