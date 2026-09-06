@@ -220,7 +220,10 @@ that had been green about nothing for five commits ·
 [167. The rest of the Makefile forms, and a dollar that became a process id](#167-the-rest-of-the-makefile-forms-and-a-dollar-that-became-a-process-id) ·
 [168. Both parsers finished: four more in fmake.mk, one in the TOML](#168-both-parsers-finished-four-more-in-fmakemk-one-in-the-toml) ·
 [169. Quoting is not escaping, and the fix was an hour old](#169-quoting-is-not-escaping-and-the-fix-was-an-hour-old) ·
-[170. The last three surfaces: one finding, and the rest holding](#170-the-last-three-surfaces-one-finding-and-the-rest-holding)
+[170. The last three surfaces: one finding, and the rest holding](#170-the-last-three-surfaces-one-finding-and-the-rest-holding) ·
+[171. situ grew, the flags line held, and the shape line is the open one](#171-situ-grew-the-flags-line-held-and-the-shape-line-is-the-open-one) ·
+[172. The ejected exe-crate rule mkdirs the wrong directory](#172-the-ejected-exe-crate-rule-mkdirs-the-wrong-directory) ·
+[173. §172 fixed, and three more in the crate path](#173-172-fixed-and-three-more-in-the-crate-path)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14094,11 +14097,11 @@ contents. **A clean that removes only files hides a build that cannot run
 from clean** -- which is the same defect wearing the reported symptom's
 clothes, from the other side.
 
-**Not fixed here, and the fix is not `$(@D)`.** For this rule `$@` is the
-binary, whose directory is usually the tree root, so `$(@D)` would create
-the wrong thing again. What wants creating is the depfile's directory.
-That is fmake's call rather than a caller's, which is why this is written
-here rather than patched.
+**~~Not fixed here~~, and the fix is not `$(@D)`.** Closed; see §173. For
+this rule `$@` is the binary, whose directory is usually the tree root, so
+`$(@D)` would create the wrong thing again. What wants creating is the
+depfile's directory. That is fmake's call rather than a caller's, which is
+why this is written here rather than patched.
 
 **Measured, not inferred, and the audit around it came up empty
 otherwise.** The full build-clean-rebuild cycle was run on ejected
@@ -14107,3 +14110,103 @@ minimal Qt project with one `Q_OBJECT` header: every file the build
 created was removed by `clean` in all three, and the rebuild recompiled
 everything. The Rust path is the one that broke, and it broke on the
 build rather than on the clean.
+
+## 173. §172 fixed, and three more in the crate path
+
+The mkdir, then what asking why it was wrong turned up. Each fix was
+reverted afterwards and the case watched going red through its own
+assertion, so none of the four is recorded on the strength of a green
+suite alone.
+
+**The fix is the depfile's directory, and it is derived rather than
+written.** §172 said the mkdir is not `$(@D)`, because `$@` is the
+program and the program goes in the tree root. What wants creating is
+the directory of the *other* file the recipe writes, so the recipe now
+emits the depfile path once and asks make for its directory:
+
+    demo: src/main.rs src/helper.rs
+    	@mkdir -p $(dir $(BUILD_DIR)/src/main.rs.d)
+    	$(RUSTC) $(RUSTFLAGS) -o $@ \
+    	    --emit=link,dep-info=$(BUILD_DIR)/src/main.rs.d src/main.rs
+
+One Python string feeds both lines. A mkdir naming a path of its own is
+a mkdir that can drift from the emit beside it, which is how the eight
+correct recipes and the one wrong one differed in the first place.
+
+The case builds a crate rooted in a subdirectory, removes `build/`
+rather than its contents, and runs the ejected make. A flat crate root
+cannot find this: there the depfile lands in `BUILD_DIR` itself, which
+the old mkdir did create -- which is why the suite already had a Rust
+eject case and it passed throughout.
+
+**Then the lens, which is §143's question asked again.** That recipe is
+the odd one out because it writes two files to two places; the depfile
+is the second, and it is named after the *source*. §143 recorded what
+goes wrong when an object list is keyed on a path rather than on the
+unit that produced it. So: what else in the crate path is keyed on the
+crate root rather than on the program?
+
+**The ejected Makefile included a depfile nothing writes.** The
+`-include` list was built by a comprehension iterating `rel` and
+formatting `name`, which is not bound in it -- so the line named
+whatever the last loop above it had left in that variable, the install
+plan's filename in the tree this was measured on. Nothing is ever
+written there, and `-include` passes over a missing file in silence, so
+the depfile was produced on every build and read on none of them:
+
+    CLEAN       = $(BUILD_DIR)/main.rs.d     <- what the recipe writes
+    CRATE_DEPS  = $(BUILD_DIR)/inc.d         <- what was included
+
+Measured on a crate whose member is reached by `include!`, which is the
+one thing the `mod` scan cannot see and the entire reason the depfile is
+consulted: the ejected build built once, and then printed 11 for ever
+while the source said 22. `make` reported *Nothing to be done*. The
+comment two lines above the fault says this is "the half that would have
+rotted quietly", and it had. ninja was right throughout -- it names the
+depfile per edge and uses that same string -- so it is the control in
+the case rather than a second helping.
+
+**A second program from one crate root is now refused, and so are
+`defines` on one.** Both were found by pointing a fmake.toml at a crate
+root, which is what the reproduction in §172 did:
+
+    [target.demo]
+    root = "src/main.rs"
+
+The README documents that as a second program from that file, with
+`defines` as what makes it a different one. A crate has neither half.
+`defines` is `-D`, which rustc does not take -- `own_flags` already says
+so for `@define` and drops it -- and there is no per-target `rustflags`
+to redirect anybody to, so the second program was a byte-identical copy
+of the first, built and installed under another name with nothing said.
+
+It was not a harmless copy. Both targets take the depfile path from the
+crate root, so the ejected make wrote one file from two rules, and ninja
+refused the generated file outright:
+
+    ninja: error: build.ninja:76: multiple rules generate build/src/main.rs.d
+
+which fails the whole build rather than the duplicate. Two refusals now,
+in the order that puts the more specific message first: `defines` on a
+crate names the flag and what does reach one, and a duplicate root names
+the target that already builds the crate and how a target is renamed --
+`[target.<existing name>] name = "demo"`, which is what that stanza is
+usually reaching for. fmake already refuses a mismatched section that
+declares no root, in those words; a section that declares one escaped
+the check by being a legal thing to write.
+
+**What was not changed.** C keeps the duplicate: two targets on one C
+root are two objects and two programs, differing by their defines, which
+is what the feature is for -- fmake's own schema comment records situ as
+the tree that wanted it. The native build
+still gives two exe targets one depfile, which is now unreachable from a
+config fmake will accept -- recorded rather than fixed, because the
+depfile is a property of the Unit there and a program's is a property of
+the target.
+
+**And the suite was already red before any of this.** The contents index
+had stopped at §170: the two sections added since were written without
+being listed, which is the exact failure the index case was written for
+and which it duly reported. All three are listed now. It is worth
+knowing that the run this section cites started from a red suite, and
+that the red was somebody else's line rather than these.

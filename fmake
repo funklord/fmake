@@ -8668,6 +8668,20 @@ def build(args, _bootstrapping=False):
 			die(f"{CONF_FILE}: {tgt_section(t.name)} defines applies to the "
 			    f"root translation unit of a program, and this target is "
 			    f"{t.kind}")
+		# `own_flags' says the same thing about @define and drops it: every
+		# directive there spells a C flag and rustc would refuse the first
+		# one it saw. Dropping this one silently is worse than dropping
+		# that one, because the stanza asks for a second *program* and
+		# would get a byte-identical copy of the first under another name.
+		# There is no per-target rustflags to redirect the reader to, so
+		# the message says what does reach a crate and stops.
+		if units[t.rel].lang.unit == "crate":
+			die(f"{CONF_FILE}: {tgt_section(t.name)} defines is -D, a C "
+			    f"preprocessor flag, and {t.rel} is a crate rustc compiles: "
+			    f"nothing would carry it, and this target would be a copy of "
+			    f"the program the crate already builds. [project] rustflags "
+			    f"and [profile.*] rustflags reach a crate; neither is per "
+			    f"target")
 		flags = ["-D" + d for d in want]
 		# Named for the target rather than hashed, because this path is
 		# read by whoever is looking at why two objects came out of one
@@ -8676,6 +8690,29 @@ def build(args, _bootstrapping=False):
 		         members=crates.get(t.rel, [])[1:], variant=_mk_ident(t.name))
 		v.own = list(units[t.rel].own) + flags
 		variants[t.name] = v
+
+	# Two exe targets rooted in one crate would be two identical programs:
+	# `defines' is what makes a second [target.*] on an existing root a
+	# different program, and the check above has just refused it for a
+	# crate. They would also share the one depfile rustc names after the
+	# crate root -- which make writes twice and ninja refuses outright,
+	# "multiple rules generate", failing the whole build file rather than
+	# the duplicate. Nothing here is a choice fmake could make correctly,
+	# so it says which target already builds this crate and how a name is
+	# changed, which is what the stanza was usually reaching for.
+	rooted = {}
+	for t in targets:
+		u = units.get(t.rel)
+		if not u or not u.crate_exe:
+			continue
+		first = rooted.setdefault(t.rel, t)
+		if first is not t:
+			die(f"{CONF_FILE}: {tgt_section(t.name)} roots {t.rel}, and the "
+			    f"crate there already builds `{first.name}'. A second "
+			    f"program from one crate root would be a copy of it: rustc "
+			    f"takes no defines, so there is nothing to make the two "
+			    f"differ. A section is keyed by the name a target already "
+			    f"has; `name = ...' inside it renames one")
 
 	# Which optional features this build has, and which it does not. Said
 	# once per package rather than per file, and said whether the answer is

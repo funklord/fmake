@@ -15382,6 +15382,77 @@ pub extern "C" fn only_thing() -> i32 { 1 }
 
 
 @case
+def a_second_program_from_one_crate_root_is_refused(t):
+	"""`[target.*] root' naming a source that already roots a program is
+	documented as a second program from that file, and `defines' is what
+	makes it a different one. A crate has neither half: rustc takes no -D,
+	so the second program would be a copy of the first under another name.
+
+	It was not a harmless copy. Both targets take their depfile path from
+	the crate root, so the ejected make build wrote one file from two
+	rules and ninja refused the generated file outright -- "multiple rules
+	generate build/src/main.rs.d" -- which fails the whole build rather
+	than the duplicate.
+
+	The likely reading of that stanza is a rename, so the message says how
+	one is spelled."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	t.write("src/main.rs", "fn main() { println!(\"hi\"); }\n")
+	t.write("fmake.toml", """
+[target.demo]
+root = "src/main.rs"
+""")
+	name = os.path.basename(t.dir)
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"two programs from one crate root should be refused: {out}")
+	check(name in out,
+	      f"the refusal does not name the target that already builds the "
+	      f"crate: {out}")
+	check("name = " in out,
+	      f"the refusal does not say how a target is renamed, which is what "
+	      f"the stanza was reaching for: {out}")
+	check(not os.path.exists(os.path.join(t.dir, "demo")),
+	      "the refused target was built anyway")
+
+
+@case
+def defines_on_a_crate_target_are_refused_rather_than_dropped(t):
+	"""`defines' is `-D', a C preprocessor flag. A crate takes none --
+	`own_flags' says so for `@define' and drops it, which is right for a
+	directive that reached the wrong language by accident.
+
+	This one is not an accident: the stanza exists to make a second program
+	out of a root that already has one, and the define is the whole of what
+	would differ. Dropped silently it produced two identical binaries and
+	said nothing, which is a wrong answer delivered confidently.
+
+	No per-target rustflags exists to send the reader to, so the message
+	names what does reach a crate and stops there rather than inventing a
+	key."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	t.write("src/main.rs", "fn main() { println!(\"hi\"); }\n")
+	t.write("fmake.toml", """
+[target.demo]
+root = "src/main.rs"
+defines = ["CHECKED"]
+""")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"defines on a crate should be refused: {out}")
+	check("rustflags" in out,
+	      f"the refusal does not say what does reach a crate: {out}")
+	check("src/main.rs" in out,
+	      f"the refusal does not name the file it is about: {out}")
+
+
+@case
 def a_file_cannot_be_a_module_of_two_crates(t):
 	"""Section 3's ambiguity in another language. Nothing in the tree says
 	which crate the file belongs to, and compiling it into both gives two

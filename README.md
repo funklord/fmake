@@ -429,6 +429,13 @@ second program cost one compile rather than a second build. Where that is
 wrong for a project — where a define changes a layout — the two builds are
 two builds, and fmake is not the tool for saying so.
 
+**Neither half of that reaches a crate, so both are refused.** `defines` is
+`-D`, which rustc does not take, and there is no per-target `rustflags` — so
+a second program from a crate root could only be a copy of the first under
+another name, and the two would collide over the one depfile rustc names
+after the crate root. Where the stanza was reaching for a rename, that is
+`[target.<the name it has>] name = "…"`.
+
 **A `version` also versions a shared library.** `libgreet.so.1.2.3` is
 installed, with `libgreet.so.1` and `libgreet.so` pointing at it, and the
 `SONAME` becomes the major alone — so a consumer records `libgreet.so.1`
