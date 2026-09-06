@@ -4062,7 +4062,7 @@ def crate_plan(root, srcs, scans):
 	# can name any file, so this is reachable rather than theoretical, and
 	# a file compiled as both a crate and a module of one is two copies of
 	# every symbol in it.
-	drawn = {m for r, ms in crates.items() for m in ms[1:]}
+	drawn = {m for _r, ms in crates.items() for m in ms[1:]}
 	for r in list(crates):
 		if r in drawn:
 			del crates[r]
@@ -8046,7 +8046,7 @@ def build(args, _bootstrapping=False):
 	# or a candidate: handed to rustc alone it is a crate, and a binary
 	# crate with no main() is an error rather than a piece of a program.
 	crates, crate_of, crate_orphans = crate_plan(root, srcs, scans)
-	crate_members = {m for r, ms in crates.items() for m in ms[1:]}
+	crate_members = {m for _r, ms in crates.items() for m in ms[1:]}
 	if crates and not shutil.which(cfg.rustc):
 		die(f"this tree has {len(crates)} Rust crate(s) and {cfg.rustc} is "
 		    f"not installed.\n"

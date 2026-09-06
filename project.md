@@ -223,7 +223,8 @@ that had been green about nothing for five commits ·
 [170. The last three surfaces: one finding, and the rest holding](#170-the-last-three-surfaces-one-finding-and-the-rest-holding) ·
 [171. situ grew, the flags line held, and the shape line is the open one](#171-situ-grew-the-flags-line-held-and-the-shape-line-is-the-open-one) ·
 [172. The ejected exe-crate rule mkdirs the wrong directory](#172-the-ejected-exe-crate-rule-mkdirs-the-wrong-directory) ·
-[173. §172 fixed, and three more in the crate path](#173-172-fixed-and-three-more-in-the-crate-path)
+[173. §172 fixed, and three more in the crate path](#173-172-fixed-and-three-more-in-the-crate-path) ·
+[174. The lens from §173, and situ built from a copy](#174-the-lens-from-173-and-situ-built-from-a-copy)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14041,9 +14042,9 @@ because the growth is invisible from here: `[situ] flags` passes through,
 so a situc that has doubled its surface looks identical to one that has
 not.
 
-**Not measured.** Whether fmake builds a situ tree correctly today.
-`situ/fmake.toml` exists, so the experiment is available and cheap, and it
-was not run for this note -- the claims above are about situc's interface
+**~~Not measured.~~ Measured; see §174.** Whether fmake builds a situ
+tree correctly today. `situ/fmake.toml` exists, so the experiment is
+available and cheap, and it was not run for this note -- the claims above are about situc's interface
 and fmake's source, both read, and about nothing that was executed.
 
 ## 172. The ejected exe-crate rule mkdirs the wrong directory
@@ -14210,3 +14211,68 @@ being listed, which is the exact failure the index case was written for
 and which it duly reported. All three are listed now. It is worth
 knowing that the run this section cites started from a red suite, and
 that the red was somebody else's line rather than these.
+
+## 174. The lens from §173, and situ built from a copy
+
+Two things, one derived from the last fault and one that §171 left
+explicitly unmeasured.
+
+**The comprehension detector, which found nothing and says how it
+looked.** §173's second fault was `[f"...{name}.d" for rel in xs]` --
+a comprehension iterating one variable and formatting another, bound
+two hundred lines above. What gives that shape away is not the wrong
+name, which is a real variable holding a plausible string, but the loop
+variable nobody uses. So the check is: no comprehension in `fmake` or
+`selftest` may ignore its own target.
+
+It is in the suite rather than in a scratch file, because the fault it
+covers survived months of reading. It carries a broken sample of its
+own -- a clean corpus says nothing about a detector that cannot speak --
+and it was confirmed the other way too, by putting §173's line back and
+watching the case name it by line number.
+
+Two comprehensions matched and neither was a fault: `{m for r, ms in
+crates.items() ...}`, where the key is genuinely unwanted. They are
+spelled `_r` now. That is a two-character change and it is the reason
+the check can exist at all: the alternative was a gate with an ignore
+list, which is a gate switched off by instalments.
+
+**situ, built from a copy of its HEAD, which §171 declined to do.**
+That section recorded situc's growth from the outside and said plainly
+that whether fmake builds a situ tree today had not been measured. It
+has now, against `030880f`, unpacked with `git archive` into a scratch
+directory because that tree was dirty and is somebody else's to edit.
+
+    fmake             built situ-walk-c and libsitu.a          rc 0
+    fmake test        11 of 12 test programs built             rc 1
+                      test_icmp did not compile
+
+**The failure is not fmake's, and the way that was established is the
+part worth keeping.** The comfortable explanation was to hand and it was
+wrong: situ's own `test/generated/Makefile` passes `--layer converse` to
+`situc build`, and its `fmake.toml` carries no `[situ] flags`, so fmake
+compiles the schemas at the default rung. That is a real difference and
+it explains nothing -- run by hand, both rungs emit the same
+`situ_icmp_message_view(msg, offset, length, ...)`, and the committed
+test calls it with three arguments.
+
+What settles it is that **situ's own Makefile fails the same way**, on a
+header its own recipe generated at its own rung, with the same two
+errors from the same compiler. So fmake and make agree about this tree,
+which is the answer §171 wanted; the twelfth test is a breakage at
+situ's HEAD and is theirs to know about. Their tree was being edited
+while this ran -- `situc/ast.py`, `cli.py` and `dump.py` were all
+modified -- so it may already be in hand.
+
+**Two facts about fmake fall out of the run, both good.** A build where
+one source failed to compile exits 1 and says `1 file(s) did not
+compile; not running tests` rather than running the eleven that did: a
+partial suite reported as a pass is the failure that rule exists to
+prevent. And the schema work it did not need -- 28 example schemas
+nothing includes -- is reported per schema and skipped, which is what
+`[situ]` support was written to do.
+
+**Not measured, again, and named so it stays visible.** Whether the
+eleven that build also pass, since fmake declined to run any of them
+while one was broken; and situ's Python suite and its double
+compilation, which its own `fmake.toml` says are not attempted.

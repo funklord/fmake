@@ -13100,6 +13100,68 @@ def the_packaged_script_has_an_absolute_interpreter(t):
 
 
 @case
+def no_comprehension_ignores_its_own_loop_variable(t):
+	"""The lens from the fault fixed in `eject: include the crate depfile
+	that is written'. That line read
+
+	    names = [f"$(BUILD_DIR)/{name}.d" for rel in sorted(crate_deps)]
+
+	-- iterating `rel' and formatting a `name' bound by a loop two hundred
+	lines above, so it produced one wrong path per element, repeated. It is
+	a hard fault to see by reading, because both halves are spelled
+	correctly and the wrong one is a real variable holding a plausible
+	string; what gives it away is that the loop variable is never used.
+
+	A whole-file check rather than a rule about that one line, because the
+	shape is not specific to paths: any comprehension that ignores what it
+	is iterating is either this fault or a repetition somebody could have
+	written as multiplication.
+
+	`_'-prefixed names are the conventional way to say a target is not
+	wanted -- unpacking a dict's items for the values alone -- so they are
+	not findings. And the detector carries a broken sample, since a clean
+	corpus proves nothing about a detector that cannot speak: every module
+	in the tree passing and a detector that has never fired look exactly
+	the same from here."""
+	def unused(text):
+		out = []
+		for node in ast.walk(ast.parse(text)):
+			if not isinstance(node, (ast.ListComp, ast.SetComp,
+			                         ast.DictComp, ast.GeneratorExp)):
+				continue
+			parts = ([node.key, node.value]
+			         if isinstance(node, ast.DictComp) else [node.elt])
+			for gen in node.generators:
+				parts.append(gen.iter)
+				parts.extend(gen.ifs)
+			seen = {n.id for p in parts for n in ast.walk(p)
+			        if isinstance(n, ast.Name)}
+			for gen in node.generators:
+				for n in ast.walk(gen.target):
+					if (isinstance(n, ast.Name)
+					        and not n.id.startswith("_")
+					        and n.id not in seen):
+						out.append((node.lineno, n.id))
+		return sorted(set(out))
+
+	control = 'names = [f"{name}.d" for rel in sorted(deps)]\n'
+	check(unused(control),
+	      "the detector does not see the fault it was written for, so its "
+	      "silence on the tree below means nothing")
+	check(not unused("names = [f'{rel}.d' for rel in sorted(deps)]\n"),
+	      "the detector fires on a comprehension that uses what it iterates")
+	check(not unused("v = {m for _r, ms in d.items() for m in ms}\n"),
+	      "the detector fires on the conventional `_' for an unwanted key")
+
+	for name in ("fmake", "selftest"):
+		with open(os.path.join(REPO, name)) as fh:
+			found = unused(fh.read())
+		check(not found,
+		      f"{name} has a comprehension iterating something it never "
+		      f"uses: {found}")
+
+
+@case
 def the_source_runs_on_the_python_it_declares(t):
 	"""A syntax the declared interpreter cannot read is a package that
 	installs and then never starts.
