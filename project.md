@@ -14702,6 +14702,25 @@ else. Its expectation is derived rather than written: whatever
 mention, because a test naming `i386-linux-gnu` would be this section's
 own fault in the check meant to catch it.
 
+**Two things the same lens was pointed at and did not find.** The
+triplet now moves with the flags, so anything derived from it could have
+moved too -- `_prefixed` picks binutils from the compiler's *name*
+prefix rather than from the triplet, and is untouched; and `cfg.key`
+already carries `*self.cflags`, so no cached answer taken natively can
+be read back under `-m32`, which the differing object directories
+confirm. Both were read rather than assumed, because they are the two
+ways this change could have been quietly wrong.
+
+**And where the lens stops: pkg-config.** Its search path is
+`--variable=pc_path`, which is the host's built-in list, so a 32-bit
+build asks 64-bit `.pc` files. That is pkg-config's own convention --
+`PKG_CONFIG_LIBDIR` or a prefixed pkg-config is how everyone tells it,
+and fmake honours both and sets them itself for a sysroot -- so it is not
+obviously fmake's to derive. It is also not demonstrable here: no
+`i386-linux-gnu/pkgconfig` is installed, so there is nothing for a
+correct search to find. Recorded as swept and unproven rather than as a
+finding.
+
 **Not measured, and worth saying.** This machine has no 32-bit
 development libraries -- `/usr/lib/i386-linux-gnu` holds `libz.so.1` and
 no `libz.so` -- so a 32-bit build that *needs* a library still cannot
