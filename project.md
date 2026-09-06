@@ -229,7 +229,8 @@ that had been green about nothing for five commits ·
 [176. The claim a search path cannot make](#176-the-claim-a-search-path-cannot-make) ·
 [177. hydra's report: a HEAD build produced no link set for five targets](#177-hydras-report-a-head-build-produced-no-link-set-for-five-targets) ·
 [178. §177 measured: the version was not the variable, and the status was](#178-177-measured-the-version-was-not-the-variable-and-the-status-was) ·
-[179. A stand-in that stops standing in when the real tool arrives](#179-a-stand-in-that-stops-standing-in-when-the-real-tool-arrives)
+[179. A stand-in that stops standing in when the real tool arrives](#179-a-stand-in-that-stops-standing-in-when-the-real-tool-arrives) ·
+[180. Asking the compiler, in the configuration it will build in](#180-asking-the-compiler-in-the-configuration-it-will-build-in)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14645,3 +14646,65 @@ mistake by anybody. fmake's order is deliberate and documented -- named,
 installed, then the tree -- so changing it is not a passing edit, and the
 question belongs to whoever owns that order rather than to a session that
 tripped over it.
+
+## 180. Asking the compiler, in the configuration it will build in
+
+§176's lens was "a hardcoded list where a tool is the authority". Pointed
+at the rest of the tree it found the same fault one step further on: the
+tool *was* asked, and asked in a configuration the build never uses.
+
+**fmake states the problem itself, in a refusal.** `cc = "clang
+--target=aarch64-linux-gnu"` is refused, and the message explains why:
+
+    fmake takes a program here rather than a command line, because a flag
+    like --target changes what -print-search-dirs and -print-multiarch
+    answer and those are asked separately.
+
+The remedy it gives is `[project] cflags`. Those probes run in
+`Config.__init__` **before** `self.cflags` is assembled, so a flag put
+where fmake asked for it is a flag the probes cannot see. The refusal and
+the remedy were each right and did not meet.
+
+**Measured with `-m32`, which needs multilib rather than a cross
+toolchain**, on the configuration fmake's own arch error tells a reader
+to write -- `cflags = ["-m32"]`, `[toolchain] arch = "x86"`:
+
+    before                                   after
+    library search  x86/32le only            library search  x86/32le only
+      .../x86_64-linux-gnu/14      25          .../x86_64-linux-gnu/14/32   12
+      /usr/lib/x86_64-linux-gnu   585          /usr/lib/i386-linux-gnu      15
+      /usr/lib                      4          /usr/lib32                   19
+    external symbols [1, 0 in libc]          external symbols [1, 1 in libc]
+
+611 libraries that would be declined for their architecture and not one
+that could answer, against the three directories the compiler names when
+it is asked with the flags. `puts` resolves to libc afterwards and to
+nothing before. The program builds, runs, and is a 32-bit ELF; a native
+tree's search is unchanged.
+
+**Whole flags, no whitelist, and that is the point.** A list of "flags
+that change the target" is the hardcoded list §176 was about, one
+abstraction up. A flag the driver refuses makes the probe come back
+empty, and an empty probe falls back to the bare question -- so the worst
+case is what fmake did before, rather than a build that stops. Four sites
+ask this way now: the triplet, `-print-search-dirs` in both users, and
+the preprocessor's include list.
+
+**`lib_search_dirs` stopped asking a second time.** It ran its own bare
+`-print-multiarch`, which is how a build could hold two triplets at once;
+it reads `cfg.triplet` now, which was asked with the flags.
+
+**The case uses `-m32` deliberately.** The suite's only other cross-build
+case skips on this machine for want of `aarch64-linux-gnu-g++`, so the
+cross path was verified nowhere here. `-m32` needs multilib and nothing
+else. Its expectation is derived rather than written: whatever
+`cc -m32 -print-multiarch` says is what a searched directory must
+mention, because a test naming `i386-linux-gnu` would be this section's
+own fault in the check meant to catch it.
+
+**Not measured, and worth saying.** This machine has no 32-bit
+development libraries -- `/usr/lib/i386-linux-gnu` holds `libz.so.1` and
+no `libz.so` -- so a 32-bit build that *needs* a library still cannot
+link here, and the case proves the search rather than the link. §15's
+"cross builds are verified on one toolchain" is narrower than it was by
+one ABI, and not closed.

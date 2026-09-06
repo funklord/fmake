@@ -4295,8 +4295,21 @@ class Config:
 		self.cxx     = (os.environ.get("CXX") or tool.get("cxx")
 		                or self._prefixed("g++") or self._prefixed("c++")
 		                or "c++")
-		self.triplet = _stdout([self.cc, "-print-multiarch"]).strip() \
-		               or _stdout([self.cc, "-dumpmachine"]).strip()
+		# What the project's own flags make this compiler. `-m32', a
+		# `--target' or a `-B' changes what -print-multiarch and
+		# -print-search-dirs answer, and fmake refuses `cc = "clang
+		# --target=..."' for exactly that reason -- then sends the flag to
+		# [project] cflags, where these probes could not see it. So they
+		# are asked in the configuration the build will use.
+		#
+		# Whole flags, no whitelist, because a list of "flags that change
+		# the target" is the hardcoded list section 176 was about. A flag
+		# the driver refuses makes the probe empty, and an empty probe
+		# falls back to the bare question: worst case is what fmake did
+		# before, rather than a build that stops.
+		self.probe_flags = [f for f in conf.cflags() if f != "-c"]
+		self.triplet = (self._probe("-print-multiarch")
+		                or self._probe("-dumpmachine"))
 		self.nm      = find_nm(tool.get("nm")
 		                       or self._prefixed("nm"))
 		self.sysroot = tool.get("sysroot")
@@ -4470,6 +4483,16 @@ class Config:
 		                         *self.cflags, "|", *self.override,
 		                         "|", self.rustc, self.rust_edition,
 		                         *self.rustflags]))[:12]
+
+	def _probe(self, question):
+		"""Ask the compiler `question', in this project's configuration.
+
+        The flags first, because a driver reads them left to right and a
+        later -m32 must not be overridden by an earlier -m64 from the same
+        list; the question last, so it is the one being answered.
+        """
+		got = _stdout([self.cc, *self.probe_flags, question]).strip()
+		return got or _stdout([self.cc, question]).strip()
 
 	def _prefixed(self, tool):
 		"""The toolchain's own copy of a binutil, if there is one."""
@@ -5919,7 +5942,7 @@ def compiler_lib_dirs(cfg):
 	"""Where this compiler's linker looks. Authoritative, and correct for a
     cross compiler, which is why it comes before any guess."""
 	out = []
-	for line in _stdout([cfg.cc, "-print-search-dirs"]).splitlines():
+	for line in cfg._probe("-print-search-dirs").splitlines():
 		if line.startswith("libraries:"):
 			for d in line.split(":", 1)[1].lstrip(" =").split(":"):
 				if d and os.path.isdir(d):
@@ -5929,7 +5952,9 @@ def compiler_lib_dirs(cfg):
 
 def lib_search_dirs(cfg):
 	"""Where the linker will look, in the order it looks."""
-	triplet = _stdout([cfg.cc, "-print-multiarch"]).strip()
+	# cfg.triplet, not a second bare question: it was asked with this
+	# project's flags, and -m32 or a --target makes the two disagree.
+	triplet = cfg.triplet if "-" in cfg.triplet else ""
 	cands = list(cfg.extra_libdirs)
 
 	# A sysroot is the unambiguous statement that the target's filesystem is
@@ -6139,7 +6164,9 @@ def default_include_dirs(cfg):
     marker lines, which is the only interface cpp offers for it.
     """
 	out, inside = [], False
-	txt = _stderr([cfg.driver(True), "-E", "-Wp,-v", "-xc++", os.devnull])
+	ask = ["-E", "-Wp,-v", "-xc++", os.devnull]
+	txt = (_stderr([cfg.driver(True), *cfg.probe_flags, *ask])
+	       or _stderr([cfg.driver(True), *ask]))
 	for line in txt.splitlines():
 		if line.startswith("#include <...>"):
 			inside = True
@@ -6156,7 +6183,7 @@ def default_include_dirs(cfg):
 def default_link_dirs(cfg):
 	"""Where the linker already looks, so -L is only added when it is needed."""
 	out = set()
-	for line in _stdout([cfg.cc, "-print-search-dirs"]).splitlines():
+	for line in cfg._probe("-print-search-dirs").splitlines():
 		if line.startswith("libraries:"):
 			for d in line.split(":", 1)[1].lstrip(" =").split(":"):
 				if d:
