@@ -13611,6 +13611,74 @@ def the_contents_index_lists_every_section(t):
 
 
 @case
+def an_eject_that_left_a_program_out_says_so_in_its_status(t):
+	"""Section 177, reported from hydra: five test drivers came back with
+	no link set, and the generator that asked for them refused to write a
+	partial file -- correctly, but without being able to say why.
+
+	`--eject' already exits 1 when a file did not compile, and its comment
+	gives the reason: a build that drops a target leaves no binary and the
+	next command notices, while an eject writes a build file that looks
+	complete and is not. A file whose object exports no `main()' is the
+	same hazard by a quieter route. It was quieter still on a second run:
+	the answer is remembered against the file's hash, so the warning is
+	printed once and every eject afterwards omits the program and exits 0.
+
+	The build keeps saying nothing on the second run -- that is what the
+	memory is for, and a build that drops a target leaves no binary to
+	mistake for a complete one. Only the artifact needs the status.
+
+	`#ifdef` is how a file comes to look like a program and not be one:
+	the scan reads comment-stripped text and does not evaluate the
+	preprocessor, which is deliberate -- it cannot, without becoming the
+	compiler."""
+	t.write("real.c", """
+#include <stdio.h>
+int main(void){ puts("real"); return 0; }
+""")
+	t.write("looks.c", """
+#ifdef STANDALONE
+int main(void){ return 0; }
+#endif
+int helper(void){ return 1; }
+""")
+
+	first = t.fmake("--eject")
+	check(first.returncode != 0,
+	      "an eject that left a program out exited 0, so a generator has "
+	      "nothing in the status to refuse")
+	check("looks.c" in first.stderr,
+	      f"the status says something is missing and not what: "
+	      f"{first.stderr}")
+
+	# The half that was silent. Nothing changed on disk, so the answer is
+	# the remembered one and the per-file warning does not fire again.
+	again = t.fmake("--eject")
+	check(again.returncode != 0,
+	      f"the second eject exited 0: the answer is remembered, so this "
+	      f"is the run a generator would actually make: {again.stderr}")
+	check("looks.c" in again.stderr,
+	      f"the second eject does not name what it left out: {again.stderr}")
+
+	# A build is unaffected, in both directions: it still succeeds, and it
+	# still says the thing once.
+	built = t.fmake()
+	check(built.returncode == 0,
+	      f"the build was turned into a failure: {built.stdout}{built.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "real")),
+	      "the program that was fine did not get built")
+
+	# The control: without a mirage the same command exits 0, so the
+	# assertions above are about this tree rather than about --eject.
+	os.remove(os.path.join(t.dir, "looks.c"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	clean = t.fmake("--eject")
+	check(clean.returncode == 0,
+	      f"--eject fails on a tree with nothing left out, so the checks "
+	      f"above would pass whatever it did: {clean.stderr}")
+
+
+@case
 def an_ejected_makefile_survives_a_deleted_header(t):
 	"""`-MP`, which code-style.md holds ejected Makefiles to.
 

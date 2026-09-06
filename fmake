@@ -8114,6 +8114,12 @@ def build(args, _bootstrapping=False):
 	# the configuration does. Both are in the stamp. Same shape as moc's
 	# negative result for a Q_OBJECT the preprocessor never reaches.
 	nomain = cache.data.setdefault("nomain", {})
+	# What this run decided not to root a target with, live or remembered.
+	# A build says nothing about the remembered ones on purpose -- that is
+	# what the memory is for -- but an eject writes an artifact that
+	# outlives the run, and a fragment quietly missing a program is the
+	# thing the eject's own exit status exists to refuse.
+	mirage = []
 
 	def main_stamp(rel):
 		"""What the answer depends on: the file, and the configuration.
@@ -8164,6 +8170,7 @@ def build(args, _bootstrapping=False):
 			continue
 		if ann.scalar("kind") is None and scans[rel]["has_main"] \
 		        and main_is_a_mirage(rel):
+			mirage.append(rel)
 			continue
 		if scans[rel]["has_main"] and not ann.scalar("kind") \
 		        and not ann.scalar("target"):
@@ -8963,6 +8970,7 @@ def build(args, _bootstrapping=False):
 					# the next build does not propose it, compile it, link
 					# nothing and say this again.
 					nomain[t.rel] = main_stamp(t.rel)
+					mirage.append(t.rel)
 					wanted.remove(t)
 			if not wanted:
 				die("no target could be built")
@@ -9495,7 +9503,20 @@ def build(args, _bootstrapping=False):
 		# The artifact is still written, because the part that worked is
 		# worth having and worth inspecting; the status is what stops a
 		# caller adopting it without looking.
-		return 1 if broken else 0
+		#
+		# A file whose object exports no main() is the same hazard by a
+		# quieter route, and it was quieter still on the second run: the
+		# answer is remembered against the file's hash, so the warning is
+		# printed once and every eject afterwards omits the program and
+		# exits 0. hydra's generator met exactly that -- five test drivers
+		# with no link set, a well-formed fragment, and nothing in the
+		# status to refuse it -- and is section 177.
+		if mirage:
+			warn("left out of this fragment, and its object exports no "
+			     "main(): " + ", ".join(sorted(set(mirage)))
+			     + "\n@kind or [target.*] settles what such a file is; "
+			       "until then a program is missing from the file below")
+		return 1 if broken or mirage else 0
 
 	all_units = [units[r] for r in sorted(units)]
 	if args.explain:

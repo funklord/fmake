@@ -227,7 +227,8 @@ that had been green about nothing for five commits ·
 [174. The lens from §173, and situ built from a copy](#174-the-lens-from-173-and-situ-built-from-a-copy) ·
 [175. A package that is not linked still contributes its cflags](#175-a-package-that-is-not-linked-still-contributes-its-cflags) ·
 [176. The claim a search path cannot make](#176-the-claim-a-search-path-cannot-make) ·
-[177. hydra's report: a HEAD build produced no link set for five targets](#177-hydras-report-a-head-build-produced-no-link-set-for-five-targets)
+[177. hydra's report: a HEAD build produced no link set for five targets](#177-hydras-report-a-head-build-produced-no-link-set-for-five-targets) ·
+[178. §177 measured: the version was not the variable, and the status was](#178-177-measured-the-version-was-not-the-variable-and-the-status-was)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2209,7 +2210,10 @@ rather than code, and one lesson about testing.
   while an eject writes a build file that **looks complete and is not**,
   and goes on being wrong every time it is used. One project regenerated
   its object-set file from a tree in this state and was wrong for a week,
-  because its caller checked the status and nothing else. Measured before
+  because its caller checked the status and nothing else. Extended in §178
+  to a target dropped for any reason, not only a compile failure: the one
+  that leaves `broken` empty was silent, and silent on every run after the
+  first. Measured before
   and after, across all three emitters:
 
       before   build 1     make 0     make-fragment 0     ninja 0
@@ -14486,3 +14490,69 @@ than fixed from here". It was not: nothing was written into this tree, and
 the sentence recorded an intention as though it were an act. Found by
 sweeping that project for claims of having signalled something, after the
 same failure turned up in its Makefile about a different signal.
+
+## 178. §177 measured: the version was not the variable, and the status was
+
+hydra reported five test drivers with no link set, and named the
+difference it could see: the failing run used a scratch build of fmake
+HEAD dated 2026-08-25, the succeeding one the packaged 1.0. That is a
+report with its reproduction attached, which is what made this
+answerable at all.
+
+**Both ends were run, and they agree.** hydra HEAD `0a42ef0`, unpacked
+with `git archive` into a scratch directory because that tree has a live
+session in it, then `--eject make-fragment` exactly as
+`tool/objsets.py` invokes it:
+
+    today's fmake          rc 0    91 targets    all five present
+    fmake at 3513e6f       rc 0    91 targets    all five present
+    (the last commit of 2026-08-25)
+
+No skips, no compile failures, from a cleared tree in both cases. **So
+the fmake version is not the variable.** Something in that working tree
+was, and it is not visible from here -- the report says the session was
+mid-edit, and a `git archive` has none of that.
+
+**The limit of that control, said plainly.** "A scratch build of HEAD
+dated 2026-08-25" is not necessarily `3513e6f`; a scratch build is
+whatever the working tree held, which may have been dirty. So this
+disproves "the released 1.0 and that day's committed HEAD disagree
+about hydra" and does not disprove "the binary they ran did something
+different".
+
+**What was worth having is the mechanism, and it is a defect.** The
+symptom is exact and only one path produces it: rc 0, a well-formed
+fragment, no compile error, five blocks simply absent. A file that
+scans as defining `main()` and whose object does not export it is
+dropped with
+
+    * X looked like it defined main() but the object does not export it
+
+and that path leaves `broken` empty, so the eject returns 0. The
+argument for the other half was already made, in §15 and in the eject
+site's own comment: a build that drops a target leaves no binary and the
+next command notices, while an eject writes a build file that **looks
+complete and is not**. It was implemented for compile failures only.
+
+**And the second run is worse than the first.** The answer is
+remembered against the file's hash, so the per-file warning prints once
+and every eject afterwards omits the program with no message at all and
+exits 0. A generator that regenerates on a schedule would never see it.
+That is the shape that cost hydra a week of stale `objsets.mk`, from
+the other direction.
+
+**Fixed: an eject that left a program out names it and exits 1**, on
+both backends, on the remembered run as well as the live one. The
+build is deliberately unchanged -- it still exits 0 and still says it
+once, because a build that drops a target leaves no binary to mistake
+for a complete one, and the memory exists so that a build does not
+repeat itself. Only the artifact needs the status.
+
+**What hydra can do with this.** If it recurs, the run now cannot be
+silent: `objsets.py` reads fmake's stderr when the status is non-zero,
+and the status is non-zero. The stderr names the file, which is the one
+datum nobody has.
+
+**Not measured.** Why those five, in that tree, on that day. It needs
+the working tree as it was, and that is hydra's to hold rather than
+this project's to guess at.
