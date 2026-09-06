@@ -14624,6 +14624,18 @@ red with situc installed; after it, eight green and two skipped, on the
 same machine in the same state. That pairing is the whole evidence, and
 it was available only because somebody installed a package mid-run.
 
+**Swept for siblings, and there is exactly one.** The class is "a
+fixture that reaches its tool by discovery rather than by name", so the
+question is which tools fmake discovers at all: `situc' is the only one
+with a tree fallback -- `root/bin/situc', one line in `find_situc' -- and
+the rest come from a name the caller supplies. Every other stand-in in
+the suite is reached explicitly: `CC=' in the environment for the
+compiler shims, `[toolchain] moc' or `$MOC' or a pkg-config `libexecdir'
+the fixture writes for moc, an `fmake.toml' rule for the generate shims.
+So the sweep is empty and its lens was: grep the suite for a fixture that
+installs an executable and chmods it, then ask of each how fmake is meant
+to find it.
+
 **And a live hazard for situ's own tree, which is theirs to decide.**
 `find_situc` prefers the installed compiler, so a situ working tree built
 on this machine now compiles its schemas with `/usr/bin/situc 1.0` rather
