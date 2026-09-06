@@ -15230,6 +15230,50 @@ pub extern "C" fn rust_seven() -> i32 { helper::seven() }
 
 
 @case
+def an_ejected_crate_rooted_in_a_subdirectory_builds_with_no_build_dir(t):
+	"""Section 172. The recipe writes two files to two places -- the
+	program where the target says, and the depfile under BUILD_DIR keeping
+	the source's subdirectory -- and it created the directory of neither.
+
+	It stayed hidden because the ejected `clean' removes files and leaves
+	directories, so a tree that has built once can clean and rebuild for
+	ever without meeting it. What exposes it is a build directory that is
+	not there: a fresh clone, an unpacked archive, or this case, which
+	removes the directory rather than its contents.
+
+	A flat crate root cannot find it either -- there the depfile lands in
+	BUILD_DIR itself, which the mkdir did create. The subdirectory is the
+	whole fixture, and it is the layout cargo puts a program in."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("src/main.rs", """
+mod helper;
+fn main() { println!("{}", helper::seven()); }
+""")
+	t.write("src/helper.rs", "pub fn seven() -> i32 { 7 }\n")
+	name = os.path.basename(t.dir)
+
+	e = t.fmake("--eject", "make")
+	check(e.returncode == 0, f"--eject make failed: {e.stderr}")
+	t.write("Makefile", e.stdout)
+	for gone in (".fmake", "build"):
+		shutil.rmtree(os.path.join(t.dir, gone), ignore_errors=True)
+
+	r = subprocess.run(["make", "-C", t.dir], capture_output=True, text=True)
+	check(r.returncode == 0,
+	      f"the ejected build failed with no build directory in the tree: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(name).stdout.strip() == "7",
+	      "the ejected build produced a different program")
+	dep = os.path.join(t.dir, "build", "src", "main.rs.d")
+	check(os.path.exists(dep),
+	      f"the depfile is not where the recipe named it, so a member the "
+	      f"`mod' scan cannot see would never rebuild the crate: {dep}")
+
+
+@case
 def a_library_that_is_only_a_crate_is_the_crates_own_archive(t):
 	"""`ar rcs` over an empty object list succeeds.
 

@@ -10671,11 +10671,21 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			deps = " ".join([_eject_src(root_unit.rel)]
 			                + [_eject_src(m)
 			                   for m in sorted(root_unit.members)])
+			# The one recipe here that writes two files to two places:
+			# the program, which goes where the target says, and the
+			# depfile, which goes under BUILD_DIR keeping the source's
+			# subdirectory. So the directory to create is the depfile's
+			# and not `$(@D)' -- a crate root at src/main.rs writes
+			# $(BUILD_DIR)/src/main.rs.d while $@ sits in the tree root,
+			# and rustc does not create the directory it was given.
+			# Derived from the same string the recipe emits, because a
+			# mkdir naming a path of its own is a mkdir that can drift.
+			dep = f"$({P}BUILD_DIR)/{_eject_obj(root_unit.rel)}.d"
 			a(f"{t.filename}: {deps}")
-			a(f"\t@mkdir -p $({P}BUILD_DIR)")
+			a(f"\t@mkdir -p $(dir {dep})")
 			a(f"\t$({P}RUSTC) $({P}RUSTFLAGS) -o $@ \\")
-			a(f"\t    --emit=link,dep-info=$({P}BUILD_DIR)/"
-			  f"{_eject_obj(root_unit.rel)}.d {_eject_src(root_unit.rel)}")
+			a(f"\t    --emit=link,dep-info={dep} "
+			  f"{_eject_src(root_unit.rel)}")
 			a("")
 			continue
 		objs = [f"$({P}BUILD_DIR)/{_obj_of(u)}.o" for u in closures[t].link
