@@ -230,7 +230,8 @@ that had been green about nothing for five commits ·
 [177. hydra's report: a HEAD build produced no link set for five targets](#177-hydras-report-a-head-build-produced-no-link-set-for-five-targets) ·
 [178. §177 measured: the version was not the variable, and the status was](#178-177-measured-the-version-was-not-the-variable-and-the-status-was) ·
 [179. A stand-in that stops standing in when the real tool arrives](#179-a-stand-in-that-stops-standing-in-when-the-real-tool-arrives) ·
-[180. Asking the compiler, in the configuration it will build in](#180-asking-the-compiler-in-the-configuration-it-will-build-in)
+[180. Asking the compiler, in the configuration it will build in](#180-asking-the-compiler-in-the-configuration-it-will-build-in) ·
+[181. Eighty per cent of a no-op build was one function](#181-eighty-per-cent-of-a-no-op-build-was-one-function)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14743,3 +14744,54 @@ no `libz.so` -- so a 32-bit build that *needs* a library still cannot
 link here, and the case proves the search rather than the link. §15's
 "cross builds are verified on one toolchain" is narrower than it was by
 one ABI, and not closed.
+
+## 181. Eighty per cent of a no-op build was one function
+
+§8's property is that a second build compiles nothing. It does, and on a
+real tree it was taking 7.2 seconds to decide that. Profiled with
+`cProfile` on hydra's tree -- 116 sources, moc output, 91 targets --
+under the numbers the profiler's own overhead inflates, the proportion
+is what matters:
+
+    ncalls  tottime  cumtime  function
+       478    9.097   15.756  parse_depfile          80% of the run
+    11036234  3.351           list.append
+    11254136  3.014           str.isspace
+
+Eleven million `isspace` calls: one per character of every depfile, in a
+scanner written character by character because a depfile is Makefile
+syntax and a space in a path arrives as `\ `.
+
+**The observation that makes it cheap: every escape Make defines begins
+with a backslash or a dollar.** So a right-hand side holding neither
+contains no escape at all, splits on whitespace, and is finished. All 167
+depfiles in that tree hold neither -- which is not luck, it is what a
+depfile looks like unless a path has a space in it.
+
+    parse, over that tree's 167 depfiles       0.82s -> 0.02s
+    no-op build of the tree                    7.2s  -> 1.6s
+
+**The careful loop stays**, because the tree with `inc dir/hdr.h` in it is
+what it is for, and that case is already proved end to end -- a real
+compiler, a real edit, and a binary that must carry the new value.
+
+**The proof is against the shipped function, not a copy.** The equivalence
+was checked by executing `parse_depfile` out of the file being committed
+and comparing it with the old loop over all 167 real depfiles and twelve
+escaping cases: no disagreement. A transcription would have proved the
+transcription.
+
+**And the case is a table, deliberately.** Its expectations are written
+from Make's rules rather than taken from either implementation, so a
+change that makes both paths agree on something *wrong* still fails --
+which a reference copy of the old loop could not catch, being the same
+witness twice. It also asserts that both paths are exercised, since a
+table that went down one path would be a green light for the other.
+Controlled by taking the fast path unconditionally, which fails on the
+escaped-space row and names the wrong output.
+
+**What this does not claim.** The profile was taken on one tree, and the
+proportion will differ on a C tree with small depfiles; the parse cost is
+a function of how much header text the compiler recorded, and Qt records
+a great deal. What holds everywhere is the equivalence, which is what the
+table pins.

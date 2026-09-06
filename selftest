@@ -15351,6 +15351,64 @@ def a_symbol_whose_name_has_a_space_is_read_correctly(t):
 
 
 @case
+def a_depfile_is_read_the_same_way_by_both_of_its_paths(t):
+	"""`parse_depfile' has a fast path and a careful one, and this is the
+	table that says they mean the same thing.
+
+	Profiling a no-op build of a 116-source Qt tree put 80% of it inside
+	that function: a character-by-character scanner, 11 million `isspace'
+	calls. A right-hand side containing neither a backslash nor a dollar
+	holds no Make escape at all, so it splits on whitespace and is done --
+	0.82s to 0.02s over that tree's 167 depfiles, and the no-op build went
+	from 7.2s to 1.6s.
+
+	The case beside this one proves the escapes end to end, through a real
+	compiler and a real rebuild. This one is the seam: the expectations
+	below are written from Make's rules rather than taken from either
+	implementation, so a change that makes both paths agree on something
+	wrong still fails here. That is the difference between a second witness
+	and the same witness twice."""
+	table = [
+		("o: plain.h other.h\n",        ["plain.h", "other.h"]),
+		("o: a\\ b.h c.h\n",             ["a b.h", "c.h"]),
+		("o: a$$b.h\n",                 ["a$b.h"]),
+		("o: a\\\\b.h\n",                ["a\\b.h"]),
+		("o: a\\#b.h\n",                ["a#b.h"]),
+		("o: \\\n  a.h \\\n  b.h\n",     ["a.h", "b.h"]),
+		("o: a.h\tb.h\r\nc.h\n",       ["a.h", "b.h", "c.h"]),
+		("o: a$b.h\n",                  ["a$b.h"]),
+		("o:\n",                        []),
+		("",                            []),
+		("no colon here\n",             []),
+	]
+	# The shipped function, out of the file that will be committed rather
+	# than a copy of it: a parser tested through a transcription is a test
+	# of the transcription.
+	ns = {"__name__": "not_main"}
+	with open(FMAKE) as fh:
+		exec(compile(fh.read(), FMAKE, "exec"), ns)
+	parse = ns["parse_depfile"]
+
+	for i, (text, want) in enumerate(table):
+		# Written raw rather than through t.write, which strips a leading
+		# newline: the leading whitespace is part of what is being parsed.
+		path = os.path.join(t.dir, f"d{i}.d")
+		with open(path, "w") as fh:
+			fh.write(text)
+		got = parse(path)
+		check(got == want,
+		      f"depfile {text!r} parsed as {got!r}, not {want!r}")
+
+	# Both paths were actually taken: the table is useless if every row
+	# went down the same one.
+	escaped = [x for x, _ in table if "\\" in x.partition(":")[2]
+	           or "$" in x.partition(":")[2]]
+	check(len(escaped) >= 4 and len(table) - len(escaped) >= 4,
+	      f"the table does not exercise both paths: {len(escaped)} escaped "
+	      f"of {len(table)}")
+
+
+@case
 def a_header_whose_path_needs_escaping_is_still_a_dependency(t):
 	"""A depfile is Makefile syntax, and the compiler escapes accordingly.
 
