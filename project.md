@@ -224,7 +224,8 @@ that had been green about nothing for five commits ·
 [171. situ grew, the flags line held, and the shape line is the open one](#171-situ-grew-the-flags-line-held-and-the-shape-line-is-the-open-one) ·
 [172. The ejected exe-crate rule mkdirs the wrong directory](#172-the-ejected-exe-crate-rule-mkdirs-the-wrong-directory) ·
 [173. §172 fixed, and three more in the crate path](#173-172-fixed-and-three-more-in-the-crate-path) ·
-[174. The lens from §173, and situ built from a copy](#174-the-lens-from-173-and-situ-built-from-a-copy)
+[174. The lens from §173, and situ built from a copy](#174-the-lens-from-173-and-situ-built-from-a-copy) ·
+[175. A package that is not linked still contributes its cflags](#175-a-package-that-is-not-linked-still-contributes-its-cflags)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14276,3 +14277,64 @@ nothing includes -- is reported per schema and skipped, which is what
 eleven that build also pass, since fmake declined to run any of them
 while one was broken; and situ's Python suite and its double
 compilation, which its own `fmake.toml` says are not attempted.
+
+## 175. A package that is not linked still contributes its cflags
+
+Reported from openmlx4, which evaluated fmake against its tree on
+2026-09-06 under the standing instruction that a project hand-writing a
+build system say whether it would adopt this one. Its verdict was no —
+twenty-two Makefile targets against six, and compiling was not where its
+trouble was — but fmake built the program, found the fourteen test
+drivers by itself, built thirteen and ran them green, and `--eject`
+produced a standalone Makefile that builds. This is the one defect that
+came out of it.
+
+**§17 already has the first half.** `caf-openmpi`'s `.pc` claims
+`/usr/include/x86_64-linux-gnu` and so claims everything underneath it,
+which is why `<python3.13/pyconfig.h>` answered it there. In openmlx4 the
+header is `sys/stat.h`, and the answer is the same package for the same
+reason. That part is understood and is not what this section is about.
+
+**The part that is new is what happens after the refusal.** Signal 2 does
+its job and declines the link. The package's `--cflags` are applied
+anyway:
+
+    libraries                        [from the external symbols above]
+      (not linked)   sys/stat.h at src/main.c:28 suggests caf-openmpi,
+                     but no symbol needs it
+
+and every translation unit in that tree then compiled with five paths
+from the package that had just been declined:
+
+    -I/usr/include/x86_64-linux-gnu
+    -I/usr/lib/x86_64-linux-gnu/fortran/
+    -I/usr/lib/x86_64-linux-gnu/openmpi/include
+    -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi
+    -I/usr/lib/x86_64-linux-gnu/openmpi/lib/../../fortran/gfortran-mod-15/openmpi
+
+Re-measured against `76cd33a` before sending, because this tree moved
+twice while the report was being written.
+
+**Isolated before being reported, because the first version of the claim
+was wrong.** It began as "fmake adds openmpi paths to a C build", which
+is not what happens. `CPATH` and `C_INCLUDE_PATH` are both empty; a
+two-line `hello.c` in an empty directory gets `-Os -I.` and nothing else;
+and removing `test/diff_layouts.c` — the one file in that tree with
+unresolvable includes — changes nothing. It is the declined package, and
+only that.
+
+**The consequence is a hazard rather than something observed.** The
+binary was correct and the build warning-free under the project's own
+`-Wall -Wextra -Wshadow`. What makes a stray `-I` more than noise is that
+it changes header search *order*, so a system directory arriving ahead of
+a project's own can shadow a header. That did not happen in openmlx4, and
+saying so is the point: this is worth a line because of what it could do,
+not because of what it did.
+
+**It is not a complaint about signal 1 proposing the package.** The
+proposal is cheap and the refusal is the argument of §3. It is that the
+two signals disagree and only one of them reaches the compile line.
+
+Reported rather than fixed: openmlx4 holds the reproduction and fmake
+holds the reasons. The reproduction is a clean `git archive HEAD` of
+openmlx4 with its committed `fmake.toml`, then `fmake --explain`.
