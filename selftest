@@ -16457,11 +16457,32 @@ UNREPORTED = ('wrote(name + "_extra.c", "int " + name + '
               '"_extra(void) { return 1; }\\n", report=False)\n')
 
 
-def _situc(t, stream="stderr", unreported=False):
+def _situ_pin(t):
+	"""`[toolchain] situc', naming this fixture's stand-in by full path.
+
+    Without it these cases only test what they say on a machine with no
+    situc installed. `find_situc' takes the configured one, then the
+    installed one, then the tree's `bin/situc' -- so the moment somebody
+    installs the situc package, every fixture below silently switches to
+    the real compiler, which cannot read a schema that says
+    `// a schema the stand-in does not read'.
+
+    That is not hypothetical: the package was installed on this machine at
+    21:16 on 2026-09-06 and ten of these cases went red inside the hour,
+    having passed all day. They failed loudly, which is the good outcome;
+    the bad one is a stand-in that goes on standing in for a tool nobody
+    is running.
+    """
+	return '[toolchain]\nsituc = "%s"\n' % os.path.join(t.dir, "bin", "situc")
+
+
+def _situc(t, stream="stderr", unreported=False, pin=True):
 	"""Install the stand-in compiler at bin/situc, as situ ships one."""
 	path = t.write("bin/situc", FAKE_SITUC % {
 	    "stream": stream, "extra": UNREPORTED if unreported else ""})
 	os.chmod(path, 0o755)
+	if pin:
+		t.write("fmake.toml", _situ_pin(t))
 	return path
 
 
@@ -16481,8 +16502,17 @@ def a_schema_is_compiled_because_a_source_includes_its_header(t):
 
     fmake knows nothing about this tree beyond what is in it -- a .situ file
     and a main.c that includes the header its name implies. The compiler is
-    found in the tree, at the path situ installs one to."""
-	_situ_tree(t)
+    found in the tree, at the path situ installs one to.
+
+    Deliberately unpinned, and therefore only answerable on a machine with
+    no situc installed: `find_situc' prefers an installed one, so the tree
+    fallback is not reachable while a real situc is on PATH. Its siblings
+    name the stand-in outright -- see `_situ_pin' -- because they are about
+    what fmake does with a compiler rather than which one it picks."""
+	if shutil.which("situc"):
+		raise Skip("situc is installed here, so the tree fallback this "
+		           "case exists for cannot be reached")
+	_situ_tree(t, pin=False)
 	r = t.fmake()
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	check("SITU schema/msg.situ" in r.stdout,
@@ -16512,7 +16542,8 @@ def a_schema_is_not_recompiled_until_it_changes(t):
 	# it a tree that adds `[situ] flags` keeps the previous rung's files
 	# and builds against them, which is the staleness bug that cannot be
 	# seen from the build log.
-	t.write("fmake.toml", '[situ]\nflags = ["--layer", "converse"]\n')
+	t.write("fmake.toml",
+	        _situ_pin(t) + '\n[situ]\nflags = ["--layer", "converse"]\n')
 	r = t.fmake()
 	check("SITU" in r.stdout, f"changing the flags must recompile: {r.stdout}")
 	check(os.path.exists(os.path.join(t.dir, ".fmake/situ/msg_frame.h")),
@@ -16522,7 +16553,9 @@ def a_schema_is_not_recompiled_until_it_changes(t):
 
 	# And back: what the previous flags produced is not left behind to
 	# answer an #include nobody meant.
-	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	# Back to no [situ] flags, keeping the compiler named: dropping the
+	# whole file would hand the fixture to whatever situc is installed.
+	t.write("fmake.toml", _situ_pin(t))
 	check(t.fmake().returncode == 0, "reverting the flags failed")
 	check(not os.path.exists(os.path.join(t.dir, ".fmake/situ/msg_frame.h")),
 	      "a file the previous flags produced was left behind")
@@ -16743,7 +16776,7 @@ def a_missing_situc_names_the_key_that_supplies_one(t):
 	"""Section 31: the remedy has to be one the reader can act on."""
 	if shutil.which("situc"):
 		raise Skip("situ is installed here, so there is one to find")
-	_situ_tree(t)
+	_situ_tree(t, pin=False)
 	os.unlink(os.path.join(t.dir, "bin/situc"))
 	r = t.fmake()
 	check(r.returncode != 0, "a schema with no compiler should stop the build")

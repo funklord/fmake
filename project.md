@@ -228,7 +228,8 @@ that had been green about nothing for five commits ·
 [175. A package that is not linked still contributes its cflags](#175-a-package-that-is-not-linked-still-contributes-its-cflags) ·
 [176. The claim a search path cannot make](#176-the-claim-a-search-path-cannot-make) ·
 [177. hydra's report: a HEAD build produced no link set for five targets](#177-hydras-report-a-head-build-produced-no-link-set-for-five-targets) ·
-[178. §177 measured: the version was not the variable, and the status was](#178-177-measured-the-version-was-not-the-variable-and-the-status-was)
+[178. §177 measured: the version was not the variable, and the status was](#178-177-measured-the-version-was-not-the-variable-and-the-status-was) ·
+[179. A stand-in that stops standing in when the real tool arrives](#179-a-stand-in-that-stops-standing-in-when-the-real-tool-arrives)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14556,3 +14557,57 @@ datum nobody has.
 **Not measured.** Why those five, in that tree, on that day. It needs
 the working tree as it was, and that is hydra's to hold rather than
 this project's to guess at.
+
+## 179. A stand-in that stops standing in when the real tool arrives
+
+Ten cases went red at 22:00 on 2026-09-06, having passed at 21:15. The
+change was not in this tree: **`situc` was installed as a Debian package
+at 21:16**, and `find_situc` prefers an installed compiler to the one in
+the tree.
+
+    stat -c %z /usr/bin/situc     2026-09-06 21:16:21   the install
+    stat -c %y /usr/bin/situc     2026-08-05 18:00:00   the build
+
+The mtime is the package's and says nothing; the ctime is when it landed
+here. Worth knowing which of the two answers "when did this appear".
+
+**Every situ case installs a stand-in at `bin/situc`**, because that is
+where situ ships one, and `find_situc` reads the tree only when nothing
+is installed. So the moment a real situc existed, ten fixtures handed
+their schemas to it -- and the fixtures' schema is one line reading
+`// a schema the stand-in does not read`, which a real compiler turns
+into a header without `msg_check()`. The symptom was ten builds failing
+on an implicit declaration.
+
+**They failed loudly, which is the good outcome.** The bad one is the
+same setup passing while testing something else, and that is available
+here: a stand-in reachable only when the real tool is absent is a
+stand-in whose coverage depends on a machine's package list.
+
+**Fixed by naming the compiler**, which is `find_situc`'s first branch
+and the only one that does not depend on the environment:
+
+    [toolchain]
+    situc = "<the fixture's own bin/situc>"
+
+Two cases are deliberately left unpinned, because their subject *is* the
+environment: the one that proves a tree's `bin/situc` is found when
+nothing is installed, and the one that proves the message names
+`[toolchain] situc` when nothing is found at all. Both skip with a
+reason naming the installed compiler. A case that cannot be answered here
+should say so rather than quietly test its neighbour.
+
+**The check on the fix is the machine as it now is.** Before the pin, ten
+red with situc installed; after it, eight green and two skipped, on the
+same machine in the same state. That pairing is the whole evidence, and
+it was available only because somebody installed a package mid-run.
+
+**And a live hazard for situ's own tree, which is theirs to decide.**
+`find_situc` prefers the installed compiler, so a situ working tree built
+on this machine now compiles its schemas with `/usr/bin/situc 1.0` rather
+than the `bin/situc` beside them. §174 measured what version skew between
+a schema's header and its test costs; this is a route to it that needs no
+mistake by anybody. fmake's order is deliberate and documented -- named,
+installed, then the tree -- so changing it is not a passing edit, and the
+question belongs to whoever owns that order rather than to a session that
+tripped over it.
