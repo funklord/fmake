@@ -6204,7 +6204,8 @@ def choose_libs(providers, wanted, proposed):
 class PkgConfig:
 	"""pkg-config, for the -I flags a library's own headers need."""
 
-	def __init__(self, configured=None, sysroot=None, triplet=None):
+	def __init__(self, configured=None, sysroot=None, triplet=None,
+	             sysincs=()):
 		self.exe = (shutil.which(configured) if configured else None) \
 		           or shutil.which("pkg-config") or shutil.which("pkgconf")
 		self._flags = {}
@@ -6227,6 +6228,19 @@ class PkgConfig:
 		# configuration still gets the default rather than no answer, and
 		# replaced by qt_preference() once a named moc is known.
 		self.qt_order = tuple(m[:len("Qt0")] for m in QT_CORE_MODULES)
+		# Where the preprocessor already looks. A .pc naming one of these
+		# claims every header on the machine and owns none of them; see
+		# by_includedir. Part of the cache key rather than only of the
+		# answer, because a cross build has a different set and a cached
+		# attribution taken under one must not be read back under another.
+		# The pair this used to hardcode, kept as the fallback and only
+		# as that: a compiler that will not answer -- absent, or a
+		# wrapper that swallows the probe -- must not leave every .pc
+		# claiming every system header, which is what an empty set
+		# would do.
+		self.sysincs = {os.path.realpath(d) for d in
+		                (sysincs or ("/usr/include", "/usr/local/include"))}
+		self.incs_sig = ",".join(sorted(self.sysincs))
 		self.sysroot = sysroot
 
 		# Left alone, pkg-config answers for the host: host .pc files, host
@@ -6393,7 +6407,8 @@ class PkgConfig:
 		# The Qt preference is part of the answer, so a cache written under
 		# one must not be read back under another: naming a moc changes what
 		# every Qt header resolves to.
-		key = sig + "|" + ",".join(self.qt_order) + "|" + name
+		key = (sig + "|" + ",".join(self.qt_order) + "|"
+		       + self.incs_sig + "|" + name)
 		if key in store:
 			self._note_dirs((store[key] or [None, None, None, []])[3])
 			return store[key]
@@ -6432,8 +6447,21 @@ class PkgConfig:
 
         Only useful for libraries that keep their headers in a subdirectory,
         which is exactly the case where an -I is needed. Packages installing
-        straight into /usr/include are ambiguous and are skipped -- they need
-        no -I either, so nothing is lost.
+        straight into a directory the preprocessor already searches are
+        ambiguous and are skipped -- they need no -I either, so nothing is
+        lost.
+
+        Which directories those are is the compiler's answer and not a
+        list here. It was `/usr/include' and `/usr/local/include', and
+        the multiarch directory beside them was missing -- on Debian
+        `/usr/include/x86_64-linux-gnu' is searched by default, so a .pc
+        naming it owned every system header underneath it. One .pc of the
+        451 on the machine this was found on names it, and one is enough:
+        `<sys/stat.h>' answered `caf-openmpi', a Fortran MPI package, and
+        five of its -I flags then reached every translation unit in a tree
+        whose symbols had declined to link it. Reported from openmlx4 and
+        recorded as section 176; hardcoding a search path is the thing
+        default_include_dirs exists to refuse.
         """
 		if self._by_incdir is not None:
 			return self._by_incdir
@@ -6449,7 +6477,7 @@ class PkgConfig:
 				if not f.endswith(".pc"):
 					continue
 				for inc in _pc_includedirs(os.path.join(d, f)):
-					if inc.rstrip("/") in ("/usr/include", "/usr/local/include"):
+					if os.path.realpath(inc) in self.sysincs:
 						continue
 					self._by_incdir.setdefault(inc.rstrip("/"), f[:-3])
 		return self._by_incdir
@@ -6544,14 +6572,31 @@ def _preferred_qt(hits, order):
 	return hits[0]
 
 
-def propose_from_headers(units, pkg, store, proj=None):
+def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
 	"""Packages the system includes suggest, with the -I flags they need.
 
     Runs before compiling, since that is when -I is needed. What comes back
     is a proposal only: the symbol evidence settles whether a package is
     really linked.
+
+    `sysincs' is where the preprocessor already looks, and an -I naming one
+    of those is dropped: default_link_dirs exists so that -L is only added
+    when it is needed, and this is that rule for the other half. It is not
+    only tidiness -- an explicit -I is searched *before* the system
+    directories, so re-naming one promotes it past every directory in
+    front of it, and a package proposed by a header it does not really own
+    can reorder a search path nobody asked it to touch. Reported from
+    openmlx4, whose build took five paths from a package the symbols had
+    just declined; this removes the one that was redundant, and section
+    176 says what the other four need.
+
+    Only the -I flags. A package's -D reaches the compile line because the
+    header needs it -- ncurses asks for -D_XOPEN_SOURCE=600 and krb5 for an
+    -isystem -- and those are not redundant merely because the header sits
+    somewhere the compiler already looks.
     """
 	sig = pkg.signature()
+	sysincs = {os.path.realpath(d) for d in sysincs}
 	cflags, proposed, seen = [], {}, set()
 	for u in units:
 		for kind, name, line in (u.scan.get("incs") or []):
@@ -6565,6 +6610,9 @@ def propose_from_headers(units, pkg, store, proj=None):
 				continue
 			module, mod_cflags, mod_libs = got[0], got[1], got[2]
 			for f in mod_cflags:
+				if (f.startswith("-I")
+				        and os.path.realpath(f[2:]) in sysincs):
+					continue
 				if f not in cflags:
 					cflags.append(f)
 			for l in mod_libs:
@@ -7580,7 +7628,8 @@ def build(args, _bootstrapping=False):
 	# Built here rather than where the -I flags are worked out, because moc
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.
-	pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet)
+	pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet,
+	                   default_include_dirs(cfg))
 	# Before anything resolves a header, so that every Qt answer in this
 	# build comes from the one major -- including the moc outputs, whose
 	# includes are the ones that gave the disagreement away.
@@ -8806,7 +8855,9 @@ def build(args, _bootstrapping=False):
 	if not args.no_libs:
 		every_unit = [units.get(rel) or Unit(rel, root, objdir, scans[rel])
 		              for rel in srcs if rel not in crate_members]
-		pkg_cflags, _ = propose_from_headers(every_unit, pkg, hdr_store, proj)
+		pkg_cflags, _ = propose_from_headers(every_unit, pkg, hdr_store,
+		                                     proj,
+		                                     default_include_dirs(cfg))
 		incflags = base_incflags + [f for f in pkg_cflags
 		                            if f not in base_incflags]
 

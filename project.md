@@ -225,7 +225,8 @@ that had been green about nothing for five commits ·
 [172. The ejected exe-crate rule mkdirs the wrong directory](#172-the-ejected-exe-crate-rule-mkdirs-the-wrong-directory) ·
 [173. §172 fixed, and three more in the crate path](#173-172-fixed-and-three-more-in-the-crate-path) ·
 [174. The lens from §173, and situ built from a copy](#174-the-lens-from-173-and-situ-built-from-a-copy) ·
-[175. A package that is not linked still contributes its cflags](#175-a-package-that-is-not-linked-still-contributes-its-cflags)
+[175. A package that is not linked still contributes its cflags](#175-a-package-that-is-not-linked-still-contributes-its-cflags) ·
+[176. The claim a search path cannot make](#176-the-claim-a-search-path-cannot-make)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14344,6 +14345,95 @@ not because of what it did.
 proposal is cheap and the refusal is the argument of §3. It is that the
 two signals disagree and only one of them reaches the compile line.
 
-Reported rather than fixed: openmlx4 holds the reproduction and fmake
-holds the reasons. The reproduction is a clean `git archive HEAD` of
-openmlx4 with its committed `fmake.toml`, then `fmake --explain`.
+~~Reported rather than fixed~~ **-- fixed; see §176**, which found the
+cause a directory further up: the map that attributes a header to a
+package skipped the two search paths it knew by name and not the
+multiarch directory beside them. Reported rather than fixed at the time:
+openmlx4 holds the reproduction and fmake holds the reasons. The
+reproduction is a clean `git archive HEAD` of openmlx4 with its
+committed `fmake.toml`, then `fmake --explain`.
+
+## 176. The claim a search path cannot make
+
+§175 arrived as a report from openmlx4: a package the symbols declined to
+link put five `-I` flags on every compile line anyway. This is the fix,
+and the interesting part is that **the rule was already written down and
+was hardcoded to two paths**.
+
+`by_includedir` builds the header-to-package map, and it opened by
+skipping the directories a package cannot own:
+
+    if inc.rstrip("/") in ("/usr/include", "/usr/local/include"):
+        continue
+
+with a docstring saying why -- "Packages installing straight into
+/usr/include are ambiguous and are skipped -- they need no `-I` either, so
+nothing is lost." That is exactly right and the list is one entry short.
+On Debian the preprocessor also searches `/usr/include/x86_64-linux-gnu`,
+so a `.pc` naming *that* owned every system header underneath it. One of
+the 451 `.pc` files here does: `caf-openmpi`.
+
+**Three lines reproduce it**, which is smaller than the tree it was
+reported from:
+
+    #include <sys/stat.h>
+    #include <stdio.h>
+    int main(void){ struct stat s; (void)s; puts("x"); return 0; }
+
+    flags
+      -Os -I. -I/usr/include/x86_64-linux-gnu
+      -I/usr/lib/x86_64-linux-gnu/fortran/ -I.../openmpi/include ...
+
+Five paths from a Fortran MPI package, in a program that uses `stat`.
+Afterwards the same program gets `-Os -I.`.
+
+**The compiler is asked now**, which is what `default_include_dirs`
+already existed for -- its own docstring says the compiler is the
+authority on its own search path and that hardcoding `/usr/include` is
+wrong on every cross build, and it was right about the tree it was
+sitting in. The pair it replaced stays as the fallback for a compiler
+that will not answer, because an empty set would let every `.pc` claim
+every system header, which is worse than the bug.
+
+**Two changes, and the second is smaller than it looks.** A directory
+the preprocessor already searches now claims nothing in the map, and an
+`-I` naming one is dropped from a proposal's flags. The first kills the
+false attribution at the root; the second is `default_link_dirs`'
+discipline -- only add what is needed -- applied to the other half, and
+it matters for a package that is correctly attributed by its own
+directory and names a system one beside it. 22 modules here reach the
+multiarch directory through `Requires:`, which `_pc_includedirs` does not
+follow, so they were never in the map and are exactly the case the flag
+filter covers.
+
+**Only the `-I` flags.** A package's `-D` reaches the compile line
+because its header needs it: ncurses asks for `-D_XOPEN_SOURCE=600`,
+krb5 for an `-isystem`, sdl2 for `-D_REENTRANT`. Measured across the 452
+modules installed here, so "drop the whole proposal when the header
+resolves anyway" was tried on paper and refused -- it would have
+silently changed what `<ncurses.h>` declares.
+
+**What it costs.** Five `.pc` files here have `-I` directories that are
+all default ones, so a header found in them is no longer attributed to
+them -- `libunwind` and `avtp` and their siblings. Nothing is lost that
+matters: they need no `-I`, and §3 still links them by symbol, which is
+the same reason the two hardcoded paths were skipped in the first place.
+
+**The number in the first draft of the comment was invented.** It said
+138 of 452 `.pc` files name the multiarch directory. Measured: one file
+does, and 22 modules inherit it through `Requires:`. Nothing downstream
+would have caught that -- it was a plausible integer in a code comment,
+which is the shape `evidence.md` says is agreed with by every subsequent
+reading. The comment carries the measured figure now, and both numbers
+came from these, which is what a re-derivation needs:
+
+    grep -l -- '-I/usr/include/x86_64-linux-gnu' \
+         /usr/lib/x86_64-linux-gnu/pkgconfig/*.pc     -> 1 file
+    for p in $(pkg-config --list-all | awk '{print $1}'); do
+        pkg-config --cflags "$p" | tr ' ' '\n' |
+            grep -qx -- -I/usr/include/x86_64-linux-gnu && echo "$p"
+    done | wc -l                                      -> 22 modules
+
+`_pc_includedirs` reads a file's `Cflags:` line and its variables and
+does not follow `Requires:`, which is why those two numbers differ and
+why only the first one decides what the map contains.

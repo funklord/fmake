@@ -12689,6 +12689,99 @@ int main(void){ return mylib_answer() == 42 ? 0 : 1; }
 
 
 @case
+def a_pc_claiming_a_default_include_dir_owns_nothing(t):
+	"""`by_includedir' skipped `/usr/include' and `/usr/local/include' by
+	name, and the multiarch directory beside them was not in the list. On
+	Debian `/usr/include/x86_64-linux-gnu' is searched by default, so one
+	`.pc` naming it -- `caf-openmpi', a Fortran MPI package, the only one
+	of 451 on the machine where this was found -- owned every system header
+	underneath it.
+
+	`<sys/stat.h>` therefore answered caf-openmpi, and because the symbols
+	then declined to link it, five of its -I flags reached every
+	translation unit in a tree that was not using it. A stray -I is
+	searched *before* the system directories, so it reorders a search path
+	nobody asked it to touch. Reported from openmlx4.
+
+	The list is the compiler's answer now. A directory it already searches
+	is the least specific claim there is -- every header on the machine is
+	under one -- which is `_deepest_owner' arriving at the same place from
+	the other end.
+
+	The control is the second half: the same fixture, claiming a directory
+	the compiler does *not* search, must still be attributed. Without it
+	this case passes just as loudly against a build that resolves no
+	packages at all."""
+	if not shutil.which("pkg-config"):
+		raise Skip("pkg-config not installed")
+
+	# The compiler is asked, rather than /usr/include assumed: this is a
+	# fixture that needs a header the preprocessor finds on its own, and
+	# where that lives is the machine's business.
+	txt = subprocess.run(["cc", "-E", "-Wp,-v", "-xc", os.devnull],
+	                     capture_output=True, text=True).stderr
+	dirs, inside = [], False
+	for line in txt.splitlines():
+		if line.startswith("#include <...>"):
+			inside = True
+			continue
+		if inside:
+			if not line.startswith(" "):
+				break
+			dirs.append(line.strip().split(" (")[0])
+	owned = [d for d in dirs if os.path.isfile(os.path.join(d, "sys/stat.h"))]
+	if not owned:
+		raise Skip("no default include directory here holds sys/stat.h")
+
+	prefix = tempfile.mkdtemp(prefix="fmake-claim-")
+	try:
+		os.makedirs(os.path.join(prefix, "pkgconfig"))
+		os.makedirs(os.path.join(prefix, "extra"))
+		os.makedirs(os.path.join(prefix, "own"))
+		with open(os.path.join(prefix, "own/mine.h"), "w") as fh:
+			fh.write("#pragma once\n#define MINE 1\n")
+		env = {"PKG_CONFIG_PATH": os.path.join(prefix, "pkgconfig")}
+
+		def pc(name, incdirs):
+			with open(os.path.join(prefix, "pkgconfig",
+			                       name + ".pc"), "w") as fh:
+				fh.write(f"Name: {name}\nDescription: fixture\n"
+				         f"Version: 1.0\nLibs: -lnosuchlib_{name}\n"
+				         f"Cflags: "
+				         + " ".join("-I" + d for d in incdirs) + "\n")
+
+		pc("claimer", [owned[0], os.path.join(prefix, "extra")])
+		t.write("main.c", """
+#include <sys/stat.h>
+int main(void){ struct stat s; (void)s; return 0; }
+""")
+		r = t.fmake("--explain", env=env)
+		check(r.returncode == 0, f"--explain failed: {r.stdout}{r.stderr}")
+		check(os.path.join(prefix, "extra") not in r.stdout,
+		      f"a .pc claiming {owned[0]}, which the compiler already "
+		      f"searches, owned <sys/stat.h> and put its own -I on every "
+		      f"compile line: {r.stdout}")
+
+		# The control. Same fixture, a directory the compiler does not
+		# search, and a header only that directory has.
+		os.remove(os.path.join(prefix, "pkgconfig/claimer.pc"))
+		pc("owner", [os.path.join(prefix, "own")])
+		t.write("main.c", """
+#include <mine.h>
+int main(void){ return MINE - 1; }
+""")
+		r = t.fmake("--explain", env=env)
+		check(r.returncode == 0,
+		      f"--explain failed for the control: {r.stdout}{r.stderr}")
+		check(os.path.join(prefix, "own") in r.stdout,
+		      f"a .pc claiming a directory the compiler does not search was "
+		      f"not attributed either, so the first half of this case "
+		      f"proves nothing: {r.stdout}")
+	finally:
+		shutil.rmtree(prefix, ignore_errors=True)
+
+
+@case
 def a_header_is_owned_by_the_deepest_include_directory(t):
 	"""A module's own -D must not be swapped for a sibling's.
 
