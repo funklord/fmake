@@ -226,7 +226,8 @@ that had been green about nothing for five commits ·
 [173. §172 fixed, and three more in the crate path](#173-172-fixed-and-three-more-in-the-crate-path) ·
 [174. The lens from §173, and situ built from a copy](#174-the-lens-from-173-and-situ-built-from-a-copy) ·
 [175. A package that is not linked still contributes its cflags](#175-a-package-that-is-not-linked-still-contributes-its-cflags) ·
-[176. The claim a search path cannot make](#176-the-claim-a-search-path-cannot-make)
+[176. The claim a search path cannot make](#176-the-claim-a-search-path-cannot-make) ·
+[177. hydra's report: a HEAD build produced no link set for five targets](#177-hydras-report-a-head-build-produced-no-link-set-for-five-targets)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
