@@ -14278,6 +14278,15 @@ eleven that build also pass, since fmake declined to run any of them
 while one was broken; and situ's Python suite and its double
 compilation, which its own `fmake.toml` says are not attempted.
 
+**Relayed on 2026-09-06**, on the copyright holder's instruction, as
+`suggestion/fmake.md` in situ's tree -- a new file, since theirs was
+dirty in eleven others and their `suggestion/` is documented as
+"correspondence rather than a backlog". Left untracked: whether it is
+committed is theirs. It carries the reproduction under their own
+Makefile, the rung experiment that ruled out the obvious explanation,
+and the list of situc commands fmake does not drive, which is §171's
+open observation written where its owner will read it.
+
 ## 175. A package that is not linked still contributes its cflags
 
 Reported from openmlx4, which evaluated fmake against its tree on
