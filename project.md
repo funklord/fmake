@@ -14042,3 +14042,68 @@ not.
 `situ/fmake.toml` exists, so the experiment is available and cheap, and it
 was not run for this note -- the claims above are about situc's interface
 and fmake's source, both read, and about nothing that was executed.
+
+## 172. The ejected exe-crate rule mkdirs the wrong directory
+
+Found 2026-09-06 from claude-guidelines, auditing every project's `clean`
+after the copyright holder reported one that "did not clean enough to
+trigger a complete rebuild" and named fmake's ejected Makefile.
+
+**The reproduction is three files.** A crate whose root is in a
+subdirectory, ejected and built from a tree with no `build/`:
+
+    src/main.rs   with `mod helper;`
+    src/helper.rs
+    fmake.toml    [target.demo] root = "src/main.rs"
+
+    $ fmake --eject > Makefile && make
+    error: error writing dependencies to `build/src/main.rs.d`:
+           No such file or directory (os error 2)
+    make: *** [Makefile:70: demo] Error 1
+
+`mkdir -p build/src` by hand and the same build succeeds and writes the
+depfile, which is the whole diagnosis.
+
+**The rule creates the target's directory and then writes a second file
+somewhere else.** For an executable crate the recipe is
+
+    $(t.filename): <root> <members>
+    	@mkdir -p $(BUILD_DIR)
+    	$(RUSTC) $(RUSTFLAGS) -o $@ \
+    	    --emit=link,dep-info=$(BUILD_DIR)/src/main.rs.d src/main.rs
+
+so the mkdir covers `$@`, and `dep-info=` goes to
+`$(BUILD_DIR)/<subdir>/<name>.d`, which nothing created. The staticlib
+rule above it is correct: it writes `$(BUILD_DIR)/<name>.a` with
+`--emit=link,dep-info=$(@:.a=.d)`, both in one directory, and mkdirs
+`$(@D)`.
+
+**It is the odd one out, and countably so.** The eject emitter has eight
+`@mkdir -p $(@D)` and exactly one `@mkdir -p $(BUILD_DIR)`, at the
+executable-crate rule. Every other recipe makes the directory of the file
+it is about to write; this one makes the directory of a different file,
+and it is also the only recipe that writes two outputs to two places.
+
+**Why it stayed hidden is the half that answers the original question.**
+The ejected `clean` is `rm -f $(CLEAN)`, which removes files and leaves
+directories. So `build/src/` survives every clean, and a tree that has
+built once can clean and rebuild for ever without meeting this. What
+exposes it is a directory that is not there: a fresh clone, an extracted
+archive, or anything that removes `$(BUILD_DIR)` rather than its
+contents. **A clean that removes only files hides a build that cannot run
+from clean** -- which is the same defect wearing the reported symptom's
+clothes, from the other side.
+
+**Not fixed here, and the fix is not `$(@D)`.** For this rule `$@` is the
+binary, whose directory is usually the tree root, so `$(@D)` would create
+the wrong thing again. What wants creating is the depfile's directory.
+That is fmake's call rather than a caller's, which is why this is written
+here rather than patched.
+
+**Measured, not inferred, and the audit around it came up empty
+otherwise.** The full build-clean-rebuild cycle was run on ejected
+Makefiles for ossacli (plain C, 17 compiles), hembygd (C++, 20) and a
+minimal Qt project with one `Q_OBJECT` header: every file the build
+created was removed by `clean` in all three, and the rebuild recompiled
+everything. The Rust path is the one that broke, and it broke on the
+build rather than on the clean.
