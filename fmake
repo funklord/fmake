@@ -4939,6 +4939,17 @@ def crate_cmd(u, cfg, out, exe=False):
 # it -- on hydra, 93,478 calls for a few thousand distinct paths. `root'
 # is fixed for the run, so the answer cannot change.
 _REL_CACHE = {}
+# One stat per prerequisite outside the tree, per compile pass, instead of
+# one per object that includes it. Measured on a 116-source Qt tree: 94,620
+# prerequisite entries across the depfiles, 3,413 distinct paths, and 98% of
+# the entries name a file outside the tree -- a Qt or system header, stat'd
+# once for every object that included it.
+#
+# Outside the tree is the whole of the condition, because that is what this
+# build cannot write. A generated source, a moc output or an object is
+# in-tree and is asked every time, which is what keeps a file written
+# mid-build from being remembered at the value it had before.
+_DEP_HASH = {}
 
 
 def object_key(u, cfg, cache, root, incflags):
@@ -4961,7 +4972,13 @@ def object_key(u, cfg, cache, root, incflags):
 		rel = _REL_CACHE.get((root, dep))
 		if rel is None:
 			rel = _REL_CACHE[(root, dep)] = os.path.relpath(dep, root)
-		dh = cache.hash_of(dep, rel)
+		# `..' at the front is relpath saying the path leaves the tree.
+		outside = rel[0] == "." and rel.startswith("..")
+		dh = _DEP_HASH.get(dep) if outside else None
+		if dh is None:
+			dh = cache.hash_of(dep, rel)
+			if outside and dh:
+				_DEP_HASH[dep] = dh
 		if dh:
 			parts.append(rel + ":" + dh)
 	return sha("|".join(parts))
@@ -5122,6 +5139,11 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
     """
 	broken = set() if broken is None else broken
 	origins = origins or {}
+	# Cleared per pass rather than per run: a [generate] rule may name an
+	# output anywhere, including outside the tree, and a pass boundary is
+	# where anything written since becomes visible again. Two passes cost
+	# two cold starts, which is 6,000 stats where the memo saves 90,000.
+	_DEP_HASH.clear()
 	todo = []
 	for u in units:
 		if u.compiled:

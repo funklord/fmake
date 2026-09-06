@@ -231,7 +231,8 @@ that had been green about nothing for five commits ·
 [178. §177 measured: the version was not the variable, and the status was](#178-177-measured-the-version-was-not-the-variable-and-the-status-was) ·
 [179. A stand-in that stops standing in when the real tool arrives](#179-a-stand-in-that-stops-standing-in-when-the-real-tool-arrives) ·
 [180. Asking the compiler, in the configuration it will build in](#180-asking-the-compiler-in-the-configuration-it-will-build-in) ·
-[181. Eighty per cent of a no-op build was one function](#181-eighty-per-cent-of-a-no-op-build-was-one-function)
+[181. Eighty per cent of a no-op build was one function](#181-eighty-per-cent-of-a-no-op-build-was-one-function) ·
+[182. One stat per header, not one per object that includes it](#182-one-stat-per-header-not-one-per-object-that-includes-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14795,3 +14796,68 @@ proportion will differ on a C tree with small depfiles; the parse cost is
 a function of how much header text the compiler recorded, and Qt records
 a great deal. What holds everywhere is the equivalence, which is what the
 table pins.
+
+## 182. One stat per header, not one per object that includes it
+
+§181 left `object_key` as the cost of a no-op build, and under it two
+things: `hash_of`, and the `stat` inside it. Counted over the depfiles of
+hydra's tree rather than guessed:
+
+    prerequisite entries         94620
+    distinct paths                3413
+    distinct outside the tree     3150
+    entries outside the tree     93225   (98%)
+
+So a Qt header was stat'd once for every object that included it, and 98%
+of the traffic was on files this build cannot write.
+
+**Outside the tree is the whole of the condition**, because that is
+exactly the set a build does not change while it runs. A generated
+source, a moc output, an object -- all in-tree, all asked every time,
+which is what keeps a file written mid-build from being remembered at the
+value it had before. `relpath` already says which is which: a `..` at the
+front means the path leaves the tree.
+
+**Cleared per compile pass rather than per run**, because a `[generate]`
+rule may name an output anywhere, including outside the tree, and a pass
+boundary is where a write since becomes visible again. Two passes cost
+two cold starts -- about 6,000 stats where the memo saves 90,000.
+
+**Measured A/B, interleaved, on the same tree**, because the machine
+carries other sessions and a before-and-after taken an hour apart is a
+measurement of the load:
+
+    HEAD          user 1.82 1.71 1.84   sys 0.49 0.57 0.48   wall 2.67 2.86 3.47
+    with memo     user 1.15 1.34 1.38   sys 0.22 0.22 0.16   wall 1.49 1.73 2.47
+
+**`sys` halving is the mechanism showing up in the right column.** A stat
+is a syscall, so if the saving were anywhere else that number would not
+have moved; the user-time drop is the dict lookups that replaced them
+being cheaper than the calls.
+
+**Correctness, in the four directions that matter**, on hydra's tree:
+
+    touch the header, mtime only     0 compiles   content is what is hashed
+    a real edit                      3 compiles   in-tree files still asked
+    revert the edit                  3 compiles   not fooled by a value seen before
+    settled                          0 compiles
+
+The third row is the sharp one. The objects on disk had been built from
+the edited header, so returning the file to its earlier content must
+still rebuild -- a memo that had remembered in-tree files would show 0
+there and leave the tree describing bytes that are not on disk.
+
+**Two measurement errors on the way, both mine and both worth naming.**
+The revert was first read through `tail -1`, which prints fmake's summary
+and hides the `[n/m] CC` lines above it: it said "up to date" and I
+briefly had a defect that was not there. And the first timing compared
+against a number taken an hour earlier under different load, which is the
+error §26 is about; the interleaved A/B is what replaced it.
+
+**And the next candidate, measured and refused.** The cache is 2.4MB and
+`json.dumps` costs 143ms, about 9% of a no-op, and on a true no-op the
+data is very likely unchanged. Skipping the write needs a dirty flag
+across about eight mutation sites, and a missed site is a cache that
+silently fails to record what it built -- staleness in the direction
+nobody checks. 9% does not buy that risk. The zero-risk variant, dumping
+anyway and skipping only the rename, saves the write and not the 143ms.
