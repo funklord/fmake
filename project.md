@@ -14702,6 +14702,22 @@ else. Its expectation is derived rather than written: whatever
 mention, because a test naming `i386-linux-gnu` would be this section's
 own fault in the check meant to catch it.
 
+**The cost of asking, measured before anybody optimises it.** §176 put
+`default_include_dirs` on every build, where it had been reached only by
+a diagnostic; §180 gave the other three probes a fallback that can ask
+twice. The include probe costs about 15ms, and a no-op build of hydra's
+tree -- 116 sources, moc, 91 targets -- is about 7.2s, three runs
+measured together. That is 0.2%, so there is nothing here to cache and
+the laziness that suggests itself would buy nothing: `for_header` needs
+the probe's answer in its cache key, so any tree with a system include
+pays it on the first header either way.
+
+Written down because §26 is the record of an optimisation that was not
+one, and the next reader deserves the number rather than the instinct.
+The 5% it would be against §26's own 0.3s figure is a different tree --
+168 C files, no Qt, no 91 links -- and comparing them would be the error
+that section is about.
+
 **Two things the same lens was pointed at and did not find.** The
 triplet now moves with the flags, so anything derived from it could have
 moved too -- `_prefixed` picks binutils from the compiler's *name*
