@@ -10889,7 +10889,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# graph, so a crate goes stale on a member the `mod' scan above")
 		a("# never saw -- which is the half that would have rotted quietly.")
 		a(f"{P}CRATE_DEPS = \\")
-		names = [f"$({P}BUILD_DIR)/{name}.d"
+		# The same expression CLEAN uses, and it has to be: a depfile
+		# written under one name and included under another is a
+		# `-include' of a file that never exists, which make passes
+		# over in silence.
+		names = [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d"
 		         for rel in sorted(crate_deps)]
 		for n, o in enumerate(names):
 			a(f"\t{o}" + (" \\" if n < len(names) - 1 else ""))

@@ -15230,6 +15230,60 @@ pub extern "C" fn rust_seven() -> i32 { helper::seven() }
 
 
 @case
+def an_ejected_crate_rebuilds_on_a_member_the_mod_scan_cannot_see(t):
+	"""The case above this one, asked of the ejected builds -- and make was
+	failing it.
+
+	The recipe writes `$(BUILD_DIR)/<source>.d' and `CLEAN' names the same
+	path, but the `-include' line was built from a variable left over from
+	the install loop, so it named `$(BUILD_DIR)/<last installed file>.d'.
+	Nothing is ever written there, and `-include' passes over a file that
+	does not exist without a word: the depfile was produced on every build
+	and read on none of them.
+
+	So a crate whose member is reached by `include!' -- which the `mod'
+	scan cannot see, which is why the depfile is consulted at all -- built
+	once and then never again, and the program went on printing the old
+	answer. ninja was right throughout, which is what makes it the control
+	here rather than a second helping."""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	t.write("main.rs", """
+include!("extra.rs");
+fn main() { println!("{}", extra_value()); }
+""")
+	t.write("extra.rs", "fn extra_value() -> i32 { 11 }\n")
+	name = os.path.basename(t.dir)
+
+	for backend, tool, out in (("make", ["make", "-C", t.dir], "Makefile"),
+	                           ("ninja", ["ninja", "-C", t.dir],
+	                            "build.ninja")):
+		if not shutil.which(backend):
+			continue
+		e = t.fmake("--eject", backend)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write(out, e.stdout)
+		for gone in (".fmake", "build"):
+			shutil.rmtree(os.path.join(t.dir, gone), ignore_errors=True)
+
+		r = subprocess.run(tool, capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"the ejected {backend} build failed: {r.stdout}{r.stderr}")
+		check(t.run(name).stdout.strip() == "11",
+		      f"the ejected {backend} build produced a different program")
+
+		t.write("extra.rs", "fn extra_value() -> i32 { 22 }\n")
+		r = subprocess.run(tool, capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"the {backend} rebuild failed: {r.stdout}{r.stderr}")
+		check(t.run(name).stdout.strip() == "22",
+		      f"the ejected {backend} build did not rebuild on a member the "
+		      f"`mod' scan cannot see, so it writes a depfile nothing "
+		      f"reads: {r.stdout}")
+		t.write("extra.rs", "fn extra_value() -> i32 { 11 }\n")
+
+
+@case
 def an_ejected_crate_rooted_in_a_subdirectory_builds_with_no_build_dir(t):
 	"""Section 172. The recipe writes two files to two places -- the
 	program where the target says, and the depfile under BUILD_DIR keeping
