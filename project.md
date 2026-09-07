@@ -232,7 +232,9 @@ that had been green about nothing for five commits ·
 [179. A stand-in that stops standing in when the real tool arrives](#179-a-stand-in-that-stops-standing-in-when-the-real-tool-arrives) ·
 [180. Asking the compiler, in the configuration it will build in](#180-asking-the-compiler-in-the-configuration-it-will-build-in) ·
 [181. Eighty per cent of a no-op build was one function](#181-eighty-per-cent-of-a-no-op-build-was-one-function) ·
-[182. One stat per header, not one per object that includes it](#182-one-stat-per-header-not-one-per-object-that-includes-it)
+[182. One stat per header, not one per object that includes it](#182-one-stat-per-header-not-one-per-object-that-includes-it) ·
+[183. A fallback that could not fire](#183-a-fallback-that-could-not-fire) ·
+[184. Load spoils a timing and hardens a test](#184-load-spoils-a-timing-and-hardens-a-test)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -14909,3 +14911,87 @@ the paragraph above declines. The json share the profiler reports is
 mostly its own per-call overhead over 620,000 encoder calls -- which is
 why the number that decided it was `time.time()` around `json.dumps`
 rather than the profile's own column.
+
+## 183. A fallback that could not fire
+
+§180 gave the compiler probes the project's flags, and gave them a
+fallback for a flag the driver will not take. The fallback could not
+fire. Found four hours later by re-reading the night's four changes
+together rather than by anything that ran.
+
+**Success and failure arrive on the same channel, and truthiness cannot
+tell them apart.** `default_include_dirs` reads its answer from stderr,
+because `-Wp,-v` is the only interface cpp offers for it. A driver
+refusing a flag also writes to stderr:
+
+    cc: error: unrecognized command-line option '-mbogusflag'
+
+62 bytes, as truthy as a search path and holding no directories. Written
+as `flagged or bare` over those two strings, the failing probe always
+won.
+
+    flags                  before   after
+    none                        7       7
+    -std=c11, a warning         7       7
+    -mbogusflag, refused        0       7
+
+**The damage was bounded, which is why nothing caught it.** `PkgConfig`
+keeps the old hardcoded pair for a probe that answers nothing, so the end
+state was the behaviour before §180 -- correct enough that a full suite
+passed over the dead fallback twice. Nothing on this machine hands fmake
+a flag its driver refuses, so the path that needed the fallback was never
+taken.
+
+**The fix is to ask the ANSWER, not the text.** `read()` parses, and the
+fallback runs when the list came back empty -- which is the question a
+fallback exists to ask. Where success and failure share a channel, test
+the shape of what came back rather than whether anything did.
+
+**The case execs the shipped function in three configurations** and needs
+no build: no flags, a flag the driver warns about, and one it refuses.
+Its control disables the fallback and it fails naming it. Written that
+way because the failing configuration cannot be reached through a build
+on this machine -- there is no tree here whose flags this compiler
+refuses, and inventing one to drive a build would be a fixture testing
+itself.
+
+**And the general form, which is this project's own rule turned around.**
+A check that cannot fail is the thing `evidence.md` warns about; a
+fallback that cannot fire is the same defect in the remedy rather than in
+the check. Both were mine, four hours apart, in code whose comment
+described the behaviour it did not have.
+
+## 184. Load spoils a timing and hardens a test
+
+Reported from fuzzypickles 2026-09-07, after our benchmarks spent a night
+spoiling each other on the same twelve cores. The observation is theirs
+and it corrects a blanket policy of mine.
+
+**A contended timing is wrong in the flattering direction and looks
+identical to a clean one.** That is what put 7.2s into §181 and 143ms
+into §182, both corrected.
+
+**A contended test is only made harder.** Their load guard exists to
+refuse spurious *failures*, so a pass taken at load 47 is a pass despite
+a handicap -- worth more than a pass taken idle, not less. They ran
+twelve scenarios deliberately outside the guard on that reasoning, said
+so before starting, and all twelve passed.
+
+    a timing under load     silently flattering    schedule it, or interleave
+    a test under load       loudly honest          run it whenever
+
+**The general form: where a measurement can only be spoiled in one
+direction, adverse conditions are free evidence.**
+
+**What it costs here is a habit.** This session ran a suite at load 84
+and half-apologised for it, then arranged a later run into a quiet window
+on the same instinct. The first was better evidence than the second. The
+quiet box was only ever needed for the two timings, and the interleaved
+A/B in §181 removes even that need -- contention lands on both arms and
+cancels in the ratio.
+
+**Their own report is the same discipline pointed at their result.** 68
+scenarios in one sweep plus 12 run afterwards is not an 80-scenario run,
+and they wrote it as a union of two runs rather than as 80 of 80. A
+single full sweep has still never completed on that machine, and the note
+says so.
