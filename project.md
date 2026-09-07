@@ -234,7 +234,8 @@ that had been green about nothing for five commits ·
 [181. Eighty per cent of a no-op build was one function](#181-eighty-per-cent-of-a-no-op-build-was-one-function) ·
 [182. One stat per header, not one per object that includes it](#182-one-stat-per-header-not-one-per-object-that-includes-it) ·
 [183. A fallback that could not fire](#183-a-fallback-that-could-not-fire) ·
-[184. Load spoils a timing and hardens a test](#184-load-spoils-a-timing-and-hardens-a-test)
+[184. Load spoils a timing and hardens a test](#184-load-spoils-a-timing-and-hardens-a-test) ·
+[185. hembygd builds, and its warning about the package is stale](#185-hembygd-builds-and-its-warning-about-the-package-is-stale)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15051,3 +15052,52 @@ scenarios in one sweep plus 12 run afterwards is not an 80-scenario run,
 and they wrote it as a union of two runs rather than as 80 of 80. A
 single full sweep has still never completed on that machine, and the note
 says so.
+
+## 185. hembygd builds, and its warning about the package is stale
+
+The standing evaluation says to try fmake against the tree in front of
+you rather than in the abstract. hembygd was the least-covered tree in
+these notes -- one mention -- and it has an `fmake.toml`, so somebody had
+already set it up. Built from a clean `git archive` of `a1bb514` in a
+scratch directory:
+
+    fmake -j4                       rc 0, 19 TUs, LD hembygd
+    fmake --eject, then make        rc 0 from an emptied tree, 243KB
+
+Both work, and the second is the check §172's defect would have failed.
+The flags differ from their Makefile's -- `-Os` against
+`-O2 -g -Wall -Wextra -fno-exceptions -fno-rtti -std=c++17` -- which is
+the README's own "diff the flags first" rather than a fault.
+
+**The finding is in their README, and it is about this project.** It
+says *"Not `/usr/bin/fmake`. The packaged one predates `$file()`"* and
+sends a reader to `python3 ~/src/fmake/fmake`. Measured, the packaged one
+builds their tree, and it could not have without `$file()`: their own
+`fmake.toml` comment says `src/qt/main.cpp` does not compile without
+`HEMBYGD_VERSION`, which is `$file(VERSION)`.
+
+**The dates are the interesting part, because the obvious one supports
+the warning.**
+
+    $file() landed              02e11a8, 2026-09-01
+    /usr/bin/fmake mtime        2026-08-04     the .deb's build stamp
+    /usr/bin/fmake ctime        2026-09-04     when it was installed here
+
+That is §179's lesson recurring two days later, in the other direction:
+there a package's ctime showed something had arrived mid-run, here an
+mtime nearly confirmed a stale warning. **The mtime is the package's own
+and says nothing about when it landed.**
+
+**And a second thing I nearly reported wrongly.** `fmake --version`
+prints `1.0 (5af02348)`, and that hash is not in this repository's
+history -- which reads as a mystery until you remember why it exists.
+`build_identity()` is a content hash of the file, not a commit: `VERSION`
+answers which release, and cannot also answer whether the fmake you are
+running is the one over there, because a package version that moves
+eighty times a fortnight is not a version. I had drafted "that hash is
+not in our history" as a finding about their setup.
+
+**Told rather than edited**, as a message to the session working there:
+their tree was dirty in three files. Recorded here so the claim of having
+told them names something -- and the remedy is one sentence in their
+README, which they own.
