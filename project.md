@@ -14985,6 +14985,32 @@ on this machine -- there is no tree here whose flags this compiler
 refuses, and inventing one to drive a build would be a fixture testing
 itself.
 
+**Swept for the class, and it is otherwise handled -- by name.** The lens
+is "success and failure arriving on the same channel, where an error can
+be parsed as an answer", and the population is every place fmake reads a
+tool's output: three `_stdout`/`_stderr` sites and thirteen
+`subprocess.run` calls. `_stdout` returns `""` on a non-zero status, so
+its callers cannot read an error as data. `read_symbols` checks the
+status, tells bitcode apart from a bad nm, and calls `plugin_failure` for
+the case where nm exits 0 having read nothing. And the sharpest one was
+already found and fixed harder than this section's: `elf_identity`
+returns `UNREADABLE`, a tuple that can never equal a real identity and is
+never `None`, because "unreadable" and "not an ELF" both used to come
+back as `None` and every caller reads `None` as no opinion -- right for a
+linker script, wrong for a file that could not be opened, and at the one
+site that decides whether a library may be linked it offered the host's
+zlib to a cross build.
+
+Measured while looking: 5 of the 539 `.so` files in
+`/usr/lib/x86_64-linux-gnu` fail `nm` outright, and all five are ld
+scripts -- `libc.so`, `libm.so`, and the three ncurses ones carrying
+`INPUT(libncurses.so.6 -ltinfo)`. fmake parses those rather than passing
+them to nm, and names all three in the comment that does it. So the
+class has one instance, it was mine, and it is the one above.
+`tool_version` is the only remaining site taking `(stdout or stderr)`
+without a status, and its worst case is an error line shown as a version
+and hashed into a key that stays stable per machine.
+
 **And the general form, which is this project's own rule turned around.**
 A check that cannot fail is the thing `evidence.md` warns about; a
 fallback that cannot fire is the same defect in the remedy rather than in
