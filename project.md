@@ -235,7 +235,9 @@ that had been green about nothing for five commits ·
 [182. One stat per header, not one per object that includes it](#182-one-stat-per-header-not-one-per-object-that-includes-it) ·
 [183. A fallback that could not fire](#183-a-fallback-that-could-not-fire) ·
 [184. Load spoils a timing and hardens a test](#184-load-spoils-a-timing-and-hardens-a-test) ·
-[185. hembygd builds, and its warning about the package is stale](#185-hembygd-builds-and-its-warning-about-the-package-is-stale)
+[185. hembygd builds, and its warning about the package is stale](#185-hembygd-builds-and-its-warning-about-the-package-is-stale) ·
+[186. Vendored submodules are the build's to fetch, and fmake needs a method](#186-vendored-submodules-are-the-builds-to-fetch-and-fmake-needs-a-method) ·
+[187. A worktree is a git checkout, and fmake asked the wrong question](#187-a-worktree-is-a-git-checkout-and-fmake-asked-the-wrong-question)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15199,3 +15201,72 @@ before it is written rather than after.
 
 Recorded rather than designed: what the method is belongs to this
 project, and what is settled is that there must be one.
+
+## 187. A worktree is a git checkout, and fmake asked the wrong question
+
+§186 records the instruction that fmake needs a method for submodules.
+Reading it as fmake's problem rather than as a fact about fmake's own
+repository -- the copyright holder's correction -- sent me to how fmake
+asks git anything, and the rule names the spelling in its second
+constraint: `test -d .git` is false in a worktree and in a submodule
+checkout. **fmake had two of them.**
+
+    .git in a worktree            49 bytes, ASCII text
+    os.path.isdir(root/".git")    False
+    git rev-parse --git-dir       /home/funk/src/hembygd/.git/worktrees/wt
+
+**The pair that shows what it cost.** A tree whose git-ignored `outdir/`
+holds a second definition of `helper`:
+
+    as a clone       [1/1] CC helper.c        * built repo
+    as a worktree    outdir/helper.c ...      "fmake will not guess which
+                                              one belongs in wt"
+
+The same commit, the same files. As a worktree, `git_ignored` returned
+nothing, so `ignored_source_dirs` found nothing, so a directory git had
+been told to ignore was scanned for source -- and the refusal advised
+`@os`, `@arch` or an `fmake.toml` stanza, which points the reader at
+their own sources for a directory git had already disowned. §139 and
+§146 are the same failure reported from hydra; it was waiting in every
+worktree. `ensure_gitignore` carried the spelling too, so a worktree
+never got its `.fmake/` line.
+
+**Asked of git now**, memoised, because the answer cannot change while a
+build runs and two callers would otherwise each pay a subprocess.
+
+**Two method errors on the way, both mine, both the kind that end an
+investigation early.** The first fixture did not reproduce it: the
+ignored file defined `main()`, so it became a second target that was
+silently not built rather than a collision that refuses, and the run
+looked identical to a clean one. A fixture that fails to reproduce is not
+evidence of absence -- it is a fixture that has not reached the hazard,
+which is *A test can name the hazard exactly and cover only the safe
+path* in `evidence.md`. And twice I read the output through `grep` and
+hid the answer, which is the reduction error this project has recorded
+three times and I made twice in ten minutes.
+
+**The first attempt swapped one wrong question for another, and the
+suite caught it.** `ensure_gitignore` asked `git_dir` too, which broke a
+case whose fixture is `os.makedirs(root/".git")` -- an empty directory
+standing in for a repository, which `rev-parse` correctly refuses. The
+fixture is a stand-in that is not the thing, which is `evidence.md`'s own
+shape reported from here; but the real fault was mine and larger than the
+fixture: **on a machine with no git installed, a tree with a perfectly
+good `.git` would have lost its ignore line.**
+
+    git_ignored         can git ANSWER which paths are ignored?
+                        -> git_dir: a git that cannot answer is no
+                           ignore information
+
+    ensure_gitignore    is there a repository here at all?
+                        -> `.git` exists, or git says so: a courtesy line
+                           costs nothing where it is wrong
+
+Two call sites, two questions, and collapsing them is what produced both
+the original defect and my first fix for it. `.git` exists as a directory
+in a clone, as a file in a worktree and a submodule checkout, and on a
+machine with no git at all.
+
+**This is a prerequisite for §186 rather than a detour from it.** A
+method that fetches submodules has to ask git about a tree whose `.git`
+is, in exactly the interesting cases, a file.

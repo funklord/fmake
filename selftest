@@ -13641,6 +13641,121 @@ def the_readme_documents_every_directive(t):
 
 
 @case
+def a_worktree_is_a_git_checkout_and_its_ignores_are_read(t):
+	"""`os.path.isdir(root/".git")` is false for a checkout git is happy to
+	talk about. In a worktree -- and in a submodule checkout -- `.git` is a
+	FILE naming the real directory elsewhere: 49 bytes of ASCII, measured.
+
+	fmake read that as "not a git checkout", so `git_ignored` returned
+	nothing, so a directory git is told to ignore was scanned for source.
+	The pair that shows it: a tree whose ignored `outdir/` holds a second
+	definition of `helper`. As a clone it builds, the ignored copy never
+	considered. As a worktree of the same commit it REFUSES, listing
+	`outdir/helper.c` beside the real one and saying it will not guess
+	which belongs -- advice about `@os` and `fmake.toml`, pointing at the
+	reader's own sources, for a directory git had already disowned.
+
+	`build-and-commit.md` names this spelling as the one that dropped a
+	whole backend in raidcfgd, and says the workspace moved off it on
+	2026-09-03. fmake had two of them.
+
+	Asked of git now. The clone half is the control: without it this case
+	passes on any tree that simply has no second definition."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+
+	t.write("main.c", "#include <stdio.h>\nint helper(void);\n"
+	        "int main(void){ printf(\"%d\\n\", helper()); return 0; }\n")
+	t.write("helper.c", "int helper(void){ return 1; }\n")
+	t.write("outdir/helper.c", "int helper(void){ return 2; }\n")
+	t.write(".gitignore", "outdir/\n")
+
+	def git(*a, **kw):
+		return subprocess.run(["git", "-C", t.dir, *a],
+		                      capture_output=True, text=True, **kw)
+	check(git("init", "-q", ".").returncode == 0, "git init failed")
+	git("config", "user.email", "t@example.invalid")
+	git("config", "user.name", "t")
+	check(git("add", "main.c", "helper.c", ".gitignore").returncode == 0,
+	      "git add failed")
+	check(git("commit", "-qm", "init").returncode == 0, "git commit failed")
+
+	# The control: as an ordinary checkout the ignored copy is not source.
+	clone = t.fmake()
+	check(clone.returncode == 0,
+	      f"the ordinary checkout does not build, so the worktree half "
+	      f"below would prove nothing: {clone.stdout}{clone.stderr}")
+
+	wt = os.path.join(t.dir, "..", os.path.basename(t.dir) + "-wt")
+	wt = os.path.abspath(wt)
+	try:
+		check(git("worktree", "add", "--detach", wt, "HEAD").returncode == 0,
+		      "git worktree add failed")
+		# The ignored directory is not committed, so it is not in the
+		# worktree; copy it, which is what a build directory left behind
+		# amounts to.
+		shutil.copytree(os.path.join(t.dir, "outdir"),
+		                os.path.join(wt, "outdir"))
+		check(os.path.isfile(os.path.join(wt, ".git")),
+		      "this git does not use a .git file in a worktree, so the "
+		      "case cannot test what it exists for")
+
+		r = subprocess.run([FMAKE, "-C", wt], capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"a worktree does not build what its clone does: git is told "
+		      f"to ignore outdir/ and fmake did not ask git: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		git("worktree", "remove", "--force", wt)
+		shutil.rmtree(wt, ignore_errors=True)
+
+
+@case
+def every_option_says_what_it_does(t):
+	"""`-v` and `-q` carried no help at all, so `--help` printed their
+	names and nothing else -- the only two options in the parser like it.
+
+	What that costs is measured rather than supposed. Two projects reached
+	for `--eject make-fragment`, which builds the whole tree, to answer
+	"what flags is this compiling with", when `-n` prints exactly that and
+	builds nothing and `--explain` carries the same lines. A reader
+	scanning `--help` for the answer met two bare names, and `--explain`
+	described itself as "the inferred build", which does not sound like
+	the place a command line lives. Section 185.
+
+	The assertion is over the population rather than over those two: an
+	option added tomorrow with no help fails here, which is the only
+	version of this check that keeps working."""
+	out = subprocess.run([FMAKE, "--help"], capture_output=True, text=True)
+	check(out.returncode == 0, f"--help failed: {out.stderr}")
+
+	# argparse indents an option at two spaces and its help at more; a
+	# flag whose help is missing leaves the line bare.
+	bare = []
+	for line in out.stdout.splitlines():
+		if not line.startswith("  -") or line.startswith("    "):
+			continue
+		# `  -x, --long ARG` with help on the same line has two or more
+		# spaces after the option; with help on the next line it does not,
+		# and argparse then indents that line further.
+		text = line[2:]
+		if "  " in text.rstrip():
+			continue                    # help follows on this line
+		bare.append(text.strip())
+	# A wrapped option puts its help on the following line, so a name here
+	# is only bare if the next line is not indented help.
+	lines = out.stdout.splitlines()
+	really = []
+	for name in bare:
+		i = next(n for n, l in enumerate(lines) if l.strip().startswith(name))
+		nxt = lines[i + 1] if i + 1 < len(lines) else ""
+		if not nxt.startswith("      "):
+			really.append(name)
+	check(not really,
+	      f"these options print their name and no help at all: {really}")
+
+
+@case
 def the_readme_documents_every_option(t):
 	"""The README is the manual, so its option table is a third copy.
 

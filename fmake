@@ -11879,6 +11879,44 @@ def do_install(targets, closures, root, outdir, conf, args):
 # Housekeeping
 # ---------------------------------------------------------------------------
 
+_GIT_DIR = {}
+
+
+def git_dir(root):
+	"""This tree's git directory, or None -- asked of git, not guessed.
+
+    `os.path.isdir(root/".git")` is false for a checkout git is perfectly
+    happy to talk about: in a worktree and in a submodule checkout `.git`
+    is a FILE naming the real directory elsewhere. Measured on a worktree
+    of a sibling tree here -- 49 bytes of ASCII, `isdir` false,
+    `rev-parse --git-dir` answering `.../.git/worktrees/wt`.
+
+    What that spelling cost is not hypothetical: it decided `git_ignored`
+    returned nothing, so `ignored_source_dirs` found nothing, so a build
+    directory left in a worktree was compiled as source -- which is the
+    failure §139 and §146 record from hydra, reappearing wherever somebody
+    builds in a worktree. `build-and-commit.md` names the same spelling as
+    the one that dropped a whole backend in raidcfgd, and says the
+    workspace moved off it on 2026-09-03.
+
+    Memoised: the answer cannot change while a build runs, and the two
+    callers would otherwise each pay a subprocess.
+    """
+	if root in _GIT_DIR:
+		return _GIT_DIR[root]
+	answer = None
+	if shutil.which("git"):
+		try:
+			r = subprocess.run(["git", "-C", root, "rev-parse", "--git-dir"],
+			                   capture_output=True, text=True,
+			                   errors="replace", timeout=10)
+			answer = r.stdout.strip() if r.returncode == 0 else None
+		except (OSError, subprocess.SubprocessError):
+			answer = None
+	_GIT_DIR[root] = answer
+	return answer
+
+
 def git_ignored(root, paths):
 	"""Which of these git is already told to ignore, or an empty set.
 
@@ -11897,7 +11935,7 @@ def git_ignored(root, paths):
     An empty answer is the safe one and every failure returns it: no git, no
     repository, a git that could not answer. Nothing is skipped on a guess.
     """
-	if not os.path.isdir(os.path.join(root, ".git")) or not shutil.which("git"):
+	if not git_dir(root):
 		return set()
 	try:
 		# -z on both halves. Without it git quotes any path that is not
@@ -12104,7 +12142,16 @@ def _answer_block(o):
 
 
 def ensure_gitignore(root):
-	if not os.path.isdir(os.path.join(root, ".git")):
+	# Looser than `git_dir' on purpose, and the two questions differ.
+	# `git_ignored' needs git to ANSWER, so a git that cannot is the same
+	# as no ignore information. This one only needs to know whether a
+	# repository is here, and a courtesy line costs nothing where it is
+	# wrong: `.git' exists as a directory in a clone, as a FILE in a
+	# worktree and in a submodule checkout, and on a machine with no git
+	# installed at all -- where asking git would drop the line for a tree
+	# that plainly has a repository in it. Asking git as well covers the
+	# case where `.git' is somewhere else entirely.
+	if not (git_dir(root) or os.path.exists(os.path.join(root, ".git"))):
 		return
 	path = os.path.join(root, ".gitignore")
 	try:
@@ -12223,8 +12270,12 @@ def parse_args(argv):
 	                    "script, by shebang or binfmt_misc")
 	p.add_argument("-o", "--output", default=None,
 	               help="where to put the binaries (default: project root)")
+	# "the inferred build" did not tell anybody that the exact compile and
+	# link lines are in it, which is the thing people go looking for.
 	p.add_argument("--explain", action="store_true",
-	               help="print the inferred build and exit")
+	               help="print the inferred build and exit: every target, "
+	                    "its link set and why, and the exact compile and "
+	                    "link command lines")
 	p.add_argument("-n", "--dry-run", action="store_true",
 	               help="print commands without running them")
 	p.add_argument("-i", "--interactive", action="store_true",
@@ -12290,8 +12341,18 @@ def parse_args(argv):
 	p.add_argument("-V", "--version", action="version",
 	               version=f"fmake {VERSION} ({build_identity()})\n"
 	                       f"{COPYRIGHT}\n{LICENCE}")
-	p.add_argument("-v", "--verbose", action="store_true")
-	p.add_argument("-q", "--quiet", action="store_true")
+	# The only two options that carried no help at all, which is how a
+	# reader scanning this list learns nothing about them. Two projects
+	# reached for `--eject make-fragment' -- a full build -- to answer
+	# "what flags is this compiling with", when `-n' prints exactly that
+	# and builds nothing; see section 185.
+	p.add_argument("-v", "--verbose", action="store_true",
+	               help="say more: the library search and its directories, "
+	                    "the whole of a long link error, and what a "
+	                    "sub-make is doing")
+	p.add_argument("-q", "--quiet", action="store_true",
+	               help="say less: no per-file progress, only what failed "
+	                    "and what was built")
 	# argparse refuses a value that looks like an option, so `--ldflags -lm`
 	# fails where `--ldflags=-lm` works. Since -l is exactly what anyone will
 	# type, rewrite the separated form into the joined one first.
