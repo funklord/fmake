@@ -2062,6 +2062,31 @@ rather than code, and one lesson about testing.
   read back into the freshness key, the same bargain the compile side
   makes. `depends` stays for the ones that cannot -- flex cannot, and a
   shell script only can if somebody makes it.
+- **A tree's existing build file names flags fmake does not, and nothing
+  compares them.** Raised as a wish by hembygd 2026-09-07 -- "a way to say
+  these flags are load-bearing, refuse to build without them" -- and worth
+  recording with the measurement they did not have and §185 does. Their
+  Makefile carried `-ffp-contract=off`; their `fmake.toml` carried no
+  flags at all; so fmake compiled that tree with FMA fusion permitted, and
+  nothing could complain, because the flag's absence is invisible until a
+  world hash disagrees between two builds of one commit.
+
+  **A tool cannot refuse a flag nobody wrote down**, so the wish as stated
+  has no implementation. What it points at does: the tree already declared
+  those flags, in the Makefile fmake was replacing. Reading a `CFLAGS`
+  or `CXXFLAGS` assignment out of an existing build file and reporting
+  what fmake is not passing would turn the README's *diff the flags first*
+  from advice into a report, at adoption time, which is the one moment a
+  reader is looking.
+
+  **The cost is that it is a heuristic about somebody else's file.** A
+  Makefile can compute its flags, name them per target, or inherit them,
+  and a report that is wrong about that is worse than none -- it would be
+  a false finding in the exact place fmake asks to be trusted. Two of the
+  three flags in hembygd's case were also genuinely inert, so a naive diff
+  would have led with noise and buried the one that mattered. Whether that
+  trade is worth making is the copyright holder's, not a session's.
+
 - **Object directories are never reclaimed.** One is kept per
   configuration on purpose, so switching profiles, toolchains or `$DEBUG`
   costs nothing the second time -- and nothing removes the ones that fall
