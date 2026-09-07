@@ -10819,6 +10819,24 @@ and does not name `DEB_DIR`, `build/deb`, `dist/` or the `Unsupported file`
 message anywhere, so what it is missing is exactly the cause and not the
 symptom.
 
+**Re-measured 2026-09-07, and half of it had been fixed there while this
+entry went on saying otherwise.** apt-emerge's workflow names `build/deb/`
+now, in both the install and the lintian step; the `dist/` above is no
+longer true of that tree. What remains is the README, which still tells a
+reader `sudo apt install ./build/apt-emerge_*_all.deb` while `make deb`
+moves the artifacts into `$(DEB_DIR)` and lists them there -- a documented
+command that fails on the line after the one that worked.
+
+**And the signal had never been sent.** "Signalled, not reached across
+into" is the sentence above, and nothing had been written into that tree:
+no `suggestion/`, no mention of `DEB_DIR` or the paths anywhere in its
+notes. That is the shape `harmonization.md` named this morning -- a claim
+asserting an act, with no artifact -- found here by pointing the new rule
+at this project's own record rather than at anybody else's. It is written
+into apt-emerge's `project.md` now, as *"Signal from fmake: the README's
+install line names the wrong directory"*, which is the artifact this
+paragraph can be checked against.
+
 ### What the logs cost
 
 Nothing older than about a day has logs. `--log-failed` and `--job <id>
@@ -14553,6 +14571,18 @@ build is deliberately unchanged -- it still exits 0 and still says it
 once, because a build that drops a target leaves no binary to mistake
 for a complete one, and the memory exists so that a build does not
 repeat itself. Only the artifact needs the status.
+
+**Recorded at hydra's end**, which is the artifact this section can be
+checked against rather than a claim of having told them: their
+`project.md`, heading *"`objsets.mk` cannot be regenerated, and that is
+why it went stale"*, commit `86f3d84`. That file carries no section
+numbers -- 194 headings, none numbered -- so the heading and the commit
+are the citation, and they declined to number it retroactively on the
+grounds that renumbering 194 headings and their references is a
+convention change belonging to the copyright holder rather than something
+done to make a cross-tree citation read neatly. Both halves are in that
+one entry: the mechanism, and the second-inference correction about the
+two empty link sets.
 
 **What hydra can do with this.** If it recurs, the run now cannot be
 silent: `objsets.py` reads fmake's stderr when the status is non-zero,
