@@ -15065,9 +15065,32 @@ scratch directory:
     fmake --eject, then make        rc 0 from an emptied tree, 243KB
 
 Both work, and the second is the check §172's defect would have failed.
-The flags differ from their Makefile's -- `-Os` against
-`-O2 -g -Wall -Wextra -fno-exceptions -fno-rtti -std=c++17` -- which is
-the README's own "diff the flags first" rather than a fault.
+
+**The flags differed from their Makefile's, and calling that "diff the
+flags first rather than a fault" was wrong.** hembygd corrected it: their
+`fmake.toml` named no flags at all, so fmake was compiling that tree
+without `-ffp-contract=off`, which is invariant 1 there rather than a
+preference. The sim is full of `pos + vel * dt`, a compiler may fuse that
+into one FMA with different rounding, and a binary built without it can
+hash a world differently from the shipped one -- which ends replay and
+save portability between two builds of one commit.
+
+**What makes it worse than a missing flag is that nothing can complain.**
+That code uses neither exceptions nor RTTI, so `-fno-exceptions` and
+`-fno-rtti` change nothing observable, and the third is invisible until a
+hash disagrees -- long after the change and nowhere near it. I read their
+Makefile's flags as a style difference and never asked what any of them
+was FOR, which is how a correctness flag gets filed as a preference.
+
+They now carry `-Os -fno-exceptions -fno-rtti -ffp-contract=off` and
+`std = "c++17"`, verified by ejecting and reading the compile line rather
+than by watching the build succeed, with `nm` finding no typeinfo symbol
+in the result.
+
+**And a fact about `cflags` worth stating outright: it replaces the
+default rather than adding to it.** They repeated `-Os` deliberately;
+leaving it out while adding one flag is a silent switch to no
+optimisation.
 
 **The finding is in their README, and it is about this project.** It
 says *"Not `/usr/bin/fmake`. The packaged one predates `$file()`"* and
@@ -15096,6 +15119,16 @@ answers which release, and cannot also answer whether the fmake you are
 running is the one over there, because a package version that moves
 eighty times a fortnight is not a version. I had drafted "that hash is
 not in our history" as a finding about their setup.
+
+**And a finding about fmake came back with the correction.** They found
+the flags by `--eject make-fragment`, building the whole tree to read one
+compile line, because `-v` prints progress rather than commands. But
+`--explain` prints the command -- the full compile line per target, the
+link line, then `installs` -- and it caps the list at two with "... 17
+more", which is probably why it does not look like the answer at a
+glance. Two people have now reached for the eject to ask "what flags is
+this compiling with", so that is fmake failing to advertise the cheap
+route rather than either of them missing it.
 
 **Told rather than edited**, as a message to the session working there:
 their tree was dirty in three files. Recorded here so the claim of having
