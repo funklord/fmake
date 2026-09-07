@@ -6199,21 +6199,30 @@ def default_include_dirs(cfg):
     wrong on every cross build. The list arrives on stderr between two
     marker lines, which is the only interface cpp offers for it.
     """
-	out, inside = [], False
+	def read(argv):
+		out, inside = [], False
+		for line in _stderr(argv).splitlines():
+			if line.startswith("#include <...>"):
+				inside = True
+				continue
+			if inside:
+				if not line.startswith(" "):
+					break
+				d = line.strip().split(" (")[0]
+				if os.path.isdir(d):
+					out.append(d)
+		return out
+
+	# Falling back on the ANSWER, not on the text. `_stderr' returns what
+	# the driver said whether or not it worked, and a driver that refuses a
+	# flag says so on stderr -- 62 bytes of `unrecognized command-line
+	# option', which is as truthy as a search path and holds no directories
+	# at all. Written first as `a or b' over those strings, this could not
+	# fire: the failing probe always won. Asking whether the list came back
+	# empty is the question the fallback exists to ask.
 	ask = ["-E", "-Wp,-v", "-xc++", os.devnull]
-	txt = (_stderr([cfg.driver(True), *cfg.probe_flags, *ask])
-	       or _stderr([cfg.driver(True), *ask]))
-	for line in txt.splitlines():
-		if line.startswith("#include <...>"):
-			inside = True
-			continue
-		if inside:
-			if not line.startswith(" "):
-				break
-			d = line.strip().split(" (")[0]
-			if os.path.isdir(d):
-				out.append(d)
-	return out
+	return (read([cfg.driver(True), *cfg.probe_flags, *ask])
+	        or read([cfg.driver(True), *ask]))
 
 
 def default_link_dirs(cfg):

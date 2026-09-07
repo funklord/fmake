@@ -14579,6 +14579,20 @@ two, which is why one arrived as an error and the other as a quiet
 variable. The new status names only the first, and naming the second
 would be a false finding in a generator somebody runs on a schedule.
 
+**Swept for siblings, and the eject was the outlier.** The lens is "a
+warning that means work was dropped, in a path whose status does not say
+so", and the population is every `warn(` in the file -- 28 of them, read
+one by one. The ones that drop work already carry it:
+`fmake test` returns 1 for a test that did not run as well as one that
+failed, and says in its own comment why calling that a skip would be the
+vacuous pass one level up; an unstoppable test is TERMed, then KILLed by
+process group, and named out loud if it survives both; an `ar` over no
+objects, which exits 0 and writes a valid empty archive, is turned into a
+failure deliberately. The rest are advisory and say what follows from
+them. So this was one missing case rather than a habit, which is the
+result worth recording -- a sweep that found nothing else is what makes
+the one find a defect rather than a symptom.
+
 **Not measured.** Why those five, in that tree, on that day. It needs
 the working tree as it was, and that is hydra's to hold rather than
 this project's to guess at.

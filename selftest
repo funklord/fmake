@@ -4181,6 +4181,47 @@ def _elf_machine(path):
 
 
 @case
+def a_probe_falls_back_when_the_driver_refuses_a_flag(t):
+	"""The other half of asking in the project's configuration: what
+	happens when the configuration is one the driver will not accept.
+
+	`default_include_dirs' reads its answer from stderr, because `-Wp,-v'
+	is the only interface cpp offers for it -- and a driver that refuses a
+	flag also writes to stderr. Written as `flagged or bare', the fallback
+	compared those two strings for truthiness, so 62 bytes of
+	`unrecognized command-line option' beat a real search path and the
+	bare question was never asked. A fallback that cannot fire.
+
+	It asks whether the LIST came back empty now, which is the question it
+	existed to ask. Measured against the version before the fix: with a
+	refused flag it returned no directories at all, where the bare
+	question returns seven."""
+	def dirs(flags):
+		ns = {"__name__": "not_main"}
+		with open(FMAKE) as fh:
+			exec(compile(fh.read(), FMAKE, "exec"), ns)
+		class Cfg:
+			probe_flags = flags
+			def driver(self, cxx):
+				return "cc"
+		return ns["default_include_dirs"](Cfg())
+
+	bare = dirs([])
+	if not bare:
+		raise Skip("this compiler does not print its include search path")
+
+	# A flag the driver merely complains about must not lose the answer:
+	# -std=c11 against the C++ driver warns and still prints the block.
+	check(dirs(["-std=c11"]) == bare,
+	      "a flag the driver warns about lost the include search path")
+	# And one it refuses outright must fall back to the bare question
+	# rather than to nothing.
+	check(dirs(["-mbogusflag-fmake"]) == bare,
+	      "a flag the driver refuses left the include search path empty, "
+	      "so the fallback did not fire")
+
+
+@case
 def the_compiler_is_asked_in_the_configuration_it_will_build_in(t):
 	"""`-print-multiarch' and `-print-search-dirs' answer differently once
 	the project's own flags are on the command line, and fmake was asking
