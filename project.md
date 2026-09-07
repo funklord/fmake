@@ -14854,10 +14854,21 @@ briefly had a defect that was not there. And the first timing compared
 against a number taken an hour earlier under different load, which is the
 error §26 is about; the interleaved A/B is what replaced it.
 
-**And the next candidate, measured and refused.** The cache is 2.4MB and
-`json.dumps` costs 143ms, about 9% of a no-op, and on a true no-op the
-data is very likely unchanged. Skipping the write needs a dirty flag
-across about eight mutation sites, and a missed site is a cache that
-silently fails to record what it built -- staleness in the direction
-nobody checks. 9% does not buy that risk. The zero-risk variant, dumping
-anyway and skipping only the rename, saves the write and not the 143ms.
+**And the next candidate, measured twice and refused on the second
+number.** The cache is 2.9MB and `json.dumps` costs about **25ms** --
+22, 25, 22, 34, 40 over five runs on a quiet machine -- which is under 2%
+of a no-op. The first measurement of it here said 143ms and about 9%, and
+that was taken while the suite was running: a serialisation benchmark on
+a loaded box measures the box. The conclusion survives the correction and
+is stronger for it, since skipping the write needs a dirty flag across
+about eight mutation sites whose failure mode is a cache that silently
+does not record what it built. Compact separators were tried too: 3.7%
+smaller and 2ms slower, so not a win either.
+
+**A third profile, and the thread ends here.** After the memo nothing
+dominates: `stat` is down from 112,680 calls to 12,283, `object_key` to
+0.16s of tottime, and the largest remaining item is the cache write that
+the paragraph above declines. The json share the profiler reports is
+mostly its own per-call overhead over 620,000 encoder calls -- which is
+why the number that decided it was `time.time()` around `json.dumps`
+rather than the profile's own column.
