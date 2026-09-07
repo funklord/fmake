@@ -137,6 +137,18 @@ fmake's defaults in place of whatever that one passed — a language standard,
 a warning set. Neither is an error and neither shows up anywhere but the
 diff.
 
+**Check the status if a script does the ejecting.** An eject that left
+something out still writes the file — the part that worked is worth having
+and worth reading — and says so on stderr and in a non-zero exit. That
+covers a file that would not compile, and a file that looks like a program
+whose object turns out not to export `main()`. Both produce a build file
+that looks complete and is not, which is a different hazard from a build
+that drops a target: no binary appears, so the next command notices. A
+generator that reads the status gets told; one that reads only the output
+commits an artifact missing a program, and goes on doing it — the answer is
+remembered, so later ejects omit the same program without repeating the
+warning.
+
 ### Run a C or C++ file as a script
 
 **`fmake --run FILE [ARGS...]` builds a C or C++ file and becomes it**, so a
