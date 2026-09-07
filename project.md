@@ -14770,7 +14770,23 @@ depfiles in that tree hold neither -- which is not luck, it is what a
 depfile looks like unless a path has a space in it.
 
     parse, over that tree's 167 depfiles       0.82s -> 0.02s
-    no-op build of the tree                    7.2s  -> 1.6s
+
+    no-op build, interleaved A/B, load 9:
+      before   user 3.32 3.12 3.17   sys 0.34 0.39 0.38   wall 3.70 3.52 3.55
+      after    user 1.12 1.06 1.44   sys 0.35 0.34 0.39   wall 1.47 1.40 1.85
+
+**The wall figures first published here were 7.2s and 1.6s**, taken an
+hour apart while other sessions were building: the 7.2 carried somebody
+else's compile. The interleaved pair above is 3.6s to 1.5s, which is the
+number to quote. Reported by fuzzypickles, who noticed our two benchmarks
+were spoiling each other on the same box and pointed out that a contended
+figure is indistinguishable from a clean one after the fact -- so every
+timing here now carries the load it was taken under.
+
+**And `sys` staying put is the mechanism check.** This change saves user
+CPU, because parsing is arithmetic; §182's memo saves system time,
+because a stat is a syscall. Two fixes, two columns, and neither number
+moved in the other's.
 
 **The careful loop stays**, because the tree with `inc dir/hdr.h` in it is
 what it is for, and that case is already proved end to end -- a real
