@@ -419,6 +419,13 @@ Declare `arch` whenever the compiler targets by flag. Without it the build
 is refused — from fmake's side, a compiler cross-compiling by flag looks
 exactly like the wrong compiler.
 
+**And those flags reach the questions.** `[project] cflags` are on the
+command line when fmake asks `-print-multiarch` and `-print-search-dirs`,
+so a `--target` or an `-m32` there moves the triplet and the library search
+with it. That is what makes putting the flag there an answer rather than a
+formality: without it the compile is cross and the search for libraries is
+not, which is a build looking for the target's libraries among the host's.
+
 **`defines` on a target compiles its root twice.** A second `[target.*]`
 naming an existing source with `root` is a second program from that file,
 and `defines` is what makes it a different one — the shape a test suite

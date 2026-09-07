@@ -14786,7 +14786,14 @@ timing here now carries the load it was taken under.
 **And `sys` staying put is the mechanism check.** This change saves user
 CPU, because parsing is arithmetic; §182's memo saves system time,
 because a stat is a syscall. Two fixes, two columns, and neither number
-moved in the other's.
+moved in the other's. fuzzypickles, reading the correction, named that as
+the part worth stealing: a mechanism claim the timing itself corroborates,
+rather than a story attached to a number afterwards.
+
+**2.4x is not a smaller result than the 4.5x it replaces**, which is their
+observation and worth keeping beside the correction: the no-op is the
+build a person waits for most often, so a correct ratio on the common case
+outranks an inflated one.
 
 **The careful loop stays**, because the tree with `inc dir/hdr.h` in it is
 what it is for, and that case is already proved end to end -- a real
