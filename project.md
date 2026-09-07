@@ -15159,3 +15159,43 @@ route rather than either of them missing it.
 their tree was dirty in three files. Recorded here so the claim of having
 told them names something -- and the remedy is one sentence in their
 README, which they own.
+
+## 186. Vendored submodules are the build's to fetch, and fmake needs a method
+
+**Set by the copyright holder 2026-09-07** and written into
+`build-and-commit.md` as *A vendored submodule is the build's to fetch,
+not the reader's*: where a project vendors a sibling as a submodule, its
+build clones it when absent and updates it to the commit the gitlink
+names, so somebody who has just cloned types the build command and gets a
+build rather than a silently smaller one. The instruction names fmake --
+it is to work out a method for this too.
+
+**Why it is not simply "run git submodule update".** fmake's premise is
+that a tree needs no build file, so a submodule has to be DISCOVERED
+rather than declared, and everything fmake knows how to find is inside
+the tree it scans. A submodule is a hole in that tree: the directory is
+empty before it is fetched, so a scan that runs first sees no sources
+there and produces a build that is correct about a tree nobody wants.
+The ordering is the problem -- the fetch has to happen before discovery,
+and discovery is what would tell you a fetch was needed.
+
+**Three constraints the rule carries, which bear on the method rather
+than the wording.** A build never moves the pin, since advancing a
+submodule belongs in a commit somebody reviews. git's absence is reported
+as its own condition rather than as a repository that is not one, which
+is the `test -d .git` spelling the workspace moved off on 2026-09-03
+after it dropped a whole backend in a worktree. And a clone is visible,
+because network access is not a compile.
+
+**What is already here to build on, and the question it does not
+answer.** `.gitmodules` is a declared file in the tree naming path and
+url, so the discovery half may be smaller than it looks; the honest first
+question is whether reading it suffices or whether the gitlink has to be
+asked for as well. The half it does not answer is a decision rather than
+a mechanism: whether a fetch belongs in the default build, in a separate
+target, or behind a flag. A build that reaches the network by default is
+a different thing from one that does not, and that is worth settling
+before it is written rather than after.
+
+Recorded rather than designed: what the method is belongs to this
+project, and what is settled is that there must be one.
