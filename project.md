@@ -237,7 +237,8 @@ that had been green about nothing for five commits ·
 [184. Load spoils a timing and hardens a test](#184-load-spoils-a-timing-and-hardens-a-test) ·
 [185. hembygd builds, and its warning about the package is stale](#185-hembygd-builds-and-its-warning-about-the-package-is-stale) ·
 [186. Vendored submodules are the build's to fetch, and fmake needs a method](#186-vendored-submodules-are-the-builds-to-fetch-and-fmake-needs-a-method) ·
-[187. A worktree is a git checkout, and fmake asked the wrong question](#187-a-worktree-is-a-git-checkout-and-fmake-asked-the-wrong-question)
+[187. A worktree is a git checkout, and fmake asked the wrong question](#187-a-worktree-is-a-git-checkout-and-fmake-asked-the-wrong-question) ·
+[188. The submodule fetch, and where it had to go](#188-the-submodule-fetch-and-where-it-had-to-go)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15270,3 +15271,65 @@ machine with no git at all.
 **This is a prerequisite for §186 rather than a detour from it.** A
 method that fetches submodules has to ask git about a tree whose `.git`
 is, in exactly the interesting cases, a file.
+
+## 188. The submodule fetch, and where it had to go
+
+§186 recorded the instruction and left one question: whether the fetch
+belongs in the default build, a separate target, or behind a flag. The
+copyright holder settled it -- the default build -- which is what the
+rule's own wording asks for: a person who has just cloned types the build
+command and gets a build.
+
+**The ordering was the difficulty and it has one answer.** fmake
+discovers a build by walking the tree, and a submodule is a hole in it:
+before the fetch the directory is empty, so a scan that ran first would
+be correct about a tree nobody wants. The fetch goes immediately before
+`walk_tree`, which is the only place it can, and that is why
+`vendor/lib.c` appears in the compile list at all.
+
+**The declaration is read without git, deliberately.** `git submodule
+status` is authoritative when it answers -- it is the only thing that
+knows a checkout has drifted off the gitlink -- but the case that most
+needs an answer is the one where git cannot give one. An unpacked archive
+carries `.gitmodules` and none of the contents, and `git archive` is how
+half the measurements in these notes were taken. So `.gitmodules` is
+parsed directly for its paths, and a declared path that is an empty
+directory is a submodule nobody fetched, whoever is able to say so.
+
+**`--init`, never `--remote`.** Advancing a submodule is a change to what
+the project builds against and belongs in a commit somebody reviews. The
+case checks it rather than trusting the flag: it drifts the checkout to a
+commit of its own, builds, and asserts the drifted file is gone.
+
+**Every path measured, because a build that writes to somebody's checkout
+should not be believed on description:**
+
+    fresh clone, uninitialised    SUB, fetch, compiles vendor/lib.c, runs
+    second run                    silent
+    drifted off the gitlink       reset to the gitlink; drift gone
+    dirty, in sync                untouched; the edit survives
+    dirty AND off the gitlink     git refuses; fmake stops; edit survives
+    fetch fails                   stops with git's own message
+    archive: .gitmodules, no .git stops, names the path and the remedy
+    -n                            prints the git command, fetches nothing
+    --no-submodules               builds as before
+
+**The dirty-and-drifted row is the one worth having.** A build that
+updates a checkout could destroy uncommitted work, and this one does not
+-- not because fmake guards it, but because `git submodule update`
+refuses and fmake surfaces the refusal instead of forcing past it. Worth
+knowing that the safety is git's rather than fmake's, since a future
+`--force` anywhere near this would remove it.
+
+**The suite caught the documentation, which is the point of that case.**
+Adding `--no-submodules` failed `the_readme_documents_every_option`: the
+README's table is documentation of record, and a flag that exists only in
+`--help` is one a reader of the repository never meets. The behaviour got
+a paragraph too, because a build that reaches the network by default is
+not a footnote.
+
+**What it replaces.** raidcfgd unpacked from an archive compiled 34
+files, failed 2, and said `ossa/ossa.h: No such file or directory`,
+advising a package install or `@os`. The header is inside an empty
+`ossacli/`. A wrong diagnosis is worse than a stop, which is the whole
+argument for failing here rather than reporting.

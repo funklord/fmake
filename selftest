@@ -13641,6 +13641,147 @@ def the_readme_documents_every_directive(t):
 
 
 @case
+def a_vendored_submodule_is_fetched_by_the_build(t):
+	"""Set by the copyright holder 2026-09-07: where a project vendors a
+	sibling as a submodule, its build fetches it, so somebody who has just
+	cloned types the build command and gets a build rather than a silently
+	smaller one.
+
+	The ordering is the whole difficulty. fmake discovers a build by
+	walking the tree, and a submodule is a hole in it -- before the fetch
+	the directory is empty, so a scan that ran first would be correct about
+	a tree nobody wants. The fetch goes before `walk_tree`, which is the
+	one place it can.
+
+	Three constraints checked here rather than assumed: the pin is not
+	moved, a settled tree is silent, and a dry run fetches nothing."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	work = tempfile.mkdtemp(prefix="fmake-submod-")
+	# Local paths are a `file' transport, which git has refused by default
+	# since CVE-2022-39253. The fixture says so rather than the tool.
+	env = {"GIT_ALLOW_PROTOCOL": "file"}
+	allow = ["-c", "protocol.file.allow=always"]
+
+	def git(where, *a, **kw):
+		return subprocess.run(["git", "-C", where, *a],
+		                      capture_output=True, text=True, **kw)
+
+	try:
+		lib, app = os.path.join(work, "lib"), os.path.join(work, "app")
+		for d in (lib, app):
+			os.makedirs(d)
+			git(d, "init", "-q", ".")
+			git(d, "config", "user.email", "t@example.invalid")
+			git(d, "config", "user.name", "t")
+		with open(os.path.join(lib, "lib.c"), "w") as fh:
+			fh.write("int lib_answer(void){ return 42; }\n")
+		with open(os.path.join(lib, "lib.h"), "w") as fh:
+			fh.write("int lib_answer(void);\n")
+		git(lib, "add", "-A"); git(lib, "commit", "-qm", "lib")
+
+		with open(os.path.join(app, "main.c"), "w") as fh:
+			fh.write('#include <stdio.h>\n#include "vendor/lib.h"\n'
+			         'int main(void){ printf("%d\\n", lib_answer()); '
+			         'return 0; }\n')
+		add = subprocess.run(["git", "-C", app, *allow, "submodule", "add",
+		                      "-q", lib, "vendor"],
+		                     capture_output=True, text=True)
+		if add.returncode != 0:
+			raise Skip("this git will not add a submodule over a local "
+			           "path: " + add.stderr.strip().splitlines()[0][:60])
+		git(app, "add", "-A"); git(app, "commit", "-qm", "app")
+
+		fresh = os.path.join(work, "fresh")
+		subprocess.run(["git", *allow, "clone", "-q", app, fresh],
+		               capture_output=True, text=True)
+		check(not os.listdir(os.path.join(fresh, "vendor")),
+		      "the clone already has the submodule, so this proves nothing")
+
+		# A dry run says what it would fetch and fetches nothing.
+		dry = subprocess.run([FMAKE, "-C", fresh, "-n"],
+		                     capture_output=True, text=True,
+		                     env=dict(os.environ, **env))
+		check("submodule update --init" in dry.stdout,
+		      f"a dry run does not say it would fetch: {dry.stdout}")
+		check(not os.listdir(os.path.join(fresh, "vendor")),
+		      "a dry run fetched the submodule, which is not dry")
+
+		r = subprocess.run([FMAKE, "-C", fresh], capture_output=True,
+		                   text=True, env=dict(os.environ, **env))
+		check(r.returncode == 0,
+		      f"a fresh clone does not build: {r.stdout}{r.stderr}")
+		check("vendor/lib.c" in r.stdout,
+		      f"the vendored source was not compiled, so the fetch "
+		      f"happened after discovery: {r.stdout}")
+		got = subprocess.run([os.path.join(fresh, "fresh")],
+		                     capture_output=True, text=True)
+		check(got.stdout.strip() == "42",
+		      f"the program does not run: {got.stdout!r}")
+
+		# Settled: nothing to fetch, and it says nothing.
+		again = subprocess.run([FMAKE, "-C", fresh], capture_output=True,
+		                       text=True, env=dict(os.environ, **env))
+		check("SUB" not in again.stdout,
+		      f"a settled tree still reports a fetch: {again.stdout}")
+
+		# The pin is not moved. Drift the checkout to a commit of its own
+		# and the build must put it back to what the gitlink names.
+		sub = os.path.join(fresh, "vendor")
+		git(sub, "checkout", "-q", "--detach", "HEAD")
+		with open(os.path.join(sub, "extra.c"), "w") as fh:
+			fh.write("int extra(void){ return 7; }\n")
+		git(sub, "add", "-A")
+		git(sub, "-c", "user.email=t@e", "-c", "user.name=t",
+		    "commit", "-qm", "drift")
+		moved = subprocess.run([FMAKE, "-C", fresh], capture_output=True,
+		                       text=True, env=dict(os.environ, **env))
+		check(moved.returncode == 0,
+		      f"the build failed after the submodule drifted: "
+		      f"{moved.stdout}{moved.stderr}")
+		check(not os.path.exists(os.path.join(sub, "extra.c")),
+		      "the submodule was left at its own commit, so the build "
+		      "either moved the pin or ignored the drift")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
+def a_submodule_that_cannot_be_fetched_stops_the_build(t):
+	"""An unpacked archive is the usual way to have a `.gitmodules` and no
+	git: `git archive` carries the file and none of the contents.
+
+	Measured on raidcfgd unpacked that way, before this: fmake compiled 34
+	files, failed 2, and reported `ossa/ossa.h: No such file or directory`
+	with advice to install a package or mark the file as another
+	platform's -- a confident wrong diagnosis for an empty directory. A
+	build that produces less has to stop rather than report, which is
+	`build-and-commit.md`'s argument and `evidence.md`'s about a gate over
+	an empty file list.
+
+	The remedy has to be in the message, since somebody who unpacked a
+	tarball deliberately needs a way through."""
+	t.write("main.c", '#include "vendor/lib.h"\nint main(void){ return f(); }\n')
+	t.write(".gitmodules", '[submodule "vendor"]\n\tpath = vendor\n'
+	        '\turl = https://example.invalid/lib.git\n')
+	os.makedirs(os.path.join(t.dir, "vendor"), exist_ok=True)
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a build with an unfetchable submodule should stop: {out}")
+	check("vendor" in out, f"the message does not name it: {out}")
+	check("--no-submodules" in out,
+	      f"the message does not say how to build anyway: {out}")
+
+	# And that way through works.
+	anyway = t.fmake("--no-submodules")
+	check("vendor" not in (anyway.stdout + anyway.stderr).split("main.c")[0]
+	      or anyway.returncode != 0,
+	      "--no-submodules should proceed to the build itself")
+
+
+@case
 def a_worktree_is_a_git_checkout_and_its_ignores_are_read(t):
 	"""`os.path.isdir(root/".git")` is false for a checkout git is happy to
 	talk about. In a worktree -- and in a submodule checkout -- `.git` is a

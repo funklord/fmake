@@ -7786,6 +7786,12 @@ def build(args, _bootstrapping=False):
 	# files nobody has looked at. The two-pass scan section 7 once said was
 	# unnecessary turns out to be exactly what putting rules in comments
 	# costs.
+	# Before the walk, which is the only place it can go: a submodule is
+	# a hole in the tree fmake discovers from, and an empty directory
+	# scans as no sources rather than as something missing. See
+	# fetch_submodules.
+	if not args.no_submodules:
+		fetch_submodules(root, dry_run=bool(args.dry_run))
 	srcs, hdrs = walk_tree(root)
 	# Before the scan, so a build directory's contents are not read either.
 	# Headers are left where they are: a build tree is also where a
@@ -11917,6 +11923,145 @@ def git_dir(root):
 	return answer
 
 
+# `git submodule status' writes one line per submodule: a flag, the sha,
+# the path, and sometimes a description in parentheses. `-' is not
+# initialised, `+' is checked out at something other than the gitlink, `U'
+# has a merge conflict, and a space is in step.
+RE_SUBMODULE = re.compile(r"^(?P<flag>[-+U ])(?P<sha>[0-9a-f]+) "
+                          r"(?P<path>.+?)(?: \(.*\))?$")
+
+
+RE_GITMODULES_PATH = re.compile(r"^\s*path\s*=\s*(.+?)\s*$", re.M)
+
+
+def declared_submodules(root):
+	"""The paths `.gitmodules' names, or [].
+
+    A declared file rather than something to infer, which is why the
+    discovery half of this is small. Read directly rather than through
+    `git config -f', because the one case that most needs an answer is a
+    tree where git cannot answer at all.
+    """
+	try:
+		with open(os.path.join(root, ".gitmodules"), errors="replace") as fh:
+			text = fh.read()
+	except OSError:
+		return []
+	return [m.group(1) for m in RE_GITMODULES_PATH.finditer(text)]
+
+
+def submodules_to_fetch(root):
+	"""Submodules this tree declares that are not at the commit it names.
+
+    Returned as (path, why) so the message can say which of the two it is:
+    a directory that is empty because nobody ran `--init', and one sitting
+    at a different commit because somebody checked out a branch.
+
+    `.gitmodules' is the cheap gate -- a declared file naming path and url,
+    which most trees do not have -- and git is asked only when it is there.
+    """
+	declared = declared_submodules(root)
+	if not declared:
+		return []
+	try:
+		r = subprocess.run(["git", "-C", root, "submodule", "status"],
+		                   capture_output=True, text=True,
+		                   errors="replace", timeout=30)
+	except (OSError, subprocess.SubprocessError):
+		r = None
+	# git could not answer -- no git, or an unpacked archive, which carries
+	# .gitmodules and none of the contents. That is the case most in need
+	# of an answer, so it is read off the declaration and the directory
+	# rather than skipped: an empty directory where a submodule is declared
+	# is a submodule nobody fetched, whoever is or is not able to say so.
+	if r is None or r.returncode != 0:
+		return [(p, "not initialised") for p in declared
+		        if not os.listdir(os.path.join(root, p))
+		        or not os.path.isdir(os.path.join(root, p))]
+	out = []
+	for line in r.stdout.splitlines():
+		m = RE_SUBMODULE.match(line)
+		if not m:
+			continue
+		if m["flag"] == "-":
+			out.append((m["path"], "not initialised"))
+		elif m["flag"] == "+":
+			out.append((m["path"], "at a different commit"))
+	return out
+
+
+def fetch_submodules(root, dry_run=False):
+	"""Fetch what the tree vendors, before anything looks at the tree.
+
+    Set by the copyright holder 2026-09-07 and written into
+    `build-and-commit.md`: where a project vendors a sibling as a
+    submodule, its build clones it when absent and updates it to the commit
+    the gitlink names, so a person who has just cloned types the build
+    command and gets a build rather than a silently smaller one.
+
+    **The ordering is the whole difficulty.** fmake discovers a build by
+    walking the tree, and a submodule is a hole in it: before the fetch the
+    directory is empty, so a scan that ran first would be correct about a
+    tree nobody wants. So this runs before `walk_tree', which is the one
+    place it can.
+
+    **Never `--remote'.** `update --init' checks out the commit the gitlink
+    names and nothing else. Advancing a submodule is a change to what the
+    project builds against and belongs in a commit somebody reviews; a
+    build that quietly moved the pin would make the tree's history a claim
+    about nobody's code in particular.
+
+    **A clone is not a compile**, so it says what it is fetching before it
+    starts. And it fails rather than continuing: raidcfgd's tree with an
+    empty `ossacli/` compiled 34 files, failed 2, and reported
+    `ossa/ossa.h: No such file or directory` with advice to install a
+    package or mark the file as another platform's -- a wrong diagnosis
+    for an empty directory, and the reason a build that produces less has
+    to stop rather than report.
+    """
+	want = submodules_to_fetch(root)
+	if not want:
+		return
+	if not shutil.which("git"):
+		# git's absence is its own condition, not "this is not a
+		# repository": the second sends a reader looking at their
+		# checkout. `build-and-commit.md' names the same distinction
+		# after `test -d .git' dropped a whole backend in raidcfgd.
+		die(f"this tree vendors {len(want)} submodule(s) and git is not "
+		    f"installed, so they cannot be fetched:\n    "
+		    + "\n    ".join(f"{p} ({why})" for p, why in want)
+		    + "\nInstall git, or build with --no-submodules and accept "
+		      "that what they contain will be missing.")
+	if not git_dir(root):
+		die(f"this tree declares {len(want)} submodule(s) in .gitmodules "
+		    f"and is not a git checkout, so they cannot be fetched:\n    "
+		    + "\n    ".join(f"{p} ({why})" for p, why in want)
+		    + "\nAn unpacked archive is the usual way to be here: `git "
+		      "archive' carries .gitmodules and none of the contents.\n"
+		      "Clone the repository, or build with --no-submodules and "
+		      "accept that what they contain will be missing.")
+	for path, why in want:
+		info(f"{CYAN('SUB')} {path} ({why})")
+		if dry_run:
+			print(" ".join(["git", "-C", root, "submodule", "update",
+			                "--init", "--", path]))
+			continue
+		try:
+			r = subprocess.run(["git", "-C", root, "submodule", "update",
+			                    "--init", "--", path],
+			                   capture_output=True, text=True,
+			                   errors="replace", timeout=600)
+		except (OSError, subprocess.SubprocessError) as exc:
+			die(f"fetching the submodule {path} failed: {exc}")
+		if r.returncode != 0:
+			said = (r.stderr.strip() or r.stdout.strip()
+			        or f"git exited {r.returncode}")
+			die(f"fetching the submodule {path} failed:\n    {said}\n"
+			    f"A build that carried on here would compile whatever is "
+			    f"in the tree and report the missing pieces as errors in "
+			    f"your own sources.")
+
+
 def git_ignored(root, paths):
 	"""Which of these git is already told to ignore, or an empty set.
 
@@ -12328,6 +12473,10 @@ def parse_args(argv):
 	                    "renders the directives instead of warning about them")
 	p.add_argument("--man", action="store_true",
 	               help="print this manual as a roff page, for packaging")
+	p.add_argument("--no-submodules", action="store_true",
+	               help="do not fetch or update the git submodules "
+	                    "this tree vendors; what they contain will be "
+	                    "missing from the build")
 	p.add_argument("--no-libs", action="store_true",
 	               help="do not resolve external symbols to libraries; pass "
 	                    "every -l and -I yourself")

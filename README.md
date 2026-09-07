@@ -80,6 +80,18 @@ guessed from the name, so a project whose sources genuinely live under
 what a generator writes is added back by name whatever the walk decided.
 Skipped files are counted and the directory named.
 
+**A submodule this tree vendors is fetched before anything is scanned.** A
+submodule is a hole in the tree fmake discovers from: before it is fetched
+the directory is empty, so a scan that ran first would be correct about a
+tree nobody wants. `fmake` clones it and checks out the commit the gitlink
+names — `--init`, never `--remote`, because advancing a submodule is a
+change to what the project builds against and belongs in a commit somebody
+reviews. It says what it is fetching, since a clone is not a compile, and
+it stops rather than building less: an unpacked archive carries
+`.gitmodules` and none of the contents, and a build that carried on there
+would report the missing pieces as errors in your own sources.
+`--no-submodules` declines all of it.
+
 **C, C++, assembly and Rust.** The first three are one file per object, and
 they mix in a single link set because the closure reads symbol tables rather
 than source. Rust is not one file per object: a crate root — `main.rs` or
@@ -774,6 +786,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `--eject [make\|make-fragment\|ninja]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile |
 | `--force-link SRC` | link a file no symbol reaches |
 | `--widen-all` | compile the whole tree before deciding the link set |
+| `--no-submodules` | do not fetch the git submodules this tree vendors |
 | `--no-libs` | resolve no libraries; pass every `-l` yourself |
 | `--run FILE` | build FILE and run it, passing what follows as its arguments |
 | `--install` | build, then install the artifacts and their `@headers` |
