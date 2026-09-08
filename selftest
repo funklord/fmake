@@ -4740,6 +4740,72 @@ def a_pkgconfig_file_names_the_prefix_it_is_installed_at(t):
 			      f"the {backend} .pc lost its relocatable paths: {body}")
 
 
+@case
+def a_symlink_loop_does_not_hang_the_build(t):
+	"""The third way fmake found not to return, and the first needing no
+	unusual file -- two ordinary directory symlinks.
+
+    `something_that_is_not_a_file_is_not_a_source` records the other two:
+    a FIFO blocks on open, /dev/zero never stops. This one is a tree with
+    `real/up -> ..` and a second name for that directory, on which fmake
+    ran at full CPU with no output until it was killed. Diagnosed with a
+    fault handler rather than guessed: two hundred frames of
+    `glob._rlistdir` under `situ_plan`.
+
+    `_walk` had solved this already, and that is the point. It follows
+    symlinked directories on purpose -- `src/common -> ../shared` is a
+    real layout -- while keying a `seen` set on the real path. The four
+    `glob.glob("**/*.x", recursive=True)` scans were a second traversal of
+    the same tree with no such guard. Measured on glob alone: one link
+    returns 82 hits for two files, both links together never return.
+
+    The suite bounds every fmake run for exactly this, so a regression
+    here arrives as this case failing rather than as a suite that never
+    finishes.
+
+    The guard's other effect is asserted next door rather than here: with
+    this fixture every sabotage stops at the timeout, so a second check
+    below it could never be reached to fail.
+    """
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("real/helper.c", "int helper(void){ return 1; }\n")
+	os.symlink("..", os.path.join(t.dir, "real", "up"))
+	os.symlink("real", os.path.join(t.dir, "alias"))
+
+	r = t.fmake(timeout=120)
+	check(r.returncode == 0, f"the build failed: {r.stdout}{r.stderr}")
+
+
+@case
+def one_file_reachable_by_two_names_is_reported_once(t):
+	"""The same guard, on a tree that terminates either way.
+
+    `_walk` keys its `seen` set on the real path, so a directory with two
+    names is walked once; `glob` does not know they are one file and
+    reported `link/res.qrc` and `shared/res.qrc` -- one file, twice, in a
+    message telling the reader something is unused.
+
+    Deliberately no loop here. In the hang case beside this one every
+    sabotage stops at the timeout, so nothing after it can be shown to
+    fail; this fixture is finite with the fix and without it, which is
+    what leaves the count free to be the thing that breaks.
+
+    No Qt: the unused-.qrc report is what prints it.
+    """
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("shared/res.qrc", '<!DOCTYPE RCC><RCC version="1.0">'
+	        '<qresource prefix="/x"><file>main.c</file></qresource></RCC>\n')
+	os.symlink("shared", os.path.join(t.dir, "link"))
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the build failed: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	named = [l for l in out.splitlines() if "res.qrc" in l]
+	check(len(named) == 1,
+	      f"one file reachable by two names was reported {len(named)} "
+	      f"times: {named}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
@@ -9048,14 +9114,64 @@ int main(void){ return 0; }
 	      f"the installed version helps: {r.stderr}")
 
 
+def _directive_sets():
+	"""Every directive fmake knows, read out of fmake.
+
+    Two cases assert that a list is complete -- the README's table and the
+    Doxygen alias block -- and a list of four written by hand is not that
+    assertion however it is named. Derived once here so both ask the same
+    question of the same source.
+    """
+	with open(FMAKE) as fh:
+		src = fh.read()
+
+	def names(start, end):
+		return set(re.findall(r'"([^"]+)"',
+		                      src[src.index(start):src.index(end)]))
+
+	scalar = names("DIRECTIVE_SCALAR = {", "# Accumulate across")
+	listed = names("DIRECTIVE_LIST = {", "# @define and @defines")
+	# Anchored at a line start and searched forward from the alias table.
+	# `src.index("DIRECTIVES = ")` finds MK_PROJECT_DIRECTIVES twelve
+	# hundred lines earlier, which makes the slice run backwards and the
+	# alias map come out empty.
+	at = src.index("\nDIRECTIVE_ALIAS = {")
+	alias = dict(re.findall(r'"([^"]+)": "([^"]+)"',
+	                        src[at:src.index("\nDIRECTIVES = ", at)]))
+	assert alias, "no directive aliases were read, so the check is wrong"
+	assert len(scalar | listed) > 10, "too few directives read out of fmake"
+	return scalar, listed, alias
+
+
 @case
 def doxygen_aliases_are_emitted(t):
-	"""Doxygen warns about unknown commands; this is the fix."""
+	"""Doxygen warns about unknown commands; this is the fix.
+
+    Asserted over the population rather than over the four names this
+    checked before -- and worth being exact about what that buys, because
+    the obvious claim is wrong. `doxygen_aliases()` iterates DIRECTIVES,
+    so a directive added tomorrow gets its alias for free and no check is
+    needed for that. What the four names could not see is the GENERATOR
+    drifting from the set. Sabotaged both ways rather than reasoned
+    about: emitting only DIRECTIVE_SCALAR loses twelve aliases and the
+    OLD check would have caught that too, since `pkg` and `libs` are
+    among them. Emitting `DIRECTIVES - {"arch", "rule"}` is the sabotage
+    that separates the two -- all four names it looked for are still
+    emitted, so the old check passes, and this one fails naming `arch`
+    and `rule`.
+
+    That the aliases do anything at all is measured rather than assumed:
+    without the file Doxygen reports `Found unknown command '@target'`
+    and three more; with it, silence.
+    """
 	r = t.fmake("--doxygen-aliases")
 	check(r.returncode == 0, f"failed: {r.stderr}")
-	for d in ("target", "pkg", "libs", "kind"):
-		check(f'ALIASES += "{d}=' in r.stdout,
-		      f"@{d} missing from the alias block: {r.stdout}")
+	scalar, listed, alias = _directive_sets()
+	want = sorted((scalar | listed) | set(alias))
+	missing = [d for d in want if f'ALIASES += "{d}=' not in r.stdout]
+	check(not missing,
+	      f"Doxygen will warn about these, which the alias block exists "
+	      f"to prevent: {missing}")
 
 
 def _have_pkg(module):
@@ -14347,24 +14463,8 @@ def the_readme_documents_every_directive(t):
 	spelling of `@define`, accepted so a fact does not need a different
 	word for living in a config file, and documenting both would suggest
 	they are two things."""
-	with open(FMAKE) as fh:
-		src = fh.read()
-
-	def names(start, end):
-		return set(re.findall(r'"([^"]+)"', src[src.index(start):src.index(end)]))
-
-	scalar = names("DIRECTIVE_SCALAR = {", "# Accumulate across")
-	listed = names("DIRECTIVE_LIST = {", "# @define and @defines")
-	# Anchored at a line start and searched forward from the alias table.
-	# `src.index("DIRECTIVES = ")` finds MK_PROJECT_DIRECTIVES twelve
-	# hundred lines earlier, which makes the slice run backwards and the
-	# alias map come out empty -- so `@defines` read as undocumented.
-	at = src.index("\nDIRECTIVE_ALIAS = {")
-	alias = dict(re.findall(r'"([^"]+)": "([^"]+)"',
-	                        src[at:src.index("\nDIRECTIVES = ", at)]))
-	check(alias, "no directive aliases were read, so the check is wrong")
+	scalar, listed, alias = _directive_sets()
 	want = {alias.get(d, d) for d in scalar | listed}
-	check(len(want) > 10, f"only {len(want)} directives read out of fmake")
 
 	with open(os.path.join(REPO, "README.md")) as fh:
 		readme = fh.read()

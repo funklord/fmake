@@ -2737,10 +2737,9 @@ def uic_plan(files, hdrs, scans, root):
 		return []
 
 	by_stem = {}
-	for hit in sorted(glob.glob(os.path.join(root, "**", "*.ui"),
-	                            recursive=True)):
-		stem = os.path.splitext(os.path.basename(hit))[0]
-		by_stem.setdefault(stem, []).append(os.path.relpath(hit, root))
+	for rel in find_ext(root, ".ui"):
+		stem = os.path.splitext(os.path.basename(rel))[0]
+		by_stem.setdefault(stem, []).append(rel)
 
 	jobs = []
 	for stem, (rel, line) in sorted(wanted.items()):
@@ -2811,10 +2810,9 @@ def rcc_plan(files, scans, root):
     therefore comes from what the source says it opens, per program -- which
     is why this returns the users and not just the file.
     """
-	hits = sorted(glob.glob(os.path.join(root, "**", "*.qrc"), recursive=True))
 	jobs = []
-	for hit in hits:
-		rel = os.path.relpath(hit, root)
+	for rel in find_ext(root, ".qrc"):
+		hit = os.path.join(root, rel)
 		stem = os.path.splitext(os.path.basename(rel))[0]
 		paths = qrc_declares(hit)
 		users = {}
@@ -3137,9 +3135,8 @@ def situ_plan(root, hdrs, scans):
 	have = {os.path.basename(h) for h in hdrs}
 
 	jobs, unused, seen = [], [], {}
-	for path in sorted(glob.glob(os.path.join(root, "**", "*" + SITU_EXT),
-	                             recursive=True)):
-		rel = os.path.relpath(path, root)
+	for rel in find_ext(root, SITU_EXT):
+		path = os.path.join(root, rel)
 		name = os.path.basename(rel)[:-len(SITU_EXT)]
 		header = name + ".h"
 		if header not in wanted:
@@ -3921,6 +3918,29 @@ def stage_run_source(root, path, alone=False):
 		with open(full, "wb") as fh:
 			fh.write(new)
 	return staged
+
+
+def find_ext(root, ext):
+	"""Every file under `root` ending in `ext`, tree-relative and sorted.
+
+    `glob.glob("**/*.x", recursive=True)` is the obvious spelling and it
+    does not terminate: glob follows a symlinked directory and has no
+    cycle guard, so a tree holding `real/up -> ..` alongside a second name
+    for that directory sent fmake into `_rlistdir` for ever -- full CPU,
+    no output, no diagnosis, and nothing to kill but the process. Measured
+    with a fault handler: two hundred frames of glob under `situ_plan`.
+
+    `_walk` already solved this for the source walk, deliberately
+    following symlinked directories -- `src/common -> ../shared` is a real
+    layout -- while keying a `seen` set on the real path. This is that
+    guard lent to the three scans that were doing their own traversal.
+    """
+	out = []
+	for dirpath, _dirnames, filenames in _walk(root):
+		for f in filenames:
+			if f.endswith(ext):
+				out.append(os.path.relpath(os.path.join(dirpath, f), root))
+	return sorted(out)
 
 
 def walk_tree(root):
@@ -8110,10 +8130,8 @@ def build(args, _bootstrapping=False):
 	# returns the work to do and a list of what it declined is a different
 	# question asked of the same glob.
 	_qrc_named = {j["src"] for j in qrc_jobs}
-	qrc_unused = sorted(
-	    os.path.relpath(p, root)
-	    for p in glob.glob(os.path.join(root, "**", "*.qrc"), recursive=True)
-	    if os.path.relpath(p, root) not in _qrc_named)
+	qrc_unused = [rel for rel in find_ext(root, ".qrc")
+	              if rel not in _qrc_named]
 	# A source that defines a version macro for itself when the build did
 	# not is not a compile failure, and that is the whole problem: the tree
 	# builds, the program links, it runs, and it reports a version it made

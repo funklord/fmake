@@ -243,7 +243,8 @@ that had been green about nothing for five commits ·
 [190. What the ejected build did not know it depended on](#190-what-the-ejected-build-did-not-know-it-depended-on) ·
 [191. Three paths that reached a build file unchecked](#191-three-paths-that-reached-a-build-file-unchecked) ·
 [192. Everything else that reaches a shell](#192-everything-else-that-reaches-a-shell) ·
-[193. The .pc named a prefix nothing was installed at](#193-the-pc-named-a-prefix-nothing-was-installed-at)
+[193. The .pc named a prefix nothing was installed at](#193-the-pc-named-a-prefix-nothing-was-installed-at) ·
+[194. A third way not to return](#194-a-third-way-not-to-return)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15960,3 +15961,89 @@ already carrying ninja's escape while the rest do not. Doubling the whole
 body a second time turned `${prefix}` into a ninja variable expanding to
 nothing -- a `.pc` with empty paths, which is the trap the Makefile side
 already carries a comment about. Escaped per line now.
+
+---
+
+## 194. A third way not to return
+
+§193 came from checking an artifact against the tool that reads it, so
+the rest of them were checked the same way. **One find, and the rest is
+an empty sweep worth recording with its lens** -- these families have
+been swept, so the next fault needs a new one:
+
+    --man                groff -ww              no warnings
+    --completion bash    bash -n, then driven   --ej completes to --eject;
+                                                after --eject: make,
+                                                make-fragment, ninja
+    --doxygen-aliases    doxygen                silent, and the control
+                                                fires: without the file it
+                                                reports four unknown commands
+    libgreet.so          readelf, a consumer    SONAME libgreet.so.1, and the
+                                                consumer records NEEDED on it
+    the installed tree   cc and ld.so           .so -> .so.1 -> .so.1.2.3;
+                                                a consumer links and runs
+    --uninstall          the filesystem         removed its five files and
+                                                left a stray one alone
+    --clean              its own promise        "remove .fmake/ and exit" is
+                                                what it does
+
+### The find: two symlinks and fmake never returns
+
+A tree holding `real/up -> ..` **and** a second name for that directory
+made fmake run at full CPU with no output until it was killed.
+`something_that_is_not_a_file_is_not_a_source` already records two ways
+this happened -- a FIFO blocks on open, `/dev/zero` never stops -- and
+this is the third and the first needing no unusual file at all.
+
+**Diagnosed rather than guessed**, with `PYTHONFAULTHANDLER=1` and
+`timeout -s ABRT`: two hundred frames of `glob._rlistdir` under
+`situ_plan`. Measured on glob alone, which is what makes the shape clear:
+
+    real/up -> ..        82 hits for 2 files    finite, and an explosion
+    here -> .            82 hits
+    alias -> real         3 hits
+    both together        never returns
+
+**`_walk` had already solved this, and that is the point.** It follows
+symlinked directories on purpose -- `src/common -> ../shared` is a real
+layout -- while keying a `seen` set on the real path. The four
+`glob.glob("**/*.x", recursive=True)` scans were **a second traversal of
+the same tree** with no such guard: the same duplicate-mechanism shape as
+the rcc list in §190 and `install_paths` in §193, and the third time
+today that the copy was the one that was wrong.
+
+`find_ext(root, ext)` lends `_walk`'s guard to those scans. Two
+consequences beyond the hang:
+
+- **A file reachable by two names is reported once.** `link/res.qrc` and
+  `shared/res.qrc` were both named as unused; they are one file.
+- **The scans now see the tree the source walk sees**, so a `.ui`, `.qrc`
+  or `.situ` under `build/`, `node_modules/` or a dotted directory is no
+  longer scanned. That is a deliberate narrowing rather than a side
+  effect: sources there are already skipped, so uic'ing a form fmake
+  would refuse to compile beside was the inconsistent half. All three are
+  authored files, which is why living under `build/` is not a layout
+  anybody has.
+
+**The hang case and the dedup case are separate on purpose.** With the
+looping fixture every sabotage stops at the timeout, so a second
+assertion after it can never be shown to fail -- the dedup one runs on a
+tree that terminates either way, which leaves the count free to be the
+thing that breaks. The suite's own bound turns both into named failing
+cases rather than a run that never finishes.
+
+### And a check that named four of seventeen
+
+`doxygen_aliases_are_emitted` looked for `@target`, `@pkg`, `@libs` and
+`@kind`. **The obvious rationale for widening it is wrong**, and saying
+so is the point of this paragraph: `doxygen_aliases()` iterates
+`DIRECTIVES`, so a directive added tomorrow gets its alias for free and
+needs no check at all.
+
+What the four names could not see is the generator drifting from the set,
+and **the first sabotage did not establish that either**: emitting only
+`DIRECTIVE_SCALAR` drops twelve aliases including `pkg` and `libs`, which
+the old check named. `DIRECTIVES - {"arch", "rule"}` is the sabotage that
+separates them -- the old check passes, the population check fails naming
+both. The derivation is now one helper serving this and the README's
+directive table, rather than two copies of the same parse.
