@@ -4169,6 +4169,121 @@ def an_ejected_build_regenerates_a_stale_source(t):
 			u.cleanup()
 
 
+def _depfile_tree(t, target='out'):
+	"""A generator that reads a file nothing declares, and says so.
+
+    `part.txt` is in no `inputs` list. The only thing that knows the rule
+    read it is the rule, which is the whole reason `depfile` exists.
+    """
+	t.write("mk.py", "import os, sys\n"
+	        "out = sys.argv[1]\n"
+	        "value = open(\"part.txt\").read().strip()\n"
+	        "os.makedirs(os.path.dirname(out), exist_ok=True)\n"
+	        "with open(out, \"w\") as fh:\n"
+	        "    fh.write(\"int made(void){ return %s; }\\n\" % value)\n"
+	        "with open(out + \".d\", \"w\") as fh:\n"
+	        f"    fh.write(\"%s: part.txt\\n\" % {target})\n")
+	t.write("part.txt", "7\n")
+	t.write("main.c", "#include <stdio.h>\nint made(void);\n"
+	        'int main(void){ printf("%d\\n", made()); return 0; }\n')
+	t.write("fmake.toml", f"""
+[generate.thing]
+command = "{sys.executable} mk.py gen/made.c"
+inputs  = ["mk.py"]
+outputs = ["gen/made.c"]
+depfile = "gen/made.c.d"
+""")
+
+
+@case
+def an_ejected_build_reads_the_generators_depfile(t):
+	"""The mechanism for what a list cannot hold, dropped on the way out.
+
+    A rule declares `depfile` because the tool that did the reading is the
+    only thing that knows what it read -- bison's includes, protoc's
+    imports. fmake folds those into the rule's freshness key. The build
+    files it wrote named `inputs` and `depends` and nothing else, so the
+    ejected build was stale in exactly the case the mechanism exists for:
+    with the same fixture, fmake went 7 to 9 on a change to a file only
+    the depfile names, and `make` reported nothing to do.
+
+    Both backends have the machinery already -- `-include` and ninja's
+    own `depfile` -- and both want the depfile to name the rule's first
+    output, measured on a two-output ninja edge rather than assumed, so
+    one requirement covers them both.
+    """
+	for backend, out, cmd in (("make", "Makefile", ["make"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		u = Tree("gendep-" + backend)
+		try:
+			_depfile_tree(u)
+			e = u.fmake("--eject", backend)
+			check(e.returncode == 0,
+			      f"--eject {backend} failed: {e.stderr}")
+			u.write(out, e.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			shutil.rmtree(os.path.join(u.dir, "gen"), ignore_errors=True)
+
+			prog = "./" + os.path.basename(u.dir)
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} failed: {b.stdout}{b.stderr}")
+			check(_run_in(u.dir, prog).stdout == "7\n",
+			      f"the ejected {backend} build is wrong before any change")
+
+			u.write("part.txt", "9\n")
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} rebuild failed: {b.stdout}{b.stderr}")
+			got = _run_in(u.dir, prog).stdout
+			check(got == "9\n",
+			      f"the ejected {backend} build ignored the depfile the "
+			      f"generator wrote, so a file only the rule knows it "
+			      f"read did not rebuild it: {got!r}")
+		finally:
+			u.cleanup()
+
+
+@case
+def a_depfile_naming_the_wrong_target_is_reported(t):
+	"""fmake reads the prerequisites and never the target, so it alone is
+	forgiving -- and the forgiveness is what hides the fault.
+
+    Measured on a rule whose depfile says `WRONG.c':
+
+        make    attaches the prerequisites to a target nothing builds, so
+                the discovered input changes and the output does not
+        ninja   accepts it and never reaches a fixed point; the edge is
+                dirty on every run and the generator re-runs for ever
+
+    Neither says anything, and fmake would have built the tree happily
+    for months before anybody ejected. The correct target is the control:
+    the same fixture, one word different, must be silent.
+    """
+	_depfile_tree(t, target='out')
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("depfile naming" not in r.stdout + r.stderr,
+	      f"a depfile naming its own output must not be reported: "
+	      f"{r.stdout}{r.stderr}")
+
+	u = Tree("wrongdep")
+	try:
+		_depfile_tree(u, target='"WRONG.c"')
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"a wrong target is a warning, not a refusal: "
+		      f"{r.stdout}{r.stderr}")
+		out = r.stdout + r.stderr
+		check("WRONG.c" in out and "gen/made.c" in out,
+		      f"the report names neither the depfile's target nor the "
+		      f"rule's output: {out}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

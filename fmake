@@ -2268,6 +2268,18 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			gen_deps[name] = sorted(set(found))
 			vinfo(f"{name} reads {len(gen_deps[name])} file(s) "
 			      f"by its own account")
+			# fmake takes the prerequisites and ignores the target, so a
+			# depfile naming the wrong file is invisible here and fatal
+			# after an eject. Said now, where the generator that wrote it
+			# is the thing being talked about.
+			said = depfile_target(where)
+			first = r["outputs"][0]
+			if said and os.path.relpath(os.path.join(root, said),
+			                            root) != first:
+				warn(f"{_gen_where(r, name)} wrote a depfile naming "
+				     f"{said!r} rather than {first!r}. fmake reads it "
+				     f"either way; an ejected build cannot -- make goes "
+				     f"stale and ninja re-runs the rule for ever.")
 			# Recomputed, because the key above was built from what the
 			# *previous* run recorded and this run may read more. Without
 			# this the first build after a new include is stale-clean:
@@ -4707,6 +4719,34 @@ class Cache:
 # ---------------------------------------------------------------------------
 # Depfiles
 # ---------------------------------------------------------------------------
+
+def depfile_target(path):
+	"""The file a depfile says it describes, or None.
+
+    fmake reads a depfile for its prerequisites and never looks at the
+    target, so a generator naming the wrong one works here and in neither
+    ejected build. Measured on a rule whose depfile said
+    `SOMETHING/ELSE.txt':
+
+        make    attaches the prerequisites to a target nothing builds;
+                the discovered input changes and the output does not
+        ninja   accepts it and never reaches a fixed point -- the edge is
+                dirty on every run, so the generator re-runs for ever
+
+    Neither says anything. Reading the target here is the only way to say
+    it before an eject makes it somebody else's problem.
+    """
+	try:
+		with open(path) as fh:
+			text = fh.read()
+	except OSError:
+		return None
+	lhs, sep, _ = text.replace("\\\n", " ").partition(":")
+	if not sep:
+		return None
+	name = lhs.strip().replace("\\ ", " ")
+	return name or None
+
 
 def parse_depfile(path):
 	"""Read a `cc -MD` depfile and return the prerequisite paths.
@@ -10710,6 +10750,16 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			for extra in outs[1:]:
 				a(f"{extra}: {outs[0]}")
 				a("\t@:")
+			# What the generator itself said it read. Declaring `depfile'
+			# exists precisely because a hand-written list is a list
+			# somebody has to keep right, and an ejected build that
+			# ignored it was stale in the one case the mechanism is for:
+			# fmake regenerated on a change the depfile named and make
+			# reported nothing to do. `-include' rather than `include',
+			# because a clean tree has not written it yet -- the declared
+			# inputs are what force the first run.
+			if r.get("depfile"):
+				a(f"-include {r['depfile']}")
 			a("")
 
 	every, crate_libs, crate_deps = {}, {}, {}
@@ -11297,6 +11347,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			cmds.append(line.replace("$", "$$") + (" || true" if ignore else ""))
 		a(f"rule gen_{_mk_ident(name)}")
 		a(f"  command = {' && '.join(cmds)}")
+		# Measured on a two-output edge rather than assumed: ninja accepts
+		# a depfile there so long as it names the FIRST output, which is
+		# the same file make needs it to name, so one requirement covers
+		# both backends.
+		if r.get("depfile"):
+			a(f"  depfile = {_ninja(r['depfile'])}")
 		a(f"  description = GEN {r.get('description') or name}")
 		a("")
 		deps = r.get("depends", [])

@@ -15529,8 +15529,8 @@ worse than none.
 Makefile is the project's build once it is committed. That is one member
 of a population, and the lens it suggests is the whole population:
 **what does the default build know that the build file it writes does
-not?** Two answers, both silent, both reproduced before anything was
-changed.
+not?** Three answers, every one silent, every one reproduced before
+anything was changed.
 
 ### A resource's contents are an input, and only fmake knew it
 
@@ -15573,6 +15573,44 @@ than empty. Both backends now ask one `_tool_paths` -- the tool sources,
 the files a `.qrc` embeds, and every generator input, output and
 `depends` -- rather than composing the same list separately.
 
+### A generator's own depfile stopped at the exit
+
+The third answer, found by finishing the lens rather than stopping at
+two. A `[generate.*]` may declare a `depfile`, and the reason is in the
+comment beside the code that reads it: "the tool that did the reading is
+the only thing that knows, and a hand-written list is a list somebody has
+to keep right" -- bison's includes, protoc's imports. fmake folds those
+paths into the rule's freshness key. **The build files it wrote named
+`inputs` and `depends` and stopped there**, so the ejected build was
+stale in precisely the case the mechanism exists for. On a rule reading
+`part.txt`, which no `inputs` list mentions:
+
+    fmake, change part.txt         7 -> 9
+    ejected make, same change      nothing to do, still 7
+
+Both backends had the machinery already -- make's `-include`, ninja's own
+`depfile` -- and both want the depfile to name the rule's **first**
+output. That was measured rather than assumed, on a two-output ninja
+edge, and it is the same file make needs it to name, so one requirement
+covers both.
+
+**And fmake is the only one of the three that does not care**, which is
+what makes the requirement worth saying out loud. `parse_depfile` takes
+the prerequisites and discards the target, so a generator naming the
+wrong one builds correctly here for as long as nobody ejects. Measured on
+a depfile saying `WRONG.c`:
+
+    make    attaches the prerequisites to a target nothing builds, so the
+            discovered input changes and the output does not
+    ninja   accepts it and never reaches a fixed point -- the edge is
+            dirty on every run, so the generator re-runs for ever
+
+Neither says anything. `depfile_target` reads the target now and the
+build reports the mismatch, naming both the target written and the output
+expected. The first version of that code said ninja "refuses the build
+outright"; it does not, and the paragraph above is what measuring it
+produced.
+
 ### The suite tested the easy half, and something else caught the hard one
 
 `generated_sources_survive_ejection` deletes `gen/` and watches the
@@ -15591,6 +15629,13 @@ reverted one piece at a time:
     an_ejected_build_regenerates_a_stale_source     both backends
     an_ejected_build_rebuilds_a_changed_resource    both backends
     a_generator_input_make_cannot_name_is_refused   make refuses, ninja builds
+    an_ejected_build_reads_the_generators_depfile   both backends
+    a_depfile_naming_the_wrong_target_is_reported   and silent when it is right
+
+The last one carries its own control, and the control was sabotaged too:
+with the comparison removed so the report fires on every depfile, the
+case fails on the correct fixture rather than the wrong one. A report
+nobody can make quiet is not a report.
 
 **Two docstrings written for this pass said the ninja path list was
 already shorter than the Makefile's. It was not** -- the two were
