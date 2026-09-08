@@ -10482,6 +10482,12 @@ def _tool_paths(moc=None, uic=None, rcc=None, gen_rules=None):
 	for r in (gen_rules or {}).values():
 		for key in ("inputs", "outputs", "depends"):
 			out += list(r.get(key) or ())
+		# `-include' is silent about a file it cannot read, so a depfile
+		# path Make splits is not an error -- it is the dependency
+		# quietly gone, which is the defect the depfile was emitted to
+		# fix. Checked with the rest.
+		if r.get("depfile"):
+			out.append(r["depfile"])
 	return out
 
 
@@ -10558,7 +10564,13 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	eject_bins = {x.name: "./" + x.filename for x in targets}
 	eject_files = {x.name: x.filename for x in targets}
 	P = "FM_" if fragment else ""
-	gen_srcs = _tool_paths(moc, uic, rcc, gen_rules)
+	# The submodule paths with them: they are targets and prerequisites in
+	# what follows, and a `.gitmodules' path is whatever somebody wrote.
+	# Before this a submodule at `my lib' ejected `my lib/.git:' and make
+	# stopped on `*** [Makefile:66: my] Error 1', out of an --eject that
+	# had exited 0.
+	gen_srcs = (_tool_paths(moc, uic, rcc, gen_rules)
+	            + list(declared_submodules(root)))
 	_refuse_leading_dash(targets, closures, root, gen_srcs)
 	_refuse_whitespace(targets, closures, root, gen_srcs)
 	any_crate = any(u.crate for t in targets for u in closures[t].link)
@@ -10970,9 +10982,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# ---- submodules " + "-" * 46)
 		a("")
 		for path in subs:
+			# The target is a Make path and the argument is a shell word,
+			# and they are quoted differently for that reason. What the
+			# whitelist above allows is safe in both, so this is the belt
+			# to that pair of braces rather than the only guard.
 			a(f"{path}/.git:")
-			a(f"\t@echo 'fetching submodule {path}'")
-			a(f"\tgit submodule update --init --recursive -- {path}")
+			a(f"\t@echo {shlex.quote('fetching submodule ' + path)}")
+			a(f"\tgit submodule update --init --recursive -- "
+			  f"{shlex.quote(path)}")
 			a("")
 
 	# One rule per object, because per-file flags are the point: @cflags and
@@ -11282,7 +11299,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# colon -- and this is the one it cannot either, because the difficulty
 	# is downstream of the build file entirely.
 	_refuse_leading_dash(targets, closures, root,
-	                     _tool_paths(moc, uic, rcc, gen_rules))
+	                     _tool_paths(moc, uic, rcc, gen_rules)
+	                     + list(declared_submodules(root)))
 	common = " ".join(_eject_flags(cfg.cflags + incflags, root, _nj_flag))
 	override = " ".join(_eject_flags(cfg.override, root, _nj_flag))
 	L = []
@@ -11557,7 +11575,13 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	subs = declared_submodules(root)
 	if subs:
 		a("rule submodule")
-		a("  command = git submodule update --init --recursive -- $path")
+		# `qpath' rather than `$path', because ninja shell-quotes $in and
+		# $out when it expands them into a command and does NOT quote a
+		# variable of your own. Measured: a rule whose command holds a
+		# custom variable set to `a b.txt' hands the shell two arguments
+		# where $in hands it one -- so a submodule at `my lib' reached git
+		# as `my' and `lib'. The description keeps the readable form.
+		a("  command = git submodule update --init --recursive -- $qpath")
 		a("  description = SUB $path")
 		a("")
 		for path in subs:
@@ -11573,6 +11597,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			outs = " ".join([f"{_ninja(path)}/.git"] + sorted(made))
 			a(f"build {outs}: submodule")
 			a(f"  path = {path}")
+			a(f"  qpath = {shlex.quote(path)}")
 		a("")
 
 	# Order-only: a generated header must exist before anything compiles,

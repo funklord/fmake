@@ -240,7 +240,8 @@ that had been green about nothing for five commits ·
 [187. A worktree is a git checkout, and fmake asked the wrong question](#187-a-worktree-is-a-git-checkout-and-fmake-asked-the-wrong-question) ·
 [188. The submodule fetch, and where it had to go](#188-the-submodule-fetch-and-where-it-had-to-go) ·
 [189. The README was not rewritten](#189-the-readme-was-not-rewritten) ·
-[190. What the ejected build did not know it depended on](#190-what-the-ejected-build-did-not-know-it-depended-on)
+[190. What the ejected build did not know it depended on](#190-what-the-ejected-build-did-not-know-it-depended-on) ·
+[191. Three paths that reached a build file unchecked](#191-three-paths-that-reached-a-build-file-unchecked)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15723,3 +15724,80 @@ already shorter than the Makefile's. It was not** -- the two were
 identical, and only the whitespace refusal is make's alone. Corrected
 before the commit; a claim about which of two lists was shorter is the
 kind nothing downstream trips over.
+
+---
+
+## 191. Three paths that reached a build file unchecked
+
+§190's lens was what the live build knows that the emitted one does not.
+Two of its three fixes worked by **naming more paths in the build file**,
+which suggests the next lens rather than repeating the last: *every path
+an ejected build names has to be one make can express and one the shell
+receives whole*, and the guard for that walks a list somebody maintains
+by hand. Three findings, all measured, one of them an hour old.
+
+### A depfile path, in the commit that added it
+
+`-include <path>` is how the ejected Makefile reads what a generator said
+it opened, and **`-include` is silent about a file it cannot read.** So a
+depfile at `gen/made file.d` is not an error and not a broken build: make
+takes `gen/made` and `file.d`, finds neither, says nothing, and the
+dependency is quietly gone -- which is the exact defect the line was
+emitted to fix, one commit earlier. Worse than the generator-input case
+beside it, which at least stops make.
+
+`_tool_paths` gained the depfile. **The fault was in the same function
+that had just been written to close this class**, which is the useful
+part: adding a path to a build file and adding it to the list of paths
+that get checked are two edits, and nothing connects them.
+
+### A submodule path, from §188
+
+`.gitmodules` holds whatever somebody wrote, and §188 made those paths
+targets and prerequisites without adding them to the refusal. Measured on
+a submodule at `my lib`:
+
+    --eject make    exits 0 and writes  my lib/.git:
+    make            *** [Makefile:66: my] Error 1
+
+### And ninja does not quote a variable of your own
+
+The same submodule, ejected to ninja, loads and then fails, because the
+fetch rule reads `-- $path`. **Ninja shell-quotes `$in` and `$out` when
+it expands them into a command and leaves any other variable alone.**
+Measured directly, one rule each way, on a value of `a b.txt`:
+
+    a custom variable   [a]  [b.txt]      two arguments
+    $in                 [a b.txt]         one
+
+So `paths_with_spaces_build_and_eject_honestly` was right that ninja
+copes -- it asks about sources, which arrive through `$in`. A path fmake
+puts in a variable of its own is a different question, and this is the
+only place fmake does that. The rule carries `qpath` now, quoted, and the
+description keeps `path` so the output stays readable.
+
+### The sabotage went green, and the fixture was why
+
+Reverting the submodule half left the case passing. Not because the check
+could not fire: the first fixture put a `.c` **inside** the submodule, so
+`my lib/lib.c` was a source in the closure and the whitespace refusal
+fired on that instead. The guard was reached by a second route, and from
+the outside that is indistinguishable from the guard under test working.
+The submodule is header-only now, which leaves its path as the only thing
+in the tree Make cannot express.
+
+**This is the one that generalises**: a fixture built to demonstrate a
+fault tends to contain the fault twice, because the natural way to build
+it -- a submodule with a spaced path *and* the sources you would put in a
+submodule -- reproduces the symptom by two mechanisms at once.
+
+### Checked and left alone: the subset eject that now refuses
+
+`--eject make <one target>` in a tree holding any `uses` generator refuses
+since §190, even when the named target has nothing to do with that
+generator. That reads like a regression and is not. Measured against the
+previous commit: the Makefile it wrote **failed with exit 127** anyway,
+because every object carries an order-only dependency on `$(GENERATED)`
+and an unrelated generate rule is therefore not unrelated -- make builds
+`gen/vals.c` on the way to anything. Refusing replaces a broken file with
+a message that names the target to add.

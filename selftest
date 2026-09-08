@@ -14330,6 +14330,143 @@ def an_ejected_build_fetches_the_submodule_too(t):
 
 
 @case
+def a_submodule_path_make_cannot_name_is_refused(t):
+	"""A `.gitmodules` path is whatever somebody wrote, and it became a
+	Makefile target without anybody checking it.
+
+    Measured on a submodule at `my lib`: `--eject make` exited 0 and wrote
+
+        my lib/.git:
+        \tgit submodule update --init --recursive -- my lib
+        $(BUILD_DIR)/main.c.o: main.c | my lib/.git
+
+    Make reads two targets and two prerequisites there, and stopped on
+    `*** [Makefile:66: my] Error 1`. The refusal that exists for exactly
+    this walked the targets, the link sets, the install plan and the tool
+    paths -- the submodules were the one list nobody added.
+
+    Ninja can express the path and had a second fault of its own, which
+    is why this case fetches rather than reading the file: **ninja
+    shell-quotes `$in` and `$out` when it expands them into a command and
+    does not quote a variable of your own**, so `path = my lib` reached
+    git as two arguments. Measured directly, one rule each way:
+
+        custom variable   [a]  [b.txt]
+        $in               [a b.txt]
+
+    A `qpath` carries the quoted form now, and the fetch below is what
+    says so.
+    """
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	work = tempfile.mkdtemp(prefix="fmake-subspace-")
+	env = dict(os.environ, GIT_ALLOW_PROTOCOL="file")
+	allow = ["-c", "protocol.file.allow=always"]
+
+	def git(where, *a):
+		return subprocess.run(["git", "-C", where, *a],
+		                      capture_output=True, text=True)
+	try:
+		lib, app = os.path.join(work, "lib"), os.path.join(work, "app")
+		for d in (lib, app):
+			os.makedirs(d)
+			git(d, "init", "-q", ".")
+			git(d, "config", "user.email", "t@example.invalid")
+			git(d, "config", "user.name", "t")
+		# Header-only, and that is load-bearing rather than tidy: a .c
+		# inside the submodule is a source in the closure, so the
+		# whitespace refusal fires on `my lib/lib.c' and the case would
+		# pass with the submodule list removed again. Sabotage said so --
+		# it went green with the fix reverted until this fixture stopped
+		# handing the guard a second reason.
+		with open(os.path.join(lib, "lib.h"), "w") as fh:
+			fh.write("static inline int lib_answer(void){ return 42; }\n")
+		git(lib, "add", "-A"); git(lib, "commit", "-qm", "lib")
+		with open(os.path.join(app, "main.c"), "w") as fh:
+			fh.write('#include <stdio.h>\n#include "my lib/lib.h"\n'
+			         'int main(void){ printf("%d\\n", lib_answer()); '
+			         'return 0; }\n')
+		add = subprocess.run(["git", "-C", app, *allow, "submodule", "add",
+		                      "-q", lib, "my lib"],
+		                     capture_output=True, text=True)
+		if add.returncode != 0:
+			raise Skip("this git will not add a submodule over a local path")
+		git(app, "add", "-A"); git(app, "commit", "-qm", "app")
+
+		tree = os.path.join(work, "fresh")
+		subprocess.run(["git", *allow, "clone", "-q", app, tree],
+		               capture_output=True, text=True)
+
+		r = subprocess.run([FMAKE, "-C", tree, "--eject", "make"],
+		                   capture_output=True, text=True, env=env)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a Makefile naming `my lib' was emitted: {out[:400]}")
+		check("my lib" in out and "whitespace" in out,
+		      f"the refusal names neither the path nor the reason: {out}")
+		check("ninja" in out,
+		      f"nothing points at the backend that can express it: {out}")
+
+		if not shutil.which("ninja"):
+			return
+		e = subprocess.run([FMAKE, "-C", tree, "--eject", "ninja"],
+		                   capture_output=True, text=True, env=env)
+		check(e.returncode == 0, f"ninja eject failed: {e.stderr}")
+		with open(os.path.join(tree, "build.ninja"), "w") as fh:
+			fh.write(e.stdout)
+		shutil.rmtree(os.path.join(tree, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(tree, "my lib"), ignore_errors=True)
+		os.makedirs(os.path.join(tree, "my lib"), exist_ok=True)
+
+		n = subprocess.run(["ninja", "-C", tree], capture_output=True,
+		                   text=True, env=env)
+		check(n.returncode == 0,
+		      f"the ejected ninja build could not fetch a submodule whose "
+		      f"path has a space: {n.stdout}{n.stderr}")
+		check(os.path.exists(os.path.join(tree, "my lib", "lib.h")),
+		      "the submodule was not fetched")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
+def a_depfile_path_make_cannot_name_is_refused(t):
+	"""The path added an hour before this, and unchecked with it.
+
+    A generator's `depfile` becomes `-include <path>` in the Makefile, and
+    `-include` is silent about a file it cannot read. So a depfile at
+    `gen/made file.d` is not an error and not a broken build: it is the
+    dependency quietly gone, which is the exact defect the line was
+    emitted to fix. Worse than the input case beside it, which at least
+    stops make.
+    """
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("mk.py", "import os, sys\n"
+	        "os.makedirs('gen', exist_ok=True)\n"
+	        "open(sys.argv[1], 'w').write('int made(void){ return 7; }\\n')\n"
+	        "open('gen/made file.d', 'w').write"
+	        "('%s: part.txt\\n' % sys.argv[1])\n")
+	t.write("part.txt", "7\n")
+	t.write("main.c", "#include <stdio.h>\nint made(void);\n"
+	        'int main(void){ printf("%d\\n", made()); return 0; }\n')
+	t.write("fmake.toml", f"""
+[generate.thing]
+command = "{sys.executable} mk.py gen/made.c"
+inputs  = ["mk.py"]
+outputs = ["gen/made.c"]
+depfile = "gen/made file.d"
+""")
+	check(t.fmake().returncode == 0, "fmake itself never goes through Make")
+	r = t.fmake("--eject", "make")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a Makefile with a split -include was emitted: {out[:400]}")
+	check("gen/made file.d" in out and "whitespace" in out,
+	      f"the refusal names neither the path nor the reason: {out}")
+
+
+@case
 def a_submodule_that_cannot_be_fetched_stops_the_build(t):
 	"""An unpacked archive is the usual way to have a `.gitmodules` and no
 	git: `git archive` carries the file and none of the contents.
