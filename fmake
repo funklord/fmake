@@ -9852,7 +9852,7 @@ def build(args, _bootstrapping=False):
 	# to touch nothing.
 	if not args.dry_run:
 		for t in wanted:
-			text = pc_text(t, conf)
+			text = pc_text(t, conf, install_paths(conf, args)["prefix"])
 			if text is None:
 				continue
 			path = os.path.join(outdir, t.name + ".pc")
@@ -11246,14 +11246,29 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		pcs = [(t, pc_text(t, conf)) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
 		for t, text in pcs:
+			# Regenerated every time rather than when missing: its
+			# contents depend on $(PREFIX), which is set on the command
+			# line, and a rule with no prerequisites fires only when its
+			# target is absent -- so the first `make install PREFIX=...'
+			# wrote the file and every later one with a different prefix
+			# published the first one's. That is the class
+			# build-and-commit.md names, in a file other projects read.
+			a(f".PHONY: {t.name}.pc")
 			a(f"{t.name}.pc:")
 			# `${prefix}` is a pkg-config variable and a Make variable
 			# reference, and Make wins: unescaped, the recipe runs,
 			# succeeds, and writes a .pc with empty paths. Section 26
 			# records the same trap for fmake.mk recipes -- a surviving
 			# dollar has to be doubled or the output is quietly wrong.
-			args_ = " ".join(shlex.quote(l.replace("$", "$$"))
-			                 for l in text.rstrip("\n").split("\n"))
+			# The prefix line is left for Make to expand, because the
+			# whole install block is `?=' and overridable and this was
+			# the one thing that did not follow: `make install
+			# PREFIX=/opt' installed under /opt and wrote a .pc naming
+			# whatever the tree said when it was ejected.
+			args_ = " ".join(
+			    f"prefix=$({P}PREFIX)" if l.startswith("prefix=")
+			    else shlex.quote(l.replace("$", "$$"))
+			    for l in text.rstrip("\n").split("\n"))
 			a(f"\tprintf '%s\\n' {args_} > $@")
 			a("")
 
@@ -11848,15 +11863,39 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# ninja's escape rather than Make's.
 		pcs = [(t, pc_text(t, conf)) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
+		# The prefix line reads the same PREFIX the install steps above
+		# do, rather than the one this tree named when it was ejected:
+		# `PREFIX=/opt ninja install' installed under /opt and published
+		# /usr/local otherwise.
+		#
+		# Escaped per line rather than over the joined string, because
+		# this line arrives already carrying ninja's escape and the rest
+		# do not. Doubling the whole body a second time turned
+		# `${prefix}' into a ninja variable that expands to nothing --
+		# a .pc with empty paths, which is the trap the Makefile side
+		# already carries a comment about.
+		default = dict(INSTALL_DEFAULTS)
+		default.update({k: v for k, v in conf.install.items() if v})
 		for t, text in pcs:
-			body = " ".join(shlex.quote(l)
-			                for l in text.rstrip("\n").split("\n"))
+			parts = []
+			for l in text.rstrip("\n").split("\n"):
+				if l.startswith("prefix="):
+					parts.append('"prefix=$${PREFIX:='
+					             + default["prefix"] + '}"')
+				else:
+					parts.append(shlex.quote(l).replace("$", "$$"))
 			a("")
 			a(f"rule pc_{_mk_ident(t.name)}")
-			a(f"  command = printf '%s\\n' {body.replace('$', '$$')} > $out")
+			a(f"  command = printf '%s\\n' {' '.join(parts)} > $out")
 			a(f"  description = PC {t.name}.pc")
-			a(f"build {_ninja(t.name)}.pc: pc_{_mk_ident(t.name)}")
+			# Rebuilt every run: ninja re-runs on a changed command line,
+			# and this command is identical while the environment that
+			# decides its output is not, so a second install under a
+			# different prefix republished the first one's file.
+			a(f"build {_ninja(t.name)}.pc: pc_{_mk_ident(t.name)} | always")
 
+		a("")
+		a("build always: phony")
 		a("")
 		a("rule install")
 		a("  command = " + "; ".join(steps))
@@ -11897,7 +11936,7 @@ INSTALL_DEFAULTS = {"prefix": "/usr/local", "bindir": "bin",
                     "libdir": "lib", "includedir": "include"}
 
 
-def pc_text(t, conf):
+def pc_text(t, conf, prefix=None):
 	"""The pkg-config file for a library, or None if none was asked for.
 
     fmake resolves libraries *through* pkg-config -- a header proposes a
@@ -11923,6 +11962,16 @@ def pc_text(t, conf):
 		return None
 	p = dict(INSTALL_DEFAULTS)
 	p.update({k: v for k, v in conf.install.items() if v})
+	# The prefix this .pc will be TRUE at, which is not always the one
+	# fmake.toml names. `install_paths' folds in --prefix and this
+	# function re-derived the same fact without it, so
+	# `--install --prefix /opt/thing' installed under /opt/thing and
+	# published `prefix=/usr/local' -- pkg-config then answering
+	# -I/usr/local/include for a library that is not there. The consumer
+	# this file most obviously helps is fmake, so the next build looked
+	# in the wrong place and said nothing.
+	if prefix:
+		p["prefix"] = prefix
 	def var(key):
 		sub = p[key]
 		return sub if os.path.isabs(sub) else "${prefix}/" + sub

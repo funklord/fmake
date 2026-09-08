@@ -242,7 +242,8 @@ that had been green about nothing for five commits ·
 [189. The README was not rewritten](#189-the-readme-was-not-rewritten) ·
 [190. What the ejected build did not know it depended on](#190-what-the-ejected-build-did-not-know-it-depended-on) ·
 [191. Three paths that reached a build file unchecked](#191-three-paths-that-reached-a-build-file-unchecked) ·
-[192. Everything else that reaches a shell](#192-everything-else-that-reaches-a-shell)
+[192. Everything else that reaches a shell](#192-everything-else-that-reaches-a-shell) ·
+[193. The .pc named a prefix nothing was installed at](#193-the-pc-named-a-prefix-nothing-was-installed-at)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15906,3 +15907,56 @@ phonies, the order-only lists -- all internal, all derived from paths
 already checked. The user-controlled strings that reach a build file are
 the ones above, and each now goes through the same two escapes as a
 flag.
+
+---
+
+## 193. The `.pc` named a prefix nothing was installed at
+
+The `.pc` is the one artifact here that *other projects read*, and
+`pc_text`'s own docstring says the consumer it most obviously helps is
+fmake. It was publishing a directory nothing had been installed into.
+
+**Discriminated before it was believed**, because a `.pc` deliberately
+avoids baked paths and "the prefix is wrong" could have been the design:
+
+    [install] prefix = ".../stage2"   .pc says prefix=.../stage2   right
+    --prefix .../stage                .pc says prefix=/usr/local   wrong
+
+Same install location, two ways of asking. `install_paths(conf, args)`
+folds `--prefix` in; `pc_text(t, conf)` re-derived the same fact from
+`[install]` alone and did not. So `--install --prefix /opt/thing`
+installed under `/opt/thing` and published `/usr/local`, and pkg-config
+answered `-I/usr/local/include -L/usr/local/lib` for a library that is
+not there -- **plausible flags pointing at nothing**, which is worse than
+a missing file.
+
+**The same fault one layer out, where no flag can fix it.** The ejected
+builds bake the `.pc` at eject time, and the prefix is not known until
+`make install PREFIX=...` runs. The whole install block is `?=` and
+documented as overridable -- "a distribution sets DESTDIR and PREFIX and
+the rest follow" -- and the `.pc` was the one thing that did not follow.
+It reads `$(PREFIX)` now, and the ninja rule reads the `$PREFIX` its own
+install steps already read.
+
+**And the rule had no prerequisites.** Once `greet.pc` existed make never
+wrote it again, so a second install under a different prefix published
+the first one's file -- measured, `stage3` and `stage4` both received the
+`stage3` text. That is the class `build-and-commit.md` names in as many
+words, found in fmake's own output rather than in a hand-written
+Makefile. Both backends regenerate it every run: `.PHONY` in make, and in
+ninja an `always` edge, because **ninja re-runs on a changed command line
+and this command is identical while the environment deciding its output
+is not.**
+
+**What the fix must not do**, and the reason the case asserts it: the
+paths under the prefix stay `${prefix}` pkg-config variables. A `.pc`
+with baked paths is wrong the moment it is relocated, which is exactly
+what DESTDIR staging does -- so the fix is to name the right prefix, not
+to resolve everything.
+
+**One escaping trap on the way, caught by reading the output.** The ninja
+body was escaped over the joined string, and the prefix line arrives
+already carrying ninja's escape while the rest do not. Doubling the whole
+body a second time turned `${prefix}` into a ninja variable expanding to
+nothing -- a `.pc` with empty paths, which is the trap the Makefile side
+already carries a comment about. Escaped per line now.

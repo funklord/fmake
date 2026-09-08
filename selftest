@@ -4655,6 +4655,91 @@ def a_dry_run_prints_commands_a_shell_can_run(t):
 		      f"the install display splits the prefix: {line}")
 
 
+def _pc_tree(t):
+	"""A shared library that asks for a .pc by declaring a version."""
+	t.write("greet.c", "/** @kind shared\n *  @target greet\n"
+	        " *  @version 1.2.3\n *  @headers greet.h\n */\n"
+	        '#include "greet.h"\nint greet_answer(void){ return 42; }\n')
+	t.write("greet.h", "#pragma once\nint greet_answer(void);\n")
+
+
+@case
+def a_pkgconfig_file_names_the_prefix_it_is_installed_at(t):
+	"""The one artifact here that other projects read, naming a directory
+	nothing was installed into.
+
+    `install_paths' folds --prefix in; `pc_text' re-derived the same fact
+    from [install] alone and did not. So `--install --prefix /opt/thing'
+    installed under /opt/thing and published `prefix=/usr/local', and
+    pkg-config answered -I/usr/local/include for a library that is not
+    there. Discriminated against the control: the same prefix given in
+    fmake.toml came out right, which is what said the flag path was the
+    broken one rather than the file being deliberately prefix-free.
+
+    The ejected builds had the same fault one layer out and could not fix
+    it by reading a flag, because the prefix is not known until `make
+    install PREFIX=...' runs -- so the .pc rule reads $(PREFIX) there,
+    and the ninja one reads $PREFIX from the environment its install
+    steps already read.
+
+    And the rule had no prerequisites, so once the file existed make
+    never wrote it again: a second install under a different prefix
+    published the first one's file. That is the class
+    build-and-commit.md names, in a file other projects depend on. Both
+    backends regenerate it every run, which is what asserting the SECOND
+    install is for.
+
+    `${prefix}` stays a pkg-config variable throughout: a .pc with baked
+    paths is wrong the moment it is relocated, which is what DESTDIR
+    staging does.
+    """
+	_pc_tree(t)
+	check(t.fmake().returncode == 0, "the library should build")
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--prefix", stage)
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	pc = os.path.join(stage, "lib", "pkgconfig", "greet.pc")
+	check(os.path.exists(pc), f"no .pc under {stage}")
+	with open(pc) as fh:
+		text = fh.read()
+	check(f"prefix={stage}\n" in text,
+	      f"the .pc names a prefix nothing was installed at: {text}")
+	check("${prefix}" in text,
+	      f"the paths under it must stay relocatable: {text}")
+
+	for backend, out, run in (("make", "Makefile", ["make", "-s"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		e = t.fmake("--eject", backend)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write(out, e.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		check(_run_in(t.dir, *run).returncode == 0, f"{backend} build failed")
+		# Twice, under two prefixes: the second is the one a rule with no
+		# prerequisites gets wrong.
+		for which in ("one", "two"):
+			where = os.path.join(t.dir, f"{backend}-{which}")
+			env = dict(os.environ, PREFIX=where, DESTDIR="")
+			if backend == "make":
+				i = subprocess.run([*run, "install", f"PREFIX={where}"],
+				                   cwd=t.dir, capture_output=True, text=True)
+			else:
+				i = subprocess.run([*run, "install"], cwd=t.dir, env=env,
+				                   capture_output=True, text=True)
+			check(i.returncode == 0,
+			      f"{backend} install failed: {i.stdout}{i.stderr}")
+			got = os.path.join(where, "lib", "pkgconfig", "greet.pc")
+			check(os.path.exists(got), f"{backend} installed no .pc at {where}")
+			with open(got) as fh:
+				body = fh.read()
+			check(f"prefix={where}\n" in body,
+			      f"the {backend} install ({which}) published a .pc naming "
+			      f"another prefix: {body.splitlines()[0]}")
+			check("${prefix}" in body,
+			      f"the {backend} .pc lost its relocatable paths: {body}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
