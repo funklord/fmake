@@ -245,7 +245,8 @@ that had been green about nothing for five commits ·
 [192. Everything else that reaches a shell](#192-everything-else-that-reaches-a-shell) ·
 [193. The .pc named a prefix nothing was installed at](#193-the-pc-named-a-prefix-nothing-was-installed-at) ·
 [194. A third way not to return](#194-a-third-way-not-to-return) ·
-[195. A sweep that found nothing, and five probes that were wrong](#195-a-sweep-that-found-nothing-and-five-probes-that-were-wrong)
+[195. A sweep that found nothing, and five probes that were wrong](#195-a-sweep-that-found-nothing-and-five-probes-that-were-wrong) ·
+[196. The build wrote over a file it did not write](#196-the-build-wrote-over-a-file-it-did-not-write)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16119,3 +16120,63 @@ the shape that produced three of this session's bugs, and a `mandir`
 added tomorrow is eight edits with no check that they all happened. Left
 alone deliberately: there is no defect to fix, and a sweep with no
 request behind it is what `working-practice.md` warns against.
+
+---
+
+## 196. The build wrote over a file it did not write
+
+A target whose name collides with a **directory** has been detected,
+renamed and explained for a long time -- there is a careful guard for it,
+with its own history in the comment. A target whose name collides with a
+**file** had nothing, and the file is the case where something is lost.
+
+    a committed script `tool' beside tool.c    replaced; git said ` M tool'
+    the same, untracked, in a tree with no git gone for good
+    a data file `report' beside report.c       gone for good
+
+**`report` beside `report.c` is an ordinary pair to have**, which is what
+makes this worth a guard rather than a note.
+
+**Refused rather than renamed**, which is where it parts company with the
+directory guard beside it. A directory cannot be written over at all, so
+renaming there rescues a build that could not otherwise run; a file can
+be, so the choice belongs to whoever owns the file, and the message names
+the three ways out -- `@target`, `-o`, or moving the file.
+
+**What is AT the path decides, not who owns it.** The obvious
+discriminator is git, and git is exactly what cannot answer in the case
+where the loss is permanent: a tree with no repository in it. A link step
+writes ELF, PE, Mach-O or an `ar` archive and nothing else in a tree
+does, so reading the first bytes separates "the previous build's output"
+from "somebody's file" without asking anyone.
+
+**The control is the half that keeps it honest**, and it is sabotaged
+too: make the magic test answer no and the case fails on *a rebuild must
+not be refused*. That is what stops this becoming "refuse when the path
+exists" -- which would break every second build, and every build after
+`--clean`, since `--clean` removes `.fmake/` and leaves the binary
+standing.
+
+### And a number for the refusals nobody has seen
+
+§195 recorded that no text match can say which `die()` messages the suite
+produces, because the suite asserts on short distinctive substrings. The
+answer needs the program instrumented, so it was: `die()` logged its
+caller's line to a file under an environment variable, the suite ran with
+it set, and the scaffolding came out afterwards.
+
+    die() call sites          128
+    produced by the suite      71
+    never produced             57
+    refusals fired in one run 150
+
+The suite passed unchanged under the instrumentation, which is what says
+the number is about the suite rather than about the measurement.
+
+**This is a to-do list rather than a bug list**, and the distinction
+matters: an unproduced diagnostic is not a wrong one. Nine of them were
+produced by hand in §195 -- five `fmake.mk` parser refusals and four
+`$file()` ones -- and every message was accurate. What an unproduced
+message loses is not the refusal but the *wording*, which nothing tests
+and which rots quietly; the parser ones are the sharpest, since those
+fire on a reader's own mistake.

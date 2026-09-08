@@ -8497,6 +8497,46 @@ def build(args, _bootstrapping=False):
 	# change a build that worked: the only trees affected are the ones that
 	# stopped with an error. A name somebody *did* choose is still refused,
 	# because renaming what an author asked for is worse than declining.
+	# A link step writes one of these, and nothing else in a tree does.
+	# ELF, PE, the four Mach-O magics and its fat header, and `ar' for a
+	# static library. Read rather than inferred from a name, because the
+	# question is what is ALREADY at that path.
+	_BUILT_MAGIC = (b"\x7fELF", b"MZ", b"!<arch>",
+	                b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+	                b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
+	                b"\xca\xfe\xba\xbe")
+
+	def _looks_built(path):
+		try:
+			with open(path, "rb") as fh:
+				head = fh.read(8)
+		except OSError:
+			return True          # unreadable is not this check's business
+		return any(head.startswith(m) for m in _BUILT_MAGIC)
+
+	# The same collision as the directory one below, in the shape where it
+	# destroys something instead of failing. Measured before this existed:
+	# a committed shell script called `tool' beside `tool.c' was replaced
+	# by the compiled binary and `git status' said ` M tool'; an untracked
+	# one in a tree with no git was gone for good; and a data file called
+	# `report' beside `report.c' -- an ordinary pair -- went the same way.
+	#
+	# Refused rather than renamed, which is where this parts company with
+	# the directory case just below. A directory cannot be written over at
+	# all, so renaming rescues a build that could not have run; a file can,
+	# so the choice is the author's and the remedies are theirs to pick.
+	# What is at the path decides, not who owns it: git cannot answer in
+	# the case where the loss is permanent, which is a tree with no git.
+	for t in targets:
+		out = os.path.join(outdir, t.filename)
+		if not os.path.isfile(out) or _looks_built(out):
+			continue
+		die(f"{t.rel} would be built as {_rel(out, root)}, which is "
+		    f"already a file this build did not write.\n"
+		    f"Linking would replace it. Give the target another name with "
+		    f"@target or {CONF_FILE}, send the build elsewhere with -o, or "
+		    f"move the file.")
+
 	project_name = conf.project.get("name") or os.path.basename(root) or ""
 	for t in targets:
 		if not os.path.isdir(os.path.join(outdir, t.filename)):

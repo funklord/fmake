@@ -4806,6 +4806,67 @@ def one_file_reachable_by_two_names_is_reported_once(t):
 	      f"times: {named}")
 
 
+@case
+def a_file_the_build_did_not_write_is_not_overwritten(t):
+	"""The same collision the directory guard handles, in the shape where
+	it destroys something rather than failing.
+
+    Measured before this existed: a committed shell script `tool' beside
+    `tool.c' was replaced by the compiled binary and `git status' said
+    ` M tool'; the same script untracked in a tree with no git was gone
+    for good; and a data file `report' beside `report.c' -- an ordinary
+    pair -- went the same way. fmake already treats this class as worth
+    handling: a target whose name collides with a DIRECTORY is detected,
+    renamed and explained. A file got nothing, and a file is the case
+    where something is lost.
+
+    Refused rather than renamed, which is where it parts company with the
+    directory guard. A directory cannot be written over at all, so
+    renaming rescues a build that could not have run; a file can, so the
+    choice belongs to whoever owns the file.
+
+    What is AT the path decides, not who owns it: git cannot answer in a
+    tree with no git, which is exactly the case where the loss is
+    permanent. A link step writes ELF, PE, Mach-O or an `ar' archive, and
+    nothing else in a tree does -- so the previous build's own output is
+    replaced without a word, which the control below is for.
+    """
+	before = "#!/bin/sh\necho 'a hand-written script'\n"
+	t.write("tool", before)
+	t.write("tool.c", '#include <stdio.h>\n'
+	        'int main(void){ puts("compiled"); return 0; }\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the script was overwritten: {out[:300]}")
+	check("tool" in out and "did not write" in out,
+	      f"the refusal does not say what is in the way: {out}")
+	with open(os.path.join(t.dir, "tool")) as fh:
+		check(fh.read() == before, "the script was modified anyway")
+
+	# A data file is the same collision without an execute bit on it.
+	os.remove(os.path.join(t.dir, "tool"))
+	os.remove(os.path.join(t.dir, "tool.c"))
+	t.write("report", "important data, not a program\n")
+	t.write("report.c", "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check(r.returncode != 0,
+	      f"a data file was overwritten: {r.stdout}{r.stderr}")
+
+	# The control, and the reason this cannot be "refuse when the path
+	# exists": fmake replaces what fmake wrote, including after --clean,
+	# which removes the state and leaves the binary in the tree.
+	os.remove(os.path.join(t.dir, "report"))
+	os.remove(os.path.join(t.dir, "report.c"))
+	t.write("main.c", "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "the first build should work")
+	check(t.fmake().returncode == 0, "a rebuild must not be refused")
+	check(t.fmake("--clean").returncode == 0, "--clean failed")
+	check(os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
+	      "the fixture assumes --clean leaves the binary")
+	check(t.fmake().returncode == 0,
+	      "a build after --clean must replace the binary it wrote")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
