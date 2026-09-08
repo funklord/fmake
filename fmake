@@ -10797,6 +10797,39 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t$({P}MOC) $({P}MOCFLAGS) $< -o $@")
 			a("")
 
+	# ---- submodules
+	#
+	# An ejected Makefile is the project's build once it is committed, and
+	# the rule it inherits is the same one: a build fetches what the tree
+	# vendors rather than leaving it to the reader. Measured before this
+	# existed -- a fresh clone plus `make' stopped at
+	# `vendor/lib.h: No such file or directory', which is the failure
+	# ejection had reintroduced.
+	#
+	# Keyed on the submodule's own `.git', which is a file once git has
+	# fetched it, so the recipe runs when it is absent and never
+	# otherwise: no stamp of fmake's invention, and no git process on a
+	# build that has nothing to fetch. `--init', never `--remote', for the
+	# reason section 188 gives.
+	#
+	# EVERY object waits for it, not only the ones whose source sits
+	# inside the submodule. The first attempt made that distinction and
+	# failed the way the whole feature is about: `main.c' is not under
+	# `vendor/' but includes `vendor/lib.h', and make cannot know that
+	# until it has compiled `main.c' -- which is the ordering problem
+	# fmake solves by fetching before it walks the tree, arriving here in
+	# the same shape. An order-only prerequisite that is already satisfied
+	# costs nothing.
+	subs = declared_submodules(root)
+	if subs:
+		a("# ---- submodules " + "-" * 46)
+		a("")
+		for path in subs:
+			a(f"{path}/.git:")
+			a(f"\t@echo 'fetching submodule {path}'")
+			a(f"\tgit submodule update --init -- {path}")
+			a("")
+
 	# One rule per object, because per-file flags are the point: @cflags and
 	# @define belong to a translation unit, so a single pattern rule cannot
 	# express them.
@@ -10813,7 +10846,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# A recipe line rather than a variable: see _mk_cmd.
 		own = " ".join(_eject_flags(u.own, root, _mk_cmd_flag))
 		after = ([f"$({P}GENERATED)"] if gen_outs else []) \
-		        + ([f"$({P}GENHDRS)"] if genhdrs else [])
+		        + ([f"$({P}GENHDRS)"] if genhdrs else []) \
+		        + [f"{sub}/.git" for sub in subs]
 		order_only = (" | " + " ".join(after)) if after else ""
 		a(f"{obj}: {_eject_src(rel)}{order_only}")
 		a("\t@mkdir -p $(@D)")

@@ -15333,3 +15333,33 @@ files, failed 2, and said `ossa/ossa.h: No such file or directory`,
 advising a package install or `@os`. The header is inside an empty
 `ossacli/`. A wrong diagnosis is worse than a stop, which is the whole
 argument for failing here rather than reporting.
+
+### The ejected build inherits the rule
+
+An ejected Makefile is the project's build once it is committed, so a
+tree that ejected and committed handed a fresh cloner the same failure:
+`make` stopping at `vendor/lib.h: No such file or directory`, with fmake
+nowhere in sight. Measured before it was fixed.
+
+**The marker is the submodule's own `.git`**, a file git writes when it
+fetches, so the recipe runs when it is absent and never otherwise. No
+stamp of fmake's invention to go stale, and no git process on a build
+with nothing to do -- checked by asserting a second `make` says nothing.
+
+    vendor/.git:
+    	@echo 'fetching submodule vendor'
+    	git submodule update --init -- vendor
+
+**The first attempt failed in the shape of the feature itself**, which is
+why it is written down rather than quietly corrected. It made only the
+objects whose *source* lies inside the submodule wait for the fetch --
+which sounds right and is not: `main.c` is not under `vendor/`, it
+*includes* `vendor/lib.h`, and make cannot know that until it has
+compiled `main.c`, which needs the fetch. That is precisely the ordering
+problem fmake solves by fetching before it walks the tree, met again one
+layer out and answered the same way: everything waits. An order-only
+prerequisite already satisfied costs nothing.
+
+**And that is the second time in one feature that the interesting bug was
+the ordering rather than the mechanism.** The fetch itself is nine lines
+of `git submodule update`; where it goes has now been wrong twice.
