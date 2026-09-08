@@ -15392,6 +15392,34 @@ would have produced a build file that loads, looks right, and refuses.
 The case runs both backends now, and its control reduces the ninja edge's
 outputs to the marker alone -- which fails with the error above.
 
+### Verified on the tree the rule came from
+
+raidcfgd is the incident behind `build-and-commit.md`'s rule -- it
+resolved libossa against whatever happened to be installed and built no
+ossa backend at all on a machine with nothing there. Cloned with its
+submodule absent, with the submodule url pointed at a local checkout so
+the test needs no network:
+
+    before      * 2 file(s) did not compile
+                  local/socket.c
+                  src/ossa_source.cpp        ossa/ossa.h: No such file
+
+    after       * SUB ossacli (not initialised)
+                * 1 file(s) did not compile
+                  local/socket.c
+
+`src/ossa_source.cpp` compiles because the header exists. What remains is
+that tree's own known gap -- a header in a sibling project reached
+through `FUZZNET_DIR`, which `[project] include-dirs` answers and which
+`5bf03a7` already diagnosed -- and it is *not* a submodule, which is the
+useful part: the fetch fixed exactly what it should and left the
+neighbouring failure alone.
+
+**`--clean` was checked rather than assumed**, since a submodule is
+somebody else's tree and clean deletes: it removes `.fmake/` only,
+verifies the basename before removing, and refuses a symlink. Submodules
+are never in its reach.
+
 ### A submodule that vendors one of its own, which git reports as in step
 
 The fourth placement bug in one feature, and the only one that hid behind
