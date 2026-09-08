@@ -239,7 +239,8 @@ that had been green about nothing for five commits ·
 [186. Vendored submodules are the build's to fetch, and fmake needs a method](#186-vendored-submodules-are-the-builds-to-fetch-and-fmake-needs-a-method) ·
 [187. A worktree is a git checkout, and fmake asked the wrong question](#187-a-worktree-is-a-git-checkout-and-fmake-asked-the-wrong-question) ·
 [188. The submodule fetch, and where it had to go](#188-the-submodule-fetch-and-where-it-had-to-go) ·
-[189. The README was not rewritten](#189-the-readme-was-not-rewritten)
+[189. The README was not rewritten](#189-the-readme-was-not-rewritten) ·
+[190. What the ejected build did not know it depended on](#190-what-the-ejected-build-did-not-know-it-depended-on)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15519,3 +15520,80 @@ index matches, so a section added without an entry fails rather than
 being missed. The README is long enough now that a reader arriving from
 a link needs to see the shape of it, and an index nobody maintains is
 worse than none.
+
+---
+
+## 190. What the ejected build did not know it depended on
+
+§188 put the submodule fetch into the ejected builds because an ejected
+Makefile is the project's build once it is committed. That is one member
+of a population, and the lens it suggests is the whole population:
+**what does the default build know that the build file it writes does
+not?** Two answers, both silent, both reproduced before anything was
+changed.
+
+### A resource's contents are an input, and only fmake knew it
+
+`run_rcc` hashes every file the `.qrc` lists, with the reason in a
+comment beside it -- "a changed icon has to re-run it just as a changed
+`.qrc` does". The Makefile and the `build.ninja` it wrote named the
+`.qrc` alone. On a two-file tree, `greeting.txt` embedded through
+`app.qrc`:
+
+    ejected make, change greeting.txt   nothing to do; prints the old text
+    ejected ninja, same change          nothing to do; prints the old text
+    fmake, same change in the same tree RCC re-runs; prints the new text
+
+**The worst shape a staleness bug takes**: no error, no warning, a build
+that reports success, and a binary carrying bytes nobody can find in the
+tree. It reaches whoever has ejected and committed the build file, which
+is the arrangement `--eject` exists to produce.
+
+The fix names the embedded files as prerequisites -- after the first in
+make, so `$<` is still the `.qrc`, and after `|` in ninja, so `$in` is.
+The list is read once, in `rcc_plan`, and stored on the job, so the live
+build and the ejected one cannot disagree about it again; `run_rcc` reads
+that rather than parsing the file a second time.
+
+### The refusal walked the closure, and a generator's input is not in it
+
+Adding those paths raised the question of who checks them, and the answer
+was nobody. `_refuse_whitespace` exists because Make splits prerequisites
+on whitespace, and it was asked only about the targets, their link sets
+and the install plan. A `[generate.*]` input is a prerequisite in the
+emitted Makefile and belongs to none of those:
+
+    inputs = ["in put.c"]     -->  --eject make exits 0, and writes
+                                   gen/made.c: in put.c
+    make                      -->  No rule to make target 'in'
+
+**The check that exists for exactly this could not see it**, which is
+`evidence.md`'s vacuous pass with the population one list short rather
+than empty. Both backends now ask one `_tool_paths` -- the tool sources,
+the files a `.qrc` embeds, and every generator input, output and
+`depends` -- rather than composing the same list separately.
+
+### The suite tested the easy half, and something else caught the hard one
+
+`generated_sources_survive_ejection` deletes `gen/` and watches the
+ejected build put it back. **A rule naming no prerequisites at all
+satisfies that**, since make runs a recipe whose target is missing
+whatever it depends on. Mutating `eject_make` to emit `{output}:` with no
+prerequisites was caught -- by
+`an_ejected_clean_does_not_delete_outside_the_tree`, whose own failure
+message says *which is not what this guards*. An incidental guard is one
+a rename retires without anybody noticing, and it said nothing about
+ninja.
+
+So three cases, each seen to fail through its own check with the fix
+reverted one piece at a time:
+
+    an_ejected_build_regenerates_a_stale_source     both backends
+    an_ejected_build_rebuilds_a_changed_resource    both backends
+    a_generator_input_make_cannot_name_is_refused   make refuses, ninja builds
+
+**Two docstrings written for this pass said the ninja path list was
+already shorter than the Makefile's. It was not** -- the two were
+identical, and only the whitespace refusal is make's alone. Corrected
+before the commit; a claim about which of two lists was shorter is the
+kind nothing downstream trips over.

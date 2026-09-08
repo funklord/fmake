@@ -2797,7 +2797,13 @@ def rcc_plan(files, scans, root):
 		if not users:
 			continue
 		jobs.append({
+		    # The embedded files, read once here so the live build and the
+		    # ejected one cannot disagree about what a resource depends on.
+		    # They did: fmake hashed them and the Makefile it wrote named
+		    # only the .qrc, so a changed icon left an ejected build with
+		    # nothing to do and the old bytes still in the binary.
 		    "src": rel, "name": stem, "users": users,
+		    "deps": sorted(qrc_inputs(hit, root)),
 		    "out": os.path.normpath(os.path.join(QRC_DIR, os.path.dirname(rel),
 		                                         f"qrc_{stem}.cpp")),
 		})
@@ -2814,7 +2820,7 @@ def run_rcc(root, jobs, rcc, cache, dry_run=False):
 		# The listed files are inputs too, and rcc embeds their contents, so
 		# a changed icon has to re-run it just as a changed .qrc does.
 		parts = [rcc, src, job["name"]]
-		for dep in sorted(qrc_inputs(os.path.join(root, src), root)):
+		for dep in job.get("deps", ()):
 			parts.append(dep + ":" + (cache.hash_of(os.path.join(root, dep),
 			                                        dep) or "?"))
 		key = sha("|".join(parts
@@ -10355,6 +10361,34 @@ def _eject_paths(targets, closures, root, extra=()):
 		yield name
 
 
+def _tool_paths(moc=None, uic=None, rcc=None, gen_rules=None):
+	"""Every path an ejected build names that no target's link set holds.
+
+    A generator's input, a .ui, a .qrc and the files a .qrc embeds are all
+    prerequisites in the emitted build and belong to no closure, so the
+    refusals above cannot reach them from `targets' alone. Measured before
+    it was written: `--eject make' exited 0 on a [generate.*] whose input
+    was named `in put.c' and wrote `gen/made.c: in put.c', which make reads
+    as two prerequisites and stops on -- the silent broken Makefile
+    _refuse_whitespace exists to prevent, on a path it was never shown.
+
+    One list for both backends, which composed the same three entries
+    separately before -- two copies of one fact, and the copy is how the
+    Makefile's grew the qrc dependencies while ninja's did not have to.
+    Only the Makefile refuses whitespace: ninja can express those names,
+    so it asks the same list a narrower question.
+    """
+	out = []
+	for tool in (moc, uic, rcc):
+		for j in (tool or {}).get("jobs", ()) or ():
+			out.append(j["src"])
+			out += list(j.get("deps") or ())
+	for r in (gen_rules or {}).values():
+		for key in ("inputs", "outputs", "depends"):
+			out += list(r.get(key) or ())
+	return out
+
+
 def _refuse_leading_dash(targets, closures, root, extra=()):
 	"""A path a compiler reads as an option, whatever the build file is.
 
@@ -10428,9 +10462,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	eject_bins = {x.name: "./" + x.filename for x in targets}
 	eject_files = {x.name: x.filename for x in targets}
 	P = "FM_" if fragment else ""
-	gen_srcs = ([j["src"] for j in (moc or {}).get("jobs", [])]
-	            + [j["src"] for j in (uic or {}).get("jobs", [])]
-	            + [j["src"] for j in (rcc or {}).get("jobs", [])])
+	gen_srcs = _tool_paths(moc, uic, rcc, gen_rules)
 	_refuse_leading_dash(targets, closures, root, gen_srcs)
 	_refuse_whitespace(targets, closures, root, gen_srcs)
 	any_crate = any(u.crate for t in targets for u in closures[t].link)
@@ -10751,7 +10783,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"{P}RCC      = {rcc['exe']}")
 		a("")
 		for j in rcc_jobs:
-			a(f"{_eject_src(j['out'])}: {j['src']}")
+			a(f"{_eject_src(j['out'])}: "
+			  f"{' '.join([j['src'], *j.get('deps', ())])}")
 			a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}RCC) --name {j['name']} $< -o $@")
 			a("")
@@ -11133,9 +11166,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# colon -- and this is the one it cannot either, because the difficulty
 	# is downstream of the build file entirely.
 	_refuse_leading_dash(targets, closures, root,
-	                     [j["src"] for j in (moc or {}).get("jobs", [])]
-	                     + [j["src"] for j in (uic or {}).get("jobs", [])]
-	                     + [j["src"] for j in (rcc or {}).get("jobs", [])])
+	                     _tool_paths(moc, uic, rcc, gen_rules))
 	common = " ".join(_eject_flags(cfg.cflags + incflags, root, _nj_flag))
 	override = " ".join(_eject_flags(cfg.override, root, _nj_flag))
 	L = []
@@ -11340,7 +11371,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("  description = RCC $in")
 		a("")
 		for j in rcc_jobs:
-			a(f"build {_ninja(_eject_src(j['out']))}: rcc {_ninja(j['src'])}")
+			deps = j.get("deps") or ()
+			a(f"build {_ninja(_eject_src(j['out']))}: rcc "
+			  f"{_ninja(j['src'])}"
+			  + (" | " + " ".join(_ninja(d) for d in deps) if deps else ""))
 			a(f"  resname = {j['name']}")
 		a("")
 

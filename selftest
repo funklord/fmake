@@ -4110,6 +4110,65 @@ def generated_sources_survive_ejection(t):
 	      "the ejected build produced a broken binary")
 
 
+@case
+def an_ejected_build_regenerates_a_stale_source(t):
+	"""Deleting the output is the weaker half of the promise.
+
+    generated_sources_survive_ejection removes `gen/` and watches the
+    ejected build put it back -- which a rule naming no prerequisites at
+    all satisfies, since make runs a recipe whose target is missing
+    whatever it depends on. The hazard is the other half: the output is
+    there, its input has moved, and a rule that named no inputs compiles
+    last week's file. build-and-commit.md calls that class a rule that
+    quietly does not run, and its symptom is a stale binary rather than
+    an error.
+
+    Both backends, because they spell the dependency differently and only
+    one of them was covered at all. What caught a mutation dropping
+    make's prerequisites was a text assertion inside
+    an_ejected_clean_does_not_delete_outside_the_tree, whose own message
+    says that is not what it guards; ninja's edge inputs were asserted by
+    nothing. An incidental guard is one a rename retires without anybody
+    noticing.
+    """
+	for backend, out, cmd in (("make", "Makefile", ["make"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		u = Tree("regen-" + backend)
+		try:
+			_gen_tree(u)
+			e = u.fmake("--eject", backend)
+			check(e.returncode == 0,
+			      f"--eject {backend} failed: {e.stderr}")
+			u.write(out, e.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			shutil.rmtree(os.path.join(u.dir, "gen"), ignore_errors=True)
+
+			prog = "./" + os.path.basename(u.dir)
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} failed: {b.stdout}{b.stderr}")
+			check(_run_in(u.dir, prog).stdout == "42\n",
+			      f"the ejected {backend} build produced a broken binary")
+
+			# The input moves and the output stays: exactly the state a rule
+			# naming no prerequisites cannot see.
+			with open(os.path.join(u.dir, "src/mk.py")) as fh:
+				body = fh.read()
+			assert body.count("40") == 1
+			u.write("src/mk.py", body.replace("40", "60"))
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} rebuild failed: {b.stdout}{b.stderr}")
+			got = _run_in(u.dir, prog).stdout
+			check(got == "62\n",
+			      f"the ejected {backend} build did not regenerate a source "
+			      f"whose input had changed: {got!r}")
+		finally:
+			u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
@@ -5138,6 +5197,58 @@ def a_makefile_is_refused_for_a_path_make_cannot_express(t):
 			      f"{name} either: {n.stdout}{n.stderr}")
 		finally:
 			u.cleanup()
+
+
+@case
+def a_generator_input_make_cannot_name_is_refused(t):
+	"""The refusal saw the closure and not the paths beside it.
+
+    Measured before the fix: a [generate.*] whose input is `in put.c'
+    ejected a Makefile, exited 0, and wrote
+
+        gen/made.c: in put.c
+
+    which make reads as two prerequisites and stops on with "No rule to
+    make target 'in'". The check that exists for exactly this could not
+    see it, because it walked the targets and their link sets, and a
+    generator's input belongs to neither -- so it was the silent broken
+    Makefile the whitelist was written to prevent, one list short.
+
+    A generator's outputs and its `depends` were unseen for the same
+    reason, and so were the files a .qrc embeds once those became
+    prerequisites. Both backends ask one list now rather than composing
+    the same one twice.
+    """
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("in put.c", "int made(void){ return 7; }\n")
+	t.write("main.c", "int made(void);\n"
+	        "int main(void){ return made() - 7; }\n")
+	t.write("fmake.toml",
+	        "[generate.thing]\ninputs  = [\"in put.c\"]\n"
+	        "outputs = [\"gen/made.c\"]\n"
+	        "command = \"cp 'in put.c' gen/made.c\"\n")
+	r = t.fmake("--eject", "make")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a Makefile naming it was emitted: {out}")
+	check("in put.c" in out and "whitespace" in out,
+	      f"the refusal does not name the path or the reason: {out}")
+	check("ninja" in out, f"nothing points at the backend that can "
+	                      f"express it: {out}")
+
+	if not shutil.which("ninja"):
+		return
+	e = t.fmake("--eject", "ninja")
+	check(e.returncode == 0, f"ninja eject failed: {e.stderr}")
+	t.write("build.ninja", e.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	shutil.rmtree(os.path.join(t.dir, "gen"), ignore_errors=True)
+	n = _run_in(t.dir, "ninja")
+	check(n.returncode == 0,
+	      f"ninja was offered as the answer and could not build it "
+	      f"either: {n.stdout}{n.stderr}")
+	check(_run_in(t.dir, "./" + os.path.basename(t.dir)).returncode == 0,
+	      "the ninja build produced a binary that does not run")
 
 	# And the direction a whitelist can be wrong in, which is why this one
 	# is Unicode-aware: a non-ASCII filename is expressible in a Makefile
@@ -10973,6 +11084,68 @@ def rcc_survives_ejection(t):
 	check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
 	check(_run_in(t.dir, "./" + prog).returncode == 0,
 	      "the ejected build produced a program with no resource")
+
+
+@case
+def an_ejected_build_rebuilds_a_changed_resource(t):
+	"""rcc embeds the file, so the file is an input, and only fmake knew it.
+
+    The live build hashes every path the .qrc lists and says so in a
+    comment -- "a changed icon has to re-run it just as a changed .qrc
+    does". The Makefile and build.ninja it wrote named the .qrc alone.
+    Measured on a two-file tree: change the embedded text, run the ejected
+    build, and it reports nothing to do while the binary still reads the
+    old bytes. fmake itself, on the same change in the same tree,
+    re-ran rcc and the program printed the new text.
+
+    That is the worst shape a staleness bug takes -- no error, no warning,
+    and a build that reports success -- and it reaches whoever has ejected
+    and committed the build file, which is the arrangement --eject exists
+    to produce. Both backends carried it and both are asserted here,
+    because make and ninja spell the dependency differently: a
+    prerequisite after the first, and an implicit input after `|', so
+    that $< and $in are still the .qrc.
+    """
+	_need_qt()
+	for backend, out, cmd in (("make", "Makefile", ["make"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		u = Tree("resource-" + backend)
+		try:
+			u.write("greeting.txt", "hello from the resource\n")
+			u.write("app.qrc", _qrc("/data", "greeting.txt", ""))
+			u.write("main.cpp", _reader(":/data/greeting.txt",
+			                            "hello from the resource"))
+			e = u.fmake("--eject", backend)
+			check(e.returncode == 0,
+			      f"--eject {backend} failed: {e.stderr}")
+			u.write(out, e.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+
+			prog = "./" + os.path.basename(u.dir)
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} failed: {b.stdout}{b.stderr}")
+			check(_run_in(u.dir, prog).returncode == 0,
+			      f"the ejected {backend} build produced a program with "
+			      f"no resource")
+
+			# The reader checks the text, so a stale resource is a
+			# non-zero exit rather than a wrong string to compare.
+			u.write("greeting.txt", "hello from the changed resource\n")
+			u.write("main.cpp", _reader(":/data/greeting.txt",
+			                            "hello from the changed resource"))
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} rebuild failed: {b.stdout}{b.stderr}")
+			r = _run_in(u.dir, prog)
+			check(r.returncode == 0,
+			      f"the ejected {backend} build did not re-run rcc for a "
+			      f"changed embedded file, so the binary carries the old "
+			      f"bytes (exit {r.returncode})")
+		finally:
+			u.cleanup()
 
 
 # ---------------------------------------------------------------------------
