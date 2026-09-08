@@ -4606,6 +4606,55 @@ outputs = ["gen/x.c"]
 		      f"{what} does not say what is wrong: {out}")
 
 
+@case
+def a_dry_run_prints_commands_a_shell_can_run(t):
+	"""Four of this file's dry-run printers quote their command and three
+	did not.
+
+    rcc, moc, uic and situc print `" ".join(shlex.quote(c) for c in cmd)';
+    the compile line, the link line and the submodule fetch printed
+    `" ".join(cmd)'. `-n' exists to be read and pasted, so an unquoted
+    line is a different command from the one that would run: a source
+    under `sub dir/' printed an object as three shell words where the
+    build passes one. fmake itself was never affected -- it runs a list
+    -- which is exactly why nothing downstream tripped over it.
+
+    Asserted by splitting the printed line the way a shell would, rather
+    than by looking for quotes: what matters is that the path arrives as
+    one argument, whichever quoting style produces that.
+    """
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("sub dir/my helper.c", "int helper(void){ return 0; }\n")
+	# Warmed first: on a fresh tree the file joins the link set only
+	# through widening, which needs objects, so a dry run never names it.
+	check(t.fmake().returncode == 0, "the tree should build")
+	# And changed afterwards, or the dry run has nothing to compile and
+	# only the link line is printed -- which is how the first version of
+	# this case passed with the compile printer's quoting reverted.
+	t.write("sub dir/my helper.c", "int helper(void){ return 1; }\n")
+
+	r = t.fmake("-n")
+	check(r.returncode == 0, f"the dry run failed: {r.stderr}")
+	lines = [l for l in r.stdout.splitlines() if "my helper.c" in l]
+	check(lines, f"the dry run never names the spaced source: {r.stdout}")
+	for line in lines:
+		words = shlex.split(line)
+		whole = [w for w in words if w.endswith("my helper.c")
+		         or w.endswith("my helper.c.o")]
+		check(whole,
+		      f"a shell reading this line gets the path in pieces: {line}")
+
+	# The install display, which is the same question one command over.
+	t.write("fmake.toml", '[install]\nprefix = "/opt/my place"\n')
+	r = t.fmake("--install", "-n")
+	inst = [l for l in r.stdout.splitlines() if l.startswith("install -m")]
+	check(inst, f"nothing was printed to install: {r.stdout}")
+	for line in inst:
+		words = shlex.split(line)
+		check(any(w.startswith("/opt/my place/") for w in words),
+		      f"the install display splits the prefix: {line}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -5241,7 +5241,12 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	def run_one(u):
 		cmd = compile_cmd(u, cfg, incflags)
 		if dry_run:
-			print(" ".join(cmd))
+			# Quoted, as the four generator printers in this file already
+			# are. `-n' prints a command in order to be read and pasted,
+			# and an unquoted one is a different command: a source under
+			# `sub dir/' printed three arguments where the build passes
+			# one. fmake itself is unaffected -- it runs a list.
+			print(" ".join(shlex.quote(c) for c in cmd))
 			return u, 0, ""
 		r = run_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
 		              text=True, errors="replace")
@@ -7372,7 +7377,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 			os.makedirs(os.path.dirname(cl.root.dep) or ".", exist_ok=True)
 
 	if dry_run:
-		print(" ".join(cmd))
+		print(" ".join(shlex.quote(c) for c in cmd))
 		return out, True, True
 
 	# The whole command, plus the contents of everything it consumes. Object
@@ -9700,7 +9705,11 @@ def build(args, _bootstrapping=False):
 		if not args.no_libs:
 			note("libraries are not resolved in a dry run: nothing was "
 			     "compiled, so there are no symbols to resolve. The link "
-			     "lines above are missing their -l flags.")
+			     "lines above are missing their -l flags, and a source "
+			     "that joins a link set only through widening is missing "
+			     "from the lists above altogether -- measured on a "
+			     "two-file tree, where the real build compiles a file "
+			     "the dry run never names.")
 		if any(u.crate and not u.crate_exe for u in units.values()):
 			# Same cause, and worth saying separately because this one is
 			# a file in the tree rather than a package on the machine. A
@@ -12184,7 +12193,7 @@ def do_install(targets, closures, root, outdir, conf, args):
 			# A relative target, so the chain still resolves when the whole
 			# prefix moves -- which is what a staged install is.
 			if args.dry_run:
-				print(f"ln -sf {src} {dst}")
+				print(f"ln -sf {shlex.quote(src)} {shlex.quote(dst)}")
 				continue
 			os.makedirs(os.path.dirname(dst), exist_ok=True)
 			if os.path.islink(dst) or os.path.exists(dst):
@@ -12193,7 +12202,8 @@ def do_install(targets, closures, root, outdir, conf, args):
 			print(f"{GREEN('->')} {dst} -> {src}")
 			continue
 		if args.dry_run:
-			print(f"install -m {mode:o} {rel} {dst}")
+			print(f"install -m {mode:o} {shlex.quote(rel)} "
+			      f"{shlex.quote(dst)}")
 			continue
 		os.makedirs(os.path.dirname(dst), exist_ok=True)
 		shutil.copy2(src, dst)
@@ -12386,7 +12396,8 @@ def fetch_submodules(root, dry_run=False):
 	for path, why in want:
 		info(f"{CYAN('SUB')} {path} ({why})")
 		if dry_run:
-			print(" ".join(["git", "-C", root, "submodule", "update",
+			print(" ".join(shlex.quote(c) for c in
+			               ["git", "-C", root, "submodule", "update",
 			                "--init", "--recursive", "--", path]))
 			continue
 		try:

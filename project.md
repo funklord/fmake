@@ -15866,6 +15866,37 @@ as a statement of its own, so a description holding
 ran it. Refused where the rules are read, so the live build says it too
 rather than leaving it for whoever ejects.
 
+### Four printers quoted their command and three did not
+
+The same lens, pointed at what `-n` writes rather than at what `--eject`
+does. `rcc`, `moc`, `uic` and `situc` print
+`" ".join(shlex.quote(c) for c in cmd)`; the compile line, the link line
+and the submodule fetch printed `" ".join(cmd)`. A source under
+`sub dir/` therefore printed its object as three shell words where the
+build passes one, and `--install -n` printed
+`install -m 755 prog /opt/my place/bin/prog`.
+
+**fmake was never affected, and that is why nothing tripped over it**: it
+runs a list. `-n` is read and pasted, so an unquoted line is a different
+command from the one that would run -- the only thing `-n` produces, and
+the one thing that was wrong.
+
+**And the note that `-n` already prints undersold itself.** It said
+libraries are not resolved and "the link lines above are missing their
+-l flags". Measured on a two-file tree, a fresh dry run also omits
+`sub/helper.c` from the compile list and its object from the link line,
+because a file that joins a link set only through widening needs objects
+to be found at all. A recorded limit narrower than the real one is worse
+than none, because it reads as complete.
+
+**The sabotage caught the fixture again, from the other direction.**
+Reverting the compile printer's quoting left the case green: it warmed
+the cache with a real build first, so the dry run had nothing to compile
+and printed only the link line, and the compile printer never ran. §191's
+fixture reached the guard by a second route; this one did not reach it at
+all. The case changes the source after warming, so both printers are
+exercised.
+
 ### What this lens has left
 
 The remaining raw joins in both emitters are fmake's own text or paths
