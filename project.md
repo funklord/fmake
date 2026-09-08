@@ -244,7 +244,8 @@ that had been green about nothing for five commits ·
 [191. Three paths that reached a build file unchecked](#191-three-paths-that-reached-a-build-file-unchecked) ·
 [192. Everything else that reaches a shell](#192-everything-else-that-reaches-a-shell) ·
 [193. The .pc named a prefix nothing was installed at](#193-the-pc-named-a-prefix-nothing-was-installed-at) ·
-[194. A third way not to return](#194-a-third-way-not-to-return)
+[194. A third way not to return](#194-a-third-way-not-to-return) ·
+[195. A sweep that found nothing, and five probes that were wrong](#195-a-sweep-that-found-nothing-and-five-probes-that-were-wrong)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16047,3 +16048,74 @@ the old check named. `DIRECTIVES - {"arch", "rule"}` is the sabotage that
 separates them -- the old check passes, the population check fails naming
 both. The derivation is now one helper serving this and the README's
 directive table, rather than two copies of the same parse.
+
+---
+
+## 195. A sweep that found nothing, and five probes that were wrong
+
+Recorded because an empty result is a measurement only where its method
+is written down, and because the *pattern of the errors* is the more
+useful half: **the tool was right every time and the instrument was wrong
+five times.**
+
+### What was swept, and how
+
+    live vs ejected flags     -p, @cflags, [project] cflags, defines, std
+                              -> identical, in the same order
+    DEBUG / SANITIZE          both set, each alone, DEBUG=0, neither
+                              -> identical; the ejected file re-implements
+                                 the conditionals faithfully
+    --explain argv vs -n      identical, less the widening gap -n already
+                              reports
+    rename and delete         a.c -> b.c with a changed value rebuilds and
+                              relinks; deleting it refuses with rc 1 and
+                              no binary
+    -o DIR, --clean           each does what its help says and no more
+    fmake.mk refusals         five produced by hand -- recipe before a
+                              rule, spaces for a tab, `::', a non-rule, two
+                              `%' -- every one naming file, line and the
+                              offending text
+    $file() refusals          four produced -- no path, outside the tree,
+                              unreadable, more than one line -- and the
+                              success path
+    uncertainty markers       no TODO, FIXME or XXX in 12k lines; the two
+                              hits are the GPL's "hope" and a generated
+                              comment
+    impossibility claims      four hits, every one describing a defect that
+                              was fixed rather than deterring a test
+
+**`-MP` is the one deliberate divergence** between the two compile lines:
+the ejected build passes it and the live build does not, because fmake
+reads its own depfiles and skips a prerequisite that is gone while a
+Makefile cannot.
+
+### The five wrong probes, because the shape repeats
+
+- **A profile on one side only.** The ejected Makefile was written with
+  `-p fast` and compared against live runs without it; the `-O3` in the
+  diff was mine.
+- **A `sed` that ate the path.** Stripping the tree's absolute path from
+  `-I/abs/root` left `-I`, which read as a missing argument.
+- **A pipeline's exit status.** `fmake | tail -3; echo $?` reports
+  `tail`. Read alone it said a failing build exited 0; measured properly
+  it exits 1 and writes no binary.
+- **Fragment matching with punctuation attached.** Counting which `die()`
+  messages the suite produces, `': no profile'` came out unnamed while a
+  case asserts `"no profile"`. The suite asserts on short distinctive
+  substrings, so **no text match can answer that question** -- it needs
+  the program instrumented to log which call site fired.
+- **A timeout shorter than the work.** `-i` looked like a hang at 20s and
+  30s and completed at 25s. Timed: a cold provider scan is **14.6s, 16.2s
+  and 21.1s** at load average 22, against **0.68s warm**. Worth knowing
+  before anybody bounds a run: the cold scan is two orders of magnitude
+  slower than the warm one and varies by half with load.
+
+### One latent duplicate, recorded rather than fixed
+
+`("bindir", "libdir", "includedir")` is written out **eight times** across
+the live install, both eject backends and the uninstall. Nothing is wrong
+today, because `INSTALL_DEFAULTS` holds exactly those keys -- but it is
+the shape that produced three of this session's bugs, and a `mandir`
+added tomorrow is eight edits with no check that they all happened. Left
+alone deliberately: there is no defect to fix, and a sweep with no
+request behind it is what `working-practice.md` warns against.
