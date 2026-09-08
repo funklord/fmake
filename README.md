@@ -43,6 +43,27 @@ should not be the one doing the building.
 
 ---
 
+## Contents
+
+[What it works out on its own](#what-it-works-out-on-its-own) ·
+[What it finds, and what you have to say](#what-it-finds-and-what-you-have-to-say) ·
+[Three ways to use it](#three-ways-to-use-it) ·
+[Two things generated from the parser](#two-things-generated-from-the-parser) ·
+[Libraries, programs and tests](#libraries-programs-and-tests) ·
+[Saying the things it cannot know](#saying-the-things-it-cannot-know) ·
+[Rust](#rust) ·
+[Qt](#qt) ·
+[situ schemas](#situ-schemas) ·
+[Commands](#commands) ·
+[The exit](#the-exit) ·
+[Why you might keep your Makefile](#why-you-might-keep-your-makefile) ·
+[Where it fits](#where-it-fits) ·
+[Pitfalls](#pitfalls) ·
+[Licence](#licence) ·
+[Design notes](#design-notes)
+
+---
+
 ## What it works out on its own
 
 Every translation unit defining `main()` at file scope is a program, named
@@ -56,6 +77,22 @@ the same computation the linker performs when deciding which members to pull
 out of an archive, so it is exact rather than heuristic — it copes with one
 header implemented across three files, with `util.h` implemented by
 `util_posix.c`, and with no header at all.
+
+**Not every file is compiled to find that out.** A closure needs objects,
+and compiling a whole tree to link a small program would make the first
+build cost what the tree costs rather than what the program does. So
+candidates are filtered by name first — the tokens of an undefined symbol
+against the names each file defines — and the pool widens as the closure
+pulls more in. Measured on Angband, 168 real C sources: the include graph
+proposes 122, widening adds 29, 151 are compiled and 150 are linked, so
+the waste is **one file**. The shape that sounds pathological for this —
+a large tree of loosely-coupled files behind a small binary — is the best
+case rather than the worst: 201 sources, two compiled.
+
+The filter reads definitions in `.c` and `.cpp`, so a symbol defined in a
+*header* is invisible to it, and a file reached only that way is found
+only if something else pulls it in. `--widen-all` compiles the whole tree
+before deciding, which costs the first build and settles the question.
 
 **Libraries come from the symbols too.** An undefined `SDL_Init` proves SDL is
 called; `#include <SDL.h>` only proves a declaration was wanted. Includes
@@ -100,6 +137,58 @@ never compiled on its own. See [Rust](#rust) below.
 
 Run `fmake --explain` to see every decision, down to the exact command line
 — including which kind each target is and what decided it.
+
+**To see only the commands, `fmake -n` prints them and builds nothing.**
+That is the short answer to "what flags is this compiling with", and it is
+worth saying here rather than leaving to the flag table: two projects
+reached for `--eject make-fragment` to answer it, which compiles the whole
+tree to produce a file they then grepped. `--explain` carries the same
+lines beside everything else it knows; `-n` is the one that fits on a
+screen.
+
+---
+
+## What it finds, and what you have to say
+
+Every row is a fact a build needs. The middle column is how often fmake
+arrives at it without being told; the last is where you say it when it
+cannot.
+
+**Always** means it is read off the tree and there is no directive for it.
+**Almost always** means a directive exists for the exception rather than
+for the rule. **Sometimes** means the common case is found and a
+recognisable minority is not. **Never** means fmake cannot know: the fact
+is not in the sources.
+
+| Fact | Found on its own | Said where |
+|---|---|---|
+| Which files are programs | **Always** — a file defining `main()` at file scope | `@kind`, `[target.*] root` |
+| What each program links | **Always** — the symbol closure from its object, the computation a linker does over an archive | — |
+| Which libraries to link | **Almost always** — an undefined symbol found in an installed library | `@libs` for one with no `.pc`; `@sources` for a plugin no symbol reaches |
+| Which `-I` flags | **Almost always** — the package a system header belongs to, via pkg-config | `[project] include-dirs` for a header in a sibling checkout |
+| Rebuild after a header changes | **Always** — `-MD` depfiles, read back | — |
+| Which files are another platform's | **Almost always** — `_win32`, `_android`, `_aarch64` suffixes | `@os`, `@arch` |
+| Directories holding no source | **Always** — asked of git, not guessed from the name | `[project] exclude` where git is not told |
+| Qt: what to moc, uic, rcc | **Always** — `Q_OBJECT` in the text, `.ui` and `.qrc` by extension | `[toolchain] moc` to name a different one |
+| Rust: what a crate contains | **Always** — the root plus what `mod` draws in | `[target.*] name` where the directory name is wrong |
+| situ: which schemas to compile | **Always** — a source includes the header a schema would write | `[situ] flags` for the rung |
+| Vendored submodules | **Always** — `.gitmodules`, fetched before the tree is read | `--no-submodules` declines it |
+| A program's name | **Almost always** — the file, or its directory for `main.c` | `@target`, `[target.*] name` |
+| A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared` |
+| Which programs are tests | **Sometimes** — a test directory or a `test_` name | `@test`, `@test no` |
+| Generated sources | **Never** — a generator is a command nobody can infer | `[generate.*]`, `@rule`, `fmake.mk` |
+| A macro the build injects | **Never** — `-DVERSION=...` is not in the tree | `[project] defines`, `$file(VERSION)` |
+| Public headers to install | **Never** — which headers are API is a decision | `@headers` |
+| A published version and `.pc` | **Never** — a version is chosen, not discovered | `@version`, `[target.*] version` |
+| A cross toolchain | **Never** — the compiler is a choice about the target | `[toolchain]`, `$CC` |
+| Language standard and flags | **Never for the choice** — the defaults are fmake's, not yours | `@std`, `[project] cflags` |
+
+Two things worth reading off that table rather than the prose. The
+**Never** rows are all facts that are *decisions* — what to publish, what
+to target, what a version is — or commands that exist outside the tree;
+none of them is something a cleverer tool would find. And every **Always**
+row is a computation over what is already there, which is why it cannot
+drift: nothing is written down twice.
 
 ---
 
@@ -449,6 +538,20 @@ so a `--target` or an `-m32` there moves the triplet and the library search
 with it. That is what makes putting the flag there an answer rather than a
 formality: without it the compile is cross and the search for libraries is
 not, which is a build looking for the target's libraries among the host's.
+
+**A `[profile.NAME]` is a set of flags you switch on by name.** `fmake -p
+debug` adds what `[profile.debug]` says to what `[project]` said, so a
+profile carries the difference rather than a second copy of everything;
+`--explain` prints which profile is in force, and `none` when there is
+none. The object directory is keyed on the whole configuration, so
+switching profiles does not invalidate the other one's objects — the
+second build of either is incremental, at the cost of keeping both.
+
+`DEBUG=1` in the environment is not a profile: it replaces `-Os` with
+`-Og -g` and is a switch fmake carries itself, so it works in a tree with
+no `fmake.toml` at all. A profile is for flags this project chose; `DEBUG`
+is for the one thing every project wants and nobody should have to write
+down.
 
 **`defines` on a target compiles its root twice.** A second `[target.*]`
 naming an existing source with `root` is a second program from that file,

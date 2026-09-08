@@ -238,7 +238,8 @@ that had been green about nothing for five commits ·
 [185. hembygd builds, and its warning about the package is stale](#185-hembygd-builds-and-its-warning-about-the-package-is-stale) ·
 [186. Vendored submodules are the build's to fetch, and fmake needs a method](#186-vendored-submodules-are-the-builds-to-fetch-and-fmake-needs-a-method) ·
 [187. A worktree is a git checkout, and fmake asked the wrong question](#187-a-worktree-is-a-git-checkout-and-fmake-asked-the-wrong-question) ·
-[188. The submodule fetch, and where it had to go](#188-the-submodule-fetch-and-where-it-had-to-go)
+[188. The submodule fetch, and where it had to go](#188-the-submodule-fetch-and-where-it-had-to-go) ·
+[189. The README was not rewritten](#189-the-readme-was-not-rewritten)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15459,3 +15460,62 @@ second is refused, and it is worth saying beside the other because a
 reader meeting `--recursive` next to a rule about pins would reasonably
 wonder. Fetching a grandchild to the commit its parent's gitlink names
 moves no pin.
+
+---
+
+## 189. The README was not rewritten
+
+The copyright holder asked for a table of every feature, with a column
+saying how likely fmake is to find each fact on its own -- and then asked
+whether the README should be improved or rewritten, the project having
+grown a good deal since it was written.
+
+**The answer was no, and the reason is the file's shape rather than its
+age.** The README is organised by what a reader is trying to do: what the
+tool works out on its own, the three ways to run it, what has to be said
+out loud, then the languages, then the tables. Nothing in six phases of
+growth has changed that order. What growth did was leave core mechanisms
+documented as afterthoughts, and those are additions rather than a
+rewrite -- a rewrite would have moved the parts that were working.
+
+**What was measured before deciding.** For each mechanism, the registered
+cases that exercise it against what the README said about it. The case
+count is over the 433 `@case` functions, counting a case that names the
+mechanism anywhere in its body; the README figures are of `HEAD`'s
+`README.md` before this pass:
+
+    widening        28 cases   1 mention   the --widen-all row in the flag table
+    profiles         7 cases   2 mentions  the -p row, and a config listing
+    -n, --dry-run   19 cases   2 mentions  the -n row, and a list of what
+                                           does not build
+
+Every mention was a table row or an example -- not one of the three was
+described as a thing to reach for, and between them they are exercised by
+about one case in eight. Those got a paragraph each, next to the prose
+that motivates them: widening after the closure explanation, profiles
+beside the `[profile.debug]` example, `-n` beside `--explain`, which is
+the longer answer to the same question.
+
+The counts are `grep` over the suite and the README, so they are a
+floor on the coverage and an exact count of the mentions: a case that
+exercises widening without naming it is not in the 28.
+
+**The feature table is the part that could not be inferred from the
+tree, so it is asserted against it.**
+`the_feature_table_names_only_things_fmake_has` reads every directive
+and `fmake.toml` key the table cites and refuses one fmake does not
+implement -- a table of capabilities is exactly the document that rots,
+because it is a claim about the tool written in a file the tool never
+reads. The four bands are **Always**, **Almost always**, **Sometimes**
+and **Never**, and the **Never** rows earn their own sentence: every one
+of them is a decision (what to publish, what to target, what a version
+is) or a command outside the tree. None is something a cleverer tool
+would find, which is worth saying to a reader who reads a "no" as a gap.
+
+**A `## Contents` was added, and it is generated in the sense that a case
+regenerates it.** `the_readme_contents_lists_every_section` derives the
+list of `##` headings and their anchors from the file and asserts the
+index matches, so a section added without an entry fails rather than
+being missed. The README is long enough now that a reader arriving from
+a link needs to see the shape of it, and an index nobody maintains is
+worse than none.

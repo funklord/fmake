@@ -14031,6 +14031,103 @@ def a_worktree_is_a_git_checkout_and_its_ignores_are_read(t):
 
 
 @case
+def the_readme_contents_lists_every_section(t):
+	"""The README is 1100 lines and 16 sections and had no navigation at
+	all. project.md's index has a case for the same reason and it earned
+	it: that index had stopped at section 34 of 82, which reads as
+	complete, so a reader concludes the section they want does not exist
+	rather than scrolling for it.
+
+	Both properties, since the second is the one that rots: every section
+	listed, and every link resolving. A heading reworded without its
+	anchor leaves a link that looks right and goes nowhere, which nothing
+	but a click would reveal."""
+	with open(os.path.join(REPO, "README.md")) as fh:
+		doc = fh.read()
+	head = doc.index("## Contents")
+	index = doc[head:doc.index("\n---\n", head)]
+	heads = [l[3:].strip() for l in doc.split("\n")
+	         if l.startswith("## ") and l[3:].strip() != "Contents"]
+	check(len(heads) > 10, f"only {len(heads)} sections found")
+
+	def anchor(h):
+		slug = re.sub(r"[^\w\s-]", "", h.lower())
+		return "#" + re.sub(r"\s+", "-", slug.strip())
+
+	links = re.findall(r"\]\((#[^)]+)\)", index)
+	check(len(links) > 10, f"only {len(links)} links; the split is wrong")
+	broken = sorted(set(links) - {anchor(h) for h in heads})
+	check(not broken, f"the contents links to no such heading: {broken}")
+	unlisted = sorted(h for h in heads if anchor(h) not in links)
+	check(not unlisted, f"the contents does not list: {unlisted}")
+
+
+@case
+def the_feature_table_names_only_things_fmake_has(t):
+	"""The README's *What it finds, and what you have to say* table exists
+	to answer one question -- will fmake work this out, or must I tell it
+	-- so its last column sends a reader to a directive, a config key or a
+	flag. A row naming something fmake does not have sends them looking
+	for it, which is worse than saying nothing: section 153 records the
+	same failure in a diagnostic that told a reader to install a function
+	this tree defines.
+
+	Checked against fmake rather than against a list kept beside it. The
+	directive table two sections down has its own case; this one covers
+	the third column of the table above it, which is a different set of
+	names and was not covered by anything."""
+	with open(os.path.join(REPO, "README.md")) as fh:
+		readme = fh.read()
+	marker = "| Fact | Found on its own | Said where |"
+	check(marker in readme, "the README has no feature table")
+	table = readme[readme.index(marker):]
+	table = table[:table.index("\n\n")]
+	check(table.count("\n") > 15,
+	      f"only {table.count(chr(10))} rows; the split is wrong")
+
+	with open(FMAKE) as fh:
+		src = fh.read()
+
+	# @directives, read the way the directive-table case reads them:
+	# the two sets the parser is built from, plus the aliases.
+	def names(start, end):
+		return set(re.findall(r'"([^"]+)"',
+		                      src[src.index(start):src.index(end)]))
+	at = src.index("\nDIRECTIVE_ALIAS = {")
+	alias = dict(re.findall(r'"([^"]+)": "([^"]+)"',
+	                        src[at:src.index("\nDIRECTIVES = ", at)]))
+	known = (names("DIRECTIVE_SCALAR = {", "# Accumulate across")
+	         | names("DIRECTIVE_LIST = {", "# @define and @defines")
+	         | set(alias))
+	check(len(known) > 10, f"only {len(known)} directives read out of fmake")
+	named = set(re.findall(r"@(\w+)", table))
+	check(named, "the table names no directives at all")
+	unknown = sorted(n for n in named if n not in known)
+	check(not unknown,
+	      f"the table names directives fmake does not have: {unknown}")
+
+	# [section] keys, against the config schema.
+	schema = src[src.index("CONF_SCHEMA = {"):]
+	schema = schema[:schema.index("\n}\n")]
+	keys = set(re.findall(r'"([a-z-]+)":', schema))
+	for section, key in re.findall(r"\[([a-z]+)[^\]]*\] ([a-z-]+)", table):
+		check(section in keys or section in ("project", "target", "situ",
+		                                     "toolchain", "generate",
+		                                     "install", "profile"),
+		      f"the table names a config section fmake has no schema for: "
+		      f"[{section}]")
+		check(key in keys,
+		      f"the table names [{section}] {key}, which is not in "
+		      f"CONF_SCHEMA")
+
+	# flags, against argparse
+	out = subprocess.run([FMAKE, "--help"], capture_output=True, text=True)
+	for flag in set(re.findall(r"`(--[a-z-]+)`", table)):
+		check(flag in out.stdout,
+		      f"the table names {flag}, which --help does not")
+
+
+@case
 def every_option_says_what_it_does(t):
 	"""`-v` and `-q` carried no help at all, so `--help` printed their
 	names and nothing else -- the only two options in the parser like it.
