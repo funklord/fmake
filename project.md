@@ -15529,8 +15529,8 @@ worse than none.
 Makefile is the project's build once it is committed. That is one member
 of a population, and the lens it suggests is the whole population:
 **what does the default build know that the build file it writes does
-not?** Three answers, every one silent, every one reproduced before
-anything was changed.
+not?** Four answers, every one reproduced before anything was changed,
+and three of the four silent.
 
 ### A resource's contents are an input, and only fmake knew it
 
@@ -15611,6 +15611,85 @@ expected. The first version of that code said ninja "refuses the build
 outright"; it does not, and the paragraph above is what measuring it
 produced.
 
+### `$tool` became the empty string, and the fix closed a loop
+
+The fourth is the loud one, and it is the case this file's own header
+names: a tool built from the tree, "as NetHack's makedefs is", declared
+with `uses`. `--eject make` exited 0 and wrote
+
+    gen/vals.c: seed.txt
+    	@mkdir -p $(@D)
+    	 gen/vals.c
+
+`_gen_command` was called with `tool=None` on the eject path, so `$tool`
+expanded to nothing and make tried to **execute the output**: *No such
+file or directory*, exit 127, out of a build file fmake had just called
+finished.
+
+**The obvious fix does not work on its own**, which is the part worth
+recording. The tool is an ordinary target of the same build file, so
+`$tool` becomes `./mkvals` and the rule gains `mkvals` as a
+prerequisite -- and that closes a loop, because every object carries an
+order-only dependency on `$(GENERATED)` and the tool's objects are
+objects:
+
+    make    Circular build/tool/mkvals.c.o <- gen/vals.c dependency dropped
+    ninja   refuses the graph; no binary
+
+fmake has the same rule and expresses it as a **separate pass** before
+any generator runs -- that is what `_bootstrapping` is for. A flat build
+file has no passes, so the equivalent is to leave those units out of the
+ordering, which `_tool_units` computes from the `uses` target's own
+closure. They still wait for the submodule fetch: their sources have to
+exist. A unit there that genuinely includes a generated header is a tree
+the live build cannot compile either, and it fails on the missing include
+rather than quietly.
+
+**Refusing was the other candidate and was rejected on the measurement.**
+A refusal is what fmake does for a path make cannot express or a C++
+module it cannot order, and it would have been strictly better than
+today's exit 0. But the pattern is named in fmake's own header as a
+first-class case, the tool's rule is already in the file, and the
+ordering exemption is fifteen lines -- so refusing would have retired a
+working shape to save writing them.
+
+**What is refused is `[build-toolchain]`**, and that one is not a
+judgement call: it exists to build the tool for *this* machine while
+everything else is built for another, and one build file carries one
+toolchain. The message says so and says fmake builds the tool twice on
+purpose.
+
+**The second run is asserted as well as the first**, because a cycle make
+"drops" builds once and then never settles. Success exactly once looks
+like success.
+
+### What the rest of the family does, so the next fault needs a new lens
+
+Four finds is not a reason to stop asking; running out of members is. The
+population is everything that produces a file the build then compiles,
+and each was read for the same question -- what does the live build key
+its freshness on, and what does the emitted rule name:
+
+    moc      exe, flags, source hash    rule names the source     agree
+    uic      exe, source hash           rule names the source     agree
+    situc    exe, flags, source hash    rule names the source     agree
+    rcc      + every embedded file      named the .qrc only       FIXED
+    generate inputs, depends, depfile   named inputs and depends  FIXED
+    uses     the tool, built first      substituted nothing       FIXED
+
+The three that agree agree for the same reason: their input is one file
+and the tool is named in the recipe, so a snapshot is the whole truth.
+The three that did not each had a second input the live build knew about
+and the recipe did not. **That is the shape to carry rather than the
+count** -- a tool with exactly one input cannot have this defect, and one
+that discovers its inputs always can.
+
+What this sweep does not cover, and is a different question: whether
+moc's own dependency model is complete. Both the live build and the
+ejected one key a moc job on its source alone, so they cannot disagree --
+they would simply be wrong together, and no comparison between them can
+say so.
+
 ### The suite tested the easy half, and something else caught the hard one
 
 `generated_sources_survive_ejection` deletes `gen/` and watches the
@@ -15631,6 +15710,8 @@ reverted one piece at a time:
     a_generator_input_make_cannot_name_is_refused   make refuses, ninja builds
     an_ejected_build_reads_the_generators_depfile   both backends
     a_depfile_naming_the_wrong_target_is_reported   and silent when it is right
+    an_ejected_build_runs_the_tool_a_generator_uses both backends, twice each
+    a_tool_needing_its_own_toolchain_is_not_ejected the refusal, both backends
 
 The last one carries its own control, and the control was sabotaged too:
 with the comparison removed so the report fires on every depfile, the

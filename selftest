@@ -4284,6 +4284,122 @@ def a_depfile_naming_the_wrong_target_is_reported(t):
 		u.cleanup()
 
 
+def _uses_tree(t):
+	"""A generator that runs a program built from this same tree."""
+	t.write("tool/mkvals.c",
+	        "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){\n"
+	        "    FILE *f = fopen(argv[1], \"w\");\n"
+	        "    fprintf(f, \"int made(void){ return 11; }\\n\");\n"
+	        "    fclose(f); return argc < 2;\n}\n")
+	t.write("main.c", "#include <stdio.h>\nint made(void);\n"
+	        'int main(void){ printf("%d\\n", made()); return 0; }\n')
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.toml", """
+[generate.vals]
+uses    = "mkvals"
+command = "$tool gen/vals.c"
+inputs  = ["seed.txt"]
+outputs = ["gen/vals.c"]
+""")
+
+
+@case
+def an_ejected_build_runs_the_tool_a_generator_uses(t):
+	"""$tool became the empty string on the way out.
+
+    fmake's own header names this shape -- a tool built from the tree, as
+    NetHack's makedefs is -- so it is a first-class case rather than a
+    curiosity. `--eject make' wrote
+
+        gen/vals.c: seed.txt
+        \t@mkdir -p $(@D)
+        \t gen/vals.c
+
+    and exited 0. make then tried to execute the output: "No such file or
+    directory", exit 127, from a build file fmake had just called
+    finished.
+
+    The tool is an ordinary target of the same build file, so the answer
+    is its own rule -- and naming it as a prerequisite closes a loop,
+    because every object waits on $(GENERATED) and the tool's objects are
+    objects. make drops the cycle with a warning and ninja refuses the
+    graph. fmake has the same rule and expresses it with a separate pass
+    before any generator runs; a flat build file has no passes, so the
+    tool's own units are left out of that ordering instead.
+
+    The second run is asserted as well as the first: a cycle make
+    "dropped" builds once and then never settles, which looks like
+    success exactly once.
+    """
+	for backend, out, cmd in (("make", "Makefile", ["make"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		u = Tree("usesgen-" + backend)
+		try:
+			_uses_tree(u)
+			e = u.fmake("--eject", backend)
+			check(e.returncode == 0,
+			      f"--eject {backend} failed: {e.stderr}")
+			check("mkvals gen/vals.c" in e.stdout,
+			      f"the recipe does not run the tool it uses: {e.stdout}")
+			u.write(out, e.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} failed: {b.stdout}{b.stderr}")
+			both = b.stdout + b.stderr
+			check("ircular" not in both and "cycle" not in both,
+			      f"{backend} reported a dependency cycle: {both}")
+			check(_run_in(u.dir, "./" + os.path.basename(u.dir)).stdout
+			      == "11\n",
+			      f"the ejected {backend} build produced a wrong binary")
+
+			again = _run_in(u.dir, *cmd)
+			check(again.returncode == 0,
+			      f"the second {backend} run failed: {again.stdout}")
+			check("GEN" not in again.stdout + again.stderr
+			      and "mkvals" not in again.stdout,
+			      f"the second {backend} run rebuilt the generator, so "
+			      f"the graph does not settle: {again.stdout}{again.stderr}")
+		finally:
+			u.cleanup()
+
+
+@case
+def a_tool_needing_its_own_toolchain_is_not_ejected(t):
+	"""[build-toolchain] exists to build the tool for THIS machine while
+	everything else is built for another, and one build file carries one
+	toolchain.
+
+    So the honest answer is a refusal naming the rule, rather than a
+    Makefile that would build the tool with the target's compiler and
+    then try to run it here. fmake itself builds the tool twice on
+    purpose, which is what the message says to do.
+    """
+	_uses_tree(t)
+	t.write("fmake.toml", """
+[build-toolchain]
+cc = "cc"
+
+[generate.vals]
+uses    = "mkvals"
+command = "$tool gen/vals.c"
+inputs  = ["seed.txt"]
+outputs = ["gen/vals.c"]
+""")
+	check(t.fmake().returncode == 0, "the live build must still work")
+	for backend in ("make", "ninja"):
+		r = t.fmake("--eject", backend)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"--eject {backend} emitted a build file anyway: {out[:400]}")
+		check("build-toolchain" in out and "mkvals" in out,
+		      f"the refusal names neither the tool nor the reason: {out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

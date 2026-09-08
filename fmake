@@ -10103,6 +10103,62 @@ EJECT_GENDIRS = ((MOC_DIR, "moc"), (UI_DIR, "ui"), (QRC_DIR, "qrc"),
                  (SITU_DIR, "situ"))
 
 
+def _tool_units(gen_rules, targets, closures):
+	"""The sources of every target a generator runs.
+
+    A tool that WRITES the generated sources cannot wait for them, and the
+    ejected build said it did: every object carries an order-only
+    dependency on $(GENERATED), so naming the tool as a prerequisite of
+    the rule that runs it closed a loop -- make dropped it with "Circular
+    ... dependency dropped" and ninja refused the graph outright.
+
+    fmake has the same rule and expresses it by building the tool in a
+    separate pass before any generator runs; `_bootstrapping' is that
+    pass. A flat build file has no passes, so the equivalent is to leave
+    these units out of the ordering. A unit here that genuinely includes a
+    generated header is a tree the live build cannot compile either, and
+    it fails loudly on the missing include rather than quietly.
+    """
+	by_name = {t.name: t for t in targets}
+	units = set()
+	for r in (gen_rules or {}).values():
+		t = by_name.get(r.get("uses"))
+		if t is not None:
+			units |= {u.rel for u in closures[t].link}
+	return units
+
+
+def _eject_tool(r, name, bins, conf):
+	"""The path an ejected recipe runs for a rule's `uses', or None.
+
+    `$tool' was substituted with the empty string on this path, so a rule
+    saying `command = "$tool gen/vals.c"' ejected the recipe ` gen/vals.c'
+    -- make exits 127 trying to execute the output, after --eject reported
+    success. The tool is an ordinary target of the same build file, so the
+    answer is its own rule.
+
+    Refused rather than emitted where a [build-toolchain] is configured:
+    that exists to build the tool for THIS machine while everything else
+    is built for another, and one build file carries one toolchain. The
+    live build is the place that can do both.
+    """
+	if not r.get("uses"):
+		return None
+	if conf.data.get("build-toolchain"):
+		die(f"cannot eject a build for {_gen_where(r, name)}: it runs "
+		    f"{r['uses']!r}, which {CONF_FILE} builds with "
+		    f"[build-toolchain].\nAn ejected build file has one toolchain "
+		    f"and would build the tool for the target and run it here.\n"
+		    f"Build this tree with fmake, which builds the tool twice on "
+		    f"purpose.")
+	path = bins.get(r["uses"])
+	if path is None:
+		die(f"cannot eject a build for {_gen_where(r, name)}: it runs "
+		    f"{r['uses']!r}, which is not one of the targets being "
+		    f"ejected.\nEject the whole tree, or name that target too.")
+	return path
+
+
 def _eject_gen(rel):
 	"""Remap a generated path out of the state directory, or None.
 
@@ -10725,6 +10781,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	gen_rules = gen_rules if gen_rules is not None else {}
 	gen_outs = [o for n in _gen_order(gen_rules)
 	            for o in gen_rules[n]["outputs"]]
+	tool_units = _tool_units(gen_rules, targets, closures)
 	if gen_rules:
 		a("# ---- generated sources " + "-" * 40)
 		a("")
@@ -10734,11 +10791,16 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			r = gen_rules[name]
 			outs, ins = r["outputs"], r["inputs"]
 			deps = r.get("depends", [])
-			a(f"{outs[0]}: {' '.join(ins + deps)}")
+			tool = _eject_tool(r, name, eject_bins, conf)
+			# The tool is a prerequisite and not an input: $< and $^ are
+			# substituted from `ins' here rather than left to Make, so
+			# naming it changes what waits for what and nothing else.
+			a(f"{outs[0]}: "
+			  f"{' '.join(ins + deps + ([eject_files[r['uses']]] if tool else []))}")
 			a("\t@mkdir -p $(@D)")
 			for c in (r.get("commands") or [r["command"]]):
 				line, quiet, ignore = _recipe_prefix(c)
-				line = _gen_command(line, ins, outs, None, r.get("stem"))
+				line = _gen_command(line, ins, outs, tool, r.get("stem"))
 				# Whatever $ survives substitution is the shell's, and Make
 				# would read $(x) as its own function call and expand it to
 				# nothing -- a recipe that runs, succeeds, and produces an
@@ -10928,8 +10990,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		var, flags = ("CXX", "CXXFLAGS") if u.cxx else ("CC", "CFLAGS")
 		# A recipe line rather than a variable: see _mk_cmd.
 		own = " ".join(_eject_flags(u.own, root, _mk_cmd_flag))
-		after = ([f"$({P}GENERATED)"] if gen_outs else []) \
-		        + ([f"$({P}GENHDRS)"] if genhdrs else []) \
+		# A generator's own tool is left out of the generated ordering:
+		# see _tool_units. The submodule fetch still applies -- its
+		# sources have to exist before anything reads them.
+		after = ([] if u.rel in tool_units else
+		         ([f"$({P}GENERATED)"] if gen_outs else [])
+		         + ([f"$({P}GENHDRS)"] if genhdrs else [])) \
 		        + [f"{sub}/.git" for sub in subs]
 		order_only = (" | " + " ".join(after)) if after else ""
 		a(f"{obj}: {_eject_src(rel)}{order_only}")
@@ -11336,12 +11402,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 
 	gen_rules = gen_rules if gen_rules is not None else {}
 	gen_outs = []
+	tool_units = _tool_units(gen_rules, targets, closures)
 	for name in _gen_order(gen_rules):
 		r = gen_rules[name]
 		cmds = []
+		tool = _eject_tool(r, name, eject_bins, conf)
 		for c in (r.get("commands") or [r["command"]]):
 			line, _quiet, ignore = _recipe_prefix(c)
-			line = _gen_command(line, r["inputs"], r["outputs"], None,
+			line = _gen_command(line, r["inputs"], r["outputs"], tool,
 			                    r.get("stem"))
 			# Ninja reads $ as its own escape, so the shell's must be doubled.
 			cmds.append(line.replace("$", "$$") + (" || true" if ignore else ""))
@@ -11355,7 +11423,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"  depfile = {_ninja(r['depfile'])}")
 		a(f"  description = GEN {r.get('description') or name}")
 		a("")
-		deps = r.get("depends", [])
+		deps = list(r.get("depends", []))
+		if tool:
+			deps.append(eject_files[r["uses"]])
 		a(f"build {' '.join(_ninja(o) for o in r['outputs'])}: "
 		  f"gen_{_mk_ident(name)} "
 		  f"{' '.join(_ninja(i) for i in r['inputs'])}"
@@ -11507,13 +11577,17 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 
 	# Order-only: a generated header must exist before anything compiles,
 	# but the depfiles decide when a change to it forces a rebuild.
-	order = ([_ninja(g) for g in gen_outs]
-	         + [f"{_ninja(p)}/.git" for p in subs])
+	subs_order = [f"{_ninja(p)}/.git" for p in subs]
+	order = [_ninja(g) for g in gen_outs] + subs_order
 	after = (" || " + " ".join(order)) if order else ""
+	# A generator's own tool waits for the submodules and not for what it
+	# is about to write: see _tool_units.
+	tool_after = (" || " + " ".join(subs_order)) if subs_order else ""
 	for name in sorted(every):
 		u = every[name]
 		a(f"build $build_dir/{_ninja(name)}.o: "
-		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}{after}")
+		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}"
+		  f"{tool_after if u.rel in tool_units else after}")
 		if u.own:
 			a(f"  extra = {' '.join(_eject_flags(u.own, root, _nj_flag))}")
 	# One edge per crate, with the members as implicit inputs. The depfile
