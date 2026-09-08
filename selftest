@@ -13747,6 +13747,83 @@ def a_vendored_submodule_is_fetched_by_the_build(t):
 
 
 @case
+def a_submodule_that_vendors_one_of_its_own_is_fetched_too(t):
+	"""A top-level `git submodule status` reports a tree with a fetched
+	submodule and an empty grandchild as in step: the directory is there,
+	its own child is not, and the build compiles less.
+
+	Measured on three repositories -- top vendors mid, mid vendors deep --
+	before this: fmake fetched `vendor`, then failed to compile
+	`vendor/mid.c`, naming the vendored file rather than the child nobody
+	had fetched. The diagnosis pointed one level away from the cause,
+	which is what an unfetched submodule does every time it is not
+	noticed.
+
+	`--recursive` on both the question and the answer. It never moves a
+	pin: recursion is about depth, `--remote` is about advancing, and only
+	the second is refused."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	work = tempfile.mkdtemp(prefix="fmake-nested-")
+	env = dict(os.environ, GIT_ALLOW_PROTOCOL="file")
+	allow = ["-c", "protocol.file.allow=always"]
+
+	def git(where, *a):
+		return subprocess.run(["git", "-C", where, *a],
+		                      capture_output=True, text=True)
+	try:
+		deep, mid, top = (os.path.join(work, n) for n in ("deep", "mid", "top"))
+		for d in (deep, mid, top):
+			os.makedirs(d)
+			git(d, "init", "-q", ".")
+			git(d, "config", "user.email", "t@example.invalid")
+			git(d, "config", "user.name", "t")
+		with open(os.path.join(deep, "deep.c"), "w") as fh:
+			fh.write("int deep_answer(void){ return 7; }\n")
+		with open(os.path.join(deep, "deep.h"), "w") as fh:
+			fh.write("int deep_answer(void);\n")
+		git(deep, "add", "-A"); git(deep, "commit", "-qm", "deep")
+
+		with open(os.path.join(mid, "mid.c"), "w") as fh:
+			fh.write('#include "inner/deep.h"\n'
+			         "int mid_answer(void){ return deep_answer(); }\n")
+		with open(os.path.join(mid, "mid.h"), "w") as fh:
+			fh.write("int mid_answer(void);\n")
+		add = subprocess.run(["git", "-C", mid, *allow, "submodule", "add",
+		                      "-q", deep, "inner"],
+		                     capture_output=True, text=True)
+		if add.returncode != 0:
+			raise Skip("this git will not add a submodule over a local path")
+		git(mid, "add", "-A"); git(mid, "commit", "-qm", "mid")
+
+		with open(os.path.join(top, "main.c"), "w") as fh:
+			fh.write('#include <stdio.h>\n#include "vendor/mid.h"\n'
+			         'int main(void){ printf("%d\\n", mid_answer()); '
+			         'return 0; }\n')
+		subprocess.run(["git", "-C", top, *allow, "submodule", "add", "-q",
+		                mid, "vendor"], capture_output=True, text=True)
+		git(top, "add", "-A"); git(top, "commit", "-qm", "top")
+
+		tree = os.path.join(work, "fresh")
+		subprocess.run(["git", *allow, "clone", "-q", top, tree],
+		               capture_output=True, text=True)
+		r = subprocess.run([FMAKE, "-C", tree], capture_output=True,
+		                   text=True, env=env)
+		check(r.returncode == 0,
+		      f"a tree two submodules deep does not build: "
+		      f"{r.stdout[-400:]}{r.stderr[-400:]}")
+		check("vendor/inner/deep.c" in r.stdout,
+		      f"the grandchild's source was never compiled, so the "
+		      f"recursive fetch did not happen: {r.stdout}")
+		got = subprocess.run([os.path.join(tree, "fresh")],
+		                     capture_output=True, text=True)
+		check(got.stdout.strip() == "7",
+		      f"the program does not run: {got.stdout!r}")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
 def an_ejected_build_fetches_the_submodule_too(t):
 	"""An ejected Makefile is the project's build once it is committed, so
 	it inherits the rule rather than being exempt from it. Before this, a

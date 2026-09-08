@@ -15391,3 +15391,27 @@ separately, *and* told different things. Copying the make answer across
 would have produced a build file that loads, looks right, and refuses.
 The case runs both backends now, and its control reduces the ninja edge's
 outputs to the marker alone -- which fails with the error above.
+
+### A submodule that vendors one of its own, which git reports as in step
+
+The fourth placement bug in one feature, and the only one that hid behind
+git's own answer rather than behind fmake's. `git submodule status` at
+the top level says a tree is in step when the submodule is fetched and
+*its* child is empty: the directory is there, the grandchild is not.
+
+Measured on three repositories -- top vendors mid, mid vendors deep.
+fmake fetched `vendor`, then failed to compile `vendor/mid.c` and said
+so, naming the vendored file rather than the child nobody had fetched.
+One level away from the cause, which is what an unfetched submodule does
+every time it is not noticed.
+
+`--recursive` on **both** the question and the answer -- `submodule
+status --recursive` and `submodule update --init --recursive` -- in the
+build and in both ejected backends. Verified on that fixture through all
+three, each producing 7, and the settled run silent.
+
+**Recursion is about depth; `--remote` is about advancing.** Only the
+second is refused, and it is worth saying beside the other because a
+reader meeting `--recursive` next to a rule about pins would reasonably
+wonder. Fetching a grandchild to the commit its parent's gitlink names
+moves no pin.

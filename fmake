@@ -10827,7 +10827,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		for path in subs:
 			a(f"{path}/.git:")
 			a(f"\t@echo 'fetching submodule {path}'")
-			a(f"\tgit submodule update --init -- {path}")
+			a(f"\tgit submodule update --init --recursive -- {path}")
 			a("")
 
 	# One rule per object, because per-file flags are the point: @cflags and
@@ -11397,7 +11397,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	subs = declared_submodules(root)
 	if subs:
 		a("rule submodule")
-		a("  command = git submodule update --init -- $path")
+		a("  command = git submodule update --init --recursive -- $path")
 		a("  description = SUB $path")
 		a("")
 		for path in subs:
@@ -12032,7 +12032,15 @@ def submodules_to_fetch(root):
 	if not declared:
 		return []
 	try:
-		r = subprocess.run(["git", "-C", root, "submodule", "status"],
+		# `--recursive', because a submodule may vendor one of its own and
+		# the top-level status reports such a tree as in step: the
+		# directory is there, its own child is empty, and the build
+		# compiles less. Measured on a three-deep fixture -- top vendors
+		# mid, mid vendors deep -- where the first version fetched `mid'
+		# and then failed to compile `vendor/mid.c', naming the vendored
+		# file rather than the child nobody had fetched.
+		r = subprocess.run(["git", "-C", root, "submodule", "status",
+		                    "--recursive"],
 		                   capture_output=True, text=True,
 		                   errors="replace", timeout=30)
 	except (OSError, subprocess.SubprocessError):
@@ -12112,11 +12120,11 @@ def fetch_submodules(root, dry_run=False):
 		info(f"{CYAN('SUB')} {path} ({why})")
 		if dry_run:
 			print(" ".join(["git", "-C", root, "submodule", "update",
-			                "--init", "--", path]))
+			                "--init", "--recursive", "--", path]))
 			continue
 		try:
 			r = subprocess.run(["git", "-C", root, "submodule", "update",
-			                    "--init", "--", path],
+			                    "--init", "--recursive", "--", path],
 			                   capture_output=True, text=True,
 			                   errors="replace", timeout=600)
 		except (OSError, subprocess.SubprocessError) as exc:
