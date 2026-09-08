@@ -13798,38 +13798,52 @@ def an_ejected_build_fetches_the_submodule_too(t):
 		tree = os.path.join(work, "fresh")
 		subprocess.run(["git", *allow, "clone", "-q", app, tree],
 		               capture_output=True, text=True)
-		e = subprocess.run([FMAKE, "-C", tree, "--eject"],
-		                   capture_output=True, text=True, env=env)
-		check(e.returncode == 0, f"--eject failed: {e.stderr}")
-		with open(os.path.join(tree, "Makefile"), "w") as fh:
-			fh.write(e.stdout)
-		check("submodule update --init" in e.stdout,
-		      f"the ejected build carries no fetch: {e.stdout[:400]}")
+		# Both backends, because they needed different answers rather
+		# than the same one twice: make complains only when it reaches a
+		# rule, so an order-only prerequisite suffices, while ninja
+		# validates the whole graph as it loads the file and calls an
+		# input no edge produces "missing and no known rule to make it"
+		# before any ordering can matter. The fetch names the sources it
+		# produces there.
+		for backend, out, run in (("make", "Makefile", ["make", "-C", tree]),
+		                          ("ninja", "build.ninja",
+		                           ["ninja", "-C", tree])):
+			if not shutil.which(backend):
+				continue
+			e = subprocess.run([FMAKE, "-C", tree, "--eject", backend],
+			                   capture_output=True, text=True, env=env)
+			check(e.returncode == 0,
+			      f"--eject {backend} failed: {e.stderr}")
+			with open(os.path.join(tree, out), "w") as fh:
+				fh.write(e.stdout)
+			check("submodule update --init" in e.stdout,
+			      f"the ejected {backend} build carries no fetch: "
+			      f"{e.stdout[:400]}")
 
-		# The state a second person is in: the Makefile is committed, the
-		# submodule is not fetched, and fmake is not involved.
-		shutil.rmtree(os.path.join(tree, ".fmake"), ignore_errors=True)
-		shutil.rmtree(os.path.join(tree, "vendor"))
-		os.makedirs(os.path.join(tree, "vendor"))
+			# The state a second person is in: the build file is
+			# committed, the submodule is not fetched, and fmake is not
+			# involved.
+			shutil.rmtree(os.path.join(tree, ".fmake"), ignore_errors=True)
+			shutil.rmtree(os.path.join(tree, "vendor"))
+			os.makedirs(os.path.join(tree, "vendor"))
 
-		r = subprocess.run(["make", "-C", tree], capture_output=True,
-		                   text=True, env=env)
-		check(r.returncode == 0,
-		      f"the ejected build does not fetch what it needs: "
-		      f"{r.stdout[-500:]}{r.stderr[-500:]}")
-		got = subprocess.run([os.path.join(tree, "fresh")],
-		                     capture_output=True, text=True)
-		check(got.stdout.strip() == "42",
-		      f"the ejected build produced a different program: "
-		      f"{got.stdout!r}")
+			r = subprocess.run(run, capture_output=True, text=True, env=env)
+			check(r.returncode == 0,
+			      f"the ejected {backend} build does not fetch what it "
+			      f"needs: {r.stdout[-500:]}{r.stderr[-500:]}")
+			got = subprocess.run([os.path.join(tree, "fresh")],
+			                     capture_output=True, text=True)
+			check(got.stdout.strip() == "42",
+			      f"the ejected {backend} build produced a different "
+			      f"program: {got.stdout!r}")
 
-		# And a second make fetches nothing: the marker is the submodule's
-		# own .git, so there is no stamp to go stale and no git process on
-		# a build with nothing to do.
-		again = subprocess.run(["make", "-C", tree], capture_output=True,
-		                       text=True, env=env)
-		check("submodule update" not in again.stdout,
-		      f"a settled tree fetches again: {again.stdout}")
+			# A second run fetches nothing: the marker is the submodule's
+			# own .git, so there is no stamp to go stale and no git
+			# process on a build with nothing to do.
+			again = subprocess.run(run, capture_output=True, text=True,
+			                       env=env)
+			check("submodule update" not in again.stdout,
+			      f"a settled {backend} tree fetches again: {again.stdout}")
 	finally:
 		shutil.rmtree(work, ignore_errors=True)
 

@@ -15363,3 +15363,31 @@ prerequisite already satisfied costs nothing.
 **And that is the second time in one feature that the interesting bug was
 the ordering rather than the mechanism.** The fetch itself is nine lines
 of `git submodule update`; where it goes has now been wrong twice.
+
+### ninja needed a different answer, not the same one twice
+
+The make backend takes an order-only prerequisite and is done. ninja is
+not: it validates the whole graph as it loads the file, so an input no
+edge produces is refused before any ordering can matter.
+
+    ninja: error: 'vendor/lib.c', needed by 'build/vendor/lib.c.o',
+                  missing and no known rule to make it
+
+That error arrives at load time, with the order-only dependency present
+and correct. **make complains when it reaches a rule; ninja complains
+about the graph.** So the fetch edge names the sources it produces:
+
+    build vendor/.git vendor/lib.c: submodule
+      path = vendor
+
+which is true -- the fetch does produce them -- and is what lets ninja
+plan a build that starts by fetching. The marker stays in the output list
+so the edge fires on absence and never otherwise; `ninja: no work to do`
+on the second run is asserted rather than assumed.
+
+**§172 said an eject fix gets half done because both emitters must be
+told separately.** This is the same lesson at the next level: told
+separately, *and* told different things. Copying the make answer across
+would have produced a build file that loads, looks right, and refuses.
+The case runs both backends now, and its control reduces the ninja edge's
+outputs to the marker alone -- which fails with the error above.

@@ -11383,9 +11383,43 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		     f"which fmake --clean does not. ninja cleans by output and "
 		     f"an output has to be declared to be built.")
 
+	# The same rule the make backend carries and for the same reason: a
+	# generated build file is the project's build once it is committed, so
+	# it fetches what the tree vendors rather than leaving it to whoever
+	# cloned. Both backends had to be told separately, which section 172
+	# says is how an eject fix gets half done.
+	#
+	# Keyed on the submodule's own `.git', so the edge fires when it is
+	# absent and never otherwise, and order-only for every object rather
+	# than for the ones inside the submodule: a file that INCLUDES from
+	# one is not under it, and ninja cannot know which until it has
+	# compiled the file that needs the fetch.
+	subs = declared_submodules(root)
+	if subs:
+		a("rule submodule")
+		a("  command = git submodule update --init -- $path")
+		a("  description = SUB $path")
+		a("")
+		for path in subs:
+			# The sources this build takes from inside the submodule are
+			# named as outputs of the fetch, because ninja validates the
+			# whole graph when it loads the file: an input no edge
+			# produces is `missing and no known rule to make it', before
+			# any order-only dependency can matter. make only complains
+			# when it reaches the rule, which is why the two backends
+			# needed different answers rather than the same one twice.
+			made = [_ninja(u.rel) for u in every.values()
+			        if u.rel == path or u.rel.startswith(path + "/")]
+			outs = " ".join([f"{_ninja(path)}/.git"] + sorted(made))
+			a(f"build {outs}: submodule")
+			a(f"  path = {path}")
+		a("")
+
 	# Order-only: a generated header must exist before anything compiles,
 	# but the depfiles decide when a change to it forces a rebuild.
-	after = (" || " + " ".join(_ninja(g) for g in gen_outs)) if gen_outs else ""
+	order = ([_ninja(g) for g in gen_outs]
+	         + [f"{_ninja(p)}/.git" for p in subs])
+	after = (" || " + " ".join(order)) if order else ""
 	for name in sorted(every):
 		u = every[name]
 		a(f"build $build_dir/{_ninja(name)}.o: "
