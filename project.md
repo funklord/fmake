@@ -241,7 +241,8 @@ that had been green about nothing for five commits ·
 [188. The submodule fetch, and where it had to go](#188-the-submodule-fetch-and-where-it-had-to-go) ·
 [189. The README was not rewritten](#189-the-readme-was-not-rewritten) ·
 [190. What the ejected build did not know it depended on](#190-what-the-ejected-build-did-not-know-it-depended-on) ·
-[191. Three paths that reached a build file unchecked](#191-three-paths-that-reached-a-build-file-unchecked)
+[191. Three paths that reached a build file unchecked](#191-three-paths-that-reached-a-build-file-unchecked) ·
+[192. Everything else that reaches a shell](#192-everything-else-that-reaches-a-shell)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -15801,3 +15802,76 @@ because every object carries an order-only dependency on `$(GENERATED)`
 and an unrelated generate rule is therefore not unrelated -- make builds
 `gen/vals.c` on the way to anything. Refusing replaces a broken file with
 a message that names the target to add.
+
+---
+
+## 192. Everything else that reaches a shell
+
+§191 was about paths. The lens it leaves is one sentence: **fmake never
+goes through a shell, and every string it writes into a build file
+does.** Five sites, and the discipline for all of them already existed --
+`_mk_flag` and `_nj_flag`, whose docstrings state the layering exactly.
+These were the callers that had never used them, which is *an interface
+is only as wired as its least-used caller* rather than a missing
+mechanism.
+
+### A compiler path, an install prefix, and a schema flag
+
+    [toolchain] cc = "/opt/my tools/gcc"   fmake builds; --eject exits 0
+    make                                   /opt/my: No such file or
+                                           directory, exit 127
+    ninja                                  /opt/my: not found
+
+Every tool goes through the escapes now -- `CC`, `CXX`, `AR`, `RUSTC`,
+`MOC`, `UIC`, `RCC`, `SITUC`, in both backends -- and an ordinary path
+gains nothing, because `shlex.quote` leaves it alone. `PREFIX` and any
+absolute install directory with it: `install -d $(DESTDIR)$(BINDIR)` is a
+shell command, and `/opt/my place` made it two directories. `[situ]
+flags` was a raw join where every other flag in the file went through the
+backend's escape; that one is consistency rather than a measured break,
+and it is guarded so the join cannot come back.
+
+### `-n` built a program
+
+Not an eject fault at all, and the one with a documented promise behind
+it: the README says `-n` prints the commands and changes nothing in the
+tree. On a tree with one `uses` generator it **compiled and linked the
+tool**, leaving `.fmake/` holding a cache, an object, a depfile and the
+binary, and then printed the generator command as though nothing had
+happened.
+
+The nested build has its own cache and its own `dry_run=False`, so the
+outer run's read-only cache could not see any of it. The path a tool
+would take is derivable without building it, which is all a dry run needs
+in order to print the command -- and the reachability check has to stand
+aside with it, or it fires on the one path fmake itself supplies, with
+advice to use `uses` for a rule that already does. The case carries that
+control: a command that genuinely is not installed is still refused on a
+dry run.
+
+### The two things no build file can carry
+
+**A newline in a path.** `_ninja` escapes a space, a colon and a dollar,
+which is every escape ninja has. Measured on a source called
+`we<newline>ird.c`: `--eject ninja` exited 0 and wrote a file ninja would
+not parse. That matters beyond one rare filename, because **the Makefile
+refusal sends people to ninja** -- *"use `--eject ninja`, which can
+express all of them"* -- and for this character the sentence was false.
+Both backends refuse it now, and say what it is rather than calling it
+whitespace.
+
+**A newline in a `[generate.*] description`.** ninja reads the next line
+as a statement of its own, so a description holding
+`"one\nbuild evil: phony"` put that edge into `build.ninja` and ninja
+ran it. Refused where the rules are read, so the live build says it too
+rather than leaving it for whoever ejects.
+
+### What this lens has left
+
+The remaining raw joins in both emitters are fmake's own text or paths
+the refusals already walk. Read for this specifically:
+`$(GENERATED)`, `$(GENHDRS)`, the object and archive lists, the group
+phonies, the order-only lists -- all internal, all derived from paths
+already checked. The user-controlled strings that reach a build file are
+the ones above, and each now goes through the same two escapes as a
+flag.

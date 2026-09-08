@@ -4400,6 +4400,212 @@ outputs = ["gen/vals.c"]
 		      f"the refusal names neither the tool nor the reason: {out}")
 
 
+@case
+def a_dry_run_builds_no_tool(t):
+	"""`-n' says it changes nothing in the tree, and it built a program.
+
+    Measured on a tree with one `uses' rule: `fmake -n' ran the nested
+    build, compiled and linked the tool, and left `.fmake/' holding a
+    cache, an object, a depfile and the binary -- then printed the
+    generator command as though nothing had happened. The nested build
+    has its own cache and its own dry_run=False, so the read-only cache
+    of the outer run could not see any of it.
+
+    The path a `uses' tool would take is derivable without building it,
+    which is all a dry run needs in order to print the command. The
+    reachability check has to stand aside with it: a tool this build
+    would have produced is not missing, and the check otherwise fires on
+    the one path fmake itself supplies, advising `uses' for a rule that
+    already uses it.
+    """
+	_uses_tree(t)
+	before = sorted(os.listdir(t.dir))
+	r = t.fmake("-n")
+	check(r.returncode == 0, f"the dry run failed: {r.stdout}{r.stderr}")
+	check(sorted(os.listdir(t.dir)) == before,
+	      f"a dry run wrote into the tree: "
+	      f"{set(os.listdir(t.dir)) - set(before)}")
+	check(not os.path.exists(os.path.join(t.dir, ".fmake")),
+	      "a dry run created the state directory")
+	check("mkvals gen/vals.c" in r.stdout,
+	      f"the command that would run was not printed: {r.stdout}")
+
+	# The control: a command that genuinely is not there is still refused,
+	# so the exemption is for the tool this build makes and nothing else.
+	t.write("fmake.toml", """
+[generate.vals]
+command = "definitely-not-installed gen/vals.c"
+inputs  = ["seed.txt"]
+outputs = ["gen/vals.c"]
+""")
+	r = t.fmake("-n")
+	check(r.returncode != 0,
+	      f"a missing command must still be refused on a dry run: "
+	      f"{r.stdout}{r.stderr}")
+
+
+@case
+def a_tool_path_with_a_space_survives_ejection(t):
+	"""fmake runs a compiler as a list and never through a shell. The
+	build files it writes are a recipe and a ninja command, and both are
+	shell.
+
+    Measured with `[toolchain] cc' pointing into a directory called `my
+    tools': fmake built the tree, `--eject' exited 0, and
+
+        CC = /tmp/.../my tools/mycc
+
+    then gave `make: /tmp/.../my: No such file or directory' and exit
+    127, with ninja saying `not found' for the same reason. Every tool
+    path goes through _mk_flag and _nj_flag now -- the helpers whose own
+    docstrings describe this exact layering, and which these callers had
+    never used.
+    """
+	work = tempfile.mkdtemp(prefix="fmake-spacecc-")
+	try:
+		tools = os.path.join(work, "my tools")
+		os.makedirs(tools)
+		cc = os.path.join(tools, "mycc")
+		with open(cc, "w") as fh:
+			fh.write("#!/bin/sh\nexec cc \"$@\"\n")
+		os.chmod(cc, 0o755)
+		t.write("main.c", "int main(void){ return 0; }\n")
+		t.write("fmake.toml", f'[toolchain]\ncc = "{cc}"\n')
+		check(t.fmake().returncode == 0,
+		      "fmake itself never goes through a shell")
+
+		prog = os.path.basename(t.dir)
+		for backend, out, cmd in (("make", "Makefile", ["make"]),
+		                          ("ninja", "build.ninja", ["ninja"])):
+			if not shutil.which(backend):
+				continue
+			e = t.fmake("--eject", backend)
+			check(e.returncode == 0,
+			      f"--eject {backend} failed: {e.stderr}")
+			t.write(out, e.stdout)
+			shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+			for stale in (prog, "build"):
+				path = os.path.join(t.dir, stale)
+				shutil.rmtree(path, ignore_errors=True) \
+				    if os.path.isdir(path) else None
+				if os.path.isfile(path):
+					os.remove(path)
+			b = _run_in(t.dir, *cmd)
+			check(b.returncode == 0,
+			      f"the ejected {backend} build could not run a compiler "
+			      f"whose path has a space: {b.stdout}{b.stderr}")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
+def an_install_prefix_with_a_space_is_quoted(t):
+	"""`install -d $(DESTDIR)$(BINDIR)' is a shell command, and a prefix
+	of `/opt/my place' made it two directories.
+
+    Asserted on the recipe rather than by installing, because installing
+    into /opt is not this suite's business. `make -n install' expands the
+    variables and shows exactly what the shell would receive.
+    """
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", '[install]\nprefix = "/opt/my place"\n')
+	r = t.fmake("--eject", "make")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	t.write("Makefile", r.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	n = _run_in(t.dir, "make", "-n", "install")
+	out = n.stdout + n.stderr
+	check("'/opt/my place'/bin" in out,
+	      f"the install recipe hands the shell two directories: {out}")
+
+
+@case
+def situ_flags_are_quoted_in_both_ejected_builds(t):
+	"""[situ] flags reached the recipes by a raw join while every other
+	flag in the file went through the backend's escape.
+
+    Consistency rather than a measured break: the mechanism is the one
+    _mk_flag and _nj_flag were written for, and a flag holding a space is
+    the same two arguments there as anywhere else. Guarded so the raw
+    join cannot come back.
+    """
+	_situ_tree(t)
+	t.write("fmake.toml", (open(os.path.join(t.dir, "fmake.toml")).read()
+	                       if os.path.exists(os.path.join(t.dir, "fmake.toml"))
+	                       else "")
+	        + '\n[situ]\nflags = ["--rung", "a b"]\n')
+	for backend, needle in (("make", "SITUFLAGS"), ("ninja", "situc build")):
+		r = t.fmake("--eject", backend)
+		check(r.returncode == 0, f"--eject {backend} failed: {r.stderr}")
+		check("'a b'" in r.stdout,
+		      f"the {backend} build file splits a situ flag: "
+		      f"{[l for l in r.stdout.splitlines() if needle in l]}")
+
+
+@case
+def a_path_with_a_newline_is_refused_by_both_backends(t):
+	"""The Makefile refusal sends people to ninja, and for one character
+	that promise was false.
+
+    `_ninja' escapes a space, a colon and a dollar, which is every escape
+    ninja has. A newline has none. Measured on a source called
+    `we<newline>ird.c': `--eject ninja' exited 0 and wrote a file ninja
+    would not parse -- "expected ':', got newline" -- while `--eject
+    make' refused it as whitespace and told the reader to use ninja,
+    which could not express it either.
+
+    fmake itself builds the tree, as it does for every other name in this
+    family: it never goes through a shell or a build file.
+    """
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("we\nird.c", "int helper(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "fmake itself should cope")
+
+	for backend in ("make", "ninja"):
+		r = t.fmake("--eject", backend)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"--eject {backend} emitted a build file for a path with a "
+		      f"newline: {out[:300]}")
+		check("newline" in out,
+		      f"the refusal does not say what is wrong: {out}")
+
+
+@case
+def a_description_with_a_newline_is_refused(t):
+	"""A description is one line of a build file, and ninja reads the
+	next one as a statement of its own.
+
+    Measured: a description holding a newline and `build evil: phony' put
+    that edge into build.ninja and ninja ran it, out of an --eject that
+    exited 0. Refused rather than escaped, because a second line of a
+    description cannot usefully mean anything -- and refused where both
+    the runner and the backends read the rules, so the live build says it
+    too rather than leaving it for whoever ejects.
+    """
+	t.write("seed.txt", "seed\n")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("mk.py", "import os, sys\n"
+	        "os.makedirs('gen', exist_ok=True)\n"
+	        "open('gen/x.c', 'w').write('int x(void){ return 0; }\\n')\n")
+	t.write("fmake.toml", f"""
+[generate.thing]
+description = "one\\nbuild evil: phony"
+command = "{sys.executable} mk.py"
+inputs  = ["seed.txt"]
+outputs = ["gen/x.c"]
+""")
+	for args_ in ((), ("--eject", "ninja"), ("--eject", "make")):
+		r = t.fmake(*args_)
+		out = r.stdout + r.stderr
+		what = " ".join(args_) or "the build"
+		check(r.returncode != 0, f"{what} accepted it: {out[:300]}")
+		check("newline" in out,
+		      f"{what} does not say what is wrong: {out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

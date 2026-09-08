@@ -2053,6 +2053,17 @@ def all_generate_rules(root, conf, srcs=None, scans=None):
 			die(f"{_gen_where(rule, name)}: a rule for "
 			    f"{rule['outputs'][0]} is also in {CONF_FILE}")
 		rules[name] = rule
+	# A description is one line of a build file, and ninja reads the next
+	# one as a statement of its own. Measured: a description holding a
+	# newline and `build evil: phony' put that edge into build.ninja, and
+	# ninja ran it -- out of an --eject that exited 0. Refused here rather
+	# than escaped, because there is nothing a second line of a
+	# description could usefully mean.
+	for name, rule in rules.items():
+		if "\n" in (rule.get("description") or ""):
+			die(f"{_gen_where(rule, name)}: a description is written on "
+			    f"one line of the emitted build file, so it cannot "
+			    f"contain a newline.")
 	return rules
 
 
@@ -2211,8 +2222,13 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			reachable = words and (shutil.which(words[0])
 			                       or (os.path.isfile(here)
 			                           and os.access(here, os.X_OK)))
+			# A tool this build would have produced is not missing, it is
+			# unbuilt, and on a dry run that is the correct state. Without
+			# this the check fires on the one path fmake itself supplies,
+			# with advice to use `uses' for a rule that already does.
 			if (len(words) == len(line.split()) and words
 			        and not any(c in line for c in "|&;<>()$`")
+			        and not (dry_run and r.get("uses"))
 			        and not reachable):
 				die(f"{_gen_where(r, name)} needs {words[0]!r}, which is "
 				    f"neither installed nor an executable file in this "
@@ -7777,6 +7793,16 @@ def build(args, _bootstrapping=False):
 			    f"itself being built to run a generator. A tool cannot "
 			    f"depend on its own output.")
 		tooldir = os.path.join(state, "tools")
+		# `-n' is "print what would happen and change nothing", and this is
+		# the largest thing fmake does: measured, a dry run of a tree with
+		# one `uses' rule compiled the tool, linked it, and left .fmake/
+		# with a cache, an object, a depfile and the binary in it -- then
+		# printed the generator command as though nothing had happened.
+		# The path is derivable without building, which is all a dry run
+		# needs in order to print the command that would run.
+		if args.dry_run:
+			say(f"{YELLOW('TOOL')} {name} (not built on a dry run)")
+			return os.path.join(tooldir, name)
 		os.makedirs(tooldir, exist_ok=True)
 		sub = argparse.Namespace(**vars(args))
 		sub.targets, sub.output = [name], tooldir
@@ -10515,6 +10541,41 @@ def _refuse_leading_dash(targets, closures, root, extra=()):
 		      "because it passes absolute paths.")
 
 
+def _unninjaable(path):
+	"""Why ninja cannot express this path, or None.
+
+    `_ninja' escapes a space, a colon and a dollar, which is every
+    character ninja gives an escape for. A newline has none: measured, a
+    source called `we<newline>ird.c' ejected a build.ninja that ninja
+    refused to parse -- "expected \':\', got newline" -- after --eject
+    exited 0.
+
+    It matters more than one rare filename, because the Makefile refusal
+    sends people here: "use --eject ninja, which can express all of
+    them". For a newline that sentence was false, and this is what makes
+    it true again by refusing on both sides.
+    """
+	if "\n" in path or "\r" in path:
+		return "no build file can name a path containing a newline"
+	return None
+
+
+def _refuse_newlines(targets, closures, root, extra=()):
+	"""The one thing neither backend can express."""
+	bad = {}
+	for path in _eject_paths(targets, closures, root, extra):
+		why = _unninjaable(path)
+		if why:
+			bad[path] = why
+	if bad:
+		shown = sorted(bad)[:5]
+		die("cannot eject a build for these paths:\n    "
+		    + "\n    ".join(f"{p!r}  ({bad[p]})" for p in shown)
+		    + (f"\n    ... and {len(bad) - 5} more" if len(bad) > 5 else "")
+		    + "\nRename them: ninja has no escape for a newline and Make "
+		      "splits on it.")
+
+
 def _refuse_whitespace(targets, closures, root, extra=()):
 	"""Make cannot express some of the names a filesystem allows.
 
@@ -10572,6 +10633,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	gen_srcs = (_tool_paths(moc, uic, rcc, gen_rules)
 	            + list(declared_submodules(root)))
 	_refuse_leading_dash(targets, closures, root, gen_srcs)
+	_refuse_newlines(targets, closures, root, gen_srcs)
 	_refuse_whitespace(targets, closures, root, gen_srcs)
 	any_crate = any(u.crate for t in targets for u in closures[t].link)
 	common = _eject_flags(cfg.base_cflags() + incflags, root, _mk_flag)
@@ -10670,9 +10732,16 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		lines.append(cur)
 		return "\n".join(lines).rstrip() if lines else head.rstrip()
 
-	a(var("CC", cfg.cc, assign, own=False))
-	a(var("CXX", cfg.cxx, assign, own=False))
-	a(var("AR", cfg.ar_name, assign, own=False))
+	# _mk_flag, not the raw value: a recipe is a shell command and a tool
+	# path is whatever [toolchain] or the environment said. `cc = "/opt/my
+	# tools/gcc"' builds here -- fmake runs a compiler as a list and never
+	# through a shell -- and ejected `CC = /opt/my tools/gcc', after which
+	# make said "/opt/my: No such file or directory" and exited 127. The
+	# helper's own docstring has said why since the flags were fixed;
+	# these callers were the ones that never used it.
+	a(var("CC", _mk_flag(cfg.cc), assign, own=False))
+	a(var("CXX", _mk_flag(cfg.cxx), assign, own=False))
+	a(var("AR", _mk_flag(cfg.ar_name), assign, own=False))
 	a(var("CFLAGS", common))
 	a(var("CXXFLAGS", common))
 	# Emitted separately so it stays after each file's own flags, which is
@@ -10691,7 +10760,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# and both are plain assignments even in a fragment: a parent
 		# Makefile that had a RUSTFLAGS would be talking about a build
 		# fmake did not compute.
-		a(var("RUSTC", cfg.rustc, assign, own=False))
+		a(var("RUSTC", _mk_flag(cfg.rustc), assign, own=False))
 		a(var("RUSTFLAGS", ["--edition", cfg.rust_edition] + cfg.rustflags))
 	a(var("BUILD_DIR", EJECT_BUILD_DIR, assign))
 	a("")
@@ -10890,7 +10959,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("#")
 		a('# Selected by `#include "ui_*.h"` in the source, not by a list.')
 		a("")
-		a(f"{P}UIC      = {uic['exe']}")
+		a(f"{P}UIC      = {_mk_flag(uic['exe'])}")
 		a("")
 		for j in uic_jobs:
 			a(f"{_eject_src(j['out'])}: {j['src']}")
@@ -10904,7 +10973,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("#")
 		a("# Selected by what the source opens, not by a list.")
 		a("")
-		a(f"{P}RCC      = {rcc['exe']}")
+		a(f"{P}RCC      = {_mk_flag(rcc['exe'])}")
 		a("")
 		for j in rcc_jobs:
 			a(f"{_eject_src(j['out'])}: "
@@ -10923,8 +10992,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# Relative where it is in the tree: situ's own build finds its
 		# compiler at bin/situc, and an absolute path would tie the
 		# emitted file to the directory it was ejected from.
-		a(f"{P}SITUC     = {_rel(situ['exe'], root)}")
-		a(f"{P}SITUFLAGS = {' '.join(situ.get('flags') or [])}")
+		a(f"{P}SITUC     = {_mk_flag(_rel(situ['exe'], root))}")
+		a(f"{P}SITUFLAGS = "
+		  f"{' '.join(_mk_flag(f) for f in situ.get('flags') or [])}")
 		a("")
 		for j in situ_jobs:
 			outs = [_eject_src(o) for o in j.get("outs", [])]
@@ -10945,7 +11015,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# Selected by Q_OBJECT in the source, not by a list. Override MOC")
 		a("# if Qt lives elsewhere on the machine doing the building.")
 		a("")
-		a(f"{P}MOC      = {moc['exe']}")
+		a(f"{P}MOC      = {_mk_flag(moc['exe'])}")
 		a(f"{P}MOCFLAGS = {' '.join(_eject_flags(moc.get('flags', []), root, _mk_flag))}")
 		a("")
 		for j in moc_jobs:
@@ -11149,11 +11219,15 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# Makefile wins without editing this file.")
 		defaults = dict(INSTALL_DEFAULTS)
 		defaults.update({k: v for k, v in conf.install.items() if v})
-		a(f"PREFIX ?= {defaults['prefix']}")
+		# Quoted for the reason the tools above are: `install -d
+		# $(DESTDIR)$(BINDIR)' is a shell command, and a prefix of
+		# `/opt/my place' made it two directories.
+		a(f"PREFIX ?= {_mk_flag(defaults['prefix'])}")
 		for key in ("bindir", "libdir", "includedir"):
 			sub = defaults[key]
 			a(f"{key.upper()} ?= "
-			  + (sub if os.path.isabs(sub) else f"$(PREFIX)/{sub}"))
+			  + (_mk_flag(sub) if os.path.isabs(sub)
+			     else f"$(PREFIX)/{_mk_flag(sub)}"))
 		a("PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig")
 		a("")
 		# The .pc files, written by the ejected build rather than copied
@@ -11298,9 +11372,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# ninja expresses everything Make cannot -- a space, a dollar, a hash, a
 	# colon -- and this is the one it cannot either, because the difficulty
 	# is downstream of the build file entirely.
-	_refuse_leading_dash(targets, closures, root,
-	                     _tool_paths(moc, uic, rcc, gen_rules)
-	                     + list(declared_submodules(root)))
+	nj_extra = (_tool_paths(moc, uic, rcc, gen_rules)
+	            + list(declared_submodules(root)))
+	_refuse_leading_dash(targets, closures, root, nj_extra)
+	_refuse_newlines(targets, closures, root, nj_extra)
 	common = " ".join(_eject_flags(cfg.cflags + incflags, root, _nj_flag))
 	override = " ".join(_eject_flags(cfg.override, root, _nj_flag))
 	L = []
@@ -11332,9 +11407,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	  + ("1.7" if any(u.crate for t in targets for u in closures[t].link)
 	     else "1.5"))
 	a("")
-	a(f"cc = {cfg.cc}")
-	a(f"cxx = {cfg.cxx}")
-	a(f"ar = {cfg.ar_name}")
+	# _nj_flag for the reason its own docstring gives, and the reason the
+	# submodule fetch carries `qpath': ninja escapes $in and $out for the
+	# shell itself and expands a variable of your own textually.
+	a(f"cc = {_nj_flag(cfg.cc)}")
+	a(f"cxx = {_nj_flag(cfg.cxx)}")
+	a(f"ar = {_nj_flag(cfg.ar_name)}")
 	a(f"cflags = {common}")
 	a(f"cflags_last = {override}")
 	# Ninja has no conditionals, so this is baked -- but it is baked from
@@ -11383,7 +11461,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("  description = CP $out")
 	a("")
 	if any(u.crate for t in targets for u in closures[t].link):
-		a(f"rustc = {cfg.rustc}")
+		a(f"rustc = {_nj_flag(cfg.rustc)}")
 		a(f"rustflags = --edition {cfg.rust_edition} "
 		  + " ".join(_eject_flags(cfg.rustflags, root, _nj_flag)))
 		a("")
@@ -11471,12 +11549,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	situ_jobs = situ.get("jobs") or []
 	if situ_jobs:
 		a("# Selected by the header each source includes, not by a list.")
-		a(f"situc = {_rel(situ['exe'], root)}")
+		a(f"situc = {_nj_flag(_rel(situ['exe'], root))}")
 		a("")
 		a("rule situc")
 		# The output directory is named rather than derived: ninja has no
 		# $(@D), and every schema writes into the one flat directory.
-		flags = " ".join(situ.get("flags") or [])
+		flags = " ".join(_nj_flag(f) for f in situ.get("flags") or [])
 		out = _ninja(_eject_src(SITU_DIR))
 		a(f"  command = $situc build $in{' ' + flags if flags else ''} "
 		  f"--out {out} && $situc gen-derived $in --out {out}")
@@ -11494,7 +11572,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	uic_jobs = uic.get("jobs") or []
 	if uic_jobs:
 		a('# Selected by `#include "ui_*.h"` in the source, not by a list.')
-		a(f"uic = {uic['exe']}")
+		a(f"uic = {_nj_flag(uic['exe'])}")
 		a("")
 		a("rule uic")
 		a("  command = $uic $in -o $out")
@@ -11508,7 +11586,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	rcc_jobs = [j for j in (rcc.get("jobs") or []) if j["out"] in built]
 	if rcc_jobs:
 		a("# Selected by what the source opens, not by a list.")
-		a(f"rcc = {rcc['exe']}")
+		a(f"rcc = {_nj_flag(rcc['exe'])}")
 		a("")
 		a("rule rcc")
 		a("  command = $rcc --name $resname $in -o $out")
@@ -11527,7 +11605,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	            if (j["src"] if j["inline"] else j["out"]) in built]
 	if moc_jobs:
 		a("# Selected by Q_OBJECT in the source, not by a list.")
-		a(f"moc = {moc['exe']}")
+		a(f"moc = {_nj_flag(moc['exe'])}")
 		a(f"mocflags = {' '.join(_eject_flags(moc.get('flags', []), root, _nj_flag))}")
 		a("")
 		a("rule moc")
