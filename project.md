@@ -15405,15 +15405,31 @@ the test needs no network:
                   src/ossa_source.cpp        ossa/ossa.h: No such file
 
     after       * SUB ossacli (not initialised)
-                * 1 file(s) did not compile
-                  local/socket.c
+                * built raidtray_ciss_helper, raidtray_helper,
+                  raidtray_ossa_helper, raidtray, ciss_probe, fuzz_ciss
+                rc 0
 
-`src/ossa_source.cpp` compiles because the header exists. What remains is
-that tree's own known gap -- a header in a sibling project reached
-through `FUZZNET_DIR`, which `[project] include-dirs` answers and which
-`5bf03a7` already diagnosed -- and it is *not* a submodule, which is the
-useful part: the fetch fixed exactly what it should and left the
-neighbouring failure alone.
+**The first version of this entry said one failure remained and called it
+raidcfgd's own gap. That was wrong, and it was my scratch directory.**
+The first clone went to `/tmp/fmake-raid-XXXX/tree`, and raidcfgd's
+`fmake.toml` carries `include-dirs = ["../fuzznet"]` -- a documented
+assumption about a sibling checkout, with a comment saying so and noting
+that a tree without one "gets the same missing-header error from both"
+build systems. `../fuzznet` relative to a scratch directory is nothing at
+all, so `local/socket.c` failed for the location I had chosen rather than
+for anything in their tree.
+
+Put a fuzznet checkout beside the clone, as their config and their
+Makefile both expect, and the whole tree builds: submodule fetched, six
+targets, rc 0.
+
+`evidence.md` names this exactly -- a sweep reporting, as facts about
+other projects, an artifact of the scratch directory they were unpacked
+into. It was live in these notes for one commit, and the claim that
+tripped it was the confident half of the sentence rather than the
+measurement: the measurement was right, and "that tree's own known gap"
+was an inference I had no business making about somebody else's config
+without reading it.
 
 **`--clean` was checked rather than assumed**, since a submodule is
 somebody else's tree and clean deletes: it removes `.fmake/` only,
