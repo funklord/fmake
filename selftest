@@ -4867,6 +4867,51 @@ def a_file_the_build_did_not_write_is_not_overwritten(t):
 	      "a build after --clean must replace the binary it wrote")
 
 
+@case
+def a_file_where_the_state_directory_goes_says_so(t):
+	"""One handler, several causes, and the advice fitted only one.
+
+    A file called `.fmake' in the tree raises FileExistsError, and the
+    message sent the reader to check permissions -- "build a writable
+    copy of the tree, or make the directory writable" -- which is true
+    advice for a different cause and useless for this one. Nothing is
+    wrong with the permissions, so the reader looks at them, finds them
+    fine, and is where they started.
+
+    Found by measuring which refusals the suite never produces (section
+    196) and reading the first of them: 128 die() sites, 57 that no case
+    reaches, and this was one. That is what an unproduced diagnostic
+    costs -- not the refusal, which works, but the wording, which nothing
+    was watching.
+
+    The permission cause keeps its own message, and the assertion that
+    the wrong advice is ABSENT is what separates the two.
+    """
+	t.write("main.c", "int main(void){ return 0; }\n")
+	with open(os.path.join(t.dir, ".fmake"), "w") as fh:
+		fh.write("not a directory\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a file in the way was not refused: {out}")
+	check(".fmake" in out and "is a file" in out,
+	      f"the refusal does not say what is in the way: {out}")
+	check("writable" not in out,
+	      f"the refusal still gives the advice for another cause: {out}")
+
+	if os.geteuid() == 0:
+		return          # root ignores the mode, so the control cannot run
+	os.remove(os.path.join(t.dir, ".fmake"))
+	os.chmod(t.dir, 0o555)
+	try:
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"a read-only tree was not refused: {out}")
+		check("writable" in out,
+		      f"the permission cause lost its own advice: {out}")
+	finally:
+		os.chmod(t.dir, 0o755)
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

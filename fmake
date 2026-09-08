@@ -4601,8 +4601,19 @@ class TreeLock:
 			os.makedirs(os.path.dirname(self.path), exist_ok=True)
 			self.fh = open(self.path, "w")
 		except OSError as exc:
-			die(f"cannot create {STATE_DIR}/ in "
-			    f"{os.path.dirname(os.path.dirname(self.path))}: "
+			here = os.path.dirname(os.path.dirname(self.path))
+			state = os.path.dirname(self.path)
+			# One handler, several causes, and the advice below fits only
+			# one of them. A file sitting where the state directory goes
+			# raises FileExistsError, and being told to check permissions
+			# sends the reader to look at something that is not wrong.
+			# Found by measuring which refusals the suite never produces
+			# (section 196) and reading the first of them.
+			if os.path.exists(state) and not os.path.isdir(state):
+				die(f"{STATE_DIR} in {here} is a file, and {STATE_DIR}/ is "
+				    f"where fmake keeps its cache and objects. Move it or "
+				    f"remove it.")
+			die(f"cannot create {STATE_DIR}/ in {here}: "
 			    f"{exc.strerror or exc}\nfmake keeps its cache and objects "
 			    f"beside the source. Build a writable copy of the tree, or "
 			    f"make the directory writable.")

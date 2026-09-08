@@ -16173,8 +16173,47 @@ it set, and the scaffolding came out afterwards.
 The suite passed unchanged under the instrumentation, which is what says
 the number is about the suite rather than about the measurement.
 
-**This is a to-do list rather than a bug list**, and the distinction
-matters: an unproduced diagnostic is not a wrong one. Nine of them were
+### The first one read was wrong
+
+A list of 57 is worth something only if somebody reads it, so one was:
+the refusal for a state directory that cannot be created. A file called
+`.fmake` in the tree raises `FileExistsError`, and the message sent the
+reader to check permissions -- *"build a writable copy of the tree, or
+make the directory writable"* -- which is sound advice for a different
+cause and useless for this one. Nothing is wrong with the permissions,
+so the reader inspects them, finds them fine, and is back where they
+started.
+
+**One handler, several causes, and the advice fitted only one.** The two
+are split now, and the case asserts the wrong advice is *absent* as well
+as that the right message is present -- which is the assertion that
+separates them, since both refuse and both name `.fmake`.
+
+Two others in the same shape were checked and are fine. `[generate.*]`
+writing over a committed source is **instructed** rather than inferred:
+the author declared that output, and the committed-header rule beside it
+is about the other case, where fmake decides on its own to compile a
+schema over a file somebody wrote. And moc's *"cannot execute on this
+machine"* only ever meets a moc that exists, because a missing one is
+caught earlier by a check that names the config key -- verified by
+pointing `[toolchain] moc` at both.
+
+**Eleven of the 58 give advice**, which is where a wrong one can live,
+and the rest report the error the OS or the tool gave. Read through: the
+Qt and rustc ones offer both branches -- *install the package, or name it
+with `[toolchain] X`* -- so they cannot misdirect the way the state
+directory's did, and the submodule and eject ones were written and
+verified this session. The one found was the outlier.
+
+**Swept clean beside it, with the method**, so these lenses are spent:
+the ejected Makefile, the ejected `build.ninja` and the make-fragment
+each built a twelve-source tree with a generator under `-j8`, three runs
+apiece, with no race and the right answer; a `.ui` change re-runs uic and
+recompiles what includes the generated header; a Q_OBJECT change in a
+header re-mocs and rebuilds the dependents.
+
+**This is otherwise a to-do list rather than a bug list**, and the
+distinction matters: an unproduced diagnostic is not a wrong one. Nine of them were
 produced by hand in §195 -- five `fmake.mk` parser refusals and four
 `$file()` ones -- and every message was accurate. What an unproduced
 message loses is not the refusal but the *wording*, which nothing tests
