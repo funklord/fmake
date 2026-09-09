@@ -16212,6 +16212,21 @@ apiece, with no race and the right answer; a `.ui` change re-runs uic and
 recompiles what includes the generated header; a Q_OBJECT change in a
 header re-mocs and rebuilds the dependents.
 
+**A second pass over the untouched front ends found nothing**, and the
+list is here so it is not walked again. Rust: nested modules two levels
+down, a mid-level `mod.rs`, a file reached only by `include!` -- which no
+`mod` scan can see and rustc's own depfile does -- and a staticlib linked
+into C, each rebuilding on the right change and settling on the next run.
+Assembly: a `.S` whose `#include`d header changes re-assembles, which is
+the path where the assembler writes the depfile because cpp did not run.
+`--run`: the documented `#!/usr/bin/env -S fmake --run` works with an
+argument, a second run costs 0.25s, and a read-only directory falls back
+as designed. `-i`: it appends rather than rewriting, refuses to ask
+without a terminal -- which is what keeps it out of CI -- and, where the
+section it would write already exists, **says so and leaves it alone**
+rather than appending a second `[target.X]` that TOML would reject. That
+last was the hazard being hunted; it was already guarded.
+
 **This is otherwise a to-do list rather than a bug list**, and the
 distinction matters: an unproduced diagnostic is not a wrong one. Nine of them were
 produced by hand in §195 -- five `fmake.mk` parser refusals and four
