@@ -5478,6 +5478,81 @@ def a_using_declaration_is_not_a_definition(t):
 	      f"a file that only imports the name was read as defining it:\n{out}")
 
 
+@case
+def a_weak_or_common_symbol_in_assembly_is_a_definition(t):
+	"""Two more ways an object exports a name, and one way it does not.
+
+    The instrument of sections 202 and 203 pointed at a third language:
+    seventeen assembly shapes assembled with `cc', `nm' asked what each
+    object exports, and the answer checked against what the scanner
+    recorded. Two came back with nothing recorded at all.
+
+        .weak default_handler      the linker resolves a weak definition
+        default_handler:           exactly like a strong one
+
+        .comm shared_slot,4,4      a common symbol, which needs no label
+
+    Both fail a real build the way section 200 does -- `handler.s not
+    compiled: nothing reaches it', then `nothing in this tree appears to
+    define them' -- and `--force-link handler.s' builds and runs the same
+    tree, which is what says the object was always good and only the
+    proposal was missing.
+
+    The third part is the direction section 203 was bitten in, and it is
+    why `.weak' is not simply added to the list of spellings. `.weak' on
+    a name this file does NOT define is a weak *reference*: the idiom
+    that makes an optional dependency optional, and reading it as a
+    definition would suppress the one line saying nothing here defines
+    the symbol. It counts only with a label or a `.set' alias beside it.
+
+    Nothing in this workspace writes either directive -- 2,448 `.globl'
+    and 246 `.global' across every assembly file here, and no `.weak',
+    `.comm' or `.lcomm' at all -- so this is a shape found by
+    construction rather than by a tree that met it. A weak handler with a
+    default body is what a microcontroller's startup file is made of.
+    """
+	if not shutil.which("cc"):
+		raise Skip("no assembler driver")
+	t.write("handler.s", ".weak default_handler\n"
+	        ".type default_handler, @function\n"
+	        "default_handler:\n\tmovl $7, %eax\n\tret\n")
+	t.write("main.c", "#include <stdio.h>\nint default_handler(void);\n"
+	        'int main(void){ printf("%d\\n", default_handler()); return 0; }\n')
+	r = t.fmake()
+	if r.returncode != 0 and "no x86_64" not in (r.stdout + r.stderr):
+		raise Skip("this machine does not assemble x86_64 by hand")
+	check(r.returncode == 0,
+	      f"a weak definition was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "7\n",
+	      "the weak definition was not the one linked")
+
+	# A common symbol, which has no label at all.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "handler.s"))
+	t.write("tbl.s", ".comm shared_slot,4,4\n")
+	t.write("main.c", "#include <stdio.h>\nextern int shared_slot;\n"
+	        'int main(void){ shared_slot = 5;'
+	        ' printf("%d\\n", shared_slot); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a common symbol was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "5\n",
+	      "the common symbol was not the one linked")
+
+	# And the half that must not fire: a weak reference defines nothing,
+	# so the failure has to keep saying so.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "tbl.s"))
+	t.write("probe.s", ".weak optional_hook\n.globl probe\nprobe:\n\tret\n")
+	t.write("main.c", "int optional_hook(void);\n"
+	        "int main(void){ return optional_hook(); }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "a link with nothing defining the symbol passed")
+	out = r.stdout + r.stderr
+	check("nothing in this tree appears to define them" in out,
+	      f"a weak reference was read as a definition:\n{out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -846,6 +846,48 @@ RE_ASM_GLOBAL = re.compile(
     r"^[ \t]*\.(?:globl|global)[ \t]+"
     r"([A-Za-z_.$][\w.$]*(?:[ \t]*,[ \t]*[A-Za-z_.$][\w.$]*)*)", re.M)
 
+# The other two ways an object exports a name, found by assembling
+# seventeen shapes and asking `nm' which the scanner had missed -- the
+# instrument of sections 202 and 203, pointed at a third language.
+#
+#     .weak default_handler      a weak definition, which the linker
+#     default_handler:           resolves exactly like a strong one
+#
+#     .comm shared_slot,4,4      a common symbol, which needs no label
+#
+# Nothing in this workspace writes either: 2,448 `.globl' and 246
+# `.global' across every `.s' and `.S' here, and no `.weak', `.comm' or
+# `.lcomm' at all. So this is a shape found by construction rather than
+# by a tree that met it -- but a weak handler with a default body is what
+# every vendor's startup file for a microcontroller is made of, and the
+# control fails the way section 200 does: `handler.s not compiled:
+# nothing reaches it', then `nothing in this tree appears to define
+# them', about a definition in the same directory. `--force-link
+# handler.s' builds and runs it, which is what proves the object was
+# always good and only the proposal was missing.
+#
+# `.comm' names one symbol and then its size and alignment, which may
+# themselves be symbols -- `.comm buf,SIZE,4' -- so only the first
+# argument is read. `.lcomm' is deliberately absent: it is local, and
+# nothing outside the file can reach it.
+RE_ASM_COMM = re.compile(
+    r"^[ \t]*\.comm[ \t]+([A-Za-z_.$][\w.$]*)[ \t]*,", re.M)
+
+# `.weak' on its own is not a definition, and this is the direction
+# section 203 was bitten in. A file may declare a weak *reference* to a
+# symbol it does not define, call it, and check it against zero -- the
+# idiom that makes an optional dependency optional. Reading that as a
+# definition would propose the file for a symbol it is asking about, and
+# worse, would suppress the one line saying nothing here defines it. So a
+# weak name counts only when this file also defines it: a label, or an
+# alias made with `.set', `.equ' or `.equiv'.
+RE_ASM_WEAK = re.compile(
+    r"^[ \t]*\.weak[ \t]+"
+    r"([A-Za-z_.$][\w.$]*(?:[ \t]*,[ \t]*[A-Za-z_.$][\w.$]*)*)", re.M)
+RE_ASM_LABEL = re.compile(r"^[ \t]*([A-Za-z_.$][\w.$]*)[ \t]*:", re.M)
+RE_ASM_ALIAS = re.compile(
+    r"^[ \t]*\.(?:set|equ|equiv)[ \t]+([A-Za-z_.$][\w.$]*)[ \t]*,", re.M)
+
 # What a generated file says about itself, for the three generators fmake
 # runs itself. Each writes a banner naming the tool, measured from the
 # installed ones rather than assumed:
@@ -936,6 +978,12 @@ def scan_source(path):
 	elif not lang.cpp or lang.tag == "AS ":
 		defs = {name.strip() for group in RE_ASM_GLOBAL.findall(code)
 		        for name in group.split(",") if name.strip()}
+		defs |= set(RE_ASM_COMM.findall(code))
+		here = (set(RE_ASM_LABEL.findall(code))
+		        | set(RE_ASM_ALIAS.findall(code))
+		        | set(RE_ASM_COMM.findall(code)))
+		defs |= {name.strip() for group in RE_ASM_WEAK.findall(code)
+		         for name in group.split(",") if name.strip() in here}
 	else:
 		defs = set(RE_FUNC_DEF.findall(code))
 		for owner, name in RE_DATA_DEF.findall(code):
