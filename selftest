@@ -5553,6 +5553,63 @@ def a_weak_or_common_symbol_in_assembly_is_a_definition(t):
 	      f"a weak reference was read as a definition:\n{out}")
 
 
+@case
+def a_marked_source_keeps_its_first_include(t):
+	"""Three bytes in front of line one, and the scanner lost the line.
+
+    Read as plain UTF-8 a byte-order mark survives as U+FEFF at index 0
+    of the text, so every pattern in the scanner anchored at `^' misses
+    the first line -- and line one of a C file is usually an #include.
+    Section 27 recorded a BOM as harmless, measured on a fixture whose
+    first line held nothing the scanner needed; it is harmless exactly
+    until the first line matters.
+
+    The include being invisible means no -I is proposed for the
+    directory holding it, so the compiler stops with `api.h: No such
+    file or directory' -- an error that reads as a missing header rather
+    than as a scanner that could not see the line. The case next door is
+    the same cause failing the other way, and they are two cases rather
+    than one so that each is reached by its own sabotage.
+    """
+	t.write("inc/api.h", "int api_answer(void);\n")
+	t.write("api.c", "int api_answer(void){ return 4; }\n")
+	with open(os.path.join(t.dir, "main.c"), "wb") as fh:
+		fh.write(b'\xef\xbb\xbf#include "api.h"\n#include <stdio.h>\n'
+		         b'int main(void){ printf("%d\\n", api_answer()); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a marked file lost its first #include: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "4\n",
+	      "the tree with a marked source built the wrong thing")
+
+
+@case
+def a_marked_source_keeps_its_first_definition(t):
+	"""The other half of the mark, which fails as a missing symbol.
+
+    A definition on the first line is invisible to `RE_DATA_DEF', which
+    is anchored at line start, so the file is never proposed as a
+    candidate and the link ends with "nothing in this tree appears to
+    define them" about the file next to it -- sections 200 to 204, by a
+    cause none of them had.
+
+    Assembly is a third case and is not fmake's: `as' refuses the mark
+    itself, `invalid character (0xef) in mnemonic', so a BOM on a `.s'
+    is a file no toolchain accepts. What changed there is the diagnosis,
+    which now names the file that did not compile instead of saying
+    nothing defines the symbol.
+    """
+	with open(os.path.join(t.dir, "table.c"), "wb") as fh:
+		fh.write(b"\xef\xbb\xbfint table_size = 9;\n")
+	t.write("main.c", "#include <stdio.h>\nextern int table_size;\n"
+	        'int main(void){ printf("%d\\n", table_size); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a marked file lost its first definition: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "9\n",
+	      "the definition on the marked line was not the one linked")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -947,7 +947,25 @@ def rust_mods(code):
 
 def scan_source(path):
 	"""Read one source file and return its scan record."""
-	with open(path, "r", encoding="utf-8", errors="replace") as fh:
+	# `utf-8-sig' rather than `utf-8', for the three bytes a Windows
+	# editor puts in front of the first character. Read as plain UTF-8 a
+	# byte-order mark survives as U+FEFF at index 0, so every pattern here
+	# anchored at `^' loses line one -- and line one of a C file is
+	# usually an #include. Measured, one cause and two symptoms: an
+	# include the scanner never saw, so no -I was proposed and the compiler
+	# said `api.h: No such file or directory'; and a definition on the
+	# first line, so "nothing in this tree appears to define them" about
+	# the file next to it. The compiler accepts the mark and builds both
+	# once the scanner can see them, which is what makes it a scanner
+	# fault rather than a bad file.
+	#
+	# Assembly is the third case and is not one of ours: `as' refuses the
+	# mark outright -- `invalid character (0xef) in mnemonic' -- so a
+	# `.globl' on the first line of a `.s' is a file no toolchain accepts.
+	# What changes there is the diagnosis, and it changes for the better:
+	# fmake used to say nothing in the tree defined the symbol, and now
+	# says `s.s did not compile, and appears to define one of them'.
+	with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
 		text = fh.read()
 	code, comments = strip_comments(text)
 	lang = LANGS.get(os.path.splitext(path)[1], _C)
@@ -1201,7 +1219,10 @@ def _sub_file(item, root, where):
 			die(f"{where}: $file({rel}) must name a file inside the tree")
 		full = os.path.join(root, rel)
 		try:
-			with open(full, "r", encoding="utf-8") as fh:
+			# `utf-8-sig' for the same reason scan_source uses it: a
+			# VERSION file written on Windows would otherwise hand the
+			# compiler a define whose value opens with U+FEFF.
+			with open(full, "r", encoding="utf-8-sig") as fh:
 				text = fh.read()
 		except OSError as exc:
 			die(f"{where}: $file({rel}) cannot be read: {exc.strerror}")

@@ -254,7 +254,8 @@ that had been green about nothing for five commits ·
 [201. A callback parameter hid another](#201-a-callback-parameter-hid-another) ·
 [202. Four shapes the scanner would not call a definition](#202-four-shapes-the-scanner-would-not-call-a-definition) ·
 [203. The same instrument, pointed at C++](#203-the-same-instrument-pointed-at-c) ·
-[204. The instrument again, pointed at assembly](#204-the-instrument-again-pointed-at-assembly)
+[204. The instrument again, pointed at assembly](#204-the-instrument-again-pointed-at-assembly) ·
+[205. Three bytes in front of line one](#205-three-bytes-in-front-of-line-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -3723,11 +3724,23 @@ is to do less work rather than to do the same work quicker — which is what
 ## 27. Symlinks, and a count that named the wrong reason
 
 Found by asking what fmake does with inputs it has never been shown: CRLF
-line endings, a UTF-8 BOM, and symlinks. The first two turned out fine and
-are worth recording as such — a Windows-authored tree with `\r\n` throughout
-and a BOM on `main.c` builds correctly, with `@target` and `@define` parsed
-through both. The regex scanner survives them because it never anchors on a
-bare `\n` where `\r` could intervene.
+line endings, a UTF-8 BOM, and symlinks.
+
+**CRLF turned out fine and still is.** A Windows-authored tree with `\r\n`
+throughout builds correctly, with `@target` and `@define` parsed through it;
+the regex scanner survives it because it never anchors on a bare `\n` where
+`\r` could intervene. Re-derived rather than inherited: the same fixture,
+with an include, a definition and a `main` all in CRLF, builds and runs
+today.
+
+**The BOM did not, and this section said it did for as long as nobody put
+anything on the first line that mattered.** The mark survives a plain UTF-8
+read as U+FEFF at index 0, so every `^`-anchored pattern loses line one --
+and line one of a C file is usually an `#include`. §205 has the measurement
+and the fix; what belongs here is that the original claim was true of its
+fixture and false as a statement about fmake, which is the shape a
+harmless-input finding takes when the input is only harmless where it was
+tried.
 
 Symlinks did not fare as well.
 
@@ -16800,3 +16813,81 @@ Two further shapes are measured and deliberately left:
   junk token is harmless because `symbol_tokens` yields `_` only for a
   symbol literally spelled `_`. Recorded rather than fixed, so that the
   next sweep knows it was looked at.
+
+## 205. Three bytes in front of line one
+
+The instrument again, a fourth time and against a different oracle: 22
+ways of writing an `#include`, each preprocessed with `cc -MM` -- which
+is the compiler's own statement of what it read -- and diffed against
+what `scan_source` recorded.
+
+The first run reported every shape missed, which was the instrument
+rather than fmake: `incs` records `[path, delimiter, line]` and I read
+the delimiter. It is worth writing down only because it is the third
+time in this campaign that a wrong measurement arrived before a right
+one, and the tell each time was that the result was too tidy -- every
+row failing is not a finding, it is an apparatus.
+
+**Corrected, one shape mattered.** A file beginning with a UTF-8
+byte-order mark:
+
+    EF BB BF #include "api.h"
+
+Read as plain UTF-8 the mark survives as U+FEFF at index 0 of the text.
+Every pattern in the scanner is anchored at `^`, so all of them lose
+line one -- and line one of a C file is usually an `#include`.
+
+**One cause, two symptoms, and they fail differently enough to be two
+cases.** The include is invisible, so no `-I` is proposed for the
+directory holding the header and the compiler stops with *api.h: No such
+file or directory* -- an error that reads as a missing header rather
+than as a line nobody looked at. The definition is invisible, so the
+file is never proposed as a candidate and the link ends with *nothing in
+this tree appears to define them* about the file next to it, which is
+§200 through §204 arriving by a cause none of them had.
+
+Reading the file as `utf-8-sig` is the whole fix, and `$file()` takes it
+too: a `VERSION` written on Windows would otherwise hand the compiler a
+define whose value opens with U+FEFF.
+
+### The claim this replaces, and why it survived
+
+§27 recorded a BOM as harmless in 2026, measured on a fixture that
+built. It did build: nothing on its first line was anything the scanner
+needed. **A harmless-input finding is a claim about the fixture unless
+the fixture puts something at risk on the input**, and that one did not
+-- so the entry was true, useless, and quoted since as though it covered
+the case. It is rewritten rather than appended to, and its surviving
+half was re-derived rather than inherited: CRLF throughout, with an
+include, a definition and a `main`, still builds and runs.
+
+### Assembly is a third symptom and not fmake's
+
+`as` refuses the mark itself -- *invalid character (0xef) in mnemonic* --
+so a `.globl` on the first line of a marked `.s` is a file no toolchain
+accepts. What the fix changes there is the diagnosis, and it improves:
+before, *nothing in this tree appears to define them*, which was false;
+now, *s.s did not compile, and appears to define one of them*, which is
+the file to go and look at.
+
+### What else the sweep found, and what was left
+
+- **`#if 0` around an include is reported anyway.** Over-inclusion, and
+  the safe direction: fmake may propose an `-I` nothing needs, where the
+  other way round is a build that does not happen. A preprocessor-aware
+  scan is the only thing that would fix it and it is not worth a
+  preprocessor.
+- **`#include_next <a.h>` is not seen at all**, and recording it would
+  be worse than missing it: `include_next` exists to skip the current
+  file's own directory and reach the next header of that name, so
+  resolving it against the tree would name the very file doing the
+  including. Measured across the sixteen private trees: **not one
+  `#include_next` in any of them.**
+- **`#include HEADER_NAME` through a macro cannot be resolved** without
+  running the preprocessor. Measured the same way: four occurrences in
+  the workspace, all four in one vendored tree -- thorvg's copy of
+  jerryscript -- and none in any source a private project wrote.
+  `#import` is Objective-C, whose sources fmake does not build.
+- **A line splice inside the directive** -- `#inc\`, newline, `lude` --
+  is legal and is not read. Nobody writes it; it is recorded so the next
+  sweep knows the shape was tried.
