@@ -12446,9 +12446,16 @@ def submodules_to_fetch(root):
 	# rather than skipped: an empty directory where a submodule is declared
 	# is a submodule nobody fetched, whoever is or is not able to say so.
 	if r is None or r.returncode != 0:
+		# isdir FIRST: `or' evaluates left to right, so with these the
+		# other way round the listdir ran before the guard written to
+		# protect it and raised FileNotFoundError on a declared path that
+		# is not there -- a Python traceback where this function has a
+		# message for exactly that state. The guard was not weak, it was
+		# unreachable. A tarball that dropped an empty directory, or
+		# somebody removing one that looked useless, is all it takes.
 		return [(p, "not initialised") for p in declared
-		        if not os.listdir(os.path.join(root, p))
-		        or not os.path.isdir(os.path.join(root, p))]
+		        if not os.path.isdir(os.path.join(root, p))
+		        or not os.listdir(os.path.join(root, p))]
 	out = []
 	for line in r.stdout.splitlines():
 		m = RE_SUBMODULE.match(line)

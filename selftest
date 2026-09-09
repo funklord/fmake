@@ -4912,6 +4912,56 @@ def a_file_where_the_state_directory_goes_says_so(t):
 		os.chmod(t.dir, 0o755)
 
 
+@case
+def a_declared_submodule_that_is_not_there_is_reported(t):
+	"""A guard on the wrong side of an `or' is not a weak guard, it is an
+	unreachable one.
+
+    `submodules_to_fetch' asked
+
+        not os.listdir(path) or not os.path.isdir(path)
+
+    and `or' evaluates left to right, so the listdir ran before the test
+    written to protect it. A .gitmodules naming a path that is not there
+    raised FileNotFoundError and fmake ended in a Python traceback -- in
+    a function that carries a message for exactly that state, three lines
+    below.
+
+    Found by fuzzing the files a user writes, looking for tracebacks: 41
+    malformed configs and 10 corrupted depfiles produced none, and seven
+    of eight .gitmodules variants produced this one.
+
+    `git archive' keeps the empty directory, so the case section 188
+    documents was never the way in. What reaches it is an archive format
+    that dropped an empty directory, somebody removing one that looked
+    useless, or a hand-edited path -- which is every variant below.
+    """
+	t.write("main.c", '#include "vendor/lib.h"\nint main(void){ return f(); }\n')
+	for what, path in (("a path nobody created", "vendor"),
+	                   ("a path that climbs out", "../escape"),
+	                   ("an absolute path", "/nonexistent-submodule"),
+	                   ("a quoted name", '"quoted name"')):
+		t.write(".gitmodules",
+		        f'[submodule "x"]\n\tpath = {path}\n'
+		        f'\turl = https://example.invalid/lib.git\n')
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check("Traceback" not in out,
+		      f"{what} ended in a traceback: {out[-400:]}")
+		check(r.returncode != 0, f"{what} was not refused: {out[:200]}")
+
+	# And the state the fallback exists for still reads the same way: an
+	# empty directory where a submodule is declared.
+	t.write(".gitmodules", '[submodule "vendor"]\n\tpath = vendor\n'
+	        '\turl = https://example.invalid/lib.git\n')
+	os.makedirs(os.path.join(t.dir, "vendor"), exist_ok=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"the empty-directory case broke: {out}")
+	check("not initialised" in out,
+	      f"the empty directory is no longer reported: {out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

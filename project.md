@@ -246,7 +246,8 @@ that had been green about nothing for five commits ·
 [193. The .pc named a prefix nothing was installed at](#193-the-pc-named-a-prefix-nothing-was-installed-at) ·
 [194. A third way not to return](#194-a-third-way-not-to-return) ·
 [195. A sweep that found nothing, and five probes that were wrong](#195-a-sweep-that-found-nothing-and-five-probes-that-were-wrong) ·
-[196. The build wrote over a file it did not write](#196-the-build-wrote-over-a-file-it-did-not-write)
+[196. The build wrote over a file it did not write](#196-the-build-wrote-over-a-file-it-did-not-write) ·
+[197. A guard on the wrong side of an `or`](#197-a-guard-on-the-wrong-side-of-an-or)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16234,3 +16235,47 @@ produced by hand in §195 -- five `fmake.mk` parser refusals and four
 message loses is not the refusal but the *wording*, which nothing tests
 and which rots quietly; the parser ones are the sharpest, since those
 fire on a reader's own mistake.
+
+---
+
+## 197. A guard on the wrong side of an `or`
+
+Two sweeps in a row had found nothing, which is the signal to change the
+instrument rather than to look harder. **A Python traceback is never the
+intended output**, and that is a property a machine can check, so the
+files a user writes were fuzzed against it.
+
+    41 malformed fmake.toml and fmake.mk    0 tracebacks
+    10 corrupted depfiles                   0, and no stale build either
+    6 malformed .qrc                        0
+    sources that are not UTF-8, hold NULs,
+      or carry a 200,000-character line     0
+    8 .gitmodules variants                  SEVEN
+
+All seven were one line, in `submodules_to_fetch`:
+
+    not os.listdir(path) or not os.path.isdir(path)
+
+`or` evaluates left to right, so the `listdir` ran **before** the test
+written to protect it, and a declared path that is not there raised
+`FileNotFoundError` -- in a function carrying a message for exactly that
+state three lines below. **The guard was not weak, it was unreachable**,
+which is why no amount of reading the condition would have shown it: both
+halves are correct and the order is the whole defect.
+
+**The documented way in was never the way in.** §188 says an unpacked
+archive is the usual route to a declared submodule with no contents, and
+`git archive` **keeps the empty directory** -- measured again here -- so
+that path produces the message, as §188 recorded. What reaches the crash
+is an archive format that dropped an empty directory, somebody removing
+one that looked useless, or a hand-edited path. The suite's fixture
+created the directory, which is faithful to the documented case and one
+step away from the state that breaks.
+
+**Corrupted depfiles are worth the line they got in that table.** They
+are fmake's own files, and a killed build or a full disk is how they get
+truncated; ten mutations -- truncated mid-path, NUL bytes, a target with
+no prerequisites, 5,000 names on one line -- each produced either a clean
+refusal or a correct rebuild, because losing an entry changes the key and
+a changed key rebuilds. That is the safe direction, and it is now
+measured rather than assumed.
