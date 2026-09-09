@@ -5180,6 +5180,136 @@ def a_symbol_that_starts_with_an_underscore_finds_its_file(t):
 	      "the plain definition was not linked")
 
 
+@case
+def a_definition_taking_a_callback_is_still_a_definition(t):
+	"""The parameter list forbade `)', and every callback parameter has one.
+
+    `RE_FUNC_DEF' requires the text between the parentheses to hold no
+    `)', which is what stops it running past the end of a parameter list.
+    A function pointer carries a pair of its own, so
+
+        int run_with(int (*fn)(int), int x)
+
+    matched nothing, the file defining it was never proposed as a
+    candidate, nothing compiled it, and the build stopped with "nothing in
+    this tree appears to define them" about a definition in the same
+    directory. The control is the same function taking a plain int, which
+    builds.
+
+    This is section 200's shape one line further down the same function,
+    and a far more ordinary spelling: callbacks, comparators and dispatch
+    tables are everywhere, while an underscore-prefixed name is a choice.
+
+    The second pattern sits BESIDE the first rather than replacing it. A
+    single wider pattern was written and measured against seven real trees
+    -- hydra, beerssh, qtty, netcfgd, fuzzypickles, situ, raidcfgd -- and
+    it dropped matches the old one made as well as adding new ones, which
+    trades one silent miss for another. A union cannot lose anything.
+    Measured the same way, it adds 1,476 tokens across those trees --
+    including `if', `for' and `while', which both patterns match and
+    always have. Those never reach a def set: `DECL_WORDS' subtracts them
+    two lines further on, and a filter added here for them was a second
+    copy of that, found only because sabotaging it changed nothing.
+    """
+	t.write("handler.c", "int run_with(int (*fn)(int), int x)\n{\n"
+	        "    return fn(x) + 1;\n}\n")
+	t.write("main.c", "#include <stdio.h>\nint run_with(int (*fn)(int), int x);\n"
+	        "static int twice(int v){ return v * 2; }\n"
+	        'int main(void){ printf("%d\\n", run_with(twice, 20)); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a callback-taking definition was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "41\n",
+	      "the wrong definition was linked")
+
+	# Two callbacks, and a parameter after them, which is where a pattern
+	# that stops at the first `)' would end up in the middle of the list.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("handler.c", "int run_two(int (*a)(int), int (*b)(int), int x)\n{\n"
+	        "    return a(x) + b(x);\n}\n")
+	t.write("main.c", "#include <stdio.h>\n"
+	        "int run_two(int (*a)(int), int (*b)(int), int x);\n"
+	        "static int one(int v){ return v; }\n"
+	        "static int two(int v){ return v * 2; }\n"
+	        'int main(void){ printf("%d\\n", run_two(one, two, 7)); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"two callbacks: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "21\n",
+	      "the two-callback definition was not linked")
+
+
+@case
+def a_table_with_two_subscripts_is_still_a_definition(t):
+	"""`RE_DATA_DEF' allowed a name exactly one `[...]'.
+
+    So `int grid[2][3] = {{1,2,3},{4,5,6}}' was not a definition, the file
+    holding it was never proposed as a candidate, nothing compiled it, and
+    the build stopped with "nothing in this tree appears to define them"
+    about a definition in the same directory. A lookup table in a file of
+    its own, reached by `extern int grid[2][3]', is the shape a data
+    definition is for.
+
+    Sections 200 and 201 a third time: a pattern written for the shapes
+    its author had in mind, and every shape it misses is a file that is
+    never compiled. `?' became `*', which is a superset by construction
+    rather than by measurement -- 201 is where a wider pattern written by
+    hand turned out to drop matches as well as add them.
+
+    The control is the one-dimensional table, which built before this.
+    """
+	t.write("table.c", "int grid[2][3] = {{1,2,3},{4,5,6}};\n")
+	t.write("main.c", "#include <stdio.h>\nextern int grid[2][3];\n"
+	        'int main(void){ printf("%d\\n", grid[1][2]); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"a table was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "6\n",
+	      "the table was not the one linked")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("table.c", "int row[3] = {1,2,6};\n")
+	t.write("main.c", "#include <stdio.h>\nextern int row[3];\n"
+	        'int main(void){ printf("%d\\n", row[2]); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"the one-dimensional control broke: {r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "6\n",
+	      "the control linked the wrong thing")
+
+
+@case
+def a_globl_naming_two_symbols_exports_both(t):
+	"""gas takes a list, and the pattern took the first name.
+
+    `.globl first, second' is one directive naming two symbols, and
+    RE_ASM_GLOBAL captured `first' alone -- so a file whose only needed
+    export was the second name was never proposed as a candidate. The
+    control is the same file needing the first name, which built, and it
+    doubles as proof of the syntax: the assembler accepted the file
+    either way.
+    """
+	if not shutil.which("cc"):
+		raise Skip("no assembler driver")
+	asm = ("    .text\n    .globl first, second\nfirst:\n"
+	       "    movl $1, %eax\n    ret\nsecond:\n    movl $2, %eax\n    ret\n")
+	t.write("pair.S", asm)
+	t.write("main.c", "#include <stdio.h>\nint second(void);\n"
+	        'int main(void){ printf("%d\\n", second()); return 0; }\n')
+	r = t.fmake()
+	if r.returncode != 0 and "no x86_64" not in (r.stdout + r.stderr):
+		raise Skip("this machine does not assemble x86_64 by hand")
+	check(r.returncode == 0,
+	      f"the second name in the list was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "2\n",
+	      "the wrong symbol was linked")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("main.c", "#include <stdio.h>\nint first(void);\n"
+	        'int main(void){ printf("%d\\n", first()); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"the first-name control broke: {r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1\n",
+	      "the control linked the wrong symbol")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

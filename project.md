@@ -250,7 +250,9 @@ that had been green about nothing for five commits ·
 [197. A guard on the wrong side of an `or`](#197-a-guard-on-the-wrong-side-of-an-or) ·
 [198. Ordinary mistakes that ended in a traceback](#198-ordinary-mistakes-that-ended-in-a-traceback) ·
 [199. Six doors on one room](#199-six-doors-on-one-room) ·
-[200. The underscore that hid a definition](#200-the-underscore-that-hid-a-definition)
+[200. The underscore that hid a definition](#200-the-underscore-that-hid-a-definition) ·
+[201. A callback parameter hid another](#201-a-callback-parameter-hid-another) ·
+[202. Four shapes the scanner would not call a definition](#202-four-shapes-the-scanner-would-not-call-a-definition)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16513,3 +16515,94 @@ thought to parameterise**, which is the same limit as a stand-in
 reproducing the half of a tool its author had met (§ evidence.md), and
 the answer is not a better fuzzer but a different instrument -- here, one
 function read line by line.
+
+---
+
+## 201. A callback parameter hid another
+
+§200 was found by reading one function line by line, so the reading
+continued down the same function. `RE_FUNC_DEF` requires the text between
+the parentheses to hold no `)` -- which is what stops it running past the
+end of a parameter list -- and **a callback parameter carries a pair of
+its own**:
+
+    int run_with(int (*fn)(int), int x)    matched nothing, so the file
+                                           defining it was never proposed
+    int run_with(int fn, int x)            builds, prints 41
+
+Same failure as §200 and a far more ordinary spelling: callbacks,
+comparators and dispatch tables are everywhere, while an
+underscore-prefixed name is a choice.
+
+**Beside the old pattern rather than replacing it.** A single wider
+pattern was written first and measured against seven real trees --
+hydra, beerssh, qtty, netcfgd, fuzzypickles, situ, raidcfgd, 46,218
+definitions between them. It **dropped** matches the old one made as well
+as adding new ones, which trades one silent miss for another. A union
+cannot lose anything, and that is worth more here than a tidier regex.
+Measured the same way, the union adds 1,476 tokens. Two levels of nesting
+-- a callback whose own parameter is a callback -- is left uncovered
+deliberately: each level widens what the pattern can run past.
+
+### And a duplicate I added, caught by sabotaging my own work
+
+The union's additions include `if`, `for` and `while`, since
+`while (a(b)) {` has the nesting it looks for. A `BLOCK_KEYWORDS` set was
+added to filter them, a case was written for it -- and **removing the
+filter changed nothing**, because `DECL_WORDS` already subtracts exactly
+those words **two lines further down the same function**.
+
+So the filter was a second copy of a fact 180 lines away, which is the
+defect class this session has spent the day removing from fmake, written
+by the session removing it. It is gone; the case says why in one
+sentence, so the next reader does not add a third.
+
+**Nothing but the sabotage would have caught it.** The filter was
+harmless, its case passed, and the tree was green either way -- the only
+signal was a control that failed to fail, which is the one check that
+tells a passing test from a test that cannot fail.
+
+---
+
+## 202. Four shapes the scanner would not call a definition
+
+§200 and §201 were one function read line by line. Reading the rest of
+the family found two more of exactly the same thing, so the four belong
+in one place -- **each is a pattern written for the shapes its author had
+in mind, and each shape it misses is a file that is never compiled**,
+reported as *"nothing in this tree appears to define them"* about a
+definition in the same directory.
+
+    _helper                              a leading underscore is the
+                                         format's prefix, never the name
+    int run_with(int (*fn)(int), int x)  a parameter list holds no `)'
+    int grid[2][3] = {...}               a name takes at most one `[...]'
+    .globl first, second                 a .globl names one symbol
+
+Every one was confirmed with a control -- the same tree one character
+different, which builds -- and the assembly control does double duty,
+since the assembler accepted the very same file both ways, which is what
+says the syntax was real rather than my invention.
+
+**Two of the four fixes are supersets by construction and two are not.**
+`?` to `*` on the subscript, and splitting a `.globl` operand list, cannot
+lose a match. The callback pattern is a union precisely because §201
+measured a hand-written wider pattern against seven trees and found it
+dropping matches as well as adding them; the underscore fix keeps both
+spellings for the same reason.
+
+### The suite caught me deleting sixty-six lines
+
+The run that followed §201 came back **14 of 460 failed**, every one
+`NameError: name '_cross_available' is not defined`. Not a defect in
+fmake: trimming a paragraph out of a case, I cut from a comment to the
+next `@case`, and that span held the cross-compilation helpers --
+`CROSS_CC`, the cached probe and its reason.
+
+Two things worth keeping from it. **A `git diff --numstat` of 124/66 on a
+file I had only added to was the tell**, and it was there before the
+suite ran. And the repair was not to patch the damaged file but to take
+`selftest` back to `HEAD` and re-apply the one case, which turned a
+68-line move into 58 clean insertions -- the same reasoning as `git
+checkout -- <path>` being the dangerous half of staging by name, applied
+to my own edit rather than somebody else's work.

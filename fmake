@@ -549,6 +549,31 @@ RE_FUNC_DEF = re.compile(
     r'(?:^|[;}\s*&:])([A-Za-z_][A-Za-z0-9_]*)[ \t\n]*\([^;{)]*\)'
     r'(?:[ \t\n]*(?:const|noexcept|override|final))*[ \t\n]*\{', re.M)
 
+# The same definition, where a parameter is itself a function pointer. The
+# pattern above forbids `)' inside the parameter list, which is what keeps
+# it from running past the end of one; a callback parameter carries a pair
+# of its own, so `int run_with(int (*fn)(int), int x)' matched nothing and
+# the file defining it was never proposed as a candidate. Nothing compiled
+# it, and the build stopped with "nothing in this tree appears to define
+# them" about a definition in the same directory -- the shape of section
+# 200, one line further down the same function.
+#
+# Added BESIDE the first rather than replacing it. A wider single pattern
+# was tried and measured against seven real trees: it dropped matches the
+# old one made as well as adding new ones, which trades one silent miss
+# for another. A union cannot lose anything, and that is worth more here
+# than a tidier regex -- a definition this misses is a build that does not
+# happen.
+#
+# One level of nesting, which covers a function-pointer parameter and a
+# list of them. Two levels -- a callback whose own parameter is a callback
+# -- is not covered and is left alone deliberately: it is rare, and each
+# level widens what the pattern can run past.
+RE_FUNC_PTR_DEF = re.compile(
+    r'(?:^|[;}\s*&:])([A-Za-z_][A-Za-z0-9_]*)[ \t\n]*'
+    r'\((?:[^;{()]*\([^;{()]*\))+[^;{()]*\)'
+    r'(?:[ \t\n]*(?:const|noexcept|override|final))*[ \t\n]*\{', re.M)
+
 # The class an out-of-line member is defined in, which is how a vtable gets
 # proposed at all. `_ZTV6Widget' is not a string any source spells, so
 # section 15 recorded that nothing scanning for apparent definitions reaches
@@ -600,11 +625,18 @@ RE_MEMBER_DEF = re.compile(
 # minimal case is a data definition in a file with no matching header --
 # with a header of its own name the include graph reaches it and the scan
 # is never asked.
+# `*' rather than `?' on the subscript: one allowed exactly one, so
+# `int grid[2][3] = {...}' was not a definition and the file holding it was
+# never proposed as a candidate. A lookup table in a file of its own,
+# reached by `extern int grid[2][3]', is the shape a data definition is
+# for. Widening then said "nothing in this tree appears to define them"
+# about a definition in the same directory -- sections 200 and 201, a
+# third time. `?' is a subset of `*', so this cannot lose a match.
 RE_DATA_DEF = re.compile(
     r'^(?:(?:static|const|volatile)[ \t]+)*'
     r'(?:(?:struct|union|enum|unsigned|signed|long|short)[ \t]+)*'
     r'[A-Za-z_][A-Za-z0-9_]*(?:[ \t]*[\*&][ \t]*|[ \t]+)'
-    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\[[^\]]*\])?[ \t]*[=;]', re.M)
+    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\[[^\]]*\])*[ \t]*[=;]', re.M)
 
 # C++20 modules, recognised so that a tree using them is told so rather than
 # left with the compiler's word for it. `import hello;' fails as `module
@@ -751,8 +783,14 @@ def version_fallbacks(code):
 # whose defs are always empty can never be proposed. Assembly was recognised,
 # skipped as "nothing reaches it", and the link then failed naming the symbol
 # it held.
+# The whole operand list, because `.globl' takes one: gas accepts
+# `.globl first, second' and this captured `first' alone, so a file whose
+# only needed export was the second name was never proposed. The control
+# is the same file needing the first name, which built -- and it also
+# proves the syntax, since the assembler accepted the file either way.
 RE_ASM_GLOBAL = re.compile(
-    r"^[ \t]*\.(?:globl|global)[ \t]+([A-Za-z_.$][\w.$]*)", re.M)
+    r"^[ \t]*\.(?:globl|global)[ \t]+"
+    r"([A-Za-z_.$][\w.$]*(?:[ \t]*,[ \t]*[A-Za-z_.$][\w.$]*)*)", re.M)
 
 # What a generated file says about itself, for the three generators fmake
 # runs itself. Each writes a banner naming the tool, measured from the
@@ -842,9 +880,11 @@ def scan_source(path):
 		# archive's own symbol table already answers exactly.
 		defs = set()
 	elif not lang.cpp or lang.tag == "AS ":
-		defs = set(RE_ASM_GLOBAL.findall(code))
+		defs = {name.strip() for group in RE_ASM_GLOBAL.findall(code)
+		        for name in group.split(",") if name.strip()}
 	else:
 		defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
+		defs |= set(RE_FUNC_PTR_DEF.findall(code))
 		defs |= set(RE_MEMBER_DEF.findall(code))
 		for m in RE_TEMPLATE_INST.finditer(code):
 			defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
