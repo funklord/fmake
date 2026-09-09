@@ -5057,6 +5057,66 @@ def a_relative_output_directory_is_relative_to_the_tree(t):
 	      f"an absolute -o did not write there: {os.listdir(away)}")
 
 
+@case
+def every_shell_split_says_whose_text_it_was(t):
+	"""fmake splits shell text from six places and two of them checked it.
+
+    An unbalanced quote is an ordinary typo, and shlex raises rather than
+    guessing when the quoting does not close. Four sites had no handler,
+    so it arrived as a ValueError traceback naming shlex's own line
+    number and nothing about where the text came from -- which matters
+    here more than usual, because these six are edited in six different
+    places.
+
+    The worst is not the reader's to fix. A `.pc' file whose Cflags hold
+    `-DX="a' is installed by a package, and every build resolving that
+    module crashed. Found by fuzzing pkg-config metadata for tracebacks:
+    eight malformed .pc files, two crashes.
+
+    `@cflags' and `@libs' in a source comment are deliberately not in
+    this list: those carry a documented fallback that splits on
+    whitespace instead, which is why they were already refusing rather
+    than crashing.
+    """
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	def refuses(label, owed, args=(), env=None, files=None):
+		for name, body in (files or {}).items():
+			t.write(name, body)
+		r = t.fmake(*args, env=env)
+		out = r.stdout + r.stderr
+		check("Traceback" not in out, f"{label} crashed: {out[-300:]}")
+		check(r.returncode != 0, f"{label} was not refused: {out[:200]}")
+		check("shell-quoted" in out, f"{label} does not say why: {out}")
+		check(owed in out, f"{label} does not say whose text it was: {out}")
+		for name in (files or {}):
+			os.remove(os.path.join(t.dir, name))
+
+	refuses("$CFLAGS", "$CFLAGS", env={"CFLAGS": "-DMSG='hello"})
+	refuses("--ldflags", "--ldflags", args=("--ldflags", "\\"))
+	refuses("$RUSTFLAGS", "$RUSTFLAGS", env={"RUSTFLAGS": '-C link-arg="a'})
+	refuses("[toolchain] cc", "compiler",
+	        files={"fmake.toml": '[toolchain]\ncc = "cc \\"unclosed"\n'})
+	refuses("a generate command", "command",
+	        files={"seed.txt": "x\n",
+	               "fmake.toml": '[generate.g]\ncommand = "echo \\"a > gen/x.c"\n'
+	                             'inputs = ["seed.txt"]\noutputs = ["gen/x.c"]\n'})
+
+	# pkg-config's own answer, which nobody in this tree wrote.
+	pc = os.path.join(t.dir, "pc")
+	os.makedirs(pc, exist_ok=True)
+	with open(os.path.join(pc, "quirk.pc"), "w") as fh:
+		fh.write('Name: quirk\nVersion: 1\nCflags: -DX="a\nLibs:\n')
+	t.write("main.c", "#include <quirk.h>\nint main(void){ return 0; }\n")
+	r = t.fmake(env={"PKG_CONFIG_PATH": pc})
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"a malformed .pc crashed: {out[-300:]}")
+	# Either door: the module query and the Cflags read back out of the
+	# file are separate sites, and this fixture reaches the second.
+	check("shell-quoted" in out and ".pc" in out,
+	      f"the refusal does not name the .pc it came from: {out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

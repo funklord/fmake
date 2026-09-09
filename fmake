@@ -431,6 +431,27 @@ def die(m):
 	print(f"{RED('!!!')} {m}", file=sys.stderr)
 	sys.exit(1)
 
+def shell_split(text, where):
+	"""Split a shell-quoted string, or refuse and say whose it was.
+
+    fmake splits shell text from six places -- the command line, the
+    environment, fmake.toml, fmake.mk, a directive and pkg-config's own
+    output -- and shlex raises rather than guessing when the quoting does
+    not close. Four of the six sites had no handler, so an unbalanced
+    quote ended in a ValueError traceback naming shlex's line number and
+    nothing about where the text came from.
+
+    The worst of them is not the user's to fix: a `.pc` file whose Cflags
+    hold `-DX="a` is installed by a package, and every build resolving
+    that module crashed. `where' is what makes the message actionable,
+    since these six are edited in six different places.
+    """
+	try:
+		return shlex.split(text)
+	except ValueError as exc:
+		die(f"{where} {text.strip()!r} is not a shell-quoted string: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Source scanning
 #
@@ -1543,35 +1564,6 @@ def _gen_command(command, ins, outs, tool=None, stem=None):
 	return "".join(out)
 
 
-def _gen_argv(command, ins, outs, tool=None, stem=None):
-	"""Substitute $in and $out into an argv, not into a string.
-
-    Splitting first and substituting after means a path containing a space
-    stays one argument.
-    """
-	# $in/$out are fmake.toml's spelling; $< $@ $^ $* are Make's. Both are
-	# accepted everywhere, because a rule should not mean something different
-	# for having been written in the other file.
-	whole = {"$in": ins, "$out": outs, "$^": ins, "$@": outs}
-	first = {"$<": ins[0] if ins else "", "$*": stem or "",
-	         "$tool": tool or ""}
-	argv = []
-	for tok in shlex.split(command):
-		if tok in whole:
-			argv += whole[tok]
-		elif tok == "$tool" and tool:
-			argv.append(tool)
-		else:
-			for key, val in first.items():
-				tok = tok.replace(key, val)
-			tok = (tok.replace("$in", ins[0] if ins else "")
-			          .replace("$out", outs[0] if outs else "")
-			          .replace("$@", outs[0] if outs else "")
-			          .replace("$^", " ".join(ins)))
-			argv.append(tok)
-	return argv
-
-
 def _gen_order(rules):
 	"""Rules sorted so that a generator's inputs are produced before it runs.
 
@@ -2208,7 +2200,7 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 			# A plain command naming a program that is not installed is worth
 			# catching early with a good message. Anything with shell syntax
 			# in it is the shell's business to report.
-			words = shlex.split(line)
+			words = shell_split(line, f"{_gen_where(r, name)} command")
 			# Resolved against the tree as well as $PATH, because that is
 			# where the command will run: recipes execute with cwd=root, so
 			# `./mk.sh' means the script in the project, not one beside
@@ -4409,8 +4401,9 @@ class Config:
 		# rustc's band is its own. --cflags is a C flag list and handing it
 		# to rustc would fail on the first -Os; $RUSTFLAGS is the spelling
 		# every Rust toolchain already uses for this.
-		self.rustflags = default_rustflags() + shlex.split(
-		    os.environ.get("RUSTFLAGS", "")) + conf.rustflags()
+		self.rustflags = default_rustflags() + shell_split(
+		    os.environ.get("RUSTFLAGS", ""), "$RUSTFLAGS") \
+		    + conf.rustflags()
 
 		# $SANITIZE goes to both sides, and the link side is the one that
 		# matters. A sanitizer is a runtime as well as an instrumentation:
@@ -4441,7 +4434,7 @@ class Config:
 			# program here rather than a command line, because a flag like
 			# --target changes what -print-search-dirs and -print-multiarch
 			# answer and those are asked separately.
-			if len(shlex.split(self.cc)) > 1:
+			if len(shell_split(self.cc, "the compiler")) > 1:
 				die(f"C compiler {self.cc!r} not found -- that is a command "
 				    f"line, and fmake takes a program.\n"
 				    f"Name the compiler alone, and put its flags in "
@@ -6481,7 +6474,8 @@ class PkgConfig:
 		if self.exe:
 			r = self._run(["--cflags", "--libs", module])
 			if r.returncode == 0:
-				args = shlex.split(r.stdout)
+				args = shell_split(r.stdout,
+				                   f"pkg-config --cflags --libs {module}")
 				res = ([a for a in args
 				        if not a.startswith(("-l", "-L"))],
 				       [a for a in args if a.startswith("-l")])
@@ -6677,7 +6671,8 @@ def _pc_includedirs(path):
 		return RE_PC_VAR.sub(
 		    lambda m: expand(variables.get(m.group(1), ""), depth + 1), s)
 
-	return [a[2:] for a in shlex.split(expand(cflags)) if a.startswith("-I")]
+	return [a[2:] for a in shell_split(expand(cflags), "a .pc file's Cflags")
+	        if a.startswith("-I")]
 
 
 def _deepest_owner(incdirs, inc, name, found_in):
@@ -13056,19 +13051,7 @@ def parse_args(argv):
 	parse_args.parser = p
 
 	def split(chunk, where):
-		"""One shell-quoted string, or a refusal naming it.
-
-        These take a quoted string so a flag beginning with a dash is not
-        mistaken for one of fmake's own, and shlex raises rather than
-        guessing when the quoting does not close. `CFLAGS="-DMSG='hello"'
-        in somebody's environment is an ordinary mistake and ended in a
-        Python traceback, which says nothing about which value was wrong
-        or where it came from.
-        """
-		try:
-			return shlex.split(chunk)
-		except ValueError as exc:
-			die(f"{where} {chunk!r} is not a shell-quoted string: {exc}")
+		return shell_split(chunk, where)
 
 	def flags(given, env):
 		out = []

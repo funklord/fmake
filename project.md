@@ -248,7 +248,8 @@ that had been green about nothing for five commits ·
 [195. A sweep that found nothing, and five probes that were wrong](#195-a-sweep-that-found-nothing-and-five-probes-that-were-wrong) ·
 [196. The build wrote over a file it did not write](#196-the-build-wrote-over-a-file-it-did-not-write) ·
 [197. A guard on the wrong side of an `or`](#197-a-guard-on-the-wrong-side-of-an-or) ·
-[198. Ordinary mistakes that ended in a traceback](#198-ordinary-mistakes-that-ended-in-a-traceback)
+[198. Ordinary mistakes that ended in a traceback](#198-ordinary-mistakes-that-ended-in-a-traceback) ·
+[199. Six doors on one room](#199-six-doors-on-one-room)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16332,3 +16333,122 @@ The sabotage for it is the clearest statement of the bug: reverting the
 one line makes the suite write a build artifact into whatever directory
 the suite was started from, and that binary had to be deleted out of
 `build/` by hand.
+
+---
+
+## 199. Six doors on one room
+
+§198 fixed an unbalanced quote at two doors -- `$CFLAGS` and
+`--ldflags` -- which was treating the instance rather than the class.
+fmake splits shell text from **six** places, and four of them had no
+handler:
+
+    $CFLAGS, --cflags, --ldflags   fixed in 198
+    a [generate.*] command         crashed
+    the same command, checked for
+      reachability before it runs  crashed
+    $RUSTFLAGS                     crashed
+    [toolchain] cc                 crashed
+    pkg-config --cflags --libs     crashed
+    a .pc file's own Cflags        crashed
+
+**The `.pc` doors are the ones that are nobody's typo.** A `.pc` whose
+`Cflags` hold `-DX="a` is installed by a package, so every build
+resolving that module crashed -- with a `ValueError` naming shlex's line
+number and nothing about where the text came from. Found by fuzzing
+pkg-config metadata: eight malformed files, two crashes.
+
+One `shell_split(text, where)` now, and **`where` is the point**: these
+six are edited in six different places -- a shell profile, a command
+line, `fmake.toml`, `fmake.mk`, a source comment, a file some package
+shipped -- so a message that does not say which sends the reader to the
+wrong file.
+
+**Two sites stay as they were, deliberately.** `@cflags` and `@libs` in a
+source comment carry a documented fallback that splits on whitespace when
+the quoting will not parse, which is why they were already refusing
+rather than crashing. Making them refuse instead would be a regression
+dressed as consistency.
+
+### What else was hostile to it, and was not
+
+The same instrument was pointed at everything else fmake reads, and found
+nothing -- recorded so the lenses are not run again. Each tool was
+**replaced with a stub that lies**, which is not a thing this tree had
+tried before:
+
+    nm            silent, failing, garbage lines, 200,000 lines, raw bytes
+    the compiler  -print-search-dirs empty, garbage, failing, 20,000 long
+    git           no output, garbage rev-parse, everything-ignored
+                  check-ignore, malformed submodule status
+    the tree      empty, an empty source, a source including itself, two
+                  headers including each other, a directory named
+                  `thing.c', an unreadable source, a symlink to /dev/null,
+                  3,000 includes
+
+**And the interrupted states, which is where half-written files live.**
+Killed during the scan, killed mid-compile with 110 of 301 objects
+written, and killed mid-generate with the output truncated to
+`int made(void){ return 42;` -- each recovered on the next build with a
+correct binary. The generator case is the one that looks dangerous and is
+not: the freshness key is recorded only *after* the command succeeds, so
+a half-written output can never be mistaken for a finished one.
+
+Two racing builds in one tree: one waits on the lock, both exit 0, the
+binary is right and the cache still parses.
+
+### A function nobody had called since the day after it was written
+
+Fixing the wording of one of those six messages turned up its owner:
+`_gen_argv` appears **once in the whole tree, in its own definition**.
+`git log -S` dates it exactly -- written on 2026-07-26 with callers, and
+the next day the commit that added `fmake.mk` moved every call to
+`_gen_command`, because a recipe is shell text rather than an argv. It
+has been dead for six weeks.
+
+Its docstring asserts a property the build does have: *"splitting first
+and substituting after means a path containing a space stays one
+argument"*. **The live path reaches the same place by quoting instead**
+-- `_gen_command` runs each substituted value through `shlex.quote` --
+and that was measured before the removal rather than assumed: a
+`[generate.*]` rule whose input is `in put.txt` builds and runs.
+
+Twenty-nine lines removed. What makes it worth a paragraph is where it
+was found: not by looking for dead code, but by reading a message that
+did not quite parse as English, in a function whose `where` argument had
+nowhere sensible to point.
+
+### What the campaign came to, and the one property worth checking
+
+Across §197 to here, roughly **490 malformed or hostile inputs**: the
+config and rule files, depfiles, `.qrc`, `.gitmodules`, `.pc`, source
+encodings, 32 argument sets, 11 environments, 9 tree shapes, 16 lying
+tool stubs, **323 directive values**, format-string filenames, 16
+odd-but-valid configurations, three interrupted states and two racing
+builds. **Nineteen crashes, five defects**, every one fixed: the
+unreachable `isdir` guard, this section's `shlex` class at six doors,
+`-o` at a non-directory, `--install` without permission, and `-o`
+resolving against the wrong directory.
+
+**Crash-hunting is finished, and the instrument that replaces it checks
+answers rather than survival.** A random DAG of 6 to 16 files, each
+calling a random subset of later ones, built and then read back with `nm`
+from the **linked binary's own symbol table**: the symbols in it must
+equal the transitive closure from `main`, which the generator walks
+itself. Both directions fail -- a file missing and a file over-linked --
+so it is §21's two numbers asserted per tree rather than measured once on
+Angband. **25 trees, no disagreement.**
+
+**With the control run, and the first attempt at it proving nothing.**
+The sabotage patched `def widen(`, which does not exist, so the copy was
+unmodified and its clean pass said only that the file still parsed. The
+function is `widen_candidates`; with it stubbed to return nothing, 4 of 4
+trees disagreed. A sabotage that did not land and a check that cannot
+fail are indistinguishable from the output, which is the whole reason
+that step is not optional.
+
+**One apparent hang did not reproduce.** 50,000 lines from a stubbed
+`git submodule status` timed out once at 120s and then completed in
+**0.9s**, with the cost flat from 100 lines to 50,000 -- a bound set too
+low while the machine was running the suite at load average 28, not a
+defect.
