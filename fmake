@@ -595,8 +595,17 @@ RE_FUNC_PTR_DEF = re.compile(
 # carries no member name either, so a file whose only out-of-line member is a
 # constructor is reachable by nothing. Covering the destructor and missing
 # the constructor is the half-fix section 19 warns about, one spelling over.
+# An operator is a member name that is not an identifier, so the member
+# half allows the spelling: `F &F::operator<<(int){' proposed nothing,
+# and the class is what the mangling `_ZN1FlsEi' yields anyway. Measured
+# over the seven spellings, this is load-bearing for `()', `[]', `<<' and
+# a conversion, and not for `operator=' -- which the data pattern below
+# already finds, having a `=' exactly where it wants one. A case written
+# on `operator=' therefore guards nothing; section 203 has the table.
 RE_MEMBER_DEF = re.compile(
-    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*::[ \t]*~?[A-Za-z_][A-Za-z0-9_]*'
+    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*::[ \t]*'
+    r'~?(?:operator[ \t]*(?:[^\w\s]{1,3}|[A-Za-z_][A-Za-z0-9_]*)'
+    r'|[A-Za-z_][A-Za-z0-9_]*)'
     r'[ \t\n]*\([^;{)]*\)'
     r'(?:[ \t\n]*(?:const|noexcept|override|final))*'
     r'(?:[ \t\n]*:[^;{]*)?[ \t\n]*\{', re.M)
@@ -632,11 +641,56 @@ RE_MEMBER_DEF = re.compile(
 # for. Widening then said "nothing in this tree appears to define them"
 # about a definition in the same directory -- sections 200 and 201, a
 # third time. `?' is a subset of `*', so this cannot lose a match.
+# The optional `Class::' below is how a static data member is defined out
+# of line: `int G::v = 3;'. The class is captured as well as the name,
+# because the mangled symbol `_ZN1G1vE' yields both tokens and either is
+# enough to propose the file.
+#
+# `using' is refused outright, and the qualifier is why it had to be:
+# `using Qtty::GridMetrics;' reads as a type, a class and a name, and a
+# file that imports a name would have claimed to define it. Measured over
+# 4,377 C++ files, that shape is 1,053 of the 1,500 qualified matches --
+# the fix's own regression, and the largest single class either way. It
+# refuses `using alias = int' as well, which the pattern took as a
+# definition before any of this and which defines no storage either.
 RE_DATA_DEF = re.compile(
+    r'^(?!using\b)(?:(?:static|const|volatile)[ \t]+)*'
+    r'(?:(?:struct|union|enum|unsigned|signed|long|short)[ \t]+)*'
+    r'[A-Za-z_][A-Za-z0-9_]*(?:[ \t]*[\*&][ \t]*|[ \t]+)'
+    r'(?:([A-Za-z_][A-Za-z0-9_]*)[ \t]*::[ \t]*)?'
+    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\[[^\]]*\])*[ \t]*[=;]', re.M)
+
+# A declaration naming more than one thing. `int width = 640, height = 480'
+# is one statement and two symbols, and the pattern above stops at the
+# first, so the file was never proposed for the second -- sections 200 to
+# 202, a fifth time, found by diffing what the scanner sees against what
+# `nm' reports from the compiled object.
+#
+# Deliberately narrow, and measured that way. A general splitter was
+# written first: it walked the statement counting brackets, skipped string
+# literals once a `[' inside "\033[?1049h" was seen to unbalance it, and
+# still added 5,179 names across 507 real files -- almost all of them
+# class and struct names, because `[^;]*' swallows a whole body before the
+# first `;'. This form allows no brace or paren anywhere in the statement,
+# so a body cannot be swallowed at all: it adds ten names across the same
+# files and, being a union, can lose none.
+#
+# The cost is that `int one = f(a, b), two = 2' is skipped, an initialiser
+# holding a call being exactly what the parens exclude. The first name is
+# still found by the pattern above, so the file is still proposed; only
+# the second is missed, which is where this started and is the direction
+# that fails safe.
+RE_DATA_DEF_LIST = re.compile(
     r'^(?:(?:static|const|volatile)[ \t]+)*'
     r'(?:(?:struct|union|enum|unsigned|signed|long|short)[ \t]+)*'
     r'[A-Za-z_][A-Za-z0-9_]*(?:[ \t]*[\*&][ \t]*|[ \t]+)'
-    r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\[[^\]]*\])*[ \t]*[=;]', re.M)
+    r'([A-Za-z_][A-Za-z0-9_]*[ \t]*(?:\[[^\]{}()]*\])*'
+    r'(?:[ \t]*=[^,;{}()]*)?'
+    r'(?:[ \t]*,[ \t]*\*?[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*'
+    r'(?:\[[^\]{}()]*\])*(?:[ \t]*=[^,;{}()]*)?)+)[ \t]*;', re.M)
+
+# One declarator out of such a list, applied to what the pattern captured.
+RE_DECLARATOR = re.compile(r'(?:^|,)[ \t]*\*?[ \t]*([A-Za-z_][A-Za-z0-9_]*)')
 
 # C++20 modules, recognised so that a tree using them is told so rather than
 # left with the compiler's word for it. `import hello;' fails as `module
@@ -883,8 +937,14 @@ def scan_source(path):
 		defs = {name.strip() for group in RE_ASM_GLOBAL.findall(code)
 		        for name in group.split(",") if name.strip()}
 	else:
-		defs = set(RE_FUNC_DEF.findall(code)) | set(RE_DATA_DEF.findall(code))
+		defs = set(RE_FUNC_DEF.findall(code))
+		for owner, name in RE_DATA_DEF.findall(code):
+			defs.add(name)
+			if owner:
+				defs.add(owner)
 		defs |= set(RE_FUNC_PTR_DEF.findall(code))
+		for group in RE_DATA_DEF_LIST.findall(code):
+			defs |= set(RE_DECLARATOR.findall(group))
 		defs |= set(RE_MEMBER_DEF.findall(code))
 		for m in RE_TEMPLATE_INST.finditer(code):
 			defs |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))

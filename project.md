@@ -252,7 +252,8 @@ that had been green about nothing for five commits ·
 [199. Six doors on one room](#199-six-doors-on-one-room) ·
 [200. The underscore that hid a definition](#200-the-underscore-that-hid-a-definition) ·
 [201. A callback parameter hid another](#201-a-callback-parameter-hid-another) ·
-[202. Four shapes the scanner would not call a definition](#202-four-shapes-the-scanner-would-not-call-a-definition)
+[202. Four shapes the scanner would not call a definition](#202-four-shapes-the-scanner-would-not-call-a-definition) ·
+[203. The same instrument, pointed at C++](#203-the-same-instrument-pointed-at-c)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16591,6 +16592,44 @@ measured a hand-written wider pattern against seven trees and found it
 dropping matches as well as adding them; the underscore fix keeps both
 spellings for the same reason.
 
+### A fifth shape, and the two fixes thrown away before it
+
+Reading found four; **asking the compiler found a fifth**. Twenty-five
+definition shapes were written out, compiled with `cc`, and `nm` asked
+what each object exports -- then diffed against what the scanner
+recorded. Three came back missing: K&R parameter declarations, a function
+returning a pointer to a function, and
+
+    int width = 640, height = 480;
+
+which is ordinary C. `extern int height` did not build; `extern int
+width` printed 640.
+
+**Two fixes were written and thrown away first, and they are why the
+third is narrow.** A tail regex read `call(x, y, z)` as declaring `y`,
+and gave only `b` for `int a, b, c` because the match consumed the
+separating comma. A general splitter walking the statement needed to skip
+string literals once `"\033[?1049h"` was found to unbalance its bracket
+count -- and still added **5,179 names across 507 real files**, nearly
+all class and struct names, because a pattern ending at the first `;`
+swallows a whole body.
+
+The third allows no brace or paren anywhere in the statement, so a body
+cannot be swallowed: **ten names across those same files**, and a union,
+so it can lose none. What it gives up is written beside it -- an
+initialiser holding a call, `int one = f(a, b), two = 2`, is skipped, and
+only the second name is lost, which is the direction this started in.
+
+**The case guards the fix and not the narrowness**, which the sabotage
+established rather than my judgement: removing the pattern fails it, and
+widening the initialiser does not, because what keeps a body out is the
+list shape rather than that exclusion. The corpus measurement is what
+stands behind the narrowness, and it lives in the comment.
+
+The other two shapes are left alone. K&R declarations are removed in C23
+and a function returning a function pointer is rare enough that the
+pattern to catch it would be wider than the fault.
+
 ### The suite caught me deleting sixty-six lines
 
 The run that followed §201 came back **14 of 460 failed**, every one
@@ -16606,3 +16645,96 @@ suite ran. And the repair was not to patch the damaged file but to take
 68-line move into 58 clean insertions -- the same reasoning as `git
 checkout -- <path>` being the dangerous half of staging by name, applied
 to my own edit rather than somebody else's work.
+
+## 203. The same instrument, pointed at C++
+
+§202 asked the compiler what a C file defines and got five answers back.
+The instrument is not language-specific -- exec `fmake` as a module, run
+`scan_source`, compile the same file with `c++`, ask `nm`, and check each
+mangled symbol's tokens against the file's def set -- so it was pointed
+at C++ next: seventeen shapes, from an out-of-line member through a
+template specialisation to a variable in a namespace.
+
+**Four recorded no definitions at all.**
+
+    F &F::operator<<(int v){ ... }     a member whose name is not an
+                                       identifier
+    int G::v = 3;                      a static data member, out of line
+    namespace c { int width = 640; }   a variable in a namespace
+    namespace c { int a = 1, b = 2; }  and a declaration list in one
+
+The middle two were put through a real build rather than through the
+instrument, and both failed with *nothing in this tree appears to define
+them* -- the message of §200, §201 and §202, a sixth and seventh time,
+about a definition sitting in the next file.
+
+**Two are fixed.** `RE_DATA_DEF` takes an optional `Class::` before the
+name and adds both tokens, because `_ZN1G1vE` yields both and either is
+enough to propose the file; `RE_MEMBER_DEF` allows an operator where it
+wanted an identifier.
+
+### The half that guards which half, measured rather than judged
+
+The case was first written on `operator=`, and its sabotage went green.
+Reverting only the member half:
+
+    shape            found   with the operator spelling dropped
+    operator=          F     F
+    operator()         F     --
+    operator[]         F     --
+    operator<<         F     --
+    operator+          F     --
+    operator bool      F     --
+    plain member       F m   F m
+    destructor         F     F
+
+`F &F::operator=(int)` has a `=` exactly where the data pattern wants
+one, so the `Class::` qualifier finds it with the member half gone --
+the one spelling in the family that cannot tell the two fixes apart, and
+the one I had reached for. The case says `operator<<` now, and the two
+sabotages fail through their own symbols: `_ZN1G1vE` when the qualifier
+is disabled, `_ZN1FlsEi` when the operator spelling is.
+
+### And the fix's own regression, twice the size of the fix
+
+Diffing the scanner against itself over **4,377 C++ files under `~/src`**
+-- the private trees and the third-party ones beside them -- the two
+halves added **2,091 names and lost none**. That is the number the case
+first recorded, and it is the wrong one to stop at: classifying the
+qualified matches by their leading word said what had been added.
+
+     1053  using        using Qtty::GridMetrics;
+      217  const        const int test::build_number =
+       45  int          int GridStyle::chanA =
+       38  wxFont       wxFont Label::Head_48;
+
+**A using-declaration reads as a type, a class and a name**, so allowing
+the qualifier turned every file that imports a name into a file that
+defines it -- 1,362 of the 2,091, more than twice the definitions the
+fix was written for. `RE_DATA_DEF` refuses a statement beginning `using`
+now, which also retires a false positive that predates all of this:
+`using json = nlohmann::json` was read as a definition of `json` by the
+pattern as it stood, and an alias defines no storage. Both halves and
+the guard together: **729 names added, 250 lost**, every one of the 250
+an alias.
+
+**What it costs is not the wasted compile.** §21 prices a wrong
+candidate at one compiled file, which is why a superset is the safe
+direction -- but a file that appears to define a missing symbol also
+*suppresses* the sentence that says what is wrong. With the guard
+removed, a tree whose only mention of `ns::widget_make` is a
+using-declaration is told to name the missing libraries with
+`--ldflags`, for a function nobody has written. The case asserts the
+sentence rather than the candidate list, because the sentence is the
+half a reader acts on.
+
+### The two shapes left, and why leaving them is the decision
+
+A variable inside `namespace { }` is indented, and `RE_DATA_DEF` is
+anchored at line start. Allowing leading whitespace would admit every
+local variable in every function body as a definition of its file --
+and the class above is exactly what that costs: a wrong proposal is
+acted on, while a missing one is a widening away. What would be safe
+here is a scan that knows where a namespace begins and ends, which is a
+parser rather than a pattern, and it wants its own measurement rather
+than a line slipped in beside these.

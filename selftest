@@ -5310,6 +5310,174 @@ def a_globl_naming_two_symbols_exports_both(t):
 	      "the control linked the wrong symbol")
 
 
+@case
+def a_declaration_naming_two_things_defines_both(t):
+	"""One statement, two symbols, and the pattern stopped at the first.
+
+    `int width = 640, height = 480;' is ordinary C, and the file holding
+    it was never proposed for `height' -- so a tree reaching it by
+    `extern int height' stopped with "nothing in this tree appears to
+    define them" while `extern int width' built. Sections 200 to 202 a
+    fifth time.
+
+    Found by a systematic form of the reading that produced the other
+    four: twenty-five definition shapes compiled with cc, `nm' asked what
+    the object exports, and the answer diffed against what the scanner
+    recorded. Three shapes came back missing -- this one, K&R parameter
+    declarations, and a function returning a pointer to a function.
+
+    The pattern that fixes it is deliberately narrow, and two wider ones
+    were written and thrown away first. A tail regex read `call(x, y, z)'
+    as declaring `y'. A general splitter needed to skip string literals
+    once `"\033[?1049h"' was seen to unbalance its bracket count, and
+    still added 5,179 names across 507 real files -- nearly all class and
+    struct names, because a statement pattern ending at the first `;'
+    swallows a whole body. This one allows no brace or paren anywhere,
+    adds ten names across those same files, and unions, so it can lose
+    none.
+
+    What this case guards is the fix, not the narrowness. Sabotaged both
+    ways: removing the pattern fails it, and widening the initialiser to
+    allow braces and parens does not -- because what keeps a body out is
+    the list shape itself, a run of comma-separated declarators, rather
+    than that exclusion. The corpus measurement is what stands behind the
+    narrowness, and it is in the comment beside the pattern.
+
+    What it gives up is stated here rather than left to be discovered:
+    `int one = f(a, b), two = 2;' is skipped, the parens that keep bodies
+    out keeping an initialiser with a call out too. The first name is
+    still found, so the file is still proposed, and only the second is
+    missed -- the direction this started in.
+    """
+	t.write("dims.c", "int width = 640, height = 480;\n")
+	t.write("main.c", "#include <stdio.h>\nextern int height;\n"
+	        'int main(void){ printf("%d\\n", height); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the second name was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "480\n",
+	      "the wrong definition was linked")
+
+	# Three names, pointers, and the first-name control together.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("dims.c", "int a = 1, b = 2, c = 3;\nchar *sep = \",\", *end = \";\";\n")
+	t.write("main.c", "#include <stdio.h>\nextern int c;\nextern char *end;\n"
+	        'int main(void){ printf("%d%s\\n", c, end); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"a longer list: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "3;\n",
+	      "the third name or the quoted initialiser was mishandled")
+
+	# And nothing that merely looks like one: a class body, a call, and an
+	# initialiser holding a call must not turn into definitions.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("dims.c", "int width = 640, height = 480;\n")
+	t.write("noise.c", "int f(int x, int y){ return x + y; }\n"
+	        "int called(void){ return f(1, 2); }\n")
+	t.write("main.c", "#include <stdio.h>\nextern int height;\n"
+	        'int main(void){ printf("%d\\n", height); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"the noise fixture broke the build: {r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "480\n",
+	      "the build changed when a file of calls was added")
+
+
+@case
+def a_static_member_and_an_operator_are_definitions(t):
+	"""Two C++ shapes for which the scanner recorded nothing at all.
+
+    Found by putting the compiler on the other side of the question:
+    seventeen C++ shapes compiled with c++, `nm' asked what each object
+    exports, and each symbol run through `symbol_tokens' to ask whether
+    any token of it reaches the file's def set -- which is what widening
+    actually does, a mangled name never matching a source identifier
+    directly. Four shapes reached nothing; two are fixed here.
+
+        int G::v = 3;                 a static data member, defined out
+                                      of line, qualified at line start
+        F &F::operator=(int){ }       a member whose name is not an
+                                      identifier
+
+    `RE_DATA_DEF' now allows an optional `Class::' and captures the class
+    as well, because `_ZN1G1vE' yields both tokens and either is enough to
+    propose the file. `RE_MEMBER_DEF' allows `operator' followed by its
+    symbol. Measured by reverting exactly those two halves and diffing
+    the scanner against itself over 4,377 C++ files under ~/src: 2,091
+    names added, none lost. What that measurement did not say, and the
+    case below does, is that 1,362 of them were wrong.
+
+    The other two shapes are recorded and left. A variable inside a
+    `namespace { }' is indented, and `RE_DATA_DEF' is anchored at line
+    start -- allowing indentation would match every local variable in
+    every function body, which is a change that needs its own
+    measurement rather than a line slipped in beside these.
+    """
+	t.write("g.cpp", "struct G { static int v; };\nint G::v = 3;\n")
+	t.write("main.cpp", "#include <cstdio>\nstruct G { static int v; };\n"
+	        'int main(){ printf("%d\\n", G::v); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a static data member was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "3\n",
+	      "the static member was not the one linked")
+
+	# The operator, whose class is what the mangling carries.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "g.cpp"))
+	# `operator<<' rather than `operator='. Measured: the qualifier added
+	# above already finds `operator=', because `F &F::operator=(int)' has
+	# a `=' where the data pattern wants one -- so a case written on that
+	# spelling passes with this half reverted and guards nothing. The
+	# shift, subscript and arithmetic spellings are found only here.
+	t.write("f.cpp", "struct F { int x; F &operator<<(int v); };\n"
+	        "F &F::operator<<(int v){ x = v; return *this; }\n")
+	t.write("main.cpp", "#include <cstdio>\n"
+	        "struct F { int x; F &operator<<(int v); };\n"
+	        'int main(){ F f; f << 7; printf("%d\\n", f.x); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"an out-of-line operator was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "7\n",
+	      "the operator definition was not linked")
+
+
+@case
+def a_using_declaration_is_not_a_definition(t):
+	"""A file that imports a name does not define it.
+
+    The regression the case above introduced, and the largest single
+    class of match either fix made. `using ns::widget_make;' reads to
+    `RE_DATA_DEF' as a type, a class and a name, so once the optional
+    `Class::' was allowed, every using-declaration in the tree became a
+    definition of what it imports. Measured over 4,377 C++ files, that
+    shape is 1,053 of the roughly 1,500 qualified matches -- more than
+    twice the definitions the fix was written for.
+
+    What it costs is not only a wasted compile. `helper.cpp' below
+    imports the name and defines nothing, and with the guard removed
+    fmake reads it as a definition, compiles it, and then drops the one
+    sentence that says what is actually wrong:
+
+        nothing in this tree appears to define them either
+
+    leaving `name the missing libraries with --ldflags' as the last line
+    -- so the reader is sent to install a package for a function nobody
+    here has written. The message is what this asserts, because the
+    wasted compile is the cheap half.
+    """
+	t.write("main.cpp", "namespace ns { void widget_make(); }\n"
+	        "using ns::widget_make;\n"
+	        "int main(){ widget_make(); return 0; }\n")
+	t.write("helper.cpp", "namespace ns { void widget_make(); }\n"
+	        "using ns::widget_make;\n"
+	        "int helper_count(){ return 1; }\n")
+	r = t.fmake()
+	check(r.returncode != 0, "a link with nothing defining the symbol passed")
+	out = r.stdout + r.stderr
+	check("nothing in this tree appears to define them" in out,
+	      f"a file that only imports the name was read as defining it:\n{out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
