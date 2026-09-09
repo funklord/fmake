@@ -7399,7 +7399,13 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# already exist. Without this the linker fails with "cannot open output
 	# file", which says nothing about the directory being the problem.
 	if not dry_run:
-		os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+		# A path that exists and is not a directory: makedirs raises
+		# FileExistsError, and `-o main.c' is a plausible slip.
+		where = os.path.dirname(out) or "."
+		if os.path.exists(where) and not os.path.isdir(where):
+			die(f"-o names {_rel(where, root)}, which is a file. "
+			    f"Output goes in a directory.")
+		os.makedirs(where, exist_ok=True)
 		# A crate program never goes through compile_units -- it has no
 		# object -- so nothing else has made the directory rustc is about
 		# to write its depfile into. Without it rustc reports `error
@@ -7804,7 +7810,18 @@ def build(args, _bootstrapping=False):
 	# build comes from the one major -- including the moc outputs, whose
 	# includes are the ones that gave the disagreement away.
 	pkg.qt_order = qt_preference(cfg.moc, pkg)
-	outdir = os.path.abspath(args.output) if args.output else root
+	# Relative to the tree, not to wherever the command was typed. Its own
+	# default is the project root, so `-o build' meaning `$PWD/build' put
+	# the binaries somewhere the default never would -- and made the two
+	# ways of naming a tree disagree:
+	#
+	#     cd tree && fmake -o build      tree/build/
+	#     fmake -C tree -o build         $PWD/build/
+	#
+	# which is section 80's shape, the one this file already refuses
+	# elsewhere. An absolute path is unaffected: os.path.join keeps it.
+	outdir = (os.path.abspath(os.path.join(root, args.output))
+	          if args.output else root)
 	if args.run and not args.output:
 		# Nothing appears beside the script. The answer to "does it clean
 		# up" is that it never dirties: the binary and its objects live
@@ -12305,6 +12322,27 @@ def do_install(targets, closures, root, outdir, conf, args):
 		info("nothing to install")
 		return 0
 
+	def _write(what, do, dst):
+		"""One install step, or a refusal that says where it stopped.
+
+        Every write here can fail for the most ordinary reason there is:
+        the prefix belongs to root and this is not root. That arrived as
+        a PermissionError traceback naming shutil's own line, out of a
+        command whose whole job is to put files somewhere. Half an
+        install is also worth saying: the files already copied are still
+        there, and the reader has to know that before deciding what to
+        do next.
+        """
+		try:
+			do()
+		except OSError as exc:
+			done = installed and f"\n{installed} file(s) were installed " \
+			                     f"before this; the rest were not." or ""
+			die(f"cannot {what} {dst}: {exc.strerror or exc}{done}\n"
+			    f"Install somewhere writable with --prefix or --destdir, "
+			    f"or run this with the privileges that prefix needs.")
+
+	installed = 0
 	for src, dst, mode in planned:
 		rel = _rel(src, root)
 		if mode is None:
@@ -12313,19 +12351,25 @@ def do_install(targets, closures, root, outdir, conf, args):
 			if args.dry_run:
 				print(f"ln -sf {shlex.quote(src)} {shlex.quote(dst)}")
 				continue
-			os.makedirs(os.path.dirname(dst), exist_ok=True)
-			if os.path.islink(dst) or os.path.exists(dst):
-				os.remove(dst)
-			os.symlink(src, dst)
+			def link():
+				os.makedirs(os.path.dirname(dst), exist_ok=True)
+				if os.path.islink(dst) or os.path.exists(dst):
+					os.remove(dst)
+				os.symlink(src, dst)
+			_write("link", link, dst)
+			installed += 1
 			print(f"{GREEN('->')} {dst} -> {src}")
 			continue
 		if args.dry_run:
 			print(f"install -m {mode:o} {shlex.quote(rel)} "
 			      f"{shlex.quote(dst)}")
 			continue
-		os.makedirs(os.path.dirname(dst), exist_ok=True)
-		shutil.copy2(src, dst)
-		os.chmod(dst, mode)
+		def copy():
+			os.makedirs(os.path.dirname(dst), exist_ok=True)
+			shutil.copy2(src, dst)
+			os.chmod(dst, mode)
+		_write("install", copy, dst)
+		installed += 1
 		print(f"{GREEN('->')} {dst}")
 
 	if not args.dry_run:
@@ -13011,16 +13055,33 @@ def parse_args(argv):
 	# them, rather than from a second list that would go stale.
 	parse_args.parser = p
 
+	def split(chunk, where):
+		"""One shell-quoted string, or a refusal naming it.
+
+        These take a quoted string so a flag beginning with a dash is not
+        mistaken for one of fmake's own, and shlex raises rather than
+        guessing when the quoting does not close. `CFLAGS="-DMSG='hello"'
+        in somebody's environment is an ordinary mistake and ended in a
+        Python traceback, which says nothing about which value was wrong
+        or where it came from.
+        """
+		try:
+			return shlex.split(chunk)
+		except ValueError as exc:
+			die(f"{where} {chunk!r} is not a shell-quoted string: {exc}")
+
 	def flags(given, env):
 		out = []
-		for chunk in ([os.environ[env]] if env in os.environ else []) + given:
-			out += shlex.split(chunk)
+		if env in os.environ:
+			out += split(os.environ[env], f"${env}")
+		for chunk in given:
+			out += split(chunk, "--" + env.lower())
 		return out
 
 	args.cflags     = flags(args.cflags,  "CFLAGS")
 	args.ldflags    = flags(args.ldflags, "LDFLAGS")
 	args.force_link = [f for chunk in args.force_link
-	                   for f in shlex.split(chunk)]
+	                   for f in split(chunk, "--force-link")]
 	args.run_args = run_args
 	# Refused here rather than ignored later. -i writes an answer into the
 	# config so that the *next* build uses it, and none of these three

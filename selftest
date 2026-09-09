@@ -4962,6 +4962,101 @@ def a_declared_submodule_that_is_not_there_is_reported(t):
 	      f"the empty directory is no longer reported: {out}")
 
 
+@case
+def an_ordinary_mistake_is_a_message_and_not_a_traceback(t):
+	"""Three ways to reach a Python traceback, all of them ordinary.
+
+    Found by fuzzing the command line and the environment for the one
+    output that is never intended: 32 argument sets and 11 environments,
+    six tracebacks, three defects.
+
+        CFLAGS="-DMSG='hello"   shlex: No closing quotation
+        --ldflags '\'           shlex: No escaped character
+        -o main.c               makedirs: FileExistsError
+        --install               PermissionError, in shutil
+
+    The last is the one worth having: a prefix that belongs to root and a
+    command that is not root is the most ordinary mistake there is, and
+    it ended in a traceback naming shutil's own line, out of a command
+    whose whole job is to put files somewhere.
+
+    Half an install is asserted with it. The files copied before the
+    failure are still there, and a reader deciding what to do next has to
+    be told that -- so the count is in the message.
+    """
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	def refuses(args, env, owed):
+		r = t.fmake(*args, env=env)
+		out = r.stdout + r.stderr
+		check("Traceback" not in out, f"{args or env} crashed: {out[-300:]}")
+		check(r.returncode != 0, f"{args or env} was not refused: {out[:200]}")
+		for want in owed:
+			check(want in out, f"{args or env} does not say {want!r}: {out}")
+
+	refuses([], {"CFLAGS": "-DMSG='hello"}, ["$CFLAGS", "shell-quoted"])
+	refuses(["--ldflags", "\\"], None, ["--ldflags", "shell-quoted"])
+	refuses(["-o", "main.c"], None, ["-o", "is a file"])
+
+	# The install, on a prefix nothing may write to. Skipped under root,
+	# which can write to it and would install for real.
+	if os.geteuid() == 0:
+		return
+	check(t.fmake().returncode == 0, "the tree should build")
+	stage = os.path.join(t.dir, "stage")
+	os.makedirs(stage)
+	os.chmod(stage, 0o555)
+	try:
+		r = t.fmake("--install", "--prefix", stage)
+		out = r.stdout + r.stderr
+		check("Traceback" not in out, f"the install crashed: {out[-300:]}")
+		check("cannot install" in out and "--prefix" in out,
+		      f"the refusal does not say what to do: {out}")
+	finally:
+		os.chmod(stage, 0o755)
+
+
+@case
+def a_relative_output_directory_is_relative_to_the_tree(t):
+	"""`-o build' put the binaries wherever the command was typed.
+
+    Its own help says the default is the project root, so a relative
+    value meaning `$PWD/build' put them somewhere the default never
+    would -- and made the two ways of naming a tree disagree:
+
+        cd tree && fmake -o build     tree/build/
+        fmake -C tree -o build        $PWD/build/
+
+    which is section 80's shape, the one fmake already refuses elsewhere
+    for a generator command. Found when a case written for something else
+    used `-o main.c' and left two binaries in a directory called `main.c'
+    inside fmake's own repository, which is what the mistake looks like
+    from outside.
+
+    An absolute path is unaffected, and the case asserts that too:
+    os.path.join keeps it, and a staged build names one.
+    """
+	t.write("main.c", "int main(void){ return 0; }\n")
+	name = os.path.basename(t.dir)
+	# The artifact's own path rather than the directory's: fmake's repo
+	# has a `build/' of its own, and asserting the directory is absent
+	# would fail for a reason that has nothing to do with this.
+	here = os.path.join(os.getcwd(), "build", name)
+	check(not os.path.exists(here), "the fixture assumes this path is free")
+
+	check(t.fmake("-o", "build").returncode == 0, "the build failed")
+	check(os.path.exists(os.path.join(t.dir, "build", name)),
+	      f"nothing at {t.dir}/build: {os.listdir(t.dir)}")
+	check(not os.path.exists(here),
+	      "a relative -o wrote into the directory fmake was run from")
+
+	away = os.path.join(t.dir, "elsewhere")
+	os.makedirs(away)
+	check(t.fmake("-o", away).returncode == 0, "an absolute -o failed")
+	check(os.path.exists(os.path.join(away, name)),
+	      f"an absolute -o did not write there: {os.listdir(away)}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

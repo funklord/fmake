@@ -247,7 +247,8 @@ that had been green about nothing for five commits ·
 [194. A third way not to return](#194-a-third-way-not-to-return) ·
 [195. A sweep that found nothing, and five probes that were wrong](#195-a-sweep-that-found-nothing-and-five-probes-that-were-wrong) ·
 [196. The build wrote over a file it did not write](#196-the-build-wrote-over-a-file-it-did-not-write) ·
-[197. A guard on the wrong side of an `or`](#197-a-guard-on-the-wrong-side-of-an-or)
+[197. A guard on the wrong side of an `or`](#197-a-guard-on-the-wrong-side-of-an-or) ·
+[198. Ordinary mistakes that ended in a traceback](#198-ordinary-mistakes-that-ended-in-a-traceback)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16279,3 +16280,55 @@ no prerequisites, 5,000 names on one line -- each produced either a clean
 refusal or a correct rebuild, because losing an entry changes the key and
 a changed key rebuilds. That is the safe direction, and it is now
 measured rather than assumed.
+
+---
+
+## 198. Ordinary mistakes that ended in a traceback
+
+§197's instrument was pointed at the files a user writes. The other two
+surfaces every invocation crosses are the command line and the
+environment, and they were fuzzed the same way: **32 argument sets and 11
+environments, six tracebacks, three defects.**
+
+    CFLAGS="-DMSG='hello"    shlex: No closing quotation
+    --ldflags '\'            shlex: No escaped character
+    -o main.c                makedirs: FileExistsError
+    --install                PermissionError, inside shutil
+
+**The last is the one worth having.** A prefix that belongs to root and a
+command that is not root is the most ordinary mistake there is, and it
+ended in a traceback naming `shutil`'s own line -- out of a command whose
+whole job is to put files somewhere. It says what it could not write and
+what to do now, and **it says how far it got**: the files copied before
+the failure are still there, and a reader deciding what to do next has to
+be told. Measured on a prefix writable up to a point: *3 file(s) were
+installed before this; the rest were not.*
+
+The two `shlex` ones are one defect at two doors. These flags take a
+shell-quoted string on purpose -- so that a flag beginning with a dash is
+not mistaken for one of fmake's own -- and shlex raises rather than
+guessing when the quoting does not close. The refusal names the value and
+where it came from, `$CFLAGS` or `--ldflags`, because the two are typed
+in different places and a message that does not say which sends the
+reader to the wrong one.
+
+### And a fourth, found by the case littering this repository
+
+Writing the case for `-o main.c` put two binaries in a directory called
+`main.c` **inside fmake's own checkout**. The refusal had not fired,
+because a relative `-o` was resolved against the directory the command
+was typed in rather than against the tree:
+
+    cd tree && fmake -o build     tree/build/
+    fmake -C tree -o build        $PWD/build/
+
+**Its own help says the default is the project root**, so a relative
+value meaning `$PWD/build` puts the binaries somewhere the default never
+would -- and the two ways of naming a tree disagree, which is §80's shape
+and something this file already refuses elsewhere for a generator
+command. Relative to the tree now; an absolute path is unchanged.
+
+The sabotage for it is the clearest statement of the bug: reverting the
+one line makes the suite write a build artifact into whatever directory
+the suite was started from, and that binary had to be deleted out of
+`build/` by hand.
