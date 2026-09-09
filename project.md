@@ -249,7 +249,8 @@ that had been green about nothing for five commits ·
 [196. The build wrote over a file it did not write](#196-the-build-wrote-over-a-file-it-did-not-write) ·
 [197. A guard on the wrong side of an `or`](#197-a-guard-on-the-wrong-side-of-an-or) ·
 [198. Ordinary mistakes that ended in a traceback](#198-ordinary-mistakes-that-ended-in-a-traceback) ·
-[199. Six doors on one room](#199-six-doors-on-one-room)
+[199. Six doors on one room](#199-six-doors-on-one-room) ·
+[200. The underscore that hid a definition](#200-the-underscore-that-hid-a-definition)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16452,3 +16453,63 @@ that step is not optional.
 **0.9s**, with the cost flat from 100 lines to 50,000 -- a bound set too
 low while the machine was running the suite at load average 28, not a
 defect.
+
+---
+
+## 200. The underscore that hid a definition
+
+`symbol_tokens` ended with `{sym.lstrip("_")}`, and that line has no
+comment, no case and no other mention anywhere in the file -- an
+unexamined line rather than a considered trade. It is right for exactly
+one object format:
+
+    Mach-O   prefixes an underscore to every C identifier, so `_helper'
+             there is the source's `helper' and stripping is what makes
+             the two meet
+    ELF      prefixes nothing, so `_helper' IS the identifier, and
+             stripping produced the token `helper', which no file defines
+
+So a file defining `_helper` was never proposed as a candidate, nothing
+compiled it, and the build stopped with a message that is **wrong about
+the tree it is standing in**:
+
+    no x86_64/64le library exports: _helper
+    ... nothing in this tree appears to define them either
+
+while `helper.c` in the same directory defines exactly that. The control
+is the same tree with the underscore removed, which builds and prints 7.
+
+**Why it had not been met.** A shared header hides it: with one, the
+include graph proposes the file and widening never has to. Only a tree
+where the symbol is the *sole* connection reaches this -- which is
+precisely the case widening exists for.
+
+Both spellings are offered now, `{sym, sym.lstrip("_")}`, because the
+same input has two correct answers depending on the format. The cost is a
+candidate widening may not need, which is the safe direction: §21
+measures a wrong candidate as one extra compiled file, and a missing one
+as a build that does not happen.
+
+**The case guards one half of that, and says so.** Dropping the literal
+and keeping the strip fails it, which is the defect. Dropping the strip
+and keeping the literal **passes**, because on ELF the literal is always
+right and the strip earns its keep only on Mach-O, which nothing here can
+run. That half rests on the format's documented behaviour rather than on
+anything asserted.
+
+### Found by reading, after the fuzzers had stopped paying
+
+§199 ended with about 490 hostile inputs and no defects left to find that
+way, so the instrument changed twice. The property check came first --
+and it passed: **40 more random trees, now with cycles and back-edges and
+spare symbols that must not be pulled in, and with the normal build and
+`--widen-all` required to produce the same link set.** Two of fmake's own
+paths to one answer, agreeing on every tree.
+
+This defect is invisible to all of it. Every generated tree used plain
+identifiers, because that is what a generator writes; the fault needed a
+name a person would choose. **A fuzzer explores the space its author
+thought to parameterise**, which is the same limit as a stand-in
+reproducing the half of a tool its author had met (§ evidence.md), and
+the answer is not a better fuzzer but a different instrument -- here, one
+function read line by line.

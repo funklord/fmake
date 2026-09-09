@@ -5117,6 +5117,69 @@ def every_shell_split_says_whose_text_it_was(t):
 	      f"the refusal does not name the .pc it came from: {out}")
 
 
+@case
+def a_symbol_that_starts_with_an_underscore_finds_its_file(t):
+	"""`symbol_tokens' stripped every leading underscore, and on ELF the
+	underscore is part of the name.
+
+    Mach-O prefixes one to every C identifier, so `_helper' there is the
+    source's `helper' and stripping is what makes the two meet. ELF
+    prefixes nothing, so `_helper' is the identifier itself -- and
+    stripping produced the token `helper', which no file defines.
+
+    The consequence is a build that does not happen, with a message that
+    is wrong about the tree it is standing in:
+
+        no x86_64/64le library exports: _helper
+        ... nothing in this tree appears to define them either
+
+    while helper.c, in the same directory, defines exactly that. Nothing
+    connects the two files but the symbol, which is the whole of what
+    widening is for -- add a shared header and the include graph proposes
+    the file, which is why this had not been met.
+
+    Both spellings are offered now, and this case guards **one** of them.
+    Sabotaged both ways: dropping the literal and keeping the strip fails
+    here, which is the defect. Dropping the strip and keeping the literal
+    **passes**, because on ELF the literal is always the right answer and
+    the strip earns its place only on Mach-O, which no machine here can
+    run. That half rests on the format's documented behaviour rather than
+    on anything asserted, and saying so is the point of this paragraph.
+
+    The control is the same tree with the underscore removed, which built
+    before this and must keep building.
+    """
+	t.write("helper.c", "int _helper(void){ return 7; }\n")
+	t.write("main.c", "#include <stdio.h>\nint _helper(void);\n"
+	        'int main(void){ printf("%d\\n", _helper()); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a definition in the tree was not found: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "7\n",
+	      "the underscored definition was not the one linked")
+
+	# Two underscores, which lstrip took just as happily.
+	t.write("helper.c", "int __helper(void){ return 9; }\n")
+	t.write("main.c", "#include <stdio.h>\nint __helper(void);\n"
+	        'int main(void){ printf("%d\\n", __helper()); return 0; }\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"two underscores: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "9\n",
+	      "the doubly-underscored definition was not linked")
+
+	# The control: no underscore at all, which is every other case in this
+	# file and has to keep working.
+	t.write("helper.c", "int helper(void){ return 5; }\n")
+	t.write("main.c", "#include <stdio.h>\nint helper(void);\n"
+	        'int main(void){ printf("%d\\n", helper()); return 0; }\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"the plain spelling broke: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "5\n",
+	      "the plain definition was not linked")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

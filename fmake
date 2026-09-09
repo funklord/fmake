@@ -5853,7 +5853,23 @@ def symbol_tokens(sym):
 			if n and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
 				toks.add(name)
 		return toks
-	return {sym.lstrip("_")}
+	# Both spellings, because the same symbol means two things depending on
+	# the format. Mach-O prefixes an underscore to every C identifier, so
+	# `_helper' there is the source's `helper' and stripping is right; ELF
+	# prefixes nothing, so `_helper' there IS the identifier and stripping
+	# turns it into a token that matches nothing.
+	#
+	# Stripping alone: a file defining `_helper' was never proposed as a
+	# candidate, so nothing compiled it, and the build stopped with
+	# "nothing in this tree appears to define them" about a definition
+	# three lines away in the same directory. The control is the same tree
+	# without the underscore, which built.
+	#
+	# Offering both costs a candidate that widening may not need, which is
+	# the direction that is safe: section 21 measures the waste of a wrong
+	# candidate as one compiled file, and a missing one is a build that
+	# does not happen.
+	return {sym, sym.lstrip("_")} - {""}
 
 
 def widen_candidates(symbols, pool_units):
