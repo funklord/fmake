@@ -5610,6 +5610,61 @@ def a_marked_source_keeps_its_first_definition(t):
 	      "the definition on the marked line was not the one linked")
 
 
+@case
+def a_modern_main_still_roots_a_program(t):
+	"""Three legal entry points that built a library and said nothing.
+
+    `RE_MAIN' read the parameter list and then demanded a brace, so
+    anything standing between the two hid the program:
+
+        int main() noexcept { }             a qualifier
+        auto main() -> int { }              a trailing return type
+        int main() try { } catch (...) { }  a function-try-block
+
+    None of these failed the build. The file rooted no target, fmake fell
+    back to the only other thing a tree of sources can be, and wrote
+    `libfmake-....a' with exit 0 -- so what a reader gets for a modern
+    C++ program is a silent library. A miss that stops a build names the
+    file; this one looks like success, which is why each half checks that
+    a program exists and runs rather than that the command returned 0.
+
+    Measured over 10,901 C and C++ files in this workspace, the wider
+    pattern changes the answer for none of them, so nothing here writes
+    these spellings and the fix cannot cost anything that does.
+
+    Each half is guarded by its own sabotage -- drop the qualifier
+    alternative, the trailing-return alternative or the `try' and this
+    case fails at that half, the others still passing. The binary is
+    deleted before each build, because a tree that roots no program keeps
+    the program it built last time, and a half that ran that would be
+    passing on the half before it.
+    """
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+
+	def build_and_run(source, want, what):
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		if os.path.exists(prog):
+			os.remove(prog)
+		t.write("main.cpp", source)
+		r = t.fmake()
+		check(r.returncode == 0, f"{what} did not build: {r.stderr}")
+		check(os.path.exists(prog),
+		      f"{what} rooted no program: {r.stdout}{r.stderr}")
+		check(t.run(os.path.basename(t.dir)).stdout == want,
+		      f"{what} built the wrong thing: {r.stdout}")
+
+	build_and_run("#include <cstdio>\n"
+	              'int main() noexcept { printf("1\\n"); return 0; }\n',
+	              "1\n", "a qualified main()")
+	build_and_run("#include <cstdio>\n"
+	              'auto main() -> int { printf("2\\n"); return 0; }\n',
+	              "2\n", "a trailing return main()")
+	build_and_run("#include <cstdio>\n"
+	              'int main() try { printf("3\\n"); return 0; }\n'
+	              "catch (...) { return 1; }\n",
+	              "3\n", "a function-try main()")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

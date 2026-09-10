@@ -255,7 +255,8 @@ that had been green about nothing for five commits ·
 [202. Four shapes the scanner would not call a definition](#202-four-shapes-the-scanner-would-not-call-a-definition) ·
 [203. The same instrument, pointed at C++](#203-the-same-instrument-pointed-at-c) ·
 [204. The instrument again, pointed at assembly](#204-the-instrument-again-pointed-at-assembly) ·
-[205. Three bytes in front of line one](#205-three-bytes-in-front-of-line-one)
+[205. Three bytes in front of line one](#205-three-bytes-in-front-of-line-one) ·
+[206. A program that came out as a library](#206-a-program-that-came-out-as-a-library)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16891,3 +16892,73 @@ the file to go and look at.
 - **A line splice inside the directive** -- `#inc\`, newline, `lude` --
   is legal and is not read. Nobody writes it; it is recorded so the next
   sweep knows the shape was tried.
+
+## 206. A program that came out as a library
+
+The scan record has more fields than `defs` and `incs`, and `has_main`
+is the one that decides what gets *built*. The oracle for it is not `nm`
+this time but fmake itself: twelve spellings of an entry point, each in
+its own tree, each built, and the artifact read off the directory
+afterwards.
+
+**Four came out as `libfmake-....a`, with exit 0 and no message.**
+
+    int main() noexcept { }             a qualifier
+    auto main() -> int { }              a trailing return type
+    int main() try { } catch (...) { }  a function-try-block
+    int main(argc, argv) int argc; ...  K&R
+
+`RE_MAIN` read `main(...)` and then demanded `{`, so anything standing
+between the two hid the program. The file rooted no target, and a tree of
+sources that roots nothing is a library -- which is fmake working
+correctly on a premise that was wrong.
+
+**This is the worst shape a miss can take, and it is worth separating
+from the four sections before it.** §200 through §205 all end in a build
+that stops and names a file. This one ends in a build that *succeeds*,
+having made the wrong artifact, and the only way to notice is to look in
+the directory. A person who asked for a program gets `libfoo.a` and a
+zero exit status.
+
+The first three are fixed: the pattern now allows a qualifier, a trailing
+return type and a function-try-block between the list and the brace.
+Measured over **10,901 C and C++ files** in this workspace, the widening
+changes the answer for none of them -- no file gains a `main()` and none
+loses one -- so, like §203 and §204, it is a shape found by construction
+and cannot cost anything where nobody writes it.
+
+### The general fix, its cost, and whose call it is
+
+K&R is deliberately not in the pattern: `int main(argc, argv) int argc;
+char **argv; {` puts declarations between the list and the brace, and
+matching those means a much wider pattern for a form C23 removed. What
+would catch it -- and every spelling nobody has thought of yet -- is
+already half built.
+
+**fmake lets the object settle `main` in one direction only.** A target
+whose object turns out not to export `main` is caught, reported and
+remembered:
+
+    x.cpp looked like it defined main() but the object does not export
+    it; skipping
+
+There is no mirror. A file whose object *does* export `main` while the
+scan said it did not is exactly the case above, and by then the object
+exists -- it was compiled into the library. `read_symbols` has already
+read it.
+
+Three things, because this is a change to how targets are discovered
+rather than a pattern fix:
+
+- **The option.** After symbols are read, a unit exporting `main` that
+  roots no target and is neither vendored nor annotated `@kind lib` is a
+  program fmake did not notice; say so, or root it.
+- **The cost.** Target discovery happens before compiling, so the
+  correction can only arrive after the artifact it would have changed --
+  either a notice this build and a target the next, which is how the
+  mirage cache already behaves, or a second discovery pass. And the
+  exclusions have to be right: a vendored program, a file the tree
+  deliberately builds into a library, a test runner.
+- **Whose call.** The copyright holder's, since it changes what fmake
+  builds from an unannotated tree, which is the premise of the whole
+  project rather than a detail of it.

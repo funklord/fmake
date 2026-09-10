@@ -706,7 +706,33 @@ RE_MODULE_IMPORT = re.compile(
     r'^[ \t]*(?:export[ \t]+)?import[ \t]+([A-Za-z_][A-Za-z0-9_.:]*)[ \t]*;',
     re.M)
 
-RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
+# What may stand between the parameter list and the brace. The pattern
+# read `main(...)' and then demanded `{' immediately, so three legal
+# spellings of an entry point rooted nothing -- and the tree did not fail,
+# it built a *library*, exited 0, and said nothing:
+#
+#     int main() noexcept { }             a qualifier
+#     auto main() -> int { }              a trailing return type
+#     int main() try { } catch (...) { }  a function-try-block
+#
+# That is the worst shape a miss can take here. A build that stops names
+# the file; a build that quietly produces `libfoo.a' where a program was
+# asked for looks like success.
+#
+# Measured over 10,901 C and C++ files in this workspace, the widening
+# changes the answer for none of them -- no file gains a main() and none
+# loses one -- so it is found by construction, like sections 203 and 204,
+# and costs nothing where nobody writes it.
+#
+# K&R still roots nothing: `int main(argc, argv) int argc; char **argv; {'
+# puts declarations between the list and the brace, and allowing those
+# would be a much wider pattern for a form C23 removed. Section 206 says
+# what would catch it instead -- the object exports `main', and fmake
+# already reads that.
+RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)'
+                     r'(?:[ \t\n]*(?:const|noexcept|override|final))*'
+                     r'(?:[ \t\n]*->[ \t\n]*[A-Za-z_][\w:<>, \t]*)?'
+                     r'(?:[ \t\n]*try)?[ \t\n]*\{', re.M)
 
 # Qt writes a test's entry point with a macro, so a QtTest translation unit
 # has no main() in its text at all -- which made it root nothing, and then
