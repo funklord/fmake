@@ -259,7 +259,8 @@ that had been green about nothing for five commits ·
 [206. A program that came out as a library](#206-a-program-that-came-out-as-a-library) ·
 [207. A directive one character to the left](#207-a-directive-one-character-to-the-left) ·
 [208. `amd64` meant two different things](#208-amd64-meant-two-different-things) ·
-[209. A flag the ejected build did not read](#209-a-flag-the-ejected-build-did-not-read)
+[209. A flag the ejected build did not read](#209-a-flag-the-ejected-build-did-not-read) ·
+[210. The cache asked whether the output exists](#210-the-cache-asked-whether-the-output-exists)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17154,3 +17155,71 @@ runs. Baking one in would put somebody else's staging path in a file they
 install from. It is refused now, next to the refusal fmake already makes
 for `-i` with a flag that builds nothing -- *refused here rather than
 ignored later*, which is that comment's own phrase.
+
+## 210. The cache asked whether the output exists
+
+Two symptoms with one cause, and the second is the one that stops a tree
+building at all.
+
+**Truncate an object** -- `.fmake/obj/<key>/helper.c.o` -- and every later
+build fails at the link:
+
+    no x86_64/64le library exports: helper
+    name the missing libraries with --ldflags
+
+Go and install a library for a function this tree defines, about a file
+fmake will never recompile: the cache-hit test asks
+`os.path.exists(u.obj)`, so a **deleted** object rebuilds and a
+**truncated** one is linked as it stands.
+
+**Truncate the artifact** and it is worse. An empty file has no ELF magic,
+so the clobber guard of §196 reads fmake's own binary as somebody else's:
+
+    main.c would be built as prog, which is already a file this build did
+    not write. Give the target another name with @target ...
+
+The tree cannot be built at all until a person deletes the file by hand,
+and the advice names a collision that does not exist.
+
+Neither input is exotic. A compile or a link killed part-way, an OOM, a
+full disk -- **this session's own suite was killed twice by the harness
+for low memory while these sections were being written.**
+
+### The fix that was worse than the bug
+
+The obvious half is one line: an empty file is nobody's work. That guard
+exists to prevent *loss*, and a file with no bytes in it has nothing to
+lose -- an empty script is not a script. Written and measured, it does
+stop the refusal.
+
+It also produces **a zero-byte binary and a green build**, because the
+link's own freshness test is the same shape as the object's: it asks
+whether the artifact exists. So the carve-out on its own trades a loud
+failure for a silent one, which is the trade this file keeps warning
+about in the other direction.
+
+Both levels record what they wrote -- the object's size beside its
+symbols, the artifact's beside its link key -- and compare it. The
+carve-out then rides with them and is safe.
+
+### The size, and what it does not catch
+
+Not a hash: a hash means reading every object and every artifact on every
+build, to catch a case that changes the length in all of its realistic
+forms. The limit is pinned by the case rather than left to be
+rediscovered -- a file replaced by *exactly* as many different bytes still
+passes, and the case asserts that, so the day somebody makes it a hash
+the case fails and says why.
+
+An entry written by an older fmake carries no size, and those are
+accepted rather than rebuilt: the check arrives without charging anybody
+a full rebuild for the upgrade.
+
+### What is still true of the ejected builds
+
+`make` and `ninja` decide freshness by timestamp, so a truncated object
+newer than its source is up to date to both, and neither fmake nor this
+section can change that. It is the ordinary behaviour of those tools and
+it is theirs; what an ejected build gains from this is only that the
+tree it was ejected from will not have handed it a broken object in the
+first place.
