@@ -5665,6 +5665,85 @@ def a_modern_main_still_roots_a_program(t):
 	              "3\n", "a function-try main()")
 
 
+@case
+def a_directive_in_an_ordinary_comment_is_named(t):
+	"""The same mistake as the case above, one character to the left.
+
+    `near_directive' asks whether a name is unknown and almost one of
+    ours. Nothing asked the mirror question -- whether a name is one of
+    ours and almost in the right place -- and the two mistakes are next
+    to each other:
+
+        /*! @targt myapp */    reported: did you mean @target?
+        /* @target myapp */    silent, and the binary keeps its default
+                               name
+
+    A directive fmake does not read is a directive that does nothing, and
+    the second form does nothing quietly. That is the shape section 206
+    ends in: a build that succeeds having done something other than what
+    the file asked for.
+
+    Reported rather than refused, and recorded in the scan record rather
+    than warned about while scanning, because a scan is cached -- which
+    the second build here checks. Measured over 10,901 C and C++ files in
+    this workspace, no ordinary comment opens a line with a real
+    directive, so this is silent on every tree here; the fixtures below
+    are what show it can speak at all.
+    """
+	t.write("main.c", "/* @target renamed */\n#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {said}")
+	check("@target is in an ordinary comment" in said,
+	      f"a directive where fmake does not look was silent: {said}")
+	check(not os.path.exists(os.path.join(t.dir, "renamed")),
+	      "the ordinary comment renamed the target after all, so the "
+	      "warning is about something fmake did read")
+
+	# The half that decides whether anybody ever sees it.
+	again = t.fmake()
+	check("@target is in an ordinary comment" in again.stdout + again.stderr,
+	      f"the warning did not survive the scan cache: "
+	      f"{again.stdout}{again.stderr}")
+
+	# A line comment, and a continuation line inside a block, since the
+	# furniture differs in all three and `_uncomment' knew only the
+	# doxygen openers.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("main.c", "// @cflags -DX=1\n/*\n * @libs m\n */\n"
+	        "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("@cflags is in an ordinary comment" in said,
+	      f"a // comment was not read for this: {said}")
+	check("@libs is in an ordinary comment" in said,
+	      f"a block continuation was not read for this: {said}")
+
+	# Doxygen's own commands stay silent wherever they are written, for
+	# the reason the case above gives: the comment is shared.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("main.c", "/* @brief says nothing about the build */\n"
+	        "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("ordinary comment" not in said,
+	      f"warned about a Doxygen command in an ordinary comment: {said}")
+
+	# And the real form is read, and says nothing.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("main.c", "/*! @target renamed */\n#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("ordinary comment" not in said,
+	      f"warned about a directive fmake did read: {said}")
+	check(os.path.exists(os.path.join(t.dir, "renamed")),
+	      f"the doxygen form stopped renaming the target: {said}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -256,7 +256,8 @@ that had been green about nothing for five commits ·
 [203. The same instrument, pointed at C++](#203-the-same-instrument-pointed-at-c) ·
 [204. The instrument again, pointed at assembly](#204-the-instrument-again-pointed-at-assembly) ·
 [205. Three bytes in front of line one](#205-three-bytes-in-front-of-line-one) ·
-[206. A program that came out as a library](#206-a-program-that-came-out-as-a-library)
+[206. A program that came out as a library](#206-a-program-that-came-out-as-a-library) ·
+[207. A directive one character to the left](#207-a-directive-one-character-to-the-left)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -16962,3 +16963,65 @@ rather than a pattern fix:
 - **Whose call.** The copyright holder's, since it changes what fmake
   builds from an unannotated tree, which is the premise of the whole
   project rather than a detail of it.
+
+## 207. A directive one character to the left
+
+The lens this time was staleness, not shapes: build, change exactly one
+input, build again, and read what fmake did. Six probes.
+
+**Five came back clean, and they are worth recording as swept.** A header
+appearing earlier in the search path than the one a depfile recorded --
+the case a mtime-only build system misses -- is rebuilt and the new value
+printed. `CFLAGS` in the environment, `CC` from cc to clang, a linked
+source deleted, and a new source appearing that defines a symbol nothing
+in the tree defined: all four noticed, the deletion with the §200 message
+naming what is now undefined.
+
+**The sixth probe was wrong, and that is what found something.** It wrote
+
+    /* @cflags -DN=1 */
+
+and the build failed with `N` undeclared. fmake was right: directives are
+read from Doxygen comments -- `/*!`, `/**`, `//!`, `///` -- and an
+ordinary `/*` is not one. What it did not do was say so.
+
+### The mirror of a question this file already answers
+
+`near_directive` exists because *a directive that silently does nothing
+is the worst outcome available*. It asks whether a name is unknown and
+almost one of ours, and it is careful: one edit away and the same three
+characters, so `@brief` stays quiet and `@bind` gets no confident wrong
+guess.
+
+Nothing asked the mirror question -- whether a name is one of ours and
+almost in the right *place*. The two mistakes are one character apart:
+
+    /*! @targt myapp */    reported: @targt is not a directive; did you
+                           mean @target?
+    /* @target myapp */    silent, and the binary keeps its default name
+
+Both are somebody trying to rename a target and failing. Only one of them
+is told.
+
+It warns now, from the scan record rather than at scan time, because a
+scan is cached and a warning printed while scanning appears once and
+never again -- the same reasoning `typos` already carries, and the case
+builds twice to check it.
+
+### The measurement that was vacuous, and the one that was not
+
+Over **10,901 C and C++ files** in this workspace, **no ordinary comment
+opens a line with a real directive**, so this warns on nothing here.
+
+The first run of that measurement also said zero, and could not have said
+anything else: it reused `_uncomment`, which strips the doxygen openers
+and not a plain `/*`, so the detector could not see its own subject. The
+implementation had the same hole, and the fixtures caught it -- `/*
+@target renamed */` produced no warning while the code that was supposed
+to produce it was in place.
+
+**A zero from a detector that has never been seen to fire is not a
+measurement**, and the corpus was all-clean, so nothing in it could have
+told me. What separated the two was the fixture: three comment styles
+that must warn, a Doxygen command that must not, and the real form that
+must still be read.

@@ -1072,6 +1072,10 @@ def scan_source(path):
 	    # would appear once and never again, which is worse than not
 	    # printing it. Reported at build time from this.
 	    "typos":    _dirs_and_typos[1],
+	    # Directives in a comment fmake does not read. Recorded with the
+	    # scan for the same reason the typos are: a warning printed while
+	    # scanning appears once and never again, the scan being cached.
+	    "misplaced": _dirs_and_typos[2],
 	}
 
 # ---------------------------------------------------------------------------
@@ -3599,14 +3603,35 @@ def near_directive(name):
 
 def parse_directives(comments, where=""):
 	"""Directives found in Doxygen comments: {name: [[line, [args]], ...]},
-    and the near misses worth mentioning: [[line, written, meant], ...].
+    the near misses worth mentioning: [[line, written, meant], ...], and
+    the directives written where fmake does not look: [[line, name], ...].
 
     `where` is the file, for the one message here that refuses: a line
     number on its own names nothing in a tree of a hundred files.
     """
-	found, typos = {}, []
+	found, typos, misplaced = {}, [], []
 	for lineno, body in comments:
 		if not RE_DOXY_OPEN.match(body):
+			# The mirror of `near_directive'. That asks whether a name is
+			# unknown and almost one of ours; this asks whether a name is
+			# one of ours and almost in the right place -- `/*' where
+			# `/*!' was meant, one character, and the two mistakes are
+			# next to each other. Measured: `/*! @targt myapp */' is
+			# reported, and `/* @target myapp */' built the binary under
+			# its default name and said nothing at all.
+			#
+			# A warning rather than a refusal, and quiet in practice: over
+			# 10,901 C and C++ files in this workspace, not one ordinary
+			# comment opens a line with a real directive.
+			# `_uncomment' knows the doxygen openers and not the plain
+			# ones, having never been shown anything else, so the plain
+			# `/*' or `//' comes off first.
+			for offset, raw in enumerate(body.split("\n")):
+				line = _uncomment(re.sub(r"^\s*(?://+|/\*+)", "", raw))
+				m = RE_DIRECTIVE.match(line.strip())
+				if m and DIRECTIVE_ALIAS.get(m.group(1),
+				                             m.group(1)) in DIRECTIVES:
+					misplaced.append([lineno + offset, m.group(1)])
 			continue
 		clean = [_uncomment(l) for l in body.split("\n")]
 		for offset, line in enumerate(clean):
@@ -3665,7 +3690,7 @@ def parse_directives(comments, where=""):
 				    f"backslashes in it work as they do in a shell -- a "
 				    f"trailing backslash is not a continuation here.")
 			found.setdefault(name, []).append([lineno + offset, args])
-	return found, typos
+	return found, typos, misplaced
 
 
 class Ann:
@@ -8410,6 +8435,13 @@ def build(args, _bootstrapping=False):
 		for line, written, meant in scans[rel].get("typos", []):
 			warn(f"{rel}:{line}: @{written} is not a directive; "
 			     f"did you mean @{meant}?")
+		# And the same mistake from the other side: the right name, in a
+		# comment fmake does not read. `.get' with a default because a
+		# scan cached by an older fmake has no such key.
+		for line, name in scans[rel].get("misplaced", []):
+			warn(f"{rel}:{line}: @{name} is in an ordinary comment and "
+			     f"does nothing; directives are read from doxygen "
+			     f"comments -- /*! */, /** */, //! or ///")
 
 	# Where each generated file came from, so a compile error in one can
 	# name a file somebody is able to edit. Built from the plans rather
