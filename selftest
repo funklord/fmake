@@ -6130,6 +6130,98 @@ def an_output_directory_make_cannot_name_is_refused(t):
 	      "ninja did not put the binary in the directory with the space")
 
 
+@case
+def a_source_standing_behind_an_archive_is_named(t):
+	""""Nothing reaches it" was the wrong sentence, and the right one matters.
+
+    Measured on ossacli, which is where this came from. Its own `make'
+    leaves `libossa.a' at the tree root, and a working tree is usually in
+    that state -- its fmake.toml says as much about `debian/'. fmake reads
+    a loose in-tree archive as a dependency, links it, and every file
+    under `src/lib' is then reachable from nothing. So a syntax error
+    appended to `src/lib/ossa.c' built green: four programs and exit 0,
+    while the tree's own make refused with compile errors. Unpacked
+    pristine with `git archive', with no archive present, the same tree
+    compiles those sources and builds the same four programs -- which is
+    what says the archive is what displaced them.
+
+    What the reader was told was `not compiled: nothing reaches it
+    (--force-link if it is needed anyway)'. Something does reach it: a
+    previous build's output is standing in front of it, and --force-link
+    is not the remedy.
+
+    Five of the private trees carry a loose archive where fmake will find
+    one. This case is the message; whether fmake should prefer the
+    sources it can build over an archive that duplicates them is a
+    decision about what fmake builds from an unannotated tree, and
+    section 211 records it as the copyright holder's rather than taking
+    it.
+    """
+	if not shutil.which("ar"):
+		raise Skip("no ar")
+	# The archive says 1, the source says 2, so which one was linked is
+	# visible in the program's own output rather than inferred.
+	t.write("stale.c", "int lib_val(void){ return 1; }\n")
+	built = _run_in(t.dir, "cc", "-c", "stale.c", "-o", "stale.o")
+	check(built.returncode == 0, f"the fixture would not compile: {built.stderr}")
+	made = _run_in(t.dir, "ar", "rcs", "liblib.a", "stale.o")
+	check(made.returncode == 0, f"ar failed: {made.stderr}")
+	os.remove(os.path.join(t.dir, "stale.c"))
+	os.remove(os.path.join(t.dir, "stale.o"))
+
+	t.write("lib.c", "int lib_val(void){ return 2; }\n")
+	t.write("main.c", "#include <stdio.h>\nint lib_val(void);\n"
+	        'int main(void){ printf("%d\\n", lib_val()); return 0; }\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build failed: {said}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1\n",
+	      "the fixture does not reproduce the displacement: the source was "
+	      "linked, so there is nothing here to report")
+	check("liblib.a already provides what it defines" in said,
+	      f"the archive standing in front of lib.c was not named: {said}")
+	check("nothing reaches it" not in said,
+	      f"lib.c was still reported as reached by nothing: {said}")
+
+	# And the control: with the archive gone, the source is compiled and
+	# nothing is reported about it.
+	os.remove(os.path.join(t.dir, "liblib.a"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the control build failed: {said}")
+	check(t.run(os.path.basename(t.dir)).stdout == "2\n",
+	      "without the archive the source should be the one linked")
+	check("already provides what it defines" not in said,
+	      f"the message fires with no archive in the tree: {said}")
+
+	# And the case that decides the rule's shape. A subtree that is
+	# somebody else's project may ship a prebuilt archive beside its
+	# sources on purpose -- fuzzypickles vendors three -- and using it is
+	# the point rather than a mistake. `.gitmodules' is this repository
+	# saying the path belongs to someone else, which is the same signal
+	# fmake already uses to decide that a main() in there is not this
+	# tree's program.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "lib.c"))
+	os.makedirs(os.path.join(t.dir, "vendor", "foo"), exist_ok=True)
+	t.write("vendor/foo/foo.c", "int lib_val(void){ return 2; }\n")
+	t.write("v.c", "int lib_val(void){ return 1; }\n")
+	built = _run_in(t.dir, "cc", "-c", "v.c", "-o", "v.o")
+	check(built.returncode == 0, f"the fixture would not compile: {built.stderr}")
+	made = _run_in(t.dir, "ar", "rcs", "vendor/foo/libfoo.a", "v.o")
+	check(made.returncode == 0, f"ar failed: {made.stderr}")
+	os.remove(os.path.join(t.dir, "v.c"))
+	os.remove(os.path.join(t.dir, "v.o"))
+	t.write(".gitmodules", '[submodule "vendor/foo"]\n\tpath = vendor/foo\n'
+	        "\turl = https://example.invalid/foo.git\n")
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check("already provides what it defines" not in said,
+	      f"a vendored archive beside its own sources was reported as "
+	      f"stale output of this tree: {said}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

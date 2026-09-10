@@ -10193,11 +10193,52 @@ def build(args, _bootstrapping=False):
 			                 - set(situ_outs)
 			                 - set(crate_orphans)
 			                 - declined_generated)
-			for rel in ignored[:5]:
+			# "Nothing reaches it" is the wrong sentence for a source
+			# whose symbols an archive in this tree already provides.
+			# Measured on ossacli: `make' leaves `libossa.a' at the root,
+			# fmake links it, and every file under src/lib is then
+			# unreachable -- so a syntax error introduced into
+			# src/lib/ossa.c built green, four programs and exit 0, while
+			# the tree's own make refused. What the reader needs is not
+			# --force-link but the fact that their edits are going into a
+			# file nothing compiles because a previous build's output is
+			# standing in front of it.
+			# Not a vendored one. A subtree that is somebody else's
+			# project -- named in .gitmodules, or carrying its own .git --
+			# may ship a prebuilt archive beside its sources on purpose,
+			# and using it is the point rather than a mistake. The signal
+			# is the one fmake already uses to decide that a main() in
+			# there is not this tree's program.
+			_vendored = vendored_dirs(root, srcs)
+			arc_tokens = {}
+			for t in wanted:
+				for u in closures[t].link:
+					if u.archive and not vendor_of(u.rel, _vendored):
+						toks = arc_tokens.setdefault(u.rel, set())
+						for sym in u.strong:
+							toks |= symbol_tokens(sym)
+			displaced = {}
+			for rel in ignored:
+				defs = set(scans.get(rel, {}).get("defs") or [])
+				for arc in sorted(arc_tokens):
+					if defs & arc_tokens[arc]:
+						displaced[rel] = arc
+						break
+			for rel in sorted(displaced)[:5]:
+				warn(f"{rel} is not compiled, and {displaced[rel]} already "
+				     f"provides what it defines: if that archive is output "
+				     f"from another build of this tree it is stale, and "
+				     f"editing {rel} changes nothing. Remove it, or name it "
+				     f"in [project] exclude, to build from source.")
+			if len(displaced) > 5:
+				warn(f"... and {len(displaced) - 5} more source file(s) "
+				     f"standing behind an archive in this tree")
+			rest = [r for r in ignored if r not in displaced]
+			for rel in rest[:5]:
 				note(f"{rel} not compiled: nothing reaches it "
 				     f"(--force-link if it is needed anyway)")
-			if len(ignored) > 5:
-				note(f"... and {len(ignored) - 5} more")
+			if len(rest) > 5:
+				note(f"... and {len(rest) - 5} more")
 			# The same answer, for a .rs no crate draws in -- and asked
 			# after the build rather than before it, because the scan is
 			# not the authority on what a crate contains. `mod' is what

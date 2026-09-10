@@ -261,7 +261,8 @@ that had been green about nothing for five commits ·
 [208. `amd64` meant two different things](#208-amd64-meant-two-different-things) ·
 [209. A flag the ejected build did not read](#209-a-flag-the-ejected-build-did-not-read) ·
 [210. The cache asked whether the output exists](#210-the-cache-asked-whether-the-output-exists) ·
-[211. The other flag the ejected build did not read](#211-the-other-flag-the-ejected-build-did-not-read)
+[211. The other flag the ejected build did not read](#211-the-other-flag-the-ejected-build-did-not-read) ·
+[212. A green build over a source with a syntax error in it](#212-a-green-build-over-a-source-with-a-syntax-error-in-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17272,3 +17273,70 @@ and a path prefix is the easiest thing to forget in a rule nobody reads
 until it runs. Both were patched, neither was exercised, and the case
 runs both -- which is how it should have been done in the first place
 rather than on a second pass.
+
+## 212. A green build over a source with a syntax error in it
+
+Found by doing what `harmonization.md` asks for and pointing fmake at a
+real tree: **ossacli, in the state a working tree is usually in.**
+
+Its own `make` leaves `libossa.a` at the tree root. fmake reads a loose
+in-tree archive as a dependency, links it, and every file under `src/lib`
+is then reachable from nothing -- so it never compiles them. Append
+
+    this is not valid C at all;
+
+to `src/lib/ossa.c` and:
+
+    fmake            rc=0,  built health_summary, ossacli, ossa-check,
+                     ossa-metrics
+    the tree's make  src/lib/ossa.c:1578:1: error: unknown type name 'this'
+
+**The control is the same tree unpacked pristine.** `git archive HEAD`
+carries no build output, there is no archive, and fmake compiles those
+sources and builds the same four programs. So the archive is what
+displaced them, not anything about the files.
+
+**Five of the private trees carry a loose archive where fmake will find
+one** -- `ossacli/libossa.a`, `netcfgd/client/libncfg_client.a`,
+`beerssh/build-vterm/libvterm.a`, three under `fuzzypickles/`, and
+`qtty/build-san/lib/libqtty.a` with `build-probe`'s (`build/` is in
+SKIP_DIRS; `build-san/` is not).
+
+### The sentence that was wrong
+
+    src/lib/ossa.c not compiled: nothing reaches it
+    (--force-link if it is needed anyway)
+
+Something does reach it. A previous build's output is standing in front
+of it, `--force-link` is not the remedy, and the reader who edits that
+file gets a binary that ignores the edit. What is said now names the
+archive, says the edit changes nothing, and points at `[project]
+exclude`.
+
+**Vendored archives are left alone**, and that is the half that decides
+the rule's shape. A subtree that is somebody else's project may ship a
+prebuilt archive beside its sources on purpose -- fuzzypickles vendors
+three -- so the message is gated on `vendored_dirs`, which is
+`.gitmodules` or a `.git` inside a subdirectory: *this repository stating
+that a path belongs to someone else*. The same signal already decides
+that a `main()` in there is not this tree's program. Measured both ways
+on one fixture: with the path in `.gitmodules` it stays quiet, and with
+the archive at the root it fires.
+
+### What is NOT decided here, and whose it is
+
+Whether fmake should **prefer the sources it can build over an in-tree
+archive that duplicates them** is a change to what fmake builds from an
+unannotated tree, which is the premise of the project rather than a
+detail of it.
+
+- **The option.** An archive outside a vendored subtree whose symbols the
+  tree's own sources define is output from another build of this tree;
+  drop it from the pool and let the closure compile the sources.
+- **The cost.** A vendored subtree shipping sources *and* a prebuilt
+  archive is the case that goes the other way, and compiling those
+  sources may need flags fmake cannot know -- so the rule has to rest on
+  the same `vendored_dirs` signal the message does, and a tree that
+  copied a dependency in without tracking it carries neither marker.
+- **Whose.** The copyright holder's. The message costs nobody anything
+  and can be read; the policy changes artifacts.
