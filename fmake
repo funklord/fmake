@@ -10017,7 +10017,8 @@ def build(args, _bootstrapping=False):
 		                      {"exe": rcc_exe, "jobs": qrc_jobs},
 		                      {"exe": situc_exe, "jobs": situ_jobs,
 		                       "flags": conf.data.get("situ", {})
-		                                    .get("flags", [])}, **extra))
+		                                    .get("flags", [])},
+		                      prefix=args.prefix, **extra))
 		cache.save()
 		# Same answer the build path gives, and for a sharper reason. A
 		# build that drops targets leaves no binaries, which the next
@@ -10979,7 +10980,7 @@ def _refuse_whitespace(targets, closures, root, extra=()):
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
                gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
-               fragment=False):
+               fragment=False, prefix=None):
 	"""A standalone Makefile, or a fragment for an existing one to include.
 
     The fragment exists because replacing a build system is not the only way
@@ -11596,8 +11597,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# distribution sets DESTDIR and PREFIX and the rest follow. `?='")
 		a("# throughout, so setting one on the command line or in a parent")
 		a("# Makefile wins without editing this file.")
-		defaults = dict(INSTALL_DEFAULTS)
-		defaults.update({k: v for k, v in conf.install.items() if v})
+		defaults = install_dirs(conf, prefix)
 		# Quoted for the reason the tools above are: `install -d
 		# $(DESTDIR)$(BINDIR)' is a shell command, and a prefix of
 		# `/opt/my place' made it two directories.
@@ -11757,7 +11757,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
-                gen_rules=None, moc=None, uic=None, rcc=None, situ=None):
+                gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
+                prefix=None):
 	"""A standalone build.ninja."""
 	# Both ejected forms run their tests from the tree root, so $bin(NAME)
 	# resolves to the same relative path the recipe below invokes.
@@ -12200,8 +12201,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# read, so all three install the same set.
 	plan = install_plan(targets, closures, root)
 	if plan:
-		defaults = dict(INSTALL_DEFAULTS)
-		defaults.update({k: v for k, v in conf.install.items() if v})
+		defaults = install_dirs(conf, prefix)
 		steps = ["set -e", f': "$${{PREFIX:={defaults["prefix"]}}}"']
 		for key in ("bindir", "libdir", "includedir"):
 			sub = defaults[key]
@@ -12244,8 +12244,13 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# `${prefix}' into a ninja variable that expands to nothing --
 		# a .pc with empty paths, which is the trap the Makefile side
 		# already carries a comment about.
-		default = dict(INSTALL_DEFAULTS)
-		default.update({k: v for k, v in conf.install.items() if v})
+		# Through `install_dirs' like the install rule above, and that is
+		# not tidiness: this block read [install] and not `--prefix',
+		# which was harmless only while the install rule ignored the flag
+		# too. Fixing one of them alone writes a file whose .pc publishes
+		# /usr/local while its own install rule uses the prefix that was
+		# asked for -- one generated file disagreeing with itself.
+		default = install_dirs(conf, prefix)
 		for t, text in pcs:
 			parts = []
 			for l in text.rstrip("\n").split("\n"):
@@ -12397,11 +12402,26 @@ def refuse_install_escapes(conf, args):
 		    f"    name it absolutely if it belongs outside the prefix.")
 
 
-def install_paths(conf, args):
+def install_dirs(conf, prefix=None):
+	"""Where things install, before any of it is resolved to a path.
+
+    Three readers -- `--install`, the ejected Makefile and the ejected
+    ninja file -- and the order matters in all three: the built-in
+    defaults, then [install] in fmake.toml, then `--prefix` on the command
+    line. Written once here because the ejected pair had only the first
+    two, so `--eject make --prefix /usr` emitted `PREFIX ?= /usr/local'
+    and said nothing: a flag accepted and dropped, which is section 207's
+    fault with an option instead of a directive.
+    """
 	p = dict(INSTALL_DEFAULTS)
 	p.update({k: v for k, v in conf.install.items() if v})
-	if args.prefix:
-		p["prefix"] = args.prefix
+	if prefix:
+		p["prefix"] = prefix
+	return p
+
+
+def install_paths(conf, args):
+	p = install_dirs(conf, args.prefix)
 	dest = args.destdir or ""
 	out = {}
 	for key in ("bindir", "libdir", "includedir"):
@@ -13367,6 +13387,16 @@ def parse_args(argv):
 				p.error(f"-i is for a build that is stuck; {flag} does not "
 				        f"build anything, so there would be nothing to "
 				        f"unblock")
+	# Same rule, and the same reason it is here rather than further in.
+	# `--prefix' an ejected build can use -- it becomes the default the
+	# emitted file carries -- but a staging root cannot: both backends read
+	# DESTDIR when their install rule runs, so a value given now would have
+	# to be baked into a file somebody else installs from.
+	if args.eject and args.destdir:
+		p.error("--destdir stages an install and --eject writes a build "
+		        "file; the emitted install rule reads DESTDIR when it runs "
+		        "-- `make install DESTDIR=...' or `DESTDIR=... ninja "
+		        "install'")
 	return args
 
 

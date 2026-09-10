@@ -5812,6 +5812,113 @@ def an_alias_for_this_machine_is_this_machine(t):
 	      f"the architecture check did not speak: {said}")
 
 
+@case
+def an_ejected_build_installs_where_the_prefix_said(t):
+	"""`--eject make --prefix /usr' emitted `PREFIX ?= /usr/local'.
+
+    The prefix is decided in three steps -- the built-in default, then
+    [install] in fmake.toml, then `--prefix' -- and `--install' walked all
+    three while both ejected backends walked the first two. So the flag
+    was accepted and dropped, which is section 207's fault with an option
+    instead of a directive, and the ejected file installed somewhere the
+    command line had said not to.
+
+    The half worth keeping is what fixing it nearly did. The ninja backend
+    writes the .pc file itself, and that block read [install] and not the
+    flag -- harmless only while the install rule ignored the flag too.
+    Correcting one of them alone produces one generated file that
+    disagrees with itself: a .pc publishing /usr/local beside an install
+    rule using /opt/acme, which is worse than both being wrong together,
+    because a consumer's `pkg-config --cflags' then names a directory
+    nothing was installed into. `install_dirs' is the one implementation
+    all three now read.
+    """
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("lib.h", "int lib_val(void);\n")
+	t.write("lib.c", "/*! @kind shared\n *  @version 1.2.3\n"
+	        " *  @headers lib.h\n */\n#include \"lib.h\"\n"
+	        "int lib_val(void){ return 3; }\n")
+	prefix = "/opt/acme"
+
+	def installed(stage):
+		out = []
+		for base, _dirs, names in os.walk(stage):
+			for n in names:
+				full = os.path.join(base, n)
+				out.append(os.path.relpath(full, stage))
+		return sorted(out)
+
+	def pc_prefix(stage):
+		for base, _dirs, names in os.walk(stage):
+			for n in names:
+				if n.endswith(".pc"):
+					with open(os.path.join(base, n)) as fh:
+						for line in fh:
+							if line.startswith("prefix="):
+								return line.strip()
+		return "(no .pc)"
+
+	live = os.path.join(t.dir, "s-live")
+	r = t.fmake("--install", "--prefix", prefix, "--destdir", live)
+	check(r.returncode == 0, f"the live install failed: {r.stdout}{r.stderr}")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake("--eject", "make", "--prefix", prefix)
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+	mk = os.path.join(t.dir, "s-make")
+	m = _run_in(t.dir, "make", "-s", "install", "DESTDIR=" + mk)
+	check(m.returncode == 0, f"make install failed: {m.stdout}{m.stderr}")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake("--eject", "ninja", "--prefix", prefix)
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+		fh.write(r.stdout)
+	nj = os.path.join(t.dir, "s-ninja")
+	n = _run_in(t.dir, "ninja", "install", env={"DESTDIR": nj})
+	check(n.returncode == 0, f"ninja install failed: {n.stdout}{n.stderr}")
+
+	want = installed(live)
+	check(any(p.startswith("opt/acme/") for p in want),
+	      f"the live install ignored --prefix as well: {want}")
+	check(installed(mk) == want,
+	      f"the ejected Makefile installed elsewhere:\n  make {installed(mk)}"
+	      f"\n  live {want}")
+	check(installed(nj) == want,
+	      f"the ejected ninja file installed elsewhere:\n  ninja "
+	      f"{installed(nj)}\n  live {want}")
+
+	# And the file that says where all of this went.
+	check(pc_prefix(live) == "prefix=" + prefix,
+	      f"the live .pc named the wrong prefix: {pc_prefix(live)}")
+	check(pc_prefix(mk) == "prefix=" + prefix,
+	      f"the Makefile's .pc named the wrong prefix: {pc_prefix(mk)}")
+	check(pc_prefix(nj) == "prefix=" + prefix,
+	      f"the ninja file's .pc named the wrong prefix: {pc_prefix(nj)}")
+
+
+@case
+def a_destdir_with_eject_is_refused(t):
+	"""A staging root is an install-time answer, so ejecting cannot use it.
+
+    Both ejected backends read DESTDIR when their install rule runs --
+    `make install DESTDIR=...', `DESTDIR=... ninja install' -- so a
+    `--destdir' at eject time has nothing to do and was dropped without a
+    word. Refused rather than ignored, which is what fmake already does
+    for `-i' with a flag that builds nothing.
+    """
+	t.write("main.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	r = t.fmake("--eject", "make", "--destdir", "/tmp/nowhere")
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"--destdir was accepted and dropped: {said}")
+	check("--destdir" in said and "DESTDIR" in said,
+	      f"the refusal does not say where DESTDIR belongs: {said}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

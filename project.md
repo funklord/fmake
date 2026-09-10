@@ -258,7 +258,8 @@ that had been green about nothing for five commits ·
 [205. Three bytes in front of line one](#205-three-bytes-in-front-of-line-one) ·
 [206. A program that came out as a library](#206-a-program-that-came-out-as-a-library) ·
 [207. A directive one character to the left](#207-a-directive-one-character-to-the-left) ·
-[208. `amd64` meant two different things](#208-amd64-meant-two-different-things)
+[208. `amd64` meant two different things](#208-amd64-meant-two-different-things) ·
+[209. A flag the ejected build did not read](#209-a-flag-the-ejected-build-did-not-read)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17093,3 +17094,63 @@ Nothing in this workspace writes `@os` or `@arch` at all, and no
 row have been faults that no tree in front of me had met -- which says
 what the corpus is for and what it is not: it measures whether a fix
 costs anything, and it cannot tell you whether a fix is needed.
+
+## 209. A flag the ejected build did not read
+
+The lens here was **differential**: build a tree live, then eject it to
+make and to ninja and build it again each way, and compare what came out.
+Fourteen fixtures -- a header in a subdirectory, `@cflags` on one TU, an
+assembly source, `@libs m`, a library subdirectory, a deep include path,
+C++, an `@define` carrying quotes, and then the install of a program, a
+static library and a versioned shared library.
+
+**Eleven agreed exactly**, including the awkward ones: the ejected
+builds reach the same fixed point (`make` and `ninja` both report nothing
+to do on a second run), and all three installs place the same files, the
+same symlinks -- `liblib.so -> liblib.so.1 -> liblib.so.1.2.3` -- and
+byte-identical `.pc` contents. That is worth recording as swept: this was
+the shape §196 was about, and it holds.
+
+**One did not agree, and the disagreement was the prefix.**
+
+    fmake --install --prefix /opt/acme      installs under /opt/acme
+    fmake --eject make --prefix /opt/acme   emits PREFIX ?= /usr/local
+    fmake --eject ninja --prefix /opt/acme  emits ${PREFIX:=/usr/local}
+
+The prefix is decided in three steps -- the built-in default, then
+`[install]` in `fmake.toml`, then `--prefix` -- and `--install` walked
+all three while both ejected backends walked the first two. The flag was
+accepted and dropped, which is §207's fault with an option instead of a
+directive.
+
+### What the fix nearly did, which is the part worth keeping
+
+The ninja backend writes the `.pc` file itself, and that block read
+`[install]` and not the flag. Which was **harmless only while the install
+rule ignored the flag too**: correcting the install rule alone produces
+one generated file that disagrees with itself --
+
+    rule pc_lib   ... "prefix=${PREFIX:=/usr/local}" ...
+    rule install  ... : "${PREFIX:=/opt/acme}" ...
+
+-- and that is worse than both being wrong together, because a consumer's
+`pkg-config --cflags lib` then names a directory nothing was installed
+into. It was caught by reading the emitted file rather than by the
+fixture: the install tree was correct and only the `.pc` inside it was
+wrong.
+
+`install_dirs(conf, prefix)` is the one implementation all three read
+now. §208 was the same fault in platform names, three days' worth of
+sections ago; this file has recorded it in the rcc list, in `pc_text`
+against `install_paths`, in six `shlex` doors, and in a keyword set I
+added myself.
+
+### And the flag that cannot be honoured
+
+`--destdir` with `--eject` was dropped just as silently, and here the
+right answer is the opposite one: a staging root is an install-time
+answer, and both emitted files read `DESTDIR` when their install rule
+runs. Baking one in would put somebody else's staging path in a file they
+install from. It is refused now, next to the refusal fmake already makes
+for `-i` with a flag that builds nothing -- *refused here rather than
+ignored later*, which is that comment's own phrase.
