@@ -260,7 +260,8 @@ that had been green about nothing for five commits ·
 [207. A directive one character to the left](#207-a-directive-one-character-to-the-left) ·
 [208. `amd64` meant two different things](#208-amd64-meant-two-different-things) ·
 [209. A flag the ejected build did not read](#209-a-flag-the-ejected-build-did-not-read) ·
-[210. The cache asked whether the output exists](#210-the-cache-asked-whether-the-output-exists)
+[210. The cache asked whether the output exists](#210-the-cache-asked-whether-the-output-exists) ·
+[211. The other flag the ejected build did not read](#211-the-other-flag-the-ejected-build-did-not-read)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17223,3 +17224,51 @@ section can change that. It is the ordinary behaviour of those tools and
 it is theirs; what an ejected build gains from this is only that the
 tree it was ejected from will not have handed it a broken object in the
 first place.
+
+## 211. The other flag the ejected build did not read
+
+§209 found `--prefix` accepted and dropped by both ejected backends. The
+same sweep, finished: of the flags that shape a build, five reach the
+emitted file and one did not.
+
+    --cflags        reaches both files
+    --ldflags       reaches both files
+    --force-link    reaches both files
+    --no-libs       reaches both files (the -l is absent)
+    -p PROFILE      reaches both files
+    -o DIR          dropped, silently
+
+`-o` says where the binaries go. `fmake -o dist` puts them in `dist`;
+`fmake --eject make -o dist` emitted a Makefile that writes to the tree
+root, which is the default -- so what came out was a snapshot of a build
+nobody asked for. fmake's own words decide which way to fix it: an
+ejected build is *a snapshot of this build, not a translation of it*.
+
+Make gains `OUTDIR` and ninja `out_dir`, read by the target list, the
+link rules, the test recipes, clean and install. **One helper per backend
+rather than fifteen edited paths**, which is §208 and §209's lesson
+applied while writing rather than after: the same fact in several places
+is how the next divergence gets written.
+
+**Emitted only under the flag.** A tree that never passes `-o` gets the
+file it always had, byte for byte -- checked by comparing the emitted
+output against the unpatched emitter's, for both backends, before the
+case was written.
+
+### The refusal that already existed
+
+`-o out dir` is a path Make splits in two. Before this the emitted file
+built `out` and `dir/prog` out of an `--eject` that exited 0 -- the same
+shape as the submodule at `my lib` that ejected `my lib/.git:`. It is
+routed through the checks that already refuse such a path, so the message
+and the remedy are the ones already written, and ninja -- which can
+express it -- still builds it. A newline in `-o` hits the other refusal,
+the one both backends share.
+
+### The one thing that was not checked until it was
+
+The test recipes. `make test` and `ninja test` run the program by path,
+and a path prefix is the easiest thing to forget in a rule nobody reads
+until it runs. Both were patched, neither was exercised, and the case
+runs both -- which is how it should have been done in the first place
+rather than on a second pass.

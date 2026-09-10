@@ -6037,6 +6037,99 @@ def a_truncated_artifact_is_linked_again(t):
 		      "the build overwrote a file it did not write")
 
 
+@case
+def an_ejected_build_puts_binaries_where_o_said(t):
+	"""`--eject make -o dist' wrote a Makefile that ignored `dist'.
+
+    `-o' says where the binaries go. The live build honours it; both
+    ejected backends emitted a file that writes to the tree root, which is
+    the default -- so what came out was a snapshot of a build nobody
+    asked for. fmake's own words settle which way to fix it: an ejected
+    build is *a snapshot of this build, not a translation of it*.
+
+    Make gains an OUTDIR variable and ninja an out_dir, used by the target
+    list, the link rules, the test recipes, clean and install -- one
+    helper each rather than fifteen edited paths, since the same fact in
+    several places is what sections 208 and 209 were both about. Emitted
+    only under the flag, so a tree that never passed one gets the file it
+    always had, byte for byte.
+    """
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("main.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	t.write("check_thing.c", "/*! @test */\n#include <stdio.h>\n"
+	        'int main(void){ printf("test ok\\n"); return 0; }\n')
+	name = os.path.basename(t.dir)
+
+	r = t.fmake("--eject", "make", "-o", "dist")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+	m = _run_in(t.dir, "make", "-s")
+	check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "dist", name)),
+	      f"the ejected Makefile ignored -o: {os.listdir(t.dir)}")
+	# The test recipe runs the program where it now is, which is the line
+	# a path prefix is easiest to forget.
+	m = _run_in(t.dir, "make", "-s", "test")
+	check("test ok" in m.stdout, f"make test did not run it: {m.stdout}{m.stderr}")
+
+	shutil.rmtree(os.path.join(t.dir, "dist"), ignore_errors=True)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake("--eject", "ninja", "-o", "dist")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+		fh.write(r.stdout)
+	n = _run_in(t.dir, "ninja")
+	check(n.returncode == 0, f"ninja failed: {n.stdout}{n.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "dist", name)),
+	      f"the ejected ninja file ignored -o: {os.listdir(t.dir)}")
+
+	# With no -o the artifact is at the root, which is what keeps every
+	# tree that never passed the flag on the file it already had.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake("--eject", "make")
+	check("OUTDIR" not in r.stdout,
+	      "a Makefile ejected without -o carries an OUTDIR it does not need")
+	check(f"\n{name}:" in r.stdout or r.stdout.startswith(f"{name}:"),
+	      "without -o the target is no longer named at the tree root")
+
+
+@case
+def an_output_directory_make_cannot_name_is_refused(t):
+	"""The path refusals already knew how to say this.
+
+    `-o out dir' is a path Make splits in two: without this the emitted
+    file built `out' and `dir/prog', out of an --eject that exited 0.
+    Routed through the same check that refuses a source or a submodule
+    Make cannot name, so the message and the remedy are the ones that
+    already exist -- and ninja, which can express the path, still builds
+    it.
+    """
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("main.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	r = t.fmake("--eject", "make", "-o", "out dir")
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a Makefile was ejected for a path with a "
+	      f"space in it: {said}")
+	check("cannot eject a Makefile" in said and "ninja" in said,
+	      f"the refusal is not the one that already exists: {said}")
+
+	r = t.fmake("--eject", "ninja", "-o", "out dir")
+	check(r.returncode == 0, f"ninja refused a path it can express: "
+	      f"{r.stdout}{r.stderr}")
+	with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+		fh.write(r.stdout)
+	n = _run_in(t.dir, "ninja")
+	check(n.returncode == 0, f"ninja failed: {n.stdout}{n.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "out dir",
+	                                  os.path.basename(t.dir))),
+	      "ninja did not put the binary in the directory with the space")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

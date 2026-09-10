@@ -10081,7 +10081,8 @@ def build(args, _bootstrapping=False):
 		                      {"exe": situc_exe, "jobs": situ_jobs,
 		                       "flags": conf.data.get("situ", {})
 		                                    .get("flags", [])},
-		                      prefix=args.prefix, **extra))
+		                      prefix=args.prefix, outdir=args.output,
+		                      **extra))
 		cache.save()
 		# Same answer the build path gives, and for a sharper reason. A
 		# build that drops targets leaves no binaries, which the next
@@ -11043,7 +11044,7 @@ def _refuse_whitespace(targets, closures, root, extra=()):
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
                gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
-               fragment=False, prefix=None):
+               fragment=False, prefix=None, outdir=None):
 	"""A standalone Makefile, or a fragment for an existing one to include.
 
     The fragment exists because replacing a build system is not the only way
@@ -11074,7 +11075,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# stopped on `*** [Makefile:66: my] Error 1', out of an --eject that
 	# had exited 0.
 	gen_srcs = (_tool_paths(moc, uic, rcc, gen_rules)
-	            + list(declared_submodules(root)))
+	            + list(declared_submodules(root))
+	            # `-o out dir' is a path make cannot name either, and the
+	            # refusals below already know how to say so and where to
+	            # send the reader. Without it the emitted file split the
+	            # directory in two and built `out' and `dir/prog'.
+	            + ([outdir] if outdir else []))
 	_refuse_leading_dash(targets, closures, root, gen_srcs)
 	_refuse_newlines(targets, closures, root, gen_srcs)
 	_refuse_whitespace(targets, closures, root, gen_srcs)
@@ -11206,7 +11212,22 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(var("RUSTC", _mk_flag(cfg.rustc), assign, own=False))
 		a(var("RUSTFLAGS", ["--edition", cfg.rust_edition] + cfg.rustflags))
 	a(var("BUILD_DIR", EJECT_BUILD_DIR, assign))
+	# Where the artifacts land, and only when `-o' asked for somewhere.
+	# An ejected build is a snapshot of the build it came from rather than
+	# a translation of it, and `-o dist' is part of what that build was --
+	# so a file ejected from it has to put binaries in dist too. Emitted
+	# only under the flag, because every tree that never passed one keeps
+	# the file it has always had, byte for byte.
+	if outdir:
+		a(var("OUTDIR", outdir, assign))
 	a("")
+
+	# One spelling of an artifact's path, used by the target list, the
+	# link rules, the test recipes, clean and install. Written once
+	# because the same fact in several places is what section 208 and
+	# section 209 were both about.
+	def art(name):
+		return f"$({P}OUTDIR)/{name}" if outdir else name
 
 	# DEBUG and SANITIZE survive the exit.
 	#
@@ -11265,7 +11286,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	for t in tests:
 		by_group.setdefault(t.test_group, []).append(t)
 	group_names = sorted(by_group)
-	names = " ".join(t.filename for t in targets if not t.test)
+	names = " ".join(art(t.filename) for t in targets if not t.test)
 
 	def group_var(g):
 		return ("FM_" if fragment else "") + _mk_ident(g).upper() + "_TARGETS"
@@ -11277,8 +11298,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"FM_TARGETS = {names}")
 	for g in group_names:
 		a(f"{group_var(g)} = "
-		  + " ".join(t.filename for t in sorted(by_group[g],
-		                                        key=lambda x: x.name)))
+		  + " ".join(art(t.filename) for t in sorted(by_group[g],
+		                                             key=lambda x: x.name)))
 	a("")
 	phonies = " ".join(group_rule(g) for g in group_names)
 	if fragment:
@@ -11298,7 +11319,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			                for x in t.conf.get("test-args", []))
 			env = " ".join(_mk_cmd(_sh_env(p))
 			               for p in test_env_pairs(conf, t, eject_bins))
-			a(f"\t{env + ' ' if env else ''}./{t.filename}"
+			a(f"\t{env + ' ' if env else ''}./{art(t.filename)}"
 			  + (f" {argv}" if argv else ""))
 		a("")
 
@@ -11581,8 +11602,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# Derived from the same string the recipe emits, because a
 			# mkdir naming a path of its own is a mkdir that can drift.
 			dep = f"$({P}BUILD_DIR)/{_eject_obj(root_unit.rel)}.d"
-			a(f"{t.filename}: {deps}")
+			a(f"{art(t.filename)}: {deps}")
 			a(f"\t@mkdir -p $(dir {dep})")
+			if outdir:
+				a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}RUSTC) $({P}RUSTFLAGS) -o $@ \\")
 			a(f"\t    --emit=link,dep-info={dep} "
 			  f"{_eject_src(root_unit.rel)}")
@@ -11624,10 +11647,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			arcs_txt = f"-Wl,--start-group {arcs_txt} -Wl,--end-group"
 		tail = ((f" {arcs_txt}" if arcs_txt else "")
 		        + (f" {libs}" if libs else "") + f" $({P}LDFLAGS)")
-		a(f"{t.filename}: $({P}{ident}_OBJS)"
+		a(f"{art(t.filename)}: $({P}{ident}_OBJS)"
 		  + (f" {' '.join(blobs)}" if blobs else "")
 		  + (f" {' '.join(arcs or crate_arcs)}"
 		     if (arcs or crate_arcs) else ""))
+		if outdir:
+			a("\t@mkdir -p $(@D)")
 		if t.kind == "static" and not objs and len(crate_arcs) == 1:
 			# The crate's staticlib is the library. Copied rather than
 			# assembled, for the reason link_cmd gives: `ar` over no
@@ -11723,7 +11748,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				if origin == "symlink":
 					a(f"\tln -sf {source} {var}/{name}")
 					continue
-				src = source if origin == "built" else _eject_src(source)
+				src = (art(source) if origin == "built"
+				       else _eject_src(source))
 				a(f"\tinstall -m {mode:o} {src} {var}/{name}")
 		a("")
 		# The inverse, named file by file for the reason `clean' is: a
@@ -11773,7 +11799,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	               for rel in sorted(crate_libs)]
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d"
 	               for rel in sorted(crate_deps)]
-	            + [t.filename for t in targets]
+	            + [art(t.filename) for t in targets]
 	            + [t.name + ".pc" for t in targets if pc_text(t, conf)]
 	            + [_eject_src(j["out"]) for j in uic_jobs]
 	            + [_eject_src(j["out"]) for j in moc_jobs]
@@ -11821,7 +11847,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
                 gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
-                prefix=None):
+                prefix=None, outdir=None):
 	"""A standalone build.ninja."""
 	# Both ejected forms run their tests from the tree root, so $bin(NAME)
 	# resolves to the same relative path the recipe below invokes.
@@ -11833,7 +11859,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	nj_extra = (_tool_paths(moc, uic, rcc, gen_rules)
 	            + list(declared_submodules(root)))
 	_refuse_leading_dash(targets, closures, root, nj_extra)
-	_refuse_newlines(targets, closures, root, nj_extra)
+	_refuse_newlines(targets, closures, root,
+	                 nj_extra + ([outdir] if outdir else []))
 	common = " ".join(_eject_flags(cfg.cflags + incflags, root, _nj_flag))
 	override = " ".join(_eject_flags(cfg.override, root, _nj_flag))
 	L = []
@@ -11877,6 +11904,21 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# link_flags(), so --coverage and friends reach the link here too.
 	a(f"ldflags = {' '.join(_eject_flags(cfg.link_flags(), root, _nj_flag))}")
 	a(f"build_dir = {EJECT_BUILD_DIR}")
+	# `-o', for the reason the Makefile carries OUTDIR: an ejected build is
+	# a snapshot of the build it came from, and where that build put its
+	# binaries is part of it. Emitted only under the flag, so a tree that
+	# never passed one keeps the file it always had.
+	if outdir:
+		a(f"out_dir = {_ninja(outdir)}")
+
+	def art(name):
+		return f"$out_dir/{_ninja(name)}" if outdir else _ninja(name)
+
+	# The same path for a shell command rather than a ninja input: the
+	# install recipe and the test runner quote it themselves, and a
+	# ninja-escaped path inside `sh -c' is a path with a literal `$' in it.
+	def _art_path(name):
+		return os.path.join(outdir, name) if outdir else name
 	a("")
 	# `deps = gcc` lets ninja read the depfile and then discard it, which is
 	# what makes header dependencies free here too.
@@ -12174,7 +12216,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# program's depfile is an intermediate, and the tree root is
 			# where the program goes.
 			dep = f"$build_dir/{_ninja(_eject_obj(root_unit.rel))}.d"
-			a(f"build {_ninja(t.filename)} | {dep} {dep}.all: rustbin "
+			a(f"build {art(t.filename)} | {dep} {dep}.all: rustbin "
 			  f"{_ninja(_eject_src(root_unit.rel))}{mods}")
 			a(f"  dep = {dep}")
 			continue
@@ -12198,14 +12240,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		crate_arcs = [f"$build_dir/{_ninja(_eject_obj(u.rel))}.a"
 		              for u in closures[t].link if u.archive and u.crate]
 		if t.kind == "static" and not objs.strip() and len(crate_arcs) == 1:
-			a(f"build {_ninja(t.filename)}: copy {crate_arcs[0]}")
+			a(f"build {art(t.filename)}: copy {crate_arcs[0]}")
 			continue
 		rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
 		# Implicit inputs so a changed archive relinks; the command line
 		# places them after the objects and groups them when there is more
 		# than one, neither of which an input list can express.
 		after = (" | " + " ".join(arcs)) if arcs else ""
-		a(f"build {_ninja(t.filename)}: {rule} {objs}{after}")
+		a(f"build {art(t.filename)}: {rule} {objs}{after}")
 		if t.kind != "static":
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
 			if t.kind == "shared":
@@ -12227,7 +12269,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	for t in targets:
 		if t.test:
 			by_group.setdefault(t.test_group, []).append(t)
-	a(f"default {' '.join(_ninja(t.filename) for t in plain)}")
+	a(f"default {' '.join(art(t.filename) for t in plain)}")
 	for g in sorted(by_group):
 		members = sorted(by_group[g], key=lambda x: x.name)
 		a("")
@@ -12235,7 +12277,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		    " ".join([_nj_esc(_sh_env(p))
 		              for p in test_env_pairs(conf, t, eject_bins)]
 		             + ["./" + " ".join(_nj_esc(shlex.quote(x))
-		                                for x in [t.filename]
+		                                for x in [_art_path(t.filename)]
 		                                + list(t.conf.get("test-args", [])))])
 		    for t in members)
 		a(f"rule run_{_mk_ident(g)}")
@@ -12244,7 +12286,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("  pool = console")
 		_dep = [_ninja(d) for d in bin_deps(conf, members, eject_files)]
 		a(f"build run-{g}: run_{_mk_ident(g)} | "
-		  f"{' '.join([_ninja(t.filename) for t in members] + _dep)}")
+		  f"{' '.join([art(t.filename) for t in members] + _dep)}")
 		a(f"build {g}: phony run-{g}")
 
 	# ---- install
@@ -12284,7 +12326,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 					             f'"$$DESTDIR$${directory.upper()}/"'
 					             f"{shlex.quote(name)}")
 					continue
-				src = source if origin == "built" else _eject_src(source)
+				src = (_art_path(source) if origin == "built"
+				       else _eject_src(source))
 				# Shell-quoted rather than ninja-escaped: this is a command
 				# line, and ninja can express a path with a space in it, so
 				# one can reach here.
@@ -12339,7 +12382,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("  command = " + "; ".join(steps))
 		a("  description = INSTALL")
 		a("  pool = console")
-		deps = " ".join(sorted({_ninja(t.filename) for t in targets}
+		deps = " ".join(sorted({art(t.filename) for t in targets}
 		                       | {_ninja(t.name) + ".pc" for t, _x in pcs}))
 		a(f"build install: install | {deps}")
 
