@@ -3741,11 +3741,19 @@ def host_os():
 	return p
 
 
+# Spellings of one architecture. `platform.machine()' is where these come
+# from -- it is the machine's own word for itself and differs by kernel --
+# but they are equally what a person writes, in a filename, in `@arch' and
+# in [toolchain], which is why the table is out here rather than inside
+# the function that first needed it. See `canon_platform'.
+ARCH_SPELLINGS = {"amd64": "x86_64", "x64": "x86_64", "arm64": "aarch64",
+                  "i386": "x86", "i486": "x86", "i586": "x86",
+                  "i686": "x86"}
+
+
 def host_arch():
-	m = platform.machine().lower()
-	return {"amd64": "x86_64", "x64": "x86_64", "arm64": "aarch64",
-	        "i386": "x86", "i486": "x86", "i586": "x86",
-	        "i686": "x86"}.get(m, m)
+	return ARCH_SPELLINGS.get(platform.machine().lower(),
+	                          platform.machine().lower())
 
 
 # Suffixes that state which platform a file is for. Only spellings that
@@ -3783,6 +3791,36 @@ _PLATFORM_ORDER = sorted(PLATFORM_SUFFIXES, key=len, reverse=True)
 # argument is that a word cannot mean anything else does not get to keep a
 # word that can.
 PLATFORM_PREFIX_UNSAFE = {"ios"}
+
+
+def canon_platform(kind, name):
+	"""The canonical spelling of an os or arch name, or the name lowered.
+
+    A platform name reaches fmake three ways -- a suffix in a filename, an
+    `@os' or `@arch' directive, and [toolchain] os/arch -- and each read
+    the text its own way until this existed. `amd64' was x86_64 in
+    `fast_amd64.c', x86_64 again through `host_arch()', and a platform of
+    its own in `@arch amd64': so the directive excluded the file on the
+    one machine it names, and the message said so in its own words --
+    "fast.c is excluded (@arch amd64 (building for x86_64))".
+
+    The same fact twice, which is this project's most-repeated fault. It
+    cost more than the exclusion: [toolchain] arch = "amd64" also turned
+    the ELF architecture check off, silently, because that walks
+    ELF_MACHINES looking for a name equal to `cfg.arch' and none is
+    spelled that way.
+
+    Unknown names are lowered and returned as they are, deliberately.
+    `host_os()' falls back to `sys.platform' for a system nobody here has
+    met, so a name fmake does not know can still be the right answer on
+    the machine that calls itself that, and refusing it would break the
+    one case that cannot be tested from here.
+    """
+	name = name.strip().lower()
+	hit = PLATFORM_SUFFIXES.get(name)
+	if hit and hit[0] == kind:
+		return hit[1]
+	return ARCH_SPELLINGS.get(name, name) if kind == "arch" else name
 
 
 def filename_platform(rel):
@@ -3834,13 +3872,17 @@ def platform_excludes(ann, want_os=None, want_arch=None):
     is the host; on a cross build [toolchain] os/arch says otherwise, and
     testing the host instead is silently wrong every time.
     """
-	want_os = want_os or host_os()
-	want_arch = want_arch or host_arch()
+	want_os = canon_platform("os", want_os or host_os())
+	want_arch = canon_platform("arch", want_arch or host_arch())
+	# Written as the author wrote them for the message, canonical for the
+	# comparison: `@arch amd64 (building for x86_64)` was a true sentence
+	# about a wrong decision, and quoting the canonical form back would
+	# hide which word in the file did it.
 	oses = [o.lower() for o in ann.items("os")]
-	if oses and want_os not in oses:
+	if oses and want_os not in [canon_platform("os", o) for o in oses]:
 		return f"@os {' '.join(oses)} (building for {want_os})"
 	arches = [a.lower() for a in ann.items("arch")]
-	if arches and want_arch not in arches:
+	if arches and want_arch not in [canon_platform("arch", a) for a in arches]:
 		return f"@arch {' '.join(arches)} (building for {want_arch})"
 	return None
 
@@ -4593,8 +4635,12 @@ class Config:
 		# A cross build must test @os/@arch against the machine being built
 		# *for*, not the one doing the building. Without this the host is
 		# assumed, which is silently wrong for every cross compilation.
-		self.os      = tool.get("os") or host_os()
-		self.arch    = tool.get("arch") or host_arch()
+		# Canonical here rather than at every reader: [toolchain] is text
+		# somebody wrote, and `arch = "amd64"' otherwise matched no entry
+		# in ELF_MACHINES, which switched the architecture check off
+		# without saying anything.
+		self.os      = canon_platform("os", tool.get("os") or host_os())
+		self.arch    = canon_platform("arch", tool.get("arch") or host_arch())
 
 		# Three bands, general to specific: defaults and fmake.toml, then
 		# each file's own annotations, then the command line. Later wins at

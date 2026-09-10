@@ -5744,6 +5744,74 @@ def a_directive_in_an_ordinary_comment_is_named(t):
 	      f"the doxygen form stopped renaming the target: {said}")
 
 
+@case
+def an_alias_for_this_machine_is_this_machine(t):
+	"""`amd64' meant x86_64 in a filename and something else in a directive.
+
+    A platform name reaches fmake three ways -- a suffix in a filename, an
+    `@os' or `@arch' directive, and [toolchain] os/arch -- and each read
+    the text its own way. `fast_amd64.c' was x86_64, `host_arch()' turned
+    the machine's own `amd64' into x86_64, and `@arch amd64' was a
+    platform of its own: so the directive excluded the file on the one
+    machine it names, and said so in a sentence that reads as correct --
+
+        fast.c is excluded (@arch amd64 (building for x86_64))
+
+    The same fact in three places, which is this project's most repeated
+    fault, and it cost a second thing that nothing would have connected to
+    it: `[toolchain] arch = \"arm64\"' matched no entry in ELF_MACHINES, so
+    the architecture check walked away without looking, and a tree
+    declaring a cross build compiled and linked host objects in silence.
+    That half is the third check here, and it needs no cross toolchain --
+    the host compiler's own output is the wrong architecture for a tree
+    that says it is building for another.
+    """
+	alias = {"x86_64": "amd64", "aarch64": "arm64", "x86": "i686"}.get(
+	    {"amd64": "x86_64", "x64": "x86_64", "arm64": "aarch64",
+	     "i386": "x86", "i686": "x86"}.get(platform.machine().lower(),
+	                                       platform.machine().lower()))
+	if not alias:
+		raise Skip(f"no alias spelling for {platform.machine()}")
+	other = "arm64" if alias == "amd64" else "amd64"
+
+	t.write("fast.c", f"/*! @arch {alias} */\nint fast_path(void)"
+	        "{ return 42; }\n")
+	t.write("main.c", "#include <stdio.h>\nint fast_path(void);\n"
+	        'int main(void){ printf("%d\\n", fast_path()); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"@arch {alias} excluded a file on the machine it names: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "42\n",
+	      "the file @arch names was not the one linked")
+
+	# The other direction, which the fix must not have broken: a name that
+	# really is another machine still takes the file out of the build.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("fast.c", "/*! @arch riscv64 */\nint fast_path(void)"
+	        "{ return 42; }\n")
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"@arch riscv64 built here anyway: {said}")
+	check("excluded (@arch riscv64" in said,
+	      f"the exclusion stopped naming the directive that caused it: {said}")
+
+	# And the check that an alias had switched off. The tree declares a
+	# machine this one is not, so the host compiler's objects are the
+	# wrong architecture and have to be refused.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "fast.c"))
+	t.write("main.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	t.write("fmake.toml", f'[toolchain]\narch = "{other}"\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a tree declaring {other} linked host objects: {said}")
+	check("compiled for" in said and "being built for" in said,
+	      f"the architecture check did not speak: {said}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

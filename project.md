@@ -257,7 +257,8 @@ that had been green about nothing for five commits ·
 [204. The instrument again, pointed at assembly](#204-the-instrument-again-pointed-at-assembly) ·
 [205. Three bytes in front of line one](#205-three-bytes-in-front-of-line-one) ·
 [206. A program that came out as a library](#206-a-program-that-came-out-as-a-library) ·
-[207. A directive one character to the left](#207-a-directive-one-character-to-the-left)
+[207. A directive one character to the left](#207-a-directive-one-character-to-the-left) ·
+[208. `amd64` meant two different things](#208-amd64-meant-two-different-things)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17025,3 +17026,70 @@ measurement**, and the corpus was all-clean, so nothing in it could have
 told me. What separated the two was the fixture: three comment styles
 that must warn, a Doxygen command that must not, and the real form that
 must still be read.
+
+## 208. `amd64` meant two different things
+
+A platform name reaches fmake three ways: a suffix in a filename, an
+`@os` or `@arch` directive, and `[toolchain] os`/`arch`. Each read the
+text its own way.
+
+    fast_amd64.c            x86_64, through PLATFORM_SUFFIXES
+    host_arch()             x86_64, through a table of its own
+    @arch amd64             a platform called "amd64", equal to nothing
+
+So a file annotated for the machine it is sitting on was **taken out of
+the build on that machine**, and the message said so in a sentence that
+reads as perfectly correct:
+
+    fast.c is excluded (@arch amd64 (building for x86_64))
+
+The same fact in three places, which is the fault this file has recorded
+more than any other -- §189's rcc list, §196's `pc_text` against
+`install_paths`, §199's six `shlex` doors, and a keyword set I added
+myself and only found by sabotaging it.
+
+### The second symptom, which nothing would have connected to the first
+
+`[toolchain] arch = "arm64"` is a tree saying it cross-builds for
+aarch64. The architecture check walks `ELF_MACHINES` looking for an entry
+whose name equals `cfg.arch`, finds none spelled `arm64`, and **returns
+without looking at anything**. Measured, and it needs no cross toolchain
+to see: with the alias, the host compiler's x86_64 objects were compiled,
+linked and shipped in silence; canonical, the same tree stops with
+
+    main.c compiled for x86_64 (64-bit LSB), but this tree is being
+    built for linux/aarch64
+
+A guard that is switched off by a spelling is worse than one that is
+absent, because the tree looks guarded.
+
+### One table, three readers
+
+`canon_platform(kind, name)` is the whole fix: the filename table plus
+the machine-name spellings `host_arch()` already carried, asked at the
+two places where the text arrives from a person. The exclusion message
+still quotes the word the author wrote rather than the canonical one --
+`@arch amd64 (building for x86_64)` is the right sentence when the file
+really is for another machine, and replacing `amd64` with `x86_64` there
+would hide which word in the file decided.
+
+**An unknown name is lowered and kept, deliberately.** `host_os()` falls
+back to `sys.platform` for a system nobody here has met, so `@os plan9`
+on a machine that calls itself plan9 must still match. Refusing unknown
+names would need a list of every platform fmake will ever run on, and
+that list would be wrong on exactly the machine that needed it.
+
+**A warning for a misspelled name was considered and left.** `@os linx`
+does take the file out of the build -- but not silently: the file is
+reported as excluded, with the directive quoted, and if anything needed
+it the link says so too. The message is already the one a reader needs;
+a second one keyed on a list of known names would go stale against the
+fallback above.
+
+### Found by construction again
+
+Nothing in this workspace writes `@os` or `@arch` at all, and no
+`fmake.toml` here sets `[toolchain] os` or `arch`. Three sections in a
+row have been faults that no tree in front of me had met -- which says
+what the corpus is for and what it is not: it measures whether a fix
+costs anything, and it cannot tell you whether a fix is needed.
