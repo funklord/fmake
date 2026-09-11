@@ -6222,6 +6222,125 @@ def a_source_standing_behind_an_archive_is_named(t):
 	      f"stale output of this tree: {said}")
 
 
+@case
+def a_refusal_lists_the_names_it_accepts(t):
+	"""`no target 'test'. Available: check_a, prog, test'.
+
+    The loop that resolves a name on the command line takes a phony rule,
+    a target, or a test GROUP. The list it printed when it refused was
+    built from the first two plus a literal `test' whenever anything was
+    held back -- so a tree whose tests are grouped was told that `test' is
+    available, which it is not, and never told about `unit' and `slow',
+    which are. The advice fmake prints during a build has always been
+    right (``fmake slow' or `fmake unit' builds and runs them''); only the
+    refusal disagreed with it.
+
+    Built from the same three sets the lookup reads, so the two cannot
+    drift again.
+    """
+	t.write("prog.c", "/*! @target prog */\n#include <stdio.h>\n"
+	        'int main(void){ printf("p\\n"); return 0; }\n')
+	t.write("check_a.c", "/*! @test unit */\n#include <stdio.h>\n"
+	        'int main(void){ printf("u\\n"); return 0; }\n')
+	t.write("check_b.c", "/*! @test slow */\n#include <stdio.h>\n"
+	        'int main(void){ printf("s\\n"); return 0; }\n')
+	r = t.fmake("test")
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"`fmake test' built something here: {said}")
+	check("slow" in said and "unit" in said,
+	      f"the refusal does not name the groups that would work: {said}")
+	check("prog" in said, f"the refusal dropped the ordinary targets: {said}")
+	check("Available: check_a, check_b, prog, slow, unit" in said,
+	      f"the list is not the set the lookup accepts: {said}")
+
+	# And the names it lists do work.
+	r = t.fmake("unit")
+	check(r.returncode == 0 and "1 test passed" in r.stdout + r.stderr,
+	      f"a group named in the list did not run: {r.stdout}{r.stderr}")
+
+
+@case
+def a_flag_in_libs_is_refused(t):
+	"""`@libs -lm' asked the linker for `-l-lm'.
+
+    Every value of `@libs' becomes `-l<value>', so writing the flag
+    instead of the name produces `-l-lm' and the linker says `cannot find
+    -l-lm: No such file or directory' -- naming neither the directive nor
+    the file it is in, about a library nobody wrote down. A leading dash
+    cannot be a library name, so this is unambiguous, and it is refused
+    before anything compiles, which is the answer @pkg already gives for a
+    constraint it cannot satisfy.
+    """
+	t.write("lib.c", "/*! @libs -lm */\n#include <math.h>\n"
+	        "int lib_val(void){ return (int)sqrt(4.0); }\n")
+	t.write("main.c", "#include <stdio.h>\nint lib_val(void);\n"
+	        'int main(void){ printf("%d\\n", lib_val()); return 0; }\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"`@libs -lm' built: {said}")
+	check("lib.c:1" in said and "@libs takes a library name" in said,
+	      f"the refusal does not name the line that wrote it: {said}")
+
+	# The spelling the directive documents still works, and links libm.
+	t.write("lib.c", "/*! @libs m */\n#include <math.h>\n"
+	        "int lib_val(void){ return (int)sqrt(4.0); }\n")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"the documented spelling stopped working: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "2\n",
+	      "the library was not linked")
+
+
+@case
+def the_doxygen_aliases_are_the_spelling_doxygen_takes(t):
+	"""The aliases were written in a spelling Doxygen now refuses.
+
+    `--doxygen-aliases' exists so that a tree using fmake directives
+    documents cleanly. Measured with Doxygen 1.9.8, the `\\n' this emitted
+    produced `warning: Illegal command \\n found as part of a title
+    section' for every directive, and rendered the two characters into the
+    page -- `Build target:\\n demo'. `^^' is the spelling that works.
+
+    The control is the file being absent, which gives `Found unknown
+    command '@target'': the aliases are needed, and until this they were
+    needed and wrong.
+    """
+	if not shutil.which("doxygen"):
+		raise Skip("doxygen not installed")
+	r = t.fmake("--doxygen-aliases")
+	check(r.returncode == 0, f"--doxygen-aliases failed: {r.stderr}")
+	check("\\n\"" not in r.stdout,
+	      "the aliases still carry the spelling Doxygen refuses")
+	with open(os.path.join(t.dir, "fmake.doxygen-aliases"), "w") as fh:
+		fh.write(r.stdout)
+	t.write("main.c", "/*! @file\n *  @target demo\n *  @version 1.2\n"
+	        " *  @brief x\n */\nint documented(void){ return 0; }\n")
+	_run_in(t.dir, "doxygen", "-g", "Doxyfile")
+	with open(os.path.join(t.dir, "Doxyfile"), "a") as fh:
+		fh.write("\nQUIET=YES\nEXTRACT_ALL=YES\nGENERATE_HTML=YES\n"
+		         "HTML_OUTPUT=html\nGENERATE_LATEX=NO\n"
+		         "@INCLUDE = fmake.doxygen-aliases\n")
+	got = _run_in(t.dir, "doxygen", "Doxyfile")
+	said = got.stdout + got.stderr
+	check("Illegal command" not in said,
+	      f"Doxygen refused the aliases: {said}")
+	check("unknown command" not in said.lower(),
+	      f"Doxygen did not recognise a directive: {said}")
+
+	page = os.path.join(t.dir, "html", "main_8c.html")
+	check(os.path.exists(page), f"doxygen wrote no page: {said}")
+	with open(page, encoding="utf-8", errors="replace") as fh:
+		html = fh.read()
+	check("Build target:" in html,
+	      "the directive did not render as its label")
+	check("\\n" not in html.split("Build target:")[1][:40],
+	      "the rendered page carries a literal backslash-n")
+	# `version' was one of three directives with no label at all, so it
+	# rendered as the bare lowercase name.
+	check("Version:" in html, "a directive with no label rendered as itself")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

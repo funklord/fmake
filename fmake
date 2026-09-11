@@ -3902,7 +3902,20 @@ DOXYGEN_ALIAS_TEXT = {
     "os":      "Operating systems",
     "arch":    "Architectures",
     "sources": "Extra sources",
+    "defines": "Defines",
+    "rule":    "Generator rule",
+    "version": "Version",
 }
+
+# `^^' rather than `\n', which is what Doxygen's own manual showed for
+# years and what modern Doxygen refuses. Measured on 1.9.8: with `\n' every
+# directive in a documented file produces `warning: Illegal command \n found
+# as part of a title section' and renders the two characters `\n' into the
+# HTML -- `Build target:\n demo'. With `^^' there is no warning and the
+# value lands on its own line. The control is the file being absent, which
+# gives `warning: Found unknown command '@target'': the aliases are needed,
+# and until now they were needed and wrong.
+_DOXY_PAR = "\\par"
 
 
 RE_ROFF_DASH = re.compile(r"(^|\s)-")
@@ -4064,7 +4077,7 @@ def doxygen_aliases():
 	]
 	for name in sorted(DIRECTIVES):
 		label = DOXYGEN_ALIAS_TEXT.get(name, name)
-		out.append(f'ALIASES += "{name}=\\par {label}:\\n"')
+		out.append(f'ALIASES += "{name}={_DOXY_PAR} {label}:^^"')
 	return "\n".join(out) + "\n"
 
 # ---------------------------------------------------------------------------
@@ -8541,6 +8554,21 @@ def build(args, _bootstrapping=False):
 			warn(f"{rel}:{line}: @{name} is in an ordinary comment and "
 			     f"does nothing; directives are read from doxygen "
 			     f"comments -- /*! */, /** */, //! or ///")
+		# `@libs' takes the NAME, and every value here becomes `-l<value>'.
+		# `@libs -lm' therefore asks the linker for `-l-lm', which fails
+		# with `cannot find -l-lm: No such file or directory' -- a message
+		# naming neither the directive nor the file it is in, about a
+		# library nobody wrote down. A leading dash cannot be a library
+		# name, so this is unambiguous, and refusing it here is the same
+		# answer @pkg gives for a constraint it cannot satisfy: before
+		# anything is compiled, naming the line.
+		for line, args_ in scans[rel].get("dirs", {}).get("libs", []):
+			for value in args_:
+				if value.startswith("-"):
+					die(f"{rel}:{line}: @libs takes a library name, not a "
+					    f"flag: write {value.lstrip('-l') or 'NAME'!r} "
+					    f"rather than {value!r}. Link flags that are not "
+					    f"libraries go in @ldflags.")
 
 	# Where each generated file came from, so a compile error in one can
 	# name a file somebody is able to edit. Built from the plans rather
@@ -9038,9 +9066,14 @@ def build(args, _bootstrapping=False):
 			if name in groups:
 				run_groups.append(name)
 				continue
-			known = set(by_name) | set(phony)
-			if held:
-				known.add("test")
+			# The names this loop actually accepts: a phony rule, a
+			# target, or a test GROUP. It used to list a literal `test'
+			# whenever anything was held back, and never the groups -- so
+			# a tree with `@test unit' was told `no target 'test'.
+			# Available: check_a, prog, test', which omits the two names
+			# that work and offers one that does not. The list is built
+			# from the same three sets the lookup reads.
+			known = set(by_name) | set(phony) | set(groups)
 			# `--run` names its target after the file, so a file with no
 			# main() reaches here as a target nobody declared. Answering
 			# with a list of other targets is the wrong conversation

@@ -262,7 +262,8 @@ that had been green about nothing for five commits ·
 [209. A flag the ejected build did not read](#209-a-flag-the-ejected-build-did-not-read) ·
 [210. The cache asked whether the output exists](#210-the-cache-asked-whether-the-output-exists) ·
 [211. The other flag the ejected build did not read](#211-the-other-flag-the-ejected-build-did-not-read) ·
-[212. A green build over a source with a syntax error in it](#212-a-green-build-over-a-source-with-a-syntax-error-in-it)
+[212. A green build over a source with a syntax error in it](#212-a-green-build-over-a-source-with-a-syntax-error-in-it) ·
+[213. Three messages that named the wrong thing](#213-three-messages-that-named-the-wrong-thing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17340,3 +17341,68 @@ detail of it.
   copied a dependency in without tracking it carries neither marker.
 - **Whose.** The copyright holder's. The message costs nobody anything
   and can be read; the policy changes artifacts.
+
+## 213. Three messages that named the wrong thing
+
+A pass over what fmake *says* rather than what it does, and three of them
+were wrong in the same way: the answer was computed from one rule and the
+message from another.
+
+### A refusal that listed the wrong names
+
+    $ fmake test
+    !!! no target 'test'. Available: check_a, check_b, prog, test
+
+The loop that resolves a name on the command line takes a phony rule, a
+target, or a test **group**. The list it printed when it refused was built
+from the first two, plus a literal `test` whenever any test was held back
+-- so a tree whose tests are grouped was offered `test`, which is refused,
+and never told about `unit` and `slow`, which work. **The advice fmake
+prints during an ordinary build was always right** -- *`fmake slow` or
+`fmake unit` builds and runs them* -- so the tree had two answers to one
+question and printed the wrong one at the moment somebody needed it. The
+list is now the same three sets the lookup reads.
+
+### A directive whose value could not be a value
+
+`@libs` takes a name and every value becomes `-l<value>`, so `@libs -lm`
+asks the linker for `-l-lm`:
+
+    /usr/bin/ld: cannot find -l-lm: No such file or directory
+
+-- a message naming neither the directive nor the file it is in, about a
+library nobody wrote down. A leading dash cannot be a library name, so
+this is unambiguous and it is refused before anything compiles, naming the
+line. That is the answer `@pkg` already gives for a constraint it cannot
+satisfy, and §207's answer for a directive written where fmake does not
+read.
+
+### An artifact written in a spelling its consumer refuses
+
+`fmake --doxygen-aliases` exists so that a tree using fmake directives
+documents cleanly. Measured with Doxygen 1.9.8, the aliases it emitted
+produced, for **every** directive in a documented file:
+
+    warning: Illegal command \n found as part of a title section
+
+and rendered the two characters into the page -- `Build target:\n demo`.
+`\n` is what Doxygen's own manual showed for years; `^^` is what modern
+Doxygen takes. The control is the file being absent, which gives *Found
+unknown command '@target'*: the aliases are needed, and until now they
+were needed and wrong.
+
+Three of the seventeen directives -- `defines`, `rule`, `version` -- had
+no entry in the label table either, so they rendered as the bare
+lowercase directive name. The same fact in two places, which is this
+file's most repeated fault and was sitting inside the fix for another one.
+
+### Measured and left: `@headers` is checked only when installing
+
+`@headers nosuch.h` builds without a word and is refused by `--install`.
+Checking it during an ordinary build was written and thrown away: a
+header can be *generated* -- by moc, by uic, by a `[generate.*]` rule --
+and does not exist when the scan reads the directive, so an early check
+refuses a tree that is correct. The install-time check is the one that
+can be right, and the cost is that a wrong path waits until somebody
+packages. Recorded rather than fixed, so the next sweep knows it was
+looked at.
