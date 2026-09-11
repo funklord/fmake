@@ -4814,8 +4814,23 @@ class Config:
 		# else is: a crate archive built at one opt-level must not be
 		# reused for a build asking for another, and the object directory
 		# is what keeps two configurations apart.
+		#
+		# nm is here although it produces nothing, and that is why it was
+		# missing: the key reads as the identity of whatever WROTE the
+		# object, and a cached entry also holds what was READ out of it.
+		# An nm that misreads one object records it as exporting nothing,
+		# and nothing about repairing the nm reaches that. Measured on two
+		# programs and an nm silent for one object file: the build
+		# succeeds, says `b.c looked like it defined main() but the object
+		# does not export it', and stores that verdict in `nomain' under a
+		# key naming every tool except the one that produced it. Give it
+		# the right nm afterwards and it says `a up to date' -- b is never
+		# mentioned again, and only clearing `.fmake' -- `--clean', or the
+		# directory by hand -- brought it back, with nothing pointing there.
+		# What it does not catch is an nm replaced in place: the path is
+		# the identity here, not the version.
 		self.key = sha(" ".join([self.cc, self.cxx, self.ccver, self.cxxver,
-		                         self.os, self.arch,
+		                         self.os, self.arch, self.nm,
 		                         *self.cflags, "|", *self.override,
 		                         "|", self.rustc, self.rust_edition,
 		                         *self.rustflags]))[:12]

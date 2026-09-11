@@ -6877,6 +6877,65 @@ def a_damaged_cache_is_rebuilt_not_a_traceback(t):
 	      f"a cache fmake wrote itself was discarded: {r.stdout}{r.stderr}")
 
 
+@case
+def a_repaired_nm_does_not_repair_the_build(t):
+	"""What nm read was cached under a key that did not name nm.
+
+    An object's cache entry holds the symbol table nm reported as well as
+    the object the compiler wrote, and the key naming that entry covered
+    cc, cxx, their versions, the target, the flags and rustc -- everything
+    that PRODUCES an object, and not the tool that reads one. So a build
+    made with an nm that cannot read some object records it as exporting
+    nothing, and repairing the nm changes no key and clears nothing.
+
+    Two programs and an nm silent for one object file:
+
+        $ fmake
+        * b.c looked like it defined main() but the object does not
+          export it; skipping
+        * built a                       <- and it succeeds, so it saves
+        $ NM=/usr/bin/nm fmake
+        * a up to date                  <- b is not mentioned at all
+
+    The second line is the expensive one. The first build at least says
+    what it did; after the repair a tree holding two programs builds one
+    of them in silence, for as long as `.fmake' survives. `fmake --clean'
+    clears it and nothing points there, the output naming no file at all.
+
+    The wrapper is not a stand-in for nm: it runs the real one, and the
+    single behaviour it adds is the behaviour under test.
+    """
+	real = shutil.which("nm") or shutil.which("llvm-nm") or shutil.which("gnm")
+	check(real is not None, "this case needs an nm on PATH")
+	t.write("a.c", '#include <stdio.h>\nint main(void){ puts("a"); return 0; }\n')
+	t.write("b.c", '#include <stdio.h>\nint main(void){ puts("b"); return 0; }\n')
+	blind = t.write("blind-nm",
+	                "#!/bin/sh\n"
+	                "for arg in \"$@\"; do\n"
+	                "	case \"$arg\" in *b.c.o) exit 0;; esac\n"
+	                "done\n"
+	                f"exec {real} \"$@\"\n")
+	os.chmod(blind, 0o755)
+	prog_a = os.path.join(t.dir, "a")
+	prog_b = os.path.join(t.dir, "b")
+
+	r = t.fmake(env={"NM": blind})
+	said = r.stdout + r.stderr
+	check(r.returncode == 0 and os.path.exists(prog_a),
+	      f"the build that must succeed did not: {said}")
+	# The control. Without this the case passes when the wrapper never ran.
+	check(not os.path.exists(prog_b),
+	      "an nm that cannot read b.c's object still built b: the wrapper "
+	      "did not take effect, so nothing below is a measurement")
+	check("b.c" in said, f"b.c was skipped and nothing said so: {said}")
+
+	r = t.fmake(env={"NM": real})
+	said = r.stdout + r.stderr
+	check(os.path.exists(prog_b),
+	      f"a repaired nm left b unbuilt; only deleting .fmake helped: {said}")
+	check(r.returncode == 0, f"the repaired build failed: {said}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -272,7 +272,8 @@ that had been green about nothing for five commits ·
 [219. The build that invented a RAID controller](#219-the-build-that-invented-a-raid-controller) ·
 [220. The header that was published where nobody includes it](#220-the-header-that-was-published-where-nobody-includes-it) ·
 [221. Two headers, one installed name, and one of them gone](#221-two-headers-one-installed-name-and-one-of-them-gone) ·
-[222. A damaged cache, and the three shapes the guard had met](#222-a-damaged-cache-and-the-three-shapes-the-guard-had-met)
+[222. A damaged cache, and the three shapes the guard had met](#222-a-damaged-cache-and-the-three-shapes-the-guard-had-met) ·
+[223. The nm that was not part of what it decided](#223-the-nm-that-was-not-part-of-what-it-decided)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17876,3 +17877,99 @@ The case takes the good cache fmake has just written, damages it nine ways
 and asserts a build each time -- and ends by asserting that the cache fmake
 writes itself is still used (`up to date`), which is what says this is a
 gate and not a way of never having a cache.
+
+## 223. The nm that was not part of what it decided
+
+An object's cache entry holds two things: the object the compiler wrote,
+and the symbol table `nm` reported for it. The key naming that entry --
+`Config.key`, which also names the object directory -- covered `cc`,
+`cxx`, both versions, the target, every flag, `rustc` and its flags.
+Everything that **produces** an object, and not the tool that reads one.
+
+So a build made with an nm that cannot read some object records that
+object as exporting nothing, under a key that a working nm reproduces
+exactly. Measured, with two programs and a wrapper that runs the real nm
+for every file except one:
+
+    $ NM=./blind-nm fmake
+    * b.c looked like it defined main() but the object does not export it;
+      skipping
+    * built a                             <- it succeeds, so it saves
+    $ NM=/usr/bin/nm fmake
+    * a up to date                        <- b is not mentioned at all
+    $ ls b
+    ls: cannot access 'b': No such file or directory
+
+**The second line is the expensive one.** The first build says what it
+did, and a reader who fixes their nm has every reason to expect that to
+be the end of it. What they get is a tree of two programs building one of
+them in silence, for as long as `.fmake` survives, with nothing anywhere
+suggesting where to look. `fmake --clean` does clear it, having removed
+`.fmake/` entire since it was written -- but it also throws the whole
+build away, and nothing connects `no x86_64/64le library exports` to it.
+The output points at `--ldflags` instead, which is advice that cannot
+work.
+
+`nomain` is the section that holds it here, keyed on the source hash plus
+`Config.key` by `main_stamp`, and the object entries have the same
+exposure from the other side: an object recorded as exporting nothing
+stays recorded that way, which produces `no x86_64/64le library exports:
+b_val` and sends the reader after a library that has nothing to do with
+it.
+
+The fix is one word -- `self.nm` in `refresh_key` -- and the reason it was
+missing is worth more than the fix. **A key reads as the identity of
+whatever wrote the thing**, and `refresh_key`'s own docstring says so:
+*a flag that is not in it is a flag that silently reuses objects built
+without it*. nm writes nothing. It only decides what the entry beside the
+object says, which is not what the sentence is about, and so it was never
+a candidate.
+
+Cost: changing nm rebuilds the tree, because the key names the object
+directory. That is the cost a new compiler version already pays, and
+changing nm is rarer than that. What it does not catch is an nm replaced
+in place at the same path -- the path is the identity here, not the
+version, and a `nm --version` probe on every run buys a margin narrower
+than the one case that bites, which is an nm named wrongly in `$NM` or in
+`[toolchain]`.
+
+### The same line, read for what else is missing
+
+`refresh_key` carries `ccver` and `cxxver` -- `cc --version`'s first line
+-- so a compiler upgraded in place changes the key and everything
+rebuilds. **rustc is in that list by name only.** Its own comment says
+*rustc and its flags are in the key for the reason everything else is*,
+and everything else includes a version. Read rather than measured: this
+machine has one rustc, so nothing here can show an upgrade being missed
+-- what can be shown is that the key does not contain anything that would
+differ between two of them at one path.
+
+It is not fixed with a third `tool_version` call, because that call is
+not free the way the other two are. Measured, three runs each under load:
+
+    rustc --version    0.23  0.18  0.29 s
+    cc --version       0.01  0.00  0.01 s
+
+so the obvious edit puts a fifth of a second on every build of every
+C-only tree on a machine that happens to have rustc installed. The shape
+that works is lazy and narrow: `object_key` already treats a crate unit
+differently from an object, and that is the one place the answer is
+needed, so the version can be asked for once, on the first crate, and by
+no tree without one. Left for its own round rather than folded into this
+one.
+
+### The half that is not fixed
+
+An nm that exits **0** and prints nothing still has fmake blame the
+source: `main.c looked like it defined main() but the object does not
+export it`. Exiting non-zero is diagnosed properly -- the tool is named,
+so is the object, and so is the remedy -- and so is the one route to a
+silent success that had been met before, a BFD plugin that claims a file
+and prints `bfd plugin: ...` while failing. A plugin that says nothing,
+or any other nm that reads nothing quietly, lands on the source.
+
+The discriminator is **every** compiled object coming back with no
+symbols at all, not this one: a single object with none is an ordinary
+scanner false positive, measured with a definition inside `#if 0` --
+fmake compiles that file, reads no symbols, and reports the link error,
+which is the right answer for it. Left for its own round.
