@@ -6341,6 +6341,83 @@ def the_doxygen_aliases_are_the_spelling_doxygen_takes(t):
 	check("Version:" in html, "a directive with no label rendered as itself")
 
 
+@case
+def a_tool_that_exits_zero_and_writes_nothing_is_refused(t):
+	"""fmake checked five steps for this and not the three that matter.
+
+    rcc, uic, moc, an `fmake.mk' rule and a `[generate.*]' rule all verify
+    that they produced what they promised -- *uic produced nothing from
+    x.ui*, *fmake.mk:1 did not produce gen.h*. The compiler, the archiver
+    and the linker did not, and those are the three that make what the
+    user asked for. Measured with drivers that exit 0 and write nothing:
+
+        ar      `AR liblib.a' / `* built liblib.a', rc=0, no archive
+        link    `LD prog' / `* built prog', rc=0, no program
+        cc      caught only by accident, when nm could not read the
+                object that is not there -- and the advice was to set
+                [toolchain] nm "to one that understands unknown objects",
+                which is about the wrong tool entirely
+
+    A build that announces an artifact nobody can find is the worst of the
+    three shapes this file keeps meeting, because the exit status says
+    everything is fine.
+    """
+	def stub(body):
+		path = os.path.join(t.dir, "stub_cc")
+		with open(path, "w") as fh:
+			fh.write(body)
+		os.chmod(path, 0o755)
+		return path
+
+	t.write("main.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+
+	# A compiler that compiles nothing and says it worked.
+	cc = stub("#!/bin/sh\n"
+	          'for a in "$@"; do case "$a" in *.o) exec /bin/true;; esac; done\n'
+	          'exec cc "$@"\n')
+	t.write("fmake.toml", f'[toolchain]\ncc = "{cc}"\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a compiler that wrote no object passed: {said}")
+	check("wrote no object" in said,
+	      f"the missing object was not named: {said}")
+	check("understands unknown objects" not in said,
+	      f"the reader is still sent to their nm: {said}")
+
+	# A linker that links nothing and says it worked.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	cc = stub("#!/bin/sh\n"
+	          'c=no; for a in "$@"; do [ "$a" = "-c" ] && c=yes; done\n'
+	          'if [ "$c" = no ]; then for a in "$@"; do case "$a" in\n'
+	          "-o) exec /bin/true;; esac; done; fi\n"
+	          'exec cc "$@"\n')
+	t.write("fmake.toml", f'[toolchain]\ncc = "{cc}"\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a linker that wrote no program passed: {said}")
+	check("produced no" in said, f"the missing program was not named: {said}")
+	check(not os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
+	      "the fixture did not reproduce the case: a program was written")
+
+	# And an archiver that archives nothing.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(os.path.join(t.dir, "main.c"))
+	t.write("lib.c", "/*! @kind static */\nint lib_val(void){ return 3; }\n")
+	ar = os.path.join(t.dir, "stub_ar")
+	with open(ar, "w") as fh:
+		fh.write("#!/bin/sh\nexit 0\n")
+	os.chmod(ar, 0o755)
+	t.write("fmake.toml", f'[toolchain]\nar = "{ar}"\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"an ar that wrote no archive passed: {said}")
+	check("produced no liblib.a" in said,
+	      f"the missing archive was not named: {said}")
+	check("built liblib.a" not in said,
+	      f"fmake announced an archive that is not there: {said}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

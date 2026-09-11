@@ -5596,6 +5596,17 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			return u, 0, ""
 		r = run_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
 		              text=True, errors="replace")
+		# A compiler that exits 0 and writes nothing. Measured with a
+		# driver that does exactly that: the compile "succeeded", nm was
+		# then asked to read an object that is not there, and fmake told
+		# the reader to set [toolchain] nm to one that understands unknown
+		# objects -- advice about the wrong tool entirely. rcc, uic, moc,
+		# an fmake.mk rule and a [generate.*] rule all check that they
+		# produced what they promised; the three steps that make what the
+		# user asked for did not.
+		if r.returncode == 0 and _file_size(u.obj) is None:
+			return u, 1, (r.stderr + f"{cmd[0]} exited 0 and wrote no "
+			              f"object for {u.rel}\n")
 		return u, r.returncode, r.stderr
 
 	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -7803,6 +7814,16 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 			PROGRESS.write("\n".join(lines[:LINK_ERR_LINES]) + "\n")
 			note(f"... {len(lines) - LINK_ERR_LINES} more linker lines (-v "
 			     f"for all)")
+	# The same question as the compile above, and the one that was
+	# loudest: `ar' and the linker were the two steps with no check at
+	# all, so a tool that exits 0 and writes nothing left fmake printing
+	# `* built prog' with no program on disk. Empty counts as nothing --
+	# a zero-byte program is no program, and an archive with no members is
+	# refused further up with a message of its own.
+	if r.returncode == 0 and not _file_size(out):
+		die(f"{cmd[0]} exited 0 and produced no {name}\n"
+		    f"    the command was: "
+		    f"{' '.join(shlex.quote(c) for c in cmd)}")
 	if key is not None and r.returncode == 0:
 		# Recomputed, not reused. A crate's inputs come from the depfile
 		# rustc has only just written, so the key computed above was made

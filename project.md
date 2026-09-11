@@ -263,7 +263,8 @@ that had been green about nothing for five commits ·
 [210. The cache asked whether the output exists](#210-the-cache-asked-whether-the-output-exists) ·
 [211. The other flag the ejected build did not read](#211-the-other-flag-the-ejected-build-did-not-read) ·
 [212. A green build over a source with a syntax error in it](#212-a-green-build-over-a-source-with-a-syntax-error-in-it) ·
-[213. Three messages that named the wrong thing](#213-three-messages-that-named-the-wrong-thing)
+[213. Three messages that named the wrong thing](#213-three-messages-that-named-the-wrong-thing) ·
+[214. Five steps checked their output; three did not](#214-five-steps-checked-their-output-three-did-not)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17406,3 +17407,56 @@ refuses a tree that is correct. The install-time check is the one that
 can be right, and the cost is that a wrong path waits until somebody
 packages. Recorded rather than fixed, so the next sweep knows it was
 looked at.
+
+## 214. Five steps checked their output; three did not
+
+`evidence.md` calls it *a helper that is not there reports success*. Here
+it is the same discipline applied unevenly inside one program, and the
+three places it was missing are the three that produce what the user
+asked for.
+
+Measured with drivers that exit 0 and write nothing:
+
+    rcc            "rcc produced nothing from x.qrc"             refused
+    uic            "uic produced nothing from x.ui"              refused
+    moc            notices the empty output and drops it         handled
+    fmake.mk rule  "fmake.mk:1 did not produce gen.h"            refused
+    [generate.*]   "[generate.header] did not produce gen.h"     refused
+
+    ar             "AR liblib.a" / "* built liblib.a"            rc=0
+    link           "LD prog" / "* built prog"                    rc=0
+    cc             caught by accident, blaming the wrong tool
+
+**A build that announces an artifact nobody can find is the worst of the
+three shapes this file keeps meeting**, because the exit status says
+everything is fine. §206's library-instead-of-a-program at least left a
+file behind.
+
+The compiler case is the one worth reading twice. Nothing checked the
+object, so nm was asked to read a file that is not there, and what the
+reader got was
+
+    !!! /usr/bin/nm could not read main.c's object: No such file
+    Set [toolchain] nm in fmake.toml, or $NM, to one that understands
+    unknown objects.
+
+-- advice about a tool that is working perfectly, for a compiler that
+lied. The message was written for a real case (a cross build with a host
+nm, or clang's bitcode) and it cannot tell that case from this one,
+because by the time it runs the only fact left is that the object is
+missing. Checking at the compile keeps the two apart at the point where
+the difference still exists.
+
+`ar` and the linker now say *exited 0 and produced no <name>*, with the
+command, in the wording the other five already use. Empty counts as
+nothing: a zero-byte program is no program, and an archive with no
+members is refused further up with a message of its own.
+
+### What this does not cover
+
+A tool that writes a **wrong** artifact rather than none -- a linker that
+produces a valid binary from the wrong objects, a compiler that writes an
+object for another architecture. The second is caught elsewhere, by the
+ELF identity check §208 repaired. The first is not caught at all, and
+nothing short of reading the artifact could; it is recorded here so the
+next sweep knows the boundary of this one.
