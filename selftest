@@ -6418,6 +6418,69 @@ def a_tool_that_exits_zero_and_writes_nothing_is_refused(t):
 	      f"fmake announced an archive that is not there: {said}")
 
 
+@case
+def a_pkgconfig_file_names_what_else_the_library_needs(t):
+	"""fmake installed a static library and a .pc that cannot link it.
+
+    The generated file carried `Libs: -L${libdir} -llib' and nothing
+    else, so a consumer doing what pkg-config documents --
+
+        cc consumer.c $(pkg-config --cflags --libs --static lib)
+
+    -- failed with `undefined reference to zlibVersion', and the same
+    link with `-lz -lm' added by hand worked. fmake had both facts: @pkg
+    zlib and @libs m are written in the tree, and the resolved link flags
+    are what fmake itself linked with. It published neither.
+
+    `Libs.private' rather than `Requires.private': what fmake holds is
+    flags, and turning them back into package names is a mapping it does
+    not keep. Measured on this machine, `pkg-config --libs --static'
+    returns them either way.
+    """
+	if not shutil.which("pkg-config"):
+		raise Skip("no pkg-config")
+	probe = _run_in(t.dir, "pkg-config", "--exists", "zlib")
+	if probe.returncode != 0:
+		raise Skip("zlib has no .pc here, so there is nothing to require")
+	t.write("lib.h", "int lib_val(void);\n")
+	t.write("lib.c", "/*! @kind static\n *  @version 1.0.0\n"
+	        " *  @headers lib.h\n *  @pkg zlib\n *  @libs m\n */\n"
+	        "#include <string.h>\n#include <math.h>\n#include <zlib.h>\n"
+	        '#include "lib.h"\n'
+	        "int lib_val(void){ return (int)(strlen(zlibVersion())"
+	        " + (int)sqrt(4.0)); }\n")
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--prefix", "/usr", "--destdir", stage)
+	check(r.returncode == 0, f"the install failed: {r.stdout}{r.stderr}")
+
+	pc = os.path.join(stage, "usr", "lib", "pkgconfig", "lib.pc")
+	check(os.path.exists(pc), f"no .pc was installed: {os.listdir(stage)}")
+	with open(pc) as fh:
+		text = fh.read()
+	check("Libs.private:" in text,
+	      f"the .pc says nothing about what else the library needs:\n{text}")
+	check("-lz" in text and "-lm" in text,
+	      f"the .pc names neither the package nor the raw library:\n{text}")
+
+	# The measurement that made this a bug rather than a nicety: a
+	# consumer linking the documented way.
+	t.write("consumer.c", "#include <stdio.h>\nint lib_val(void);\n"
+	        'int main(void){ printf("%d\\n", lib_val()); return 0; }\n')
+	env = {"PKG_CONFIG_PATH": os.path.join(stage, "usr", "lib", "pkgconfig")}
+	flags = _run_in(t.dir, "pkg-config", "--cflags", "--libs", "--static",
+	                "lib", env=env)
+	check(flags.returncode == 0, f"pkg-config refused the file: {flags.stderr}")
+	built = _run_in(t.dir, "cc", "consumer.c", "-o", "consumer",
+	                *flags.stdout.split(),
+	                "-L" + os.path.join(stage, "usr", "lib"))
+	check(built.returncode == 0,
+	      f"a consumer using the flags this .pc provides did not link:\n"
+	      f"{built.stderr}")
+	ran = _run_in(t.dir, "./consumer")
+	check(ran.stdout == "7\n",
+	      f"the consumer linked the wrong library: {ran.stdout!r}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

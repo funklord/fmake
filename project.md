@@ -264,7 +264,8 @@ that had been green about nothing for five commits ·
 [211. The other flag the ejected build did not read](#211-the-other-flag-the-ejected-build-did-not-read) ·
 [212. A green build over a source with a syntax error in it](#212-a-green-build-over-a-source-with-a-syntax-error-in-it) ·
 [213. Three messages that named the wrong thing](#213-three-messages-that-named-the-wrong-thing) ·
-[214. Five steps checked their output; three did not](#214-five-steps-checked-their-output-three-did-not)
+[214. Five steps checked their output; three did not](#214-five-steps-checked-their-output-three-did-not) ·
+[215. A pkg-config file that could not link the library it describes](#215-a-pkg-config-file-that-could-not-link-the-library-it-describes)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17460,3 +17461,45 @@ object for another architecture. The second is caught elsewhere, by the
 ELF identity check §208 repaired. The first is not caught at all, and
 nothing short of reading the artifact could; it is recorded here so the
 next sweep knows the boundary of this one.
+
+## 215. A pkg-config file that could not link the library it describes
+
+§7 generates a `.pc` so that the next project can find a library fmake
+installed, and says the consumer it most obviously helps is fmake. What
+it wrote was:
+
+    Libs: -L${libdir} -llib
+    Cflags: -I${includedir}
+
+For a static library that is not enough, and the failure is the
+consumer's rather than this tree's, which is why nothing here had ever
+seen it. Measured, doing exactly what pkg-config documents:
+
+    $ cc consumer.c $(pkg-config --cflags --libs --static lib)
+    undefined reference to `zlibVersion'
+    $ cc consumer.c $(...) -lz -lm
+    7
+
+**fmake had both facts.** `@pkg zlib` and `@libs m` are written in the
+tree, and the resolved link flags -- `-lz -lm` -- are what fmake linked
+with itself. It published neither, so the file it installs for other
+projects to use describes half a library.
+
+`Libs.private` rather than `Requires.private`: what fmake holds is flags,
+and turning them back into package names is a mapping it does not keep.
+Measured on this machine rather than recalled, a hand-written file with
+`Requires.private: zlib` and `Libs.private: -lm` and one with the flags
+alone both answer `-ldemo -lm -lz` to `pkg-config --libs --static`.
+
+A `-L` pointing inside the tree is dropped: it names a directory that
+means nothing once the library is installed, and publishing it would send
+a consumer to somebody else's build directory.
+
+### The fourth reader of one fact
+
+`pc_text` computed the install prefix itself -- `dict(INSTALL_DEFAULTS)`
+updated from `[install]`, then the `--prefix` argument -- which is the
+same three-step rule §209 had just unified into `install_dirs` for the
+other three readers. It was correct, and it was a fourth copy sitting
+inside the function that had already been wrong once about this exact
+fact (§196). It reads `install_dirs` now, like everything else.

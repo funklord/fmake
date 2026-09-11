@@ -10382,7 +10382,9 @@ def build(args, _bootstrapping=False):
 	# to touch nothing.
 	if not args.dry_run:
 		for t in wanted:
-			text = pc_text(t, conf, install_paths(conf, args)["prefix"])
+			text = pc_text(t, conf, install_paths(conf, args)["prefix"],
+			               (resolutions.get(t) or {}).get("ldflags") or (),
+			               root)
 			if text is None:
 				continue
 			path = os.path.join(outdir, t.name + ".pc")
@@ -11796,7 +11798,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# out of the tree: a clean checkout of a project that committed
 		# this Makefile has no .pc in it, and an install rule naming a
 		# file nothing produces fails on the one machine that matters.
-		pcs = [(t, pc_text(t, conf)) for t in targets]
+		pcs = [(t, pc_text(t, conf, prefix,
+		                   (resolutions.get(t) or {}).get("ldflags") or (),
+		                   root)) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
 		for t, text in pcs:
 			# Regenerated every time rather than when missing: its
@@ -12432,7 +12436,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# Same reason as the Makefile: a clean checkout has no .pc, so
 		# the build has to write one. `$$` for a literal dollar here too,
 		# ninja's escape rather than Make's.
-		pcs = [(t, pc_text(t, conf)) for t in targets]
+		pcs = [(t, pc_text(t, conf, prefix,
+		                   (resolutions.get(t) or {}).get("ldflags") or (),
+		                   root)) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
 		# The prefix line reads the same PREFIX the install steps above
 		# do, rather than the one this tree named when it was ejected:
@@ -12512,7 +12518,7 @@ INSTALL_DEFAULTS = {"prefix": "/usr/local", "bindir": "bin",
                     "libdir": "lib", "includedir": "include"}
 
 
-def pc_text(t, conf, prefix=None):
+def pc_text(t, conf, prefix=None, ldflags=(), root=None):
 	"""The pkg-config file for a library, or None if none was asked for.
 
     fmake resolves libraries *through* pkg-config -- a header proposes a
@@ -12536,8 +12542,7 @@ def pc_text(t, conf, prefix=None):
     """
 	if t.kind == "exe" or not t.version:
 		return None
-	p = dict(INSTALL_DEFAULTS)
-	p.update({k: v for k, v in conf.install.items() if v})
+	p = install_dirs(conf, prefix)
 	# The prefix this .pc will be TRUE at, which is not always the one
 	# fmake.toml names. `install_paths' folds in --prefix and this
 	# function re-derived the same fact without it, so
@@ -12546,8 +12551,6 @@ def pc_text(t, conf, prefix=None):
 	# -I/usr/local/include for a library that is not there. The consumer
 	# this file most obviously helps is fmake, so the next build looked
 	# in the wrong place and said nothing.
-	if prefix:
-		p["prefix"] = prefix
 	def var(key):
 		sub = p[key]
 		return sub if os.path.isabs(sub) else "${prefix}/" + sub
@@ -12560,8 +12563,36 @@ def pc_text(t, conf, prefix=None):
 	    "Description: " + (t.description or f"{t.name}, built by fmake"),
 	    "Version: " + t.version,
 	    "Libs: -L${libdir} -l" + t.name,
-	    "Cflags: -I${includedir}",
 	]
+	# What a consumer needs in ADDITION to -l<name>, which for a static
+	# library is not optional: measured, a consumer linking liblib.a with
+	# exactly the flags this file provided failed with `undefined
+	# reference to zlibVersion', and the same link with `-lz -lm' added
+	# by hand worked. fmake had both -- @pkg zlib and @libs m are in the
+	# tree, and the resolved link flags are what it used itself -- and
+	# published neither.
+	#
+	# `Libs.private' rather than `Requires.private': the flags are what
+	# fmake resolved, and turning them back into package names is a
+	# mapping it does not keep. Measured on this machine, `pkg-config
+	# --libs --static' returns them either way.
+	#
+	# A -L into the tree is dropped: it names a directory that means
+	# nothing once the library is installed, and publishing it would point
+	# a consumer at somebody else's build directory.
+	extra = []
+	for flag in ldflags:
+		if flag.startswith("-l"):
+			extra.append(flag)
+		elif flag.startswith("-L") and root:
+			where = os.path.abspath(os.path.join(root, flag[2:]))
+			if not where.startswith(os.path.join(os.path.abspath(root), "")):
+				extra.append(flag)
+		elif flag.startswith("-L"):
+			extra.append(flag)
+	if extra:
+		lines.append("Libs.private: " + " ".join(extra))
+	lines.append("Cflags: -I${includedir}")
 	return "\n".join(lines) + "\n"
 
 
