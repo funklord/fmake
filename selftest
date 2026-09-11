@@ -6593,6 +6593,117 @@ def a_library_resolves_its_own_includes_like_a_program(t):
 		u.cleanup()
 
 
+@case
+def a_published_header_keeps_the_path_it_is_included_by(t):
+	"""`include/pkg/api.h' installed as `$includedir/api.h'.
+
+    A library whose header is at `include/pkg/api.h', and whose own
+    sources include it as `<pkg/api.h>', published a flat copy -- so a
+    consumer writing the include the library itself writes could not
+    compile against the installed tree. ossacli is the case in this
+    workspace, and its own Makefile disagrees with fmake outright:
+
+        install -m 644 include/ossa/ossa.h $(DESTDIR)$(INCDIR)/ossa/
+
+    The installed path is taken relative to the include directory the
+    tree reaches the header by -- the same directory fmake put on the
+    compile line -- so what is installed is the layout the code's own
+    include text names. A flat library, whose header sits beside its
+    source, is unchanged: there is no include root above it to be
+    relative to.
+
+    All three install paths are checked, because they are three
+    implementations of one plan and the ejected pair have to create the
+    subdirectory themselves before install(1) writes into it.
+    """
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("include/pkg/api.h", "#pragma once\nint pkg_val(void);\n")
+	t.write("lib.c", "/*! @kind static\n *  @version 1.0\n"
+	        " *  @headers include/pkg/api.h\n */\n#include <pkg/api.h>\n"
+	        "int pkg_val(void){ return 1; }\n")
+
+	# Staged outside the tree, and the consumer written outside it too.
+	# A staging root inside would put a second `api.h' in the tree -- fmake
+	# then refuses the include as ambiguous, which is right and is not what
+	# this case is about -- and a consumer.c inside would be a second
+	# program in it.
+	want = "usr/local/include/pkg/api.h"
+	outside = tempfile.mkdtemp(prefix="fmake-installed-")
+	try:
+		stage = os.path.join(outside, "s-live")
+		r = t.fmake("--install", "--destdir", stage)
+		check(r.returncode == 0,
+		      f"the live install failed: {r.stdout}{r.stderr}")
+		check(os.path.exists(os.path.join(stage, want)),
+		      f"the live install flattened the header: "
+		      f"{sorted(_all_files(stage))}")
+
+		# A consumer that writes the include the library writes.
+		with open(os.path.join(outside, "consumer.c"), "w") as fh:
+			fh.write("#include <pkg/api.h>\n"
+			         "int main(void){ return pkg_val(); }\n")
+		got = _run_in(outside, "cc", "-c", "consumer.c", "-o", "/dev/null",
+		              "-I" + os.path.join(stage, "usr", "local", "include"))
+		check(got.returncode == 0,
+		      f"a consumer could not compile against the installed tree:\n"
+		      f"{got.stderr}")
+
+		for how in ("make", "ninja"):
+			shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+			r = t.fmake("--eject", how)
+			check(r.returncode == 0, f"eject {how} failed: {r.stderr}")
+			name = "Makefile" if how == "make" else "build.ninja"
+			with open(os.path.join(t.dir, name), "w") as fh:
+				fh.write(r.stdout)
+			out = os.path.join(outside, "s-" + how)
+			if how == "make":
+				got = _run_in(t.dir, "make", "install", "DESTDIR=" + out)
+			else:
+				got = _run_in(t.dir, "ninja", "install",
+				              env={"DESTDIR": out})
+			check(got.returncode == 0,
+			      f"{how} install failed: {got.stdout}{got.stderr}")
+			check(os.path.exists(os.path.join(out, want)),
+			      f"the ejected {how} install flattened the header: "
+			      f"{sorted(_all_files(out))}")
+		# One header, two spellings. A tree can put both `include' and
+		# `include/pkg' on the path -- `<pkg/api.h>' from one file and
+		# `<api.h>' from another -- and the two answers are not equally
+		# wrong: installed at `pkg/api.h' a consumer who writes
+		# `<api.h>' adds one -I and finds it, while installed flat a
+		# consumer who writes `<pkg/api.h>' cannot reach it at all. The
+		# most qualified spelling wins, which is the shortest include
+		# root.
+		u = Tree("two-spellings")
+		try:
+			u.write("include/pkg/api.h", "#pragma once\n"
+			        "int pkg_val(void);\n")
+			u.write("include/pkg/wrap.h", "#pragma once\n"
+			        "#include <api.h>\n")
+			u.write("lib.c", "/*! @kind static\n *  @version 1.0\n"
+			        " *  @headers include/pkg/api.h\n */\n"
+			        "#include <pkg/api.h>\n#include <pkg/wrap.h>\n"
+			        "int pkg_val(void){ return 1; }\n")
+			two = os.path.join(outside, "s-two")
+			r = u.fmake("--install", "--destdir", two)
+			check(r.returncode == 0,
+			      f"the two-spelling install failed: {r.stdout}{r.stderr}")
+			check(os.path.exists(os.path.join(two, want)),
+			      f"the flat spelling won, so `<pkg/api.h>' cannot be "
+			      f"satisfied: {sorted(_all_files(two))}")
+		finally:
+			u.cleanup()
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
+
+
+def _all_files(base):
+	for here, _dirs, names in os.walk(base):
+		for n in names:
+			yield os.path.relpath(os.path.join(here, n), base)
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

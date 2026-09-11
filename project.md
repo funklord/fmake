@@ -268,7 +268,9 @@ that had been green about nothing for five commits ·
 [215. A pkg-config file that could not link the library it describes](#215-a-pkg-config-file-that-could-not-link-the-library-it-describes) ·
 [216. The include path depends on how fmake reached the file](#216-the-include-path-depends-on-how-fmake-reached-the-file) ·
 [217. The script that could not be called what scripts are called](#217-the-script-that-could-not-be-called-what-scripts-are-called) ·
-[218. The same file built as a program and failed as a library](#218-the-same-file-built-as-a-program-and-failed-as-a-library)
+[218. The same file built as a program and failed as a library](#218-the-same-file-built-as-a-program-and-failed-as-a-library) ·
+[219. The build that invented a RAID controller](#219-the-build-that-invented-a-raid-controller) ·
+[220. The header that was published where nobody includes it](#220-the-header-that-was-published-where-nobody-includes-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17649,3 +17651,132 @@ _already_holds_is_named` still saying *it is in this tree, at
 vendor/include/thing.h*, and the case here would not notice if they
 stopped. Two questions that look alike from a distance, and only one of
 them is answerable without the copyright holder.
+
+## 219. The build that invented a RAID controller
+
+**A finding and a question, not a fix.** The question is §3's, which is
+not mine to answer.
+
+ossacli, unpacked twice from one commit and built two ways:
+
+    make build:   ossacli: scan failed: permission denied (need root)
+    fmake build:  Smart Array P410 in Slot 1
+                     Serial Number: PEYHB0MOCK0FA
+                     Firmware Version: 6.64
+                     Device Path: /dev/sg4093
+                     Logical Drives: 2
+                     Physical Drives: 4
+
+The fmake-built program reports a controller this machine does not have,
+with a serial number that says MOCK in it, on a host with no such
+hardware and no environment variable set.
+
+**Why.** `src/lib/transport_sg.c` leaves `close` undefined. The closure
+looks in the tree, finds a file that defines it, and links it -- and that
+file is `src/shim/sgshim.c`, whose own banner reads *"LD_PRELOAD shim
+that fakes a Smart Array P410 at the syscall boundary"*. It fabricates
+`sg4093`, makes a sysfs listing gain an entry for it, and answers its
+ioctls from the simulator. ossacli's own build compiles it only into
+`ossa-sgshim.so`, for `LD_PRELOAD`.
+
+`--explain` says so exactly -- `src/shim/sgshim.c <- close
+(src/lib/transport_sg.c)` -- and the build itself says nothing. The
+ejected Makefile carries it into every one of the four programs' object
+lists.
+
+### The rule, and where it stops being right
+
+§3 is that a symbol undefined in the link set is satisfied by a file in
+the tree that defines it. That is right for a project's own functions and
+**wrong for a symbol libc owns**, where a tree definition is an
+interposer rather than an implementation: `LD_PRELOAD` shims, a
+`fake_time.c` for tests, a sanitizer stub. `LINKER_SYMBOLS` guards
+`_init` and `_end` and their kind; nothing guards `close`.
+
+Five trees here hold a file defining a libc function. Two are
+first-party -- ossacli, and **raidcfgd, which vendors it** -- and the
+other three are inside vendored dependency builds (OpenSSL's fuzz
+harnesses, Catch).
+
+### The two candidates, and what each costs
+
+- **Do not satisfy a symbol from the tree when a resolved library
+  provides it.** fmake already computes which externals libc supplies --
+  `--explain` prints *"N in libc"* -- so the machinery exists; it is
+  consulted after the closure rather than during it. The cost is a
+  project that deliberately overrides `malloc` or `strlcpy` from its own
+  source and expects the override linked.
+- **Keep the rule and say it.** A line naming the file, the symbol and
+  the library it displaces, at the point the closure pulls it in. Costs
+  nothing and fixes nobody's binary.
+
+**Whose.** The copyright holder's: the first changes what §3 means, and
+§3 is the premise of the project. What is not in question is that the
+present behaviour ships a storage tool that invents hardware, which is
+why this is recorded with the demonstration rather than left as a note.
+
+## 220. The header that was published where nobody includes it
+
+A library whose header is `include/pkg/api.h`, and whose own sources
+include it as `<pkg/api.h>`, installed **`$includedir/api.h`**. A
+consumer writing the include the library itself writes cannot compile
+against that:
+
+    consumer.c:1:10: fatal error: pkg/api.h: No such file or directory
+
+`install_plan` took `os.path.basename(h)` for the installed name, so
+every published header was flattened into `includedir`.
+
+**ossacli is the case, and its own Makefile disagrees with fmake
+outright:**
+
+    its sources:      #include <ossa/ossa.h>
+    its Makefile:     install -m 644 include/ossa/ossa.h \
+                                     $(DESTDIR)$(INCDIR)/ossa/
+    fmake --install:  $includedir/ossa.h
+
+So a project that adopted `@headers` would ship an include tree none of
+its consumers -- or its own examples -- can use, and nothing would say
+so until somebody tried.
+
+The installed path is taken relative to the include directory the tree
+reaches the header by, which is the same directory fmake put on the
+compile line: what is installed is the layout the code's own include text
+names. A flat library is unchanged -- there is no include root above its
+header to be relative to.
+
+**The shortest matching root wins, and that is not arbitrary.** A tree can
+reach one header two ways, with both `include` and `include/pkg` on the
+path: `<pkg/api.h>` from one file and `<api.h>` from another. The two
+answers are not equally wrong. Installed at `pkg/api.h`, a consumer who
+writes `<api.h>` adds one `-I` and finds it; installed flat, a consumer
+who writes `<pkg/api.h>` cannot reach it at all. The first rule written
+here took the longest root, published `api.h`, and was caught by building
+that tree -- the library's own source says `<pkg/api.h>`.
+
+### Three implementations, and the two that had to learn to make a
+directory
+
+`install_plan` is shared by the live install and both emitters, which is
+§7's whole argument for it. The name it returns now carries a
+subdirectory, and `install(1)` will not create one: the live path already
+called `os.makedirs`, and the ejected Makefile and ninja file each needed
+an `install -d` per published subdirectory before the copy. The case
+installs all three ways and asserts the same path in each, because the
+sharing is only worth anything if the ends agree.
+
+`install_subpath` reads the include roots from a module-level set filled
+where the include graph is built. A parameter would have had to reach
+seven call sites -- the live install, both emitters, the uninstall of
+each, and `--explain` -- and install and uninstall have to agree about
+where a header lands by construction rather than by everybody remembering
+to pass the same thing.
+
+### The fixture that reproduced a different bug
+
+Staging the install *inside* the tree put a second `api.h` where fmake
+walks, and the next build refused the include as ambiguous, naming both
+copies. That is fmake working correctly on a tree I had made ambiguous,
+and it is why the case stages outside the tree and writes its consumer
+there too -- a `consumer.c` inside would have been a second program in a
+library's tree.
