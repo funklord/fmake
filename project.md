@@ -274,7 +274,9 @@ that had been green about nothing for five commits ·
 [221. Two headers, one installed name, and one of them gone](#221-two-headers-one-installed-name-and-one-of-them-gone) ·
 [222. A damaged cache, and the three shapes the guard had met](#222-a-damaged-cache-and-the-three-shapes-the-guard-had-met) ·
 [223. The nm that was not part of what it decided](#223-the-nm-that-was-not-part-of-what-it-decided) ·
-[224. The cache that did not say which fmake wrote it](#224-the-cache-that-did-not-say-which-fmake-wrote-it)
+[224. The cache that did not say which fmake wrote it](#224-the-cache-that-did-not-say-which-fmake-wrote-it) ·
+[225. Two artifacts of one name, sharing one cache entry](#225-two-artifacts-of-one-name-sharing-one-cache-entry) ·
+[226. The generator that kept the old tool's output](#226-the-generator-that-kept-the-old-tools-output)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18040,3 +18042,125 @@ What it does not catch is an fmake whose own file cannot be read.
 `build_identity()` answers `unknown` then -- deliberately, since a version
 string is the last place to raise -- every run agrees with itself, and the
 cache persists across changes exactly as it did before.
+
+## 225. Two artifacts of one name, sharing one cache entry
+
+`link_target` records what it has linked under `t.filename`. A tool a
+generator names with `uses` is linked **twice in one run**: once by the
+nested build into `.fmake/tools/`, once by the outer build into the tree.
+One name, two paths, one entry -- so each run overwrote the other's, and
+because the outer build saves last, the nested one never matched its own
+record. Measured, with the generator stale:
+
+    $ fmake -v
+    TOOL mkvals
+    LD  mkvals            <- nothing about the tool had changed
+    GEN vals
+    * up to date mkvals   <- the outer build, same name, same run
+
+The two lines about `mkvals` are two different files disagreeing under one
+key. It repeats every time a generator is stale, for ever.
+
+By itself that is one redundant link nobody notices. It was found from the
+other end: section 226's fix keys a generator's freshness on **what the
+tool is**, and a tool rewritten on every run made that rule regenerate on
+every run -- which is the exact failure `gen_key`'s own docstring records
+having fixed once before, arriving by a new route.
+
+### Two halves, and neither works alone
+
+The entry has to be **distinct**, keyed by what was produced rather than
+by what it is called -- `os.path.relpath(out, root)`. And it has to
+**survive the outer build's save**, which means joining the merge at the
+end of a bootstrapped build. That merge exists precisely to keep a nested
+build's work, and it listed `files` and `objects`:
+
+    for section in ("files", "objects"):
+
+**The section those two builds actually shared was the one not listed.**
+An enumeration short by one, which is this document's most repeated
+finding -- and here it was the reason a fix one layer up looked like a
+design failure rather than a collision.
+
+With both halves the nested build says `up to date mkvals` and the outer
+build agrees; on a copy carrying this and section 226, `GEN` appears zero
+times on a no-op run where it had appeared every time.
+
+## 226. The generator that kept the old tool's output
+
+**Found, measured, and not yet fixed.** The fix works and costs too much
+until one more thing is cheap; what is here is the measurement and the
+options, so that nobody has to take them again.
+
+A rule's freshness is `gen_key`: its commands, its `uses` **name**, its
+declared depfile, and the hash of every file it reads. Not the tool. So:
+
+    $ fmake                                   -> 11
+    $ sed -i 's/return 11/return 22/' tool/mkvals.c
+    $ fmake
+      [1/1] CC  tool/mkvals.c
+      LD  mkvals
+      * built usesbug, mkvals                 -> still 11
+    $ echo seed2 > seed.txt && fmake          -> 22
+
+fmake recompiles and relinks the generator **in the same run** and still
+calls the rule fresh. The only thing that moves it is touching an input,
+which nobody would think to do, because they can see the tool being
+rebuilt. What the tree ends up with is a generated source from a program
+that no longer exists -- a silently wrong artifact, which is this
+document's worst class.
+
+### fmake disagrees with what fmake emits
+
+    make:   gen/vals.c: seed.txt mkvals
+    ninja:  build gen/vals.c: gen_vals seed.txt | mkvals
+
+ninja's `|` is an implicit dependency and dates the target, unlike make's
+order-only `|`. Ran the ejected Makefile from the same tree: build, change
+the tool, `make` -- 22. **Both emitters are right and the thing that wrote
+them is wrong**, so this is not a question about what freshness should
+mean.
+
+Why it was missed is worth keeping: **a path is a fine identity for a tool
+somebody installed, and none at all for one built out of the tree.**
+`run_moc` keys on moc's path and that is correct, because moc's path
+changes when moc does. A tool a generator `uses` has a path that never
+changes and contents that change whenever anybody edits the generator.
+
+### What it costs, measured on a copy
+
+Building the tool before the freshness test and hashing the binary into
+the key is exactly what both emitters do, and it works: change the tool,
+the rule re-runs, `-n` is unaffected. Three no-op runs of the same tree
+under the same load:
+
+    unpatched                     2.15   2.63 s
+    with the fix                 31.91  30.12  34.52 s
+    with the fix + section 225   24.97  25.01  25.59 s
+
+Section 225 removed a regeneration LOOP from it -- the tool was being
+relinked every run, so its hash moved every run -- but not the cost. The
+cost is not the nested build, whose every step reports cached; it is the
+nested **Config**. `build_tool` sets `use_build_toolchain = True`, which
+constructs a second `Config`, which re-probes the compiler and
+re-enumerates pkg-config.
+
+### What is left, and what was rejected
+
+- **Make the second Config cheap.** On a native build with no
+  `[build-toolchain]` section the build machine's toolchain *is* the
+  host's, so the second Config is a second copy of the first. Unmeasured:
+  find where the 23 s goes before believing it.
+- **Rejected: record the tool's sources when the generator runs and check
+  those instead.** Cheap, and it misses a file that JOINS the tool's
+  closure later -- an enumeration that can be short by one, which is the
+  shape of the bug rather than of a fix, and which both emitters get
+  right.
+- **Rejected: hash the tool binary already on disk.** It is the previous
+  run's, so a changed source that has not been rebuilt yet still reads as
+  fresh. It is the answer that looks cheapest and cannot work.
+
+One limit to pin either way: `build_tool` does not build under `-n` and
+says so, so the tool cannot be part of the key there. A dry run can
+already call a rule fresh that a real build re-runs; that stays as it is
+rather than being traded for a louder wrong answer.

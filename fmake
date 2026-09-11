@@ -7843,9 +7843,18 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	if cache is not None and root is not None:
 		key = _link_key(cmd, objs, cache, root)
 		store = cache.data.setdefault("links", {})
+		# Keyed by what was produced, not by what it is called. A tool a
+		# generator `uses' is linked twice in one run -- once by the nested
+		# build into `.fmake/tools/', once by the outer build into the tree
+		# -- under one name and to two different paths, so one entry held
+		# both and each run overwrote the other's. The nested build
+		# therefore relinked its tool every single time a generator was
+		# stale, while the outer build in the same run said `up to date'
+		# about the same name.
+		store_key = os.path.relpath(out, root)
 		# A bare string is what an older fmake wrote here, before the
 		# artifact's size joined the key; it reads as "no size recorded".
-		was = store.get(name)
+		was = store.get(store_key)
 		if isinstance(was, dict):
 			want, size = was.get("key"), was.get("size")
 		else:
@@ -7904,7 +7913,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		# two keys is exactly the thing the depfile came to correct.
 		if cl.root.crate_exe:
 			key = _link_key(cmd, crate_inputs(cl.root, root), cache, root)
-		cache.data.setdefault("links", {})[name] = {
+		cache.data.setdefault("links", {})[store_key] = {
 		    "key": key, "size": _file_size(out),
 		}
 	return out, True, r.returncode == 0
@@ -8394,7 +8403,10 @@ def build(args, _bootstrapping=False):
 		# generator freshness keys that were just written and are not on
 		# disk yet.
 		disk = Cache(os.path.join(state, CACHE_FILE))
-		for section in ("files", "objects"):
+		# `links' with them. Distinct keys are what stops the tool's entry
+		# and the tree's colliding; this is what stops the outer build's
+		# save from dropping the nested one's entry altogether.
+		for section in ("files", "objects", "links"):
 			merged = dict(disk.data.get(section, {}))
 			merged.update(cache.data.get(section, {}))
 			cache.data[section] = merged

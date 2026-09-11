@@ -7048,6 +7048,74 @@ outputs = ["gen/vals.c"]
 	      f"wrote, so --clean left {gen} behind: {said}")
 
 
+@case
+def two_artifacts_of_one_name_do_not_share_a_cache_entry(t):
+	"""The tool a generator uses was relinked on every build.
+
+    `link_target` recorded what it had linked under `t.filename`, and a
+    tool named by `uses` is linked TWICE in one run: once by the nested
+    build into `.fmake/tools/`, once by the outer build into the tree --
+    one name, two paths, one cache entry. Each run overwrote the other's,
+    and because the outer build saves last the nested one never matched
+    its own record:
+
+        $ fmake -v                # with the generator stale
+        TOOL mkvals
+        LD  mkvals                <- nothing about the tool had changed
+        GEN vals
+        * up to date mkvals       <- the outer build, same name, same run
+
+    By itself that is one redundant link. What it costs beside that is a
+    question nobody can ask: anything keyed on what the tool IS sees a
+    binary rewritten for no reason, so a rule keyed on it regenerates for
+    ever. That was measured while trying exactly that, which is why this
+    is fixed first.
+
+    Two halves, and neither works alone. The entry has to be distinct --
+    keyed by what was produced rather than by what it is called -- and it
+    has to survive the outer build's save, which means joining the merge
+    that already protects a nested build's `files` and `objects` and had
+    never listed the section those two builds actually shared.
+    """
+	t.write("tool/mkvals.c",
+	        "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){\n"
+	        "    FILE *f = fopen(argv[1], \"w\");\n"
+	        "    fprintf(f, \"int made(void){ return 11; }\\n\");\n"
+	        "    fclose(f); return argc < 2;\n}\n")
+	t.write("main.c", "#include <stdio.h>\nint made(void);\n"
+	        'int main(void){ printf("%d\\n", made()); return 0; }\n')
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.toml", """
+[generate.vals]
+uses    = "mkvals"
+command = "$tool gen/vals.c"
+inputs  = ["seed.txt"]
+outputs = ["gen/vals.c"]
+""")
+	r = t.fmake()
+	check(r.returncode == 0, f"the first build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "11\n",
+	      "the generated value did not reach the program")
+
+	# Stale again, twice, because the entry alternates: one run proves
+	# nothing about which of the two builds last wrote it.
+	for seed in ("seed2\n", "seed3\n"):
+		t.write("seed.txt", seed)
+		r = t.fmake("-v")
+		said = r.stdout + r.stderr
+		lines = said.splitlines()
+		# The control. Without the nested build running there is no second
+		# link, and the assertion below would hold for the wrong reason.
+		check(any("TOOL" in l and "mkvals" in l for l in lines),
+		      f"the nested tool build did not run, so nothing here is a "
+		      f"measurement: {said}")
+		check(not any("LD" in l and "mkvals" in l for l in lines),
+		      f"the tool was relinked with nothing about it changed: {said}")
+	check(t.run(os.path.basename(t.dir)).stdout == "11\n",
+	      "the program stopped working")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
