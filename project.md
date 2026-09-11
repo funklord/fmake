@@ -267,7 +267,8 @@ that had been green about nothing for five commits ·
 [214. Five steps checked their output; three did not](#214-five-steps-checked-their-output-three-did-not) ·
 [215. A pkg-config file that could not link the library it describes](#215-a-pkg-config-file-that-could-not-link-the-library-it-describes) ·
 [216. The include path depends on how fmake reached the file](#216-the-include-path-depends-on-how-fmake-reached-the-file) ·
-[217. The script that could not be called what scripts are called](#217-the-script-that-could-not-be-called-what-scripts-are-called)
+[217. The script that could not be called what scripts are called](#217-the-script-that-could-not-be-called-what-scripts-are-called) ·
+[218. The same file built as a program and failed as a library](#218-the-same-file-built-as-a-program-and-failed-as-a-library)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17609,3 +17610,42 @@ without it -- and a `.cpp` script that only compiles as C++.
 Found by reading §71 and trying what it describes: the section says a
 shebang marks a file as meant to be run, and every such file on this
 machine is named without an extension.
+
+## 218. The same file built as a program and failed as a library
+
+One file, one word apart:
+
+    #include <pkg/api.h>              header at include/pkg/api.h
+    int pkg_val(void){ return 1; }
+
+As a program it builds. With `@kind static` it does not:
+
+    pkg/api.h: No such file or directory
+      it is in this tree, at include/pkg/api.h
+      [project] include-dirs = ['include'] would find it
+
+-- fmake naming the file it had resolved, and then not putting it on the
+path.
+
+**Building the candidate set, a program goes through `proj.candidates`,
+and that walk is what fills `incdirs`.** A library takes `candidates |=
+set(srcs)` and walks nothing, so the base include path was `-I.` alone.
+The library's own root, and its declared members, are walked now, exactly
+as a program's root is.
+
+An `include/` directory beside a library is the ordinary shape here --
+ossacli, netcfgd's client library, fuzznet and qtty are all laid out that
+way -- and each had to write `[project] include-dirs` down for a fact
+fmake works out for itself the moment the same file is a program.
+
+### What this deliberately does not settle
+
+§216 is about a file that only **widening** reaches, and it stays open.
+This walks a library's own sources: everything reachable from a library
+root is a file the library is made of, which is not an inference about
+somebody else's layout. Checked rather than assumed -- with this in
+place, the two cases that turn on §216 still refuse, `a_header_the_tree
+_already_holds_is_named` still saying *it is in this tree, at
+vendor/include/thing.h*, and the case here would not notice if they
+stopped. Two questions that look alike from a distance, and only one of
+them is answerable without the copyright holder.

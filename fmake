@@ -9217,10 +9217,28 @@ def build(args, _bootstrapping=False):
 	for t in wanted:
 		if t.members is not None:
 			candidates |= set(t.members)
+			# A declared member is one of this library's own sources, so
+			# its includes are walked like a program's. See below.
+			proj.reachable_headers(list(t.members))
 		elif t.kind != "exe":
 			candidates |= set(srcs)
 		else:
 			candidates |= proj.candidates(t.rel)
+		# `proj.candidates' walks the include graph from a program's root
+		# and that is what fills `incdirs'; a library never went through
+		# it, so nothing filled anything, and the base include path was
+		# `-I.' alone. Measured on one file and one word: `#include
+		# <pkg/api.h>' with the header at include/pkg/api.h builds as a
+		# program and fails as a library, the difference being `@kind
+		# static'.
+		#
+		# The root's own graph, not the whole tree: everything reachable
+		# from a library's root is a file the library is made of, and a
+		# file that only widening reaches stays where section 216 left it
+		# -- an open question rather than something settled by a fix for
+		# this.
+		if t.kind != "exe" and t.rel in proj.src_set:
+			proj.reachable_headers([t.rel])
 	# A named .o is a prebuilt object rather than something to compile, so
 	# it is taken out here and linked as a unit of its own further down.
 	forced_objs = [r for r in forced_rels if r.endswith(".o")]

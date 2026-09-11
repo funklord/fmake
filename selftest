@@ -6538,6 +6538,61 @@ def a_script_with_no_extension_runs(t):
 		u.cleanup()
 
 
+@case
+def a_library_resolves_its_own_includes_like_a_program(t):
+	"""One file, one word apart, and only one of them built.
+
+        #include <pkg/api.h>          header at include/pkg/api.h
+        int pkg_val(void){ return 1; }
+
+    As a program this builds: `proj.candidates' walks the include graph
+    from a program's root, and that walk is what fills `incdirs' and so
+    the -I list. As a library -- the same file with `@kind static' -- the
+    candidate set is taken as every source in the tree and nothing walks
+    anything, so the include path was `-I.' and the compile failed with
+
+        pkg/api.h: No such file or directory
+        it is in this tree, at include/pkg/api.h
+        [project] include-dirs = ['include'] would find it
+
+    -- fmake naming the file it had resolved and then not put on the
+    path. An include/ directory beside a library is the ordinary shape:
+    ossacli, netcfgd's client library, fuzznet and qtty are all laid out
+    that way, and each had to write down a fact fmake works out for
+    itself the moment the same file is a program.
+
+    The root's own graph, and a declared member's, and nothing wider.
+    Section 216 is about a file that only *widening* reaches, which is a
+    different question and stays open: the two cases that turn on it --
+    a header the tree already holds, and every include directory named at
+    once -- still refuse, and this case would not notice if they stopped.
+    """
+	t.write("include/pkg/api.h", "#pragma once\nint pkg_val(void);\n")
+	t.write("lib.c", "/*! @kind static */\n#include <pkg/api.h>\n"
+	        "int pkg_val(void){ return 1; }\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a library could not find its own header: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "liblib.a")),
+	      f"no archive was written: {os.listdir(t.dir)}")
+
+	# The same source as a program, which is the control: it built before
+	# this and has to go on building.
+	u = Tree("as-a-program")
+	try:
+		u.write("include/pkg/api.h", "#pragma once\nint pkg_val(void);\n")
+		u.write("main.c", "#include <pkg/api.h>\n#include <stdio.h>\n"
+		        "int pkg_val(void){ return 1; }\n"
+		        'int main(void){ printf("%d\\n", pkg_val()); return 0; }\n')
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"the program control broke: {r.stdout}{r.stderr}")
+		check(u.run(os.path.basename(u.dir)).stdout == "1\n",
+		      "the program control built the wrong thing")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
