@@ -270,7 +270,8 @@ that had been green about nothing for five commits ·
 [217. The script that could not be called what scripts are called](#217-the-script-that-could-not-be-called-what-scripts-are-called) ·
 [218. The same file built as a program and failed as a library](#218-the-same-file-built-as-a-program-and-failed-as-a-library) ·
 [219. The build that invented a RAID controller](#219-the-build-that-invented-a-raid-controller) ·
-[220. The header that was published where nobody includes it](#220-the-header-that-was-published-where-nobody-includes-it)
+[220. The header that was published where nobody includes it](#220-the-header-that-was-published-where-nobody-includes-it) ·
+[221. Two headers, one installed name, and one of them gone](#221-two-headers-one-installed-name-and-one-of-them-gone)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17780,3 +17781,45 @@ copies. That is fmake working correctly on a tree I had made ambiguous,
 and it is why the case stages outside the tree and writes its consumer
 there too -- a `consumer.c` inside would have been a second program in a
 library's tree.
+
+## 221. Two headers, one installed name, and one of them gone
+
+Two libraries, each publishing its own `api.h`, installed a single file:
+whichever the plan reached first. The other was dropped without a word,
+so a consumer of the second library compiled against the first's
+declarations.
+
+    $ fmake --install --destdir stage
+    * built libliba.a, liblibb.a
+    * installed 3 file(s) under /usr/local        <- two archives, ONE header
+    $ cat stage/usr/local/include/api.h
+    #define WHICH 1
+
+The dedupe it passed through is right about the case it was written for
+and was never told about this one: **the same FILE published by two
+targets** is installed once, because a header carrying `@headers` is
+often linked into one of the tree's programs as well. Two **different**
+files landing on one name is an ambiguity, and fmake already refuses two
+targets with one name and two definitions of one symbol. It gets the same
+answer -- both files named, and the remedy that §220 made possible: a
+header included as `<lib/api.h>` installs as `lib/api.h`.
+
+### The refusal found a hole in the fix before it
+
+Taking that remedy -- restructuring to `include/liba/api.h` and
+`include/libb/api.h`, which is the layout fmake's own ambiguity message
+tells a reader to adopt -- **still collided**, both flattening to
+`api.h`.
+
+`install_subpath` read `proj.incdirs`, which is what the include *graph
+inferred*, and a directory stated as `[project] include-dirs` never goes
+through the graph. Two headers of one basename are exactly the case where
+the graph cannot infer anything -- fmake refuses the include as ambiguous
+and tells the reader to state the directory -- so §220's fix was blind in
+precisely the trees that need it most. The compile line had both sets all
+along, which is why nothing else noticed.
+
+**A new refusal is a good way to find a gap in an old fix.** Nothing else
+in the suite compares an installed path against what the code includes;
+the collision check does, because a collision is what a wrong path
+produces when there are two of them.

@@ -9320,9 +9320,19 @@ def build(args, _bootstrapping=False):
 
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in sorted(proj.incdirs | {"."})]
-	# The same set `install_subpath' reads, recorded where it is known.
+	# The same set `install_subpath' reads, recorded where it is known --
+	# and `[project] include-dirs' with it, which is NOT in `proj.incdirs':
+	# that set is what the include graph inferred, and a directory stated
+	# in the configuration never goes through it. Measured: two libraries
+	# publishing `include/liba/api.h' and `include/libb/api.h', which is
+	# the layout fmake's own ambiguity message tells a reader to adopt,
+	# had both headers installed flat as `api.h' -- the fix of section 220
+	# reading half the include path. An absolute one is somebody else's
+	# directory and no header of ours is published relative to it.
 	_INCLUDE_ROOTS.clear()
 	_INCLUDE_ROOTS.update(proj.incdirs)
+	_INCLUDE_ROOTS.update(d for d in conf.project.get("include-dirs", [])
+	                      if not os.path.isabs(d))
 	# uic output is flat and its includes are unqualified, so one -I covers
 	# it. Added explicitly rather than left to the include graph to discover,
 	# because a header nothing has walked to yet still has to be findable.
@@ -12821,12 +12831,36 @@ def install_plan(targets, closures, root):
 			planned.append(("built", t.name + ".pc", "pkgconfigdir",
 			                t.name + ".pc", 0o644))
 
-	seen, unique = set(), []
+	# Two entries landing on one path are two different questions. The
+	# same FILE published by two targets is the case this dedupe was
+	# written for -- a header carrying `@headers' is often linked into a
+	# program as well, and installing it twice under two owners is what
+	# had to stop. Two DIFFERENT files landing on one name is an
+	# ambiguity, and it was silently resolved in favour of whichever came
+	# first: two libraries each publishing their own `api.h' installed
+	# one of them, the other vanished, and a consumer of the second
+	# compiled against the first's declarations. fmake refuses two
+	# targets with one name and two definitions of one symbol; this is
+	# the same ambiguity and gets the same answer.
+	seen, unique = {}, []
 	for item in planned:
 		lands = (item[2], item[3])
-		if lands not in seen:
-			seen.add(lands)
+		prior = seen.get(lands)
+		if prior is None:
+			seen[lands] = item
 			unique.append(item)
+			continue
+		if (prior[0], prior[1]) == (item[0], item[1]):
+			continue                # the same file, published twice
+		where = {"bindir": "$BINDIR", "libdir": "$LIBDIR",
+		         "includedir": "$INCLUDEDIR",
+		         "pkgconfigdir": "$PKGCONFIGDIR"}[item[2]]
+		die(f"{prior[1]} and {item[1]} would both install as "
+		    f"{where}/{item[3]}\n"
+		    f"    two files cannot share one installed name. Put one "
+		    f"under a directory of its own -- a header included as "
+		    f"`<lib/api.h>' installs as `lib/api.h' -- or publish only "
+		    f"one of them.")
 	return unique
 
 

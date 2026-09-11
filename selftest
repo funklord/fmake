@@ -6704,6 +6704,96 @@ def _all_files(base):
 			yield os.path.relpath(os.path.join(here, n), base)
 
 
+@case
+def two_headers_cannot_install_as_one(t):
+	"""One of them used to vanish.
+
+    Two libraries, each publishing its own `api.h', installed a single
+    file: whichever the plan reached first. The other was dropped without
+    a word, so a consumer of the second library compiled against the
+    first's declarations -- a wrong header, which is the quietest way for
+    a build to be wrong.
+
+    The dedupe this passed through exists for a real case and stays: the
+    same FILE published by two targets is installed once, because a
+    header carrying `@headers' is often linked into a program as well.
+    Two DIFFERENT files landing on one name is an ambiguity, and fmake
+    refuses two targets with one name and two definitions of one symbol
+    for the same reason.
+
+    The third part is the remedy the message offers, which has to work --
+    and did not when it was first written. Restructuring to
+    `include/liba/api.h' and `include/libb/api.h' still collided, because
+    `install_subpath' read the include directories the graph INFERRED and
+    a directory stated as `[project] include-dirs' never goes through the
+    graph. The compile line had both all along, which is why nothing else
+    noticed.
+    """
+	t.write("one/api.h", "#pragma once\n#define WHICH 1\nint one_val(void);\n")
+	t.write("one/a.c", "/*! @kind static\n *  @target liba\n"
+	        " *  @headers one/api.h\n */\n#include \"api.h\"\n"
+	        "int one_val(void){ return WHICH; }\n")
+	t.write("two/api.h", "#pragma once\n#define WHICH 2\nint two_val(void);\n")
+	t.write("two/b.c", "/*! @kind static\n *  @target libb\n"
+	        " *  @headers two/api.h\n */\n#include \"api.h\"\n"
+	        "int two_val(void){ return WHICH; }\n")
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage)
+	said = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"two headers installed as one name and nothing said so: {said}")
+	check("one/api.h" in said and "two/api.h" in said,
+	      f"the refusal does not name both files: {said}")
+	check(not os.path.exists(os.path.join(stage, "usr", "local", "include",
+	                                      "api.h")),
+	      "a header was installed by a build that refused")
+
+	# The remedy the message offers: a directory of its own.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	for gone in ("one/api.h", "one/a.c", "two/api.h", "two/b.c"):
+		os.remove(os.path.join(t.dir, gone))
+	t.write("include/liba/api.h", "#pragma once\nint one_val(void);\n")
+	t.write("a.c", "/*! @kind static\n *  @target liba\n"
+	        " *  @headers include/liba/api.h\n */\n#include <liba/api.h>\n"
+	        "int one_val(void){ return 1; }\n")
+	t.write("include/libb/api.h", "#pragma once\nint two_val(void);\n")
+	t.write("b.c", "/*! @kind static\n *  @target libb\n"
+	        " *  @headers include/libb/api.h\n */\n#include <libb/api.h>\n"
+	        "int two_val(void){ return 2; }\n")
+	# Stated rather than inferred, because two headers of one basename are
+	# ambiguous to the include graph -- which is what fmake tells a reader
+	# to do here, and is exactly the path `install_subpath' was missing.
+	t.write("fmake.toml", '[project]\ninclude-dirs = ["include"]\n')
+	stage2 = os.path.join(t.dir, "stage2")
+	r = t.fmake("--install", "--destdir", stage2)
+	check(r.returncode == 0,
+	      f"the remedy the message offers does not build: {r.stdout}{r.stderr}")
+	inc = os.path.join(stage2, "usr", "local", "include")
+	check(os.path.exists(os.path.join(inc, "liba", "api.h"))
+	      and os.path.exists(os.path.join(inc, "libb", "api.h")),
+	      f"the remedy still flattened them: {sorted(_all_files(stage2))}")
+
+	# And the case the dedupe was written for: one file, two publishers.
+	u = Tree("one-header-two-targets")
+	try:
+		u.write("api.h", "#pragma once\nint shared_val(void);\n")
+		u.write("a.c", "/*! @kind static\n *  @target liba\n"
+		        " *  @headers api.h\n */\n#include \"api.h\"\n"
+		        "int shared_val(void){ return 1; }\n")
+		u.write("b.c", "/*! @kind static\n *  @target libb\n"
+		        " *  @headers api.h\n */\n#include \"api.h\"\n"
+		        "int other(void){ return shared_val(); }\n")
+		out = os.path.join(u.dir, "stage")
+		r = u.fmake("--install", "--destdir", out)
+		check(r.returncode == 0,
+		      f"one header published twice was refused: {r.stdout}{r.stderr}")
+		check(os.path.exists(os.path.join(out, "usr", "local", "include",
+		                                  "api.h")),
+		      "the header was not installed at all")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
