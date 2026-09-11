@@ -4967,6 +4967,12 @@ def file_hash(path):
 	return h.hexdigest()
 
 
+def _dict_of_dicts(value):
+	"""A mapping of mappings, which is what a cache section has to be."""
+	return (isinstance(value, dict)
+	        and all(isinstance(entry, dict) for entry in value.values()))
+
+
 class Cache:
 	"""Persisted file hashes, scan results and symbol tables.
 
@@ -4987,7 +4993,19 @@ class Cache:
 		try:
 			with open(path) as fh:
 				d = json.load(fh)
-			if d.get("version") == CACHE_VER:
+			# The shape as well as the version. A cache that cannot be read
+			# is discarded and rebuilt -- that is what the `except' below
+			# says for a truncated or unparsable file, and what the version
+			# test says for one another fmake wrote. Valid JSON of the
+			# wrong shape is the same thing and was not checked, so it went
+			# into `self.data' and the next line raised `KeyError' with no
+			# mention of the file a reader would have deleted. Checked here
+			# is what this class indexes without a guard; every other key
+			# is reached through `.get' by its caller and survives being
+			# absent, measured one at a time.
+			if (isinstance(d, dict) and d.get("version") == CACHE_VER
+			        and _dict_of_dicts(d.get("files"))
+			        and _dict_of_dicts(d.get("objects"))):
 				self.data = d
 				self.data.setdefault("units", [])
 		except (OSError, ValueError):

@@ -271,7 +271,8 @@ that had been green about nothing for five commits ·
 [218. The same file built as a program and failed as a library](#218-the-same-file-built-as-a-program-and-failed-as-a-library) ·
 [219. The build that invented a RAID controller](#219-the-build-that-invented-a-raid-controller) ·
 [220. The header that was published where nobody includes it](#220-the-header-that-was-published-where-nobody-includes-it) ·
-[221. Two headers, one installed name, and one of them gone](#221-two-headers-one-installed-name-and-one-of-them-gone)
+[221. Two headers, one installed name, and one of them gone](#221-two-headers-one-installed-name-and-one-of-them-gone) ·
+[222. A damaged cache, and the three shapes the guard had met](#222-a-damaged-cache-and-the-three-shapes-the-guard-had-met)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17823,3 +17824,55 @@ along, which is why nothing else noticed.
 in the suite compares an installed path against what the code includes;
 the collision check does, because a collision is what a wrong path
 produces when there are two of them.
+
+## 222. A damaged cache, and the three shapes the guard had met
+
+`Cache.__init__` discards a cache it cannot use and rebuilds. It does that
+for a truncated file, an empty one and one that is not JSON at all -- three
+shapes, one `except (OSError, ValueError)` -- and for a cache another fmake
+wrote, which the version test catches. Valid JSON of the wrong **shape** is
+the same event and was not checked, so it went straight into `self.data`
+and the line below it indexed the result:
+
+    $ python3 -c '... d["objects"] = "oops" ...'
+    $ fmake
+    KeyError: 'objects'
+
+A traceback names no file. `.fmake/cache.json` is exactly the file a reader
+would have deleted had anything said so, and nothing does -- so the one
+remedy is the one thing the output does not mention.
+
+Measured, the whole surface:
+
+| damage | before |
+|---|---|
+| truncated, empty, not JSON | discarded, rebuilt |
+| version from the future | discarded, rebuilt |
+| `headers` `links` `nomain` `providers` `generated_outputs` `units` absent | fine, each read through `.get` |
+| top level a list, a string, `null` | `AttributeError` |
+| `files` or `objects` absent | `KeyError` |
+| `files` or `objects` of the wrong type | `AttributeError` |
+| one entry under either of the wrong type | `AttributeError` |
+
+**The three shapes that were covered are the ones whose symptom is an
+exception at the moment of reading.** A parse error arrives inside the
+`try`; a wrong shape arrives a line later, where nothing is watching. The
+guard was written against the failures its author had met, which is the
+class this project keeps finding -- and the optional keys show the other
+half of it, since every one of them was defended by the caller reaching
+for `.get` rather than by anybody deciding they were optional.
+
+What is checked is what the class itself indexes without a guard: the top
+level, `files`, `objects`, and the entries under those two. Not a schema --
+every other key survives being absent, measured one at a time, so checking
+it would be inventing a requirement rather than recording one.
+
+Discarding stays silent, as it already is for the other three. There is
+nothing for the reader to do, and rebuilding is the whole of the remedy;
+a line saying so on every build of a tree whose cache keeps being damaged
+would be noise about a condition the next build fixes.
+
+The case takes the good cache fmake has just written, damages it nine ways
+and asserts a build each time -- and ends by asserting that the cache fmake
+writes itself is still used (`up to date`), which is what says this is a
+gate and not a way of never having a cache.

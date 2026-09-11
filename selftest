@@ -38,6 +38,7 @@ import ast
 import concurrent.futures
 import glob
 import hashlib
+import json
 import os
 import platform
 import re
@@ -6792,6 +6793,88 @@ def two_headers_cannot_install_as_one(t):
 		      "the header was not installed at all")
 	finally:
 		u.cleanup()
+
+
+@case
+def a_damaged_cache_is_rebuilt_not_a_traceback(t):
+	"""Four shapes of damage, and the guard met three of them.
+
+    A cache that cannot be read is discarded and rebuilt. That is what
+    `Cache.__init__' does for a truncated file, an empty one and one that
+    is not JSON, all through a single `except (OSError, ValueError)', and
+    what the version test does for a cache another fmake wrote. Valid
+    JSON of the wrong SHAPE is the same event and was not checked, so it
+    went into `self.data' and the line below it indexed it:
+
+        $ python3 -c '... d["objects"] = "oops" ...'
+        $ fmake
+        KeyError: 'objects'
+
+    A traceback names no file, so a reader has nothing to act on -- and
+    `.fmake/cache.json' is precisely the file they would have deleted had
+    anything said so. The three shapes that were covered are the ones
+    whose symptom is an exception at the moment of reading; this one's
+    arrives a line later, which is why the guard never met it.
+
+    Every optional key was measured one at a time -- `headers', `links',
+    `nomain', `providers', `generated_outputs', `units' -- and each is
+    read through `.get' by its caller, so each survives being absent.
+    What this class indexes without a guard is `files' and `objects' and
+    the entries under them, so that is what is checked and no more.
+
+    Discarding stays silent, as it already is for the other three: there
+    is nothing for the reader to do, and rebuilding is the whole remedy.
+    """
+	t.write("helper.c", "int helper(void){ return 1; }\n")
+	t.write("main.c", "#include <stdio.h>\nint helper(void);\n"
+	        "int main(void){ printf(\"%d\\n\", helper()); return 0; }\n")
+	check(t.fmake().returncode == 0, "the undamaged build failed")
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+	prog  = os.path.join(t.dir, os.path.basename(t.dir))
+	with open(cache) as fh:
+		good = fh.read()
+
+	def damaged(what, text):
+		with open(cache, "w") as fh:
+			fh.write(text)
+		if os.path.exists(prog):
+			os.remove(prog)
+		r = t.fmake()
+		said = r.stdout + r.stderr
+		check("Traceback" not in said,
+		      f"a cache whose {what} gave a traceback: {said}")
+		check(r.returncode == 0,
+		      f"a cache whose {what} stopped the build: {said}")
+		check(os.path.exists(prog),
+		      f"a cache whose {what} built no program: {said}")
+
+	# Valid JSON that is not a cache at all.
+	damaged("top level is a list", "[1, 2]")
+	damaged("top level is a string", '"hi"')
+	damaged("top level is null", "null")
+
+	# The right version and the wrong shape: these are the ones that
+	# tracebacked, and each names the key the exception named.
+	for what, edit in (
+	        ("objects is missing", lambda d: d.pop("objects", None)),
+	        ("files is missing", lambda d: d.pop("files", None)),
+	        ("objects is a string", lambda d: d.update(objects="oops")),
+	        ("files is a list", lambda d: d.update(files=[1, 2])),
+	        ("a file entry is a string",
+	         lambda d: d["files"].update(
+	             {k: "x" for k in list(d["files"])[:1]})),
+	        ("an object entry is a string",
+	         lambda d: d["objects"].update(
+	             {k: "x" for k in list(d["objects"])[:1]}))):
+		d = json.loads(good)
+		edit(d)
+		damaged(what, json.dumps(d))
+
+	# And the cache fmake has just written is still used, which is what
+	# says this is a gate rather than a way of never having a cache.
+	r = t.fmake()
+	check(r.returncode == 0 and "up to date" in r.stdout,
+	      f"a cache fmake wrote itself was discarded: {r.stdout}{r.stderr}")
 
 
 CROSS_CC = "aarch64-linux-gnu-gcc"
