@@ -273,7 +273,8 @@ that had been green about nothing for five commits ·
 [220. The header that was published where nobody includes it](#220-the-header-that-was-published-where-nobody-includes-it) ·
 [221. Two headers, one installed name, and one of them gone](#221-two-headers-one-installed-name-and-one-of-them-gone) ·
 [222. A damaged cache, and the three shapes the guard had met](#222-a-damaged-cache-and-the-three-shapes-the-guard-had-met) ·
-[223. The nm that was not part of what it decided](#223-the-nm-that-was-not-part-of-what-it-decided)
+[223. The nm that was not part of what it decided](#223-the-nm-that-was-not-part-of-what-it-decided) ·
+[224. The cache that did not say which fmake wrote it](#224-the-cache-that-did-not-say-which-fmake-wrote-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -17973,3 +17974,69 @@ symbols at all, not this one: a single object with none is an ordinary
 scanner false positive, measured with a definition inside `#if 0` --
 fmake compiles that file, reads no symbols, and reports the link error,
 which is the right answer for it. Left for its own round.
+
+## 224. The cache that did not say which fmake wrote it
+
+Nearly everything in `.fmake/cache.json` is fmake's own reading of the
+tree: what each file defines, whether it has a `main()`, which header
+proposes which source, which unit provides which symbol. A cached scan is
+keyed on the file's content hash and on **nothing about the program that
+produced it**, so a tree built once by an fmake with a scanner bug keeps
+that bug's answer for ever.
+
+Measured against section 203's defect, with the `using`-declaration
+guard removed from a copy of today's fmake:
+
+    $ ./fmake-without-the-guard
+    * did not link ... no library exports _ZN2ns11widget_makeEv
+      name the missing libraries with --ldflags, or build only the targets
+    $ fmake                          # with the fix
+    * did not link ... no library exports _ZN2ns11widget_makeEv
+      name the missing libraries with --ldflags, or build only the targets
+    $ rm -rf .fmake && fmake
+    * did not link ... no library exports _ZN2ns11widget_makeEv
+      no library here exports them, and nothing in this tree appears to
+      define them either
+
+Byte-identical for the first two, and only the third says the sentence
+that tells the reader nobody has written the function. The fix had landed
+and the tree could not see it.
+
+`CACHE_VER` is the lever that exists for exactly this, and it is moved by
+somebody remembering. `git log -S` on its line returns one commit -- the
+first -- so it has been 9 since the beginning, while `RE_DATA_DEF` alone
+has changed since, in `a866803`, and sections 202 and 203 are two more
+scanner fixes that landed with it untouched. **A lever nobody has ever
+pulled is not a lever.**
+
+`build_identity()` already answers "which fmake is this", and its own
+docstring carries the incident that made it: an installed copy
+eighty-six commits behind the source reporting the same `fmake 1.0`, with
+twenty-three targets silently dropped between them. That is the same
+question -- *does this fmake read the tree the way that one did* -- and
+the cache never asked it. So the acceptance test gains the answer beside
+the format version, and `CACHE_VER` goes back to meaning what its name
+says.
+
+### What it costs, and what was rejected
+
+Discarding the whole file discards the object entries too, so an fmake
+that has changed at all -- a comment included -- costs one full rebuild of
+every tree it is pointed at. The surgical alternative is to gate only the
+fmake-derived sections and keep `objects`, which nm produced rather than
+fmake; it is cheaper and it is an enumeration, which is the shape of the
+bug being fixed here and in section 222. A gate over the whole file
+cannot be short by a key. An fmake upgrade is rare and a rebuild after one
+is honest: the program that decided what to build is not the program that
+decided it last time.
+
+One thing it buys beyond the defect it fixes: a change to the cache's
+SHAPE is now safe by construction. Any fmake that spells a section
+differently is an fmake with a different identity, so the file it cannot
+read is a file it will not read -- which is what `CACHE_VER` was for and
+what nobody remembered to move.
+
+What it does not catch is an fmake whose own file cannot be read.
+`build_identity()` answers `unknown` then -- deliberately, since a version
+string is the last place to raise -- every run agrees with itself, and the
+cache persists across changes exactly as it did before.

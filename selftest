@@ -6936,6 +6936,118 @@ def a_repaired_nm_does_not_repair_the_build(t):
 	check(r.returncode == 0, f"the repaired build failed: {said}")
 
 
+@case
+def a_cache_says_which_fmake_decided_what_is_in_it(t):
+	"""A scanner fix that did not reach a tree that had been built once.
+
+    Almost everything in `.fmake/cache.json` is fmake's own reading of the
+    tree -- what each file defines, whether it has a `main()`, which header
+    proposes which source -- and a cached scan is keyed on the file's
+    content hash and on nothing about the program that produced it. So a
+    tree built by an fmake with a scanner bug keeps that bug's answer, and
+    upgrading fmake changes nothing at all:
+
+        $ ./fmake-without-the-using-guard   # section 203's defect
+        * did not link ... no library exports _ZN2ns11widget_makeEv
+        $ ./fmake                           # with the fix
+        * did not link ... no library exports _ZN2ns11widget_makeEv
+        $ rm -rf .fmake && ./fmake
+        ... nothing in this tree appears to define them either
+
+    Byte-identical, and only the third run says the useful sentence.
+    `CACHE_VER` is the lever that exists for this and it is moved by
+    somebody remembering: `git log -S` on its line returns one commit, the
+    first, so it has been 9 throughout while the scanner has changed.
+
+    `build_identity()` already answers "which fmake is this", and its own
+    docstring carries the incident that made it -- an installed copy
+    eighty-six commits behind reporting the same `fmake 1.0` as the
+    source, twenty-three targets silently dropped between them. The cache
+    never asked it.
+
+    Measured here without a second fmake, which would prove one scanner
+    change rather than the gate. A cached scan is corrupted in one field
+    and the two arms differ only in the recorded identity:
+
+      - identity unchanged: the corruption decides, and the tree builds a
+        static library instead of the program. That is the control, and
+        without it this case passes when the corruption does nothing.
+      - identity changed: the cache is discarded, the tree is re-scanned,
+        and the program is built.
+
+    The third part is what a discard must NOT throw away. `--clean`
+    removes generated files by the list the cache holds and by nothing
+    else, so a cache discarded for a new fmake would leave them in
+    somebody's tree; `generated_outputs` is a record of what happened
+    rather than a reading of the tree, and it is carried across.
+
+    What none of this catches is an fmake whose own file cannot be read:
+    `build_identity()` answers `unknown` then, every run agrees with
+    itself, and the cache persists across changes exactly as before.
+    """
+	t.write("vals.in", "int made(void){ return 7; }\n")
+	t.write("helper.c", "int helper(void){ return 1; }\n")
+	t.write("main.c", "#include <stdio.h>\nint helper(void);\nint made(void);\n"
+	        "int main(void){ printf(\"%d\\n\", helper() + made()); return 0; }\n")
+	t.write("fmake.toml", """
+[generate.vals]
+command = "cp vals.in gen/vals.c"
+inputs  = ["vals.in"]
+outputs = ["gen/vals.c"]
+""")
+	name  = os.path.basename(t.dir)
+	prog  = os.path.join(t.dir, name)
+	lib   = os.path.join(t.dir, f"lib{name}.a")
+	gen   = os.path.join(t.dir, "gen", "vals.c")
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+	r = t.fmake()
+	check(r.returncode == 0 and os.path.exists(prog),
+	      f"the undamaged build produced no program: {r.stdout}{r.stderr}")
+	check(os.path.exists(gen), "the generator wrote nothing")
+
+	def rewrite(identity, corrupt=True):
+		with open(cache) as fh:
+			d = json.load(fh)
+		if corrupt:
+			d["files"]["main.c"]["scan"]["has_main"] = False
+		if identity is not None:
+			d["fmake"] = identity
+		with open(cache, "w") as fh:
+			json.dump(d, fh)
+
+	# The control: the corrupted scan has to decide something, or the arm
+	# below proves nothing.
+	rewrite(None)
+	for gone in (prog, lib):
+		if os.path.exists(gone):
+			os.remove(gone)
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(os.path.exists(lib) and not os.path.exists(prog),
+	      f"a cached scan saying main.c has no main() changed nothing, so "
+	      f"nothing below is a measurement: {said}")
+
+	# The same corruption, recorded as another fmake's reading of the tree.
+	rewrite("00000000")
+	for gone in (prog, lib):
+		if os.path.exists(gone):
+			os.remove(gone)
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the re-scanned build failed: {said}")
+	check(os.path.exists(prog),
+	      f"a cache another fmake wrote was believed anyway: {said}")
+
+	# And what the discard keeps: `--clean' removes generated files by the
+	# cache's own record of them.
+	rewrite("11111111", corrupt=False)
+	r = t.fmake("--clean")
+	said = r.stdout + r.stderr
+	check(not os.path.exists(gen),
+	      f"a cache discarded for a new fmake forgot what its generators "
+	      f"wrote, so --clean left {gen} behind: {said}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

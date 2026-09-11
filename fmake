@@ -139,6 +139,9 @@ LICENCE     = "GPL-3.0-or-later"
 COPYRIGHT   = "Copyright (C) 2026 " + AUTHOR
 
 
+_IDENTITY = None
+
+
 def build_identity():
 	"""Short hash of this file, so two copies can be told apart.
 
@@ -168,11 +171,17 @@ def build_identity():
     Never fatal. A version string is the last place to raise, so an
     unreadable file gives `unknown' rather than a traceback from -V.
     """
-	try:
-		with open(os.path.realpath(__file__), "rb") as fh:
-			return hashlib.sha256(fh.read()).hexdigest()[:8]
-	except OSError:
-		return "unknown"
+	global _IDENTITY
+	if _IDENTITY is None:
+		try:
+			with open(os.path.realpath(__file__), "rb") as fh:
+				_IDENTITY = hashlib.sha256(fh.read()).hexdigest()[:8]
+		except OSError:
+			# Memoised too. A copy that cannot be read now will not be
+			# readable a line later, and answering differently between two
+			# callers in one run is worse than answering `unknown' twice.
+			_IDENTITY = "unknown"
+	return _IDENTITY
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
@@ -5003,8 +5012,8 @@ class Cache:
 		# have been inspecting, from the one mode that says it does not
 		# build. `--explain' keeps writing, and should: it compiles.
 		self.read_only = False
-		self.data = {"version": CACHE_VER, "files": {}, "objects": {},
-		             "units": []}
+		self.data = {"version": CACHE_VER, "fmake": build_identity(),
+		             "files": {}, "objects": {}, "units": []}
 		try:
 			with open(path) as fh:
 				d = json.load(fh)
@@ -5018,11 +5027,31 @@ class Cache:
 			# is what this class indexes without a guard; every other key
 			# is reached through `.get' by its caller and survives being
 			# absent, measured one at a time.
+			# Which fmake wrote it, as well as which format. Nearly
+			# everything in here is fmake's own reading of the tree -- what
+			# a file defines, whether it has a main(), what proposes what --
+			# and an fmake that reads differently is what a scanner fix is.
+			# CACHE_VER is the format and was the only lever, so it had to
+			# be moved by somebody remembering: it has not moved since the
+			# first commit, and the scanner has.
 			if (isinstance(d, dict) and d.get("version") == CACHE_VER
+			        and d.get("fmake") == build_identity()
 			        and _dict_of_dicts(d.get("files"))
 			        and _dict_of_dicts(d.get("objects"))):
 				self.data = d
 				self.data.setdefault("units", [])
+			elif isinstance(d, dict) and isinstance(
+			        d.get("generated_outputs"), dict):
+				# The one thing a discarded cache still knows for certain:
+				# which files its generators wrote. That is a record of
+				# what happened rather than a reading of the tree, those
+				# files are still on disk, and `--clean' removes them by
+				# that list and by nothing else -- so dropping it would
+				# leave generated sources behind in somebody's tree every
+				# time fmake changed.
+				self.data["generated_outputs"] = {
+				    k: v for k, v in d["generated_outputs"].items()
+				    if isinstance(v, list)}
 		except (OSError, ValueError):
 			pass
 		self.files   = self.data["files"]
