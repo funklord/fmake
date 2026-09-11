@@ -4167,8 +4167,18 @@ def stage_run_source(root, path, alone=False):
 		rel = os.path.relpath(os.path.abspath(path), root)
 		if not first.startswith(b"#!"):
 			return rel
-	staged = (os.path.basename(path) if alone
-	          else os.path.join(RUN_DIR, os.path.basename(path)))
+	# A script is usually named without an extension -- that is what a
+	# shebang is for -- and the staged copy then collides with the program
+	# built from it: both are `.fmake/run/tool', so the clobber guard fired
+	# and offered `@target or fmake.toml' about a file nobody in this story
+	# has, for a feature that has no targets to name. Staged with the
+	# language's own extension instead, which is also what says which
+	# language it is: an extension fmake does not know reads as C, the same
+	# default LANGS has always had, and a C++ script keeps its .cpp.
+	base = os.path.basename(path)
+	if os.path.splitext(base)[1] not in SRC_EXTS:
+		base += ".c"
+	staged = base if alone else os.path.join(RUN_DIR, base)
 	full = os.path.join(root, staged)
 	os.makedirs(os.path.dirname(full) or root, exist_ok=True)
 	with open(path, "rb") as fh:

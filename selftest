@@ -6481,6 +6481,63 @@ def a_pkgconfig_file_names_what_else_the_library_needs(t):
 	      f"the consumer linked the wrong library: {ran.stdout!r}")
 
 
+@case
+def a_script_with_no_extension_runs(t):
+	"""A shebang marks the files meant to be run, and those have no `.c'.
+
+    Section 71 chose a shebang over binfmt_misc precisely because it marks
+    the few files that are meant to be run -- and a file meant to be run
+    is called `tool', not `tool.c'. That file did not work:
+
+        !!! .fmake/run/tool would be built as .fmake/run/tool, which is
+        already a file this build did not write. Give the target another
+        name with @target or fmake.toml ...
+
+    The staged copy and the program built from it were the same path, so
+    the clobber guard of section 196 fired -- correctly, on a collision
+    fmake had made itself -- and offered a remedy about targets and
+    fmake.toml, neither of which a script has.
+
+    Staged with the language's extension instead, which is also what says
+    which language it is: an extension fmake does not know reads as C,
+    the default `LANGS' has always had, and a C++ script keeps its .cpp
+    and is still compiled as C++.
+    """
+	shebang = f"#!/usr/bin/env -S {FMAKE} --run\n"
+	t.write("tool", shebang + "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){ (void)argv;\n"
+	        '  printf("ran with %d\\n", argc - 1); return 0; }\n')
+	os.chmod(os.path.join(t.dir, "tool"), 0o755)
+	r = subprocess.run([os.path.join(t.dir, "tool"), "a", "b"],
+	                   capture_output=True, text=True, cwd=t.dir)
+	check(r.returncode == 0,
+	      f"a script with no extension did not run: {r.stdout}{r.stderr}")
+	check(r.stdout == "ran with 2\n",
+	      f"its arguments did not reach it: {r.stdout!r}{r.stderr}")
+
+	# Twice, because the staged copy is what the second run reuses and a
+	# collision would come back with the cache rather than without it.
+	again = subprocess.run([os.path.join(t.dir, "tool")],
+	                       capture_output=True, text=True, cwd=t.dir)
+	check(again.returncode == 0,
+	      f"the second run broke: {again.stdout}{again.stderr}")
+
+	# And an extension fmake does know is still what picks the language:
+	# this one only compiles as C++.
+	u = Tree("cpp-script")
+	try:
+		u.write("s.cpp", shebang + "#include <cstdio>\n#include <string>\n"
+		        'int main(){ std::string s = "cpp"; printf("%s\\n",'
+		        " s.c_str()); return 0; }\n")
+		os.chmod(os.path.join(u.dir, "s.cpp"), 0o755)
+		c = subprocess.run([os.path.join(u.dir, "s.cpp")],
+		                   capture_output=True, text=True, cwd=u.dir)
+		check(c.returncode == 0 and c.stdout == "cpp\n",
+		      f"a .cpp script stopped being C++: {c.stdout}{c.stderr}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

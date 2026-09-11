@@ -265,7 +265,9 @@ that had been green about nothing for five commits ·
 [212. A green build over a source with a syntax error in it](#212-a-green-build-over-a-source-with-a-syntax-error-in-it) ·
 [213. Three messages that named the wrong thing](#213-three-messages-that-named-the-wrong-thing) ·
 [214. Five steps checked their output; three did not](#214-five-steps-checked-their-output-three-did-not) ·
-[215. A pkg-config file that could not link the library it describes](#215-a-pkg-config-file-that-could-not-link-the-library-it-describes)
+[215. A pkg-config file that could not link the library it describes](#215-a-pkg-config-file-that-could-not-link-the-library-it-describes) ·
+[216. The include path depends on how fmake reached the file](#216-the-include-path-depends-on-how-fmake-reached-the-file) ·
+[217. The script that could not be called what scripts are called](#217-the-script-that-could-not-be-called-what-scripts-are-called)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2408,11 +2410,16 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and is ~3 minutes at 173, because the cases added
-since are the expensive kind: cross compiles, ejecting a build and running
-`make` or `ninja` over it, and the Qt cases, which compile C++ against Qt
-headers. Filtering by name is the way to work — `./selftest rcc` is seven
-cases and a few seconds — and the full run is for before a commit.
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **484** now
+(`grep -c '^@case' selftest`, which is how to re-derive it rather than
+trusting this line) — the cases added since are the expensive kind: cross
+compiles, ejecting a build and running `make` or `ninja` over it, and the
+Qt cases, which compile C++ against Qt headers. **Time it on the machine
+in front of you rather than reading a number here**: the same run took
+about 20 minutes at `-j2` and over an hour at `-j1` on a box with a dozen
+other builds on it. Filtering by name is the way to work — `./selftest
+rcc` is seven cases and a few seconds — and the full run is for before a
+commit.
 
 Cases needing something absent from the machine skip rather than fail — a
 cross toolchain, `ninja`, a library, Qt. A skip is not a pass; check the
@@ -17503,3 +17510,102 @@ same three-step rule §209 had just unified into `install_dirs` for the
 other three readers. It was correct, and it was a fourth copy sitting
 inside the function that had already been wrong once about this exact
 fact (§196). It reads `install_dirs` now, like everything else.
+
+## 216. The include path depends on how fmake reached the file
+
+**Not a fix. A finding, a fix that was written and reverted, and a
+question that is not mine to answer.**
+
+The include path is built from the include graph, walked from what fmake
+already knows it will compile. A file that joins by *symbol* -- widening,
+or the set remembered from the last build's widening -- is one the graph
+did not reach, so the directories its own includes need are not on its
+command line:
+
+    sub/impl.c   #include <subutil.h>     beside it, in sub/
+    src/impl.c   #include <pkg/api.h>     header at inc/pkg/api.h
+
+Both fail with *No such file or directory*. **Both compile as soon as
+anything else includes the same header** -- the control is `main.c`
+including it too -- so whether a file builds depends on the order fmake
+walked, not on the file. A quote include survives, because the compiler
+looks beside the includer; an angle include does not, and neither does
+the `include/` plus `<pkg/api.h>` layout.
+
+### The fix, and what the suite said about it
+
+Resolving each unit's own includes and adding the directories it needs is
+eleven lines, costs nothing measurable (a no-op build on an 18-source
+tree: 0.33s before, 0.33s after), and makes both trees build. **Two cases
+then failed, and reading them settled the question the other way.**
+
+`a_header_the_tree_already_holds_is_named` says it outright:
+
+> The including file has to be one fmake reaches by widening rather than
+> through the root's include graph -- which is beerssh's shape, and the
+> first version of this fixture put the include in main.c, where fmake
+> resolves it and the case had nothing to test.
+
+So the asymmetry is known and deliberate: where fmake cannot see the
+include, it refuses and **names the header it already holds and the
+directory that would find it**, rather than inferring a path. The sibling
+case, `every_include_directory_the_tree_could_supply_is_named_at_once`,
+collects those directories into one line -- written from thorvg, where
+following it took a tree from 48 files failing to 11.
+
+Measured with the fix in place: a genuinely ambiguous include still
+refuses and still names both candidates, so the refusal machinery
+survives. What does not survive is the *summary* line, which fires only
+for a header fmake could resolve and had not put on the path -- exactly
+the case the fix removes.
+
+### The question, its cost, and whose it is
+
+- **The option.** Give every unit the include directories its own
+  includes resolve to, so that a file compiles or not on its own merits
+  rather than on the order of the walk. It is the move fmake already
+  makes for generated output, with the reasoning written out: *a
+  [generate] rule writing a .c that includes a header from a directory
+  nothing else includes from fails exactly the same way, measured rather
+  than argued.*
+- **The cost.** Two cases encode the refusal as intent, both from real
+  trees, and the "all of those together" advice becomes unreachable for
+  resolvable headers. A tree that relies on the advice to learn it should
+  write `[project] include-dirs` would instead build silently on a
+  basename guess -- which is the thing §3 refuses to do elsewhere.
+- **Whose.** The copyright holder's: it changes what fmake infers from an
+  unannotated tree, and the two cases say the present answer was chosen
+  rather than defaulted into.
+
+The patch and its case are kept in this session's scratch rather than the
+tree; they apply cleanly to `84cc288` if the answer is yes.
+
+## 217. The script that could not be called what scripts are called
+
+§71 chose a shebang over `binfmt_misc` because it *marks the few files
+that are meant to be run, which is exactly what a shebang is for*. A file
+meant to be run is called `tool`, not `tool.c` -- and that file did not
+work:
+
+    !!! .fmake/run/tool would be built as .fmake/run/tool, which is
+    already a file this build did not write. Give the target another name
+    with @target or fmake.toml, send the build elsewhere with -o, or move
+    the file.
+
+The staged copy, which exists because a shebang is not C, and the program
+built from it were the same path. §196's clobber guard fired -- correctly,
+on a collision fmake had made itself -- and offered remedies about targets
+and `fmake.toml`, neither of which a script has, about a file the reader
+never wrote.
+
+The copy is staged with the language's extension now, which also answers
+the question the extension was carrying: **an extension fmake does not
+know reads as C**, which is the default `LANGS` has always had, and a C++
+script keeps its `.cpp` and is still compiled as C++. The case runs a
+no-extension script twice -- the second run is the one that reuses the
+staged copy, so a collision would come back with the cache rather than
+without it -- and a `.cpp` script that only compiles as C++.
+
+Found by reading §71 and trying what it describes: the section says a
+shebang marks a file as meant to be run, and every such file on this
+machine is named without an extension.
