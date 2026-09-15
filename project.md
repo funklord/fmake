@@ -285,7 +285,8 @@ that had been green about nothing for five commits ·
 [232. `--release`: everything downloadable, and the page that lists it](#232---release-everything-downloadable-and-the-page-that-lists-it) ·
 [233. The ejected Makefile asks pkg-config for the places](#233-the-ejected-makefile-asks-pkg-config-for-the-places) ·
 [234. `--arch`: the compiler found from the architecture](#234---arch-the-compiler-found-from-the-architecture) ·
-[235. Packaging a real tree: what ossacli said about the emitter](#235-packaging-a-real-tree-what-ossacli-said-about-the-emitter)
+[235. Packaging a real tree: what ossacli said about the emitter](#235-packaging-a-real-tree-what-ossacli-said-about-the-emitter) ·
+[236. Packaging netcfgd: one package of five, and what the tree lacked](#236-packaging-netcfgd-one-package-of-five-and-what-the-tree-lacked)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18562,6 +18563,21 @@ So "build for several architectures" is `dpkg-buildpackage -a arm64 -a
 riscv64 ...` against one ejected source package, and `fmake --arch` is
 for the tree's own builds. Neither needs the other.
 
+**Measured, once everything above was built.** One ejected source
+package, `hello 1.2`: `dpkg-buildpackage -b` gave `hello_1.2_amd64.deb`
+with `Architecture: amd64`; `dpkg-buildpackage -a arm64 -b -d` compiled
+`usr/bin/hello` as an AArch64 ELF through `CC=aarch64-linux-gnu-gcc`
+from `rules`, and gave `hello_1.2_arm64.deb` with `Architecture: arm64`
+-- the name and the tag are dpkg's from `-a`, fmake having written
+nothing architecture-specific. What stood between was `dh_shlibdeps`:
+resolving `${shlibs:Depends}` for a foreign architecture needs that
+architecture's libraries installed as packages (`libc6:arm64`, which
+`crossbuild-essential-arm64` sets up), and this machine has the cross
+compiler's libc under `/usr/aarch64-linux-gnu/` but no foreign-arch
+packages. That is Debian's own cross-build prerequisite; the artifact
+above was seen by stubbing `dh_shlibdeps` in a scratch copy for the
+measurement only.
+
 ### A release page from README.md, with everything downloadable
 
 Asked by the copyright holder 2026-09-15, after the two emitters: could
@@ -19109,3 +19125,57 @@ The case covers the split, the grouping, the excluded tests and the
 Makefile's install rule with a fixture rather than the sibling; against
 the emitter before this section it fails on the first defect the
 sibling found.
+
+## 236. Packaging netcfgd: one package of five, and what the tree lacked
+
+The second sibling through `--eject deb`, pulled to `6f756f4` first, in
+a scratch copy with its `debian/` and Makefile moved aside. netcfgd is
+five packages by hand -- `netcfgd`, `-nm`, `-modem`, `-gui`, `-trinity`
+-- and fmake builds one program in that tree, the Qt client: the rest
+is a Cargo workspace of twenty-one crates, which fmake does not build
+and its README says so. So the emitter's reach here is `netcfgd-gui`,
+and the boundary is the build model's, not the emitter's.
+
+That package built, `dpkg-buildpackage -b -us -uc`, with the tree's own
+GUI suite run during the build, and lintian reporting one warning, the
+man page the hand-written package lacks as well. Four builds to get
+there, and every stop was a declaration the tree's `fmake.toml` does
+not carry for something fmake already models:
+
+- `test-env = ["QT_QPA_PLATFORM=offscreen"]`: `access_frame` aborted for
+  want of a display. `gui/Makefile` sets it per test.
+- `[target.client_test] test-args = ["doc/schema/socket.json"]`: run
+  from the root it looked for `../doc/schema/socket.json` -- and this
+  key is the example fmake's own README gives, taken from this tree.
+- `test-group = "live"` on the eight `gui/tests/live/` programs, which
+  need a running daemon; the ejected `test` rule ran them with the rest.
+  Whether fmake should infer a group from a `tests/live/` directory is a
+  question about what it reads off an unannotated tree, so it is the
+  holder's, recorded in section 227's list.
+
+Signalled into netcfgd's `project.md`, uncommitted, as ossacli's were.
+
+**One thing the emitter lacked, and a clean chroot would have found.**
+`Build-Depends` came out `qt6-base-dev`, derived from the four Qt6
+modules' `.pc` files, and `moc` lives in `qt6-base-dev-tools`, which no
+`.pc` names. This machine has moc, so the build here passed; a chroot
+with only the declared dependencies would not have. The emitter now
+asks dpkg which package ships each tool the build ran -- moc, uic, rcc,
+situc -- only where that tool had work, since a tree with no `.ui` needs
+no uic. The case asserts the relationship rather than the name: the
+package dpkg names for the moc that Qt6Core's own pkg-config points at
+is in `Build-Depends`. Against the emitter before this it fails on
+exactly that package.
+
+**Two facts fmake cannot express and did not try to.** netcfgd's
+`debian/copyright` says `MIT or Apache-2.0` and there is no licence text
+at the root: a dual licence has no single text to hash, and the copy
+used a GPL-3 text as a fixture, which says nothing about netcfgd. And
+the `netcfgd-tui` symlink beside `netcfgd-gui` is a second name for one
+binary, an alias the install model has no row for.
+
+What matched, with those declared: the `netcfgd-gui` stanza differs
+from the hand-written one in the long description's length, in a
+`Build-Profiles: <pkg.netcfgd.gui>` line -- a Debian mechanism for
+building the GUI only on request, which fmake does not model -- and in
+the derived `Build-Depends` being the two packages rather than one.

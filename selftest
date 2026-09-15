@@ -8067,6 +8067,75 @@ Both are tiny.
 		      f"{what} was not refused as such: {r.stdout}{r.stderr}")
 
 
+@case
+def build_depends_name_the_tools_the_build_ran(t):
+	"""One package short of a clean chroot, found by packaging netcfgd.
+
+    Build-Depends were derived from the pkg-config modules fmake
+    resolved -- the .pc files name qt6-base-dev -- and the moc those
+    modules need lives in qt6-base-dev-tools, which the .pc files do
+    not name. This machine has moc, so the build here could not notice;
+    a clean chroot would have. So the emitter asks dpkg which package
+    ships each tool the build actually ran, only where that tool had
+    work: a tree with no .ui needs no uic.
+
+    Asserted as a relationship: the package dpkg names for moc's real
+    path is in Build-Depends, whatever it is called on this machine.
+    """
+	_deb_tools()
+	if not shutil.which("moc") and not shutil.which("moc-qt6"):
+		raise Skip("no moc installed")
+	pc = subprocess.run(["pkg-config", "--variable=pcfiledir", "Qt6Core"],
+	                    capture_output=True, text=True).stdout.strip()
+	if not pc:
+		raise Skip("Qt6Core is not installed")
+	t.write("src/main.cpp",
+	        "/*! @target qtool */\n/* SPDX-License-Identifier: GPL-3.0-or-later */\n"
+	        "#include <QObject>\n#include <QCoreApplication>\n"
+	        "class Ping : public QObject { Q_OBJECT\npublic:\n"
+	        "\tPing(){}\nsignals:\n\tvoid pinged();\n};\n"
+	        "int main(int argc, char **argv){ QCoreApplication app(argc, argv);"
+	        " Ping p; return 0; }\n#include \"main.moc\"\n")
+	shutil.copy("/usr/share/common-licenses/GPL-3", os.path.join(t.dir, "src", "LICENSE"))
+	t.write("src/VERSION", "0.1\n")
+	t.write("src/fmake.toml", """
+[project]
+name = "qtool"
+[package]
+maintainer  = "Test Person <test@example.invalid>"
+description = \"\"\"
+A QObject with one signal, kept as the fixture for which packages a
+package build needs.
+
+Nothing more.
+\"\"\"
+[target.qtool]
+description = "pings"
+""")
+	src = _src(t)
+	_run_in(src, "git", "init", "-q", ".")
+	r = _deb(t, "--eject", "deb")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--eject deb: {said}")
+	with open(os.path.join(src, "debian", "control")) as fh:
+		control = fh.read()
+	# The moc fmake ran is the one Qt6Core's own pkg-config names.
+	libexec = subprocess.run(["pkg-config", "--variable=libexecdir", "Qt6Core"],
+	                         capture_output=True, text=True).stdout.strip()
+	moc = os.path.realpath(os.path.join(libexec, "moc")) if libexec else ""
+	if not os.path.exists(moc):
+		raise Skip(f"Qt6Core names no moc at {libexec}")
+	owner = subprocess.run(["dpkg", "-S", moc], capture_output=True,
+	                       text=True).stdout.split(":", 1)[0].strip()
+	check(owner, f"dpkg does not know which package ships {moc}")
+	dev = subprocess.run(["dpkg", "-S", os.path.join(pc, "Qt6Core.pc")],
+	                     capture_output=True, text=True).stdout.split(":", 1)[0].strip()
+	for want in (dev, owner):
+		check(want in control,
+		      f"Build-Depends lacks {want}, which dpkg names for what the "
+		      f"build used:\n{control}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

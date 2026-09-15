@@ -10447,8 +10447,14 @@ def build(args, _bootstrapping=False):
 			# Makefile the package builds with goes beside debian/, and
 			# both are written into the tree, which is where a source
 			# package lives.
+			# The tools this build ran, so Build-Depends names what ships
+			# them: only the ones with work, since a tree with no .ui
+			# needs no uic.
 			eject_deb(wanted, closures, resolutions, root, conf, cfg, pkg,
-			          text)
+			          text, tools=[exe for exe, jobs in (
+			              (moc_exe, moc_jobs), (uic_exe, ui_jobs),
+			              (rcc_exe, qrc_jobs), (situc_exe, situ_jobs))
+			              if exe and jobs])
 		elif args.eject == "ebuild":
 			eject_ebuild(wanted, closures, resolutions, root, conf, cfg,
 			             pkg, text)
@@ -13630,14 +13636,21 @@ def copyright_years(root):
 	return now
 
 
-def deb_build_depends(resolutions, pkg):
-	"""The -dev packages behind the pkg-config modules this tree links.
+def deb_build_depends(resolutions, pkg, tools=()):
+	"""The -dev packages behind the pkg-config modules this tree links,
+    and the packages behind the tools the build runs.
 
     fmake decided WHICH modules, by symbol. Which Debian package ships
     each module's .pc file is dpkg's to say -- `dpkg -S' on the file --
     so this asks it rather than carrying a table of another
     distribution's names. A module dpkg cannot place is reported and
     left for the maintainer, never guessed.
+
+    The tools the same way: a tree that mocs needs `qt6-base-dev-tools'
+    and not only `qt6-base-dev', which the .pc files name. Found by
+    packaging netcfgd's client, whose Build-Depends came out one package
+    short of what a clean chroot has -- this machine has moc, so the
+    build here could not notice.
     """
 	modules = set()
 	for res in resolutions.values():
@@ -13647,23 +13660,32 @@ def deb_build_depends(resolutions, pkg):
 			if module:
 				modules.add(module)
 	found, missing = set(), []
-	for module in sorted(modules):
-		pcdir = pkg.variable(module, "pcfiledir") if pkg else None
-		path = os.path.join(pcdir, module + ".pc") if pcdir else None
-		if not path or not os.path.isfile(path):
-			missing.append(module)
-			continue
+
+	def owner_of(path):
 		try:
 			r = subprocess.run(["dpkg", "-S", path], capture_output=True,
 			                   text=True, timeout=60)
 		except (OSError, subprocess.TimeoutExpired):
-			missing.append(module)
-			continue
-		owner = r.stdout.split(":", 1)[0].strip() if r.returncode == 0 else ""
+			return ""
+		return r.stdout.split(":", 1)[0].strip() if r.returncode == 0 else ""
+
+	for module in sorted(modules):
+		pcdir = pkg.variable(module, "pcfiledir") if pkg else None
+		path = os.path.join(pcdir, module + ".pc") if pcdir else None
+		owner = owner_of(path) if path and os.path.isfile(path) else ""
 		if owner:
 			found.add(owner)
 		else:
 			missing.append(module)
+	for tool in tools:
+		if not tool:
+			continue
+		exe = shutil.which(tool) or tool
+		owner = owner_of(os.path.realpath(exe)) if os.path.exists(exe) else ""
+		if owner:
+			found.add(owner)
+		else:
+			missing.append(os.path.basename(tool))
 	return sorted(found), missing
 
 
@@ -13788,7 +13810,7 @@ def _deb_wrap(text):
 
 
 def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
-              makefile):
+              makefile, tools=()):
 	"""Write debian/ and the Makefile it builds with, into the tree."""
 	src_name = conf.project.get("name") or os.path.basename(root)
 	if not RE_DEB_NAME.match(src_name):
@@ -13859,11 +13881,11 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 			    f"One package for all three archives cannot be built from "
 			    f"it.")
 
-	build_deps, unmapped = deb_build_depends(resolutions, pkg)
+	build_deps, unmapped = deb_build_depends(resolutions, pkg, tools)
 	if unmapped:
-		warn(f"Build-Depends could not be derived for pkg-config "
-		     f"module(s) {', '.join(unmapped)}: dpkg does not know which "
-		     f"package ships them here. Name them in debian/control.")
+		warn(f"Build-Depends could not be derived for "
+		     f"{', '.join(unmapped)}: dpkg does not know which package "
+		     f"ships them here. Name them in debian/control.")
 
 	# ---- control
 	long_desc = conf.package.get("description", "").strip()
