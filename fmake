@@ -1188,7 +1188,7 @@ CONF_SCHEMA = {
     "debian": {"*": {
         "section": S, "depends": L, "recommends": L, "suggests": L,
         "description": S, "postinst": S, "prerm": S, "postrm": S,
-        "preinst": S,
+        "preinst": S, "targets": L, "synopsis": S,
     }},
 	# One ebuild per tree -- Portage has no sub-packages, it has USE --
 	# in Gentoo's vocabulary: the category it files under, where the
@@ -12153,7 +12153,15 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# The plan comes from install_plan, the same function --install uses, so
 	# the two cannot disagree about what a project publishes. What differs
 	# is only that a directory stays a variable here.
-	plan = install_plan(targets, closures, root)
+	# What ships, which is not every target the build file can build:
+	# --eject hands the test programs over so the Makefile can build and
+	# run them, and `install' must not put them in $(BINDIR). Found by
+	# packaging ossacli: the .install files were right, the Makefile
+	# installed shim_wide, test_ossa and test_replay into debian/tmp as
+	# well, and dh_missing refused the package for the files nothing
+	# claimed -- the ejected install disagreeing with fmake's own
+	# --install, which has always taken the held-back tests out.
+	plan = install_plan([t for t in targets if not t.test], closures, root)
 	if plan:
 		a("# ---- install " + "-" * 46)
 		a("")
@@ -12816,7 +12824,15 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	#
 	# The plan is install_plan, the same list --install and the Makefile
 	# read, so all three install the same set.
-	plan = install_plan(targets, closures, root)
+	# What ships, which is not every target the build file can build:
+	# --eject hands the test programs over so the Makefile can build and
+	# run them, and `install' must not put them in $(BINDIR). Found by
+	# packaging ossacli: the .install files were right, the Makefile
+	# installed shim_wide, test_ossa and test_replay into debian/tmp as
+	# well, and dh_missing refused the package for the files nothing
+	# claimed -- the ejected install disagreeing with fmake's own
+	# --install, which has always taken the held-back tests out.
+	plan = install_plan([t for t in targets if not t.test], closures, root)
 	if plan:
 		defaults = install_dirs(conf, prefix)
 		steps = ["set -e", f': "$${{PREFIX:={defaults["prefix"]}}}"']
@@ -13651,45 +13667,80 @@ def deb_build_depends(resolutions, pkg):
 	return sorted(found), missing
 
 
-def deb_packages(targets, closures, root, conf):
+def deb_packages(targets, closures, root, conf, src_name):
 	"""How this tree splits into binary packages, and what each holds.
 
-    One per program, named as the program; a `lib<name>-dev' per library
-    holding its headers, archive and .pc; a shared library also gets a
-    runtime `lib<name><SOVER>' holding the .so chain. That is what situ
-    and ossacli do by hand, and one package per tree is the degenerate
-    case of the same rule. Each package's files are the plan rows for its
-    target, as paths under the install prefix, which is what a
-    `.install' file lists.
+    **Every program in one package named as the source**, and a
+    `lib<name>-dev' per library holding its headers, archive and .pc,
+    with a shared library's .so chain in a runtime `lib<name><SOVER>'.
+    The first draft said one package per program, citing situ and
+    ossacli -- and measured across the twelve trees here that carry a
+    debian/, every one puts all its programs in one package: situ's
+    `situc' holds four binaries, ossacli's holds three. A proxy checked
+    only against the two trees it was fitted to.
+
+    `[debian.<pkg>] targets = [...]' names the targets a package holds
+    outright, all their rows, for the shapes the default does not
+    produce: netcfgd's `netcfgd-nm' is a second program in a package of
+    its own, and ossacli's `libossa-dev' carries the .so chain with no
+    runtime package, which is that tree's choice. A target named nowhere
+    takes the default.
+
+    Test programs are not packaged: `--eject' hands every target over so
+    a Makefile can build them, and a package is what ships.
     """
-	packages = []
+	targets = [t for t in targets if not t.test]
+	explicit = {}
+	for pkgname, sec in conf.debian.items():
+		if not RE_DEB_NAME.match(pkgname):
+			die(f"[debian.{pkgname}] is not a package name Debian accepts "
+			    f"(lowercase letters, digits, + . -)")
+		for tn in sec.get("targets", []):
+			if tn in explicit:
+				die(f"target {tn!r} is named by both [debian.{explicit[tn]}] "
+				    f"and [debian.{pkgname}]; a target ships in one package")
+			explicit[tn] = pkgname
+	by_name = {t.name: t for t in targets}
+	for tn, pkgname in explicit.items():
+		if tn not in by_name:
+			die(f"[debian.{pkgname}] targets names {tn!r}, which is not a "
+			    f"target this tree builds (they are: "
+			    f"{', '.join(sorted(by_name)) or 'none'})")
+	packages = {}
+
+	def add(name, kind, t, rows):
+		if not RE_DEB_NAME.match(name):
+			die(f"{name!r} is not a package name Debian accepts (lowercase "
+			    f"letters, digits, + . -); rename the target with @target "
+			    f"or [target] name, or group it with [debian.NAME] targets")
+		pk = packages.setdefault(name, {"name": name, "kind": kind,
+		                                "targets": [], "rows": []})
+		pk["targets"].append(t)
+		pk["rows"] += rows
+		if kind == "program":
+			pk["kind"] = "program"
+
 	for t in targets:
 		rows = install_plan([t], {t: closures[t]}, root)
+		if t.name in explicit:
+			add(explicit[t.name], "program" if t.kind == "exe" else "dev",
+			    t, rows)
+			continue
 		if t.kind == "exe":
-			name = t.name
-			if not RE_DEB_NAME.match(name):
-				die(f"{name!r} is not a package name Debian accepts "
-				    f"(lowercase letters, digits, + . -); rename the "
-				    f"target with @target or [target] name")
-			packages.append({"name": name, "target": t, "kind": "program",
-			                 "rows": rows})
+			add(src_name, "program", t, rows)
 			continue
 		dev = [r for r in rows if r[2] in ("includedir", "pkgconfigdir")
 		       or (r[2] == "libdir" and r[3].endswith(".a"))
 		       or (r[0] == "symlink" and r[3] == t.filename)]
 		run = [r for r in rows if r not in dev]
 		lib = "lib" + t.name.lower()
-		if not RE_DEB_NAME.match(lib):
-			die(f"{lib!r} is not a package name Debian accepts")
 		if t.kind == "shared":
 			if not t.version:
 				die(f"{t.name} is a shared library with no @version, and a "
 				    f"runtime package is named by its soname's major")
-			packages.append({"name": lib + t.version.split(".")[0],
-			                 "target": t, "kind": "runtime", "rows": run})
-		packages.append({"name": lib + "-dev", "target": t, "kind": "dev",
-		                 "rows": dev})
-	return packages
+			add(lib + t.version.split(".")[0], "runtime", t, run)
+		add(lib + "-dev", "dev", t, dev)
+	return list(packages.values())
 
 
 def refuse_to_overwrite(root, made, makefile):
@@ -13757,7 +13808,7 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 
 	refuse_to_overwrite(root, "debian", makefile)
 
-	packages = deb_packages(targets, closures, root, conf)
+	packages = deb_packages(targets, closures, root, conf, src_name)
 	names = {p["name"] for p in packages}
 	for name in conf.debian:
 		if name not in names:
@@ -13821,7 +13872,9 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	# says "built by fmake" about itself is one lintian rightly refuses.
 	synopsis = long_desc.split("\n\n")[0].replace("\n", " ").split(". ")[0]
 	synopsis = synopsis.rstrip(".").strip()
-	if not synopsis and not all(p["target"].description for p in packages):
+	if not synopsis and not all(len(p["targets"]) == 1
+	                            and p["targets"][0].description
+	                            for p in packages):
 		die(f"{CONF_FILE}: [package] description is needed: its first "
 		    f"sentence is the one-line synopsis Debian requires, and "
 		    f"fmake will not invent one. A target's own `description' "
@@ -13837,7 +13890,9 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	c.append(f"Standards-Version: {DEB_STANDARDS}")
 	c.append("Rules-Requires-Root: no")
 	for p in packages:
-		t, sec = p["target"], conf.debian.get(p["name"], {})
+		sec = conf.debian.get(p["name"], {})
+		ts = p["targets"]
+		t = ts[0]
 		c.append("")
 		c.append(f"Package: {p['name']}")
 		if p["kind"] == "dev":
@@ -13861,7 +13916,9 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 			# unsatisfied, and dpkg-gencontrol reports the variable
 			# defined and unused.
 			c.append("Pre-Depends: ${misc:Pre-Depends}")
-		if p["kind"] == "dev" and t.kind == "shared":
+		if p["kind"] == "dev" and t.kind == "shared" \
+		        and f"lib{t.name.lower()}{t.version.split('.')[0]}" \
+		        in {q["name"] for q in packages}:
 			depends.insert(0, f"lib{t.name.lower()}"
 			               f"{t.version.split('.')[0]} (= ${{binary:Version}})")
 		depends += sec.get("depends", [])
@@ -13869,15 +13926,25 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 		for field in ("recommends", "suggests"):
 			if sec.get(field):
 				c.append(f"{field.capitalize()}: {', '.join(sec[field])}")
-		what = t.description or synopsis
+		# One target's own line where the package is one target; the
+		# package's own, or the source's, where it is several.
+		what = (sec.get("synopsis")
+		        or (t.description if len(ts) == 1 else None) or synopsis)
 		if p["kind"] == "dev":
 			what = f"{what} - development files"
 		elif p["kind"] == "runtime":
 			what = f"{what} - shared library"
 		c.append(f"Description: {what}")
 		body = sec.get("description") or long_desc
-		if body:
-			c.append(_deb_wrap(body))
+		# lintian: description-synopsis-is-duplicated. A [package]
+		# description of one sentence is the synopsis, and saying it
+		# twice is an error, not a repetition.
+		if not body or " ".join(body.split()).rstrip(".") == what.rstrip("."):
+			die(f"{p['name']} has no extended description: [package] "
+			    f"description is only the synopsis again, and Debian "
+			    f"requires a paragraph below it. Write one; fmake will "
+			    f"not.")
+		c.append(_deb_wrap(body))
 	control = "\n".join(c) + "\n"
 
 	# ---- rules
@@ -14119,6 +14186,7 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 		die(f"{CONF_FILE}: [gentoo] src-uri is needed, with ${{PV}} for the "
 		    f"version -- where a release tarball lives is a fact about the "
 		    f"project's hosting that nothing in a source tree states.")
+	targets = [t for t in targets if not t.test]
 	srcs = [u.rel for cl in closures.values() for u in cl.link]
 	short, _stanza = identify_license(root, srcs)
 	# The program's own one-liner first, as the deb emitter's synopsis
@@ -14307,8 +14375,9 @@ def do_release(targets, closures, root, outdir, conf, cfg, args):
 	paths = install_paths(conf, argparse.Namespace(prefix="/", destdir=None))
 	with tarfile.open(os.path.join(out, bin_tar), "w:gz") as tf:
 		top = f"{name}-{version}-{cfg.os}-{cfg.arch}"
+		shipped = [t for t in targets if not t.test]
 		for origin, source, directory, fname, mode in install_plan(
-				targets, closures, root):
+				shipped, closures, root):
 			if directory in INIT_GLUE:
 				continue
 			arc = os.path.join(top, paths[directory].lstrip("/"), fname)

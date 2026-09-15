@@ -284,7 +284,8 @@ that had been green about nothing for five commits ·
 [231. `--eject ebuild`: the same plan in Gentoo's words](#231---eject-ebuild-the-same-plan-in-gentoos-words) ·
 [232. `--release`: everything downloadable, and the page that lists it](#232---release-everything-downloadable-and-the-page-that-lists-it) ·
 [233. The ejected Makefile asks pkg-config for the places](#233-the-ejected-makefile-asks-pkg-config-for-the-places) ·
-[234. `--arch`: the compiler found from the architecture](#234---arch-the-compiler-found-from-the-architecture)
+[234. `--arch`: the compiler found from the architecture](#234---arch-the-compiler-found-from-the-architecture) ·
+[235. Packaging a real tree: what ossacli said about the emitter](#235-packaging-a-real-tree-what-ossacli-said-about-the-emitter)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19042,3 +19043,69 @@ What this is not: a package build's architecture. That is
 its compiler from `dpkg-architecture`'s variables in `debian/rules`
 (section 230) and asks the target's pkg-config for the places (section
 233). Neither needs the other, which is what section 227 said.
+
+## 235. Packaging a real tree: what ossacli said about the emitter
+
+Section 227's list had "try `--eject deb` against a real sibling tree".
+Done, in a copy of ossacli in scratch, with its hand-written `debian/`
+and Makefile moved aside, against the emitter as it stood after
+section 230. The copy built a package that dpkg-buildpackage accepts and
+lintian passes with no error, after the emitter had been corrected four
+times; the corrections are the finding.
+
+**The default split was fitted to two trees and wrong for all twelve.**
+Section 230 said one package per program, citing situ and ossacli. The
+copy produced `ossacli`, `ossa-check` and `ossa-metrics` as three
+packages; the hand-written `debian/` ships all three in one. Measured
+across every tree here with a `debian/`: twelve of twelve put all their
+programs in one package named as the source -- situ's `situc` holds
+four binaries. *A proxy tested only where you know the answer will
+separate anything*, and this one had been checked against the two trees
+it was read from. The default is now every program in one package named
+as the source, a `lib<name>-dev` per library, a runtime `lib<name><SOVER>`
+for a shared one, and `[debian.<pkg>] targets = [...]` for the shapes
+that differ: netcfgd's second daemon in a package of its own, and
+ossacli's `-dev` carrying the `.so` chain with no runtime package --
+which lintian warns about, and which is that tree's choice to keep.
+
+**Tests reached the package list.** `--eject` hands every target to the
+emitter so the Makefile can build the tests; the deb emitter took them
+as programs to package and refused on `shim_wide`'s underscore. A
+package is what ships; tests are left out of it, and of the ebuild and
+the release tarball.
+
+**The ejected Makefile installed the tests.** The `.install` files were
+right and the build still failed: `make install DESTDIR=debian/tmp` put
+`shim_wide`, `test_ossa` and `test_replay` under `usr/bin`, and
+`dh_missing` refused the package for files nothing claimed. fmake's own
+`--install` has always taken the held-back tests out; the ejected
+install and uninstall rules of both emitters had not, and nothing had
+noticed because nothing had read `debian/tmp` before.
+
+**A synopsis repeated as the description, and no description at all,
+are both lintian errors** (`description-synopsis-is-duplicated`,
+`extended-description-is-empty`). A `[package] description` of one
+sentence is the synopsis and nothing more; the emitter refuses rather
+than writing it twice or writing nothing.
+
+**What matched.** With the four fixed, the ejected `control` differs from
+the hand-written one in the source name (the copy's directory),
+`Standards-Version` (absent by hand), a `Section` repeated on the binary
+package, and `Multi-Arch: same` on `-dev`. Build-Depends differ by what
+the emitter cannot know -- `situc`, `sg3-utils`, `cciss-vol-status` are
+this tree's test-time tools -- and `[debian.<source>] build-depends` is
+the place for them, not yet added. `dh_auto_test` ran the tree's suite
+during the package build, as the hand-written rules also do.
+
+**What was ossacli's, signalled into its `project.md` and not changed**:
+`example/` builds a program fmake would ship; `test/fuzz.c` needs
+`test-args` or is not a test; no library target is declared, and one
+declared by root alone pulls the shims in (`ioctl` twice), so `sources`
+has to name the members as the Makefile's `LIB_SRCS` does; and
+`libossa.a` beside `libossa.so` is two artifact kinds from one set of
+sources, which one fmake target does not express.
+
+The case covers the split, the grouping, the excluded tests and the
+Makefile's install rule with a fixture rather than the sibling; against
+the emitter before this section it fails on the first defect the
+sibling found.

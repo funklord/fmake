@@ -7969,6 +7969,104 @@ def an_architecture_named_on_the_command_line_finds_its_compiler(t):
 		u.cleanup()
 
 
+@case
+def programs_ship_in_one_package_and_tests_in_none(t):
+	"""The split the trees actually use, found by packaging one of them.
+
+    The first deb emitter put each program in a package of its own,
+    citing situ and ossacli. Packaging a copy of ossacli said otherwise
+    at once: its three programs ship in one package named as the source,
+    and measured across all twelve trees here with a debian/, every one
+    does the same -- situ's `situc' holds four binaries. A proxy checked
+    only against the two trees it was fitted to. So the default is every
+    program in one package named as the source, a lib<name>-dev per
+    library, and `[debian.<pkg>] targets = [...]' for the shapes that
+    differ: netcfgd's second daemon in a package of its own, ossacli's
+    -dev carrying the .so chain.
+
+    The same tree said two more things. Test programs reached the
+    package list, because `--eject' hands every target over so the
+    Makefile can build them; a package is what ships, so tests are left
+    out. And the ejected Makefile's `install' rule put the test binaries
+    into $(BINDIR) -- it never had, in fmake's own --install -- so
+    debian/tmp held three programs nothing claimed and dh_missing
+    refused the build. Both are pinned here: the package's .install
+    names no test, and the Makefile's install rule names none either.
+    """
+	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
+		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
+	t.write("src/a.c", "/*! @target alpha */\nint main(void){ return 0; }\n")
+	t.write("src/b.c", "/*! @target beta */\nint main(void){ return 0; }\n")
+	t.write("src/test/t_check.c", "int main(void){ return 0; }\n")
+	shutil.copy("/usr/share/common-licenses/GPL-3", os.path.join(t.dir, "src", "LICENSE"))
+	t.write("src/VERSION", "1.0\n")
+	toml = '''
+[project]
+name = "twins"
+
+[package]
+maintainer  = "Test Person <test@example.invalid>"
+description = """
+Two programs that do nothing, kept as the fixture for how fmake splits
+a tree into packages.
+
+Both are tiny.
+"""
+'''
+	t.write("src/fmake.toml", toml)
+	src = os.path.join(t.dir, "src")
+	_run_in(src, "git", "init", "-q", ".")
+	r = _run_in(src, FMAKE, "--eject", "deb")
+	check(r.returncode == 0, f"--eject deb: {r.stdout}{r.stderr}")
+	with open(os.path.join(src, "debian", "control")) as fh:
+		control = fh.read()
+	check(control.count("\nPackage: ") == 1 and "Package: twins\n" in control,
+	      f"two programs did not land in one package named as the source:\n{control}")
+	with open(os.path.join(src, "debian", "twins.install")) as fh:
+		inst = fh.read()
+	check("usr/bin/alpha\n" in inst and "usr/bin/beta\n" in inst,
+	      f"twins.install lacks a program: {inst}")
+	check("t_check" not in inst, f"a test program is packaged: {inst}")
+	with open(os.path.join(src, "Makefile")) as fh:
+		mk = fh.read()
+	check("t_check:" in mk or "t_check.c.o" in mk,
+	      "the Makefile cannot build the test at all")
+	check("$(BINDIR)/t_check" not in mk,
+	      "the ejected Makefile installs the test program")
+
+	# The explicit grouping: beta in a package of its own.
+	shutil.rmtree(os.path.join(src, "debian"))
+	os.remove(os.path.join(src, "Makefile"))
+	t.write("src/fmake.toml", toml + '\n[debian.beta-tools]\ntargets = ["beta"]\n'
+	        'synopsis = "the other one"\n')
+	r = _run_in(src, FMAKE, "--eject", "deb")
+	check(r.returncode == 0, f"--eject deb with targets: {r.stdout}{r.stderr}")
+	with open(os.path.join(src, "debian", "control")) as fh:
+		control = fh.read()
+	check("Package: beta-tools\n" in control and "Package: twins\n" in control,
+	      f"[debian.beta-tools] targets did not make a package: {control}")
+	check("Description: the other one\n" in control,
+	      f"the grouped package's synopsis was not used: {control}")
+	with open(os.path.join(src, "debian", "beta-tools.install")) as fh:
+		check(fh.read().strip() == "usr/bin/beta", "beta-tools holds the wrong files")
+	with open(os.path.join(src, "debian", "twins.install")) as fh:
+		check("beta" not in fh.read(), "beta is in both packages")
+
+	# A target named by two packages, or by none the tree builds.
+	for what, extra, said in (
+	        ("two packages", '\n[debian.pkg-a]\ntargets = ["beta"]\n[debian.pkg-b]\ntargets = ["beta"]\n',
+	         "ships in one package"),
+	        ("an unknown target", '\n[debian.pkg-a]\ntargets = ["gamma"]\n',
+	         "not a target this tree builds")):
+		shutil.rmtree(os.path.join(src, "debian"), ignore_errors=True)
+		if os.path.exists(os.path.join(src, "Makefile")):
+			os.remove(os.path.join(src, "Makefile"))
+		t.write("src/fmake.toml", toml + extra)
+		r = _run_in(src, FMAKE, "--eject", "deb")
+		check(r.returncode != 0 and said in r.stdout + r.stderr,
+		      f"{what} was not refused as such: {r.stdout}{r.stderr}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

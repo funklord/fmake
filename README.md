@@ -523,6 +523,9 @@ description = "Greets whoever connects."   # long; a target's own is the synopsi
 [debian.greetd]                 # per binary package, in Debian's words
 recommends = ["zlib1g"]         # runtime programs have no abstract form
 postinst   = "debian-src/postinst"         # carried verbatim; needs #DEBHELPER#
+# Every program ships in one package named as the source, and each
+# library in lib<name>-dev; `targets = [...]` under a [debian.NAME]
+# puts named targets in a package of their own instead.
 
 [gentoo]                        # one ebuild per tree, in Portage's words
 category = "app-misc"
