@@ -431,6 +431,8 @@ like `@brief` are ignored.
 | `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms; overrides a `_platform` suffix |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |
+| `@man PATH…` | Manual pages, installed under `man<N>` by their suffix |
+| `@desktop PATH…` / `@icons PATH…` / `@metainfo PATH…` | A program's desktop entry, icons (SVG, or a square PNG sized from its own header) and AppStream metainfo, installed where a desktop looks |
 | `@version X.Y.Z` | Publishable: writes a `.pc`, and versions a `.so` with its soname chain |
 | `@rule …` | A build rule, in Makefile syntax (below) |
 

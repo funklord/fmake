@@ -1142,6 +1142,7 @@ CONF_SCHEMA = {
 		# Makefile does and what its runtime header declares safe.
         "defines": L, "define": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
+        "man": L, "desktop": L, "icons": L, "metainfo": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "version": S, "description": S,
     }},
@@ -1157,6 +1158,7 @@ CONF_SCHEMA = {
     "situ": {"flags": L},
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
+        "mandir": S, "applicationsdir": S, "icondir": S, "metainfodir": S,
     },
     "toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
@@ -3536,7 +3538,7 @@ DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
-                  "rule"}
+                  "rule", "man", "desktop", "icons", "metainfo"}
 
 # @define and @defines are the same directive. The config file spells it
 # plural because it holds a list; a comment spells it singular because it
@@ -3903,6 +3905,10 @@ DOXYGEN_ALIAS_TEXT = {
     "pkg_optional": "Optional package dependency",
     "libs":    "Libraries",
     "headers": "Public headers",
+    "man":     "Manual pages",
+    "desktop": "Desktop entries",
+    "icons":   "Icons",
+    "metainfo": "AppStream metainfo",
     "cflags":  "Compile flags",
     "ldflags": "Link flags",
     "define":  "Defines",
@@ -8207,8 +8213,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		if plan:
 			print(f"  {CYAN('installs')}")
 			for origin, source, directory, name, _mode in plan:
-				var = "$" + directory.upper()[:-3] + "DIR" \
-				    if directory != "pkgconfigdir" else "$PKGCONFIGDIR"
+				var = "$" + install_var(directory)
 				arrow = "->" if origin != "symlink" else "->(link)"
 				print(f"    {name:<{W}}{arrow} {var}"
 				      + (f"   [{source}]" if origin == "symlink" else ""))
@@ -11902,12 +11907,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# $(DESTDIR)$(BINDIR)' is a shell command, and a prefix of
 		# `/opt/my place' made it two directories.
 		a(f"PREFIX ?= {_mk_flag(defaults['prefix'])}")
-		for key in ("bindir", "libdir", "includedir"):
+		for key, _default, base in install_rows_for(plan):
 			sub = defaults[key]
-			a(f"{key.upper()} ?= "
+			a(f"{install_var(key)} ?= "
 			  + (_mk_flag(sub) if os.path.isabs(sub)
-			     else f"$(PREFIX)/{_mk_flag(sub)}"))
-		a("PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig")
+			     else f"$({install_var(base)})/{_mk_flag(sub)}"))
 		a("")
 		# The .pc files, written by the ejected build rather than copied
 		# out of the tree: a clean checkout of a project that committed
@@ -11951,12 +11955,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f".PHONY: {rule}")
 		a(f"{rule}: {'fmake-all' if fragment else 'all'}"
 		  + ("".join(f" {t.name}.pc" for t, _x in pcs)))
-		for directory in ("bindir", "libdir", "includedir",
-		                  "pkgconfigdir"):
+		for directory in INSTALL_LANDINGS:
 			items = [p for p in plan if p[2] == directory]
 			if not items:
 				continue
-			var = f"$(DESTDIR)$({directory.upper()})"
+			var = f"$(DESTDIR)$({install_var(directory)})"
 			a(f"\tinstall -d {var}")
 			# A published header keeps the path the tree includes it by,
 			# so `include/pkg/api.h' lands at `$(INCLUDEDIR)/pkg/api.h'
@@ -11981,11 +11984,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		undo = "fmake-uninstall" if fragment else "uninstall"
 		a(f".PHONY: {undo}")
 		a(f"{undo}:")
-		for directory in ("bindir", "libdir", "includedir",
-		                  "pkgconfigdir"):
+		for directory in INSTALL_LANDINGS:
 			for _origin, _source, d, name, _mode in plan:
 				if d == directory:
-					a(f"\trm -f $(DESTDIR)$({directory.upper()})/{name}")
+					a(f"\trm -f $(DESTDIR)$({install_var(directory)})/{name}")
 		a("")
 
 	all_objs = sorted({f"$({P}BUILD_DIR)/{name}.o" for name in every})
@@ -12529,29 +12531,28 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	if plan:
 		defaults = install_dirs(conf, prefix)
 		steps = ["set -e", f': "$${{PREFIX:={defaults["prefix"]}}}"']
-		for key in ("bindir", "libdir", "includedir"):
+		for key, _default, base in install_rows_for(plan):
 			sub = defaults[key]
-			value = sub if os.path.isabs(sub) else f"$$PREFIX/{sub}"
-			steps.append(f': "$${{{key.upper()}:={value}}}"')
-		steps.append(': "$${PKGCONFIGDIR:=$$LIBDIR/pkgconfig}"')
-		for directory in ("bindir", "libdir", "includedir",
-		                  "pkgconfigdir"):
+			value = (sub if os.path.isabs(sub)
+			         else f"$${install_var(base)}/{sub}")
+			steps.append(f': "$${{{install_var(key)}:={value}}}"')
+		for directory in INSTALL_LANDINGS:
 			items = [p for p in plan if p[2] == directory]
 			if not items:
 				continue
-			var = f'"$$DESTDIR$${directory.upper()}"'
+			var = f'"$$DESTDIR$${install_var(directory)}"'
 			steps.append(f"install -d {var}")
 			# The Makefile's reason, in ninja's quoting: a header keeps
 			# the path the tree includes it by, and the directory under
 			# includedir has to exist before install(1) writes into it.
 			for sub_ in sorted({os.path.dirname(p_[3]) for p_ in items
 			                    if os.path.dirname(p_[3])}):
-				steps.append(f'install -d "$$DESTDIR$${directory.upper()}/"'
+				steps.append(f'install -d "$$DESTDIR$${install_var(directory)}/"'
 				             f"{shlex.quote(sub_)}")
 			for origin, source, _, name, mode in items:
 				if origin == "symlink":
 					steps.append(f"ln -sf {shlex.quote(source)} "
-					             f'"$$DESTDIR$${directory.upper()}/"'
+					             f'"$$DESTDIR$${install_var(directory)}/"'
 					             f"{shlex.quote(name)}")
 					continue
 				src = (_art_path(source) if origin == "built"
@@ -12560,7 +12561,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				# line, and ninja can express a path with a space in it, so
 				# one can reach here.
 				steps.append(f"install -m {mode:o} -- {shlex.quote(src)} "
-				             f'"$$DESTDIR$${directory.upper()}/"'
+				             f'"$$DESTDIR$${install_var(directory)}/"'
 				             f"{shlex.quote(name)}")
 		# Same reason as the Makefile: a clean checkout has no .pc, so
 		# the build has to write one. `$$` for a literal dollar here too,
@@ -12616,15 +12617,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		                       | {_ninja(t.name) + ".pc" for t, _x in pcs}))
 		a(f"build install: install | {deps}")
 
-		# The parameter lines only -- `set -e' and the five `: "${VAR:=...}"'
+		# The parameter lines only -- `set -e' and the `: "${VAR:=...}"'
 		# defaults -- so uninstall reads the same environment install does.
 		undo = [step for step in steps
 		        if step.startswith((": ", "set -e"))]
-		for directory in ("bindir", "libdir", "includedir",
-		                  "pkgconfigdir"):
+		for directory in INSTALL_LANDINGS:
 			for _origin, _source, d, name, _mode in plan:
 				if d == directory:
-					undo.append(f'rm -f "$$DESTDIR$${directory.upper()}/"'
+					undo.append(f'rm -f "$$DESTDIR$${install_var(directory)}/"'
 					            f"{shlex.quote(name)}")
 		a("")
 		a("rule uninstall")
@@ -12643,8 +12643,68 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 # publish -- so it has to be declared, and this is what declaring it buys.
 # ---------------------------------------------------------------------------
 
-INSTALL_DEFAULTS = {"prefix": "/usr/local", "bindir": "bin",
-                    "libdir": "lib", "includedir": "include"}
+# Every directory an install can land in, in one place: the key, its
+# default, and what the default is relative to. Both ejected builds spell
+# a row as the key in capitals -- `$(BINDIR)', `$MANDIR' -- and resolve it
+# against its base the same way `install_paths' does here. Until this
+# table existed the four directories were written out as a tuple in seven
+# places, which is the same-fact-in-more-than-one-place this document
+# keeps meeting, one directory at a time; adding a fifth was seven edits
+# and the sixth would have been seven more.
+#
+# The rows past pkgconfigdir are where a program's furniture goes, and
+# each is a location some other tool fixes rather than a choice: man(1)
+# walks `share/man/manN', a desktop looks in `share/applications' and in
+# `share/icons/hicolor/<size>/apps' by the XDG specifications, AppStream
+# reads `share/metainfo'. hydra's icons went unseen for eleven days after
+# a rename pass spelled `icons' singular -- the name belongs to the tool,
+# which is the reason each of these is a row rather than a parameter.
+INSTALL_DIRS = (
+	# key                default                  relative to
+    ("prefix",           "/usr/local",            None),
+    ("bindir",           "bin",                   "prefix"),
+    ("libdir",           "lib",                   "prefix"),
+    ("includedir",       "include",               "prefix"),
+    ("pkgconfigdir",     "pkgconfig",             "libdir"),
+    ("mandir",           "share/man",             "prefix"),
+    ("applicationsdir",  "share/applications",    "prefix"),
+    ("icondir",          "share/icons/hicolor",   "prefix"),
+    ("metainfodir",      "share/metainfo",        "prefix"),
+)
+INSTALL_DEFAULTS = {key: default for key, default, _base in INSTALL_DIRS}
+# The rows a plan can name, in the order the ejected install rules list
+# them: everything but the prefix, which is a base and never a landing.
+INSTALL_LANDINGS = tuple(key for key, _d, _b in INSTALL_DIRS
+                         if key != "prefix")
+
+
+def install_var(directory):
+	"""The variable both ejected builds spell a directory as."""
+	return directory.upper()
+
+
+# What every ejected build declared before the table grew: a packager's
+# debian/rules is written against these four whether or not the tree
+# lands anything in them, so they stay unconditional.
+INSTALL_CLASSIC = ("bindir", "libdir", "includedir", "pkgconfigdir")
+
+
+def install_rows_for(plan):
+	"""The directory rows an ejected build declares for this plan.
+
+    The classic four always, and every other row only where the plan
+    lands something in it -- so a tree with no man page ejects the same
+    Makefile it did before there was a MANDIR, and one with a man page
+    gets the variable that names where it goes.
+    """
+	used = {p[2] for p in plan}
+	rows = []
+	for key, default, base in INSTALL_DIRS:
+		if base is None:
+			continue
+		if key in INSTALL_CLASSIC or key in used:
+			rows.append((key, default, base))
+	return rows
 
 
 def pc_text(t, conf, prefix=None, ldflags=(), root=None):
@@ -12748,7 +12808,7 @@ def refuse_install_escapes(conf, args):
 	values = dict(conf.install)
 	if args.prefix:
 		values["prefix"] = args.prefix
-	for key in ("prefix", "bindir", "libdir", "includedir"):
+	for key, _default, _base in INSTALL_DIRS:
 		value = values.get(key)
 		if not value or os.pardir not in value.replace("\\", "/").split("/"):
 			continue
@@ -12784,15 +12844,18 @@ def install_dirs(conf, prefix=None):
 def install_paths(conf, args):
 	p = install_dirs(conf, args.prefix)
 	dest = args.destdir or ""
-	out = {}
-	for key in ("bindir", "libdir", "includedir"):
+	# Resolved in table order, so a row's base is always resolved before
+	# the row is: pkgconfigdir sits under libdir, which is where every
+	# distribution puts it and where pkg-config looks without being told.
+	out = {"prefix": p["prefix"]}
+	for key, _default, base in INSTALL_DIRS:
+		if base is None:
+			continue
 		sub = p[key]
-		full = sub if os.path.isabs(sub) else os.path.join(p["prefix"], sub)
-		out[key] = os.path.join(dest, full.lstrip("/")) if dest else full
-	# Where every distribution puts them, and where pkg-config looks
-	# without being told: under libdir, not beside it.
-	out["pkgconfigdir"] = os.path.join(out["libdir"], "pkgconfig")
-	out["prefix"] = p["prefix"]
+		out[key] = sub if os.path.isabs(sub) else os.path.join(out[base], sub)
+	if dest:
+		for key in INSTALL_LANDINGS:
+			out[key] = os.path.join(dest, out[key].lstrip("/"))
 	return out
 
 
@@ -12840,6 +12903,65 @@ def install_subpath(h):
 		if h.startswith(pre) and (best is None or len(pre) < len(best)):
 			best = pre
 	return h[len(best):] if best else os.path.basename(h)
+
+
+def _png_size(path):
+	"""Width and height out of a PNG's IHDR, or None if it is not one."""
+	try:
+		with open(path, "rb") as fh:
+			head = fh.read(24)
+	except OSError:
+		return None
+	if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" \
+	        or head[12:16] != b"IHDR":
+		return None
+	return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
+def furniture_landing(kind, rel, root):
+	"""Where a man page, desktop entry, icon or metainfo file installs.
+
+    Each is `(directory, name)` under a row of INSTALL_DIRS, and each is
+    what some other program will look for rather than a choice:
+
+        man          $MANDIR/man<N>/<file>       the section is the suffix
+        desktop      $APPLICATIONSDIR/<file>
+        icons        $ICONDIR/scalable/apps/<f>  an SVG
+                     $ICONDIR/<W>x<H>/apps/<f>   a PNG, its size read from
+                                                  its own header
+        metainfo     $METAINFODIR/<file>
+
+    Refused rather than guessed: a man page with no numeric section, a
+    compressed one (the packaging compresses, and a `.gz' would give the
+    section as `gz'), an icon that is neither SVG nor PNG, and a PNG that
+    is not square -- hicolor has no directory for one.
+    """
+	base = os.path.basename(rel)
+	if kind == "man":
+		stem, dot, section = base.rpartition(".")
+		if not dot or not section[:1].isdigit():
+			die(f"@man {rel!r}: a manual page ends in its section "
+			    f"(`{stem or base}.1'), and this one ends in {section!r}"
+			    + ("\n    install it uncompressed; the packaging compresses"
+			       if section == "gz" else ""))
+		return "mandir", f"man{section[0]}/{base}"
+	if kind == "desktop":
+		return "applicationsdir", base
+	if kind == "metainfo":
+		return "metainfodir", base
+	if kind == "icons":
+		if base.lower().endswith(".svg"):
+			return "icondir", f"scalable/apps/{base}"
+		size = _png_size(os.path.join(root, rel))
+		if size is None:
+			die(f"@icons {rel!r}: an icon is an SVG or a PNG, and this is "
+			    f"neither.")
+		w, h = size
+		if w != h:
+			die(f"@icons {rel!r} is {w}x{h}, and a hicolor theme has no "
+			    f"directory for an icon that is not square.")
+		return "icondir", f"{w}x{h}/apps/{base}"
+	raise AssertionError(kind)
 
 
 def install_plan(targets, closures, root):
@@ -12905,6 +13027,29 @@ def install_plan(targets, closures, root):
 			planned.append(("built", t.name + ".pc", "pkgconfigdir",
 			                t.name + ".pc", 0o644))
 
+		# A program's furniture: its manual page, desktop entry, icons and
+		# AppStream metainfo. Gathered from the file that holds main() --
+		# where a person writes `@man tool.1', beside the thing it
+		# documents -- and, for a library, from every unit the way
+		# @headers is, since a man3 page sits beside the function it
+		# describes. The config list is honoured for any kind, as with
+		# headers: naming it outright is a decision rather than an
+		# inference. Where each lands is fixed by the tool that will
+		# look for it, and `furniture_landing' says which and refuses
+		# what it cannot place.
+		units = ([closures[t].root] if t.kind == "exe"
+		         else list(closures[t].link))
+		for kind in ("man", "desktop", "icons", "metainfo"):
+			named = list(t.conf.get(kind, []))
+			for u in units:
+				if u is not None:
+					named += u.ann.items(kind)
+			for f in dict.fromkeys(named):
+				if not os.path.isfile(os.path.join(root, f)):
+					die(f"@{kind} {f!r} does not exist (named for {t.name})")
+				directory, name = furniture_landing(kind, f, root)
+				planned.append(("tree", f, directory, name, 0o644))
+
 	# Two entries landing on one path are two different questions. The
 	# same FILE published by two targets is the case this dedupe was
 	# written for -- a header carrying `@headers' is often linked into a
@@ -12926,9 +13071,7 @@ def install_plan(targets, closures, root):
 			continue
 		if (prior[0], prior[1]) == (item[0], item[1]):
 			continue                # the same file, published twice
-		where = {"bindir": "$BINDIR", "libdir": "$LIBDIR",
-		         "includedir": "$INCLUDEDIR",
-		         "pkgconfigdir": "$PKGCONFIGDIR"}[item[2]]
+		where = "$" + install_var(item[2])
 		die(f"{prior[1]} and {item[1]} would both install as "
 		    f"{where}/{item[3]}\n"
 		    f"    two files cannot share one installed name. Put one "

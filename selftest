@@ -7116,6 +7116,147 @@ outputs = ["gen/vals.c"]
 	      "the program stopped working")
 
 
+def _furniture_tree(t):
+	"""A program with the four kinds of furniture a desktop looks for."""
+	t.write("main.c",
+	        "/*! @man packaging/furn.1\n"
+	        " *  @desktop packaging/se.vibes.furn.desktop\n"
+	        " *  @icons packaging/se.vibes.furn.svg packaging/furn-48.png\n"
+	        " *  @metainfo packaging/se.vibes.furn.metainfo.xml\n"
+	        " */\n#include <stdio.h>\nint main(void){ puts(\"hi\"); return 0; }\n")
+	t.write("packaging/furn.1", ".TH FURN 1\n.SH NAME\nfurn \\- a thing\n")
+	t.write("packaging/se.vibes.furn.desktop",
+	        "[Desktop Entry]\nType=Application\nName=furn\nExec=furn\n")
+	t.write("packaging/se.vibes.furn.svg",
+	        '<svg xmlns="http://www.w3.org/2000/svg"/>\n')
+	t.write("packaging/se.vibes.furn.metainfo.xml", "<component/>\n")
+	_write_png(os.path.join(t.dir, "packaging", "furn-48.png"), 48, 48)
+
+
+def _write_png(path, w, h):
+	"""The smallest PNG whose header says w by h: an IHDR and an IEND."""
+	import struct
+	import zlib
+
+	def chunk(tag, data):
+		return (struct.pack(">I", len(data)) + tag + data
+		        + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff))
+	ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+	with open(path, "wb") as fh:
+		fh.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+		         + chunk(b"IEND", b""))
+
+
+FURNITURE = [
+    "share/applications/se.vibes.furn.desktop",
+    "share/icons/hicolor/48x48/apps/furn-48.png",
+    "share/icons/hicolor/scalable/apps/se.vibes.furn.svg",
+    "share/man/man1/furn.1",
+    "share/metainfo/se.vibes.furn.metainfo.xml",
+]
+
+
+def _under(stage, prefix="usr/local"):
+	root = os.path.join(stage, prefix)
+	found = []
+	for d, _dirs, files in os.walk(root):
+		for f in files:
+			found.append(os.path.relpath(os.path.join(d, f), root))
+	return sorted(found)
+
+
+@case
+def a_programs_furniture_installs_where_its_tools_look(t):
+	"""Man page, desktop entry, icons, metainfo: the same plan, three ways.
+
+    `install_plan' knew four directories -- bin, lib, include, pkgconfig
+    -- and every tree with a desktop program installed the rest by hand,
+    in its own Makefile, in its own words. bbq-predictor's is the
+    reference: `share/applications', `share/icons/hicolor/scalable/apps',
+    `share/man/man1', each with its own mkdir and its own install line
+    and its own rm in uninstall. hydra's icons went unseen for eleven days
+    when a rename pass spelled `icons' singular, which is the whole
+    argument for these being rows in one table rather than paths people
+    type: each is where some other program looks, not a choice.
+
+    So: `@man', `@desktop', `@icons', `@metainfo' beside `main()', and
+    the plan gains rows for them. Where each lands is fixed by the tool
+    that will look for it -- a man page under `man<N>' by its suffix, an
+    SVG under `scalable/apps', a PNG under `<W>x<H>/apps' with the size
+    read out of its own header rather than its name.
+
+    Asserted three ways, because that is the property: the live install,
+    the ejected Makefile and the ejected ninja file must land the same
+    six files, and `--uninstall' must leave nothing. Then the refusals,
+    each pinned by its message: a compressed man page (the section would
+    read as `gz'), an icon that is neither SVG nor PNG, a PNG that is not
+    square (hicolor has no directory for it).
+    """
+	_furniture_tree(t)
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage)
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	prog = "bin/" + os.path.basename(t.dir)
+	check(_under(stage) == sorted([prog] + FURNITURE),
+	      f"the live install landed: {_under(stage)}")
+
+	e = t.fmake("--explain")
+	for line in ("man1/furn.1", "$MANDIR", "scalable/apps/se.vibes.furn.svg",
+	             "48x48/apps/furn-48.png", "$ICONDIR", "$APPLICATIONSDIR",
+	             "$METAINFODIR"):
+		check(line in e.stdout, f"--explain does not say {line}: {e.stdout}")
+
+	r = t.fmake("--uninstall", "--destdir", stage)
+	check(r.returncode == 0 and _under(stage) == [],
+	      f"uninstall left: {_under(stage)}")
+
+	for backend, out, cmd in (("make", "Makefile", ["make", "-s"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		u = Tree("furniture-" + backend)
+		try:
+			_furniture_tree(u)
+			e = u.fmake("--eject", backend)
+			check(e.returncode == 0, f"--eject {backend}: {e.stderr}")
+			u.write(out, e.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			dest = os.path.join(u.dir, "stage")
+			b = _run_in(u.dir, *cmd, "install", env={"DESTDIR": dest})
+			check(b.returncode == 0,
+			      f"{backend} install failed: {b.stdout}{b.stderr}")
+			prog = "bin/" + os.path.basename(u.dir)
+			check(_under(dest) == sorted([prog] + FURNITURE),
+			      f"the ejected {backend} install landed: {_under(dest)}")
+			b = _run_in(u.dir, *cmd, "uninstall", env={"DESTDIR": dest})
+			check(b.returncode == 0 and _under(dest) == [],
+			      f"the ejected {backend} uninstall left: {_under(dest)}")
+		finally:
+			u.cleanup()
+
+	# The refusals, each through its own message.
+	for what, directive, path, make, said in (
+	        ("compressed man page", "@man", "p/tool.1.gz",
+	         lambda f: open(f, "w").close(),
+	         "install it uncompressed"),
+	        ("icon that is neither", "@icons", "p/i.jpg",
+	         lambda f: open(f, "w").close(),
+	         "an icon is an SVG or a PNG"),
+	        ("icon that is not square", "@icons", "p/wide.png",
+	         lambda f: _write_png(f, 64, 32),
+	         "not square")):
+		u = Tree("furniture-refuse")
+		try:
+			u.write("main.c", f"/*! {directive} {path} */\n"
+			        "int main(void){ return 0; }\n")
+			make(u.write(path, ""))
+			r = u.fmake("--install", "--destdir", os.path.join(u.dir, "s"))
+			check(r.returncode != 0 and said in r.stdout + r.stderr,
+			      f"a {what} was not refused as such: {r.stdout}{r.stderr}")
+		finally:
+			u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

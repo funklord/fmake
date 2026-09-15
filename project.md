@@ -277,7 +277,8 @@ that had been green about nothing for five commits ·
 [224. The cache that did not say which fmake wrote it](#224-the-cache-that-did-not-say-which-fmake-wrote-it) ·
 [225. Two artifacts of one name, sharing one cache entry](#225-two-artifacts-of-one-name-sharing-one-cache-entry) ·
 [226. The generator that kept the old tool's output](#226-the-generator-that-kept-the-old-tools-output) ·
-[227. Packaging: one model, emitted in each format's own language](#227-packaging-one-model-emitted-in-each-formats-own-language)
+[227. Packaging: one model, emitted in each format's own language](#227-packaging-one-model-emitted-in-each-formats-own-language) ·
+[228. Furniture: man pages, desktop entries, icons and metainfo in the plan](#228-furniture-man-pages-desktop-entries-icons-and-metainfo-in-the-plan)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18295,6 +18296,21 @@ reads `VERSION` once, for `version_fallbacks`; this widens that read.
   `LICENSE` is in its intended state, and one whose text matches nothing
   known is the holder's to look at. No `[package] license` key exists,
   because it would be the second place.
+- **The text names the licence and not the grant.** Measured: the three
+  full-text `LICENSE` files hash identically to
+  `/usr/share/common-licenses/GPL-3`, and that text says nothing about
+  "or later" -- the option is granted in a notice, not in the licence.
+  All three trees' `debian/copyright` say `GPL-3.0-or-later`, and their
+  per-file headers carry the clause. So identification is in two parts,
+  and neither invents: the hash gives `GPL-3`; an `SPDX-License-
+  Identifier` in the tree's own sources, where every one agrees, gives
+  the grant the holder wrote there, `GPL-3.0-or-later`. No SPDX line
+  means the bare `GPL-3` is emitted -- `CLAUDE.md` is explicit that
+  widening to "or later" is a different grant -- and SPDX lines that
+  disagree with each other, or with the file, are a refusal naming
+  both. Five trees write `License: UNDECIDED` in a hand-written
+  `debian/copyright` on purpose; with no `LICENSE` file the emitter
+  refuses, which is the same statement.
 - The programs that print a licence line (`fmake -V`, `emerge
   --version`) carry it as a constant today, which is a third place. Out
   of scope here and worth knowing.
@@ -18327,8 +18343,257 @@ reads `VERSION` once, for `version_fallbacks`; this widens that read.
    the tree names, never synthesised. netcfgd's `postinst` is the case
    that decides it.
 
+### Do Debian, Devuan and Ubuntu packages need to differ? Measured: no
+
+Asked by the copyright holder before starting. Across all eleven
+`debian/` directories: every changelog says `unstable`; no `control`,
+`rules` or `.install` mentions Ubuntu, Devuan, a series name, `elogind`
+or `libsystemd`; and no source in any tree links `libsystemd`, which is
+the one place Devuan diverges at the ABI level. The reason is structural:
+one format, one debhelper, and maintainer-script snippets that test for
+systemd **at install time**, so a package carrying both a unit and a
+sysvinit script installs on all three and starts the right thing on
+each. Devuan's OpenRC reads LSB sysvinit scripts, so the `sysvinit` file
+covers it; the `openrc-run` script is Gentoo's and Alpine's.
+
+So there is one `deb` emitter, distribution-neutral by construction: it
+carries every init file a `[service]` names and writes `UNRELEASED` as
+the changelog series, since choosing a series is the act of uploading
+and belongs to whoever does it. `deb-devuan` and `deb-ubuntu` are that
+emitter plus a series name and a `[package.<name>.debian.<distro>]`
+override table applied where the tree has one -- for a tree with none
+they differ from `deb` by one word, which is the "genuinely does not
+care" case falling out of the design rather than being special-cased.
+No `deb-debian`, which would be a synonym. `ebuild` is one thing.
+
+**Settled by the copyright holder 2026-09-15: `deb` and `ebuild` only.**
+The flavours above are not built. A package that originates here has no
+Ubuntu or Devuan special case to carry (see the metadata table below),
+and the three conditions that make one package serve all three archives
+are checked by the one emitter.
+
+**Refined the same day, on the copyright holder's objection that
+`deb-debian` is not a synonym of `deb-devuan`.** It is not, and the
+paragraph above never said it was: `deb-debian` would be a synonym of
+the neutral `deb`, and the real question is whether one package can
+satisfy all three archives. It can, under three conditions, and the
+emitter can hold the package to all three:
+
+1. **Every `[service]` ships both a unit and an LSB init script.** With
+   both, Debian and Ubuntu start the unit and Devuan starts the script;
+   `dh_installsystemd`'s snippets already test for systemd at install
+   time, and `deb-systemd-helper` lives in `init-system-helpers`, which
+   Devuan ships. The neutral `deb` REFUSES a service with only one --
+   that is the difference between the flavours: `deb-debian` and
+   `deb-ubuntu` accept a unit alone, `deb-devuan` a script alone, and
+   `deb` wants what all three can start.
+2. **No dependency names systemd.** `Depends`, `Recommends` and
+   `Suggests` are hand-written, and a `systemd`, `systemd-sysv` or
+   `libpam-systemd` in them is what Devuan's archive rejects. This is
+   the dependency-pulling the holder pointed at, and the emitter cannot
+   know a program's runtime needs -- but it can refuse the neutral `deb`
+   when a declared dependency is on that list, and say which flavour
+   would take it.
+3. **Nothing in the link set is systemd's.** This one fmake can SEE:
+   the closure is the link set, and `-lsystemd` in it means `sd_notify`
+   or journald, which Devuan satisfies at the ABI through `libelogind0`
+   and cannot satisfy in function. Measured across the sixteen trees:
+   none links it. The neutral `deb` refuses when one does.
+
+What no emitter can hold is a hand-written `postinst` calling
+`systemctl` unguarded; netcfgd's guards every call with
+`[ -d /run/systemd/system ]`, and a lint that looks for the unguarded
+form is a warning, not a guarantee.
+
+### What happens to a running service on upgrade, per platform
+
+Asked by the copyright holder the same day: restart it ourselves with
+`systemctl` or `rc-service`, leave it to Debian's restart list, or do
+nothing and let the operator? Each platform has a settled answer, and
+the emitter's job is to say the platform's answer in the platform's
+words rather than to pick one.
+
+**Debian, Ubuntu, Devuan: the package restarts its own daemon, and it
+does not write the code that does it.** Policy 9.3.3 expects a package
+that includes a daemon to restart it on upgrade, through `invoke-rc.d`
+-- never `systemctl` or `/etc/init.d/x` directly, because `invoke-rc.d`
+and `deb-systemd-invoke` honour `policy-rc.d` (a chroot or a container
+can veto every start) and detect the running init. The code is
+generated: `dh_installsystemd` and `dh_installinit` append snippets to
+`postinst`, `prerm` and `postrm` at the `#DEBHELPER#` token, and the
+flags on those two calls are the whole policy:
+
+    (default)                   enable on first install, start it, and
+                                restart it at the END of postinst on
+                                upgrade -- the old daemon runs through
+                                the unpack, so a network daemon keeps
+                                the network up
+    --no-restart-after-upgrade  stop in prerm, start in postinst: down
+                                for the length of the unpack
+    --no-stop-on-upgrade        never touch a running daemon
+    --no-enable / --no-start    install it and leave it
+
+So `[service]` carries `enable`, `start` and `restart-on-upgrade`, and
+`--eject deb` turns them into those flags in `debian/rules` and writes
+`#DEBHELPER#` into every maintainer script it generates -- netcfgd
+shipped for months with the token missing and every snippet silently
+dropped, which is the failure worth designing against.
+
+**The defaults are the distribution's defaults: all three true.** The
+first draft of this paragraph proposed `enable = false, start = false`
+on the claim that every tree here shipping a unit had chosen that by
+hand, and the copyright holder asked why fmake would depart from a
+distribution's default on something this pivotal. Re-measured, the
+claim was wrong. netcfgd passes `--no-enable --no-start` to debhelper
+and then its own `postinst` runs `netcfgd_select.sh netcfgd` on first
+install -- it enables, starts, and stands down whatever was holding the
+interfaces, by the holder's explicit decision (its 0168) reversing an
+earlier "install must change nothing". bbq-predictor's `--no-start` is
+on a oneshot service behind a timer, which the timer starts. Neither is
+a tree declining to run what it installed; one is a tree doing more than
+debhelper's snippet can, and the other is a unit that is not a daemon.
+
+So a package fmake emits does what a Debian package does: installed
+means enabled and running. A tree that wants otherwise -- a oneshot, a
+socket-activated unit, a daemon whose start is a takeover it performs
+itself -- says `start = false` and carries its own `postinst`, which is
+what netcfgd already does by hand. Departing from the default is a
+decision the tree records, not one fmake makes for it.
+
+"The list of services Debian handles" is `needrestart` (and
+`checkrestart` from debian-goodies). It is for the OTHER case: a daemon
+that merely uses a library another package upgraded. A package's own
+daemon is its own postinst's business, and needrestart would only ever
+see it if that postinst had not done its job.
+
+**Gentoo: never.** An ebuild does not start, enable or restart anything,
+by policy and by every ebuild in the tree. `src_install` places the unit
+with `systemd_dounit` and the OpenRC script with `newinitd`, and
+`pkg_postinst` may say `elog "Restart X to pick up this update"`. So the
+same `[service]` emits, on Gentoo, exactly that message and no action --
+`restart-on-upgrade = true` becomes an `elog`, and `enable`/`start` are
+ignored because Portage has no place for them.
+
+**What the emitter does not do on any platform** is call `systemctl` or
+`rc-service` itself from a script it wrote. Both are how a package
+starts a daemon in a container that forbade it, and both skip the init
+detection the distribution's own helpers already carry.
+
+### Settled 2026-09-15: the package builds with an ejected Makefile
+
+Decision 4 above, by the copyright holder: **a source package must not
+depend on fmake.** `--eject deb` writes `debian/` and a Makefile beside
+it, and `debian/rules` drives that Makefile -- so the secondary step,
+building the package on a distribution's own infrastructure, needs make
+and a compiler and nothing from this tree's tooling. fmake is the step
+that runs here, once, and what it leaves behind is self-contained. The
+same holds for the ebuild: `src_compile` is `emake`, `src_install` is
+`emake DESTDIR="${D}" install`.
+
+### Architectures: the source package is neutral, and the build names one
+
+Asked by the copyright holder 2026-09-15: build packages for several
+architectures with a simple argument substitution. Two layers again,
+because fmake's own build and a distribution's package build name an
+architecture in different places.
+
+**fmake's build already crosses by naming the compiler** -- `[toolchain]
+cc = "aarch64-linux-gnu-gcc"`, or `$CC` -- and `_tool_prefix` reads the
+triplet back out of that name. What it lacks is the substitution: an
+`--arch aarch64` that resolves `<triplet>-gcc` from the architecture the
+way the prefix is resolved from the compiler today, so one tree builds
+for several targets from the command line and `[toolchain]` is for the
+target that is not a plain triplet. `--explain` already says which
+platform a build is for.
+
+**A Debian source package is built for an architecture by
+`dpkg-buildpackage -a<arch>`, and the package must not know which.**
+`debian/rules` receives `DEB_HOST_GNU_TYPE` and debhelper hands `CC`,
+`CXX`, `PKG_CONFIG` to a Makefile build. So the Makefile `--eject deb`
+writes beside `debian/` has to be architecture-neutral, and today's is
+not quite: it is ejected "Built for: linux/x86_64" with the host's
+answers baked in. Measured, the bake is smaller than it looks:
+
+- A resolved library is written as its name, `-lz`, never as a path,
+  and a name resolves through whichever compiler is asked. Neutral.
+- `CC = cc` is a file-origin assignment, which make lets a command-line
+  `CC=` override and an environment `CC` NOT override. `?=` keeps make's
+  own default of `cc` and yields to both. One character.
+- pkg-config modules that answer with paths -- Qt's `-I/usr/include/
+  x86_64-linux-gnu/qt6` -- are the real bake. For those the ejected
+  Makefile defers to build time: `$(shell $(PKG_CONFIG) --cflags --libs
+  Qt6Widgets)`, with `PKG_CONFIG ?= pkg-config`, so a cross build's
+  `aarch64-linux-gnu-pkg-config` answers for the target. fmake still
+  decided WHICH modules, by symbol; the flags are the build machine's
+  to supply, which is what a source package means.
+
+The architecture names are two vocabularies -- Debian's `arm64` is the
+triplet's `aarch64` -- and `ARCH_SPELLINGS` already maps them, with
+`dpkg-architecture -a<arch> -qDEB_HOST_GNU_TYPE` as the object to ask
+where the table is short. Gentoo builds natively per machine and has no
+cross packaging to plan for; `KEYWORDS` in the ebuild lists what was
+tested, and the emitter writes the build machine's and nothing more.
+
+So "build for several architectures" is `dpkg-buildpackage -a arm64 -a
+riscv64 ...` against one ejected source package, and `fmake --arch` is
+for the tree's own builds. Neither needs the other.
+
 ### What is deliberately out
 
 Alpine (`APKBUILD`), OpenWrt (`procd`), Android: netcfgd carries the
 first two by hand and four trees carry the third through
 `tool/android.mk`. Same model, later emitters, and not part of this.
+
+## 228. Furniture: man pages, desktop entries, icons and metainfo in the plan
+
+Section 227's first layer, first step. `install_plan` knew four
+directories -- `bindir`, `libdir`, `includedir`, `pkgconfigdir` -- and
+the list of them was written out as a literal tuple in seven places: the
+path resolver, the escape guard, `--explain`, the install and uninstall
+rules of both emitters, and the refusal message's own dictionary. Adding
+a fifth directory was seven edits, which is *the same fact in more than
+one place* met one directory at a time, and the reason nobody had added
+one.
+
+So the first change is a table, `INSTALL_DIRS`: key, default, and what
+the default is relative to. Every reader walks it. Both ejected builds
+were re-ejected for a plain tree before and after and compared
+byte-for-byte -- identical -- which is the proof a refactor of this kind
+carries. New rows are declared by an ejected build only where the plan
+lands something in them, so a tree with no man page ejects the Makefile
+it always did.
+
+Then four rows, each a place some other program looks rather than a
+choice: `man(1)` walks `share/man/manN`, a desktop reads
+`share/applications` and `share/icons/hicolor/<size>/apps` by the XDG
+specifications, AppStream reads `share/metainfo`. hydra's icons went
+unseen for eleven days after a rename pass spelled `icons` singular,
+which is the argument for these being rows and not paths people type.
+
+Declared beside `main()` the way `@headers` is declared beside a
+library, or as `man`, `desktop`, `icons`, `metainfo` lists in a target's
+section:
+
+    /*! @man packaging/furn.1
+     *  @desktop packaging/se.vibes.furn.desktop
+     *  @icons packaging/se.vibes.furn.svg packaging/furn-48.png
+     *  @metainfo packaging/se.vibes.furn.metainfo.xml
+     */
+
+A program gathers them from the file holding `main()` only; a library
+from every unit, as headers are, since a `man3` page sits beside the
+function it describes. `--install`, `--eject make`, `--eject ninja` and
+`--explain` all read the one plan, measured to land the same six files
+and to remove them again.
+
+Where each lands is read off the file, not guessed: the man section is
+the suffix, an SVG goes under `scalable/apps`, and a PNG's size comes out
+of its own IHDR rather than its filename. Refused with the reason: a
+`.gz` man page (the section would read as `gz`; the packaging
+compresses), an icon that is neither SVG nor PNG, a PNG that is not
+square, which hicolor has no directory for.
+
+What this does not yet carry is the rest of section 227's first layer:
+services, sysusers, D-Bus policy, and data files with no tool-fixed
+home. Services are next, because they are what the packaging question
+turns on.
