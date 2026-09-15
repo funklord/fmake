@@ -10367,6 +10367,23 @@ restores the symlink and the bug with it, silently. A `dpkg-divert` would
 have survived that and was not applied. If Rust builds here start refusing
 again with `Reader: 'LLVM 14.0.6'`, this is why.
 
+**Which machine "here" is, because this note did not say and it matters.**
+These trees are worked from more than one computer, and this section
+describes the one it was measured on -- not `debian-nabbe`. Measured there
+2026-09-15: no `llvm-14` package appears in `/var/log/dpkg.log*` back to
+July, `dpkg -V llvm-14-linker-tools` answers `package ... is not installed`
+rather than reporting a missing file, and `/usr/lib/bfd-plugins/` holds
+`liblto_plugin.so` and `LLVMgold-19.so` only. So there is nothing on that
+machine to come back: a fresh `rustc --crate-type staticlib` read by plain
+`nm` gives 244 members, the exported symbol, and not one line on stderr.
+The diagnostic above is what separates the two states -- `missing` names
+the machine this note is about, `not installed` names one it is not -- and
+a reader on the wrong one should stop here. Found by a sweep for recovery
+notes whose truth depends on state outside the tree: a note that says
+"here" and not which here is the shape that fails, because nothing in
+ordinary use of the tree brings it together with the machine that
+falsifies it.
+
 **Nothing else broke, and the reason is better than the one first given.**
 An audit of gcc 14 and clang 11, 14 and 19 -- `nm` on LTO objects, driver
 link and run, `ar` plus `nm` plus link and run, and `-fuse-ld=bfd` -- passed
