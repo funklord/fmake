@@ -278,7 +278,8 @@ that had been green about nothing for five commits ·
 [225. Two artifacts of one name, sharing one cache entry](#225-two-artifacts-of-one-name-sharing-one-cache-entry) ·
 [226. The generator that kept the old tool's output](#226-the-generator-that-kept-the-old-tools-output) ·
 [227. Packaging: one model, emitted in each format's own language](#227-packaging-one-model-emitted-in-each-formats-own-language) ·
-[228. Furniture: man pages, desktop entries, icons and metainfo in the plan](#228-furniture-man-pages-desktop-entries-icons-and-metainfo-in-the-plan)
+[228. Furniture: man pages, desktop entries, icons and metainfo in the plan](#228-furniture-man-pages-desktop-entries-icons-and-metainfo-in-the-plan) ·
+[229. Services: one declaration, and the machine decides which glue](#229-services-one-declaration-and-the-machine-decides-which-glue)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18614,3 +18615,61 @@ What this does not yet carry is the rest of section 227's first layer:
 services, sysusers, D-Bus policy, and data files with no tool-fixed
 home. Services are next, because they are what the packaging question
 turns on.
+
+## 229. Services: one declaration, and the machine decides which glue
+
+Section 227's first layer, second step, and the one the packaging turns
+on. A service is declared once, in `fmake.toml`, because it belongs to
+the tree rather than to any source file:
+
+    [service.svcd]
+    systemd  = "packaging/svcd.service"
+    sysvinit = "packaging/svcd.sysvinit"
+    openrc   = "packaging/svcd.openrc"
+    enable   = true                   # the defaults, read by the emitters
+    start    = true
+    restart-on-upgrade = true
+
+The plan gains a row per file: the unit under `$UNITDIR`
+(`lib/systemd/system` beneath the prefix -- `/usr/local/lib/systemd/
+system` is on systemd's search path), the scripts under `$SYSVINITDIR`
+and `$OPENRCDIR`, both `/etc/init.d` whatever the prefix, because an init
+reads one directory. Two rows for one path is the point: an LSB script
+and an `openrc-run` script are different programs, and the wrong one is
+executed at boot and fails there. So no reader places all three.
+
+**Which glue is placed is decided by which init is running, by one test
+spelled once** -- `INIT_DETECT_SH`, `/run/openrc` first, then
+`/run/systemd/system`, else sysvinit -- and read three ways:
+
+- `--install` asks the machine and says so before the copies: `this
+  machine runs openrc, so that is the init glue placed`. Measured here,
+  which is how it was learned that this machine runs OpenRC: the first
+  draft of the case assumed systemd, and the detection corrected it.
+- Both ejected builds carry `INIT`, defaulting to the same detection at
+  install time, so an ejected Makefile installed on another machine asks
+  that machine. `INIT=systemd`, `sysvinit`, `openrc` choose; `INIT=none`
+  places no glue at all, which is what a package build passes -- the
+  package places its glue through its own tooling, because that tooling
+  also writes the scripts that start it.
+- `--explain` lists all three rows with their directories, since a
+  reader of the plan wants to see everything the tree can place.
+
+Uninstall takes back exactly what install placed, under the same `INIT`.
+
+The three flags are accepted now and read by nothing yet: they are the
+packaging emitters' facts, and section 227 says what each becomes on
+each platform. Refused with the reason: a service naming no file, a file
+that is not there, and a `systemd =` whose name does not end in
+`.service`, `.socket`, `.timer` or `.path`, which is how systemd knows
+what a unit is.
+
+The case asserts by content, not by path, since two of the three land on
+one path: each explicit `INIT=` through make and through ninja places
+exactly that init's file, `none` places nothing, and the live install
+places exactly one -- the one the machine runs, read the way fmake reads
+it, so that arm proves agreement while the explicit arms prove each
+file goes where it should.
+
+What is still to come from section 227's first layer: sysusers, D-Bus
+policy, data files with no tool-fixed home. Then the emitters.

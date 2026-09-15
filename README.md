@@ -514,6 +514,15 @@ defines = ["SITU_CHECKED"]      # applied to the root TU, not the closure
 [install]
 prefix = "/usr/local"
 
+[service.greetd]                # a daemon: the glue for each init
+systemd  = "packaging/greetd.service"
+sysvinit = "packaging/greetd.init"    # an LSB script
+openrc   = "packaging/greetd.openrc"  # an openrc-run script
+# `--install` places the one for the init this machine runs; an ejected
+# build asks the same question at install time through INIT, and takes
+# INIT=none from a package build. enable, start and restart-on-upgrade
+# default to true and are read by the packaging emitters.
+
 [toolchain]                     # cross-compiling
 cc   = "aarch64-linux-gnu-gcc"
 arch = "aarch64"

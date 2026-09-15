@@ -1159,7 +1159,17 @@ CONF_SCHEMA = {
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
         "mandir": S, "applicationsdir": S, "icondir": S, "metainfodir": S,
+        "unitdir": S, "sysvinitdir": S, "openrcdir": S,
     },
+	# A service: the files that start it under each init, and what a
+	# package does with it. The three flags are read by the packaging
+	# emitters (section 227) and default to the distribution's defaults;
+	# a plain install places the glue and starts nothing, since starting
+	# a daemon is a package's act and not a file copy's.
+    "service": {"*": {
+        "systemd": S, "sysvinit": S, "openrc": S,
+        "enable": B, "start": B, "restart-on-upgrade": B,
+    }},
     "toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
         "moc": S, "uic": S, "rcc": S, "situc": S,
@@ -1355,6 +1365,7 @@ class Conf:
 		self.project  = self.data.get("project", {})
 		self.targets  = self.data.get("target", {})
 		self.install  = self.data.get("install", {})
+		self.services = self.data.get("service", {})
 		self.tool     = self.data.get("toolchain", {})
 		self.build_tool_conf = self.data.get("build-toolchain", {})
 		profiles      = self.data.get("profile", {})
@@ -9408,6 +9419,7 @@ def build(args, _bootstrapping=False):
 	# had both headers installed flat as `api.h' -- the fix of section 220
 	# reading half the include path. An absolute one is somebody else's
 	# directory and no header of ours is published relative to it.
+	_SERVICES[:] = service_glue(conf, root)
 	_INCLUDE_ROOTS.clear()
 	_INCLUDE_ROOTS.update(proj.incdirs)
 	_INCLUDE_ROOTS.update(d for d in conf.project.get("include-dirs", [])
@@ -11912,6 +11924,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"{install_var(key)} ?= "
 			  + (_mk_flag(sub) if os.path.isabs(sub)
 			     else f"$({install_var(base)})/{_mk_flag(sub)}"))
+		if any(p[2] in INIT_GLUE for p in plan):
+			a("# Which init the service glue below is for: systemd, sysvinit,")
+			a("# openrc, or none. Detected from the machine running make,")
+			a("# because an init reads one directory and a script for the")
+			a("# wrong one is executed at boot and fails there. A package")
+			a("# build passes INIT=none and places the glue through its own")
+			a("# tooling, which also generates the scripts that start it.")
+			a(f"INIT ?= $(shell {INIT_DETECT_SH})")
 		a("")
 		# The .pc files, written by the ejected build rather than copied
 		# out of the tree: a clean checkout of a project that committed
@@ -11960,6 +11980,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			if not items:
 				continue
 			var = f"$(DESTDIR)$({install_var(directory)})"
+			if directory in INIT_GLUE:
+				a(f"ifeq ($(INIT),{INIT_GLUE[directory]})")
 			a(f"\tinstall -d {var}")
 			# A published header keeps the path the tree includes it by,
 			# so `include/pkg/api.h' lands at `$(INCLUDEDIR)/pkg/api.h'
@@ -11975,6 +11997,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				src = (art(source) if origin == "built"
 				       else _eject_src(source))
 				a(f"\tinstall -m {mode:o} {src} {var}/{name}")
+			if directory in INIT_GLUE:
+				a("endif")
 		a("")
 		# The inverse, named file by file for the reason `clean' is: a
 		# target everybody runs without reading must not be able to remove
@@ -11985,9 +12009,15 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f".PHONY: {undo}")
 		a(f"{undo}:")
 		for directory in INSTALL_LANDINGS:
-			for _origin, _source, d, name, _mode in plan:
-				if d == directory:
-					a(f"\trm -f $(DESTDIR)$({install_var(directory)})/{name}")
+			names = [name for _o, _s, d, name, _m in plan if d == directory]
+			if not names:
+				continue
+			if directory in INIT_GLUE:
+				a(f"ifeq ($(INIT),{INIT_GLUE[directory]})")
+			for name in names:
+				a(f"\trm -f $(DESTDIR)$({install_var(directory)})/{name}")
+			if directory in INIT_GLUE:
+				a("endif")
 		a("")
 
 	all_objs = sorted({f"$({P}BUILD_DIR)/{name}.o" for name in every})
@@ -12536,12 +12566,18 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			value = (sub if os.path.isabs(sub)
 			         else f"$${install_var(base)}/{sub}")
 			steps.append(f': "$${{{install_var(key)}:={value}}}"')
+		if any(p[2] in INIT_GLUE for p in plan):
+			# The Makefile's INIT, as an environment variable with the
+			# same default: detected here, `none' from a package build.
+			steps.append(f': "$${{INIT:=$$({INIT_DETECT_SH})}}"')
 		for directory in INSTALL_LANDINGS:
 			items = [p for p in plan if p[2] == directory]
 			if not items:
 				continue
 			var = f'"$$DESTDIR$${install_var(directory)}"'
-			steps.append(f"install -d {var}")
+			guard = (f'[ "$$INIT" != {INIT_GLUE[directory]} ] || '
+			         if directory in INIT_GLUE else "")
+			steps.append(f"{guard}install -d {var}")
 			# The Makefile's reason, in ninja's quoting: a header keeps
 			# the path the tree includes it by, and the directory under
 			# includedir has to exist before install(1) writes into it.
@@ -12560,7 +12596,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				# Shell-quoted rather than ninja-escaped: this is a command
 				# line, and ninja can express a path with a space in it, so
 				# one can reach here.
-				steps.append(f"install -m {mode:o} -- {shlex.quote(src)} "
+				steps.append(f"{guard}install -m {mode:o} -- "
+				             f"{shlex.quote(src)} "
 				             f'"$$DESTDIR$${install_var(directory)}/"'
 				             f"{shlex.quote(name)}")
 		# Same reason as the Makefile: a clean checkout has no .pc, so
@@ -12622,9 +12659,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		undo = [step for step in steps
 		        if step.startswith((": ", "set -e"))]
 		for directory in INSTALL_LANDINGS:
+			guard = (f'[ "$$INIT" != {INIT_GLUE[directory]} ] || '
+			         if directory in INIT_GLUE else "")
 			for _origin, _source, d, name, _mode in plan:
 				if d == directory:
-					undo.append(f'rm -f "$$DESTDIR$${install_var(directory)}/"'
+					undo.append(f'{guard}rm -f '
+					            f'"$$DESTDIR$${install_var(directory)}/"'
 					            f"{shlex.quote(name)}")
 		a("")
 		a("rule uninstall")
@@ -12670,12 +12710,50 @@ INSTALL_DIRS = (
     ("applicationsdir",  "share/applications",    "prefix"),
     ("icondir",          "share/icons/hicolor",   "prefix"),
     ("metainfodir",      "share/metainfo",        "prefix"),
+	# Init glue. A unit goes where systemd looks, under the prefix --
+	# /usr/local/lib/systemd/system is on its search path. An init script
+	# goes in /etc/init.d whatever the prefix, which is why these two are
+	# absolute: the init reads one directory. Two rows for one path,
+	# because a sysvinit script and an openrc-run script are different
+	# programs that happen to live in the same place, and which of them
+	# an install writes is decided by which init this machine runs.
+    ("unitdir",          "lib/systemd/system",    "prefix"),
+    ("sysvinitdir",      "/etc/init.d",           None),
+    ("openrcdir",        "/etc/init.d",           None),
 )
 INSTALL_DEFAULTS = {key: default for key, default, _base in INSTALL_DIRS}
 # The rows a plan can name, in the order the ejected install rules list
 # them: everything but the prefix, which is a base and never a landing.
 INSTALL_LANDINGS = tuple(key for key, _d, _b in INSTALL_DIRS
                          if key != "prefix")
+# Which init each glue directory belongs to. A row here is placed by a
+# live install only when that init is the one running, and by an ejected
+# build only when INIT names it -- the rest of the plan is unconditional.
+INIT_GLUE = {"unitdir": "systemd", "sysvinitdir": "sysvinit",
+             "openrcdir": "openrc"}
+# One spelling of the detection, shared by the live install and both
+# emitters so that they cannot disagree about what this machine runs.
+# openrc first: a machine running OpenRC on top of a systemd-free base
+# has /run/openrc and no /run/systemd/system, and the reverse never
+# occurs. Neither present is the traditional answer, sysvinit.
+INIT_DETECT_SH = ("if [ -d /run/openrc ]; then echo openrc; "
+                  "elif [ -d /run/systemd/system ]; then echo systemd; "
+                  "else echo sysvinit; fi")
+
+
+def detect_init():
+	"""The init this machine is running, by the same test the shell uses."""
+	if os.path.isdir("/run/openrc"):
+		return "openrc"
+	if os.path.isdir("/run/systemd/system"):
+		return "systemd"
+	return "sysvinit"
+
+
+def init_places(directory, init):
+	"""Whether an install for `init' writes into this directory."""
+	glue = INIT_GLUE.get(directory)
+	return glue is None or (init != "none" and glue == init)
 
 
 def install_var(directory):
@@ -12700,10 +12778,10 @@ def install_rows_for(plan):
 	used = {p[2] for p in plan}
 	rows = []
 	for key, default, base in INSTALL_DIRS:
-		if base is None:
+		if key == "prefix":
 			continue
 		if key in INSTALL_CLASSIC or key in used:
-			rows.append((key, default, base))
+			rows.append((key, default, base or "prefix"))
 	return rows
 
 
@@ -12849,10 +12927,11 @@ def install_paths(conf, args):
 	# distribution puts it and where pkg-config looks without being told.
 	out = {"prefix": p["prefix"]}
 	for key, _default, base in INSTALL_DIRS:
-		if base is None:
+		if key == "prefix":
 			continue
 		sub = p[key]
-		out[key] = sub if os.path.isabs(sub) else os.path.join(out[base], sub)
+		out[key] = (sub if os.path.isabs(sub)
+		            else os.path.join(out[base or "prefix"], sub))
 	if dest:
 		for key in INSTALL_LANDINGS:
 			out[key] = os.path.join(dest, out[key].lstrip("/"))
@@ -12866,6 +12945,34 @@ def install_paths(conf, args):
 # uninstall have to agree about where a header lands by construction
 # rather than by everybody remembering to pass the same thing.
 _INCLUDE_ROOTS = set()
+
+# The services this tree declares, validated once per run, for the same
+# reason and with the same seven readers. Each is (name, glue, rel).
+_SERVICES = []
+
+
+def service_glue(conf, root):
+	"""Every [service.NAME] file, checked, as (name, glue, rel)."""
+	out = []
+	for name, sec in sorted(conf.services.items()):
+		files = [(g, sec[g]) for g in ("systemd", "sysvinit", "openrc")
+		         if sec.get(g)]
+		if not files:
+			die(f"{CONF_FILE}: [service.{name}] names no file: give it a "
+			    f"`systemd', a `sysvinit' or an `openrc' script, or all "
+			    f"three -- one package has to start it under whichever "
+			    f"init the machine runs.")
+		for glue, rel in files:
+			if not os.path.isfile(os.path.join(root, rel)):
+				die(f"{CONF_FILE}: [service.{name}] {glue} = {rel!r} does "
+				    f"not exist")
+			if glue == "systemd" and not rel.endswith((".service", ".socket",
+			                                           ".timer", ".path")):
+				die(f"{CONF_FILE}: [service.{name}] systemd = {rel!r}: a "
+				    f"unit file ends in .service, .socket, .timer or "
+				    f".path, which is how systemd knows what it is")
+			out.append((name, glue, rel))
+	return out
 
 
 def install_subpath(h):
@@ -13050,6 +13157,17 @@ def install_plan(targets, closures, root):
 				directory, name = furniture_landing(kind, f, root)
 				planned.append(("tree", f, directory, name, 0o644))
 
+	# Init glue, once per tree rather than per target: a service is not a
+	# target's, it is the tree's. A unit keeps its own name, which is what
+	# `systemctl' is told; an init script installs as the service's name,
+	# which is what `rc-service' and `invoke-rc.d' are told.
+	for name, glue, rel in _SERVICES:
+		if glue == "systemd":
+			planned.append(("tree", rel, "unitdir",
+			                os.path.basename(rel), 0o644))
+		else:
+			planned.append(("tree", rel, glue + "dir", name, 0o755))
+
 	# Two entries landing on one path are two different questions. The
 	# same FILE published by two targets is the case this dedupe was
 	# written for -- a header carrying `@headers' is often linked into a
@@ -13133,9 +13251,11 @@ def do_uninstall(targets, closures, root, conf, args):
     """
 	refuse_install_escapes(conf, args)
 	paths = install_paths(conf, args)
+	init = detect_init()
 	planned = [os.path.join(paths[directory], name)
 	           for _origin, _source, directory, name, _mode
-	           in install_plan(targets, closures, root)]
+	           in install_plan(targets, closures, root)
+	           if init_places(directory, init)]
 	if not planned:
 		info("nothing to uninstall")
 		return 0
@@ -13170,8 +13290,15 @@ def do_install(targets, closures, root, outdir, conf, args):
 	paths = install_paths(conf, args)
 	planned = []
 
+	init = detect_init()
+	if _SERVICES:
+		# Said before the copies, so an operator on a sysvinit machine
+		# who sees no unit go in knows it was decided and not forgotten.
+		info(f"this machine runs {init}, so that is the init glue placed")
 	for origin, source, directory, name, mode in install_plan(
 			targets, closures, root):
+		if not init_places(directory, init):
+			continue
 		dst = os.path.join(paths[directory], name)
 		if origin == "symlink":
 			# The target stays a bare name. An absolute one points into

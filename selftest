@@ -7257,6 +7257,148 @@ def a_programs_furniture_installs_where_its_tools_look(t):
 			u.cleanup()
 
 
+def _service_tree(t):
+	"""A daemon with glue for all three inits."""
+	t.write("main.c", '#include <stdio.h>\nint main(void){ puts("d"); return 0; }\n')
+	t.write("packaging/svcd.service",
+	        "[Unit]\nDescription=svc\n[Service]\nExecStart=/usr/local/bin/svc\n"
+	        "[Install]\nWantedBy=multi-user.target\n")
+	t.write("packaging/svcd.sysvinit",
+	        "#!/bin/sh\n### BEGIN INIT INFO\n# Provides: svcd\n"
+	        "### END INIT INFO\nexec /usr/local/bin/svc\n")
+	t.write("packaging/svcd.openrc",
+	        "#!/sbin/openrc-run\ncommand=/usr/local/bin/svc\n")
+	t.write("fmake.toml", """
+[service.svcd]
+systemd  = "packaging/svcd.service"
+sysvinit = "packaging/svcd.sysvinit"
+openrc   = "packaging/svcd.openrc"
+""")
+
+
+# What each init's glue lands as, and the first line that proves which
+# file it is -- the two scripts share a path and differ only in content.
+GLUE = {
+    "systemd":  ("usr/local/lib/systemd/system/svcd.service", "[Unit]"),
+    "sysvinit": ("etc/init.d/svcd", "#!/bin/sh"),
+    "openrc":   ("etc/init.d/svcd", "#!/sbin/openrc-run"),
+}
+
+
+def _glue_under(stage):
+	"""Every init file under a staging root, as (relative path, first line)."""
+	out = []
+	for d, _dirs, files in os.walk(stage):
+		for f in files:
+			full = os.path.join(d, f)
+			rel = os.path.relpath(full, stage)
+			if "/bin/" in "/" + rel:
+				continue
+			with open(full) as fh:
+				out.append((rel, fh.readline().rstrip("\n")))
+	return sorted(out)
+
+
+@case
+def a_service_is_placed_for_the_init_that_will_run_it(t):
+	"""One `[service]', three inits, and the machine decides which glue.
+
+    A service is what packaging turns on, so it is the second thing the
+    install model had to carry. `[service.NAME]' names the unit, the
+    LSB script and the openrc-run script; the plan gains a row for each,
+    under `$UNITDIR', `$SYSVINITDIR' and `$OPENRCDIR'. The last two are
+    the same directory -- an init reads one `/etc/init.d' -- holding two
+    different programs, and a script for the wrong init is executed at
+    boot and fails there. So which row is placed is decided by which
+    init is running, by one test spelled once: `/run/openrc', then
+    `/run/systemd/system', else sysvinit.
+
+    The live install asks the machine. The ejected builds ask the same
+    question at install time, through `INIT', which defaults to the same
+    detection and takes `none' from a package build -- a package places
+    its glue through its own tooling, because that tooling also writes
+    the scripts that start it (section 227).
+
+    Asserted by content, not by path, since two of the three land on one
+    path: for each `INIT=' the ejected make and ninja installs must
+    place exactly that init's file, `INIT=none' must place nothing, and
+    uninstall must take back what install placed. The live install must
+    place exactly one, and it must be the one the machine runs -- which
+    this suite reads the same way fmake does, so that half proves
+    agreement rather than correctness, and the explicit `INIT=' arms are
+    what prove each file goes where it should.
+    """
+	_service_tree(t)
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage)
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	placed = _glue_under(stage)
+	check(len(placed) == 1,
+	      f"a live install placed {len(placed)} init files, not one: {placed}")
+	running = ("openrc" if os.path.isdir("/run/openrc")
+	           else "systemd" if os.path.isdir("/run/systemd/system")
+	           else "sysvinit")
+	check(placed[0] == GLUE[running],
+	      f"this machine runs {running} and the live install placed {placed}")
+	check(f"runs {running}" in r.stdout,
+	      f"the install did not say which init it chose: {r.stdout}")
+	r = t.fmake("--uninstall", "--destdir", stage)
+	check(r.returncode == 0 and _glue_under(stage) == [],
+	      f"uninstall left: {_glue_under(stage)}")
+
+	e = t.fmake("--explain").stdout
+	for var in ("$UNITDIR", "$SYSVINITDIR", "$OPENRCDIR"):
+		check(var in e, f"--explain does not list {var}: {e}")
+
+	for backend, out, cmd in (("make", "Makefile", ["make", "-s"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		u = Tree("service-" + backend)
+		try:
+			_service_tree(u)
+			ej = u.fmake("--eject", backend)
+			check(ej.returncode == 0, f"--eject {backend}: {ej.stderr}")
+			u.write(out, ej.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			for init in ("systemd", "sysvinit", "openrc", "none"):
+				dest = os.path.join(u.dir, "st-" + init)
+				b = _run_in(u.dir, *cmd, "install",
+				            env={"DESTDIR": dest, "INIT": init})
+				check(b.returncode == 0,
+				      f"{backend} INIT={init} install: {b.stdout}{b.stderr}")
+				want = [] if init == "none" else [GLUE[init]]
+				check(_glue_under(dest) == want,
+				      f"{backend} INIT={init} placed {_glue_under(dest)}, "
+				      f"wanted {want}")
+				b = _run_in(u.dir, *cmd, "uninstall",
+				            env={"DESTDIR": dest, "INIT": init})
+				check(b.returncode == 0 and _glue_under(dest) == [],
+				      f"{backend} INIT={init} uninstall left "
+				      f"{_glue_under(dest)}")
+		finally:
+			u.cleanup()
+
+	# Refused, each by its message.
+	for what, toml, said in (
+	        ("a service naming no file", "[service.x]\nenable = true\n",
+	         "names no file"),
+	        ("a file that is not there",
+	         '[service.x]\nsysvinit = "packaging/nope"\n', "does not exist"),
+	        ("a unit with no unit suffix",
+	         '[service.x]\nsystemd = "packaging/svcd.sysvinit"\n',
+	         "ends in .service")):
+		u = Tree("service-refuse")
+		try:
+			_service_tree(u)
+			u.write("fmake.toml", toml)
+			r = u.fmake()
+			check(r.returncode != 0 and said in r.stdout + r.stderr,
+			      f"{what} was not refused as such: {r.stdout}{r.stderr}")
+		finally:
+			u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
