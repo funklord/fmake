@@ -7399,6 +7399,232 @@ def a_service_is_placed_for_the_init_that_will_run_it(t):
 			u.cleanup()
 
 
+def _deb_tree(t, spdx=True):
+	"""A daemon, a library it uses, zlib from pkg-config, and every root file."""
+	tag = "/* SPDX-License-Identifier: GPL-3.0-or-later */\n" if spdx else ""
+	t.write("src/main.c",
+	        "/*! @target greetd\n *  @man packaging/greetd.1\n */\n" + tag
+	        + "#include <stdio.h>\n#include <zlib.h>\nint hello(void);\n"
+	        "int main(void){ printf(\"%d %s\\n\", hello(), zlibVersion()); "
+	        "return 0; }\n")
+	t.write("src/api.h", "#pragma once\nint hello(void);\n")
+	t.write("src/hello.c",
+	        "/*! @kind static\n *  @target greet\n *  @headers api.h\n"
+	        " *  @version 1.2.3\n */\n" + tag
+	        + '#include "api.h"\nint hello(void){ return 7; }\n')
+	t.write("src/packaging/greetd.1", ".TH GREETD 1\n.SH NAME\ngreetd \\- greets\n")
+	t.write("src/packaging/greetd.service",
+	        "[Unit]\nDescription=greetd\n[Service]\nExecStart=/usr/bin/greetd\n"
+	        "[Install]\nWantedBy=multi-user.target\n")
+	t.write("src/packaging/greetd.init", """#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          greetd
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: greets
+### END INIT INFO
+. /lib/lsb/init-functions
+case "$1" in
+  start) start-stop-daemon --start --background --exec /usr/bin/greetd ;;
+  stop) start-stop-daemon --stop --exec /usr/bin/greetd ;;
+  restart|force-reload) $0 stop; $0 start ;;
+  status) status_of_proc /usr/bin/greetd greetd ;;
+  *) echo "Usage: $0 {start|stop|restart|force-reload|status}"; exit 2 ;;
+esac
+""")
+	shutil.copy("/usr/share/common-licenses/GPL-3", os.path.join(t.dir, "src", "LICENSE"))
+	t.write("src/VERSION", "0.4.1\n")
+	t.write("src/fmake.toml", """
+[project]
+name = "greetd"
+
+[package]
+maintainer  = "Test Person <test@example.invalid>"
+homepage    = "https://example.invalid/greetd"
+section     = "utils"
+description = "Greets whoever connects, kept as the fixture for fmake's packaging emitter."
+
+[target.greetd]
+description = "greeter daemon"
+
+[target.greet]
+description = "greeting library"
+
+[debian.greetd]
+recommends = ["zlib1g"]
+
+[service.greetd]
+systemd  = "packaging/greetd.service"
+sysvinit = "packaging/greetd.init"
+""")
+
+
+def _src(t):
+	"""The source tree, one level down, so a package build's `..' is the
+	fixture's own directory and not /tmp."""
+	return os.path.join(t.dir, "src")
+
+
+def _deb(t, *args):
+	return _run_in(_src(t), FMAKE, *args)
+
+
+def _deb_tools():
+	for tool in ("dpkg-buildpackage", "dh", "lintian", "dpkg", "git"):
+		if not shutil.which(tool):
+			raise Skip(f"{tool} not installed")
+	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
+		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
+
+
+@case
+def a_debian_source_package_is_ejected_and_builds(t):
+	"""Section 227's second layer: `--eject deb', proved by dpkg and lintian.
+
+    The package is written in Debian's own words from the same plan the
+    three installs read -- control, rules, changelog, copyright, one
+    .install per binary package, the service glue as links to the
+    tree's files, and the Makefile the package builds with, so that the
+    secondary step needs make and a compiler and nothing from fmake.
+
+    What proves it is not reading the files back: `dpkg-buildpackage'
+    builds them and `lintian' reads the result, and neither was written
+    by fmake. Asserted: the build exits 0; the program package holds the
+    binary, the man page, the unit and the init script; the -dev package
+    holds the header, the archive and the .pc under the multiarch
+    directory; the postinst carries debhelper's start and restart
+    snippets, which the tree never wrote; the .pc names the multiarch
+    libdir; Build-Depends names zlib1g-dev, derived by asking dpkg which
+    package ships the .pc fmake resolved; the licence is GPL-3.0-or-later
+    because the tree's SPDX lines say so, and GPL-3 when they do not;
+    and lintian reports no error.
+
+    Then the refusals, each through its message: a debian/ already
+    there, no LICENSE, no VERSION, no maintainer, a service without its
+    sysvinit script, a dependency that exists only under systemd.
+    """
+	_deb_tools()
+	_deb_tree(t)
+	_run_in(_src(t), "git", "init", "-q", ".")
+	_run_in(_src(t), "git", "-c", "user.name=t", "-c", "user.email=t@t",
+	        "commit", "-q", "--allow-empty", "-m", "init")
+	r = _deb(t, "--eject", "deb")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--eject deb failed: {said}")
+	for f in ("debian/control", "debian/rules", "debian/changelog",
+	          "debian/copyright", "debian/source/format", "Makefile",
+	          "debian/greetd.install", "debian/libgreet-dev.install",
+	          "debian/greetd.greetd.service", "debian/greetd.greetd.init"):
+		check(os.path.lexists(os.path.join(_src(t), f)), f"{f} was not written")
+	check(os.path.islink(os.path.join(_src(t), "debian/greetd.greetd.service")),
+	      "the unit is a copy, not a link to the tree's file")
+	with open(os.path.join(_src(t), "debian/control")) as fh:
+		control = fh.read()
+	check("zlib1g-dev" in control,
+	      f"Build-Depends does not name zlib1g-dev, asked of dpkg: {control}")
+	check("Pre-Depends: ${misc:Pre-Depends}" in control,
+	      "the package with a service lacks the Pre-Depends its snippets need")
+	with open(os.path.join(_src(t), "debian/copyright")) as fh:
+		check("License: GPL-3.0-or-later" in fh.read(),
+		      "the grant the SPDX lines make was not read")
+
+	b = _run_in(_src(t), "dpkg-buildpackage", "-b", "-us", "-uc")
+	check(b.returncode == 0, f"dpkg-buildpackage failed:\n{b.stdout}\n{b.stderr}")
+	parent = t.dir
+	debs = {n: os.path.join(parent, n) for n in os.listdir(parent)
+	        if n.startswith(("greetd_", "libgreet-dev_")) and n.endswith(".deb")}
+	prog = next(p for n, p in debs.items() if n.startswith("greetd_"))
+	dev = next(p for n, p in debs.items() if n.startswith("libgreet-dev_"))
+	def contents(deb):
+		out = subprocess.run(["dpkg", "-c", deb], capture_output=True,
+		                     text=True).stdout
+		return {l.split()[-1].lstrip(".") for l in out.splitlines()
+		        if not l.split()[-1].endswith("/")}
+	have = contents(prog)
+	for f in ("/usr/bin/greetd", "/usr/share/man/man1/greetd.1.gz",
+	          "/usr/lib/systemd/system/greetd.service", "/etc/init.d/greetd"):
+		check(f in have, f"greetd package lacks {f}: {sorted(have)}")
+	have = contents(dev)
+	multi = subprocess.run(["dpkg-architecture", "-qDEB_HOST_MULTIARCH"],
+	                       capture_output=True, text=True).stdout.strip()
+	for f in ("/usr/include/api.h", f"/usr/lib/{multi}/libgreet.a",
+	          f"/usr/lib/{multi}/pkgconfig/greet.pc"):
+		check(f in have, f"libgreet-dev lacks {f}: {sorted(have)}")
+	ctl = os.path.join(t.dir, "ctl")
+	subprocess.run(["dpkg-deb", "-e", prog, ctl], check=True)
+	with open(os.path.join(ctl, "postinst")) as fh:
+		post = fh.read()
+	for snippet in ("deb-systemd-invoke", "update-rc.d", "invoke-rc.d"):
+		check(snippet in post,
+		      f"postinst carries no {snippet} snippet; debhelper's "
+		      f"generated start and restart were dropped")
+	pc = subprocess.run(["dpkg-deb", "--fsys-tarfile", dev],
+	                    capture_output=True).stdout
+	tar_ = subprocess.run(["tar", "-xO", f"./usr/lib/{multi}/pkgconfig/greet.pc"],
+	                      input=pc, capture_output=True).stdout.decode()
+	check(f"libdir=${{prefix}}/lib/{multi}" in tar_,
+	      f"the installed .pc does not name the multiarch libdir: {tar_}")
+	lint = subprocess.run(["lintian", "--tag-display-limit", "0", prog, dev],
+	                      capture_output=True, text=True)
+	errors = [l for l in lint.stdout.splitlines() if l.startswith("E:")]
+	check(not errors, "lintian reports an error:\n" + "\n".join(errors))
+
+	# The grant follows the tree's SPDX lines; without them, the bare name.
+	u = Tree("deb-bare")
+	try:
+		_deb_tree(u, spdx=False)
+		_run_in(_src(u), "git", "init", "-q", ".")
+		r = _deb(u, "--eject", "deb")
+		check(r.returncode == 0, f"--eject deb without SPDX lines: {r.stderr}")
+		with open(os.path.join(_src(u), "debian/copyright")) as fh:
+			text = fh.read()
+		check("License: GPL-3\n" in text and "or-later" not in text,
+		      f"with no SPDX line the grant was widened: {text}")
+	finally:
+		u.cleanup()
+
+	# Refusals.
+	for what, edit, said in (
+	        ("a debian/ already there",
+	         lambda u: os.makedirs(os.path.join(_src(u), "debian")),
+	         "already exists here, and it is yours"),
+	        ("no LICENSE",
+	         lambda u: os.remove(os.path.join(_src(u), "LICENSE")),
+	         "no LICENSE file"),
+	        ("no VERSION",
+	         lambda u: os.remove(os.path.join(_src(u), "VERSION")),
+	         "no VERSION file"),
+	        ("no maintainer",
+	         lambda u: u.write("src/fmake.toml", '[package]\ndescription = "x"\n'
+	                           '[target.greetd]\ndescription = "x"\n'),
+	         "maintainer"),
+	        ("a service without its sysvinit script",
+	         lambda u: u.write("src/fmake.toml", u_toml(u).replace(
+	             'sysvinit = "packaging/greetd.init"\n', "")),
+	         "both a systemd unit and a sysvinit script"),
+	        ("a dependency only systemd has",
+	         lambda u: u.write("src/fmake.toml", u_toml(u).replace(
+	             'recommends = ["zlib1g"]', 'depends = ["libpam-systemd"]')),
+	         "exists only under systemd")):
+		u = Tree("deb-refuse")
+		try:
+			_deb_tree(u)
+			_run_in(_src(u), "git", "init", "-q", ".")
+			edit(u)
+			r = _deb(u, "--eject", "deb")
+			check(r.returncode != 0 and said in r.stdout + r.stderr,
+			      f"{what} was not refused as such: {r.stdout}{r.stderr}")
+		finally:
+			u.cleanup()
+
+
+def u_toml(u):
+	with open(os.path.join(_src(u), "fmake.toml")) as fh:
+		return fh.read()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

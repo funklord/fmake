@@ -514,6 +514,16 @@ defines = ["SITU_CHECKED"]      # applied to the root TU, not the closure
 [install]
 prefix = "/usr/local"
 
+[package]                       # what a package needs and no file says
+maintainer  = "Name <address>"  # required; the version is the VERSION file
+homepage    = "https://example.invalid/greet"
+section     = "utils"           # Debian's archive section
+description = "Greets whoever connects."   # long; a target's own is the synopsis
+
+[debian.greetd]                 # per binary package, in Debian's words
+recommends = ["zlib1g"]         # runtime programs have no abstract form
+postinst   = "debian-src/postinst"         # carried verbatim; needs #DEBHELPER#
+
 [service.greetd]                # a daemon: the glue for each init
 systemd  = "packaging/greetd.service"
 sysvinit = "packaging/greetd.init"    # an LSB script
@@ -863,6 +873,7 @@ fmake flash              run a .PHONY rule from fmake.mk
 fmake --explain          print every decision and why
 fmake --install          install artifacts and @headers
 fmake --eject > Makefile leave, taking the build with you
+fmake --eject deb        write debian/ and a Makefile; dpkg-buildpackage does the rest
 fmake --clean            remove .fmake/
 fmake -i                 answer what it will not guess, once
 ```
@@ -897,7 +908,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `--cflags 'FLAGS'` | replace the default `-Os`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
 | `--explain` | print every decision and why, and build nothing |
-| `--eject [make\|make-fragment\|ninja]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile |
+| `--eject [make\|make-fragment\|ninja\|deb]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile; `deb` writes `debian/` and a Makefile into the tree |
 | `--force-link SRC` | link a file no symbol reaches |
 | `--widen-all` | compile the whole tree before deciding the link set |
 | `--no-submodules` | do not fetch the git submodules this tree vendors |

@@ -279,7 +279,8 @@ that had been green about nothing for five commits ·
 [226. The generator that kept the old tool's output](#226-the-generator-that-kept-the-old-tools-output) ·
 [227. Packaging: one model, emitted in each format's own language](#227-packaging-one-model-emitted-in-each-formats-own-language) ·
 [228. Furniture: man pages, desktop entries, icons and metainfo in the plan](#228-furniture-man-pages-desktop-entries-icons-and-metainfo-in-the-plan) ·
-[229. Services: one declaration, and the machine decides which glue](#229-services-one-declaration-and-the-machine-decides-which-glue)
+[229. Services: one declaration, and the machine decides which glue](#229-services-one-declaration-and-the-machine-decides-which-glue) ·
+[230. `--eject deb`: a source package that builds with make alone](#230---eject-deb-a-source-package-that-builds-with-make-alone)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18556,6 +18557,51 @@ So "build for several architectures" is `dpkg-buildpackage -a arm64 -a
 riscv64 ...` against one ejected source package, and `fmake --arch` is
 for the tree's own builds. Neither needs the other.
 
+### A release page from README.md, with everything downloadable
+
+Asked by the copyright holder 2026-09-15, after the two emitters: could
+fmake generate a webpage from README.md carrying the downloadable
+content -- source tarballs, binary releases, packages. Recorded as a
+design with its options and costs, not started.
+
+What "everything downloadable" is, fmake already knows or can produce:
+a source tarball is `git archive` at the tagged VERSION; a binary
+release is the plan's artifacts for one platform, which `--install
+--destdir` already stages and which a tar of the staging tree is; a
+`.deb` is `dpkg-buildpackage` over `--eject deb`; an ebuild is a file.
+So the page's manifest is derivable from the same plan the installs and
+emitters read, and that half is fmake's shape exactly -- one more reader
+of `install_plan`, producing an index of artifacts with their sizes and
+checksums.
+
+The half that is not fmake's shape is rendering Markdown. fmake is one
+file with no dependency beyond the Python standard library, which is
+the property the README rule in `harmonization.md` relies on, and the
+standard library has no Markdown. This README uses headings, tables (69
+rows), fenced code (46 fences), links, emphasis and lists. Three
+options, each with a cost:
+
+- **Render it in fmake.** A Markdown subset renderer for what these
+  READMEs use is a few hundred lines and a second parser to keep right
+  -- fmake already carries parsers for Makefile syntax, Doxygen and
+  TOML, so a fourth is in character, and it is the only option that
+  keeps the one-file property.
+- **Ask a tool the machine has.** `pandoc` is installed here and does
+  it perfectly; `cmark` and `markdown` are common. The page then depends
+  on a tool fmake does not, which is the `situc`/`moc` shape --
+  `[toolchain] markdown = ...` with a refusal naming it when absent --
+  and it is honest about being an optional surface.
+- **Do not render; publish the artifacts and link the README.** A page
+  that is the manifest -- name, size, checksum, link -- with README.md
+  beside it as a file. Smallest, and every hosting service renders a
+  README anyway.
+
+**Settled by the copyright holder 2026-09-15: the manifest, and pandoc
+when present.** No renderer in fmake. The page carries the artifacts
+with size and checksum, and the README rendered through pandoc where
+the machine has it -- linked as a file where it does not, with the
+absence said rather than hidden.
+
 ### What is deliberately out
 
 Alpine (`APKBUILD`), OpenWrt (`procd`), Android: netcfgd carries the
@@ -18673,3 +18719,90 @@ file goes where it should.
 
 What is still to come from section 227's first layer: sysusers, D-Bus
 policy, data files with no tool-fixed home. Then the emitters.
+
+## 230. `--eject deb`: a source package that builds with make alone
+
+Section 227's second layer, first emitter. `fmake --eject deb` writes
+`debian/` and a Makefile into the tree, and refuses if either exists --
+that packaging is somebody's. What it writes is Debian's own words for
+the plan the three installs already read:
+
+    control      Source from [project] name or the directory; Maintainer,
+                 Homepage, Section from [package]; Build-Depends derived;
+                 one Package stanza per binary package
+    rules        dh, with the Makefile as the build; cross tools from
+                 dpkg-architecture; INIT=none and the multiarch libdir on
+                 the install; one dh_installsystemd and dh_installinit
+                 call per service, carrying what [service] declined
+    changelog    VERSION, series UNRELEASED -- choosing a series is the
+                 act of uploading
+    copyright    DEP-5; the licence identified from LICENSE, the grant
+                 from the tree's SPDX lines, the year from git
+    <pkg>.install   the plan's rows for that package, under /usr, with
+                 ${DEB_HOST_MULTIARCH} where a library goes
+    <pkg>.<svc>.service, .init   links to the tree's files, not copies
+    source/format   3.0 (native), which three of four trees here use
+
+**Proved by tools fmake did not write.** The case builds the result with
+`dpkg-buildpackage -b -us -uc` and reads the result with `dpkg -c`,
+`dpkg-deb -e` and `lintian`: the program package holds the binary, the
+man page, the unit and the init script; the -dev package holds the
+header, the archive and the `.pc` under `/usr/lib/<triplet>/`; the
+postinst carries `deb-systemd-invoke`, `update-rc.d` and `invoke-rc.d`,
+which the tree never wrote; the installed `.pc` says
+`libdir=${prefix}/lib/<triplet>`; lintian reports no error. Measured on
+the way there, each an error until fixed:
+
+- `debian/<pkg>.<svc>.service` is read by debhelper **only under
+  `--name=<svc>`**; without it both glue files were silently absent from
+  the package and no maintainer script was generated at all. One call
+  per service, named, is the shape.
+- A `Multi-Arch: same` package with `libgreet.a` under `/usr/lib/` is a
+  lintian error; the archive goes under the multiarch directory, which
+  is `LIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)` on the install line and
+  `${DEB_HOST_MULTIARCH}` in the `.install` file, which debhelper
+  substitutes. The ejected Makefile's `.pc` rule then has to follow
+  `LIBDIR` rather than write `${prefix}/lib`, spelled back relative to
+  `${prefix}` where it sits under it -- `$(patsubst $(PREFIX)/%,
+  $${prefix}/%,$(LIBDIR))` -- so a plain eject is unchanged and a
+  package build gets a `.pc` that names where the library is.
+- `invoke-rc.d --skip-systemd-native`, which dh_installinit's snippet
+  uses, needs `Pre-Depends: ${misc:Pre-Depends}`; without it lintian
+  reports the snippet unsatisfied and dpkg-gencontrol reports the
+  variable defined and unused.
+- A synopsis of "greet, built by fmake" is a lintian error
+  (description-starts-with-package-name). The synopsis is a target's
+  `description`, else the first sentence of `[package] description`, and
+  is otherwise a refusal: not invented.
+- `${shlibs:Depends}` on a package holding only a static archive is a
+  dpkg-gencontrol warning; a -dev package gets `${misc:Depends}` alone.
+- `/usr/share/common-licenses/GPL` is a copy of GPL-3, so the first
+  match by name was `GPL`; the longest matching name is the licence.
+
+**Build-Depends are derived by asking dpkg.** fmake resolved each
+library through a pkg-config module; `pkg-config --variable=pcfiledir`
+says where that module's `.pc` is, and `dpkg -S` says which package
+ships it -- `zlib1g-dev`, 0.37 s per module. No table of another
+distribution's names to go stale; a module dpkg cannot place is
+reported and left to the maintainer, never guessed.
+
+**The three conditions of section 227 are checked, not assumed.** A
+service without both a unit and a sysvinit script, a declared dependency
+on `systemd`, `systemd-sysv`, `libpam-systemd` and the like, and a link
+set containing `libsystemd` are each a refusal naming the reason. A
+maintainer script named in `[debian.<pkg>]` is carried verbatim and must
+contain `#DEBHELPER#`, or the snippets that start and restart the
+service are dropped without a word -- netcfgd shipped that way for
+months.
+
+**Refused rather than invented**: no `LICENSE`, a `LICENSE` matching no
+known text, SPDX lines that disagree, no `VERSION`, no maintainer, a
+name Debian's package-name rule rejects, a service in a tree of several
+programs that does not say whose it is.
+
+What this does not do yet: the `[gentoo]` half, which is section 227's
+next emitter; runtime shared-library packages are named `lib<name><major>`
+and emitted but untested against a real shared library; and pkg-config
+modules that answer with paths are still baked into the Makefile at
+eject time, which section 227's architecture note says to defer to
+build time.
