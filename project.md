@@ -283,7 +283,8 @@ that had been green about nothing for five commits ·
 [230. `--eject deb`: a source package that builds with make alone](#230---eject-deb-a-source-package-that-builds-with-make-alone) ·
 [231. `--eject ebuild`: the same plan in Gentoo's words](#231---eject-ebuild-the-same-plan-in-gentoos-words) ·
 [232. `--release`: everything downloadable, and the page that lists it](#232---release-everything-downloadable-and-the-page-that-lists-it) ·
-[233. The ejected Makefile asks pkg-config for the places](#233-the-ejected-makefile-asks-pkg-config-for-the-places)
+[233. The ejected Makefile asks pkg-config for the places](#233-the-ejected-makefile-asks-pkg-config-for-the-places) ·
+[234. `--arch`: the compiler found from the architecture](#234---arch-the-compiler-found-from-the-architecture)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18980,3 +18981,64 @@ expand `CFLAGS` -- `_ejected_cflags` in the suite -- which is what a
 build does and a stronger witness than the text was: the deferral is
 exercised by three more cases against a real Qt, through the shell
 that fills the variable.
+
+## 234. `--arch`: the compiler found from the architecture
+
+Section 227's architecture note, the fmake half. fmake already crossed
+by naming the compiler -- `[toolchain] cc = "aarch64-linux-gnu-gcc"` or
+`$CC` -- and `_tool_prefix` read the triplet back out of the name, from
+which nm, ar and pkg-config followed. What was missing was the
+substitution the copyright holder asked for: one tree, several targets,
+from the command line.
+
+    $ fmake --arch arm64
+    * --arch arm64: building with aarch64-linux-gnu-gcc into build-aarch64/
+    $ fmake --arch arm64 --explain
+        aarch64-linux-gnu-gcc -c main.c -o ... -I. -Os
+
+**The compiler is found, not derived.** `dpkg-architecture -a<arch>
+-qDEB_HOST_GNU_TYPE` is asked for the triplet where it exists, because
+it is the object that knows Debian's spelling (`arm64` is
+`aarch64-linux-gnu`); then PATH is read for `<arch>-*-gcc` and
+`<arch>-*-clang`, which is what a Gentoo crossdev toolchain is called
+(`aarch64-unknown-linux-gnu-gcc`), `-linux-gnu-` preferred. Nothing is
+looked up in a table of triplets, which would be the table that goes
+stale. The spelling of the architecture goes through `canon_platform`,
+so `arm64`, `aarch64`, `amd64` and `x86_64` mean what they mean
+everywhere else in this file.
+
+**Two answers to "which compiler" is a refusal.** A `$CC` or
+`[toolchain] cc` whose prefix is for this architecture is kept; one for
+another is refused naming both, rather than letting `--arch` silently
+win over a compiler somebody named on purpose. The host's own
+architecture names no cross compiler and builds in place. An
+architecture with no compiler installed is refused with what was looked
+for and how to install one on Debian and on Gentoo.
+
+**Binaries land under `build-<arch>/`** unless `-o` says otherwise, and
+the build says so on its first line: two architectures built in place
+would overwrite each other's binaries under one name. The object
+directory was already per configuration, since `cc` and `arch` are in
+its key.
+
+Measured on this machine, which has `aarch64-linux-gnu-gcc`: the binary
+under `build-aarch64/` has `e_machine` 183.
+
+**And no `aarch64-linux-gnu-g++`**, which the first C++ tree found: the
+C compiler was found by architecture and C++ fell back to the host's
+`c++`, the object came out x86_64, and the mismatch message told the
+reader to declare `[toolchain] arch = 'x86_64'` -- advice that cannot
+work for somebody who has just said `--arch arm64`. Under `--arch` the
+intent is known, so the message names the package instead: `apt install
+g++-aarch64-linux-gnu`, by the triplet, which is how Debian names cross
+compilers and which the first draft got wrong as `g++-arm64-linux-gnu`.
+The ejected Makefile's `PKG_CONFIG` default is the one this
+configuration used, the prefixed one where it exists. The case reads that the way
+fmake reads it, and pins the native no-op, the missing-compiler
+refusal, and the disagreeing `$CC`.
+
+What this is not: a package build's architecture. That is
+`dpkg-buildpackage -a<arch>` against the source package, which names
+its compiler from `dpkg-architecture`'s variables in `debian/rules`
+(section 230) and asks the target's pkg-config for the places (section
+233). Neither needs the other, which is what section 227 said.

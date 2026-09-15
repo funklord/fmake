@@ -4647,6 +4647,76 @@ def _tool_prefix(cc):
 	return m.group(1) if m else None
 
 
+# Debian's spelling of an architecture, for asking dpkg-architecture
+# which triplet it means. The reverse of ARCH_SPELLINGS' Debian rows.
+DEB_ARCH = {"x86_64": "amd64", "aarch64": "arm64", "x86": "i386"}
+
+
+def compiler_for_arch(name, chosen):
+	"""The cross compiler for an architecture named on the command line.
+
+    `--arch aarch64' -- or `arm64', the spellings canon_platform knows
+    -- is a substitution for naming a compiler: one tree builds for
+    several targets from the command line, and [toolchain] keeps the
+    target that is not a plain triplet. Returns (cc, canonical arch).
+
+    The compiler is found, not derived. `dpkg-architecture' is asked for
+    the triplet where it exists, since it is the object that knows
+    Debian's spelling; then PATH is read for `<arch>-*-gcc' and
+    `<arch>-*-clang', which is what a Gentoo crossdev toolchain is
+    called. A compiler already named -- $CC or [toolchain] cc -- is kept
+    when its prefix is for this architecture and refused when it is not,
+    because two answers to "which compiler" is the fault this program
+    exists to remove. The host's own architecture names no cross
+    compiler at all.
+    """
+	want = canon_platform("arch", name)
+	if want == host_arch():
+		return chosen, want
+	have = _tool_prefix(chosen)
+	if have:
+		its = canon_platform("arch", have.split("-")[0])
+		if its == want:
+			return chosen, want
+		die(f"--arch {name} asks for {want}, and the compiler already "
+		    f"named, {chosen}, is for {its}. One of them is wrong; "
+		    f"drop $CC or [toolchain] cc, or drop --arch.")
+	looked = []
+	triplet = f"{want}-linux-gnu"
+	dpkg = shutil.which("dpkg-architecture")
+	if dpkg:
+		r = subprocess.run([dpkg, "-a" + DEB_ARCH.get(want, want),
+		                    "-qDEB_HOST_GNU_TYPE"],
+		                   capture_output=True, text=True)
+		if r.returncode == 0 and r.stdout.strip():
+			triplet = r.stdout.strip()
+			for tool in ("gcc", "clang"):
+				cand = f"{triplet}-{tool}"
+				looked.append(cand)
+				if shutil.which(cand):
+					return cand, want
+	found = []
+	for d in os.environ.get("PATH", "").split(os.pathsep):
+		try:
+			names = os.listdir(d)
+		except OSError:
+			continue
+		for n in names:
+			if (n.startswith(want + "-") and n.endswith(("-gcc", "-clang"))
+			        and os.access(os.path.join(d, n), os.X_OK)):
+				found.append(n)
+	looked.append(f"{want}-*-gcc and {want}-*-clang on PATH")
+	if found:
+		# -linux-gnu- first, the common one; then whatever is there.
+		found.sort(key=lambda n: (0 if "-linux-gnu-" in n else 1, n))
+		return found[0], want
+	die(f"no compiler for {want} is installed here; looked for "
+	    f"{', '.join(looked)}.\n"
+	    f"    Debian: apt install gcc-{triplet}    "
+	    f"Gentoo: crossdev -t {want}-unknown-linux-gnu\n"
+	    f"    or name one outright with [toolchain] cc.")
+
+
 def find_nm(configured=None):
 	for cand in (os.environ.get("NM"), configured, "nm", "llvm-nm", "gnm"):
 		if cand and shutil.which(cand):
@@ -4671,6 +4741,11 @@ class Config:
 		# machine, and its objects are foreign on purpose.
 		self.for_build_machine = getattr(args, "use_build_toolchain", False)
 		self.cc      = os.environ.get("CC")  or tool.get("cc", "cc")
+		# --arch, a compiler chosen by architecture. Not for a tool built
+		# to run here, which is the build machine's business.
+		self.arch_named = None
+		if getattr(args, "arch", None) and not self.for_build_machine:
+			self.cc, self.arch_named = compiler_for_arch(args.arch, self.cc)
 		# aarch64-linux-gnu-gcc implies aarch64-linux-gnu-nm and -ar. Naming
 		# the compiler should be enough; a host nm can often read foreign
 		# objects, but relying on that is luck rather than design.
@@ -4721,7 +4796,8 @@ class Config:
 		# in ELF_MACHINES, which switched the architecture check off
 		# without saying anything.
 		self.os      = canon_platform("os", tool.get("os") or host_os())
-		self.arch    = canon_platform("arch", tool.get("arch") or host_arch())
+		self.arch    = (self.arch_named
+		                or canon_platform("arch", tool.get("arch") or host_arch()))
 
 		# Three bands, general to specific: defaults and fmake.toml, then
 		# each file's own annotations, then the command line. Later wins at
@@ -5606,6 +5682,16 @@ def check_object_arch(u, cfg):
 		# has not said so: a compiler told to target another machine by a
 		# flag rather than by its name -- clang's --target, and every
 		# unprefixed toolchain -- looks exactly like a mistake from here.
+		if getattr(cfg, "arch_named", None) and u.cxx:
+			# --arch found a C compiler and C++ fell back to the host's,
+			# because no <triplet>-g++ is installed. The intent is known,
+			# so the remedy is the package, not a declaration.
+			die(f"{u.rel} compiled for {describe_identity(ident)}, but "
+			    f"--arch asked for {cfg.arch}\n"
+			    f"    {cfg.cc} is here and no C++ compiler beside it is: "
+			    f"the C++ went to {cfg.driver(u.cxx)!r}, the host's\n"
+			    f"    Debian: apt install g++-{(cfg.prefix or '').rstrip('-')}"
+			    f"    or name one with [toolchain] cxx")
 		die(f"{u.rel} compiled for {describe_identity(ident)}, but this "
 		    f"tree is being built for {cfg.os}/{cfg.arch}\n"
 		    f"    the compiler used was {cfg.driver(u.cxx)!r}\n"
@@ -8358,6 +8444,13 @@ def build(args, _bootstrapping=False):
 	# elsewhere. An absolute path is unaffected: os.path.join keeps it.
 	outdir = (os.path.abspath(os.path.join(root, args.output))
 	          if args.output else root)
+	if args.arch and not args.output and cfg.arch != host_arch():
+		# Two architectures built in place would overwrite each other's
+		# binaries under one name. A cross build named by --arch lands
+		# under build-<arch>/ unless -o says otherwise, and says so.
+		outdir = os.path.join(root, f"build-{cfg.arch}")
+		info(f"--arch {args.arch}: building with {cfg.cc} into "
+		     f"build-{cfg.arch}/")
 	if args.run and not args.output:
 		# Nothing appears beside the script. The answer to "does it clean
 		# up" is that it never dirties: the binary and its objects live
@@ -11563,7 +11656,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# architecture, with PKG_CONFIG=<triplet>-pkg-config -- resolves")
 		a("# for itself. Which modules, and which -l names, fmake decided by")
 		a("# symbol and has written below; only the places are asked for.")
-		a(f"PKG_CONFIG ?= pkg-config")
+		# The one this configuration used: a cross build named by --arch
+		# or a prefixed compiler reaches `<triplet>-pkg-config' where it
+		# exists, and the Makefile should default to the same rather than
+		# to the host's.
+		a(f"PKG_CONFIG ?= {os.path.basename(cfg.pkgexe or 'pkg-config')}")
 		for module, name in sorted(used.items()):
 			cf, _libs, dirs = deferred[module]
 			if any(f.startswith(PATH_CFLAGS) for f in cf):
@@ -15038,6 +15135,11 @@ def parse_args(argv):
 	                    "script, by shebang or binfmt_misc")
 	p.add_argument("-o", "--output", default=None,
 	               help="where to put the binaries (default: project root)")
+	p.add_argument("--arch", default=None, metavar="NAME",
+	               help="build for an architecture: aarch64, arm64, "
+	                    "riscv64, amd64 ... The cross compiler is found by "
+	                    "asking dpkg-architecture and reading PATH; binaries "
+	                    "land under build-<arch>/ unless -o says otherwise")
 	# "the inferred build" did not tell anybody that the exact compile and
 	# link lines are in it, which is the thing people go looking for.
 	p.add_argument("--explain", action="store_true",

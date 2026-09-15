@@ -7892,6 +7892,83 @@ def an_ejected_makefile_asks_pkg_config_for_the_places(t):
 		u.cleanup()
 
 
+@case
+def an_architecture_named_on_the_command_line_finds_its_compiler(t):
+	"""Section 227's architecture note, the fmake half: `--arch'.
+
+    fmake crossed by naming the compiler, `[toolchain] cc' or $CC, and
+    reads the triplet back out of the name. `--arch aarch64' -- or
+    `arm64', a spelling canon_platform knows -- is the substitution: the
+    compiler is FOUND, by asking dpkg-architecture for the triplet where
+    it exists and reading PATH for `<arch>-*-gcc' and `-clang', which is
+    what a crossdev toolchain is called. The binaries land under
+    build-<arch>/ unless -o says otherwise, since two architectures built
+    in place would overwrite each other under one name.
+
+    Asserted with the cross compiler the suite already requires for its
+    other cross cases: the binary under build-aarch64/ is an AArch64
+    ELF, read the way fmake reads it; the host's own architecture names
+    no cross compiler and builds in place; an architecture nobody has a
+    compiler for is refused naming what was looked for and how to
+    install one; and a $CC for another architecture is refused naming
+    both, since two answers to "which compiler" is the fault this
+    program exists to remove.
+    """
+	if not _cross_available():
+		raise Skip(_cross_reason())
+	t.write("main.c", '#include <stdio.h>\nint main(void){ puts("hi"); return 0; }\n')
+	name = os.path.basename(t.dir)
+	r = t.fmake("--arch", "arm64")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--arch arm64 failed: {said}")
+	prog = os.path.join(t.dir, "build-aarch64", name)
+	check(os.path.isfile(prog), f"no binary under build-aarch64/: {said}")
+	check(_elf_machine(prog) == 183,
+	      f"build-aarch64/{name} is not an AArch64 ELF: e_machine "
+	      f"{_elf_machine(prog)}")
+	check("into build-aarch64/" in said, f"the build did not say where: {said}")
+	check(not os.path.exists(os.path.join(t.dir, name)),
+	      "a cross build also wrote a binary in place")
+
+	r = t.fmake("--arch", platform.machine())
+	check(r.returncode == 0 and os.path.isfile(os.path.join(t.dir, name)),
+	      f"--arch with the host's own architecture did not build in place: "
+	      f"{r.stdout}{r.stderr}")
+
+	r = t.fmake("--arch", "s390x")
+	said = r.stdout + r.stderr
+	check(r.returncode != 0 and "no compiler for s390x" in said
+	      and "looked for" in said,
+	      f"an architecture with no compiler was not refused as such: {said}")
+
+	r = t.fmake("--arch", "arm64", env={"CC": "x86_64-linux-gnu-gcc"})
+	said = r.stdout + r.stderr
+	check(r.returncode != 0 and "One of them is wrong" in said,
+	      f"a $CC for another architecture was not refused: {said}")
+
+	# C++ under --arch: the C compiler was found by architecture and the
+	# C++ one follows from its prefix. Where no <triplet>-g++ is installed
+	# the C++ falls back to the host's, the object comes out for the wrong
+	# machine, and the message has to name the package rather than tell
+	# the reader to declare an architecture they just named.
+	u = Tree("arch-cxx")
+	try:
+		u.write("main.cpp", "#include <cstdio>\nint main(){ std::puts(\"hi\"); return 0; }\n")
+		r = u.fmake("--arch", "arm64")
+		said = r.stdout + r.stderr
+		if shutil.which("aarch64-linux-gnu-g++"):
+			check(r.returncode == 0 and _elf_machine(os.path.join(
+			          u.dir, "build-aarch64", os.path.basename(u.dir))) == 183,
+			      f"a C++ cross build with the cross g++ installed failed: {said}")
+		else:
+			check(r.returncode != 0 and "g++-aarch64-linux-gnu" in said
+			      and "no C++ compiler beside it" in said,
+			      f"C++ fell back to the host's and the message did not name "
+			      f"the missing package: {said}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -557,6 +557,14 @@ Declare `arch` whenever the compiler targets by flag. Without it the build
 is refused — from fmake's side, a compiler cross-compiling by flag looks
 exactly like the wrong compiler.
 
+**`--arch NAME` on the command line is the same thing without the file.**
+The compiler is found rather than derived — `dpkg-architecture` is asked
+for the triplet where it exists, then PATH is read for `<arch>-*-gcc` and
+`<arch>-*-clang`, which is what a crossdev toolchain is called — and the
+binaries land under `build-<arch>/` so two architectures do not overwrite
+each other. A `$CC` or `[toolchain] cc` for a different architecture is
+refused naming both.
+
 **And those flags reach the questions.** `[project] cflags` are on the
 command line when fmake asks `-print-multiarch` and `-print-search-dirs`,
 so a `--target` or an `-m32` there moves the triplet and the library search
@@ -880,6 +888,7 @@ fmake --eject > Makefile leave, taking the build with you
 fmake --eject deb        write debian/ and a Makefile; dpkg-buildpackage does the rest
 fmake --eject ebuild     write gentoo/<category>/<name>/ and the Makefile
 fmake --release          everything downloadable, with checksums, and a page
+fmake --arch arm64       build for another architecture, into build-aarch64/
 fmake --clean            remove .fmake/
 fmake -i                 answer what it will not guess, once
 ```
@@ -913,6 +922,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `-i` | ask about what fmake will not guess, and write the answers into `fmake.toml` |
 | `--cflags 'FLAGS'` | replace the default `-Os`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
+| `--arch NAME` | build for an architecture (`aarch64`, `arm64`, `riscv64`…); the cross compiler is found by asking `dpkg-architecture` and reading PATH, and binaries land under `build-<arch>/` unless `-o` says otherwise |
 | `--explain` | print every decision and why, and build nothing |
 | `--release` | build, then write `release/`: source tarball from git, binary tarball, the `.deb` built from that tarball where `debian/` is committed, the ebuild, `SHA256SUMS`, and an `index.html` with the README rendered through pandoc where it is installed |
 | `--eject [make\|make-fragment\|ninja\|deb\|ebuild]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile; `deb` writes `debian/` and a Makefile into the tree, `ebuild` writes `gentoo/<category>/<name>/` and the Makefile |
