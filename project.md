@@ -282,7 +282,8 @@ that had been green about nothing for five commits ·
 [229. Services: one declaration, and the machine decides which glue](#229-services-one-declaration-and-the-machine-decides-which-glue) ·
 [230. `--eject deb`: a source package that builds with make alone](#230---eject-deb-a-source-package-that-builds-with-make-alone) ·
 [231. `--eject ebuild`: the same plan in Gentoo's words](#231---eject-ebuild-the-same-plan-in-gentoos-words) ·
-[232. `--release`: everything downloadable, and the page that lists it](#232---release-everything-downloadable-and-the-page-that-lists-it)
+[232. `--release`: everything downloadable, and the page that lists it](#232---release-everything-downloadable-and-the-page-that-lists-it) ·
+[233. The ejected Makefile asks pkg-config for the places](#233-the-ejected-makefile-asks-pkg-config-for-the-places)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18918,3 +18919,64 @@ verifies `SHA256SUMS` with `sha256sum -c`, reads the binary tarball's
 listing, reads the page's links, and asserts the pandoc arm or the
 linked arm according to what the machine has. Refused, each through its
 message: a second release over `release/`, a dirty tree, no git.
+
+## 233. The ejected Makefile asks pkg-config for the places
+
+Section 227's architecture note, made true. An ejected Makefile carried
+`-I/usr/include/x86_64-linux-gnu/qt6` baked in from the machine that
+ejected it, so a source package built elsewhere, or for another
+architecture, compiled against the ejecting machine's Qt. Measured on a
+tree of one `QCoreApplication`:
+
+    before   CXXFLAGS = -I. -I/usr/include/x86_64-linux-gnu/qt6/QtCore \
+                        -I/usr/include/x86_64-linux-gnu/qt6 \
+                        -I/usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -fPIC
+    after    PKG_CONFIG ?= pkg-config
+             PKG_QT6CORE_CFLAGS := $(shell $(PKG_CONFIG) --cflags Qt6Core)
+             CXXFLAGS = -I. $(PKG_QT6CORE_CFLAGS) -fPIC
+
+**The rule is about places, not modules.** A module whose answer is
+only `-l` names -- zlib's `-lz` -- resolves through whichever compiler
+is asked, stays baked, and its tree ejects byte-for-byte what it did
+before; measured. A module whose answer names a directory, in `-I`,
+`-isystem`, `-idirafter`, `-iquote`, `-F` or `-L`, is deferred: one
+variable per module, filled at build time, read everywhere the module's
+flags stood -- `CFLAGS`, a unit's own `@pkg` flags, the link line's
+`-L`. **The `-l` names stay written**, because fmake chose them by
+symbol and `pkg-config --libs` would hand back every library the module
+lists, `-ltinfo` beside `-lncursesw`, which is the imprecision this
+program exists to remove. Only `--libs-only-L` is asked. `-fPIC`, which
+fmake adds for Qt itself, is not pkg-config's and stays.
+
+`PKG_CONFIG` is left unprefixed in a fragment on purpose: it is the
+conventional name, and `?=` yields to whatever the parent Makefile set.
+A cross package build passes `PKG_CONFIG=<triplet>-pkg-config`, which
+is what debhelper does, and the same Makefile resolves for the target.
+
+**ninja is not deferred**, and the reason is measured rather than
+assumed: ninja has no parse-time shell, so a deferred module would be
+one pkg-config run per compile rather than one per build. The Makefile
+is what a source package builds with; the ninja file is for the tree's
+own builds on the machine that ejected it.
+
+The case carries its own module -- a `foo.pc` under `PKG_CONFIG_PATH`
+with `-I` and `-L` into a prefix of its own, so nothing depends on what
+the machine has -- and its control is the part that matters: with
+`PKG_CONFIG=false` the ejected build cannot find `foo.h`, which is what
+says the places come from pkg-config at build time and from nowhere
+else. Against the fmake before this change the case fails on the first
+line it looks for.
+
+**What the suite said, and what it was right about.** Four cases failed
+on the first run. One was a defect the change introduced: a unit's
+deferred flags were keyed by source path, and one source compiled twice
+with two sets of flags -- a target variant with its own `-D` -- is two
+objects, so the second's flags reached both; keyed by object now, and
+`the_ejected_builds_keep_both_objects` is the case that said so. The
+other three read `-I/usr/include/.../qt6` out of the ejected text to
+decide which Qt major the flags name, and the text no longer carries
+the directory, it carries the module. Those cases now ask make to
+expand `CFLAGS` -- `_ejected_cflags` in the suite -- which is what a
+build does and a stronger witness than the text was: the deferral is
+exercised by three more cases against a real Qt, through the shell
+that fills the variable.

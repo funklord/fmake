@@ -7817,6 +7817,81 @@ def a_release_carries_everything_downloadable_with_its_checksum(t):
 		u.cleanup()
 
 
+@case
+def an_ejected_makefile_asks_pkg_config_for_the_places(t):
+	"""Section 227's architecture note, made true for the Makefile.
+
+    A source package is built on a machine fmake never saw, for an
+    architecture it may not have, and an ejected Makefile carried
+    `-I/usr/include/x86_64-linux-gnu/qt6' baked in from the machine that
+    ejected it. A module whose answer is only `-l' names -- zlib's `-lz'
+    -- resolves through whichever compiler is asked and stays as it
+    was. One whose answer names a directory is deferred: the Makefile
+    declares `PKG_CONFIG ?= pkg-config' and one variable per such module,
+    filled by `$(shell $(PKG_CONFIG) --cflags M)' and `--libs-only-L M'
+    at build time, and every place the module's flags stood -- CFLAGS,
+    a unit's own @pkg flags, the link line's -L -- reads the variable
+    instead. The `-l' names fmake chose by symbol stay written down.
+
+    The module is a fixture of this case's own, found through
+    PKG_CONFIG_PATH, so nothing here depends on what the machine has
+    installed. Asserted: the variables are declared, no path into the
+    fixture's prefix survives in the Makefile, `-lfoo' does, the build
+    runs -- and the control, which is what says the flags come from
+    pkg-config at build time rather than from anywhere else: with
+    PKG_CONFIG=false the compile cannot find the header. Then a tree
+    whose only module answers with names ejects byte-for-byte what it
+    ejected before there was any deferral.
+    """
+	dep = os.path.join(t.dir, "dep")
+	t.write("dep/include/foo.h", "int foo(void);\n")
+	t.write("dep/foo.c", "int foo(void){ return 42; }\n")
+	r = _run_in(dep, "sh", "-c", "cc -c foo.c -o foo.o && mkdir -p lib && ar rcs lib/libfoo.a foo.o")
+	check(r.returncode == 0, f"could not build the fixture library: {r.stderr}")
+	t.write("dep/lib/pkgconfig/foo.pc",
+	        f"prefix={dep}\nlibdir=${{prefix}}/lib\nincludedir=${{prefix}}/include\n"
+	        "Name: foo\nDescription: fixture\nVersion: 1.0\n"
+	        "Libs: -L${libdir} -lfoo\nCflags: -I${includedir}\n")
+	t.write("src/main.c", "/*! @pkg foo */\n#include <stdio.h>\n#include <foo.h>\n"
+	        'int main(void){ printf("%d\\n", foo()); return 0; }\n')
+	src = os.path.join(t.dir, "src")
+	env = {"PKG_CONFIG_PATH": os.path.join(dep, "lib", "pkgconfig")}
+	e = _run_in(src, FMAKE, "--eject", "make", env=env)
+	check(e.returncode == 0, f"--eject make failed: {e.stderr}")
+	mk = e.stdout
+	for line in ("PKG_CONFIG ?= pkg-config",
+	             "PKG_FOO_CFLAGS := $(shell $(PKG_CONFIG) --cflags foo)",
+	             "PKG_FOO_LDIRS := $(shell $(PKG_CONFIG) --libs-only-L foo)",
+	             "$(PKG_FOO_LDIRS) -lfoo"):
+		check(line in mk, f"the Makefile lacks {line!r}:\n{mk}")
+	check(dep not in mk,
+	      f"a path into the fixture's prefix survives in the Makefile:\n{mk}")
+	t.write("src/Makefile", mk)
+	b = _run_in(src, "make", "-s", env=env)
+	check(b.returncode == 0, f"the ejected build failed: {b.stdout}{b.stderr}")
+	check(_run_in(src, "./src").stdout == "42\n", "the program is wrong")
+	# The control: the places come from pkg-config at build time, or the
+	# header is not found.
+	_run_in(src, "make", "-s", "clean", env=env)
+	b = _run_in(src, "make", "-s", "PKG_CONFIG=false", env=env)
+	check(b.returncode != 0 and "foo.h" in b.stdout + b.stderr,
+	      f"with PKG_CONFIG=false the build still found foo.h, so the "
+	      f"flags did not come from pkg-config: {b.stdout}{b.stderr}")
+
+	# A module answering with names only is left exactly as it was.
+	u = Tree("defer-names")
+	try:
+		u.write("main.c", "#include <stdio.h>\n#include <zlib.h>\n"
+		        'int main(void){ printf("%s\\n", zlibVersion()); return 0; }\n')
+		e = u.fmake("--eject", "make")
+		if e.returncode != 0:
+			raise Skip("zlib is not installed, so the names-only half is untested")
+		check("PKG_CONFIG" not in e.stdout and "-lz" in e.stdout,
+		      f"a names-only module was deferred:\n{e.stdout}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
@@ -13714,6 +13789,26 @@ int main(){ return 0; }
 	      f"fail and proves nothing: {probe.stderr[:300]}")
 
 
+def _ejected_cflags(t, *args, env=None):
+	"""The compile flags an ejected Makefile would use, expanded by make.
+
+	Section 233 made the Makefile ask pkg-config for a module's places
+	at build time, so the text no longer carries `-I/usr/include/.../qt6'
+	-- it carries `$(shell $(PKG_CONFIG) --cflags Qt6Core)'. A case that
+	wants to know which directories the compile is given has to ask make,
+	which is what a build does. Returns (expanded CFLAGS, the text).
+	"""
+	out = t.fmake("--eject", *args, env=env).stdout
+	probe = os.path.join(t.dir, "Makefile.probe")
+	with open(probe, "w") as fh:
+		fh.write(out + "\n.PHONY: fmake-probe-cflags\nfmake-probe-cflags:\n"
+		         "\t@echo $(CFLAGS)\n")
+	r = _run_in(t.dir, "make", "-s", "-f", probe, "fmake-probe-cflags",
+	            env=env)
+	check(r.returncode == 0, f"make could not expand CFLAGS: {r.stderr}")
+	return r.stdout, out
+
+
 @case
 def every_qt_flag_comes_from_one_major(t):
 	"""Two Qts installed must not both reach one command line.
@@ -13768,8 +13863,8 @@ int main(){ counter c; (void)c; return 0; }
 	# The flags themselves, read back out of the ejected build rather than
 	# inferred from the compile having worked. A mixture that happens to
 	# compile is still a tree linking two Qts.
-	out = t.fmake("--eject").stdout
-	named = sorted(m for m, d in roots.items() if f"-I{d}" in out)
+	flags, out = _ejected_cflags(t)
+	named = sorted(m for m, d in roots.items() if f"-I{d}" in flags)
 	check(len(named) == 1,
 	      f"the emitted flags name {len(named)} Qt majors rather than one, "
 	      f"which is the mixture Qt refuses: {named}")
@@ -13999,7 +14094,7 @@ int main(){ counter c; (void)c; return 0; }
 	      f"naming {wanted}'s moc did not give a build that compiles, which "
 	      f"is the mixture the preference exists to stop: {r.stdout}{r.stderr}")
 
-	out = t.fmake("--eject", env=env).stdout
+	out, _text = _ejected_cflags(t, env=env)
 	check(f"-I{root}" in out,
 	      f"the flags do not name {wanted}, whose moc was named: {root}")
 	check(f"-I{found[other][1]}" not in out,
@@ -14077,7 +14172,7 @@ int main(){ counter c; (void)c; return 0; }
 	      f"a moc under a {decoy}-shaped path did not build against "
 	      f"{default}: {r.stdout}{r.stderr}")
 
-	out = t.fmake("--eject", env=env).stdout
+	out, _text = _ejected_cflags(t, env=env)
 	check(f"-I{default_root}" in out,
 	      f"the flags left {default}, which is the default and the major "
 	      f"the named moc really is: {default_root}")
