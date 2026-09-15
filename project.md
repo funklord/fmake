@@ -276,7 +276,8 @@ that had been green about nothing for five commits ·
 [223. The nm that was not part of what it decided](#223-the-nm-that-was-not-part-of-what-it-decided) ·
 [224. The cache that did not say which fmake wrote it](#224-the-cache-that-did-not-say-which-fmake-wrote-it) ·
 [225. Two artifacts of one name, sharing one cache entry](#225-two-artifacts-of-one-name-sharing-one-cache-entry) ·
-[226. The generator that kept the old tool's output](#226-the-generator-that-kept-the-old-tools-output)
+[226. The generator that kept the old tool's output](#226-the-generator-that-kept-the-old-tools-output) ·
+[227. Packaging: one model, emitted in each format's own language](#227-packaging-one-model-emitted-in-each-formats-own-language)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18164,3 +18165,170 @@ One limit to pin either way: `build_tool` does not build under `-n` and
 says so, so the tool cannot be part of the key there. A dry run can
 already call a rule fresh that a real build re-runs; that stays as it is
 rather than being traded for a louder wrong answer.
+
+## 227. Packaging: one model, emitted in each format's own language
+
+**A design, asked for by the copyright holder 2026-09-15 and not yet
+built.** Debian, Devuan and Ubuntu packaging (one format, `deb`), and
+Gentoo (`ebuild`), from the facts fmake already holds plus the ones it
+does not, with each emitter writing its format's own names and behaviour
+-- the way `--eject make` and `--eject ninja` already say one thing in two
+languages, and `--install` says it in a third.
+
+### What the trees already do by hand, measured
+
+Eleven of the private trees carry a `debian/`. Read across all of them,
+most of it is mechanical and derivable from what fmake knows:
+
+- `Package:` per program, a `-dev` per library (situ: `situc` +
+  `libsitu-dev`; ossacli: `ossacli` + `libossa-dev`).
+- `<pkg>.install` lists -- `usr/bin/situc`, `usr/include/situ.h`,
+  `usr/lib/libsitu.a` -- which are `install_plan` verbatim.
+- `debian/rules`: `dh $@` and an install override passing `PREFIX=/usr
+  DESTDIR=...`, which is `fmake --install --prefix /usr --destdir`.
+- `Architecture: any` for compiled, `all` for a script; `Depends:
+  ${shlibs:Depends}, ${misc:Depends}`; the version from `VERSION`, which
+  every tree already gates `debian/changelog` against.
+
+And a part that is **policy with reasons**, which no generator may invent
+and every emitter must carry verbatim: netcfgd's `control` spends thirty
+lines explaining why `wpasupplicant` is a Recommends and `netcfgd-nm` a
+Suggests; its `postinst` is 150 lines, nearly all justification; its
+`rules` passes `dh_installsystemd --no-enable --no-start` because
+debhelper's default -- enable and start on install -- is exactly what
+that package must not do, and it took a session to notice the generated
+snippet contradicting the hand-written header in the same file.
+
+What is missing from fmake's model today is the class of thing these
+trees keep under `packaging/`: systemd units, sysvinit and OpenRC scripts,
+a procd script, `.desktop` files, icons, metainfo, man pages, sysusers,
+D-Bus policy, an APKBUILD. `install_plan` knows four directories --
+`bindir`, `libdir`, `includedir`, `pkgconfigdir` -- and none of those.
+
+### The shape
+
+Two layers, and the first is worth having without the second.
+
+**Layer 1 -- one install model, wider.** The facts belong to no single
+source file, so by fmake's own rule they go in `fmake.toml`:
+
+    [package]
+    homepage    = "https://github.com/funklord/fmake"
+    maintainer  = "Nabeel Sowan <nabeel@vibes.se>"
+    license     = "GPL-3.0-or-later"     # declared, never defaulted
+    description = """..."""              # the long one
+
+    [install]
+    man     = ["doc/fmake.1"]
+    desktop = ["packaging/se.vibes.bbq-predictor.desktop"]
+    icons   = ["packaging/se.vibes.bbq-predictor.svg"]
+    data    = ["packaging/probe/default:share/netcfgd/probe/"]
+
+    [service.netcfgd]
+    systemd  = "packaging/systemd/netcfgd.service"
+    sysvinit = "packaging/sysvinit/netcfgd"
+    openrc   = "packaging/openrc/netcfgd"
+    enable   = false                      # the default; see below
+    start    = false
+
+Then `--install`, `--eject make`, `--eject ninja` and `--explain` all
+place and list these through `install_plan`, exactly as they do headers
+today. Devuan is why the service entry carries all three inits rather
+than one: same package format as Debian, no systemd, so the sysvinit or
+OpenRC script is the one that runs.
+
+**Layer 2 -- the emitters.** `--eject deb` writes `debian/`; `--eject
+ebuild` writes `<category>/<name>/<name>-<version>.ebuild`. Each reads
+the same plan and the same `[package]`, and each has a sub-table for what
+cannot be abstracted:
+
+    [package.netcfgd.debian]
+    section    = "net"
+    recommends = ["wpasupplicant", "dhcpcd-base"]
+    suggests   = ["netcfgd-nm", "hostapd", ...]
+    postinst   = "debian/postinst"        # carried verbatim
+
+    [package.netcfgd.gentoo]
+    category = "net-misc"
+    rdepend  = ["net-wireless/wpa_supplicant"]
+    iuse     = ["gui"]
+
+**Dependency names are the hard part, and fmake already holds the
+abstract form of most of them.** A library is resolved through
+pkg-config, so the module name -- `ncursesw`, `Qt6Widgets` -- is the fact
+fmake knows. On a Debian machine `dpkg -S` maps that `.pc` file to its
+`-dev` package; on a Gentoo machine `portageq owners` does the same. So
+build-dependencies can be derived on a machine that has the format,
+recorded, and overridden by hand where the mapping is wrong -- asking the
+object, rather than carrying a table of two distributions' names that
+goes stale. Runtime dependencies on *programs* (a supplicant, a DHCP
+client) have no abstract form and stay hand-written per format, with the
+reasons beside them.
+
+### `VERSION` and `LICENSE` at the root are the source, not a key
+
+Added by the copyright holder the same day: read the two root files
+directly rather than restating either in `fmake.toml`. Measured across
+the sixteen private trees: every one carries `VERSION` (and
+`code-style.md` already says a build reads it for the package version
+and for whatever the program prints); four carry `LICENSE` -- fmake,
+apt-emerge and ossacli with the full GPL-3 text byte-for-byte from
+`/usr/share/common-licenses/GPL-3`, openmlx4 with a one-paragraph
+notice naming it -- and twelve deliberately carry none. fmake already
+reads `VERSION` once, for `version_fallbacks`; this widens that read.
+
+- **`VERSION`** supplies the package version, `debian/changelog`'s
+  entry, the ebuild's filename, and a target's `version` where none is
+  declared. That last one changes existing behaviour: `.pc` generation
+  is opt-in through `version` today so that no number is invented, and a
+  number the holder wrote in `VERSION` is not invented -- but a tree
+  holding a library and a `VERSION` file would start publishing a `.pc`
+  on install where it did not before. Worth saying once, because the
+  first tree to notice will notice at install time.
+- **`LICENSE`** is *identified*, never chosen. The emitter matches the
+  file's text against the licences the machine knows
+  (`/usr/share/common-licenses/` on Debian, the SPDX text where it is
+  installed) and writes the format's own spelling of what it found --
+  `GPL-3.0-or-later` for `debian/copyright`, `GPL-3+` for `LICENSE=` in
+  an ebuild. A file it cannot identify, or no file at all, is a refusal
+  naming the file, not a guess and not a key to fill in: a tree with no
+  `LICENSE` is in its intended state, and one whose text matches nothing
+  known is the holder's to look at. No `[package] license` key exists,
+  because it would be the second place.
+- The programs that print a licence line (`fmake -V`, `emerge
+  --version`) carry it as a constant today, which is a third place. Out
+  of scope here and worth knowing.
+
+### The decisions, and whose they are
+
+1. **Licence.** Settled above: read `LICENSE`, identify, refuse otherwise.
+   What remains the copyright holder's is which trees carry one.
+2. **Package split.** Default one package per program and one `-dev` per
+   library, which is what situ and ossacli do by hand; `[package.<name>]`
+   with `targets = [...]` to say otherwise. The alternative, one package
+   per tree, is what most of the eleven have and is the degenerate case
+   of the same rule.
+3. **Services on install.** Debian policy and debhelper enable and start;
+   every tree here that ships a unit chooses not to, and Gentoo never
+   does. Default `enable = false`, so the generated `rules` passes
+   `--no-enable --no-start` and the ebuild does nothing, and a package
+   that wants Debian's default says so. Cost: one line in the tree that
+   wants the other behaviour, against a silent takeover in the tree that
+   forgot.
+4. **Who builds inside the package.** `debian/rules` can call `fmake`
+   (then fmake is a Build-Depends and must be packaged first, which it
+   is), or fmake can eject a Makefile beside the `debian/` so the source
+   package builds with make alone. The second keeps the package
+   self-contained and is what the README rule already produces; the
+   first keeps one build. Recommended: eject the Makefile too, since a
+   source package that needs the tool that generated it is a
+   bootstrapping problem for every distribution but this one.
+5. **Maintainer scripts and description prose** are carried from files
+   the tree names, never synthesised. netcfgd's `postinst` is the case
+   that decides it.
+
+### What is deliberately out
+
+Alpine (`APKBUILD`), OpenWrt (`procd`), Android: netcfgd carries the
+first two by hand and four trees carry the third through
+`tool/android.mk`. Same model, later emitters, and not part of this.
