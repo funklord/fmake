@@ -524,6 +524,10 @@ description = "Greets whoever connects."   # long; a target's own is the synopsi
 recommends = ["zlib1g"]         # runtime programs have no abstract form
 postinst   = "debian-src/postinst"         # carried verbatim; needs #DEBHELPER#
 
+[gentoo]                        # one ebuild per tree, in Portage's words
+category = "app-misc"
+src-uri  = "https://example.invalid/greet/greet-${PV}.tar.gz"  # where a
+                                # release lives is nothing a tree can state
 [service.greetd]                # a daemon: the glue for each init
 systemd  = "packaging/greetd.service"
 sysvinit = "packaging/greetd.init"    # an LSB script
@@ -874,6 +878,8 @@ fmake --explain          print every decision and why
 fmake --install          install artifacts and @headers
 fmake --eject > Makefile leave, taking the build with you
 fmake --eject deb        write debian/ and a Makefile; dpkg-buildpackage does the rest
+fmake --eject ebuild     write gentoo/<category>/<name>/ and the Makefile
+fmake --release          everything downloadable, with checksums, and a page
 fmake --clean            remove .fmake/
 fmake -i                 answer what it will not guess, once
 ```
@@ -908,7 +914,8 @@ Every flag the program accepts, which is the same list `--man` and
 | `--cflags 'FLAGS'` | replace the default `-Os`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
 | `--explain` | print every decision and why, and build nothing |
-| `--eject [make\|make-fragment\|ninja\|deb]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile; `deb` writes `debian/` and a Makefile into the tree |
+| `--release` | build, then write `release/`: source tarball from git, binary tarball, the `.deb` built from that tarball where `debian/` is committed, the ebuild, `SHA256SUMS`, and an `index.html` with the README rendered through pandoc where it is installed |
+| `--eject [make\|make-fragment\|ninja\|deb\|ebuild]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile; `deb` writes `debian/` and a Makefile into the tree, `ebuild` writes `gentoo/<category>/<name>/` and the Makefile |
 | `--force-link SRC` | link a file no symbol reaches |
 | `--widen-all` | compile the whole tree before deciding the link set |
 | `--no-submodules` | do not fetch the git submodules this tree vendors |

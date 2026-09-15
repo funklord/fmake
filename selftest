@@ -7625,6 +7625,198 @@ def u_toml(u):
 		return fh.read()
 
 
+@case
+def an_ebuild_is_ejected_in_gentoos_words(t):
+	"""Section 227's other emitter, proved by reading, and it says so.
+
+    No Portage is installed here, so nothing can build the result: the
+    proof is the text, and this case is honest about which half that is.
+    Asserted: the file lands at gentoo/<category>/<name>/<name>-<VERSION>
+    .ebuild with a metadata.xml naming the maintainer; `bash -n' accepts
+    it, since an ebuild is bash; EAPI, DESCRIPTION, HOMEPAGE, SRC_URI,
+    LICENSE, SLOT and KEYWORDS are present; LICENSE is spelled the way
+    Gentoo spells a grant -- `GPL-3+' for the tree whose SPDX lines say
+    or-later, `GPL-3' for the tree with none; the unit and the openrc
+    script go in through systemd_dounit and newinitd after an install
+    with INIT=none; the postinst only SAYS to restart, and no line of the
+    ebuild calls systemctl, rc-service or rc-update; a module Portage
+    could not be asked about is named in a comment beside RDEPEND rather
+    than guessed.
+
+    Then the refusals: no category, no src-uri, a service with no openrc
+    script, a gentoo/ already there.
+    """
+	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
+		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
+	_deb_tree(t)
+	t.write("src/packaging/greetd.openrc",
+	        "#!/sbin/openrc-run\ncommand=/usr/bin/greetd\n")
+	t.write("src/fmake.toml", u_toml(t).replace(
+	    'sysvinit = "packaging/greetd.init"\n',
+	    'sysvinit = "packaging/greetd.init"\nopenrc   = "packaging/greetd.openrc"\n')
+	    + '\n[gentoo]\ncategory = "app-misc"\n'
+	      'src-uri  = "https://example.invalid/greetd/greetd-${PV}.tar.gz"\n')
+	r = _deb(t, "--eject", "ebuild")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--eject ebuild failed: {said}")
+	path = os.path.join(_src(t), "gentoo", "app-misc", "greetd",
+	                    "greetd-0.4.1.ebuild")
+	check(os.path.isfile(path), f"no ebuild at {path}")
+	check(os.path.isfile(os.path.join(os.path.dirname(path), "metadata.xml")),
+	      "no metadata.xml beside the ebuild")
+	check(os.path.isfile(os.path.join(_src(t), "Makefile")),
+	      "no Makefile beside gentoo/")
+	with open(path) as fh:
+		text = fh.read()
+	syntax = subprocess.run(["bash", "-n", path], capture_output=True,
+	                        text=True)
+	check(syntax.returncode == 0, f"bash -n rejects the ebuild: {syntax.stderr}")
+	for line in ("EAPI=8", 'DESCRIPTION="greeter daemon"',
+	             'HOMEPAGE="https://example.invalid/greetd"',
+	             'SRC_URI="https://example.invalid/greetd/greetd-${PV}.tar.gz"',
+	             'LICENSE="GPL-3+"', 'SLOT="0"', "KEYWORDS=",
+	             'systemd_dounit "packaging/greetd.service"',
+	             'newinitd "packaging/greetd.openrc" greetd',
+	             "INIT=none install", "elog", "zlib"):
+		check(line in text, f"the ebuild lacks {line!r}:\n{text}")
+	for verb in ("systemctl", "rc-service", "rc-update"):
+		check(not any(l.strip().startswith(verb) for l in text.splitlines()),
+		      f"the ebuild calls {verb}, which an ebuild never does:\n{text}")
+	with open(os.path.join(os.path.dirname(path), "metadata.xml")) as fh:
+		check("<email>test@example.invalid</email>" in fh.read(),
+		      "metadata.xml does not name the maintainer")
+
+	u = Tree("ebuild-bare")
+	try:
+		_deb_tree(u, spdx=False)
+		u.write("src/packaging/greetd.openrc", "#!/sbin/openrc-run\n")
+		u.write("src/fmake.toml", u_toml(u).replace(
+		    'sysvinit = "packaging/greetd.init"\n',
+		    'sysvinit = "packaging/greetd.init"\nopenrc   = "packaging/greetd.openrc"\n')
+		    + '\n[gentoo]\ncategory = "app-misc"\nsrc-uri = "x-${PV}.tar.gz"\n')
+		r = _deb(u, "--eject", "ebuild")
+		check(r.returncode == 0, f"without SPDX lines: {r.stderr}")
+		with open(os.path.join(_src(u), "gentoo", "app-misc", "greetd",
+		                       "greetd-0.4.1.ebuild")) as fh:
+			check('LICENSE="GPL-3"\n' in fh.read(),
+			      "with no SPDX line the grant was widened to GPL-3+")
+	finally:
+		u.cleanup()
+
+	base = u_toml(t)
+	for what, toml, said in (
+	        ("no category", base.replace('category = "app-misc"\n', ""),
+	         "[gentoo] category"),
+	        ("no src-uri", base.replace(
+	            'src-uri  = "https://example.invalid/greetd/greetd-${PV}.tar.gz"\n',
+	            ""), "[gentoo] src-uri"),
+	        ("a service with no openrc script",
+	         base.replace('openrc   = "packaging/greetd.openrc"\n', ""),
+	         "no openrc script")):
+		u = Tree("ebuild-refuse")
+		try:
+			_deb_tree(u)
+			u.write("src/packaging/greetd.openrc", "#!/sbin/openrc-run\n")
+			u.write("src/fmake.toml", toml)
+			r = _deb(u, "--eject", "ebuild")
+			check(r.returncode != 0 and said in r.stdout + r.stderr,
+			      f"{what} was not refused as such: {r.stdout}{r.stderr}")
+		finally:
+			u.cleanup()
+	r = _deb(t, "--eject", "ebuild")
+	check(r.returncode != 0 and "already exists here" in r.stdout + r.stderr,
+	      f"a second eject over gentoo/ was not refused: {r.stdout}{r.stderr}")
+
+
+@case
+def a_release_carries_everything_downloadable_with_its_checksum(t):
+	"""Section 227's page: the manifest, and pandoc when present.
+
+    `--release' writes release/: the source tarball, which is `git
+    archive' at HEAD and nothing else; a binary tarball of this
+    platform's plan under a prefix, without init glue; the .deb built
+    FROM THAT SOURCE TARBALL in scratch, so the release proves the
+    committed packaging builds from clean; the ebuild, copied; a
+    SHA256SUMS that `sha256sum -c' accepts; and an index.html listing
+    each with its size and checksum, followed by the README rendered
+    through pandoc where the machine has it and linked where it does
+    not, with which of the two it was said in the output.
+
+    Refused: a dirty tree, since the tarball would not be of the tree
+    the reader is looking at; a tree that is not a repository; a
+    release/ already there.
+    """
+	_deb_tools()
+	_deb_tree(t)
+	t.write("src/packaging/greetd.openrc", "#!/sbin/openrc-run\ncommand=/usr/bin/greetd\n")
+	t.write("src/fmake.toml", u_toml(t).replace(
+	    'sysvinit = "packaging/greetd.init"\n',
+	    'sysvinit = "packaging/greetd.init"\nopenrc   = "packaging/greetd.openrc"\n')
+	    + '\n[gentoo]\ncategory = "app-misc"\n'
+	      'src-uri  = "https://example.invalid/greetd/greetd-${PV}.tar.gz"\n')
+	t.write("src/README.md", "# greetd\n\nGreets whoever connects.\n\n"
+	        "| what | how |\n|---|---|\n| build | `make` |\n")
+	t.write("src/.gitignore", ".fmake/\n*.a\n*.pc\ngreetd\nrelease/\n")
+	src = _src(t)
+	_run_in(src, "git", "init", "-q", ".")
+	check(_deb(t, "--eject", "deb").returncode == 0, "--eject deb failed")
+	check(_deb(t, "--eject", "ebuild").returncode == 0,
+	      "--eject ebuild over the deb's Makefile was refused, though it is "
+	      "the same file")
+	_run_in(src, "git", "add", ".gitignore", "debian", "gentoo", "Makefile",
+	        "README.md", "main.c", "api.h", "hello.c", "packaging", "LICENSE",
+	        "VERSION", "fmake.toml")
+	_run_in(src, "git", "-c", "user.name=t", "-c", "user.email=t@t",
+	        "commit", "-q", "-m", "packaging")
+
+	r = _deb(t, "--release")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--release failed: {said}")
+	out = os.path.join(src, "release")
+	have = sorted(os.listdir(out))
+	for f in ("greetd-0.4.1.tar.gz", "greetd_0.4.1_amd64.deb",
+	          "libgreet-dev_0.4.1_amd64.deb", "greetd-0.4.1.ebuild",
+	          "SHA256SUMS", "index.html", "README.md"):
+		check(f in have, f"release/ lacks {f}: {have}")
+	bins = [f for f in have if f.startswith("greetd-0.4.1-") and f.endswith(".tar.gz")]
+	check(len(bins) == 1, f"no binary tarball for this platform: {have}")
+	check(not any("dbgsym" in f for f in have), f"a dbgsym leaked in: {have}")
+	sums = _run_in(out, "sha256sum", "-c", "SHA256SUMS")
+	check(sums.returncode == 0, f"SHA256SUMS does not verify: {sums.stdout}")
+	listing = _run_in(out, "tar", "tzf", bins[0]).stdout
+	check("/bin/greetd" in listing and "/share/man/man1/greetd.1" in listing,
+	      f"the binary tarball lacks the program or its man page: {listing}")
+	check("init.d" not in listing and ".service" not in listing,
+	      f"the binary tarball carries init glue, which is a package's: {listing}")
+	with open(os.path.join(out, "index.html")) as fh:
+		page = fh.read()
+	for f in ("greetd-0.4.1.tar.gz", bins[0], "greetd_0.4.1_amd64.deb"):
+		check(f'href="{f}"' in page, f"index.html does not link {f}")
+	if shutil.which("pandoc"):
+		check("rendered by pandoc" in said and "Greets whoever connects" in page,
+		      f"pandoc is here and the README was not rendered: {said}")
+	else:
+		check("linked, not rendered" in said and 'href="README.md"' in page,
+		      f"no pandoc, and the page does not link the README: {said}")
+
+	r = _deb(t, "--release")
+	check(r.returncode != 0 and "already exists" in r.stdout + r.stderr,
+	      "a second --release over release/ was not refused")
+	shutil.rmtree(out)
+	t.write("src/main.c", open(os.path.join(src, "main.c")).read() + "\n")
+	r = _deb(t, "--release")
+	check(r.returncode != 0 and "uncommitted changes" in r.stdout + r.stderr,
+	      f"a dirty tree was released: {r.stdout}{r.stderr}")
+	u = Tree("release-nogit")
+	try:
+		_deb_tree(u)
+		r = _deb(u, "--release")
+		check(r.returncode != 0 and "not a repository" in r.stdout + r.stderr,
+		      f"a tree with no git was released: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

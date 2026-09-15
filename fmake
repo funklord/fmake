@@ -119,6 +119,8 @@ import signal
 import stat
 import threading
 import subprocess
+import tarfile
+import tempfile
 import time
 import sys
 import tomllib
@@ -1188,6 +1190,15 @@ CONF_SCHEMA = {
         "description": S, "postinst": S, "prerm": S, "postrm": S,
         "preinst": S,
     }},
+	# One ebuild per tree -- Portage has no sub-packages, it has USE --
+	# in Gentoo's vocabulary: the category it files under, where the
+	# release tarball is (a URL nobody can infer; ${PV} stands for the
+	# version), and the dependencies on programs, which have no abstract
+	# form. Library dependencies are derived where a Portage is present.
+    "gentoo": {
+        "category": S, "src-uri": S, "keywords": L, "iuse": L,
+        "rdepend": L, "bdepend": L,
+    },
     "toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
         "moc": S, "uic": S, "rcc": S, "situc": S,
@@ -1386,6 +1397,7 @@ class Conf:
 		self.services = self.data.get("service", {})
 		self.package  = self.data.get("package", {})
 		self.debian   = self.data.get("debian", {})
+		self.gentoo   = self.data.get("gentoo", {})
 		self.tool     = self.data.get("toolchain", {})
 		self.build_tool_conf = self.data.get("build-toolchain", {})
 		profiles      = self.data.get("profile", {})
@@ -10293,6 +10305,9 @@ def build(args, _bootstrapping=False):
 			# package lives.
 			eject_deb(wanted, closures, resolutions, root, conf, cfg, pkg,
 			          text)
+		elif args.eject == "ebuild":
+			eject_ebuild(wanted, closures, resolutions, root, conf, cfg,
+			             pkg, text)
 		else:
 			sys.stdout.write(text)
 		cache.save()
@@ -10562,6 +10577,10 @@ def build(args, _bootstrapping=False):
 	if args.install and not failed:
 		say()
 		return do_install(wanted, closures, root, outdir, conf, args)
+
+	if args.release and not failed:
+		say()
+		return do_release(wanted, closures, root, outdir, conf, cfg, args)
 
 	if args.uninstall and not failed:
 		say()
@@ -13471,6 +13490,32 @@ def deb_packages(targets, closures, root, conf):
 	return packages
 
 
+def refuse_to_overwrite(root, made, makefile):
+	"""A packaging that exists is somebody's; a Makefile that matches is ours.
+
+    debian/ and gentoo/ are never overwritten. The Makefile beside them
+    is written by both emitters and is the same file, so a tree that
+    wants both packagings would otherwise have to remove it between the
+    two ejects: an existing Makefile is refused only when its contents
+    differ from what would be written, and left alone when they do not.
+    """
+	if os.path.exists(os.path.join(root, made)):
+		die(f"{made} already exists here, and it is yours: fmake does not "
+		    f"overwrite a packaging somebody wrote. Move it aside to "
+		    f"regenerate, or compare in a copy of the tree.")
+	path = os.path.join(root, "Makefile")
+	if os.path.exists(path):
+		try:
+			with open(path, encoding="utf-8") as fh:
+				same = fh.read() == makefile
+		except OSError:
+			same = False
+		if not same:
+			die(f"Makefile already exists here and is not the one this "
+			    f"would write. It may be yours; fmake does not replace it. "
+			    f"Move it aside to regenerate, or compare in a copy.")
+
+
 def _deb_wrap(text):
 	"""A control-file long description: leading space, `.' for a blank."""
 	out = []
@@ -13508,11 +13553,7 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	srcs = [u.rel for cl in closures.values() for u in cl.link]
 	short, stanza = identify_license(root, srcs)
 
-	for made in ("debian", "Makefile"):
-		if os.path.exists(os.path.join(root, made)):
-			die(f"{made} already exists here, and it is yours: fmake "
-			    f"does not overwrite a packaging somebody wrote. Move it "
-			    f"aside to regenerate, or compare in a copy of the tree.")
+	refuse_to_overwrite(root, "debian", makefile)
 
 	packages = deb_packages(targets, closures, root, conf)
 	names = {p["name"] for p in packages}
@@ -13780,6 +13821,401 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	info(f"wrote a Debian source package for {src_name} {version} "
 	     f"({', '.join(p['name'] for p in packages)}); build it with "
 	     f"`dpkg-buildpackage -b -us -uc'")
+	return 0
+
+
+# ---------------------------------------------------------------------------
+# --eject ebuild
+# ---------------------------------------------------------------------------
+#
+# Section 227's other emitter. One ebuild for the tree, since Portage has
+# no sub-packages, written in Gentoo's words from the same plan and the
+# same Makefile: emake builds, `emake DESTDIR="${D}" install' installs,
+# with INIT=none so the unit and the openrc-run script go in through
+# systemd_dounit and newinitd -- the eclass functions, which is how an
+# ebuild says it. Nothing is enabled or started, by Gentoo's rule; a
+# service with restart-on-upgrade gets an elog saying so, which is the
+# whole of what an ebuild may do about a running daemon.
+
+def gentoo_license(short):
+	"""Gentoo's spelling of a licence Debian spells with -or-later.
+
+    Gentoo's licenses/ directory names the grant with a `+': GPL-3+ is
+    "version 3 or later", GPL-3 is version 3. SPDX's -or-later and
+    -only suffixes map onto that, and the `.0' Debian carries in
+    GPL-3.0 is not part of Gentoo's name. Anything else is passed as it
+    is, which is right for MIT, BSD, Apache-2.0 and ISC.
+    """
+	m = re.match(r"^([A-Z]+)-(\d+)(?:\.(\d+))?(?:\.0)?(-or-later|-only|\+)?$",
+	             short)
+	if not m:
+		return short
+	family, major, minor, grant = m.groups()
+	version = major + (f".{minor}" if minor and minor != "0" else "")
+	return f"{family}-{version}" + ("+" if grant in ("-or-later", "+") else "")
+
+
+def gentoo_depends(resolutions, pkg):
+	"""category/name for each pkg-config module, by asking Portage.
+
+    The same question dpkg answers for a .deb -- which package ships
+    this .pc file -- put to `portageq owners', which exists only on a
+    Gentoo machine. Elsewhere every module is unmapped and the ebuild
+    says so beside an empty RDEPEND, rather than carrying a table of
+    Gentoo's names that would go stale.
+    """
+	modules = set()
+	for res in resolutions.values():
+		for _lib, (module, _where, _hdr) in (res or {}).get("proposed",
+		                                                    {}).items():
+			if module:
+				modules.add(module)
+	found, missing = set(), []
+	portageq = shutil.which("portageq")
+	for module in sorted(modules):
+		pcdir = pkg.variable(module, "pcfiledir") if pkg else None
+		path = os.path.join(pcdir, module + ".pc") if pcdir else None
+		if not portageq or not path or not os.path.isfile(path):
+			missing.append(module)
+			continue
+		try:
+			r = subprocess.run([portageq, "owners", "/", path],
+			                   capture_output=True, text=True, timeout=60)
+		except (OSError, subprocess.TimeoutExpired):
+			missing.append(module)
+			continue
+		# `owners' prints `category/name-version' on its own line.
+		atoms = [l.strip() for l in r.stdout.splitlines()
+		         if "/" in l and not l.startswith("\t")]
+		if r.returncode == 0 and atoms:
+			found.add(re.sub(r"-\d.*$", "", atoms[0]))
+		else:
+			missing.append(module)
+	return sorted(found), missing
+
+
+def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
+                 makefile):
+	"""Write gentoo/<category>/<name>/<name>-<version>.ebuild and the
+	Makefile it builds with."""
+	name = conf.project.get("name") or os.path.basename(root)
+	if not re.match(r"^[a-z0-9][a-z0-9+_-]*$", name):
+		die(f"{name!r} is not a package name Portage accepts; set "
+		    f"[project] name")
+	version = read_root_version(root)
+	if not version:
+		die("no VERSION file at the root. An ebuild is named by its "
+		    "version, and fmake reads it from that file rather than asking "
+		    "twice.")
+	category = conf.gentoo.get("category")
+	if not category or not re.match(r"^[a-z]+-[a-z]+$", category):
+		die(f"{CONF_FILE}: [gentoo] category = \"app-misc\" (or another of "
+		    f"the tree's categories) is needed: an ebuild lives under one, "
+		    f"and which is a choice fmake will not make.")
+	src_uri = conf.gentoo.get("src-uri")
+	if not src_uri:
+		die(f"{CONF_FILE}: [gentoo] src-uri is needed, with ${{PV}} for the "
+		    f"version -- where a release tarball lives is a fact about the "
+		    f"project's hosting that nothing in a source tree states.")
+	srcs = [u.rel for cl in closures.values() for u in cl.link]
+	short, _stanza = identify_license(root, srcs)
+	# The program's own one-liner first, as the deb emitter's synopsis
+	# is; the package description's first sentence where there is none.
+	exe = [t for t in targets if t.kind == "exe" and t.description]
+	synopsis = exe[0].description if exe else ""
+	if not synopsis:
+		synopsis = (conf.package.get("description", "").strip()
+		            .split("\n\n")[0].replace("\n", " ").split(". ")[0]
+		            .rstrip(".").strip())
+	if not synopsis:
+		die(f"{CONF_FILE}: [package] description is needed: its first "
+		    f"sentence is the DESCRIPTION an ebuild requires, and fmake "
+		    f"will not invent one.")
+	refuse_to_overwrite(root, "gentoo", makefile)
+	rdepend, unmapped = gentoo_depends(resolutions, pkg)
+	rdepend += list(conf.gentoo.get("rdepend", []))
+	if unmapped:
+		how = ("no portageq on this machine" if not shutil.which("portageq")
+		       else "Portage does not know which package ships them here")
+		warn(f"RDEPEND could not be derived for pkg-config module(s) "
+		     f"{', '.join(unmapped)}: {how}. Name them in [gentoo] rdepend.")
+	services = sorted(conf.services.items())
+	for svc, sec in services:
+		if not sec.get("openrc"):
+			die(f"[service.{svc}] has no openrc script; Gentoo's default "
+			    f"init is OpenRC, and an ebuild that ships a daemon without "
+			    f"a way to start it under it is one Gentoo will not take.")
+
+	arch = {"x86_64": "amd64", "aarch64": "arm64", "x86": "x86"}.get(
+	    cfg.arch, cfg.arch)
+	keywords = conf.gentoo.get("keywords") or [f"~{arch}"]
+	e = ["# Generated by `fmake --eject ebuild`. The build is the Makefile",
+	     "# beside gentoo/, which needs make and a compiler and nothing",
+	     "# from fmake.",
+	     "",
+	     "EAPI=8",
+	     "",
+	     "inherit toolchain-funcs" + (" systemd" if services else ""),
+	     "",
+	     f'DESCRIPTION="{synopsis}"',
+	     f'HOMEPAGE="{conf.package.get("homepage", "")}"',
+	     f'SRC_URI="{src_uri}"',
+	     "",
+	     f'LICENSE="{gentoo_license(short)}"',
+	     'SLOT="0"',
+	     f'KEYWORDS="{" ".join(keywords)}"',
+	     f'IUSE="{" ".join(conf.gentoo.get("iuse", []))}"',
+	     "",
+	     'RDEPEND="' + "\n\t".join(rdepend) + '"'
+	     + ("" if not unmapped else
+	        "\n# not derived here (no Portage to ask): "
+	        + ", ".join(unmapped)),
+	     'DEPEND="${RDEPEND}"',
+	     'BDEPEND="' + "\n\t".join(["virtual/pkgconfig"]
+	                              + list(conf.gentoo.get("bdepend", [])))
+	     + '"',
+	     "",
+	     "src_compile() {",
+	     '\temake CC="$(tc-getCC)" CXX="$(tc-getCXX)" AR="$(tc-getAR)"',
+	     "}",
+	     "",
+	     "src_install() {",
+	     "\t# INIT=none: the unit and the openrc script go in through the",
+	     "\t# eclass functions below, which is how an ebuild places them.",
+	     '\temake DESTDIR="${D}" PREFIX=/usr LIBDIR="/usr/$(get_libdir)" \\',
+	     '\t\tCC="$(tc-getCC)" INIT=none install']
+	for svc, sec in services:
+		if sec.get("systemd"):
+			e.append(f'\tsystemd_dounit "{sec["systemd"]}"')
+		e.append(f'\tnewinitd "{sec["openrc"]}" {svc}')
+	e.append("}")
+	restarts = [svc for svc, sec in services
+	            if sec.get("restart-on-upgrade", True)]
+	if restarts:
+		e += ["",
+		      "# Gentoo starts and restarts nothing on install; the most an",
+		      "# ebuild does about a running daemon is say so.",
+		      "pkg_postinst() {",
+		      '\tif [[ -n ${REPLACING_VERSIONS} ]]; then']
+		for svc in restarts:
+			e.append(f'\t\telog "Restart {svc} to pick up this update: '
+			         f'rc-service {svc} restart"')
+		e += ["\tfi", "}"]
+	ebuild = "\n".join(e) + "\n"
+	maint = conf.package.get("maintainer", "")
+	m = re.match(r"^(.*?)\s*<([^>]+)>\s*$", maint)
+	metadata = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+	            '<!DOCTYPE pkgmetadata SYSTEM '
+	            '"https://www.gentoo.org/dtd/metadata.dtd">\n'
+	            '<pkgmetadata>\n'
+	            + (f'\t<maintainer type="person">\n'
+	               f'\t\t<email>{m.group(2)}</email>\n'
+	               f'\t\t<name>{m.group(1)}</name>\n'
+	               f'\t</maintainer>\n' if m else "")
+	            + '</pkgmetadata>\n')
+	pkgdir = os.path.join("gentoo", category, name)
+	files = {os.path.join(pkgdir, f"{name}-{version}.ebuild"): ebuild,
+	         os.path.join(pkgdir, "metadata.xml"): metadata,
+	         "Makefile": makefile}
+	for rel, text in sorted(files.items()):
+		full = os.path.join(root, rel)
+		os.makedirs(os.path.dirname(full), exist_ok=True)
+		with open(full, "w", encoding="utf-8") as fh:
+			fh.write(text)
+		print(f"{GREEN('->')} {rel}")
+	info(f"wrote an ebuild for {category}/{name}-{version}; copy gentoo/ "
+	     f"into an overlay and run `ebuild {name}-{version}.ebuild manifest'")
+	return 0
+
+
+# ---------------------------------------------------------------------------
+# --release
+# ---------------------------------------------------------------------------
+#
+# Section 227, settled by the copyright holder: the manifest, and pandoc
+# when present. Everything downloadable that this tree can produce, each
+# with its size and checksum, on one page -- and the README rendered where
+# a renderer exists, linked as a file where it does not, with the absence
+# said. No renderer in fmake: it is one file with no dependency beyond
+# the standard library, and the standard library has no Markdown.
+
+def _sha256(path):
+	h = hashlib.sha256()
+	with open(path, "rb") as fh:
+		for chunk in iter(lambda: fh.read(1 << 20), b""):
+			h.update(chunk)
+	return h.hexdigest()
+
+
+def _html(text):
+	return (text.replace("&", "&amp;").replace("<", "&lt;")
+	        .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def do_release(targets, closures, root, outdir, conf, cfg, args):
+	"""Write release/ with every artifact this tree can produce, and a page.
+
+    The source tarball is `git archive' at HEAD, which is the only honest
+    source release -- a tarball of the working tree would carry whatever
+    was uncommitted. The .deb is built from THAT tarball, unpacked into
+    scratch, so the release proves the source package builds from clean,
+    which is the property section 227 asked the secondary step to have.
+    The binary tarball is the plan's rows for this platform, laid out
+    under a prefix as `--install' lays them, without init glue: a
+    tarball is for a machine and a machine has one init, which is the
+    package's business. The ebuild is a file and is copied.
+    """
+	name = conf.project.get("name") or os.path.basename(root)
+	version = read_root_version(root)
+	if not version:
+		die("no VERSION file at the root, and a release is named by one.")
+	out = os.path.join(root, "release")
+	if os.path.exists(out):
+		die("release/ already exists here. A release is written once, "
+		    "whole, so that its manifest and its checksums are of one "
+		    "moment; remove it to make another.")
+	if not shutil.which("git") or not os.path.isdir(os.path.join(root,
+	                                                               ".git")):
+		die("a release is cut from git -- `git archive' at HEAD is the "
+		    "source tarball -- and this tree is not a repository.")
+	dirty = subprocess.run(["git", "-C", root, "status", "--porcelain",
+	                        "--untracked-files=no"],
+	                       capture_output=True, text=True).stdout.strip()
+	if dirty:
+		die("the tree has uncommitted changes, and the source tarball is "
+		    "what git holds at HEAD -- so the release would not be of the "
+		    "tree you are looking at. Commit, or stash, first:\n    "
+		    + "\n    ".join(dirty.splitlines()[:8]))
+	os.makedirs(out)
+	made = []           # (relative name, what it is)
+
+	# 1. the source
+	src_tar = f"{name}-{version}.tar.gz"
+	r = subprocess.run(["git", "-C", root, "archive", "--format=tar.gz",
+	                    f"--prefix={name}-{version}/",
+	                    "-o", os.path.join(out, src_tar), "HEAD"],
+	                   capture_output=True, text=True)
+	if r.returncode != 0:
+		die(f"git archive failed: {r.stderr.strip()}")
+	made.append((src_tar, "source"))
+	info(f"source: {src_tar}")
+
+	# 2. the binaries for this platform, under a prefix, no init glue
+	bin_tar = f"{name}-{version}-{cfg.os}-{cfg.arch}.tar.gz"
+	paths = install_paths(conf, argparse.Namespace(prefix="/", destdir=None))
+	with tarfile.open(os.path.join(out, bin_tar), "w:gz") as tf:
+		top = f"{name}-{version}-{cfg.os}-{cfg.arch}"
+		for origin, source, directory, fname, mode in install_plan(
+				targets, closures, root):
+			if directory in INIT_GLUE:
+				continue
+			arc = os.path.join(top, paths[directory].lstrip("/"), fname)
+			if origin == "symlink":
+				ti = tarfile.TarInfo(arc)
+				ti.type, ti.linkname = tarfile.SYMTYPE, source
+				tf.addfile(ti)
+				continue
+			src = os.path.join(outdir if origin == "built" else root, source)
+			if not os.path.exists(src):
+				die(f"{source} has not been built")
+			ti = tf.gettarinfo(src, arc)
+			ti.mode, ti.uid, ti.gid, ti.uname, ti.gname = mode, 0, 0, "", ""
+			with open(src, "rb") as fh:
+				tf.addfile(ti, fh)
+	made.append((bin_tar, f"binaries, {cfg.os}/{cfg.arch}"))
+	info(f"binaries: {bin_tar}")
+
+	# 3. the .deb, built from the source tarball in scratch
+	has_debian = os.path.isdir(os.path.join(root, "debian"))
+	if has_debian and shutil.which("dpkg-buildpackage"):
+		with tempfile.TemporaryDirectory(prefix="fmake-release-") as scratch:
+			with tarfile.open(os.path.join(out, src_tar)) as tf:
+				tf.extractall(scratch, filter="data")
+			unpacked = os.path.join(scratch, f"{name}-{version}")
+			say(f"{YELLOW('DEB')} building from {src_tar}")
+			r = subprocess.run(["dpkg-buildpackage", "-b", "-us", "-uc"],
+			                   cwd=unpacked, capture_output=True, text=True)
+			if r.returncode != 0:
+				die(f"dpkg-buildpackage failed on the source tarball -- "
+				    f"which is the release proving the package does not "
+				    f"build from clean:\n{r.stdout[-2000:]}{r.stderr[-2000:]}")
+			for f in sorted(os.listdir(scratch)):
+				if f.endswith(".deb") and "-dbgsym" not in f:
+					shutil.copy2(os.path.join(scratch, f), os.path.join(out, f))
+					made.append((f, "Debian package"))
+					info(f"package: {f}")
+	elif has_debian:
+		warn("debian/ is here but dpkg-buildpackage is not, so no .deb was "
+		     "built for this release")
+	else:
+		info("no debian/ in the tree; `fmake --eject deb' makes one")
+
+	# 4. the ebuild, copied
+	gentoo = os.path.join(root, "gentoo")
+	if os.path.isdir(gentoo):
+		for d, _dirs, files in os.walk(gentoo):
+			for f in files:
+				if f.endswith(".ebuild"):
+					shutil.copy2(os.path.join(d, f), os.path.join(out, f))
+					made.append((f, "Gentoo ebuild"))
+					info(f"ebuild: {f}")
+
+	# 5. checksums, and the page
+	sums = []
+	for f, _what in made:
+		sums.append(f"{_sha256(os.path.join(out, f))}  {f}")
+	with open(os.path.join(out, "SHA256SUMS"), "w") as fh:
+		fh.write("\n".join(sums) + "\n")
+
+	readme = os.path.join(root, "README.md")
+	body, how = "", ""
+	if os.path.isfile(readme):
+		shutil.copy2(readme, os.path.join(out, "README.md"))
+		pandoc = shutil.which("pandoc")
+		if pandoc:
+			r = subprocess.run([pandoc, "-f", "gfm", "-t", "html", readme],
+			                   capture_output=True, text=True)
+			if r.returncode == 0:
+				body, how = r.stdout, "pandoc"
+			else:
+				warn(f"pandoc could not render README.md: "
+				     f"{r.stderr.strip().splitlines()[:1]}")
+		if not body:
+			body = ('<p>The README is <a href="README.md">README.md</a>; '
+			        'no pandoc was installed where this page was made, so '
+			        'it is not rendered here.</p>')
+			how = "linked"
+	rows = "\n".join(
+	    f'<tr><td><a href="{_html(f)}">{_html(f)}</a></td>'
+	    f'<td>{_html(what)}</td>'
+	    f'<td class="n">{os.path.getsize(os.path.join(out, f)):,}</td>'
+	    f'<td><code>{line.split()[0]}</code></td></tr>'
+	    for (f, what), line in zip(made, sums))
+	# A plain string with markers rather than a multi-line f-string, which
+	# is 3.12 syntax and this tree declares 3.11.
+	page = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>@TITLE@</title>
+<style>
+body{font-family:sans-serif;max-width:52em;margin:2em auto;padding:0 1em;line-height:1.45}
+table{border-collapse:collapse} td,th{padding:.25em .75em;border-bottom:1px solid #ccc;text-align:left}
+td.n{text-align:right} code{font-size:.85em} pre{overflow-x:auto}
+</style></head><body>
+<h1>@TITLE@</h1>
+<h2>Downloads</h2>
+<table><tr><th>file</th><th></th><th>bytes</th><th>sha256</th></tr>
+@ROWS@
+</table>
+<p><a href="SHA256SUMS">SHA256SUMS</a></p>
+<hr>
+@BODY@
+</body></html>
+""".replace("@TITLE@", f"{_html(name)} {_html(version)}").replace(
+	    "@ROWS@", rows).replace("@BODY@", body)
+	with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as fh:
+		fh.write(page)
+	info(f"wrote release/index.html ({len(made)} file(s), README "
+	     f"{'rendered by pandoc' if how == 'pandoc' else 'linked, not rendered'})")
 	return 0
 
 
@@ -14532,19 +14968,27 @@ def parse_args(argv):
 	               help="compile every source in the tree before closing, "
 	                    "instead of filtering candidates by symbol name")
 	p.add_argument("--eject", nargs="?", const="make", default=None,
-	               choices=("make", "make-fragment", "ninja", "deb"),
-	               metavar="make|make-fragment|ninja|deb",
+	               choices=("make", "make-fragment", "ninja", "deb",
+	                        "ebuild"),
+	               metavar="make|make-fragment|ninja|deb|ebuild",
 	               help="write a build file to stdout and exit; needs no "
 	                    "fmake to run afterwards. make-fragment is the same "
 	                    "rules for an existing Makefile to include, with no "
 	                    "default goal and FM_-prefixed variables. deb writes "
 	                    "debian/ and a Makefile into the tree: a Debian "
-	                    "source package that builds with make alone")
+	                    "source package that builds with make alone; ebuild "
+	                    "writes gentoo/<category>/<name>/ and the Makefile")
 	p.add_argument("-p", "--profile", default=None, metavar="NAME",
 	               help=f"build profile from [profile.NAME] in {CONF_FILE}")
 	p.add_argument("--install", action="store_true",
 	               help="build, then install the artifacts and their "
 	                    "@headers")
+	p.add_argument("--release", action="store_true",
+	               help="build, then write release/: a source tarball from "
+	                    "git, a binary tarball for this platform, the .deb "
+	                    "and ebuild where the tree carries their packaging, "
+	                    "SHA256SUMS, and an index.html with the README "
+	                    "rendered through pandoc where it is installed")
 	p.add_argument("--uninstall", action="store_true",
 	               help="remove exactly the files --install would place, "
 	                    "and nothing else")

@@ -280,7 +280,9 @@ that had been green about nothing for five commits ·
 [227. Packaging: one model, emitted in each format's own language](#227-packaging-one-model-emitted-in-each-formats-own-language) ·
 [228. Furniture: man pages, desktop entries, icons and metainfo in the plan](#228-furniture-man-pages-desktop-entries-icons-and-metainfo-in-the-plan) ·
 [229. Services: one declaration, and the machine decides which glue](#229-services-one-declaration-and-the-machine-decides-which-glue) ·
-[230. `--eject deb`: a source package that builds with make alone](#230---eject-deb-a-source-package-that-builds-with-make-alone)
+[230. `--eject deb`: a source package that builds with make alone](#230---eject-deb-a-source-package-that-builds-with-make-alone) ·
+[231. `--eject ebuild`: the same plan in Gentoo's words](#231---eject-ebuild-the-same-plan-in-gentoos-words) ·
+[232. `--release`: everything downloadable, and the page that lists it](#232---release-everything-downloadable-and-the-page-that-lists-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18806,3 +18808,113 @@ and emitted but untested against a real shared library; and pkg-config
 modules that answer with paths are still baked into the Makefile at
 eject time, which section 227's architecture note says to defer to
 build time.
+
+## 231. `--eject ebuild`: the same plan in Gentoo's words
+
+Section 227's other emitter. One ebuild for the tree -- Portage has no
+sub-packages, it has USE -- at `gentoo/<category>/<name>/<name>-
+<VERSION>.ebuild` with a `metadata.xml` naming the maintainer, and the
+same Makefile beside it that `--eject deb` writes:
+
+    EAPI=8, inherit toolchain-funcs systemd
+    DESCRIPTION      the program's own `description', else the first
+                     sentence of [package] description; never invented
+    HOMEPAGE         [package] homepage
+    SRC_URI          [gentoo] src-uri with ${PV}, required: where a
+                     release tarball lives is a fact about the project's
+                     hosting that nothing in a tree states, and a
+                     GitHub archive URL is a guess about tag names
+    LICENSE          the identified licence in Gentoo's spelling
+    KEYWORDS         the build machine's, keyworded ~: what was built,
+                     nothing more
+    RDEPEND          derived by `portageq owners' on each module's .pc
+                     where a Portage exists; elsewhere named in a comment
+                     beside an empty RDEPEND, never guessed
+    src_compile      emake with tc-getCC, tc-getCXX, tc-getAR
+    src_install      emake DESTDIR="${D}" PREFIX=/usr LIBDIR=/usr/$(get_libdir)
+                     INIT=none install, then systemd_dounit and newinitd
+    pkg_postinst     an elog saying to restart, on an upgrade, and only that
+
+**Gentoo's spelling of a grant is a `+`.** `GPL-3+` is version 3 or
+later and `GPL-3` is version 3; SPDX's `-or-later` and `-only` map onto
+that, and the `.0` in `GPL-3.0` is not part of Gentoo's name. Measured
+over the spellings this workspace uses: `GPL-3.0-or-later` to `GPL-3+`,
+`GPL-2.0-only` to `GPL-2`, `LGPL-2.1-or-later` to `LGPL-2.1+`, `MIT`,
+`Apache-2.0` and `AGPL-3.0-or-later` right. What is not right is the
+BSD family -- Gentoo says `BSD-2`, Debian says `BSD-2-clause` -- and
+that is passed through as it is rather than mapped from memory.
+
+**An ebuild starts nothing, ever**, and the case pins that: no line of
+the output begins with `systemctl`, `rc-service` or `rc-update`. What
+`[service] restart-on-upgrade` becomes is an `elog` under
+`REPLACING_VERSIONS`, which is the whole of what Portage allows. A
+service with no `openrc` script is a refusal: Gentoo's default init is
+OpenRC, and a daemon with no way to start under it is not a package
+Gentoo takes.
+
+**Proved by reading, and it says so.** No Portage is installed on this
+machine, so nothing here can build the result; `bash -n` accepts it,
+every required variable is present, the licence is spelled as measured,
+the glue goes in through the eclass functions after an install with
+`INIT=none`, and the module Portage could not be asked about is named
+in a comment rather than resolved from a table. That is the honest
+half; the other half is a Gentoo machine running `ebuild ... manifest`
+and `emerge`, which is recorded here as not yet done.
+
+Refused: no `[gentoo] category`, no `src-uri`, a service without an
+openrc script, a `gentoo/` already there.
+
+## 232. `--release`: everything downloadable, and the page that lists it
+
+Section 227's page, as the copyright holder settled it: the manifest,
+and pandoc when present. `fmake --release` builds, then writes
+`release/`:
+
+    <name>-<VERSION>.tar.gz             git archive at HEAD
+    <name>-<VERSION>-<os>-<arch>.tar.gz this platform's plan under a prefix
+    <pkg>_<VERSION>_<arch>.deb          built FROM THE SOURCE TARBALL, in
+                                        scratch, where debian/ is committed
+                                        and dpkg-buildpackage exists
+    <name>-<VERSION>.ebuild             copied, where gentoo/ is committed
+    SHA256SUMS                          sha256sum -c accepts it
+    README.md, index.html               the list above with size and
+                                        checksum, then the README
+
+**The source tarball is what git holds, and nothing else.** A tarball
+of the working tree would carry whatever was uncommitted, so a tree
+with uncommitted changes to tracked files is refused, naming them, and
+a tree that is not a repository is refused. `git archive` is the one
+honest source release, and it is the reason `--release` needs git.
+
+**The .deb is built from that tarball, not from the tree.** The tarball
+is unpacked into scratch and `dpkg-buildpackage -b -us -uc` runs there,
+so a release that carries a `.deb` has proved that the committed
+`debian/` and `Makefile` build from clean -- which is the property
+section 227 asked the secondary step to have, and which building in
+the tree could not show, since the tree has everything the tarball
+might lack. A failure there is reported as exactly that. `-dbgsym`
+packages are left out; a release page is not where those go.
+
+**The binary tarball carries no init glue.** A tarball is for a
+machine, a machine has one init, and which one is a package's business
+(section 229). Everything else in the plan goes in, under
+`<name>-<VERSION>-<os>-<arch>/`, laid out as `--install` lays it.
+
+**The README is rendered by pandoc where pandoc is, and linked where it
+is not**, and the output says which. No renderer in fmake: it is one
+file with no dependency beyond the standard library, and the holder
+declined to grow it one. Measured here, `pandoc -f gfm -t html` renders
+this workspace's READMEs -- headings, tables, fences -- whole.
+
+**Two emitters, one Makefile.** `--eject ebuild` after `--eject deb`
+was refused, because both write `Makefile` and the second found the
+first's. They write the same file, so the rule became: `debian/` and
+`gentoo/` are never overwritten, and an existing `Makefile` is refused
+only when it differs from what would be written. A tree keeps both
+packagings and one Makefile.
+
+The case builds a release from a fixture that commits both packagings,
+verifies `SHA256SUMS` with `sha256sum -c`, reads the binary tarball's
+listing, reads the page's links, and asserts the pandoc arm or the
+linked arm according to what the machine has. Refused, each through its
+message: a second release over `release/`, a dirty tree, no git.
