@@ -8745,6 +8745,40 @@ def a_rewritten_moc_re_mocs_what_it_wrote(t):
 	      f"a moc rewritten at its path must re-run: {r.stdout}")
 
 
+@case
+def an_optional_package_is_read_from_the_sources_this_build_compiles(t):
+	"""Section 243 read `@pkg_optional` from everything scanned.
+
+	That is every header and every source the platform had just
+	excluded -- a population no other directive is read from. So a
+	header's `@pkg_optional` defined its macro for the tree while the
+	`@target` beside it did nothing, and a file kept for another OS
+	turned a feature on for this one. The directive is read from the
+	sources this build compiles, like the rest of them."""
+	if not _have_pkg("zlib"):
+		raise Skip("zlib has no pkg-config file here")
+	t.write("feature.h",
+	        "/** @pkg_optional zlib defines HAVE_ZLIB_H */\n#pragma once\n")
+	t.write("other.c",
+	        "/*! @os plan9\n * @pkg_optional zlib defines HAVE_ZLIB_OTHER */\n"
+	        "int other(void){ return 9; }\n")
+	t.write("main.c",
+	        '#include "feature.h"\n#include <stdio.h>\n'
+	        "int main(void){\n"
+	        "#ifdef HAVE_ZLIB_H\n\tputs(\"header\");\n#endif\n"
+	        "#ifdef HAVE_ZLIB_OTHER\n\tputs(\"excluded\");\n#endif\n"
+	        "\tputs(\"end\"); return 0; }\n")
+
+	r = t.fmake("-v")
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = t.run(os.path.basename(t.dir)).stdout
+	check(out == "end\n",
+	      f"neither a header nor an excluded file defines a macro: {out!r}")
+	check("HAVE_ZLIB_H" not in r.stdout + r.stderr
+	      and "HAVE_ZLIB_OTHER" not in r.stdout + r.stderr,
+	      f"nor are they reported as asking: {r.stdout}{r.stderr}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

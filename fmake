@@ -9549,8 +9549,17 @@ def build(args, _bootstrapping=False):
 	# is named -- a package appearing or vanishing changes the identity of
 	# every object, not only of the one that asked. The annotating unit
 	# still gets the package's own cflags in unit_cflags; those are its.
+	#
+	# From the sources this build compiles for this platform, which is
+	# the population every other directive is read from. The first
+	# version walked `scans', which also holds every header and every
+	# source @os had just excluded -- so a header's @pkg_optional took
+	# effect while its @target beside it did not, and a Windows-only
+	# file's package defined its macro for a Linux build.
 	optional = {}
-	for rel in sorted(scans):
+	for rel in sorted(srcs):
+		if rel not in scans:
+			continue
 		for group in Ann(scans[rel].get("dirs")).groups("pkg_optional"):
 			spec = optional_pkg(group)
 			if spec:

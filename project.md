@@ -297,7 +297,8 @@ that had been green about nothing for five commits ·
 [244. The tool a generator uses is one of the things it reads](#244-the-tool-a-generator-uses-is-one-of-the-things-it-reads) ·
 [245. situc, moc, uic and rcc are files, not paths](#245-situc-moc-uic-and-rcc-are-files-not-paths) ·
 [246. A suite that kills by a recorded pid reads the pid first](#246-a-suite-that-kills-by-a-recorded-pid-reads-the-pid-first) ·
-[247. A shim is a second moc, so the moc key gets its witness](#247-a-shim-is-a-second-moc-so-the-moc-key-gets-its-witness)
+[247. A shim is a second moc, so the moc key gets its witness](#247-a-shim-is-a-second-moc-so-the-moc-key-gets-its-witness) ·
+[248. `@pkg_optional` is read from the sources this build compiles](#248-pkg_optional-is-read-from-the-sources-this-build-compiles)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19613,3 +19614,23 @@ Recorded because the gap was written down as a fact about the machine
 when it was a fact about how the case had been imagined. An
 interface's least-used method is the one to grep for callers of; the
 same applies to the least-witnessed call of a helper.
+
+## 248. `@pkg_optional` is read from the sources this build compiles
+
+Section 243 gathered `@pkg_optional` from `scans`, because the macro
+had to be decided before the object directory was named and `units`
+do not exist yet then. `scans` is the wrong population: it holds every
+header, and every source `@os` and `[project] exclude` had just taken
+out of `srcs`. Measured on a three-file tree: a header saying
+`@pkg_optional zlib defines HAVE_ZLIB_H` defined the macro for the
+tree while the `@target` on the line beside it did nothing, and a file
+marked `@os plan9` turned its feature on for a Linux build. Every
+other directive is read from the sources this build compiles for this
+platform, and now this one is.
+
+Not a design change: whether a header should be allowed to say
+`@pkg_optional` -- hydra's `theme.h` is where the macro matters, after
+all -- is a question about which files fmake reads directives from,
+and it is the holder's; today the answer is sources, uniformly. The
+case asserts that neither the header's nor the excluded file's macro
+is defined and that neither is reported as asking.
