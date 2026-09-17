@@ -307,7 +307,8 @@ that had been green about nothing for five commits ·
 [254. A file standing in for libc is said out loud](#254-a-file-standing-in-for-libc-is-said-out-loud) ·
 [255. An include behind a platform guard is not a lost feature](#255-an-include-behind-a-platform-guard-is-not-a-lost-feature) ·
 [256. A stanza naming a root renames the target on it](#256-a-stanza-naming-a-root-renames-the-target-on-it) ·
-[257. Defines in a target's own section are its own flags](#257-defines-in-a-targets-own-section-are-its-own-flags)
+[257. Defines in a target's own section are its own flags](#257-defines-in-a-targets-own-section-are-its-own-flags) ·
+[258. A Qt test that aborts with no display is told the key](#258-a-qt-test-that-aborts-with-no-display-is-told-the-key)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20011,3 +20012,43 @@ member, and a target's defines reach the root only. `[project] defines
 parse error to a clean eject, and is signalled into its `project.md`.
 The README's `defines` paragraph is rewritten for both shapes and for
 section 256's rename, which it still described as a refusal.
+
+## 258. A Qt test that aborts with no display is told the key
+
+`fmake test` on copies of bbq-predictor and hembygd: situ's twelve
+pass, and these two lose tests to the same eight lines of Qt --
+`qt.qpa.xcb: could not connect to display`, `This application failed
+to start because no Qt platform plugin could be initialized` -- and
+fmake's own line under them, `test_cli failed (killed by SIGABRT)`. A
+crash, to anyone reading fmake's summary; and the fix is one line
+beerssh's `fmake.toml` has carried since section 120, `test-env =
+["QT_QPA_PLATFORM=offscreen"]`, which fmake's README explains at
+length and the failure did not point at.
+
+fmake does not read a test's output; it goes to the terminal
+unbuffered, above the line naming the test, by design. What fmake does
+know is what the program links and what environment it handed it, and
+those two facts are the finding. When a test dies of SIGABRT, links
+any Qt library, and the environment names no `DISPLAY`, no
+`WAYLAND_DISPLAY` and no `QT_QPA_PLATFORM`, a note follows the
+failure: `test_cli links Qt and no display is set: if the output above
+says no Qt platform plugin could be initialized, test-env = [...]
+under [project] or [target.test_cli] is how a suite runs without a
+screen`. Conditional on what the reader can see, because a Qt program
+aborts for other reasons too.
+
+Any Qt library rather than a GUI one, measured: bbq-predictor's
+`test_cli` links `Qt6Core`, `Qt6Test` and `Qt6Widgets`, and the first
+draft keyed on Gui and Widgets and would have been right there -- but
+`QTEST_MAIN` makes a `QApplication` whenever a Widgets header is in
+scope, so a test whose link set is Core and Test alone can open a
+platform plugin too, and the wider key with the conditional wording is
+the honest pair. The case builds a widget test, runs `fmake test` with
+the three variables blank, asserts the abort and the note, then takes
+the key and asserts a pass with nothing noted. Against the old runner
+it fails on the note.
+
+bbq-predictor's `test_seed` and hembygd's `test_sim` fail for their
+own reasons -- `BBQ_APP_BINARY` unset, which is `$bin()`'s case, and a
+model file the suite wants built first -- and are those trees' to
+configure; neither README claims `fmake test`.

@@ -9129,6 +9129,47 @@ def defines_in_a_targets_own_section_are_its_own_flags(t):
 	      "the ejected Makefile defines it for the object")
 
 
+@case
+def a_qt_test_that_aborts_with_no_display_is_told_the_key(t):
+	"""bbq-predictor and hembygd each lost tests under `fmake test` to
+	Qt's platform plugin aborting for want of a display, reported as
+	`killed by SIGABRT` -- a crash, to anyone not reading the eight lines
+	of Qt above it. The environment that fixes it is the line beerssh's
+	fmake.toml already carries, and fmake knows both halves of the
+	finding without reading the test's output: the program links Qt, and
+	the environment it handed the program names no display and no
+	platform. The note is conditional on what the reader can see, since
+	a Qt program can abort for other reasons."""
+	_need_qt()
+	if not _have_pkg("Qt6Test") or not _have_pkg("Qt6Widgets"):
+		raise Skip("Qt6Test and Qt6Widgets are needed")
+	# QTEST_MAIN makes a QApplication once a Widgets header is in scope,
+	# and a QApplication opens a platform plugin.
+	t.write("tests/widget_test.cpp",
+	        "#include <QtTest>\n#include <QApplication>\n#include <QWidget>\n"
+	        "class WidgetTest : public QObject {\n\tQ_OBJECT\n"
+	        "private slots:\n"
+	        "\tvoid shows() { QWidget w; w.resize(8, 8); QVERIFY(w.width() == 8); }\n"
+	        "};\nQTEST_MAIN(WidgetTest)\n"
+	        '#include "widget_test.moc"\n')
+	bare = {"DISPLAY": "", "WAYLAND_DISPLAY": "", "QT_QPA_PLATFORM": ""}
+
+	r = t.fmake("test", env=bare)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "killed by SIGABRT" in out,
+	      f"without a display the plugin aborts the test: {out}")
+	check("widget_test links Qt and no display is set" in out
+	      and 'test-env = ["QT_QPA_PLATFORM=offscreen"]' in out,
+	      f"the note names the key: {out}")
+
+	# The key, taken: the test runs, and there is nothing to note.
+	t.write("fmake.toml", '[project]\ntest-env = ["QT_QPA_PLATFORM=offscreen"]\n')
+	r = t.fmake("test", env=bare)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"offscreen, the widget test passes: {out}")
+	check("no display is set" not in out, f"and nothing is noted: {out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

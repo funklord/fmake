@@ -2159,7 +2159,22 @@ def test_env_pairs(conf, t, paths=None):
 	return out
 
 
-def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None):
+RE_QT_LIB_ANY = re.compile(r"^Qt\d+[A-Z]")
+
+
+def wants_a_display(env):
+	"""Whether a Qt GUI program run in this environment would find one.
+
+    A display, a Wayland socket, or a platform named outright. QT_QPA_
+    PLATFORM covers `offscreen', which is how every suite here that has
+    widget tests runs them on a machine without a screen.
+    """
+	return not any(env.get(k) for k in ("QT_QPA_PLATFORM", "DISPLAY",
+	                                    "WAYLAND_DISPLAY"))
+
+
+def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
+                  gui=()):
 	"""Build step done; now run them. Returns a process exit status.
 
     Sequentially and in name order, because a test suite that passes only
@@ -2256,6 +2271,25 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None):
 		if rc:
 			failed.append(t.name)
 			warn(f"{t.name} failed ({describe_exit(rc)})")
+			# Qt's platform plugin aborts the process when there is no
+			# display to open, and the abort reads as a crash in the test.
+			# fmake does not read the test's output -- it goes to the
+			# terminal, unbuffered, above the line naming the test -- but
+			# it knows the program links Qt and what environment it was
+			# handed. Qt, not Qt's GUI libraries: bbq-predictor's test_cli
+			# links Qt6Core and Qt6Test alone and still opens a platform
+			# plugin, QTEST_MAIN having expanded to a QApplication. So the
+			# note is conditional on what the reader can see above it.
+			# bbq-predictor and hembygd each lost tests this way to the
+			# same line beerssh already carries in its fmake.toml.
+			if (rc == -signal.SIGABRT and t.name in gui
+			        and wants_a_display(env or os.environ)):
+				note(f"{t.name} links Qt and no display is set: if the "
+				     f"output above says no Qt platform plugin could be "
+				     f"initialized, `test-env = "
+				     f"[\"QT_QPA_PLATFORM=offscreen\"]' under [project] or "
+				     f"{tgt_section(t.name)} is how a suite runs without "
+				     f"a screen")
 	if dry_run:
 		return 0
 	say()
@@ -11096,10 +11130,13 @@ def build(args, _bootstrapping=False):
 			warn(f"{len(broken)} file(s) did not compile; not running tests")
 			return 1
 		say()
+		gui = {t.name for t in wanted
+		       if any(RE_QT_LIB_ANY.match(l)
+		              for l in (resolutions.get(t) or {}).get("chosen", []))}
 		return run_tests_now([t for t in wanted
 		                      if t.test_group in run_groups],
 		                     root, outdir, conf, args.dry_run,
-		                     known=targets)
+		                     known=targets, gui=gui)
 
 	if broken:
 		say()
