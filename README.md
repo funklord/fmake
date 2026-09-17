@@ -427,7 +427,7 @@ like `@brief` are ignored.
 | `@target NAME` | Name of the artifact this file roots — a name, not a path; `-o` moves output |
 | `@kind exe\|shared\|static\|library` | Build an archive or `.so` from this file's closure, or both with `library`; `exe` is inferred from `main()` |
 | `@pkg NAME [OP VER]` | pkg-config dependency, version constraint optional |
-| `@pkg_optional NAME defines MACRO` | Define `MACRO` if pkg-config finds `NAME` |
+| `@pkg_optional NAME defines MACRO` | Define `MACRO` for the whole tree if pkg-config finds `NAME`; this file gets `NAME`'s cflags |
 | `@libs NAME…` | Raw `-l`, for libraries with no `.pc` file |
 | `@cflags …` | Compile flags for this file |
 | `@ldflags …` | Link flags, propagated to anything containing this file |

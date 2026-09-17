@@ -8553,6 +8553,56 @@ def a_live_directory_puts_its_tests_in_the_live_group(t):
 	      f"TEST_TARGETS does not: {test_var.group(0)}")
 
 
+@case
+def a_found_optional_package_defines_its_macro_for_the_whole_tree(t):
+	"""Reported from hydra: `--eject` failed inside Qt's own header.
+
+	`theme.h` declares a stand-in `class QDBusVariant {}` unless
+	HYDRA_HAVE_DBUS is defined, and the macro came from `@pkg_optional
+	Qt6DBus defines HYDRA_HAVE_DBUS` in theme.cpp. So theme.cpp saw the
+	real class, and test/test_theme.cpp -- which includes the header and
+	then <QDBusVariant> -- saw the stand-in and then the real one, and
+	the compiler stopped at the real one's `operator==`. Found means
+	defined is a fact about the build: the header that shapes itself on
+	the macro is included by units that never said @pkg_optional, and two
+	units disagreeing about a type is the quiet version of this fault."""
+	if not _have_pkg("zlib"):
+		raise Skip("zlib has no pkg-config file here")
+	t.write("pack.h",
+	        "#pragma once\n"
+	        "#ifdef HAVE_ZLIB\n#include <zlib.h>\n#else\n"
+	        "/* the stand-in, so the signature exists either way */\n"
+	        "typedef struct { int none; } z_stream;\n#endif\n"
+	        "int pack(z_stream *s);\n")
+	t.write("pack.c",
+	        "/** @pkg_optional zlib defines HAVE_ZLIB */\n"
+	        '#include "pack.h"\n'
+	        "int pack(z_stream *s){\n#ifdef HAVE_ZLIB\n"
+	        "\ts->zalloc = 0; return 1;\n#else\n\t(void)s; return 0;\n#endif\n}\n")
+	# hydra's test_theme.cpp: the header first, the real one after it.
+	t.write("main.c",
+	        '#include "pack.h"\n#include <zlib.h>\n#include <stdio.h>\n'
+	        "int main(void){ z_stream s; printf(\"%d %s\\n\", pack(&s), "
+	        "zlibVersion()); return 0; }\n")
+
+	r = t.fmake("-v")
+	check(r.returncode == 0,
+	      f"main.c must see the same pack.h as pack.c: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout.startswith("1 "),
+	      "the feature is compiled into the unit that asked for it")
+	check("-DHAVE_ZLIB for the whole tree" in r.stdout + r.stderr,
+	      f"the report says where the macro reaches: {r.stdout}{r.stderr}")
+
+	# The ejected build carries it once, with the tree's flags, rather than
+	# on the one object that asked -- a Makefile somebody edits has to say
+	# the same thing about main.o as fmake did.
+	mk = t.fmake("--eject", "make").stdout
+	common = re.search(r"^CFLAGS\s*[:?+]?=\s*(.*)$", mk, re.M)
+	check(common and "-DHAVE_ZLIB" in common.group(1).split(),
+	      f"the ejected CFLAGS define the macro for every object: "
+	      f"{common.group(0) if common else mk[:400]}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

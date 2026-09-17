@@ -292,7 +292,8 @@ that had been green about nothing for five commits ·
 [239. `@aliases`: a program's other names, as links beside it](#239-aliases-a-programs-other-names-as-links-beside-it) ·
 [240. Reported from hydra: `--eject` fails on a Qt DBus translation unit](#240-reported-from-hydra---eject-fails-on-a-qt-dbus-translation-unit) ·
 [241. Two licences at the root, and the expression that says how](#241-two-licences-at-the-root-and-the-expression-that-says-how) ·
-[242. `tests/live/` is the `live` group, and no other directory is one](#242-testslive-is-the-live-group-and-no-other-directory-is-one)
+[242. `tests/live/` is the `live` group, and no other directory is one](#242-testslive-is-the-live-group-and-no-other-directory-is-one) ·
+[243. Found means defined for the tree, not for the file that said so](#243-found-means-defined-for-the-tree-not-for-the-file-that-said-so)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19411,3 +19412,59 @@ name set emptied the case fails on `fmake test` printing the live test's
 output, which is the check it exists for. netcfgd is told in its
 `project.md` that the eight `test-group` lines are no longer needed;
 whether to drop them is that tree's.
+
+## 243. Found means defined for the tree, not for the file that said so
+
+Section 240's report, diagnosed. hydra's `src/theme.h` reads
+
+    #ifdef HYDRA_HAVE_DBUS
+    #include <QDBusVariant>
+    #else
+    class QDBusVariant {};
+    #endif
+
+and the macro comes from `@pkg_optional Qt6DBus defines HYDRA_HAVE_DBUS`
+in `theme.cpp`. `unit_cflags` defined it for the annotating unit and no
+other -- "per-TU by design: a compile flag is a property of the
+translation unit" -- so `theme.cpp` saw Qt's class and
+`test/test_theme.cpp`, which includes `theme.h` and then
+`<QDBusVariant>`, saw the stand-in and then the real one. The compiler
+stopped inside `qdbusextratypes.h` at `operator==` calling `variant()`
+on a class that, as far as that unit knew, had none: the two errors
+hydra quoted, exactly. hydra's Makefiles put `-DHYDRA_HAVE_DBUS` in
+`DEFINES` for every object, which is why `make` compiled it.
+
+Reproduced first in C with zlib, in the shape rather than the library:
+a header with a stand-in `typedef struct { int none; } z_stream;`
+behind `HAVE_ZLIB`, one unit carrying the directive, a second including
+the header and then `<zlib.h>`. Unpatched fmake fails the second with
+`conflicting types for 'z_stream'` inside `/usr/include/zlib.h` -- the
+same fault, one header further in.
+
+"Found means defined" was written as a fact about the file and is a
+fact about the build. A header that shapes itself on such a macro is
+included by units that never said `@pkg_optional`, and the loud form
+here has a quiet twin: two units disagreeing about a struct's layout,
+which compiles and corrupts. So when the package is found the macro
+goes into the tree's flags, before the object directory is named, so
+that a package appearing or vanishing changes the identity of every
+object rather than of the one that asked. The annotating unit keeps the
+package's own cflags -- those are about its includes, and stay its.
+`-v` says `Qt6DBus found: -DHYDRA_HAVE_DBUS for the whole tree, asked
+by src/qtwebengine_notifications.cpp and 1 more`; the ejected builds carry the macro once,
+in `CFLAGS`, rather than on one object.
+
+`Config.add_tree_flag` is the door, and `-fPIC` now goes through it
+too. It inserts in front of the sanitize band rather than appending:
+`base_cflags()` takes that band back off the end by length, so a flag
+appended after it was the one removed -- an ejected build under
+`SANITIZE=1` would have lost `-fPIC` and said nothing. Found by reading
+the comment above the band while placing the macro; not measured on a
+tree, and recorded rather than given its own case because the case
+would be the same assertion the -fPIC ejection case already makes,
+under one more switch.
+
+Measured on the copy of hydra: `fmake --no-submodules --eject
+make-fragment` runs to the end where `ff35d09`'s report stopped. What
+this does not do is tell hydra anything: their tree was right, their
+Makefile was right, and the report was fmake's to answer.

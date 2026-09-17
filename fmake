@@ -4950,6 +4950,19 @@ class Config:
 		end = len(self.cflags) - len(self.sanitize_flags)
 		return self.cflags[len(self.opt_flags):end]
 
+	def add_tree_flag(self, flag):
+		"""A compile flag fmake decided for the whole tree, into the key.
+
+        In front of the sanitize band rather than appended after it:
+        base_cflags() takes that band back off the end by length, so a
+        flag appended behind it would be the one removed -- ejected
+        builds would lose -fPIC under SANITIZE=1 and never say so.
+        """
+		if flag in self.cflags:
+			return
+		self.cflags.insert(len(self.cflags) - len(self.sanitize_flags), flag)
+		self.refresh_key()
+
 	def refresh_key(self):
 		"""Recompute the configuration identity.
 
@@ -5456,7 +5469,10 @@ def unit_cflags(u, pkg, store, sig):
 	# the macro, not the library -- once the macro is defined the guarded
 	# code is there and its symbols ask for the library on their own, so section 3
 	# still decides the link. A package that is not installed adds nothing,
-	# which is the same answer the configure step would have given.
+	# which is the same answer the configure step would have given. The
+	# macro itself is a tree flag (see build), since the header it shapes
+	# is included by units that never said @pkg_optional; what stays here
+	# is the package's own cflags, for the unit that includes its headers.
 	for group in u.ann.groups("pkg_optional"):
 		spec = optional_pkg(group)
 		if not spec:
@@ -5464,8 +5480,6 @@ def unit_cflags(u, pkg, store, sig):
 		got = pkg.for_module(spec[0], store, sig)
 		if got:
 			out += [f for f in got[1] if f not in out]
-			if "-D" + spec[1] not in out:
-				out.append("-D" + spec[1])
 	return out
 
 
@@ -9469,8 +9483,33 @@ def build(args, _bootstrapping=False):
 	# to be part of the configuration identity: building only the program and
 	# then building the library as well must not reuse the non-PIC objects.
 	if any(t.kind == "shared" for t in wanted):
-		cfg.cflags = cfg.cflags + ["-fPIC"]
-		cfg.refresh_key()
+		cfg.add_tree_flag("-fPIC")
+
+	# "Found means defined" is a fact about the build, not about the file
+	# that said it. hydra's theme.h declares a stand-in `class QDBusVariant
+	# {}' unless HYDRA_HAVE_DBUS is defined, and the macro came from
+	# `@pkg_optional Qt6DBus defines HYDRA_HAVE_DBUS' in theme.cpp -- so
+	# theme.cpp saw the real class and test/test_theme.cpp, which includes
+	# the same header and then <QDBusVariant>, saw the stand-in and then
+	# the real one, and failed inside Qt's header. Reported from hydra
+	# (section 240). A header that shapes itself on such a macro is
+	# included by every unit that uses it, and two units disagreeing about
+	# a struct's layout is the quiet version of the same fault. So the
+	# macro is defined for every unit, here, before the object directory
+	# is named -- a package appearing or vanishing changes the identity of
+	# every object, not only of the one that asked. The annotating unit
+	# still gets the package's own cflags in unit_cflags; those are its.
+	optional = {}
+	for rel in sorted(scans):
+		for group in Ann(scans[rel].get("dirs")).groups("pkg_optional"):
+			spec = optional_pkg(group)
+			if spec:
+				optional.setdefault(spec, []).append(rel)
+	hdr_store = cache.data.setdefault("headers", {})
+	pkg_sig = pkg.signature()
+	for (module, macro), users in sorted(optional.items()):
+		if pkg.for_module(module, hdr_store, pkg_sig):
+			cfg.add_tree_flag("-D" + macro)
 	objdir = os.path.join(state, "obj", cfg.key)
 
 	# @sources, resolved next to the file that asked for them, then from the
@@ -9651,9 +9690,7 @@ def build(args, _bootstrapping=False):
 	for rel in sorted(candidates):
 		unit(rel)
 
-	hdr_store = cache.data.setdefault("headers", {})
 	incflags, proposed = list(base_incflags), {}
-	pkg_sig = pkg.signature()
 
 	def own_flags(u):
 		"""The compile flags a TU asked for, plus any fmake owes it.
@@ -9756,17 +9793,13 @@ def build(args, _bootstrapping=False):
 	# once per package rather than per file, and said whether the answer is
 	# yes or no: "built without keyring support" is the sentence hydra's
 	# browser needed and did not get, and it is only trustworthy if the
-	# other half is printed too.
-	optional = {}
-	for rel in sorted(units):
-		for group in units[rel].ann.groups("pkg_optional"):
-			spec = optional_pkg(group)
-			if spec:
-				optional.setdefault(spec, []).append(rel)
+	# other half is printed too. `optional' was gathered before the object
+	# directory was named, where the macro went into the tree's flags.
 	for (module, macro), users in sorted(optional.items()):
 		if pkg.for_module(module, hdr_store, pkg_sig):
-			vinfo(f"{module} found: -D{macro} for "
-			      f"{len(users)} file{'' if len(users) == 1 else 's'}")
+			vinfo(f"{module} found: -D{macro} for the whole tree, asked "
+			      f"by {users[0]}"
+			      + (f" and {len(users) - 1} more" if len(users) > 1 else ""))
 		else:
 			info(f"{module} is not installed, so {macro} is undefined and "
 			     f"whatever {users[0]} guards with it is not in this build")
