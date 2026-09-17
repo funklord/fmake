@@ -8945,6 +8945,20 @@ def build(args, _bootstrapping=False):
 			warn(f"{rel}:{line}: @{name} is in an ordinary comment and "
 			     f"does nothing; directives are read from doxygen "
 			     f"comments -- /*! */, /** */, //! or ///")
+		# The other way to write a directive nothing reads: the right
+		# comment, in a header. Every reader of `dirs' walks the sources,
+		# and a header's directives were scanned, stored and consulted by
+		# nobody -- `@target' in the header beside a program's main.c
+		# named nothing and said nothing, while the misplaced-comment
+		# warning above promised that a doxygen comment was enough.
+		# Whether a header should be allowed to carry one is a decision
+		# (section 250); until it is taken, the silence is the defect.
+		if os.path.splitext(rel)[1] in HDR_EXTS:
+			for name, entries in sorted(scans[rel].get("dirs", {}).items()):
+				for line, _args in entries:
+					warn(f"{rel}:{line}: @{name} is in a header and does "
+					     f"nothing; directives are read from sources, so "
+					     f"put it in a .c or .cpp that includes this file")
 		# `@libs' takes the NAME, and every value here becomes `-l<value>'.
 		# `@libs -lm' therefore asks the linker for `-l-lm', which fails
 		# with `cannot find -l-lm: No such file or directory' -- a message

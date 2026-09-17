@@ -299,7 +299,8 @@ that had been green about nothing for five commits ·
 [246. A suite that kills by a recorded pid reads the pid first](#246-a-suite-that-kills-by-a-recorded-pid-reads-the-pid-first) ·
 [247. A shim is a second moc, so the moc key gets its witness](#247-a-shim-is-a-second-moc-so-the-moc-key-gets-its-witness) ·
 [248. `@pkg_optional` is read from the sources this build compiles](#248-pkg_optional-is-read-from-the-sources-this-build-compiles) ·
-[249. A killed fmake is reported as killed, with the signal](#249-a-killed-fmake-is-reported-as-killed-with-the-signal)
+[249. A killed fmake is reported as killed, with the signal](#249-a-killed-fmake-is-reported-as-killed-with-the-signal) ·
+[250. A directive in a header is said to do nothing](#250-a-directive-in-a-header-is-said-to-do-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19667,3 +19668,35 @@ and `send_signal` in the suite is aimed at a `Popen` the case has just
 started, which CPython polls before signalling. Nothing was found that
 sends TERM to a pid it did not start. The instrument is what this
 section adds; the answer is still owed.
+
+## 250. A directive in a header is said to do nothing
+
+Section 248 fixed the population `@pkg_optional` was read from and
+left the observation that produced it: `@target fromheader` in a
+doxygen comment in a header named nothing and said nothing. Every
+reader of a scan's `dirs` walks the sources -- rules, exclusion, the
+crate roots, `@sources`, and now the optional packages -- so a header's
+directives are scanned, stored in the cache, and consulted by nobody.
+Meanwhile the warning for a directive in an ordinary comment says that
+a doxygen comment is what it takes, which for a header is not true.
+
+The warning now covers the other half: `prog.h:1: @target is in a
+header and does nothing; directives are read from sources, so put it
+in a .c or .cpp that includes this file`. Per directive, per line,
+from the cached scan, so it survives the cache the way the typo
+warning does. Measured for noise on the hydra and ossacli copies: zero
+lines, and no sibling tree keeps a directive in a header.
+
+**What this does not decide.** Whether a header should be allowed to
+carry one is a real question with a real case for yes: hydra's
+`theme.h` is where `HYDRA_HAVE_DBUS` matters and `theme.cpp` is merely
+where it was said. It is also a question about which files fmake reads
+build facts from, which every reader so far has answered as sources
+without anybody having written the rule down. So the holder's: the
+option is to
+read a header's directives as belonging to every source that includes
+it; the cost is that a header included by two programs carries a
+`@target` that cannot mean anything, so the set would have to be
+narrowed to the directives that are about the header -- `@pkg`,
+`@pkg_optional`, `@headers` -- and that narrowing is the design. Until
+then the silence was the defect and it is gone.

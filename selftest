@@ -8823,6 +8823,36 @@ def a_killed_fmake_is_reported_as_killed(t):
 		              f"had merely failed: {r.stdout}{r.stderr}")
 
 
+@case
+def a_directive_in_a_header_is_said_to_do_nothing(t):
+	"""Section 248's neighbour: the silence, not the population.
+
+	Directives are read from sources; a header's were scanned, stored,
+	and read by nobody. So `@target` in the header beside main.c named
+	nothing and said nothing -- while the warning for a directive in an
+	ordinary comment promised that a doxygen comment was all it took.
+	The header's directive still does nothing; now it says so, naming
+	the file and line, and the source's beside it works as before."""
+	t.write("prog.h", "/** @target fromheader */\n#pragma once\nint f(void);\n")
+	t.write("main.c", "/** @target fromsource */\n#include \"prog.h\"\n"
+	        "int f(void){ return 0; }\nint main(void){ return f(); }\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	said = r.stdout + r.stderr
+	check("prog.h:1: @target is in a header and does nothing" in said,
+	      f"the header's directive is named as unread: {said}")
+	check(os.path.exists(os.path.join(t.dir, "fromsource"))
+	      and not os.path.exists(os.path.join(t.dir, "fromheader")),
+	      f"the source's directive decides: {os.listdir(t.dir)}")
+
+	# Once, not every build: the record is in the cached scan, and a
+	# warning that survives the cache is the reason it is recorded there.
+	r = t.fmake()
+	check("@target is in a header" in r.stdout + r.stderr,
+	      f"the warning must survive the scan cache: {r.stdout}{r.stderr}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
