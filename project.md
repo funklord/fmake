@@ -301,7 +301,8 @@ that had been green about nothing for five commits ·
 [248. `@pkg_optional` is read from the sources this build compiles](#248-pkg_optional-is-read-from-the-sources-this-build-compiles) ·
 [249. A killed fmake is reported as killed, with the signal](#249-a-killed-fmake-is-reported-as-killed-with-the-signal) ·
 [250. A directive in a header is said to do nothing](#250-a-directive-in-a-header-is-said-to-do-nothing) ·
-[251. A cache section that is present and wrong is a traceback](#251-a-cache-section-that-is-present-and-wrong-is-a-traceback)
+[251. A cache section that is present and wrong is a traceback](#251-a-cache-section-that-is-present-and-wrong-is-a-traceback) ·
+[252. A pid space that wraps in minutes, and a case run once more](#252-a-pid-space-that-wraps-in-minutes-and-a-case-run-once-more)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19663,12 +19664,11 @@ nothing -- and that is the shape observed, which is the strongest
 thing yet said about the mechanism, and still not an identification.
 The kill-by-recorded-pid in section 246 sends KILL, not TERM; if the
 next report says fifteen, that theory is dead and something calling
-`terminate()` on the wrong pid is alive. Read for that: fmake signals
-only from its own handler, after being signalled; every `terminate()`
-and `send_signal` in the suite is aimed at a `Popen` the case has just
-started, which CPython polls before signalling. Nothing was found that
-sends TERM to a pid it did not start. The instrument is what this
-section adds; the answer is still owed.
+`terminate()` on the wrong pid is alive. It spoke on the next run:
+suite44 lost a different case, `a_declaration_naming_two_things_
+defines_both`, to `killed by signal 9 (SIGKILL)` -- so the TERM
+theories are dead and the stale-pid kill is alive. Section 252 has
+what was measured after that and what the suite does about it.
 
 ## 250. A directive in a header is said to do nothing
 
@@ -19739,3 +19739,46 @@ down and has not been met; the two sections whose entries are checked
 are the two this class indexes itself, and the rest are indexed by
 their readers in five shapes, which is the reason to stop here and say
 so rather than to guess at all five.
+
+## 252. A pid space that wraps in minutes, and a case run once more
+
+The third silent death, suite44, was the first with section 249's
+instrument in place: `fmake was killed by signal 9 (SIGKILL)`, in a
+case that had never failed before. Three of five full runs have now
+lost one case each, every time exactly one, every time an fmake
+process with nothing printed.
+
+**What was measured, and what it rules out.** The session's cgroup
+has no memory or pid limit and `memory.events` reads `oom_kill 0`;
+the kernel log is root's here, but with 164 GB free the global OOM
+killer is not a candidate either. `/proc/loadavg` read `2/1852 852`:
+1852 processes alive, and the pid most recently handed out was 852 --
+the counter had just wrapped. `kernel.pid_max` is 32768, the kernel's
+own default; systemd raises it to 4194304 at boot and this machine
+boots Devuan with sysvinit and nothing in `sysctl.d` names it. So a
+pid recorded and signalled seconds later has, at this population, a
+few per cent chance of naming a live stranger, and every session on
+the box is exposed to every other session's stale `kill -9`. The
+suite's own kill sites read `/proc/<pid>/cmdline` first since section
+246; the twenty-nine cases around the first victim, run eight times in
+parallel, never reproduced it; the sender is not knowable from user
+space after the fact. Signalled to `claude-guidelines` as a fact about
+the machine, with `sysctl kernel.pid_max` named as the holder's lever.
+
+**What the suite does about it.** A killed run is neither a pass nor a
+failure. `Tree.fmake` raises `Killed`, a `Failure` with the signal on
+it, for SIGKILL and SIGTERM -- the two fmake never sends itself, so
+they came from outside -- and `run_case` runs such a case once more in
+a fresh tree. The retry is the verdict, printed as
+`ok   <case> -- after fmake was killed by signal 9 from outside, once`
+so the event stays visible in a green run; a second kill fails as
+`killed twice`. Any other signal is fmake's own -- an interpreter
+crash is a finding -- and is failed on the first. The case exercises
+`run_case` directly with three compiler shims: one that TERMs its
+parent on the first build only, one that does it every time, one that
+ABRTs it; with the retry removed it fails on the first.
+
+Not a fix for the machine and not claimed as one. The rate is one case
+in three of five runs, and a suite that reads that as a defect in
+fmake three times out of five is a suite nobody will read at all,
+which is the worse outcome.

@@ -125,9 +125,12 @@ class Tree:
 				name = signal.Signals(sig).name
 			except ValueError:
 				name = "?"
-			raise Failure(f"fmake was killed by signal {sig} ({name}) "
-			              f"running: {' '.join(args) or '(no arguments)'}; "
-			              f"it had said: {(r.stdout + r.stderr)[:400]!r}")
+			message = (f"fmake was killed by signal {sig} ({name}) "
+			           f"running: {' '.join(args) or '(no arguments)'}; "
+			           f"it had said: {(r.stdout + r.stderr)[:400]!r}")
+			if sig in (signal.SIGKILL, signal.SIGTERM):
+				raise Killed(sig, message)
+			raise Failure(message)
 		return r
 
 	def run(self, prog, env=None):
@@ -143,6 +146,18 @@ class Tree:
 
 class Failure(Exception):
 	pass
+
+
+class Killed(Failure):
+	"""fmake died by a signal only something outside it sends.
+
+	A Failure, so a case that catches one still sees it; its own class,
+	so the runner can tell a verdict about fmake from a stranger's
+	`kill -9' landing on a recycled pid and run the case once more.
+	"""
+	def __init__(self, sig, message):
+		super().__init__(message)
+		self.sig = sig
 
 
 class Skip(Exception):
@@ -8867,6 +8882,63 @@ def a_directive_in_a_header_is_said_to_do_nothing(t):
 	r = t.fmake()
 	check("@target is in a header" in r.stdout + r.stderr,
 	      f"the warning must survive the scan cache: {r.stdout}{r.stderr}")
+
+
+@case
+def a_case_whose_fmake_was_killed_from_outside_runs_once_more(t):
+	"""Three suites in five lost one case to a SIGKILL nobody here sent.
+
+	This machine's pid space is 32768 wide and wraps in minutes, so a
+	stale `kill -9` from anywhere on it lands on a live stranger. A
+	killed run is neither a pass nor a failure: `run_case` runs the case
+	once more, says so beside the `ok`, and reports a second kill as
+	two. The runner is exercised directly, with a case whose compiler
+	shim TERMs its parent on the first build only and a case whose shim
+	does it every time; any other signal is fmake's own and is not
+	retried, which the third case shows with a shim that ABRTs it."""
+	def shim(tree, once):
+		mark = os.path.join(tree.dir, "killed-once")
+		path = tree.write("cc-kill-once" if once else "cc-kill",
+		                  "#!/bin/sh\n"
+		                  + (f'[ -e "{mark}" ] && exec cc "$@"\n: > "{mark}"\n'
+		                     if once else "")
+		                  + "kill -TERM $PPID\nsleep 2\nexit 1\n")
+		os.chmod(path, 0o755)
+		return path
+
+	def killed_once(u):
+		u.write("main.c", "int main(void){ return 0; }\n")
+		# The marker lives outside the tree the retry gets, since that
+		# tree is fresh: the retry must find the first run's mark.
+		r = u.fmake(env={"CC": shim_once})
+		check(r.returncode == 0, f"the second run builds: {r.stdout}{r.stderr}")
+
+	def killed_always(u):
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.fmake(env={"CC": shim_always})
+
+	def aborted(u):
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.fmake(env={"CC": shim_abrt})
+
+	shim_once = shim(t, once=True)
+	shim_always = shim(t, once=False)
+	shim_abrt = t.write("cc-abrt", "#!/bin/sh\nkill -ABRT $PPID\nsleep 2\nexit 1\n")
+	os.chmod(shim_abrt, 0o755)
+	killed_once.__name__ = "killed-once"
+	killed_always.__name__ = "killed-always"
+	aborted.__name__ = "aborted"
+
+	status, detail = run_case(killed_once)
+	check(status == "ok" and "killed by signal 15 from outside, once" in detail,
+	      f"one kill from outside is retried and said: {status} {detail}")
+	status, detail = run_case(killed_always)
+	check(status == "fail" and detail.startswith("killed twice"),
+	      f"two kills are a failure naming both: {status} {detail}")
+	status, detail = run_case(aborted)
+	check(status == "fail" and "signal 6 (SIGABRT)" in detail
+	      and "killed twice" not in detail,
+	      f"a signal fmake could send itself is not retried: {status} {detail}")
 
 
 CROSS_CC = "aarch64-linux-gnu-gcc"
@@ -22610,14 +22682,33 @@ def the_ejected_builds_compile_the_schema_themselves(t):
 
 # ---------------------------------------------------------------------------
 
-def run_case(c):
-	"""Run one case in its own tree. Returns (status, detail)."""
+def run_case(c, _again=False):
+	"""Run one case in its own tree. Returns (status, detail).
+
+	A case whose fmake was killed by SIGKILL or SIGTERM -- signals fmake
+	never sends itself, so they came from outside -- is run once more in
+	a fresh tree, and says so. This machine's pid space wraps in minutes
+	(section 252), so a stale `kill -9' from anywhere on it lands on a
+	live stranger, and three suites in five lost one case each to that.
+	A killed run is neither a pass nor a failure; the second run is the
+	verdict, and a second kill is reported as two. Any other signal is
+	fmake's own -- an interpreter crash is a finding -- and is not retried.
+	"""
 	t = Tree(c.__name__)
 	try:
 		c(t)
 		return "ok", ""
 	except Skip as exc:
 		return "skip", str(exc)
+	except Killed as exc:
+		if _again:
+			return "fail", f"killed twice: {exc}"
+		t.cleanup()
+		status, detail = run_case(c, _again=True)
+		if status == "ok":
+			return "ok", (f"after fmake was killed by signal {exc.sig} "
+			              f"from outside, once")
+		return status, detail
 	except Failure as exc:
 		return "fail", str(exc) + (f"\n       tree: {t.dir}" if KEEP else "")
 	except Exception as exc:                           # noqa: BLE001
@@ -22662,7 +22753,8 @@ def main(argv):
 
 	for c, (status, detail) in zip(cases, results):
 		if status == "ok":
-			print(f"{GREEN}ok{OFF}   {c.__name__}")
+			print(f"{GREEN}ok{OFF}   {c.__name__}"
+			      + (f" {DIM}-- {detail}{OFF}" if detail else ""))
 		elif status == "skip":
 			skipped += 1
 			print(f"{DIM}skip {c.__name__} -- {detail}{OFF}")
