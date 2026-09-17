@@ -6855,8 +6855,12 @@ def a_damaged_cache_is_rebuilt_not_a_traceback(t):
     Every optional key was measured one at a time -- `headers', `links',
     `nomain', `providers', `generated_outputs', `units' -- and each is
     read through `.get' by its caller, so each survives being absent.
-    What this class indexes without a guard is `files' and `objects' and
-    the entries under them, so that is what is checked and no more.
+    That was written as if absent were the only other shape of damage.
+    Present and wrong is the one `.get' cannot help with: the caller
+    takes the number it was handed and indexes it by a string two lines
+    later. Section 251 measured every section set to a number and seven
+    raised, so the gate checks the type of every section now -- a dict,
+    or a list for `units' -- and this case damages each in turn.
 
     Discarding stays silent, as it already is for the other three: there
     is nothing for the reader to do, and rebuilding is the whole remedy.
@@ -6905,6 +6909,18 @@ def a_damaged_cache_is_rebuilt_not_a_traceback(t):
 		d = json.loads(good)
 		edit(d)
 		damaged(what, json.dumps(d))
+
+	# Every other section, present and the wrong type. Sections this
+	# fixture never writes are damaged too -- a cache carrying `moc: 7'
+	# is wrong whether or not this tree mocs -- and the list is what
+	# fmake's readers name, so a section added without a reader that
+	# survives it is caught here rather than by a traceback later.
+	for section in ("providers", "headers", "links", "nomain", "generated",
+	                "generated_deps", "generated_outputs", "moc", "uic",
+	                "rcc", "situ", "units"):
+		d = json.loads(good)
+		d[section] = 7
+		damaged(f"{section} is a number", json.dumps(d))
 
 	# And the cache fmake has just written is still used, which is what
 	# says this is a gate rather than a way of never having a cache.

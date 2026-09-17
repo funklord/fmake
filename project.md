@@ -300,7 +300,8 @@ that had been green about nothing for five commits ·
 [247. A shim is a second moc, so the moc key gets its witness](#247-a-shim-is-a-second-moc-so-the-moc-key-gets-its-witness) ·
 [248. `@pkg_optional` is read from the sources this build compiles](#248-pkg_optional-is-read-from-the-sources-this-build-compiles) ·
 [249. A killed fmake is reported as killed, with the signal](#249-a-killed-fmake-is-reported-as-killed-with-the-signal) ·
-[250. A directive in a header is said to do nothing](#250-a-directive-in-a-header-is-said-to-do-nothing)
+[250. A directive in a header is said to do nothing](#250-a-directive-in-a-header-is-said-to-do-nothing) ·
+[251. A cache section that is present and wrong is a traceback](#251-a-cache-section-that-is-present-and-wrong-is-a-traceback)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19700,3 +19701,41 @@ it; the cost is that a header included by two programs carries a
 narrowed to the directives that are about the header -- `@pkg`,
 `@pkg_optional`, `@headers` -- and that narrowing is the design. Until
 then the silence was the defect and it is gone.
+
+## 251. A cache section that is present and wrong is a traceback
+
+Section 221's gate checks that `files` and `objects` are mappings of
+mappings, and its record says every other section "is read through
+`.get` by its caller, so each survives being absent". True, and absent
+is one of two shapes. Measured one section at a time, a fresh cache
+each time, the section set to `7`:
+
+    providers, headers          TypeError: argument of type 'int' is not iterable
+    generated, generated_deps,
+    links, nomain               AttributeError: 'int' object has no attribute 'get'
+    units                       TypeError: 'int' object is not iterable
+    generated_outputs, moc,
+    uic, rcc, situ              survived -- nothing in that tree reads them
+
+`.get` returns whatever is there, and `setdefault("providers", {})`
+returns the 7 rather than the `{}`. Then `key in store` raises. The
+traceback names no file, and the run that raised did not save, so the
+damage stays until somebody deletes `.fmake/` by hand -- the shape
+section 221 was written against, one section over.
+
+`_well_shaped` checks every section: a dict, or a list for `units`,
+plus the two scalars, plus the two mappings-of-mappings as before. A
+section fmake does not know is a dict or the cache is discarded, which
+is what a section from a future fmake with a different shape deserves
+on this one; the identity check catches that first anyway. The case
+damages twelve sections in turn, including the ones this fixture never
+writes, since a cache carrying `moc: 7` is wrong whether or not the
+tree mocs.
+
+Not checked: the shape of an entry inside a section other than `files`
+and `objects`. A `providers` entry that is a string rather than a
+`{providers, paths}` pair would still raise. That is the next layer
+down and has not been met; the two sections whose entries are checked
+are the two this class indexes itself, and the rest are indexed by
+their readers in five shapes, which is the reason to stop here and say
+so rather than to guess at all five.

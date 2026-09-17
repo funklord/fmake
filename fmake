@@ -5186,6 +5186,33 @@ def _dict_of_dicts(value):
 	        and all(isinstance(entry, dict) for entry in value.values()))
 
 
+def _well_shaped(d):
+	"""Whether every section is the type the code that reads it indexes.
+
+    Section 221 checked `files' and `objects', the two this class indexes
+    itself, and recorded that every other section is reached through
+    `.get' and survives being ABSENT. Absent is one shape of damage;
+    present and wrong is the other, and `.get' does nothing for it: the
+    caller gets a list where it wanted a dict and indexes it by a string
+    two lines later, a traceback naming no file. Measured one section at
+    a time with the section set to a number -- providers, headers,
+    generated, generated_deps, links, nomain, units each raised. So:
+    every section is a dict except `units', which is a list, and the two
+    scalars naming the format and the fmake that wrote it.
+    """
+	if not isinstance(d, dict):
+		return False
+	for name, value in d.items():
+		if name in ("version", "fmake"):
+			continue
+		if name == "units":
+			if not isinstance(value, list):
+				return False
+		elif not isinstance(value, dict):
+			return False
+	return _dict_of_dicts(d.get("files")) and _dict_of_dicts(d.get("objects"))
+
+
 class Cache:
 	"""Persisted file hashes, scan results and symbol tables.
 
@@ -5225,8 +5252,7 @@ class Cache:
 			# first commit, and the scanner has.
 			if (isinstance(d, dict) and d.get("version") == CACHE_VER
 			        and d.get("fmake") == build_identity()
-			        and _dict_of_dicts(d.get("files"))
-			        and _dict_of_dicts(d.get("objects"))):
+			        and _well_shaped(d)):
 				self.data = d
 				self.data.setdefault("units", [])
 			elif isinstance(d, dict) and isinstance(
