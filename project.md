@@ -295,7 +295,8 @@ that had been green about nothing for five commits ·
 [242. `tests/live/` is the `live` group, and no other directory is one](#242-testslive-is-the-live-group-and-no-other-directory-is-one) ·
 [243. Found means defined for the tree, not for the file that said so](#243-found-means-defined-for-the-tree-not-for-the-file-that-said-so) ·
 [244. The tool a generator uses is one of the things it reads](#244-the-tool-a-generator-uses-is-one-of-the-things-it-reads) ·
-[245. situc, moc, uic and rcc are files, not paths](#245-situc-moc-uic-and-rcc-are-files-not-paths)
+[245. situc, moc, uic and rcc are files, not paths](#245-situc-moc-uic-and-rcc-are-files-not-paths) ·
+[246. A suite that kills by a recorded pid reads the pid first](#246-a-suite-that-kills-by-a-recorded-pid-reads-the-pid-first)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19559,3 +19560,38 @@ take the same one-line change and have no case of their own: a case
 would need a second moc, and the suite has only the one Qt installs.
 That is a known gap in the witness rather than in the code, and it is
 written here so nobody reads the situc case as covering four tools.
+
+## 246. A suite that kills by a recorded pid reads the pid first
+
+An observation first, and it is not explained. suite39, the run for
+section 244, failed one case of 507:
+`a_symbol_nothing_here_defines_gets_both_explanations`, in its second
+fixture, with fmake returning non-zero and **no output at all** --
+neither the refusal the case reads nor a traceback. Alone it passes;
+it passed in the three suites before and the one after. An fmake that
+exits without a word has been killed by a signal; nothing in fmake
+exits silently. What sent it is not known.
+
+One candidate was examined and made impossible, without being shown
+to be the cause. `an_interrupted_build_takes_its_compilers_with_it`
+records the pid of every compiler shim in a marker file, waits until
+each is dead, and then in its `finally` sends SIGKILL to every pid
+still marked -- pids it has just confirmed dead. `kernel.pid_max` here
+is 32768 and some twenty sessions build on this machine, so a pid
+freed five seconds ago is not reliably free, and a stranger wearing
+the number dies exactly as observed: no output, non-zero, in a case
+that has nothing to do with the one holding the gun. In suite39 the
+two cases completed 220 lines apart, which makes this instance
+unlikely to be that; another session's copy of the same suite running
+the same case at that moment is not ruled out, and cannot be.
+
+`_kill_marked` reads `/proc/<pid>/cmdline` and kills only a pid whose
+argv still names the shim. A dead pid has no command line and is
+skipped; a reused one is running something else and is skipped; the
+shim that fmake failed to take down -- the only thing the kill was
+ever for -- still names itself and dies. This is
+`running-code.md`'s rule about `kill -0` and `pgrep`, applied to the
+one place this suite kills by number. Recorded as a hardening with an
+observation beside it, not as a fix: the suite is not known to have
+been the killer, and a comfortable explanation that closes this would
+be worth less than the open question.

@@ -3042,6 +3042,32 @@ def diagnostics_are_grouped_in_a_language_fmake_does_not_know(t):
 	      f"when the key falls back to raw stderr: {groups}")
 
 
+def _kill_marked(marks, shim):
+	"""SIGKILL the shims whose markers are left, and nothing else.
+
+	A marker names the pid a shim had, and a shim that fmake took down
+	never removes its marker -- so by the time this runs, every pid here
+	is dead and free to be reused. pid_max on this machine is 32768, and
+	twenty sessions build on it: a stranger wearing the number within the
+	five seconds this waited is not far-fetched, and killing it would look
+	from the stranger's side like a build that died with no output. Read
+	the pid's command line first; a reused pid runs something that is not
+	the shim, and a dead one has no command line to read.
+	"""
+	for p in os.listdir(marks):
+		try:
+			with open(f"/proc/{int(p)}/cmdline", "rb") as fh:
+				argv = fh.read().split(b"\0")
+		except (OSError, ValueError):
+			continue
+		if shim.encode() not in argv:
+			continue
+		try:
+			os.kill(int(p), signal.SIGKILL)
+		except OSError:
+			pass
+
+
 @case
 def an_interrupted_build_takes_its_compilers_with_it(t):
 	"""A signal to fmake alone left its compilers running.
@@ -3122,11 +3148,7 @@ exit $rc
 	finally:
 		if proc.poll() is None:
 			proc.kill()
-		for p in os.listdir(marks):
-			try:
-				os.kill(int(p), signal.SIGKILL)
-			except (OSError, ValueError):
-				pass
+		_kill_marked(marks, shim)
 
 	# The link is the other long job, and the first version of the registry
 	# said "compiling and linking" while registering only the compiles --
@@ -3185,11 +3207,7 @@ exit $rc
 		finally:
 			if lp.poll() is None:
 				lp.kill()
-			for p in os.listdir(lmarks):
-				try:
-					os.kill(int(p), signal.SIGKILL)
-				except (OSError, ValueError):
-					pass
+			_kill_marked(lmarks, lshim)
 	finally:
 		u.cleanup()
 
