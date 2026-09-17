@@ -8216,6 +8216,118 @@ def the_source_names_the_build_depends_nobody_can_derive(t):
 		u.cleanup()
 
 
+@case
+def a_library_kind_ships_the_archive_beside_the_shared_object(t):
+	"""One declaration, both artifacts: what ossacli's -dev holds.
+
+    One target was one artifact kind everywhere in fmake -- forty-two
+    readers of `filename' -- and a distribution ships most libraries
+    both ways: ossacli's libossa-dev carries libossa.a beside the .so
+    chain. `@kind library' is expanded, as soon as the targets are
+    known, into a shared target that keeps the name, the .pc and the
+    soname chain, and a static twin named <name>_static so its Make
+    variables cannot collide, carrying the stem so its file is still
+    lib<name>.a. Nothing downstream meets a fourth kind.
+
+    Asserted three ways, as the rest of the install model is: the live
+    build produces libthing.a, libthing.so with its soname, and ONE
+    thing.pc; --install, the ejected Makefile's install and its ninja
+    file's land the same seven files; and --eject deb splits them as
+    Debian does -- the .so chain in libthing1, the archive, the plain
+    .so link, the header and the .pc in libthing-dev, which depends on
+    libthing1 at the same version. `[debian.X] targets = ["thing"]'
+    names the pair by its stem, which is ossacli's own layout.
+    """
+	t.write("api.h", "#pragma once\nint v(void);\n")
+	t.write("thing.c", "/*! @kind library\n *  @target thing\n *  @headers api.h\n"
+	        " *  @version 1.2.3\n */\n#include \"api.h\"\nint v(void){ return 2; }\n")
+	t.write("main.c", '#include <stdio.h>\n#include "api.h"\n'
+	        'int main(void){ printf("%d\\n", v()); return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	for f in ("libthing.a", "libthing.so", "thing.pc"):
+		check(os.path.isfile(os.path.join(t.dir, f)), f"{f} was not built")
+	check(not os.path.exists(os.path.join(t.dir, "thing_static.pc")),
+	      "the static twin published a .pc of its own")
+	members = subprocess.run(["ar", "t", os.path.join(t.dir, "libthing.a")],
+	                         capture_output=True, text=True).stdout.split()
+	check(members == ["thing.c.o"], f"the archive holds {members}")
+	e = t.fmake("--explain").stdout
+	check("libthing.so (shared)" in e and "libthing.a (static)" in e,
+	      f"--explain does not show both artifacts: {e}")
+
+	want = sorted(["bin/" + os.path.basename(t.dir), "include/api.h",
+	               "lib/libthing.a", "lib/libthing.so", "lib/libthing.so.1",
+	               "lib/libthing.so.1.2.3", "lib/pkgconfig/thing.pc"])
+
+	def landed(stage):
+		root = os.path.join(stage, "usr", "local")
+		out = []
+		for d, _dirs, files in os.walk(root):
+			for f in files:
+				out.append(os.path.relpath(os.path.join(d, f), root))
+		return sorted(out)
+
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage)
+	check(r.returncode == 0 and landed(stage) == want,
+	      f"the live install landed {landed(stage)}, wanted {want}")
+	for backend, out, cmd in (("make", "Makefile", ["make", "-s"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		ej = t.fmake("--eject", backend)
+		check(ej.returncode == 0, f"--eject {backend}: {ej.stderr}")
+		t.write(out, ej.stdout)
+		dest = os.path.join(t.dir, "stage-" + backend)
+		b = _run_in(t.dir, *cmd, "install", env={"DESTDIR": dest})
+		check(b.returncode == 0 and landed(dest) == want,
+		      f"the ejected {backend} install landed {landed(dest)}: "
+		      f"{b.stdout}{b.stderr}")
+		os.remove(os.path.join(t.dir, out))
+
+	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
+		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
+	shutil.copy("/usr/share/common-licenses/GPL-3", os.path.join(t.dir, "LICENSE"))
+	t.write("VERSION", "1.2.3\n")
+	t.write("fmake.toml", '[project]\nname = "thing"\n[package]\n'
+	        'maintainer = "Test Person <test@example.invalid>"\n'
+	        'description = "A thing.\\n\\nA longer thing."\n'
+	        f'[target.{os.path.basename(t.dir)}]\ndescription = "the program"\n')
+	_run_in(t.dir, "git", "init", "-q", ".")
+	r = t.fmake("--eject", "deb")
+	check(r.returncode == 0, f"--eject deb: {r.stdout}{r.stderr}")
+	with open(os.path.join(t.dir, "debian", "libthing1.install")) as fh:
+		run = fh.read()
+	with open(os.path.join(t.dir, "debian", "libthing-dev.install")) as fh:
+		dev = fh.read()
+	check("libthing.so.1.2.3" in run and "libthing.a" not in run,
+	      f"the runtime package holds the wrong files: {run}")
+	for f in ("libthing.a", "libthing.so\n", "api.h", "thing.pc"):
+		check(f in dev, f"libthing-dev lacks {f.strip()}: {dev}")
+	with open(os.path.join(t.dir, "debian", "control")) as fh:
+		check("Depends: libthing1 (= ${binary:Version}), ${misc:Depends}" in fh.read(),
+		      "libthing-dev does not depend on libthing1")
+
+	# ossacli's layout: the pair, named by its stem, in one -dev package.
+	shutil.rmtree(os.path.join(t.dir, "debian"))
+	os.remove(os.path.join(t.dir, "Makefile"))
+	t.write("fmake.toml", u_toml_of(t) + '[debian.libthing-dev]\ntargets = ["thing"]\n')
+	r = t.fmake("--eject", "deb")
+	check(r.returncode == 0, f"--eject deb with targets by stem: {r.stdout}{r.stderr}")
+	check(not os.path.exists(os.path.join(t.dir, "debian", "libthing1.install")),
+	      "a runtime package was still made when the pair was grouped")
+	with open(os.path.join(t.dir, "debian", "libthing-dev.install")) as fh:
+		dev = fh.read()
+	check("libthing.a" in dev and "libthing.so.1.2.3" in dev,
+	      f"the grouped -dev lacks the archive or the chain: {dev}")
+
+
+def u_toml_of(t):
+	with open(os.path.join(t.dir, "fmake.toml")) as fh:
+		return fh.read()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

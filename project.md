@@ -287,7 +287,8 @@ that had been green about nothing for five commits ·
 [234. `--arch`: the compiler found from the architecture](#234---arch-the-compiler-found-from-the-architecture) ·
 [235. Packaging a real tree: what ossacli said about the emitter](#235-packaging-a-real-tree-what-ossacli-said-about-the-emitter) ·
 [236. Packaging netcfgd: one package of five, and what the tree lacked](#236-packaging-netcfgd-one-package-of-five-and-what-the-tree-lacked) ·
-[237. `build-depends`: what a test run needs, under the source's name](#237-build-depends-what-a-test-run-needs-under-the-sources-name)
+[237. `build-depends`: what a test run needs, under the source's name](#237-build-depends-what-a-test-run-needs-under-the-sources-name) ·
+[238. `@kind library`: the archive and the shared object from one source set](#238-kind-library-the-archive-and-the-shared-object-from-one-source-set)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19227,3 +19228,45 @@ accepting `build-depends`, the same section refusing a binary package's
 key by name, and a section for neither a package nor the source still
 refused. Against the fmake before this it fails at the schema: the key
 was unknown.
+
+## 238. `@kind library`: the archive and the shared object from one source set
+
+The last artifact-shaped item on section 227's list, found by packaging
+ossacli (section 235): its `libossa-dev` holds `libossa.a` beside the
+`libossa.so` chain, which is how a distribution ships most libraries,
+and one fmake target was one artifact kind -- forty-two readers of
+`filename`, twenty-nine comparisons of `kind`. Two targets on one root
+could not spell it either: a target's name is a Make identifier and the
+archive's file has to be `lib<name>.a`, so the twin would have needed
+the same name, which the collision check refuses for a reason.
+
+**The declaration is one word and the expansion is one function.**
+`@kind library`, or `kind = "library"`, is expanded by
+`expand_libraries` as soon as the targets are known: the shared target
+keeps the name, the `.pc` and the soname chain; the static twin is the
+target `<name>_static` -- distinct Make variables -- and carries the
+stem, so its file is still `lib<name>.a`. `Target` grew two slots, `stem`
+and `publishes_pc`; `filename` reads the stem; the `.pc` is published
+once; the deb split names packages by the stem and lets
+`[debian.<pkg>] targets` name the pair by it. Nothing downstream meets
+a fourth kind, which is why the change is small in a file where the
+fourth kind would have been large.
+
+Both compile the same units. A tree with a shared target compiles
+everything `-fPIC` already (section 45), so the archive is PIC -- which
+is what a `-dev` package's archive is on every distribution that builds
+both from one tree, and the price of not compiling every unit twice.
+
+Measured on a three-file tree: `libthing.a`, `libthing.so` with soname
+`libthing.so.1`, one `thing.pc`; the live install, the ejected
+Makefile's and the ejected ninja file's land the same seven files;
+`--eject deb` gives `libthing1` holding the chain and `libthing-dev`
+holding the archive, the plain `.so` link, the header and the `.pc`,
+depending on `libthing1 (= ${binary:Version})`, and the three build
+with dpkg-buildpackage. On the ossacli copy, `kind = "library"` with
+`[debian.libossa-dev] targets = ["ossa"]` produces exactly the
+hand-written `libossa-dev.install`: header, `.a`, `.so*`, `.pc`.
+
+What this does not do: build the archive without PIC. A tree that wants
+a non-PIC archive beside a shared object is two builds, and says so
+with two configurations.

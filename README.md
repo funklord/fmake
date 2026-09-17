@@ -174,7 +174,7 @@ is not in the sources.
 | situ: which schemas to compile | **Always** — a source includes the header a schema would write | `[situ] flags` for the rung |
 | Vendored submodules | **Always** — `.gitmodules`, fetched before the tree is read | `--no-submodules` declines it |
 | A program's name | **Almost always** — the file, or its directory for `main.c` | `@target`, `[target.*] name` |
-| A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared` |
+| A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library` |
 | Which programs are tests | **Sometimes** — a test directory or a `test_` name | `@test`, `@test no` |
 | Generated sources | **Never** — a generator is a command nobody can infer | `[generate.*]`, `@rule`, `fmake.mk` |
 | A macro the build injects | **Never** — `-DVERSION=...` is not in the tree | `[project] defines`, `$file(VERSION)` |
@@ -334,7 +334,10 @@ LD  client_test
 ```
 
 `@kind shared` builds a `.so` instead, with a soname; `--install` then uses
-`@headers` to know what to put in `include/`.
+`@headers` to know what to put in `include/`. `@kind library` builds both —
+the archive and the `.so`, from one set of sources, which is how a
+distribution ships a library — with one `.pc` and one soname chain; the
+archive is `lib<name>.a` and appears as the target `<name>_static`.
 
 **Tests are not built by the default build.** A `main()` under `test/` or
 `tests/`, or in a file called `foo_test.c` or `test_foo.c`, roots a test
@@ -419,7 +422,7 @@ like `@brief` are ignored.
 | Directive | Means |
 |---|---|
 | `@target NAME` | Name of the artifact this file roots — a name, not a path; `-o` moves output |
-| `@kind exe\|shared\|static` | Build an archive or `.so` from this file's closure; `exe` is inferred from `main()` |
+| `@kind exe\|shared\|static\|library` | Build an archive or `.so` from this file's closure, or both with `library`; `exe` is inferred from `main()` |
 | `@pkg NAME [OP VER]` | pkg-config dependency, version constraint optional |
 | `@pkg_optional NAME defines MACRO` | Define `MACRO` if pkg-config finds `NAME` |
 | `@libs NAME…` | Raw `-l`, for libraries with no `.pc` file |

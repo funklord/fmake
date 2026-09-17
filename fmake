@@ -105,6 +105,7 @@ none of it.
 import argparse
 import errno
 import concurrent.futures
+import copy
 import datetime
 import hashlib
 import json
@@ -3596,7 +3597,12 @@ DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
 DIRECTIVE_ALIAS = {"defines": "define"}
 DIRECTIVES = DIRECTIVE_SCALAR | DIRECTIVE_LIST
 
-KINDS = ("exe", "shared", "static")
+# `library' is both: an archive and a shared object from one set of
+# sources, which is how ossacli, and most libraries a distribution ships,
+# arrive. It is expanded into a `shared' target and a `static' twin as
+# soon as the targets are known, so nothing downstream meets a fourth
+# kind -- see expand_libraries.
+KINDS = ("exe", "shared", "static", "library")
 
 # The split above is what decides whether a directive replaces or accumulates,
 # so it has to be the single statement of that fact rather than a comment next
@@ -7794,7 +7800,8 @@ class Target:
 	"""One artifact: what roots it, what it is called, and what kind it is."""
 
 	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
-	             "test_group", "test_why", "version", "description")
+	             "test_group", "test_why", "version", "description",
+	             "stem", "publishes_pc")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
@@ -7807,6 +7814,12 @@ class Target:
 		# file other projects then depend on.
 		self.version = ann.scalar("version")
 		self.description = None
+		# The artifact's name where it is not the target's: a `library'
+		# twin is the target `ossa_static' and the file `libossa.a'. The
+		# identifier has to differ -- it is a Make variable -- and the
+		# file has to not.
+		self.stem = None
+		self.publishes_pc = True
 		self.conf = {}
 		# Explicit membership, when fmake.toml gives it. This is the answer
 		# to two libraries built from one overlapping tree: the closure
@@ -7876,9 +7889,9 @@ class Target:
 	@property
 	def filename(self):
 		if self.kind == "shared":
-			return "lib%s.so" % self.name
+			return "lib%s.so" % (self.stem or self.name)
 		if self.kind == "static":
-			return "lib%s.a" % self.name
+			return "lib%s.a" % (self.stem or self.name)
 		return self.name
 
 	@property
@@ -9103,6 +9116,8 @@ def build(args, _bootstrapping=False):
 			die(f"{CONF_FILE}: {tgt_section(name)} kind = {t.kind!r} is not one "
 			    f"of {', '.join(KINDS)}")
 		targets.append(t)
+
+	targets = expand_libraries(targets)
 
 	# Said once per subtree rather than once per file: libvterm contributes
 	# four and miniz ten, and a list of ten is noise where the directory is
@@ -11254,6 +11269,40 @@ def _mk_ident(name):
 	return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
 
+def expand_libraries(targets):
+	"""`kind = "library"': one declaration, an archive and a shared object.
+
+    A distribution ships most libraries both ways -- ossacli's `-dev'
+    holds `libossa.a' beside `libossa.so' -- and one target is one
+    artifact kind everywhere in this file, forty-two readers of
+    `filename' among them. Rather than teach each a second file, the
+    declaration becomes two ordinary targets: the shared one keeps the
+    name, the `.pc' and the soname chain; the static twin is named
+    `<name>_static' so its Make variables cannot collide, and carries
+    the stem so its file is still `lib<name>.a'. Both compile the same
+    units, which a tree with a shared target compiles -fPIC anyway
+    (section 45), so the archive is PIC -- which is what a `-dev'
+    package's archive is on every distribution that builds both from
+    one tree.
+
+    Only the shared one publishes a .pc: `-l<name>' finds either.
+    """
+	out = []
+	for t in targets:
+		if t.kind != "library":
+			out.append(t)
+			continue
+		t.kind = "shared"
+		twin = copy.copy(t)
+		twin.kind = "static"
+		twin.stem = t.name
+		twin.name = t.name + "_static"
+		twin.publishes_pc = False
+		twin.description = t.description
+		out += [t, twin]
+	return out
+
+
 def refuse_ident_collisions(what, names):
 	"""Refuse names a Make identifier cannot tell apart.
 
@@ -13094,7 +13143,7 @@ def pc_text(t, conf, prefix=None, ldflags=(), root=None):
     the ordinary case, and a .pc with baked paths is wrong the moment it is
     relocated.
     """
-	if t.kind == "exe" or not t.version:
+	if t.kind == "exe" or not t.version or not t.publishes_pc:
 		return None
 	p = install_dirs(conf, prefix)
 	# The prefix this .pc will be TRUE at, which is not always the one
@@ -13417,7 +13466,7 @@ def install_plan(targets, closures, root):
 
 		# The .pc is written beside the artifacts at build time, so it is
 		# a built file and needs no special case anywhere downstream.
-		if t.kind != "exe" and t.version:
+		if t.kind != "exe" and t.version and t.publishes_pc:
 			planned.append(("built", t.name + ".pc", "pkgconfigdir",
 			                t.name + ".pc", 0o644))
 
@@ -13729,8 +13778,10 @@ def deb_packages(targets, closures, root, conf, src_name):
 				    f"and [debian.{pkgname}]; a target ships in one package")
 			explicit[tn] = pkgname
 	by_name = {t.name: t for t in targets}
+	# A `library' is named once and is two targets: its stem names both.
+	stems = {t.stem for t in targets if t.stem}
 	for tn, pkgname in explicit.items():
-		if tn not in by_name:
+		if tn not in by_name and tn not in stems:
 			die(f"[debian.{pkgname}] targets names {tn!r}, which is not a "
 			    f"target this tree builds (they are: "
 			    f"{', '.join(sorted(by_name)) or 'none'})")
@@ -13750,8 +13801,9 @@ def deb_packages(targets, closures, root, conf, src_name):
 
 	for t in targets:
 		rows = install_plan([t], {t: closures[t]}, root)
-		if t.name in explicit:
-			add(explicit[t.name], "program" if t.kind == "exe" else "dev",
+		key = t.name if t.name in explicit else t.stem
+		if key in explicit:
+			add(explicit[key], "program" if t.kind == "exe" else "dev",
 			    t, rows)
 			continue
 		if t.kind == "exe":
@@ -13761,7 +13813,7 @@ def deb_packages(targets, closures, root, conf, src_name):
 		       or (r[2] == "libdir" and r[3].endswith(".a"))
 		       or (r[0] == "symlink" and r[3] == t.filename)]
 		run = [r for r in rows if r not in dev]
-		lib = "lib" + t.name.lower()
+		lib = "lib" + (t.stem or t.name).lower()
 		if t.kind == "shared":
 			if not t.version:
 				die(f"{t.name} is a shared library with no @version, and a "
@@ -13969,11 +14021,12 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 			# unsatisfied, and dpkg-gencontrol reports the variable
 			# defined and unused.
 			c.append("Pre-Depends: ${misc:Pre-Depends}")
-		if p["kind"] == "dev" and t.kind == "shared" \
-		        and f"lib{t.name.lower()}{t.version.split('.')[0]}" \
-		        in {q["name"] for q in packages}:
-			depends.insert(0, f"lib{t.name.lower()}"
-			               f"{t.version.split('.')[0]} (= ${{binary:Version}})")
+		shared = [q for q in ts if q.kind == "shared" and q.version]
+		if p["kind"] == "dev" and shared:
+			q = shared[0]
+			runtime = f"lib{(q.stem or q.name).lower()}{q.version.split('.')[0]}"
+			if runtime in {r["name"] for r in packages}:
+				depends.insert(0, f"{runtime} (= ${{binary:Version}})")
 		depends += sec.get("depends", [])
 		c.append("Depends: " + ", ".join(depends))
 		for field in ("recommends", "suggests"):
