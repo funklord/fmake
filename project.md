@@ -306,7 +306,8 @@ that had been green about nothing for five commits ·
 [253. A tree's own situc outranks the installed one](#253-a-trees-own-situc-outranks-the-installed-one) ·
 [254. A file standing in for libc is said out loud](#254-a-file-standing-in-for-libc-is-said-out-loud) ·
 [255. An include behind a platform guard is not a lost feature](#255-an-include-behind-a-platform-guard-is-not-a-lost-feature) ·
-[256. A stanza naming a root renames the target on it](#256-a-stanza-naming-a-root-renames-the-target-on-it)
+[256. A stanza naming a root renames the target on it](#256-a-stanza-naming-a-root-renames-the-target-on-it) ·
+[257. Defines in a target's own section are its own flags](#257-defines-in-a-targets-own-section-are-its-own-flags)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19969,3 +19970,44 @@ vendored qtty fail to compile for want of `-Iqtty/include` and
 `_GNU_SOURCE` -- both things fmake names with the key that supplies
 them, and both fuzznet's to say, since it has no `fmake.toml` at all
 and its README shows no fmake line. Signalled into its `project.md`.
+
+## 257. Defines in a target's own section are its own flags
+
+Ejecting a Makefile from a copy of beerssh compiles its test program and
+stops in `test/font_catalog_test.cpp` with `expected primary-expression
+before '(' token` inside `qstringliteral.h` -- the parse-error shape
+section 120 met for `BSSH_VERSION_STRING`, this time for
+`BSSH_TEST_FONT_DIR`, which `tests.pro` defines as `$$PWD/../fonts` and
+fmake was never told. A plain `fmake` builds `./beerssh` as the README
+says; the tests are the eject's to compile.
+
+Reaching for the stanza that says it -- a target's own section with
+`defines` -- found the stanza broken. Every `defines` was read as
+section 202's second program, so `[target.NAME] defines = [...]` on a
+discovered target compiled its root twice: once plain, for the closure,
+once as a variant. When the file needs the define the plain compile
+fails, the main() confirmation read the plain object -- `units[t.rel]`
+where it had `root_unit` in hand -- and the build said `looked like it
+defined main() but the object does not export it; skipping` and `no
+target could be built`, about a program whose variant object had
+compiled beside it. Measured on a two-line fixture.
+
+A section without `root` is the target's own, and its defines are now
+the root unit's own flags: one object, which is the candidate other
+closures see as well, since a define on the root changes nothing about
+what the file exports. A section with `root` is section 202's second
+program and stays a variant. `$root` and `$file()` expand in a target's
+own defines as they do under `[project]`, since a test that reads
+fixtures out of the tree is exactly what wants a per-target define
+naming the tree. The case builds `[target.NAME] defines =
+['DIR="$root/fonts"']`, asserts one compile, the expanded path, and the
+same flag in the ejected Makefile; against the old code it fails on the
+build.
+
+For beerssh the answer turned out to be one level up: the test program
+is one binary rooted by `test/main.cpp`, `font_catalog_test.cpp` is a
+member, and a target's defines reach the root only. `[project] defines
+= [..., 'BSSH_TEST_FONT_DIR="$root/fonts"']` takes the copy from the
+parse error to a clean eject, and is signalled into its `project.md`.
+The README's `defines` paragraph is rewritten for both shapes and for
+section 256's rename, which it still described as a refusal.

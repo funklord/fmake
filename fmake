@@ -1401,6 +1401,12 @@ def _expand_conf_files(data, root):
 	for name, sub in (data.get("profile") or {}).items():
 		if isinstance(sub, dict):
 			fix(sub, f"{CONF_FILE} [profile.{name}]")
+	# The same key one level down. A test that reads fixtures out of the
+	# tree names their directory in its own defines, and `$root' is how
+	# the tree is named -- the same need as [project]'s, per target.
+	for name, sub in (data.get("target") or {}).items():
+		if isinstance(sub, dict):
+			fix(sub, f"{CONF_FILE} {tgt_section(name)}")
 	return data
 
 
@@ -9986,6 +9992,24 @@ def build(args, _bootstrapping=False):
 			    f"and [profile.*] rustflags reach a crate; neither is per "
 			    f"target")
 		flags = ["-D" + d for d in want]
+		# A section with no `root' is the target's own -- keyed by the
+		# name it already has -- and its defines are that program's own
+		# compile flags, not a second program's. This compiled the file
+		# twice: once plain, as the candidate other closures see, and
+		# once as a variant with the defines; the plain compile of a file
+		# that needs the define failed, the main() check then read the
+		# plain object, and the one program the stanza described was
+		# "skipped" with "no target could be built" while its variant
+		# object sat compiled. beerssh's font_catalog_test wants
+		# BSSH_TEST_FONT_DIR that way. The unit takes the flags; there is
+		# one object, and it is the candidate too, since a define on the
+		# root changes nothing about what the file exports. A section
+		# with `root' is section 202's shape and stays a variant.
+		if "root" not in t.conf:
+			for f in flags:
+				if f not in units[t.rel].own:
+					units[t.rel].own.append(f)
+			continue
 		# Named for the target rather than hashed, because this path is
 		# read by whoever is looking at why two objects came out of one
 		# file, and a hash answers that with another question.

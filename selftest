@@ -9096,6 +9096,39 @@ def a_stanza_naming_a_root_renames_the_target_on_it(t):
 		u.cleanup()
 
 
+@case
+def defines_in_a_targets_own_section_are_its_own_flags(t):
+	"""beerssh's font_catalog_test wants BSSH_TEST_FONT_DIR, a directory
+	in the tree, and the natural stanza for that is the target's own:
+
+	    [target.font_catalog_test]
+	    defines = ['BSSH_TEST_FONT_DIR="$root/fonts"']
+
+	Every defines stanza was read as section 202's second program, so
+	the file was compiled twice -- once plain, for the closure, once as
+	a variant -- and the plain compile of a file that needs its define
+	failed, the main() check read the plain object, and the one program
+	the stanza described was "skipped" with "no target could be built".
+	A section without `root` is the target's own, its defines are the
+	program's own flags, and `$root` reaches them like `[project]`'s."""
+	t.write("main.c", '#include <stdio.h>\nint main(void){ puts(DIR); return 0; }\n')
+	prog = os.path.basename(t.dir)
+	t.write("fmake.toml", f'[target.{prog}]\ndefines = [\'DIR="$root/fonts"\']\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"one program, with its define: {r.stdout}{r.stderr}")
+	check("skipped" not in r.stdout + r.stderr and "(" + prog + ")" not in r.stdout,
+	      f"compiled once, not plain and again as a variant: {r.stdout}{r.stderr}")
+	check(t.run(prog).stdout == os.path.join(t.dir, "fonts") + "\n",
+	      f"$root names the tree in a target's own defines: {t.run(prog).stdout!r}")
+
+	# The ejected build carries the same flag on the same object.
+	mk = t.fmake("--eject", "make")
+	check(mk.returncode == 0, f"eject failed: {mk.stdout}{mk.stderr}")
+	check(os.path.join(t.dir, "fonts") in mk.stdout,
+	      "the ejected Makefile defines it for the object")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -603,22 +603,27 @@ no `fmake.toml` at all. A profile is for flags this project chose; `DEBUG`
 is for the one thing every project wants and nobody should have to write
 down.
 
-**`defines` on a target compiles its root twice.** A second `[target.*]`
-naming an existing source with `root` is a second program from that file,
-and `defines` is what makes it a different one — the shape a test suite
-needs when half of what it proves is that its assertions compile out. The
-defines reach the **root translation unit only**; everything the closure
-brings in is the same object both programs link, which is what makes the
-second program cost one compile rather than a second build. Where that is
-wrong for a project — where a define changes a layout — the two builds are
-two builds, and fmake is not the tool for saying so.
+**`defines` in a target's own section are that program's flags.**
+`[target.greet] defines = ['DATA_DIR="$root/data"']` compiles `greet`'s
+root with the define, once; `$root` and `$file()` expand here as they do
+under `[project]`. **A section that names a `root` is a second program from
+that file**, and `defines` is what makes it a different one — the shape a
+test suite needs when half of what it proves is that its assertions compile
+out. Without `defines` a `root` section renames the program from that file
+instead, which is how one of two same-named `test/foo_test.c` gets its own
+name. In both shapes the defines reach the **root translation unit only**;
+everything the closure brings in is the same object both programs link,
+which is what makes the second program cost one compile rather than a
+second build. Where that is wrong for a project — where a define changes a
+layout — the two builds are two builds, and fmake is not the tool for
+saying so.
 
-**Neither half of that reaches a crate, so both are refused.** `defines` is
-`-D`, which rustc does not take, and there is no per-target `rustflags` — so
-a second program from a crate root could only be a copy of the first under
+**`defines` never reach a crate, so they are refused there.** `defines` is
+`-D`, which rustc does not take, and there is no per-target `rustflags` — a
+second program from a crate root could only be a copy of the first under
 another name, and the two would collide over the one depfile rustc names
-after the crate root. Where the stanza was reaching for a rename, that is
-`[target.<the name it has>] name = "…"`.
+after the crate root. A `root` section without them renames the crate's
+program, as for C.
 
 **A `version` also versions a shared library.** `libgreet.so.1.2.3` is
 installed, with `libgreet.so.1` and `libgreet.so` pointing at it, and the
