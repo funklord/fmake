@@ -8700,6 +8700,51 @@ def a_rebuilt_situc_recompiles_the_schemas_it_compiled(t):
 	check("SITU" not in r.stdout, f"and then nothing changed: {r.stdout}")
 
 
+@case
+def a_rewritten_moc_re_mocs_what_it_wrote(t):
+	"""Section 245's gap, closed: the moc key is wired, not only situc's.
+
+	The suite has one moc, so a changed moc cannot be had -- but a shim
+	that execs it is a moc as far as `[toolchain] moc` is concerned, and
+	rewriting the shim is a moc rewritten at its path. Same bytes of
+	output either way; what the case asserts is that the tool's identity
+	reaches the key, which the situc case proved for situc alone."""
+	_need_qt()
+	real = ""
+	for mod in ("Qt6Core", "Qt5Core"):
+		if not _have_pkg(mod):
+			continue
+		for var in ("libexecdir", "host_bins", "bindir"):
+			d = subprocess.run(["pkg-config", f"--variable={var}", mod],
+			                   capture_output=True, text=True).stdout.strip()
+			if d and os.access(os.path.join(d, "moc"), os.X_OK):
+				real = os.path.join(d, "moc")
+				break
+		if real:
+			break
+	if not real:
+		raise Skip("pkg-config names no moc")
+	shim = t.write("bin/moc", f'#!/bin/sh\nexec {real} "$@"\n')
+	os.chmod(shim, 0o755)
+	t.write("counter.h", COUNTER_H)
+	t.write("main.cpp", COUNTER_MAIN)
+	t.write("fmake.toml", f'[toolchain]\nmoc = "{shim}"\n')
+
+	r = t.fmake(env={"MOC": ""})
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("MOC counter.h" in r.stdout, f"moc did not run: {r.stdout}")
+	r = t.fmake(env={"MOC": ""})
+	check("MOC" not in r.stdout, f"nothing changed: {r.stdout}")
+
+	# The same moc, reinstalled: a comment line makes it a different file.
+	with open(shim, "a") as fh:
+		fh.write("# reinstalled\n")
+	r = t.fmake(env={"MOC": ""})
+	check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+	check("MOC counter.h" in r.stdout,
+	      f"a moc rewritten at its path must re-run: {r.stdout}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

@@ -296,7 +296,8 @@ that had been green about nothing for five commits ·
 [243. Found means defined for the tree, not for the file that said so](#243-found-means-defined-for-the-tree-not-for-the-file-that-said-so) ·
 [244. The tool a generator uses is one of the things it reads](#244-the-tool-a-generator-uses-is-one-of-the-things-it-reads) ·
 [245. situc, moc, uic and rcc are files, not paths](#245-situc-moc-uic-and-rcc-are-files-not-paths) ·
-[246. A suite that kills by a recorded pid reads the pid first](#246-a-suite-that-kills-by-a-recorded-pid-reads-the-pid-first)
+[246. A suite that kills by a recorded pid reads the pid first](#246-a-suite-that-kills-by-a-recorded-pid-reads-the-pid-first) ·
+[247. A shim is a second moc, so the moc key gets its witness](#247-a-shim-is-a-second-moc-so-the-moc-key-gets-its-witness)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19556,10 +19557,10 @@ to run it stays the message.
 The case rewrites the stand-in and asserts `SITU` prints, the program
 carries the new output, and the run after that is quiet. Against the
 tree before the fix it fails on the first of those. moc, uic and rcc
-take the same one-line change and have no case of their own: a case
-would need a second moc, and the suite has only the one Qt installs.
-That is a known gap in the witness rather than in the code, and it is
-written here so nobody reads the situc case as covering four tools.
+take the same one-line change. This first said they had no case of
+their own because the suite has only the one moc Qt installs; section
+247 found the second moc in a shim, and the moc key has its witness.
+uic and rcc still rest on the situc and moc cases plus reading.
 
 ## 246. A suite that kills by a recorded pid reads the pid first
 
@@ -19595,3 +19596,20 @@ one place this suite kills by number. Recorded as a hardening with an
 observation beside it, not as a fix: the suite is not known to have
 been the killer, and a comfortable explanation that closes this would
 be worth less than the open question.
+
+## 247. A shim is a second moc, so the moc key gets its witness
+
+Section 245 wired `tool_identity` into four keys and proved one. The
+reason given for leaving moc unproved -- one moc on the machine -- was
+true and not decisive: `[toolchain] moc` takes any path, and a shell
+script that execs the real moc is a moc as far as the key is
+concerned. Rewriting the shim is a moc rewritten at its path, with the
+same output bytes, which is exactly the case where only the tool's
+identity can move the key. Appending one comment line moves size and
+mtime; `MOC counter.h` prints again. With `moc_is = moc` put back the
+case fails on that line and nothing else.
+
+Recorded because the gap was written down as a fact about the machine
+when it was a fact about how the case had been imagined. An
+interface's least-used method is the one to grep for callers of; the
+same applies to the least-witnessed call of a helper.
