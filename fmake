@@ -6896,6 +6896,49 @@ def lib_exports(cfg, path):
 	return out
 
 
+def libc_exports(cfg, cache):
+	"""Every symbol the C library offers a link, read once and remembered.
+
+    Section 219's demonstration: `src/lib/transport_sg.c' leaves `close'
+    undefined, the closure finds a file in the tree that defines it, and
+    that file is an LD_PRELOAD shim faking a RAID controller. The closure
+    takes the tree over the library by rule, and the rule is the project's
+    premise, so a file that defines a libc name is linked in libc's place
+    and nothing says so. This is the set the warning below is checked
+    against. One nm of libc, cached under the file's own identity, since
+    the answer changes when libc does and not otherwise.
+    """
+	libs = linkable_libs(lib_search_dirs(cfg))
+	path = libs.get("c")
+	if not path:
+		return set()
+	targets = elf_targets(path, cfg.libdirs)
+	identity = "|".join(tool_identity(t) for t in targets)
+	store = cache.data.setdefault("libc", {})
+	if store.get("identity") == identity and isinstance(store.get("exports"), list):
+		return set(store["exports"])
+	syms = set()
+	for t in targets:
+		syms |= lib_exports(cfg, t)
+	store.clear()
+	store["identity"], store["exports"] = identity, sorted(syms)
+	return syms
+
+
+def libc_interposed(closures, targets, exports):
+	"""(file, symbol, puller) -> target names, for every closure pull of
+    a symbol libc also provides. Section 219's two candidates were to
+    refuse the tree's definition or to keep the rule and say it; this is
+    the saying, and the refusing is the copyright holder's to choose.
+    """
+	out = {}
+	for t in targets:
+		for rel, (sym, by) in closures[t].why.items():
+			if by and sym in exports:
+				out.setdefault((rel, sym, by), []).append(t.name)
+	return out
+
+
 def find_providers(cfg, wanted, jobs, want_ident=None):
 	"""Which installed libraries define each of these symbols.
 
@@ -10524,6 +10567,21 @@ def build(args, _bootstrapping=False):
 			resolutions[t] = resolve_libraries(t, closures[t], cfg, pkg,
 			                                   hdr_store, providers, paths,
 			                                   target_ident, proj)
+
+		# A file the closure took in libc's place. Section 3 takes the
+		# tree over the library, which is right for a project's own
+		# functions and produced a storage tool that invents hardware when
+		# the file was an LD_PRELOAD shim (section 219). Whether the rule
+		# should stop at libc is the copyright holder's question; that the
+		# build says nothing while it happens was not, so it says this.
+		for (rel, sym, by), names in sorted(libc_interposed(
+		        closures, wanted, libc_exports(cfg, cache)).items()):
+			warn(f"{rel} defines {sym}(), which libc provides too, and it "
+			     f"is linked into {', '.join(sorted(names))} in libc's "
+			     f"place -- pulled in by {by}. If it is an LD_PRELOAD "
+			     f"shim or a test double, [project] exclude in "
+			     f"{CONF_FILE} keeps it out; if the override is meant, "
+			     f"this is what it does")
 
 		# Said outside --explain, because the build that needs to hear it is
 		# the one nobody is inspecting. A feature guarded by a macro fmake

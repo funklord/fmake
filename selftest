@@ -8980,6 +8980,43 @@ def a_trees_own_situc_outranks_the_installed_one(t):
 	      f"{r.stdout}{r.stderr}")
 
 
+@case
+def a_file_standing_in_for_libc_is_said_out_loud(t):
+	"""Section 219, the half that was not the holder's to decide.
+
+	raidcfgd's `ciss_probe` calls `close()`; the tree it vendors carries
+	ossacli's LD_PRELOAD shim, which defines `close()` to fake a RAID
+	controller; the closure took the tree over the library, by the rule
+	that is the project's premise, and built a probe that answers its
+	own ioctls. `--explain` said so and the build said nothing. Whether
+	the rule should stop at libc is the holder's question; that the build
+	is silent while it happens was not. It names the file, the symbol,
+	the program and what pulled it, and offers the exclude."""
+	t.write("main.c", "#include <unistd.h>\n#include <stdio.h>\n"
+	        'int main(void){ printf("%d\\n", close(0)); return 0; }\n')
+	t.write("shim.c", "/* an LD_PRELOAD shim, as ossacli ships one */\n"
+	        "int close(int fd){ (void)fd; return 42; }\n")
+	prog = os.path.basename(t.dir)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	said = r.stdout + r.stderr
+	check("shim.c defines close(), which libc provides too" in said
+	      and f"linked into {prog} in libc's place" in said
+	      and "pulled in by main.c" in said,
+	      f"the interposition is named, with what pulled it: {said}")
+	check(t.run(prog).stdout == "42\n",
+	      "and the rule itself is unchanged: the tree's close() is linked")
+
+	# The remedy the message offers, taken.
+	t.write("fmake.toml", '[project]\nexclude = ["shim.c"]\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+	check("libc provides too" not in r.stdout + r.stderr,
+	      f"with the shim excluded there is nothing to say: {r.stdout}{r.stderr}")
+	check(t.run(prog).stdout == "0\n", "libc's close() is linked now")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

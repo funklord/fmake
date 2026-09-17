@@ -303,7 +303,8 @@ that had been green about nothing for five commits ·
 [250. A directive in a header is said to do nothing](#250-a-directive-in-a-header-is-said-to-do-nothing) ·
 [251. A cache section that is present and wrong is a traceback](#251-a-cache-section-that-is-present-and-wrong-is-a-traceback) ·
 [252. A pid space that wraps in minutes, and a case run once more](#252-a-pid-space-that-wraps-in-minutes-and-a-case-run-once-more) ·
-[253. A tree's own situc outranks the installed one](#253-a-trees-own-situc-outranks-the-installed-one)
+[253. A tree's own situc outranks the installed one](#253-a-trees-own-situc-outranks-the-installed-one) ·
+[254. A file standing in for libc is said out loud](#254-a-file-standing-in-for-libc-is-said-out-loud)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19824,3 +19825,56 @@ ten fixtures to the real compiler in an hour -- is history rather than
 a live hazard, since the stand-in at `bin/situc` wins unpinned; the pin
 stays as the statement it is. The ejected build was already writing
 `SITUC = bin/situc` relative to the tree for the same reason.
+
+## 254. A file standing in for libc is said out loud
+
+Section 219 met a second tree. Building a copy of raidcfgd with today's
+fmake -- the tree that vendors ossacli -- stopped on
+
+    !!! symbol 'ioctl' is defined by more than one file:
+        ossacli/src/shim/capture.c
+        ossacli/src/shim/sgshim.c
+    fmake will not guess which one belongs in fuzz_ciss.
+
+which is the refusal working: `ciss/ciss.c` calls `ioctl()` and two of
+the vendored shims define it. The programs raidcfgd's README says fmake
+builds do build, and `--explain ciss_probe` reads
+
+    ossacli/src/shim/sgshim.c       <- close  (tool/ciss_probe.c)
+
+so `ciss_probe` carries the LD_PRELOAD shim that fakes a Smart Array,
+with libc's `close()` displaced by the simulator's -- section 219's
+binary, one checkout up, in a tree whose README calls fmake's build of
+it correct. Nothing said so except `--explain`, which nobody runs on a
+build that succeeded.
+
+Section 219 recorded two candidates and gave the first to the copyright
+holder, because refusing the tree's definition changes what section 3
+means. The second -- keep the rule and say it -- changes nothing about
+what is built and is done here. `libc_exports` reads libc's dynamic
+symbol table once, through the ld script the way the provider sweep
+does, and caches it under the file's identity (section 245's
+`tool_identity`, since libc is a file that is replaced in place too).
+After the closures are settled, every pull of a symbol that set also
+holds is reported:
+
+    * ossacli/src/shim/sgshim.c defines close(), which libc provides
+      too, and it is linked into ciss_probe in libc's place -- pulled in
+      by tool/ciss_probe.c. If it is an LD_PRELOAD shim or a test
+      double, [project] exclude in fmake.toml keeps it out; if the
+      override is meant, this is what it does
+
+Once per file, symbol and puller, naming every program it reached. The
+case builds a `main.c` that calls `close()` beside a `shim.c` that
+defines it, asserts the line and that the program still returns the
+shim's 42 -- the rule is unchanged -- then takes the offered exclude
+and asserts silence and libc's 0. Zero lines on the hydra and situ
+copies; ossacli's own tree earns the line, which is section 219.
+
+**What this leaves where it was.** The question. A tree that defines
+`malloc` or `strlcpy` on purpose now gets a line saying so every
+build, which is the cost section 219 priced, and the binary raidcfgd's
+README describes is still the wrong one until either raidcfgd excludes
+`ossacli/src/shim/**` -- a one-line signal into its `project.md`, sent
+-- or the holder takes candidate one. The refusal for `fuzz_ciss`
+stands as it was: two files, no guess.
