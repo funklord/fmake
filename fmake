@@ -7741,9 +7741,22 @@ def default_name(rel, root):
 
 TEST_DIRS = {"test", "tests"}
 
+DEFAULT_TEST_GROUP = "test"
+
+# A directory under a test directory whose name is a group: `tests/live/`
+# holds the tests that need something the machine may not have -- a
+# daemon, a network, a device -- and `fmake test` leaves them alone
+# without every file saying `@test live`. Only this one name: any
+# subdirectory becoming a group would silently retire `tests/parser/`
+# from `fmake test`, which is the failure the narrow net below exists to
+# avoid. netcfgd's eight under gui/tests/live/ asked for it (section 236);
+# hydra keeps two live drivers outside the directory, so the annotation
+# still exists and still wins.
+GROUP_DIRS = {"live"}
+
 
 def looks_like_a_test(rel):
-	"""Why this file roots a test program, or None.
+	"""The group this file's test belongs to and why, or None.
 
     Two conventions, both named by the projects that asked for this: a
     directory called `test` or `tests`, and a file called `foo_test.c` or
@@ -7751,18 +7764,23 @@ def looks_like_a_test(rel):
     its place in the default build, which is a worse failure than the one
     this feature exists to fix, so the net is deliberately narrow and the
     reason is reported rather than assumed.
+
+    Under a test directory, a `live/` component names the group instead of
+    the default, since the directory is how netcfgd and hydra both spell
+    "needs the daemon" -- everything else there stays in `test`.
     """
 	parts = rel.replace(os.sep, "/").split("/")
-	for p in parts[:-1]:
+	for i, p in enumerate(parts[:-1]):
 		if p.lower() in TEST_DIRS:
-			return f"{p}/ is a test directory"
+			for q in parts[i + 1:-1]:
+				if q.lower() in GROUP_DIRS:
+					return (q.lower(),
+					        f"{p}/{q}/ is a {q.lower()} test directory")
+			return DEFAULT_TEST_GROUP, f"{p}/ is a test directory"
 	stem = os.path.splitext(parts[-1])[0].lower()
 	if stem.startswith("test_") or stem.endswith(("_test", "_tests")):
-		return f"{parts[-1]} is named as a test"
+		return DEFAULT_TEST_GROUP, f"{parts[-1]} is named as a test"
 	return None
-
-
-DEFAULT_TEST_GROUP = "test"
 
 RE_TEST_GROUP = re.compile(r"^[a-z][a-z0-9_-]*$")
 
@@ -7848,7 +7866,7 @@ class Target:
 		elif said:
 			self.test_group, self.test_why = said, f"@test in {rel}"
 		elif found:
-			self.test_group, self.test_why = DEFAULT_TEST_GROUP, found
+			self.test_group, self.test_why = found
 		else:
 			self.test_group, self.test_why = None, ""
 		self.apply_conf(conf or {})

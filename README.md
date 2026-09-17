@@ -175,7 +175,7 @@ is not in the sources.
 | Vendored submodules | **Always** — `.gitmodules`, fetched before the tree is read | `--no-submodules` declines it |
 | A program's name | **Almost always** — the file, or its directory for `main.c` | `@target`, `[target.*] name` |
 | A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library` |
-| Which programs are tests | **Sometimes** — a test directory or a `test_` name | `@test`, `@test no` |
+| Which programs are tests | **Sometimes** — a test directory or a `test_` name; `tests/live/` is the `live` group | `@test`, `@test no` |
 | Generated sources | **Never** — a generator is a command nobody can infer | `[generate.*]`, `@rule`, `fmake.mk` |
 | A macro the build injects | **Never** — `-DVERSION=...` is not in the tree | `[project] defines`, `$file(VERSION)` |
 | Public headers to install | **Never** — which headers are API is a decision | `@headers` |
@@ -360,8 +360,11 @@ RUN client_test
 
 `@test live` puts a test in a group of its own, which `fmake test` does not
 run and `fmake live` does -- for the tests that differ in what they *need*
-rather than in what they check, like the ones wanting a network. Ejected
-build files get a rule per group, and `all` depends on none of them.
+rather than in what they check, like the ones wanting a network. A `live/`
+directory under a test directory says the same thing for everything in it,
+so `tests/live/fetch_test.c` is in the `live` group without the annotation;
+no other directory name is a group, and a file's own `@test` still wins.
+Ejected build files get a rule per group, and `all` depends on none of them.
 
 `fmake test NAME...` runs only the tests named, which is what re-running one
 out of sixty-six wants. Each test gets sixty seconds, because one that hangs

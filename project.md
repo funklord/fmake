@@ -291,7 +291,8 @@ that had been green about nothing for five commits ·
 [238. `@kind library`: the archive and the shared object from one source set](#238-kind-library-the-archive-and-the-shared-object-from-one-source-set) ·
 [239. `@aliases`: a program's other names, as links beside it](#239-aliases-a-programs-other-names-as-links-beside-it) ·
 [240. Reported from hydra: `--eject` fails on a Qt DBus translation unit](#240-reported-from-hydra---eject-fails-on-a-qt-dbus-translation-unit) ·
-[241. Two licences at the root, and the expression that says how](#241-two-licences-at-the-root-and-the-expression-that-says-how)
+[241. Two licences at the root, and the expression that says how](#241-two-licences-at-the-root-and-the-expression-that-says-how) ·
+[242. `tests/live/` is the `live` group, and no other directory is one](#242-testslive-is-the-live-group-and-no-other-directory-is-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19375,3 +19376,38 @@ silently; `WITH` exception clauses and an expression mixing `OR` and
 The dual-licensed package builds and lintian accepts its copyright
 file. What this does not change for netcfgd is netcfgd: its root has no
 licence texts, and putting them there is its holder's act.
+
+## 242. `tests/live/` is the `live` group, and no other directory is one
+
+Section 236 left this to the holder, because it changes what fmake reads
+off an unannotated tree: netcfgd's eight programs under `gui/tests/live/`
+each needed `test-group = "live"` in `fmake.toml` before `fmake test`
+would leave them alone, in a tree whose directory already said so. The
+holder said to infer it, on 2026-09-17.
+
+The rule is one name. Under a test directory, a component called `live`
+puts everything below it in the `live` group; `looks_like_a_test` returns
+the group with the reason now -- `tests/live/ is a live test directory`,
+which `--explain` prints -- instead of a reason alone with the group
+implied. `tests/parser/` stays in `test`. Any subdirectory becoming a
+group was the obvious wider rule and is the one refused: a tree that
+sorts its unit tests into `tests/parser/` and `tests/net/` would find
+`fmake test` running none of them, silently, which is the failure
+section 57 named as worse than the one the feature fixes. A second name
+gets added when a second tree spells it that way; none has yet.
+
+Section 57's argument stands and is why the annotation survives:
+hydra keeps `test_live_model` and `test_helpers_live` outside the
+directory, and only the file can say what it needs. The file also wins
+the other way -- a plain `@test` under `tests/live/` returns that one to
+the default group, since a directive is a statement and a directory is a
+guess.
+
+Measured: `fmake test` runs `tests/unit_test.c` and `tests/parser/`,
+skips `tests/live/`, and runs the one there that says `@test`; `fmake
+live` runs only the directory's own; the ejected Makefile puts the
+directory's test in `LIVE_TARGETS` and not in `TEST_TARGETS`. With the
+name set emptied the case fails on `fmake test` printing the live test's
+output, which is the check it exists for. netcfgd is told in its
+`project.md` that the eight `test-group` lines are no longer needed;
+whether to drop them is that tree's.

@@ -8493,6 +8493,66 @@ def a_tree_under_two_licences_is_identified_from_its_own_expression(t):
 			u.cleanup()
 
 
+@case
+def a_live_directory_puts_its_tests_in_the_live_group(t):
+	"""netcfgd keeps eight daemon-needing tests under gui/tests/live/.
+
+	Each one had to say `@test live` before `fmake test` would leave it
+	alone, in a tree whose directory already said so. The directory is
+	one of two spellings hydra and netcfgd share for "needs something the
+	machine may not have", so under a test directory `live/` names the
+	group. Only that name: `tests/parser/` stays in `test`, because any
+	subdirectory becoming a group would retire it from the default run
+	without a word. The annotation still wins, both ways -- a plain
+	`@test` in `tests/live/` puts that one back in the default group."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/unit_test.c",
+	        '#include <stdio.h>\nint main(void){ puts("unit ok"); return 0; }\n')
+	t.write("tests/parser/parse_test.c",
+	        '#include <stdio.h>\nint main(void){ puts("parser ok"); return 0; }\n')
+	t.write("tests/live/fetch_test.c",
+	        '#include <stdio.h>\nint main(void){ puts("live ok"); return 0; }\n')
+	t.write("tests/live/said_test.c",
+	        "/** @test */\n#include <stdio.h>\n"
+	        'int main(void){ puts("said ok"); return 0; }\n')
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"failed: {r.stdout}{r.stderr}")
+	check("unit ok" in r.stdout and "parser ok" in r.stdout,
+	      f"tests/ and tests/parser/ stay in the default group: {r.stdout}")
+	check("live ok" not in r.stdout,
+	      f"tests/live/ is not run by `fmake test`: {r.stdout}")
+	check("said ok" in r.stdout,
+	      f"a plain @test under tests/live/ is the file's word: {r.stdout}")
+
+	r = t.fmake("live")
+	check(r.returncode == 0, f"failed: {r.stdout}{r.stderr}")
+	check("live ok" in r.stdout and "unit ok" not in r.stdout
+	      and "said ok" not in r.stdout,
+	      f"`fmake live` runs the directory's group only: {r.stdout}")
+
+	# The reason is reported, not assumed: `--explain` names the directory
+	# that decided it, so a reader can see why a test went missing from
+	# `fmake test` without knowing this rule exists.
+	r = t.fmake("--explain", "fetch_test")
+	check("tests/live/ is a live test directory" in r.stdout
+	      and "`fmake live` builds and runs it" in r.stdout,
+	      f"the explanation names the directory: {r.stdout}{r.stderr}")
+
+	# Ejected: a rule per group, and `all` depends on neither.
+	r = t.fmake("--eject", "make")
+	check(r.returncode == 0, f"eject failed: {r.stdout}{r.stderr}")
+	mk = r.stdout
+	live_var = re.search(r"^LIVE_TARGETS = (.*)$", mk, re.M)
+	test_var = re.search(r"^TEST_TARGETS = (.*)$", mk, re.M)
+	check(live_var and test_var and re.search(r"^live:", mk, re.M),
+	      "the ejected Makefile has a variable and a rule per group")
+	check(live_var.group(1).split() == ["fetch_test"],
+	      f"LIVE_TARGETS holds the directory's test: {live_var.group(0)}")
+	check("fetch_test" not in test_var.group(1).split(),
+	      f"TEST_TARGETS does not: {test_var.group(0)}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
