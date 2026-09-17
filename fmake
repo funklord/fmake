@@ -10113,7 +10113,12 @@ def build(args, _bootstrapping=False):
 	# the first build's output and offer it back as a dependency of itself.
 	ours = {t.filename for t in targets if t.kind == "static"}
 	out_prefix = os.path.join(os.path.abspath(outdir), "")
-	vendored = []
+	# Not `vendored': that name is the checkout directories, computed
+	# above and read again below, and a list of archives under the same
+	# name meant a reader of the widening loop who asked `vendor_of(rel,
+	# vendored)' was handed archives and matched nothing -- measured, on
+	# a prototype that ran to the end reporting the same nineteen files.
+	found_archives = []
 	for a in find_archives(root):
 		# `[project] exclude` reaches archives too, and did not. It is the
 		# one lever for "this subtree is not for this build", and beerssh
@@ -10131,12 +10136,12 @@ def build(args, _bootstrapping=False):
 		if outdir != root and \
 		        os.path.abspath(os.path.join(root, a)).startswith(out_prefix):
 			continue
-		vendored.append(a)
+		found_archives.append(a)
 	prebuilt = prebuilt_units(sorted(set(forced_objs)), root, cfg, jobs)
 	if prebuilt:
 		vinfo(f"{len(prebuilt)} prebuilt object(s): "
 		      + ", ".join(u.rel for u in prebuilt[:4]))
-	archives = archive_units(vendored, root, cfg, jobs)
+	archives = archive_units(found_archives, root, cfg, jobs)
 	if archives:
 		vinfo(f"{len(archives)} vendored archive(s): "
 		      + ", ".join(a.rel for a in archives[:4]))
@@ -10960,11 +10965,10 @@ def build(args, _bootstrapping=False):
 			# and using it is the point rather than a mistake. The signal
 			# is the one fmake already uses to decide that a main() in
 			# there is not this tree's program.
-			_vendored = vendored_dirs(root, srcs)
 			arc_tokens = {}
 			for t in wanted:
 				for u in closures[t].link:
-					if u.archive and not vendor_of(u.rel, _vendored):
+					if u.archive and not vendor_of(u.rel, vendored):
 						toks = arc_tokens.setdefault(u.rel, set())
 						for sym in u.strong:
 							toks |= symbol_tokens(sym)

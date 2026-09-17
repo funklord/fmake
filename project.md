@@ -308,7 +308,8 @@ that had been green about nothing for five commits ·
 [255. An include behind a platform guard is not a lost feature](#255-an-include-behind-a-platform-guard-is-not-a-lost-feature) ·
 [256. A stanza naming a root renames the target on it](#256-a-stanza-naming-a-root-renames-the-target-on-it) ·
 [257. Defines in a target's own section are its own flags](#257-defines-in-a-targets-own-section-are-its-own-flags) ·
-[258. A Qt test that aborts with no display is told the key](#258-a-qt-test-that-aborts-with-no-display-is-told-the-key)
+[258. A Qt test that aborts with no display is told the key](#258-a-qt-test-that-aborts-with-no-display-is-told-the-key) ·
+[259. Widening reaches into a vendored checkout by token, and what that costs](#259-widening-reaches-into-a-vendored-checkout-by-token-and-what-that-costs)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20052,3 +20053,62 @@ bbq-predictor's `test_seed` and hembygd's `test_sim` fail for their
 own reasons -- `BBQ_APP_BINARY` unset, which is `$bin()`'s case, and a
 model file the suite wants built first -- and are those trees' to
 configure; neither README claims `fmake test`.
+
+## 259. Widening reaches into a vendored checkout by token, and what that costs
+
+**A finding, a measurement, a rename, and a question that is not mine.**
+
+`fmake test` on a copy of raidcfgd builds its 23 test programs' own
+units, resolves 813 symbols as unresolved -- Qt's, nearly all, which
+the libraries will supply -- and widens: nineteen files under
+`fuzznet/qtty/` "may define" some of them, because `symbol_tokens` of
+a mangled Qt name yields words like `paint`, `grid` and `render` and
+qtty's classes define those words. Compiled with raidcfgd's flags they
+fail for want of `-Ifuzznet/qtty/include`, and fmake refuses to run
+any test: `19 file(s) did not compile; not running tests`. Not one of
+the nineteen would have joined a link had it compiled; the symbols are
+Qt's. fuzznet's own copy (section 256) lost four files the same way,
+to the same qtty.
+
+Measured, three steps. Taking fmake's advice -- `[project]
+include-dirs` gains `fuzznet/qtty/include` -- leaves four: qtty's
+tests want `fuzznet/qtty` too, and quirc's `inspect_opencv.cxx` wants
+OpenCV, which is a vendored dependency's optional test wanting a
+library raidcfgd has no use for. A prototype that declines a separate
+checkout's test material from widening, the way its programs are
+already left to it, takes nineteen to eleven: the rest are qtty's
+library sources, matched by the same tokens. So neither the include
+directory nor "their tests are theirs" closes it; what would is one
+of these, and each changes what fmake infers:
+
+- **Do not widen for a symbol a proposed library exports.** The
+  closure already knows, from the headers, that Qt6Widgets is
+  proposed; the provider sweep runs after widening today. Resolving
+  libraries first would cut the 813 to the handful nothing on the
+  machine provides, and widening would reach for those alone. Cost:
+  section 3's order -- the tree before the library -- applied to
+  speculation rather than to a definition fmake has seen; a tree that
+  vendors a library AND has the same library installed would stop
+  finding the vendored copy by symbol, which is raidcfgd and ossacli's
+  libossa exactly, and the reason section 219 is open.
+- **Do not widen into a separate checkout at all.** Its programs are
+  left to it; its library sources would be too, reachable only through
+  a target's include graph or `@sources`. Cost: raidcfgd links ossacli's
+  `libossa` sources by symbol today and would need to say so.
+- **Widen by exact name rather than by token** inside a checkout.
+  Cost: the token match exists because C++ symbols are mangled and a
+  definition's spelling is not the symbol's; a stricter match loses
+  the cases section 200 to 202 fixed.
+
+Whose: the copyright holder's, all three, since each is a rule about
+an unannotated tree. What raidcfgd can do meanwhile is `exclude =
+[..., "fuzznet/qtty/**"]` or the include directories, and is told so
+in its `project.md`. What changed here is a name: the widening loop
+sits below a point where `vendored` had been reassigned from the
+checkout directories to a list of found archives, so the prototype's
+`vendor_of(rel, vendored)` was handed archives and matched nothing --
+it ran to the end reporting the same nineteen files, which is section
+221's vacuous pass wearing a variable. The archives are
+`found_archives` now, and a later reader that had recomputed the
+directories as `_vendored` to get round the same shadow reads the
+one name.
