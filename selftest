@@ -8408,6 +8408,91 @@ def a_program_installs_under_its_other_names(t):
 			u.cleanup()
 
 
+@case
+def a_tree_under_two_licences_is_identified_from_its_own_expression(t):
+	"""MIT OR Apache-2.0, as the Rust world ships it, and nothing chosen.
+
+    netcfgd's debian/copyright says `MIT or Apache-2.0' and its root has
+    no licence text at all, which section 236 recorded as a shape the
+    identification could not express: a dual licence has no single text
+    to hash. It has two -- LICENSE-MIT and LICENSE-APACHE side by side --
+    and an SPDX expression in the sources that says a recipient may
+    choose either. That expression is the tree's own word and the only
+    thing that carries the operator, so the identification reads it:
+    each licence it names must be a file at the root, by its text where
+    the machine has it (Apache-2.0 is in common-licenses) and by its
+    name where it does not (MIT's text carries a copyright line, so no
+    two hash alike). Debian's copyright gets `MIT or Apache-2.0' and one
+    stanza per licence -- the reference for Apache, MIT's own text --
+    and the ebuild gets `|| ( MIT Apache-2.0 )'.
+
+    Refused: two files and no expression (nothing says whether either
+    or both); an expression naming a licence no file at the root is; a
+    file at the root the expression does not name. And the single-file
+    tree the deb case uses still identifies as before.
+    """
+	_deb_tools()
+	if not os.path.isfile("/usr/share/common-licenses/Apache-2.0"):
+		raise Skip("no /usr/share/common-licenses/Apache-2.0 to identify against")
+	mit = ("MIT License\n\nCopyright (c) 2026 Test Person\n\n"
+	       "Permission is hereby granted, free of charge, to any person obtaining "
+	       "a copy\nof this software [...]\n\nTHE SOFTWARE IS PROVIDED \"AS IS\".\n")
+
+	def tree(u, spdx="/* SPDX-License-Identifier: MIT OR Apache-2.0 */\n",
+	         files=("LICENSE-MIT", "LICENSE-APACHE")):
+		u.write("src/main.c", "/*! @target dualp */\n" + spdx
+		        + "int main(void){ return 0; }\n")
+		if "LICENSE-MIT" in files:
+			u.write("src/LICENSE-MIT", mit)
+		if "LICENSE-APACHE" in files:
+			shutil.copy("/usr/share/common-licenses/Apache-2.0",
+			            os.path.join(u.dir, "src", "LICENSE-APACHE"))
+		u.write("src/VERSION", "0.1\n")
+		u.write("src/fmake.toml", '[project]\nname = "dualp"\n[package]\n'
+		        'maintainer = "Test Person <test@example.invalid>"\n'
+		        'description = "Two licences.\\n\\nEither one."\n'
+		        '[target.dualp]\ndescription = "dual"\n'
+		        '[gentoo]\ncategory = "app-misc"\nsrc-uri = "x-${PV}.tar.gz"\n')
+		_run_in(_src(u), "git", "init", "-q", ".")
+
+	tree(t)
+	r = _deb(t, "--eject", "deb")
+	check(r.returncode == 0, f"--eject deb: {r.stdout}{r.stderr}")
+	with open(os.path.join(_src(t), "debian", "copyright")) as fh:
+		cp = fh.read()
+	check("License: MIT or Apache-2.0\n" in cp, f"the expression was not written: {cp}")
+	check("\nLicense: MIT\n MIT License\n" in cp,
+	      f"MIT's own text is not its stanza: {cp}")
+	check("\nLicense: Apache-2.0\n On Debian systems" in cp
+	      and "common-licenses/Apache-2.0" in cp,
+	      f"Apache-2.0 was not identified by its text: {cp}")
+	os.remove(os.path.join(_src(t), "Makefile"))
+	r = _deb(t, "--eject", "ebuild")
+	check(r.returncode == 0, f"--eject ebuild: {r.stdout}{r.stderr}")
+	with open(os.path.join(_src(t), "gentoo", "app-misc", "dualp",
+	                       "dualp-0.1.ebuild")) as fh:
+		check('LICENSE="|| ( MIT Apache-2.0 )"\n' in fh.read(),
+		      "the ebuild does not spell the choice Portage's way")
+
+	for what, kw, said in (
+	        ("two files and no expression", {"spdx": ""},
+	         "nothing in the tree says whether"),
+	        ("a licence no file is",
+	         {"spdx": "/* SPDX-License-Identifier: MIT OR GPL-2.0-only */\n"},
+	         "no file at the root is it"),
+	        ("a file the expression does not name",
+	         {"spdx": "/* SPDX-License-Identifier: MIT */\n"},
+	         "is not named by SPDX-License-Identifier")):
+		u = Tree("dual-refuse")
+		try:
+			tree(u, **kw)
+			r = _deb(u, "--eject", "deb")
+			check(r.returncode != 0 and said in r.stdout + r.stderr,
+			      f"{what} was not refused as such: {r.stdout}{r.stderr}")
+		finally:
+			u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

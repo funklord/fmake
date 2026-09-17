@@ -289,7 +289,9 @@ that had been green about nothing for five commits ·
 [236. Packaging netcfgd: one package of five, and what the tree lacked](#236-packaging-netcfgd-one-package-of-five-and-what-the-tree-lacked) ·
 [237. `build-depends`: what a test run needs, under the source's name](#237-build-depends-what-a-test-run-needs-under-the-sources-name) ·
 [238. `@kind library`: the archive and the shared object from one source set](#238-kind-library-the-archive-and-the-shared-object-from-one-source-set) ·
-[239. `@aliases`: a program's other names, as links beside it](#239-aliases-a-programs-other-names-as-links-beside-it)
+[239. `@aliases`: a program's other names, as links beside it](#239-aliases-a-programs-other-names-as-links-beside-it) ·
+[240. Reported from hydra: `--eject` fails on a Qt DBus translation unit](#240-reported-from-hydra---eject-fails-on-a-qt-dbus-translation-unit) ·
+[241. Two licences at the root, and the expression that says how](#241-two-licences-at-the-root-and-the-expression-that-says-how)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19338,3 +19340,38 @@ avoided adding a symbol so the committed link sets stayed correct without a
 regeneration. But it means `--eject` cannot currently answer for a tree
 that uses QtDBus, and the module-flag mapping is the place to look.
 
+## 241. Two licences at the root, and the expression that says how
+
+The shape section 236 recorded as one the identification could not
+express: netcfgd's `debian/copyright` says `MIT or Apache-2.0`, and a
+dual licence has no single text to hash. It has two -- the Rust world
+ships `LICENSE-MIT` and `LICENSE-APACHE` side by side -- and the only
+thing that carries the operator, whether a recipient may choose either
+or must satisfy both, is the tree's own `SPDX-License-Identifier: MIT
+OR Apache-2.0`. So that is what is read, and nothing is inferred from
+two files being there.
+
+`identify_license` now takes every `LICENSE*`, `LICENCE*` and
+`COPYING*` at the root, reads the one SPDX expression the sources
+agree on, and requires each licence the expression names to be a file:
+by its text where the machine has it -- Apache-2.0 hashes to
+`common-licenses/Apache-2.0`, once the `.0` that common-licenses drops
+from `GPL-3.0` and keeps in `Apache-2.0` was accepted under either
+spelling -- and by its name where it does not, since MIT's text carries
+a copyright line and no two hash alike. Debian's copyright gets the
+expression in the `Files` paragraph and one stanza per licence, a
+reference where the text is in common-licenses and the file's own text
+where it is not, which DEP-5 requires; the ebuild gets Portage's
+spelling of a choice, `|| ( MIT Apache-2.0 )`, and of a conjunction, a
+space. The single-file tree identifies exactly as before.
+
+Refused, each by name: two files and no expression (nothing says
+whether either or both, and fmake will not supply the word); an
+expression naming a licence no file at the root is; a file at the root
+the expression does not name, since a packager must not drop a licence
+silently; `WITH` exception clauses and an expression mixing `OR` and
+`AND`, which the two formats' fields cannot carry with precedence.
+
+The dual-licensed package builds and lintian accepts its copyright
+file. What this does not change for netcfgd is netcfgd: its root has no
+licence texts, and putting them there is its holder's act.

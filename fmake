@@ -13623,56 +13623,85 @@ def read_root_version(root):
 	return v or None
 
 
+RE_LICENSE_FILE = re.compile(r"^(LICEN[CS]E|COPYING)([-.].+)?$", re.I)
+
+
+def _license_family(ident):
+	"""`GPL-3.0-or-later' -> `GPL-3': the name common-licenses files it under."""
+	m = re.match(r"^([A-Za-z]+)-(\d+)(?:\.(\d+))?(?:\.0)?(?:-or-later|-only|\+)?$",
+	             ident)
+	if not m:
+		return ident
+	family, major, minor = m.groups()
+	return f"{family}-{major}" + (f".{minor}" if minor and minor != "0" else "")
+
+
+def _dep5(text):
+	"""A licence's text as a DEP-5 stanza body: indented, blanks as `.'."""
+	return "\n".join(" " + l if l.strip() else " ." for l in text.rstrip("\n").split("\n"))
+
+
 def identify_license(root, srcs):
-	"""Which licence the root LICENSE file is, without choosing one.
+	"""Which licence the tree's LICENSE files are, without choosing one.
 
-    Two parts, neither of which invents. The file's hash against the
-    texts the machine knows -- /usr/share/common-licenses on Debian --
-    names the licence: GPL-3. That text says nothing about "or later";
-    the option is granted in a notice, not in the licence. So the grant
-    is read from the tree's own SPDX-License-Identifier lines where every
-    one agrees and names the same licence, and is otherwise the bare
-    name. Widening is a different grant and is nobody's to infer here.
+    Two parts, neither of which invents. A file's hash against the texts
+    the machine knows -- /usr/share/common-licenses on Debian -- names
+    the licence: GPL-3. That text says nothing about "or later"; the
+    option is granted in a notice, not in the licence. So the grant is
+    read from the tree's own SPDX-License-Identifier lines where every
+    one agrees, and is otherwise the bare name. Widening is a different
+    grant and is nobody's to infer here.
 
-    Returns (short name, stanza text). Refuses when there is no file,
-    when the text matches nothing known, and when the SPDX lines
-    disagree with each other or with the file.
+    A tree may be under more than one licence: the Rust world's `MIT OR
+    Apache-2.0' ships as LICENSE-MIT and LICENSE-APACHE side by side.
+    The SPDX expression is the only thing that says whether a recipient
+    may choose either or must satisfy both, so two files and no
+    expression is a refusal, and every licence the expression names has
+    to be a file at the root -- by its text where the machine has it,
+    by its name (LICENSE-MIT) where it does not, since MIT's text
+    carries a copyright line and no two hash alike. A file the
+    expression does not account for is a refusal too: a packager must
+    not drop a licence silently.
+
+    Returns (expression, [(identifier, stanza)]): the expression as
+    Debian's copyright spells it -- `MIT or Apache-2.0' -- and one
+    stanza per licence, a reference to common-licenses where the text
+    is there and the file's own text where it is not.
     """
-	path = os.path.join(root, "LICENSE")
-	if not os.path.isfile(path):
+	known = "/usr/share/common-licenses"
+	try:
+		files = sorted(n for n in os.listdir(root)
+		               if RE_LICENSE_FILE.match(n)
+		               and os.path.isfile(os.path.join(root, n)))
+	except OSError:
+		files = []
+	if not files:
 		die("no LICENSE file at the root, so no licence to package under.\n"
 		    "    fmake identifies the licence from that file and never "
 		    "chooses one: a tree with none is in its intended state, and "
 		    "cannot be packaged until its holder decides.")
-	with open(path, "rb") as fh:
-		digest = hashlib.sha256(fh.read()).hexdigest()
-	known = "/usr/share/common-licenses"
-	# Every file that matches, and the most specific name among them:
-	# Debian keeps `GPL' as a copy of the current GPL-3, so a match on
-	# the bare name is also a match on the versioned one, and the
-	# versioned one is the licence.
-	matches = []
-	try:
-		for name in sorted(os.listdir(known)):
-			full = os.path.join(known, name)
-			if not os.path.isfile(full):
-				continue
-			with open(full, "rb") as fh:
-				if hashlib.sha256(fh.read()).hexdigest() == digest:
-					matches.append(name)
-	except OSError:
-		pass
-	base = max(matches, key=len) if matches else None
-	if base is None:
-		die(f"LICENSE does not match any text under {known}, so fmake "
-		    f"cannot say which licence it is.\n"
-		    f"    it identifies a licence by its text and never guesses "
-		    f"from a name or a notice; a file that is a known licence "
-		    f"byte-for-byte is identified, anything else is the holder's "
-		    f"to look at.")
-	# The grant, from the tree's own declarations.
+
+	def known_name(path):
+		"""The common-licenses file this one is, byte for byte, or None."""
+		with open(path, "rb") as fh:
+			digest = hashlib.sha256(fh.read()).hexdigest()
+		matches = []
+		try:
+			for name in sorted(os.listdir(known)):
+				full = os.path.join(known, name)
+				if not os.path.isfile(full):
+					continue
+				with open(full, "rb") as fh:
+					if hashlib.sha256(fh.read()).hexdigest() == digest:
+						matches.append(name)
+		except OSError:
+			pass
+		# `GPL' is a copy of GPL-3; the longest name is the licence.
+		return max(matches, key=len) if matches else None
+
+	# The grant, from the tree's own declarations: whole expressions.
 	spdx = set()
-	pat = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9.+-]+)")
+	pat = re.compile(r"SPDX-License-Identifier:\s*(.+?)\s*(?:\*/|-->)?\s*$")
 	for rel in srcs:
 		try:
 			with open(os.path.join(root, rel), encoding="utf-8",
@@ -13680,23 +13709,100 @@ def identify_license(root, srcs):
 				head = fh.read(2048)
 		except OSError:
 			continue
-		spdx.update(pat.findall(head))
-	family = re.sub(r"[^A-Za-z0-9]", "", base).lower()
+		for line in head.splitlines():
+			m = pat.search(line)
+			if m:
+				spdx.add(" ".join(m.group(1).split()))
 	if len(spdx) > 1:
 		die(f"the tree's SPDX-License-Identifier lines disagree: "
-		    f"{', '.join(sorted(spdx))}. LICENSE is {base}; say which "
-		    f"grant the tree makes, in one voice, before packaging it.")
-	short = base
-	if spdx:
-		(ident,) = spdx
-		if not re.sub(r"[^A-Za-z0-9]", "", ident).lower().startswith(family):
-			die(f"SPDX-License-Identifier says {ident} and LICENSE is "
-			    f"{base}: the tree's files and its licence file disagree, "
-			    f"and that is the holder's to settle, not fmake's.")
-		short = ident
-	stanza = (f"On Debian systems, the complete text of the {base} licence\n"
-	          f" can be found in \"{known}/{base}\".")
-	return short, stanza
+		    f"{'; '.join(sorted(spdx))}. Say which grant the tree makes, "
+		    f"in one voice, before packaging it.")
+
+	if not spdx:
+		if len(files) > 1:
+			die(f"{', '.join(files)} are all at the root and nothing in the "
+			    f"tree says whether a recipient may choose either or must "
+			    f"satisfy both. An SPDX-License-Identifier line in the "
+			    f"sources -- `MIT OR Apache-2.0' -- is the tree's own word "
+			    f"for it, and fmake will not supply one.")
+		base = known_name(os.path.join(root, files[0]))
+		if base is None:
+			die(f"{files[0]} does not match any text under {known}, so "
+			    f"fmake cannot say which licence it is.\n"
+			    f"    it identifies a licence by its text and never guesses "
+			    f"from a name or a notice; a file that is a known licence "
+			    f"byte-for-byte is identified, anything else is the "
+			    f"holder's to look at.")
+		return base, [(base, f"On Debian systems, the complete text of the "
+		                     f"{base} licence\n can be found in "
+		                     f"\"{known}/{base}\".")]
+
+	(expr,) = spdx
+	tokens = expr.replace("(", " ").replace(")", " ").split()
+	ops = {t.upper() for t in tokens if t.upper() in ("OR", "AND", "WITH")}
+	if "WITH" in ops:
+		die(f"SPDX-License-Identifier: {expr}: an exception clause is not "
+		    f"something fmake can carry into a package's licence field; "
+		    f"write debian/copyright by hand for this tree.")
+	if ops == {"OR", "AND"}:
+		die(f"SPDX-License-Identifier: {expr} mixes OR and AND, and the "
+		    f"formats fmake writes have no precedence to give it; write "
+		    f"it as one or the other, in parentheses if it needs both.")
+	idents = [t for t in tokens if t.upper() not in ("OR", "AND")]
+	if not idents:
+		die(f"SPDX-License-Identifier: {expr!r} names no licence")
+
+	def normal(text):
+		return re.sub(r"[^a-z0-9]", "", text.lower())
+
+	components, claimed = [], set()
+	for ident in dict.fromkeys(idents):
+		family = _license_family(ident)
+		# common-licenses drops the `.0' of GPL-3.0 and keeps the one in
+		# Apache-2.0, so a hash match is accepted under either spelling.
+		spellings = {family, family + ".0", ident}
+		found = None
+		for name in files:
+			path = os.path.join(root, name)
+			text_is = known_name(path)
+			if text_is in spellings:
+				found = (name, f"On Debian systems, the complete text of "
+				               f"the {text_is} licence\n can be found in "
+				               f"\"{known}/{text_is}\".")
+				break
+		if found is None:
+			for name in files:
+				suffix = RE_LICENSE_FILE.match(name).group(2)
+				if not suffix:
+					continue
+				tag = normal(suffix[1:])
+				if tag and (normal(family).startswith(tag)
+				            or normal(ident).startswith(tag)):
+					with open(os.path.join(root, name), encoding="utf-8",
+					          errors="replace") as fh:
+						found = (name, _dep5(fh.read()))
+					break
+		if found is None:
+			die(f"SPDX-License-Identifier names {ident}, and no file at the "
+			    f"root is it: not by text against {known}, not by name "
+			    f"(LICENSE-{family}). The grant the tree declares has to "
+			    f"be a text it ships.")
+		claimed.add(found[0])
+		components.append((ident, found[1]))
+	stray = [f for f in files if f not in claimed]
+	if stray:
+		die(f"{', '.join(stray)} at the root is not named by "
+		    f"SPDX-License-Identifier: {expr}. A licence file the tree's "
+		    f"declaration does not account for is not one fmake will drop "
+		    f"from a package, nor add to it.")
+	joiner = " or " if "OR" in ops else " and "
+	return joiner.join(i for i, _s in components), components
+
+
+def _dep5_ref(stanza):
+	"""A stanza body as identify_license returns it: a reference is two
+	lines already spaced for DEP-5, a text is already indented."""
+	return stanza if stanza.startswith(" ") else " " + stanza
 
 
 def copyright_years(root):
@@ -13907,7 +14013,7 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 		    f"needed: every Debian package names one, and there is no "
 		    f"place in a source tree fmake could read it from honestly.")
 	srcs = [u.rel for cl in closures.values() for u in cl.link]
-	short, stanza = identify_license(root, srcs)
+	short, components = identify_license(root, srcs)
 
 	refuse_to_overwrite(root, "debian", makefile)
 
@@ -14155,8 +14261,9 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	    + "\n"
 	    "Files: *\n"
 	    f"Copyright: {copyright_years(root)} {holder}\n"
-	    f"License: {short}\n\n"
-	    f"License: {short}\n {stanza}\n")
+	    f"License: {short}\n"
+	    + "".join(f"\nLicense: {ident}\n{_dep5_ref(stanza)}\n"
+	              for ident, stanza in components))
 
 	# ---- per package: .install, and the service glue as links
 	files = {"debian/control": control, "debian/rules": rules,
@@ -14253,6 +14360,18 @@ def gentoo_license(short):
 	return f"{family}-{version}" + ("+" if grant in ("-or-later", "+") else "")
 
 
+def gentoo_expression(expr):
+	"""`MIT or Apache-2.0' as Portage writes it: `|| ( MIT Apache-2.0 )'.
+
+    Debian's copyright joins alternatives with `or' and conjunctions
+    with `and'; Portage's LICENSE is a space-separated conjunction with
+    `|| ( ... )' for a choice.
+    """
+	if " or " in expr:
+		return "|| ( " + " ".join(gentoo_license(i) for i in expr.split(" or ")) + " )"
+	return " ".join(gentoo_license(i) for i in expr.split(" and "))
+
+
 def gentoo_depends(resolutions, pkg):
 	"""category/name for each pkg-config module, by asking Portage.
 
@@ -14317,7 +14436,7 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 		    f"project's hosting that nothing in a source tree states.")
 	targets = [t for t in targets if not t.test]
 	srcs = [u.rel for cl in closures.values() for u in cl.link]
-	short, _stanza = identify_license(root, srcs)
+	short, _components = identify_license(root, srcs)
 	# The program's own one-liner first, as the deb emitter's synopsis
 	# is; the package description's first sentence where there is none.
 	exe = [t for t in targets if t.kind == "exe" and t.description]
@@ -14360,7 +14479,7 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	     f'HOMEPAGE="{conf.package.get("homepage", "")}"',
 	     f'SRC_URI="{src_uri}"',
 	     "",
-	     f'LICENSE="{gentoo_license(short)}"',
+	     f'LICENSE="{gentoo_expression(short)}"',
 	     'SLOT="0"',
 	     f'KEYWORDS="{" ".join(keywords)}"',
 	     f'IUSE="{" ".join(conf.gentoo.get("iuse", []))}"',
