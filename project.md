@@ -294,7 +294,8 @@ that had been green about nothing for five commits ·
 [241. Two licences at the root, and the expression that says how](#241-two-licences-at-the-root-and-the-expression-that-says-how) ·
 [242. `tests/live/` is the `live` group, and no other directory is one](#242-testslive-is-the-live-group-and-no-other-directory-is-one) ·
 [243. Found means defined for the tree, not for the file that said so](#243-found-means-defined-for-the-tree-not-for-the-file-that-said-so) ·
-[244. The tool a generator uses is one of the things it reads](#244-the-tool-a-generator-uses-is-one-of-the-things-it-reads)
+[244. The tool a generator uses is one of the things it reads](#244-the-tool-a-generator-uses-is-one-of-the-things-it-reads) ·
+[245. situc, moc, uic and rcc are files, not paths](#245-situc-moc-uic-and-rcc-are-files-not-paths)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19523,3 +19524,38 @@ a real build re-runs. Section 226 pinned that and it is unchanged. And
 `TOOL mkvals` prints on every run now, no-op included, because the
 tool is checked on every run; the check is a nested no-op build and
 costs what one does.
+
+## 245. situc, moc, uic and rcc are files, not paths
+
+Section 244's lens, applied where section 226 said it did not apply:
+"a path is a fine identity for a tool somebody installed". The four
+stores for generated output -- `situ`, `moc`, `uic`, `rcc` -- keyed on
+the tool's path, its flags and the input's hash. That is fine for a
+tool that changes path when it changes, and situc is the tool this
+workspace rebuilds most: situ's own tree keeps it at `bin/situc` beside
+the schemas and rebuilds it in place, and a consumer's `[toolchain]
+situc` names a binary its holder reinstalls at the same path every
+time situ moves. Measured with the suite's stand-in: build, rewrite
+`bin/situc` so it emits a different check, build again -- `SITU` does
+not print and the program still says `4`. The tree kept headers written
+by a compiler that no longer existed, which is section 226's sentence
+with the tool fmake does not build. A distribution's moc reaches the
+same place through an upgrade.
+
+`tool_identity(path)` is the path with the file's size and mtime, one
+stat per tool per run, and all four keys carry it. Size and mtime move
+whenever the file is rewritten, which is what `install` and a relink
+both do; a rebuilt tool with identical bytes regenerates once, which is
+the cheap side of the error. Not a content hash: it would read a
+multi-megabyte binary on every run to answer a question the stat
+answers, and `libdir_signature` already chose the stat for the same
+reason. A tool that is not there keys on its bare path, so the failure
+to run it stays the message.
+
+The case rewrites the stand-in and asserts `SITU` prints, the program
+carries the new output, and the run after that is quiet. Against the
+tree before the fix it fails on the first of those. moc, uic and rcc
+take the same one-line change and have no case of their own: a case
+would need a second moc, and the suite has only the one Qt installs.
+That is a known gap in the witness rather than in the code, and it is
+written here so nobody reads the situc case as covering four tools.

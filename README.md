@@ -637,7 +637,9 @@ a schema that includes a shared one, re-runs only when the file *named in
 hand-kept list is one somebody has to keep right. If your generator can
 write a Make-style depfile, name it and fmake reads it back: the tool that
 did the reading is the only thing that knows what it read. Declaring one
-the command never writes is an error, not an empty list.
+the command never writes is an error, not an empty list. The tool itself
+is an input too: a `situc`, `moc`, `uic` or `rcc` rewritten at the same
+path, or a `uses` program rebuilt from the tree, re-runs what it wrote.
 
 Unknown keys are an error, with the valid ones named.
 

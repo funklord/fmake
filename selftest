@@ -8647,6 +8647,41 @@ def a_generator_reruns_when_the_tool_it_uses_changes(t):
 	      f"the tool's provider sweep is cached across runs: {out}")
 
 
+@case
+def a_rebuilt_situc_recompiles_the_schemas_it_compiled(t):
+	"""Section 226's shape, for the tool fmake does not build.
+
+	The situ store keyed a schema's outputs on situc's path, its flags
+	and the schema's hash. situ's tree keeps the compiler beside the
+	schemas at bin/situc and rebuilds it in place, and a consumer's
+	`[toolchain] situc` names a binary its holder reinstalls at the same
+	path -- so a situc that changed compiled nothing until a schema did,
+	and the tree kept headers written by a compiler that no longer
+	existed. moc, uic and rcc were keyed the same way. The tool's path
+	names where it is; its size and mtime say which one it is."""
+	_situ_tree(t)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	prog = os.path.basename(t.dir)
+	check(t.run(prog).stdout == "4\n", "the generated check")
+
+	# A new compiler at the old path: it writes a different check.
+	path = os.path.join(t.dir, "bin", "situc")
+	with open(path) as fh:
+		src = fh.read()
+	check("str(len(layer))" in src, "the stand-in's check is len(layer)")
+	with open(path, "w") as fh:
+		fh.write(src.replace("str(len(layer))", '"7"'))
+	r = t.fmake()
+	check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+	check("SITU schema/msg.situ" in r.stdout,
+	      f"a changed compiler must recompile the schema: {r.stdout}")
+	check(t.run(prog).stdout == "7\n",
+	      f"the program carries the new compiler's output: {r.stdout}")
+	r = t.fmake()
+	check("SITU" not in r.stdout, f"and then nothing changed: {r.stdout}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

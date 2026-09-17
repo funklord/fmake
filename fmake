@@ -3100,16 +3100,39 @@ def rcc_plan(files, scans, root):
 	return jobs
 
 
+def tool_identity(path):
+	"""What a generating tool is, for the key of what it wrote.
+
+    The path says where a tool is and not which one it is. situ keeps
+    situc beside its schemas at bin/situc and rebuilds it in place; a
+    consumer's [toolchain] situc names a binary its holder reinstalls at
+    the same path; a distribution upgrade puts a new moc where the old one
+    was. Every one of those left generated files written by a tool that
+    no longer existed, fresh under a key that named only the path --
+    section 226's shape, for the tools fmake does not build. Size and
+    mtime move whenever the file is rewritten, which is what install and
+    a relink both do, and cost one stat per tool per run; a tool that is
+    not there stays keyed on its path, so the failure to run it is the
+    message rather than a KeyError here.
+    """
+	try:
+		st = os.stat(path)
+	except OSError:
+		return path
+	return f"{path}:{st.st_size}:{st.st_mtime_ns}"
+
+
 def run_rcc(root, jobs, rcc, cache, dry_run=False):
 	"""Compile the resource files. Returns the outputs."""
 	store = cache.data.setdefault("rcc", {})
 	produced = []
+	rcc_is = tool_identity(rcc)
 	for job in jobs:
 		src, out = job["src"], job["out"]
 		abs_out = os.path.join(root, out)
 		# The listed files are inputs too, and rcc embeds their contents, so
 		# a changed icon has to re-run it just as a changed .qrc does.
-		parts = [rcc, src, job["name"]]
+		parts = [rcc_is, src, job["name"]]
 		for dep in job.get("deps", ()):
 			parts.append(dep + ":" + (cache.hash_of(os.path.join(root, dep),
 			                                        dep) or "?"))
@@ -3232,10 +3255,11 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
     """
 	store = cache.data.setdefault("moc", {})
 	produced = []
+	moc_is = tool_identity(moc)
 	for job in jobs:
 		src, out = job["src"], job["out"]
 		abs_out = os.path.join(root, out)
-		key = sha("|".join([moc, "\0".join(flags), src,
+		key = sha("|".join([moc_is, "\0".join(flags), src,
 		                    cache.hash_of(os.path.join(root, src), src) or "?"]))
 		stamp = store.get(out)
 		if stamp == key and os.path.isfile(abs_out):
@@ -3303,10 +3327,11 @@ def run_uic(root, jobs, uic, cache, dry_run=False):
     """
 	store = cache.data.setdefault("uic", {})
 	produced = []
+	uic_is = tool_identity(uic)
 	for job in jobs:
 		src, out = job["src"], job["out"]
 		abs_out = os.path.join(root, out)
-		key = sha("|".join([uic, src,
+		key = sha("|".join([uic_is, src,
 		                    cache.hash_of(os.path.join(root, src), src) or "?"]))
 		if store.get(out) == key and os.path.isfile(abs_out):
 			produced.append(out)
@@ -3519,13 +3544,14 @@ def run_situc(root, jobs, situc, flags, cache, dry_run=False):
     """
 	store = cache.data.setdefault("situ", {})
 	produced = []
+	situc_is = tool_identity(situc)
 	for job in jobs:
 		src = job["src"]
 		# The command set is in the key, so a cache written when fmake ran
 		# only `build' regenerates once rather than staying fresh on a key
 		# that never covered the second half. Same move [generate] makes
 		# for `depfile:'.
-		key = sha("|".join([situc, "build+gen-derived", " ".join(flags), src,
+		key = sha("|".join([situc_is, "build+gen-derived", " ".join(flags), src,
 		                    cache.hash_of(os.path.join(root, src), src)
 		                    or "?"]))
 		was = store.get(src)
