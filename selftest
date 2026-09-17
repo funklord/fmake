@@ -8328,6 +8328,86 @@ def u_toml_of(t):
 		return fh.read()
 
 
+@case
+def a_program_installs_under_its_other_names(t):
+	"""netcfgd-tui is netcfgd-gui, read from argv[0]: a link, not a flag.
+
+    netcfgd installs `netcfgd-tui' beside `netcfgd-gui' as a symlink,
+    and the program reads argv[0] -- a name ending `-tui' selects the
+    terminal frontend, a real command rather than `netcfgd-gui --tui'.
+    The install model had no row for it (section 236). `@aliases', or
+    `[target] aliases', is that row: the same relative symlink the
+    soname chain uses, beside the file it names, so every reader that
+    already places one places this -- the live install, both ejected
+    builds, --explain, uninstall, and the deb's .install.
+
+    Asserted three ways: the live install lands the program and two
+    links to it, and the link runs as the other name; the ejected make
+    and ninja installs land the same; uninstall takes all three back.
+    Refused: an alias with a slash, the program's own name, and a name
+    another program installs under, which is the plan's collision.
+    """
+	t.write("main.c",
+	        "/*! @target gui\n *  @aliases tui gui-console\n */\n"
+	        "#include <stdio.h>\n#include <string.h>\n"
+	        "int main(int argc, char **argv){ (void)argc; "
+	        "puts(strstr(argv[0], \"tui\") ? \"tui\" : \"gui\"); return 0; }\n")
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage)
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"install failed: {said}")
+	bindir = os.path.join(stage, "usr", "local", "bin")
+	for alias in ("tui", "gui-console"):
+		link = os.path.join(bindir, alias)
+		check(os.path.islink(link) and os.readlink(link) == "gui",
+		      f"{alias} is not a relative link to gui: {said}")
+	check(_run_in(bindir, "./tui").stdout == "tui\n",
+	      "the program did not see its other name in argv[0]")
+	e = t.fmake("--explain").stdout
+	check("tui" in e and "->(link)" in e, f"--explain does not show the alias: {e}")
+	r = t.fmake("--uninstall", "--destdir", stage)
+	check(r.returncode == 0 and not os.listdir(bindir),
+	      f"uninstall left {os.listdir(bindir)}")
+	for backend, out, cmd in (("make", "Makefile", ["make", "-s"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		ej = t.fmake("--eject", backend)
+		check(ej.returncode == 0, f"--eject {backend}: {ej.stderr}")
+		t.write(out, ej.stdout)
+		dest = os.path.join(t.dir, "stage-" + backend)
+		b = _run_in(t.dir, *cmd, "install", env={"DESTDIR": dest})
+		bd = os.path.join(dest, "usr", "local", "bin")
+		check(b.returncode == 0 and sorted(os.listdir(bd)) == ["gui", "gui-console", "tui"]
+		      and os.readlink(os.path.join(bd, "tui")) == "gui",
+		      f"the ejected {backend} install landed {os.listdir(bd) if os.path.isdir(bd) else None}: "
+		      f"{b.stdout}{b.stderr}")
+		b = _run_in(t.dir, *cmd, "uninstall", env={"DESTDIR": dest})
+		check(b.returncode == 0 and not os.listdir(bd),
+		      f"the ejected {backend} uninstall left {os.listdir(bd)}")
+		os.remove(os.path.join(t.dir, out))
+
+	for what, main, extra, said in (
+	        ("a path", "/*! @target gui\n *  @aliases sub/x\n */\n", "",
+	         "not a path"),
+	        ("its own name", "/*! @target gui\n *  @aliases gui\n */\n", "",
+	         "own name"),
+	        ("another program's name", "/*! @target gui\n *  @aliases other\n */\n",
+	         "/*! @target other */\nint main(void){ return 1; }\n",
+	         "would both install as")):
+		u = Tree("alias-refuse")
+		try:
+			u.write("main.c", main + "int main(void){ return 0; }\n")
+			if extra:
+				u.write("o.c", extra)
+			r = u.fmake("--install", "--destdir", os.path.join(u.dir, "s"))
+			check(r.returncode != 0 and said in r.stdout + r.stderr,
+			      f"an alias that is {what} was not refused as such: "
+			      f"{r.stdout}{r.stderr}")
+		finally:
+			u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

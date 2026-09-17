@@ -288,7 +288,8 @@ that had been green about nothing for five commits ·
 [235. Packaging a real tree: what ossacli said about the emitter](#235-packaging-a-real-tree-what-ossacli-said-about-the-emitter) ·
 [236. Packaging netcfgd: one package of five, and what the tree lacked](#236-packaging-netcfgd-one-package-of-five-and-what-the-tree-lacked) ·
 [237. `build-depends`: what a test run needs, under the source's name](#237-build-depends-what-a-test-run-needs-under-the-sources-name) ·
-[238. `@kind library`: the archive and the shared object from one source set](#238-kind-library-the-archive-and-the-shared-object-from-one-source-set)
+[238. `@kind library`: the archive and the shared object from one source set](#238-kind-library-the-archive-and-the-shared-object-from-one-source-set) ·
+[239. `@aliases`: a program's other names, as links beside it](#239-aliases-a-programs-other-names-as-links-beside-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19270,3 +19271,33 @@ hand-written `libossa-dev.install`: header, `.a`, `.so*`, `.pc`.
 What this does not do: build the archive without PIC. A tree that wants
 a non-PIC archive beside a shared object is two builds, and says so
 with two configurations.
+
+## 239. `@aliases`: a program's other names, as links beside it
+
+The symlink section 236 said the install model had no row for. netcfgd
+installs `netcfgd-tui` beside `netcfgd-gui` as a link, and the program
+reads `argv[0]`: a name ending `-tui` selects the terminal frontend --
+a real command rather than `netcfgd-gui --tui`, at the price of one
+symlink, which its own Makefile records as the reason.
+
+`@aliases tui gui-console` beside `main()`, or `aliases = [...]` in the
+target's section, adds a row per name: the same `("symlink", file,
+"bindir", name)` the soname chain uses, a relative link beside the file
+it names. That is the whole of it, because every reader already places
+one: `--install`, both ejected builds' install and uninstall rules,
+`--explain` (`->(link)`), `--release`'s tarball, and the deb's
+`.install`, which lists the link and lets `dh_install` copy it.
+Measured: the live install and the ejected make and ninja installs land
+the program and two links to it, the link runs as the other name, and
+uninstall takes all three back. On the netcfgd copy,
+`aliases = ["netcfgd-tui"]` puts `usr/bin/netcfgd-tui` in
+`netcfgd-gui.install`, which the hand-written package placed by hand.
+
+Refused: an alias with a slash (a name in the program's directory, not
+a path), the program's own name, and a name another program installs
+under -- the last through the collision the plan already refuses,
+which is what a row in the plan buys over a special case.
+
+Not done: a man page for the alias. Debian wants one, as a `.so`
+reference to the program's; a tree that has it names it with `@man`
+like any other.

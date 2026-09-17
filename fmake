@@ -1145,7 +1145,7 @@ CONF_SCHEMA = {
 		# Makefile does and what its runtime header declares safe.
         "defines": L, "define": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
-        "man": L, "desktop": L, "icons": L, "metainfo": L,
+        "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "version": S, "description": S,
     }},
@@ -3588,7 +3588,7 @@ DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
-                  "rule", "man", "desktop", "icons", "metainfo"}
+                  "rule", "man", "desktop", "icons", "metainfo", "aliases"}
 
 # @define and @defines are the same directive. The config file spells it
 # plural because it holds a list; a comment spells it singular because it
@@ -3964,6 +3964,7 @@ DOXYGEN_ALIAS_TEXT = {
     "desktop": "Desktop entries",
     "icons":   "Icons",
     "metainfo": "AppStream metainfo",
+    "aliases": "Other names this program installs under",
     "cflags":  "Compile flags",
     "ldflags": "Link flags",
     "define":  "Defines",
@@ -13492,6 +13493,28 @@ def install_plan(targets, closures, root):
 					die(f"@{kind} {f!r} does not exist (named for {t.name})")
 				directory, name = furniture_landing(kind, f, root)
 				planned.append(("tree", f, directory, name, 0o644))
+
+		# A second name for one program: netcfgd installs `netcfgd-tui'
+		# as a link to `netcfgd-gui', reads argv[0], and a name ending
+		# `-tui' selects the terminal frontend -- a real command rather
+		# than a flag, at the price of a symlink. The same row the soname
+		# chain uses, a relative link beside the file it names, so every
+		# reader that already places one places this. An alias landing on
+		# another program's name is the collision the plan already
+		# refuses.
+		if t.kind == "exe":
+			aliases = list(t.conf.get("aliases", []))
+			for u in units:
+				if u is not None:
+					aliases += u.ann.items("aliases")
+			for alias in dict.fromkeys(aliases):
+				if "/" in alias or not alias or alias in (".", ".."):
+					die(f"@aliases {alias!r} (for {t.name}): an alias is a "
+					    f"name in the same directory as the program, not a "
+					    f"path")
+				if alias == t.filename:
+					die(f"@aliases {alias!r} is {t.name}'s own name")
+				planned.append(("symlink", t.filename, "bindir", alias, None))
 
 	# Init glue, once per tree rather than per target: a service is not a
 	# target's, it is the tree's. A unit keeps its own name, which is what
