@@ -1179,7 +1179,7 @@ CONF_SCHEMA = {
         "name": S, "std": S, "profile": S, "needs": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
         "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
-        "test-timeout": N, "test-env": L, "rustflags": L,
+        "test-timeout": N, "test-env": L, "test-cwd": S, "rustflags": L,
     },
     "profile": {"*": {
         "std": S, "cflags": L, "ldflags": L, "defines": L, "define": L,
@@ -1200,7 +1200,8 @@ CONF_SCHEMA = {
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
         "test": B, "test-group": S, "test-args": L,
-        "test-timeout": N, "test-env": L, "version": S, "description": S,
+        "test-timeout": N, "test-env": L, "test-cwd": S,
+        "version": S, "description": S,
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
@@ -2173,6 +2174,34 @@ def wants_a_display(env):
 	                                    "WAYLAND_DISPLAY"))
 
 
+def test_cwd(conf, t, root):
+	"""The directory a test runs from, tree-relative, or "" for the root.
+
+    fmake runs a test from the project root, because that is where the
+    paths on a command line were written to work. raidcfgd's suite opens
+    `fixture/healthy_p410i.txt`, and its Makefile runs every test with
+    `make -C test`: the paths were written to work from test/, and eleven
+    of 23 tests cannot open their fixtures from anywhere else. netcfgd's
+    client_test wanted `../doc/schema/socket.json` for the same reason,
+    and `test-args` was the answer given then, which moves the path
+    rather than the test. A directory inside the tree; the target's
+    setting wins over the project's, as for test-env.
+    """
+	where = t.conf.get("test-cwd") or conf.project.get("test-cwd") or ""
+	if not where:
+		return ""
+	who = (f"{tgt_section(t.name)}" if t.conf.get("test-cwd")
+	       else "[project]")
+	norm = os.path.normpath(where)
+	if os.path.isabs(where) or norm.startswith(os.pardir):
+		die(f"{CONF_FILE}: {who} test-cwd = {where!r} must name a directory "
+		    f"inside the tree")
+	if not os.path.isdir(os.path.join(root, norm)):
+		die(f"{CONF_FILE}: {who} test-cwd = {where!r} is not a directory "
+		    f"in this tree")
+	return norm
+
+
 def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
                   gui=()):
 	"""Build step done; now run them. Returns a process exit status.
@@ -2209,8 +2238,9 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
 	# not a test that failed" and then printed "1 of 1 failed".
 	not_run = []
 	for t in sorted(targets, key=lambda x: x.name):
-		exe = os.path.join(outdir, t.filename)
+		exe = os.path.abspath(os.path.join(outdir, t.filename))
 		argv = [exe] + list(t.conf.get("test-args", []))
+		cwd = os.path.join(root, test_cwd(conf, t, root))
 		limit = t.conf.get("test-timeout", default) or None
 		pairs = test_env_pairs(conf, t, bin_paths)
 		# Inherited and added to rather than replaced: a test needs PATH
@@ -2233,7 +2263,7 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
 			# test started. A test that hangs on the network usually hangs
 			# with a helper alive, and killing only the process fmake
 			# launched leaves that helper holding the terminal.
-			proc = subprocess.Popen(argv, cwd=root, start_new_session=True,
+			proc = subprocess.Popen(argv, cwd=cwd, start_new_session=True,
 			                        env=env)
 		except OSError as exc:
 			warn(f"{t.name}: {exc}")
@@ -12217,7 +12247,13 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			                for x in t.conf.get("test-args", []))
 			env = " ".join(_mk_cmd(_sh_env(p))
 			               for p in test_env_pairs(conf, t, eject_bins))
-			a(f"\t{env + ' ' if env else ''}./{art(t.filename)}"
+			where = test_cwd(conf, t, root)
+			prog = ("./" + art(t.filename) if not where
+			        else os.path.relpath(art(t.filename), where))
+			if where and not prog.startswith((".", "/")):
+				prog = "./" + prog
+			a("\t" + (f"cd {shlex.quote(where)} && " if where else "")
+			  + f"{env + ' ' if env else ''}{prog}"
 			  + (f" {argv}" if argv else ""))
 		a("")
 
@@ -13214,13 +13250,22 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	for g in sorted(by_group):
 		members = sorted(by_group[g], key=lambda x: x.name)
 		a("")
-		cmds = " && ".join(
-		    " ".join([_nj_esc(_sh_env(p))
-		              for p in test_env_pairs(conf, t, eject_bins)]
-		             + ["./" + " ".join(_nj_esc(shlex.quote(x))
-		                                for x in [_art_path(t.filename)]
-		                                + list(t.conf.get("test-args", [])))])
-		    for t in members)
+		def _run_one(t):
+			where = test_cwd(conf, t, root)
+			prog = _art_path(t.filename)
+			if where:
+				prog = os.path.relpath(prog, where)
+			if not prog.startswith((".", "/")):
+				prog = "./" + prog
+			words = ([f"cd {shlex.quote(where)} &&"] if where else []) + [
+			    _nj_esc(_sh_env(p))
+			    for p in test_env_pairs(conf, t, eject_bins)] + [
+			    " ".join(_nj_esc(shlex.quote(x))
+			             for x in [prog] + list(t.conf.get("test-args", [])))]
+			return " ".join(words)
+		# Each test in a subshell, so a `cd' for one does not move the next.
+		cmds = " && ".join(f"({_run_one(t)})" if test_cwd(conf, t, root)
+		                   else _run_one(t) for t in members)
 		a(f"rule run_{_mk_ident(g)}")
 		a(f"  command = {cmds}")
 		a(f"  description = RUN {g}")

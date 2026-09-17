@@ -378,7 +378,10 @@ That buys a fast default build, and it is paid for by the object cache above
 being keyed on the configuration — otherwise "build only what you asked for"
 is how a stale binary gets tested. `@test` and `@test no` in the source, or
 `test = true` / `false` under `[target.NAME]`, override the guess;
-`test-args` under `[target.NAME]` gives a test its arguments, and `test-env`
+`test-args` under `[target.NAME]` gives a test its arguments; `test-cwd`
+under either names the directory, inside the tree, it runs from -- for a
+suite written to run from `test/`, opening `fixture/<name>` -- and the
+ejected builds `cd` there for the run; `test-env`
 under either takes `KEY=VALUE` settings for the environment it runs in --
 added to what fmake inherited rather than replacing it, with the target's
 setting winning over the project's. A value may say `$bin(NAME)` for where

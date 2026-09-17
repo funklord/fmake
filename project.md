@@ -309,7 +309,8 @@ that had been green about nothing for five commits ·
 [256. A stanza naming a root renames the target on it](#256-a-stanza-naming-a-root-renames-the-target-on-it) ·
 [257. Defines in a target's own section are its own flags](#257-defines-in-a-targets-own-section-are-its-own-flags) ·
 [258. A Qt test that aborts with no display is told the key](#258-a-qt-test-that-aborts-with-no-display-is-told-the-key) ·
-[259. Widening reaches into a vendored checkout by token, and what that costs](#259-widening-reaches-into-a-vendored-checkout-by-token-and-what-that-costs)
+[259. Widening reaches into a vendored checkout by token, and what that costs](#259-widening-reaches-into-a-vendored-checkout-by-token-and-what-that-costs) ·
+[260. `test-cwd`: a suite written to run from its own directory](#260-test-cwd-a-suite-written-to-run-from-its-own-directory)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20112,3 +20113,40 @@ it ran to the end reporting the same nineteen files, which is section
 `found_archives` now, and a later reader that had recomputed the
 directories as `_vendored` to get round the same shadow reads the
 one name.
+
+## 260. `test-cwd`: a suite written to run from its own directory
+
+With the two vendored subtrees excluded (section 259) raidcfgd's 23
+tests build and run under `fmake test`, and fifteen fail. Four are the
+display, and section 258's note names the line. Eleven read
+
+    FAIL  cannot open fixture fixture/healthy_p410i.txt
+
+fmake runs every test from the tree root, "since that is where a
+test's relative paths were written to work" -- and raidcfgd's were
+written to work from `test/`, which is where its Makefile runs them:
+`make -C test`, then `./$(BUILD_DIR)/$$suite fixture`. netcfgd's
+`client_test` had wanted `../doc/schema/socket.json` for the same
+reason, and `test-args` was the answer given in section 236, which
+moves the path rather than the test; for a test that opens a fixture
+by a name compiled into it there is no argument to move.
+
+`test-cwd`, under `[project]` or `[target.NAME]`, names a directory
+inside the tree; the target's setting wins, as for `test-env`. The
+binary's path is made absolute before the change of directory, so
+`test-args` are the test's own from there; a directory outside the
+tree or not in it is refused naming the key. Both ejected forms `cd`
+there for the run and reach the binary by a relative path -- `cd test
+&& ../fixture_test` -- ninja's in a subshell per test so one test's
+directory does not become the next one's. The case runs a test that
+opens `fixture/answer.txt`, asserts it fails from the root and passes
+from `test/`, ejects both builds and runs the Makefile's rule, and
+asserts the refusal for `../elsewhere`.
+
+Measured on the raidcfgd copy with `test-cwd = "test"` and `test-env =
+["QT_QPA_PLATFORM=offscreen"]` under `[project]`: 22 of 23 pass. The
+one left, `test_manual`, takes the fixture directory as `argv[1]` and
+defaults to `fixtures`, which does not exist; its Makefile passes
+`fixture` to every suite, so `test-args = ["fixture"]` under its
+section is the last line, and all of it is signalled into that tree's
+`project.md` beside the exclude.

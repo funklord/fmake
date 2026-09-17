@@ -9170,6 +9170,55 @@ def a_qt_test_that_aborts_with_no_display_is_told_the_key(t):
 	check("no display is set" not in out, f"and nothing is noted: {out}")
 
 
+@case
+def a_test_runs_from_the_directory_its_paths_were_written_for(t):
+	"""raidcfgd runs its suite with `make -C test`, and eleven of its 23
+	tests open `fixture/<name>` -- a path written to work from test/.
+	fmake ran every test from the tree root, and the eleven could not
+	open their fixtures from there; netcfgd's client_test had wanted
+	`../doc/schema/socket.json` for the same reason, and `test-args`
+	was the answer then, which moves the path rather than the test.
+	`test-cwd` names the directory, under [project] or the target, and
+	the ejected builds `cd` there for the run."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("test/fixture/answer.txt", "42\n")
+	t.write("test/fixture_test.c",
+	        '#include <stdio.h>\nint main(void){\n'
+	        '\tFILE *f = fopen("fixture/answer.txt", "r"); int n = 0;\n'
+	        '\tif (!f || fscanf(f, "%d", &n) != 1) return 2;\n'
+	        '\treturn n == 42 ? 0 : 1; }\n')
+
+	r = t.fmake("test")
+	check(r.returncode != 0 and "fixture_test failed (exit 2)" in r.stdout + r.stderr,
+	      f"from the root the fixture is not there: {r.stdout}{r.stderr}")
+
+	t.write("fmake.toml", '[project]\ntest-cwd = "test"\n')
+	r = t.fmake("test")
+	check(r.returncode == 0, f"from test/ it is: {r.stdout}{r.stderr}")
+
+	# The ejected builds do the same, and reach the binary from there.
+	mk = t.fmake("--eject", "make").stdout
+	m = re.search(r"^\tcd test && (\S+)", mk, re.M)
+	check(m and m.group(1) == "../fixture_test",
+	      f"the make rule changes directory and finds the binary: "
+	      f"{[l for l in mk.splitlines() if 'fixture_test' in l and l.startswith(chr(9))]}")
+	if shutil.which("make"):
+		with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+			fh.write(mk)
+		r = _run_in(t.dir, "make", "-s", "test")
+		check(r.returncode == 0, f"and make runs it: {r.stdout}{r.stderr}")
+	nj = t.fmake("--eject", "ninja").stdout
+	check("cd test && ./../fixture_test" in nj or "cd test && ../fixture_test" in nj,
+	      f"the ninja rule too: {[l for l in nj.splitlines() if 'cd test' in l]}")
+
+	# Outside the tree is refused by name.
+	t.write("fmake.toml", '[project]\ntest-cwd = "../elsewhere"\n')
+	r = t.fmake("test")
+	check(r.returncode != 0 and "test-cwd" in r.stdout + r.stderr
+	      and "inside the tree" in r.stdout + r.stderr,
+	      f"a directory outside the tree is refused: {r.stdout}{r.stderr}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
