@@ -505,6 +505,8 @@ command = "protoc --dependency_out=gen/proto.d --c_out=gen $in"
 inputs  = ["proto/*.msg"]
 outputs = ["gen/msg.c"]
 depfile = "gen/proto.d"         # re-runs when anything it opened changes
+                                # uses = "mktab" runs a program built from
+                                # this tree, and re-runs when it changes
 
 [target.greet]                  # a library other projects can find
 kind    = "static"

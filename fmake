@@ -2436,19 +2436,31 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 		# `deps' still orders the rules above, and still reaches both
 		# ejected forms after a `|'.
 		read_paths = [os.path.relpath(p, root) for p in ins]
-		key = gen_key(read_paths + recorded)
+
+		# A tool built from this tree, rather than one already installed.
+		# NetHack's makedefs and sqlite's lemon both work this way, and
+		# neither can be expressed by a command that must already be on
+		# $PATH before anything has been compiled.
+		#
+		# Built BEFORE the freshness test, and hashed into the key, because
+		# the tool is one of the things the rule reads. Its path never
+		# changes and its contents change whenever anybody edits the
+		# generator, so a key over the inputs alone called a rule fresh in
+		# the same run that recompiled and relinked the program it runs
+		# (section 226) -- the tree kept a source written by a program that
+		# no longer existed. Both ejected forms already date the output on
+		# the tool; this is fmake agreeing with what it emits. On a dry
+		# run the tool is not built and the hash is of whatever is on
+		# disk, which is the limit section 226 pinned.
+		tool = build_tool(r["uses"]) if r.get("uses") else None
+		key = gen_key(read_paths + recorded
+		              + ([os.path.relpath(tool, root)] if tool else []))
 
 		fresh = (store.get(name) == key
 		         and all(os.path.exists(o) for o in outs))
 		if fresh:
 			vinfo(f"generated {name} is up to date")
 			continue
-
-		# A tool built from this tree, rather than one already installed.
-		# NetHack's makedefs and sqlite's lemon both work this way, and
-		# neither can be expressed by a command that must already be on
-		# $PATH before anything has been compiled.
-		tool = build_tool(r["uses"]) if r.get("uses") else None
 
 		cmds = [_recipe_prefix(c) for c in
 		        (r.get("commands") or [r["command"]])]
@@ -8639,11 +8651,23 @@ def build(args, _bootstrapping=False):
 		# generator freshness keys that were just written and are not on
 		# disk yet.
 		disk = Cache(os.path.join(state, CACHE_FILE))
-		# `links' with them. Distinct keys are what stops the tool's entry
-		# and the tree's colliding; this is what stops the outer build's
-		# save from dropping the nested one's entry altogether.
-		for section in ("files", "objects", "links"):
-			merged = dict(disk.data.get(section, {}))
+		# Every keyed section, not a list of three. This named `files',
+		# `objects' and `links' and dropped the rest, and the rest is where
+		# section 226's 25 seconds went: the nested build's sweep of every
+		# library on the machine for the tool's externals was written to
+		# `providers', discarded by this save, and taken again on every
+		# run -- 618 nm invocations on a no-op build, measured here with
+		# cProfile, against 12 ms for the second Config that section 226
+		# blamed. Distinct keys are what stops the tool's entries and the
+		# tree's colliding, in every section alike: an object by its
+		# directory, a provider sweep by its symbol set and toolchain, a
+		# header by its pkg-config signature. Where a key is shared the
+		# outer build's entry wins, as it did for the three. `units' is a
+		# list and stays the outer build's own.
+		for section, held in disk.data.items():
+			if not isinstance(held, dict) or section in ("version", "fmake"):
+				continue
+			merged = dict(held)
 			merged.update(cache.data.get(section, {}))
 			cache.data[section] = merged
 		cache.files = cache.data["files"]

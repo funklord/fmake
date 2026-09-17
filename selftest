@@ -8603,6 +8603,50 @@ def a_found_optional_package_defines_its_macro_for_the_whole_tree(t):
 	      f"{common.group(0) if common else mk[:400]}")
 
 
+@case
+def a_generator_reruns_when_the_tool_it_uses_changes(t):
+	"""Section 226, fixed: the tool is one of the things a rule reads.
+
+	A rule's key was its commands, its inputs and its depfile -- not the
+	program `uses` names, whose path never changes and whose contents
+	change whenever anybody edits the generator. So fmake recompiled and
+	relinked mkvals in the same run that called the rule fresh, and the
+	tree kept a source written by a program that no longer existed. The
+	tool is built before the freshness test now, and hashed into the key.
+
+	What it cost, and why it is affordable: the nested build's sweep of
+	the machine's libraries for the tool's externals was written to a
+	cache section the outer build's merge did not carry, so it was taken
+	again on every run -- 25 s on the tree section 226 measured, 6 s on
+	this one. Every keyed section is merged now, and the second no-op run
+	must not sweep: asserted on the report line the sweep prints, which
+	is the direct witness, not on the clock."""
+	_uses_tree(t)
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	prog = os.path.basename(t.dir)
+	check(t.run(prog).stdout == "11\n", "the generated value")
+
+	# Edit the tool and nothing else: no input, no command.
+	path = os.path.join(t.dir, "tool", "mkvals.c")
+	with open(path) as fh:
+		src = fh.read()
+	with open(path, "w") as fh:
+		fh.write(src.replace("return 11", "return 22"))
+	r = t.fmake()
+	check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+	check(t.run(prog).stdout == "22\n",
+	      f"a rule whose tool changed must re-run: {r.stdout}{r.stderr}")
+
+	# A no-op run neither regenerates nor sweeps the libraries again.
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("generated vals is up to date" in out,
+	      f"nothing changed, so the rule is fresh: {out}")
+	check("resolving" not in out,
+	      f"the tool's provider sweep is cached across runs: {out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

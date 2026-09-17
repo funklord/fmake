@@ -293,7 +293,8 @@ that had been green about nothing for five commits ·
 [240. Reported from hydra: `--eject` fails on a Qt DBus translation unit](#240-reported-from-hydra---eject-fails-on-a-qt-dbus-translation-unit) ·
 [241. Two licences at the root, and the expression that says how](#241-two-licences-at-the-root-and-the-expression-that-says-how) ·
 [242. `tests/live/` is the `live` group, and no other directory is one](#242-testslive-is-the-live-group-and-no-other-directory-is-one) ·
-[243. Found means defined for the tree, not for the file that said so](#243-found-means-defined-for-the-tree-not-for-the-file-that-said-so)
+[243. Found means defined for the tree, not for the file that said so](#243-found-means-defined-for-the-tree-not-for-the-file-that-said-so) ·
+[244. The tool a generator uses is one of the things it reads](#244-the-tool-a-generator-uses-is-one-of-the-things-it-reads)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18122,9 +18123,11 @@ times on a no-op run where it had appeared every time.
 
 ## 226. The generator that kept the old tool's output
 
-**Found, measured, and not yet fixed.** The fix works and costs too much
-until one more thing is cheap; what is here is the measurement and the
-options, so that nobody has to take them again.
+**Found and measured here; fixed in section 244, which also corrects the
+diagnosis of the cost below.** The fix was the one this section
+describes. What made it affordable was not making the second Config
+cheap -- it already was -- but carrying the nested build's provider
+sweep across runs. The measurement and the rejected options stand.
 
 A rule's freshness is `gen_key`: its commands, its `uses` **name**, its
 declared depfile, and the hash of every file it reads. Not the tool. So:
@@ -18356,13 +18359,13 @@ reads `VERSION` once, for `version_fallbacks`; this widens that read.
    with `targets = [...]` to say otherwise. The alternative, one package
    per tree, is what most of the eleven have and is the degenerate case
    of the same rule.
-3. **Services on install.** Debian policy and debhelper enable and start;
-   every tree here that ships a unit chooses not to, and Gentoo never
-   does. Default `enable = false`, so the generated `rules` passes
-   `--no-enable --no-start` and the ebuild does nothing, and a package
-   that wants Debian's default says so. Cost: one line in the tree that
-   wants the other behaviour, against a silent takeover in the tree that
-   forgot.
+3. **Services on install.** Settled by the copyright holder, below
+   under *What happens to a running service on upgrade*: the defaults
+   are the distribution's own -- enable, start and restart on upgrade
+   all true on Debian, nothing on Gentoo -- and `[service.*]` says
+   otherwise per service. The first draft of this item proposed
+   `enable = false` for every tree and was refused; the paragraph below
+   records why.
 4. **Who builds inside the package.** `debian/rules` can call `fmake`
    (then fmake is a Build-Depends and must be packaged first, which it
    is), or fmake can eject a Makefile beside the `debian/` so the source
@@ -19468,3 +19471,55 @@ Measured on the copy of hydra: `fmake --no-submodules --eject
 make-fragment` runs to the end where `ff35d09`'s report stopped. What
 this does not do is tell hydra anything: their tree was right, their
 Makefile was right, and the report was fmake's to answer.
+
+## 244. The tool a generator uses is one of the things it reads
+
+Section 226, closed. A `[generate.*]` rule with `uses` now builds the
+tool before the freshness test and hashes the binary into the rule's
+key beside its inputs, its depfile and its commands. Edit the tool's
+source and nothing else, and the rule re-runs: the fixture that read
+`11` after the tool said `22` reads `22`. Both ejected forms already
+did this -- make dates the output on the tool, ninja through `|` -- so
+this is fmake agreeing with what it emits.
+
+**The 25 seconds were somewhere else.** Section 226 measured the fix at
+25 s per no-op run and attributed it to the nested `Config`, which
+re-probes the compiler and re-enumerates pkg-config. Profiled here with
+cProfile on the same fixture before believing it, as that section asked:
+
+    build_tool                  8.0 s
+      scan_providers            8.0 s      618 nm invocations
+    Config.__init__, both       0.012 s
+
+The nested build resolves the tool's externals -- `fopen`, `fprintf`,
+`fclose` -- by sweeping every library on the machine, and writes the
+answer to the cache's `providers` section. The outer build then merged
+the nested cache back by naming three sections, `files`, `objects` and
+`links`, and saved over the rest. So the sweep was taken on every run,
+for ever, by a build whose every compile step reported cached -- which
+is what section 226 saw and read as the cost of the Config. A wrong
+mechanism attached to a right measurement: the number was real, the
+attribution was the first plausible thing, and the cure it pointed at
+would have bought nothing.
+
+The merge now carries every keyed section of the nested cache, the
+outer build's entry winning where a key is shared, exactly as it did
+for the three. Keys are distinct by construction in every section --
+an object by its directory, a provider sweep by symbol set and
+toolchain, a header by pkg-config signature, moc output by its path --
+so nothing the tool's build learned collides with what the tree's did.
+No-op on the fixture: 0.31 s before, 6 s with the fix and the old
+merge, 0.36 s with both.
+
+The case asserts the tool-changed rerun and, for the cost, that the
+second no-op run prints no `resolving ... external symbol(s)` line
+under `-v` -- the sweep's own report, rather than a clock. Each half
+sabotaged fails through its own check: the key without the tool fails
+on `22`, the three-section merge fails on the report line.
+
+What stays as it was: a dry run does not build the tool, so its hash
+is of whatever binary is on disk, and `-n` can call a rule fresh that
+a real build re-runs. Section 226 pinned that and it is unchanged. And
+`TOOL mkvals` prints on every run now, no-op included, because the
+tool is checked on every run; the check is a nested no-op build and
+costs what one does.
