@@ -1189,6 +1189,12 @@ CONF_SCHEMA = {
         "section": S, "depends": L, "recommends": L, "suggests": L,
         "description": S, "postinst": S, "prerm": S, "postrm": S,
         "preinst": S, "targets": L, "synopsis": S,
+		# Build-Depends the emitter cannot derive: the tools a test run
+		# needs, a generator's program. Under the SOURCE package's name,
+		# which is the one section here that need not be a binary
+		# package -- the derived ones (the -dev behind every .pc, the
+		# package behind every tool the build ran) are added to it.
+        "build-depends": L,
     }},
 	# One ebuild per tree -- Portage has no sub-packages, it has USE --
 	# in Gentoo's vocabulary: the category it files under, where the
@@ -13832,10 +13838,24 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 
 	packages = deb_packages(targets, closures, root, conf, src_name)
 	names = {p["name"] for p in packages}
-	for name in conf.debian:
-		if name not in names:
+	source_only = {"build-depends"}
+	for name, sec in conf.debian.items():
+		if name in names:
+			continue
+		if name != src_name:
 			die(f"{CONF_FILE}: [debian.{name}] names no package this tree "
-			    f"builds (they are: {', '.join(sorted(names))})")
+			    f"builds (they are: {', '.join(sorted(names))}), and it is "
+			    f"not the source, {src_name}, whose section carries "
+			    f"build-depends")
+		# The source's section, with no binary package of that name:
+		# only what belongs to the source may be in it.
+		wrong = sorted(set(sec) - source_only)
+		if wrong:
+			die(f"{CONF_FILE}: [debian.{src_name}] is the source package's "
+			    f"section here -- no binary package is named {src_name} "
+			    f"(they are: {', '.join(sorted(names))}) -- so "
+			    f"{', '.join(wrong)} belong under one of those, not here. "
+			    f"Only build-depends is the source's.")
 
 	# A service belongs to the package whose program it starts. With one
 	# program there is no question; with more, the service says.
@@ -13907,7 +13927,18 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	     f"Maintainer: {maint}"]
 	if conf.package.get("homepage"):
 		c.append(f"Homepage: {conf.package['homepage']}")
+	# What was derived, then what the tree named: the tools its tests
+	# need, which no .pc file and no build step can reveal. ossacli's are
+	# situc, sg3-utils and cciss-vol-status, and without them its suite
+	# ran the reduced half on every clean builder. Written as given, so a
+	# version relation survives; a name already derived is not repeated.
+	named = list(conf.debian.get(src_name, {}).get("build-depends", []))
+
+	def _bare(dep):
+		return dep.split()[0].split("(")[0]
+
 	deps = [f"debhelper-compat (= {DEB_COMPAT})"] + build_deps
+	deps += [d for d in named if _bare(d) not in {_bare(x) for x in deps}]
 	c.append("Build-Depends: " + ",\n               ".join(deps))
 	c.append(f"Standards-Version: {DEB_STANDARDS}")
 	c.append("Rules-Requires-Root: no")

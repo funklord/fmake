@@ -286,7 +286,8 @@ that had been green about nothing for five commits ·
 [233. The ejected Makefile asks pkg-config for the places](#233-the-ejected-makefile-asks-pkg-config-for-the-places) ·
 [234. `--arch`: the compiler found from the architecture](#234---arch-the-compiler-found-from-the-architecture) ·
 [235. Packaging a real tree: what ossacli said about the emitter](#235-packaging-a-real-tree-what-ossacli-said-about-the-emitter) ·
-[236. Packaging netcfgd: one package of five, and what the tree lacked](#236-packaging-netcfgd-one-package-of-five-and-what-the-tree-lacked)
+[236. Packaging netcfgd: one package of five, and what the tree lacked](#236-packaging-netcfgd-one-package-of-five-and-what-the-tree-lacked) ·
+[237. `build-depends`: what a test run needs, under the source's name](#237-build-depends-what-a-test-run-needs-under-the-sources-name)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19179,3 +19180,50 @@ from the hand-written one in the long description's length, in a
 `Build-Profiles: <pkg.netcfgd.gui>` line -- a Debian mechanism for
 building the GUI only on request, which fmake does not model -- and in
 the derived `Build-Depends` being the two packages rather than one.
+
+## 237. `build-depends`: what a test run needs, under the source's name
+
+The last open item from section 235. ossacli's `Build-Depends` name
+`situc`, `sg3-utils` and `cciss-vol-status`: tools its suite compares
+against, and its own `debian/rules` records what their absence cost --
+the suite ran the reduced half on every clean builder, green, having
+verified none of the decoding. Nothing fmake resolves can find them: no
+`.pc` file names a tool a test invokes, and the build runs none of them.
+So they are written down, and the question was where.
+
+**Under the source package's name: `[debian.<source>] build-depends`.**
+Build-Depends is a field of the source stanza, and the source's name is
+not always a binary package's: netcfgd's source is `netcfgd` and the
+one package fmake builds there is `netcfgd-gui`. So `[debian.<name>]`
+now admits the source's name as well as a binary package's -- the one
+section that need not be a package -- and a source-only section may
+carry `build-depends` and nothing else: `depends`, `targets` and the
+rest belong to a binary package, and a source-only section carrying
+them is refused naming which. Under the default split the source's name
+is also the program package's, and the section serves as both.
+
+The named ones follow the derived ones -- the `-dev` behind every `.pc`
+(section 230), the package behind every tool the build ran (section
+236) -- written as given so a version relation survives, and a name
+already derived is not repeated. On the ossacli copy:
+
+    Build-Depends: debhelper-compat (= 13),
+                   situc,
+                   sg3-utils,
+                   cciss-vol-status
+
+against the hand-written `debhelper-compat (= 13), gcc, make, python3
+(>= 3.11), situc, sg3-utils, cciss-vol-status`, of which `gcc` and
+`make` are `build-essential`'s and `python3` is the schema step's,
+which situc's package brings.
+
+Gentoo's half already existed: `[gentoo] bdepend`, in Portage's names,
+which is why this is not a `[package]` key -- a build dependency's name
+is the format's, and one list in two vocabularies is the fault this
+document keeps meeting.
+
+The case pins the order, the deduplication, the source-only section
+accepting `build-depends`, the same section refusing a binary package's
+key by name, and a section for neither a package nor the source still
+refused. Against the fmake before this it fails at the schema: the key
+was unknown.

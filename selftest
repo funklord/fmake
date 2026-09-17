@@ -8136,6 +8136,86 @@ description = "pings"
 		      f"build used:\n{control}")
 
 
+@case
+def the_source_names_the_build_depends_nobody_can_derive(t):
+	"""What a test run needs, and no .pc file or build step reveals.
+
+    ossacli's Build-Depends name situc, sg3-utils and cciss-vol-status:
+    tools its suite compares against, and without them the suite ran
+    the reduced half on every clean builder, green, having verified
+    none of the decoding -- its own debian/rules records that. Nothing
+    fmake resolves can find them, so they are written down, under the
+    SOURCE package's section: `[debian.<source>] build-depends'. That
+    is the one section here that need not name a binary package,
+    because the source's name is not always a package's -- netcfgd's
+    source is `netcfgd' and the one package fmake builds there is
+    `netcfgd-gui'.
+
+    Asserted: the named ones follow the derived ones in Build-Depends,
+    written as given so a version relation survives; a name already
+    derived is not repeated; a source-only section carrying a binary
+    package's keys is refused naming them; and `[debian.<name>]' for a
+    name that is neither a package nor the source is still refused.
+    """
+	_deb_tools()
+	_deb_tree(t)
+	t.write("src/fmake.toml", u_toml(t).replace(
+	    'recommends = ["zlib1g"]\n',
+	    'recommends = ["zlib1g"]\nbuild-depends = ["cowsay (>= 3.03)", "zlib1g-dev"]\n'))
+	src = _src(t)
+	_run_in(src, "git", "init", "-q", ".")
+	r = _deb(t, "--eject", "deb")
+	check(r.returncode == 0, f"--eject deb: {r.stdout}{r.stderr}")
+	with open(os.path.join(src, "debian", "control")) as fh:
+		control = fh.read()
+	head = control.split("\n\n")[0]
+	check("cowsay (>= 3.03)" in head, f"the named build-dependency is missing:\n{head}")
+	check(head.count("zlib1g-dev") == 1,
+	      f"a name both derived and given appears twice:\n{head}")
+	check(head.index("zlib1g-dev") < head.index("cowsay"),
+	      f"the named ones do not follow the derived ones:\n{head}")
+
+	# A source whose name is no binary package's: only build-depends
+	# belongs in its section.
+	u = Tree("builddeps-source")
+	try:
+		_deb_tree(u)
+		# The program grouped into a package of its own, so the source's
+		# name is nobody's: netcfgd's shape.
+		u.write("src/fmake.toml", u_toml(u).replace(
+		    'name = "greetd"', 'name = "greeting"').replace(
+		    '[debian.greetd]\nrecommends = ["zlib1g"]\n',
+		    '[debian.greetd]\ntargets = ["greetd"]\nrecommends = ["zlib1g"]\n')
+		    + '\n[debian.greeting]\nbuild-depends = ["cowsay"]\n')
+		_run_in(_src(u), "git", "init", "-q", ".")
+		r = _deb(u, "--eject", "deb")
+		said = r.stdout + r.stderr
+		check(r.returncode == 0, f"a source-only section was refused: {said}")
+		with open(os.path.join(_src(u), "debian", "control")) as fh:
+			ctl = fh.read()
+		check("Source: greeting\n" in ctl and "cowsay" in ctl.split("\n\n")[0],
+		      f"the source's build-depends did not reach control:\n{ctl}")
+		shutil.rmtree(os.path.join(_src(u), "debian"))
+		os.remove(os.path.join(_src(u), "Makefile"))
+		u.write("src/fmake.toml", u_toml(u) + 'depends = ["cowsay"]\n')
+		r = _deb(u, "--eject", "deb")
+		said = r.stdout + r.stderr
+		check(r.returncode != 0 and "Only build-depends is the source's" in said
+		      and "depends" in said,
+		      f"a binary package's key in the source's section was not refused: {said}")
+		shutil.rmtree(os.path.join(_src(u), "debian"), ignore_errors=True)
+		if os.path.exists(os.path.join(_src(u), "Makefile")):
+			os.remove(os.path.join(_src(u), "Makefile"))
+		u.write("src/fmake.toml", u_toml(u).replace(
+		    "[debian.greeting]", "[debian.nobody]"))
+		r = _deb(u, "--eject", "deb")
+		said = r.stdout + r.stderr
+		check(r.returncode != 0 and "names no package this tree builds" in said,
+		      f"a section for neither a package nor the source was accepted: {said}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

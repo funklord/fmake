@@ -525,7 +525,10 @@ recommends = ["zlib1g"]         # runtime programs have no abstract form
 postinst   = "debian-src/postinst"         # carried verbatim; needs #DEBHELPER#
 # Every program ships in one package named as the source, and each
 # library in lib<name>-dev; `targets = [...]` under a [debian.NAME]
-# puts named targets in a package of their own instead.
+# puts named targets in a package of their own instead. Under the
+# SOURCE's name, `build-depends = [...]` adds what a test run needs
+# and nothing can derive; the -dev behind every .pc and the package
+# behind every tool the build ran are derived by asking dpkg.
 
 [gentoo]                        # one ebuild per tree, in Portage's words
 category = "app-misc"
