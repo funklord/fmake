@@ -19301,3 +19301,40 @@ which is what a row in the plan buys over a special case.
 Not done: a man page for the alias. Debian wants one, as a `.so`
 reference to the program's; a tree that has it names it with `@man`
 like any other.
+
+## 240. Reported from hydra: `--eject` fails on a Qt DBus translation unit
+
+hydra regenerates its test-tree link sets with `make -C test objsets`,
+which runs `fmake -j N --eject make-fragment` over the tree. On 2026-09-17
+that failed compiling one source, and the failure is fmake's flags rather
+than the source: `make` compiles the same file cleanly.
+
+Reproduction, from a hydra checkout:
+
+    cd hydra/test && make objsets        # fmake --eject, fails
+    cd hydra/test && make build-make/test_theme   # make, compiles fine
+
+The error is a Qt DBus one, at the DBus header rather than in the file:
+
+    /usr/include/.../qt6/QtDBus/qdbusextratypes.h:155: error:
+      'const class QDBusVariant' has no member named 'variant'
+    test/test_theme.cpp:702: error: no matching function for call to
+      'QDBusVariant::QDBusVariant(int)'
+
+`test_theme.cpp` does `#include <QDBusVariant>` and, at line 702,
+`Q_ARG(QDBusVariant, QDBusVariant(1))`. The include resolves -- the error
+is *inside* `qdbusextratypes.h` -- so fmake found the QtDBus headers but is
+compiling them in a mode where `QDBusVariant`'s members and its
+value-constructor are not declared. hydra's `test/Makefile` names `Qt6DBus`
+in `QT_MODULES`, which yields `-DQT_DBUS_LIB` and the QtDBus include through
+pkg-config; the symptom is consistent with fmake supplying the QtDBus
+include path for a TU that includes `<QDBusVariant>` but not the DBus
+module's define/flags that go with it.
+
+This is a report, not a diagnosis: hydra has the reproduction, fmake has
+the reasons. It does not block hydra -- `objsets.mk` is regenerated only
+when the test link graph changes, and the change that surfaced this
+avoided adding a symbol so the committed link sets stayed correct without a
+regeneration. But it means `--eject` cannot currently answer for a tree
+that uses QtDBus, and the module-flag mapping is the place to look.
+
