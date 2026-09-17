@@ -9219,6 +9219,47 @@ def a_test_runs_from_the_directory_its_paths_were_written_for(t):
 	      f"a directory outside the tree is refused: {r.stdout}{r.stderr}")
 
 
+@case
+def a_quote_include_beside_its_includer_costs_no_include_directory(t):
+	"""fuzznet keeps sched/sched.h beside sched/sched.c, which includes it
+	as "sched.h". The resolver found it beside the includer and added
+	-Isched for it -- a directory the compiler was going to search first
+	anyway for a quote include -- and that -I put the tree's sched.h in
+	front of glibc's <sched.h> for every other file: 39 of fuzznet's C++
+	files stopped on `cpu_set_t does not name a type` from inside Qt's
+	headers. A quote include found beside its includer needs nothing; an
+	angle include is not searched there and still gets the directory."""
+	t.write("sched/sched.h", "#pragma once\nint tree_sched(void);\n")
+	t.write("sched/sched.c", '#include "sched.h"\nint tree_sched(void){ return 3; }\n')
+	# The system header of the same name, used for something the tree's
+	# copy does not declare.
+	t.write("main.c", "#include <sched.h>\n#include <stdio.h>\n"
+	        "int tree_sched(void);\n"
+	        'int main(void){ sched_yield(); printf("%d\\n", tree_sched()); return 0; }\n')
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the tree's sched.h must not shadow the system's: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "3\n", "and both are used")
+	flags = t.fmake("--explain").stdout
+	check("-Isched" not in flags, f"no -I for a sibling quote include: {flags}")
+
+	# An angle include of a tree header beside its includer still needs
+	# the directory, since the compiler does not look there for <>.
+	u = Tree("angle-beside")
+	try:
+		u.write("lib/util.h", "#pragma once\nint util(void);\n")
+		u.write("lib/util.c", "#include <util.h>\nint util(void){ return 4; }\n")
+		u.write("main.c", '#include "lib/util.h"\nint main(void){ return util() - 4; }\n')
+		r = u.fmake()
+		check(r.returncode == 0, f"an angle include beside its includer builds: "
+		      f"{r.stdout}{r.stderr}")
+		check("-Ilib" in u.fmake("--explain").stdout,
+		      "the directory is on the path for the angle include")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

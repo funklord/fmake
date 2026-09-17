@@ -4681,6 +4681,11 @@ assert.h complex.h ctype.h errno.h fenv.h float.h inttypes.h iso646.h
 limits.h locale.h math.h setjmp.h signal.h stdalign.h stdarg.h stdatomic.h
 stdbit.h stdbool.h stdckdint.h stddef.h stdint.h stdio.h stdlib.h
 stdnoreturn.h string.h tgmath.h threads.h time.h uchar.h wchar.h wctype.h
+aio.h cpio.h dirent.h dlfcn.h fcntl.h fmtmsg.h fnmatch.h ftw.h glob.h
+grp.h iconv.h langinfo.h libgen.h monetary.h mqueue.h ndbm.h netdb.h
+nl_types.h poll.h pthread.h pwd.h regex.h sched.h search.h semaphore.h
+spawn.h strings.h syslog.h tar.h termios.h ulimit.h unistd.h utime.h
+wordexp.h
 """.split())
 
 
@@ -4705,14 +4710,26 @@ class Project:
 	def incdir_for(self, resolved, inc_name):
 		return include_root_for(resolved, inc_name)
 
-	def resolve_header(self, inc_name, from_rel):
-		"""Resolve an include to a tree-relative header path, or None."""
+	def resolve_header(self, inc_name, from_rel, kind='"'):
+		"""Resolve an include to a tree-relative header path, or None.
+
+        `kind' is the include's bracket, and it decides whether a header
+        found beside its includer costs a -I. A quote include is searched
+        in the includer's directory before anywhere else, so `sched.c'
+        including "sched.h" beside it needs nothing -- and adding -Isched
+        for it put the tree's sched.h in front of glibc's <sched.h> for
+        every other file in the build: 39 of fuzznet's C++ files stopped
+        on `cpu_set_t does not name a type' from inside Qt's headers. An
+        angle include is not searched beside the includer, so that one
+        still needs the directory.
+        """
 		inc_name = inc_name.replace(os.sep, "/")
 		base = os.path.dirname(from_rel)
 		cand = os.path.normpath(os.path.join(base, inc_name))
 		if cand in self.hdr_by_name.get(os.path.basename(cand), []) or \
 		   os.path.isfile(os.path.join(self.root, cand)):
-			self.incdirs.add(self.incdir_for(cand, inc_name))
+			if kind == "<":
+				self.incdirs.add(self.incdir_for(cand, inc_name))
 			return cand
 		cand = os.path.normpath(inc_name)
 		if os.path.isfile(os.path.join(self.root, cand)):
@@ -4736,8 +4753,8 @@ class Project:
 			scan = self.scans.get(cur)
 			if not scan:
 				continue
-			for _kind, name, _line in scan["incs"]:
-				h = self.resolve_header(name, cur)
+			for kind, name, _line in scan["incs"]:
+				h = self.resolve_header(name, cur, kind)
 				if h and h not in seen:
 					seen.add(h)
 					queue.append(h)
@@ -4785,8 +4802,8 @@ class Project:
 			scan = self.scans.get(cur)
 			if not scan:
 				continue
-			for _kind, name, _line in scan["incs"]:
-				h = self.resolve_header(name, cur)
+			for kind, name, _line in scan["incs"]:
+				h = self.resolve_header(name, cur, kind)
 				if not h or h in seen_h:
 					continue
 				seen_h.add(h)
@@ -7585,7 +7602,7 @@ def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
 			if kind != "<" or name in seen:
 				continue
 			seen.add(name)
-			if proj is not None and proj.resolve_header(name, u.rel):
+			if proj is not None and proj.resolve_header(name, u.rel, kind):
 				continue        # a project header that happens to use <>
 			got = pkg.for_header(name, store, sig)
 			if got is None:

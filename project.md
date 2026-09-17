@@ -310,7 +310,8 @@ that had been green about nothing for five commits ·
 [257. Defines in a target's own section are its own flags](#257-defines-in-a-targets-own-section-are-its-own-flags) ·
 [258. A Qt test that aborts with no display is told the key](#258-a-qt-test-that-aborts-with-no-display-is-told-the-key) ·
 [259. Widening reaches into a vendored checkout by token, and what that costs](#259-widening-reaches-into-a-vendored-checkout-by-token-and-what-that-costs) ·
-[260. `test-cwd`: a suite written to run from its own directory](#260-test-cwd-a-suite-written-to-run-from-its-own-directory)
+[260. `test-cwd`: a suite written to run from its own directory](#260-test-cwd-a-suite-written-to-run-from-its-own-directory) ·
+[261. A quote include found beside its includer costs no `-I`](#261-a-quote-include-found-beside-its-includer-costs-no--i)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20150,3 +20151,50 @@ defaults to `fixtures`, which does not exist; its Makefile passes
 `fixture` to every suite, so `test-args = ["fixture"]` under its
 section is the last line, and all of it is signalled into that tree's
 `project.md` beside the exclude.
+
+## 261. A quote include found beside its includer costs no `-I`
+
+`fmake test` on the fuzznet copy, with the vendored qtty excluded and
+the two renames from section 256: 39 files did not compile, every one
+of them C++ under `gui/`, every one on
+
+    'cpu_set_t' does not name a type
+
+from inside Qt's headers. `fmake test authz_view_test` compiled the
+same file cleanly, which said the flags differed between the two
+runs, and `--explain` said how: the full run carried `-Isched`.
+fuzznet has `sched/sched.h` beside `sched/sched.c`, which includes it
+as `"sched.h"`. The resolver found the header beside its includer --
+the first thing it tries -- and added the directory it found it in to
+the include path for the whole build. A quote include is searched in
+the includer's own directory before anywhere else, so that `-I` bought
+nothing for `sched.c` and put the tree's `sched.h` in front of glibc's
+`<sched.h>` for everything Qt compiles, which reads `<sched.h>` for
+`cpu_set_t`. Section 175's hazard -- an added `-I` changes search
+order and a directory can shadow a header -- from a directory fmake
+added itself. By hand: `g++ -Isched -c gui/authz_view.cpp` fails on
+`cpu_set_t` eight times and the same line without `-Isched` is clean.
+
+`resolve_header` takes the include's bracket now. A quote include
+resolved beside its includer records the header and no directory; an
+angle include resolved there still records the directory, since the
+compiler does not search beside the includer for `<>`. The three
+callers pass the kind the scan already had and threw away. And the
+basename guess -- the third branch, which does need a `-I` -- declines
+POSIX names alongside ISO C's: `sched.h`, `pthread.h`, `unistd.h`,
+`fcntl.h` and their kind, unqualified only, since `socket.h` is the
+basename of `<sys/socket.h>` and of a tree's own `net/socket.h` alike.
+The case is fuzznet's shape in three files: `sched/sched.h` beside a
+`sched.c` that quote-includes it, and a `main.c` that calls
+`sched_yield()` from `<sched.h>` and the tree's function both; the old
+resolver fails it on the shadow, and `--explain` shows no `-Isched`. A
+second tree asserts an angle include beside its includer still puts
+`-Ilib` on the path. The 45 include cases pass.
+
+On fuzznet: 39 files to one, and the one is `qtty_render_test.cpp`,
+an opt-in test its Makefile builds only with a qtty checkout, which
+the exclude that took qtty out leaves without its headers. With that
+excluded too, `fmake test` builds and runs 171 tests and 170 pass;
+the one that fails is built by its Makefile only under `FLOG_ON`, a
+define fmake was not told. A five-line `fmake.toml`, and it is in
+fuzznet's `project.md`.
