@@ -3450,22 +3450,25 @@ def situ_plan(root, hdrs, scans):
 
 
 def find_situc(configured, root):
-	"""The situc to run: the one named, the one installed, or this tree's.
+	"""The situc to run: the one named, this tree's, or the one installed.
 
-    The third case is not a courtesy. situ's own tree holds both the schemas
-    and the compiler that reads them, and it is the tree most likely to be
-    built before anything has been installed -- so a compiler sitting at
-    bin/situc is found there rather than reported missing.
+    The tree's before the installed one, and this used to be the other
+    way round. situ's own tree holds both the schemas and the compiler
+    that reads them, and the schemas are written for THAT compiler: with
+    an older situc on $PATH, fmake ran it over the tree's std/kernels.situ
+    and stopped on a feature the tree had added since -- `not a whole
+    number of bytes', from a compiler that had never seen a 5-bit width
+    -- while bin/situc beside the schemas would have read it. A tree
+    that carries a compiler at the path situ installs one to is a tree
+    that means it, the way a definition in the tree outranks a library's
+    symbol; what is installed is the answer for a tree that carries none.
     """
 	if configured:
 		return configured
-	found = shutil.which("situc")
-	if found:
-		return found
 	here = os.path.join(root, "bin", "situc")
 	if os.path.isfile(here) and os.access(here, os.X_OK):
 		return here
-	return None
+	return shutil.which("situc")
 
 
 def situc_commands(situc, src, flags):

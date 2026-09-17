@@ -8941,6 +8941,45 @@ def a_case_whose_fmake_was_killed_from_outside_runs_once_more(t):
 	      f"a signal fmake could send itself is not retried: {status} {detail}")
 
 
+@case
+def a_trees_own_situc_outranks_the_installed_one(t):
+	"""situ's tree, on a machine with an older situc on the path.
+
+	`find_situc` took the installed compiler before the tree's, and situ's
+	schemas are written for the tree's: fmake ran /usr/bin/situc over
+	std/kernels.situ and stopped on `not a whole number of bytes`, a
+	feature that compiler had never seen, while bin/situc beside the
+	schema read it. A tree carrying a compiler at the path situ installs
+	one to means it. The installed one is still the answer for a tree
+	that carries none, which the second half asserts with the same path."""
+	# An "installed" situc that refuses everything, first on PATH.
+	usr = os.path.join(t.dir, "usr-bin")
+	os.makedirs(usr)
+	stale = os.path.join(usr, "situc")
+	with open(stale, "w") as fh:
+		fh.write("#!/bin/sh\necho 'stale situc: not a whole number of "
+		         "bytes' >&2\nexit 1\n")
+	os.chmod(stale, 0o755)
+	env = {"PATH": usr + os.pathsep + os.environ.get("PATH", "")}
+
+	_situ_tree(t, pin=False)
+	r = t.fmake(env=env)
+	check(r.returncode == 0,
+	      f"the tree's bin/situc must be the one run: {r.stdout}{r.stderr}")
+	check("stale situc" not in r.stdout + r.stderr,
+	      f"the installed one was not consulted: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "4\n",
+	      "the program carries the tree's compiler's output")
+
+	# Without a compiler in the tree, the path's is the one there is.
+	os.unlink(os.path.join(t.dir, "bin", "situc"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"))
+	r = t.fmake(env=env)
+	check(r.returncode != 0 and "stale situc" in r.stdout + r.stderr,
+	      f"a tree with no situc of its own gets the installed one: "
+	      f"{r.stdout}{r.stderr}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
@@ -22306,18 +22345,18 @@ UNREPORTED = ('wrote(name + "_extra.c", "int " + name + '
 def _situ_pin(t):
 	"""`[toolchain] situc', naming this fixture's stand-in by full path.
 
-    Without it these cases only test what they say on a machine with no
-    situc installed. `find_situc' takes the configured one, then the
+    Until section 253 `find_situc' took the configured one, then the
     installed one, then the tree's `bin/situc' -- so the moment somebody
-    installs the situc package, every fixture below silently switches to
-    the real compiler, which cannot read a schema that says
-    `// a schema the stand-in does not read'.
+    installed the situc package, every fixture below silently switched
+    to the real compiler, which cannot read a schema that says
+    `// a schema the stand-in does not read'. That was not hypothetical:
+    the package was installed on this machine at 21:16 on 2026-09-06 and
+    ten of these cases went red inside the hour, having passed all day.
 
-    That is not hypothetical: the package was installed on this machine at
-    21:16 on 2026-09-06 and ten of these cases went red inside the hour,
-    having passed all day. They failed loudly, which is the good outcome;
-    the bad one is a stand-in that goes on standing in for a tool nobody
-    is running.
+    The tree's compiler outranks the installed one now, so the stand-in
+    at bin/situc wins unpinned. The pin stays: a case about what fmake
+    does with a compiler says which compiler outright, and the order is
+    a fact one case asserts rather than a thing every case leans on.
     """
 	return '[toolchain]\nsituc = "%s"\n' % os.path.join(t.dir, "bin", "situc")
 
@@ -22350,14 +22389,12 @@ def a_schema_is_compiled_because_a_source_includes_its_header(t):
     and a main.c that includes the header its name implies. The compiler is
     found in the tree, at the path situ installs one to.
 
-    Deliberately unpinned, and therefore only answerable on a machine with
-    no situc installed: `find_situc' prefers an installed one, so the tree
-    fallback is not reachable while a real situc is on PATH. Its siblings
-    name the stand-in outright -- see `_situ_pin' -- because they are about
-    what fmake does with a compiler rather than which one it picks."""
-	if shutil.which("situc"):
-		raise Skip("situc is installed here, so the tree fallback this "
-		           "case exists for cannot be reached")
+    Deliberately unpinned: the tree's compiler is the one fmake picks
+    whether or not a situc is installed (section 253), so this runs on
+    every machine now, where it used to skip wherever the package was.
+    Its siblings name the stand-in outright -- see `_situ_pin' -- because
+    they are about what fmake does with a compiler rather than which one
+    it picks."""
 	_situ_tree(t, pin=False)
 	r = t.fmake()
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")

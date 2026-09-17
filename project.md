@@ -302,7 +302,8 @@ that had been green about nothing for five commits ·
 [249. A killed fmake is reported as killed, with the signal](#249-a-killed-fmake-is-reported-as-killed-with-the-signal) ·
 [250. A directive in a header is said to do nothing](#250-a-directive-in-a-header-is-said-to-do-nothing) ·
 [251. A cache section that is present and wrong is a traceback](#251-a-cache-section-that-is-present-and-wrong-is-a-traceback) ·
-[252. A pid space that wraps in minutes, and a case run once more](#252-a-pid-space-that-wraps-in-minutes-and-a-case-run-once-more)
+[252. A pid space that wraps in minutes, and a case run once more](#252-a-pid-space-that-wraps-in-minutes-and-a-case-run-once-more) ·
+[253. A tree's own situc outranks the installed one](#253-a-trees-own-situc-outranks-the-installed-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19782,3 +19783,44 @@ Not a fix for the machine and not claimed as one. The rate is one case
 in three of five runs, and a suite that reads that as a defect in
 fmake three times out of five is a suite nobody will read at all,
 which is the worse outcome.
+
+## 253. A tree's own situc outranks the installed one
+
+Building a copy of situ's tree with today's fmake, as `build-and-
+commit.md` asks of the two shared tools:
+
+    SITU std/kernels.situ
+    error: not a whole number of bytes
+      --> std/kernels.situ:58:11
+    !!! situc build failed on std/kernels.situ (exit 1)
+
+The compiler that said it was `/usr/bin/situc`, dated 5 August; the
+schema uses a 5-bit checksum width that situ added since, and
+`bin/situc` beside the schema reads it -- named through `[toolchain]
+situc`, the same copy builds `libsitu.a` and `situ-walk-c`. `find_situc`
+took the configured compiler, then the installed one, then the tree's,
+and its docstring called the third "not a courtesy" because situ's tree
+"is the tree most likely to be built before anything has been
+installed". True on the day, and the order was still wrong: the tree's
+schemas are written for the tree's compiler whether or not an older one
+is installed, and on a machine where situ is developed one always is.
+situ's README promises `python3 ~/src/fmake/fmake` builds with no
+configuration, and on this machine it did not.
+
+The tree's compiler comes before the installed one now. A tree carrying
+one at the path situ installs to means it, the way a definition in the
+tree outranks a library's symbol; the installed one remains the answer
+for a tree that carries none, and `[toolchain] situc` still outranks
+both. The case puts a refusing "installed" situc first on `$PATH` and
+asserts the tree's stand-in is run, then removes the stand-in and
+asserts the path's is. Against the old order it fails on the first
+half with the stand-in's `SITU` line never printed.
+
+Two things in the suite move with it. `a_schema_is_compiled_because_a_
+source_includes_its_header` skipped wherever situc was installed,
+because the tree fallback was unreachable there; it runs everywhere
+now. And `_situ_pin`'s reason -- that installing the package switched
+ten fixtures to the real compiler in an hour -- is history rather than
+a live hazard, since the stand-in at `bin/situc` wins unpinned; the pin
+stays as the statement it is. The ejected build was already writing
+`SITUC = bin/situc` relative to the tree for the same reason.

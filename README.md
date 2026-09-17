@@ -870,10 +870,10 @@ hand-written per-test object list unnecessary.
 **fmake knows the shape, not the flags.** `situc build` has options that
 change which files come out, and `--layer` is the one that matters: fmake
 passes what `[situ] flags` says and never invents a rung. `[toolchain]
-situc` names the compiler; without it, one on `$PATH` is used, and failing
-that `bin/situc` in the tree being built — which is how situ's own tree,
-holding both the schemas and the compiler, builds before anything is
-installed.
+situc` names the compiler; without it, `bin/situc` in the tree being built
+is used when there is one, and failing that one on `$PATH` — the tree's
+first, because situ's own tree holds both the schemas and the compiler
+they were written for, and an older situc on the path cannot read them.
 
 **Two commands are understood, because a schema compiles to two things.**
 `situc build` writes the accessors over the bytes and `situc gen-derived`
