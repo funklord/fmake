@@ -298,7 +298,8 @@ that had been green about nothing for five commits ·
 [245. situc, moc, uic and rcc are files, not paths](#245-situc-moc-uic-and-rcc-are-files-not-paths) ·
 [246. A suite that kills by a recorded pid reads the pid first](#246-a-suite-that-kills-by-a-recorded-pid-reads-the-pid-first) ·
 [247. A shim is a second moc, so the moc key gets its witness](#247-a-shim-is-a-second-moc-so-the-moc-key-gets-its-witness) ·
-[248. `@pkg_optional` is read from the sources this build compiles](#248-pkg_optional-is-read-from-the-sources-this-build-compiles)
+[248. `@pkg_optional` is read from the sources this build compiles](#248-pkg_optional-is-read-from-the-sources-this-build-compiles) ·
+[249. A killed fmake is reported as killed, with the signal](#249-a-killed-fmake-is-reported-as-killed-with-the-signal)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19634,3 +19635,35 @@ all -- is a question about which files fmake reads directives from,
 and it is the holder's; today the answer is sources, uniformly. The
 case asserts that neither the header's nor the excluded file's macro
 is defined and that neither is reported as asking.
+
+## 249. A killed fmake is reported as killed, with the signal
+
+Section 246's case failed again in suite41, the run over sections 245
+and 246: same case, same second fixture, same empty output. Two in
+three is a rate, not a coincidence, and the case is not random either
+-- the suite runs its cases in one fixed order on four workers, so the
+same case meets the same neighbours at the same moment every run. Ran
+by hand twelve times, the fixture refuses every time with 495 bytes of
+explanation. Under the suite, twice, it said nothing.
+
+What the failure could not say is the one fact that discriminates: a
+process that exits without a word has been killed, and the signal's
+number says by what. `Tree.fmake` read `returncode` as a refusal and
+threw the sign away. It raises now on a negative return code, naming
+the signal and quoting whatever fmake had said, so the next occurrence
+arrives as `killed by signal N` in whichever case it lands in. Nine is
+a kill loop or the OOM killer, fifteen is somebody's `terminate()`,
+eleven is the interpreter.
+
+The positive control is a compiler shim that TERMs its parent. fmake
+takes its compilers down and re-raises the signal, having printed
+nothing -- and that is the shape observed, which is the strongest
+thing yet said about the mechanism, and still not an identification.
+The kill-by-recorded-pid in section 246 sends KILL, not TERM; if the
+next report says fifteen, that theory is dead and something calling
+`terminate()` on the wrong pid is alive. Read for that: fmake signals
+only from its own handler, after being signalled; every `terminate()`
+and `send_signal` in the suite is aimed at a `Popen` the case has just
+started, which CPython polls before signalling. Nothing was found that
+sends TERM to a pid it did not start. The instrument is what this
+section adds; the answer is still owed.

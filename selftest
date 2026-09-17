@@ -98,9 +98,9 @@ class Tree:
 		e.pop("SANITIZE", None)
 		e.update(env or {})
 		try:
-			return subprocess.run([FMAKE, "-C", self.dir, *args],
-			                      capture_output=True, text=True, env=e,
-			                      timeout=timeout)
+			r = subprocess.run([FMAKE, "-C", self.dir, *args],
+			                   capture_output=True, text=True, env=e,
+			                   timeout=timeout)
 		except subprocess.TimeoutExpired:
 			# A bound the suite carries itself, rather than one whoever
 			# runs it remembers to wrap around it. fmake had two ways to
@@ -111,6 +111,24 @@ class Tree:
 			# case, which is the one form of it anybody can act on.
 			raise Failure(f"fmake did not return within {timeout}s: "
 			              f"{' '.join(args) or '(no arguments)'}")
+		# Killed is not failed. Nothing in fmake exits by a signal on its
+		# own, and a case reading `returncode != 0' as its refusal takes a
+		# death from outside for the answer it wanted -- twice in three
+		# suites one case failed on empty output where a refusal should
+		# have been, and the message could not say what had happened,
+		# because the only fact that discriminates was thrown away here.
+		# The signal's number is that fact: 9 is a kill loop or the OOM
+		# killer, 15 is somebody's terminate(), 11 is the interpreter.
+		if r.returncode < 0:
+			sig = -r.returncode
+			try:
+				name = signal.Signals(sig).name
+			except ValueError:
+				name = "?"
+			raise Failure(f"fmake was killed by signal {sig} ({name}) "
+			              f"running: {' '.join(args) or '(no arguments)'}; "
+			              f"it had said: {(r.stdout + r.stderr)[:400]!r}")
+		return r
 
 	def run(self, prog, env=None):
 		e = dict(os.environ)
@@ -8777,6 +8795,32 @@ def an_optional_package_is_read_from_the_sources_this_build_compiles(t):
 	check("HAVE_ZLIB_H" not in r.stdout + r.stderr
 	      and "HAVE_ZLIB_OTHER" not in r.stdout + r.stderr,
 	      f"nor are they reported as asking: {r.stdout}{r.stderr}")
+
+
+@case
+def a_killed_fmake_is_reported_as_killed(t):
+	"""The instrument for section 246's open question.
+
+	Twice in three suites one case failed on empty output where a
+	refusal should have been, and its message could not say what had
+	happened: `returncode != 0` was the refusal it wanted, and the
+	signal number that would have discriminated a death from outside
+	was thrown away in the helper every case goes through. `Tree.fmake`
+	raises on a negative return code now, naming the signal. A compiler
+	shim that TERMs its parent is the positive control: fmake re-raises
+	the signal after taking its compilers down, and says nothing first --
+	which is the shape that was observed."""
+	shim = t.write("cc-kill", "#!/bin/sh\nkill -TERM $PPID\nsleep 2\nexit 1\n")
+	os.chmod(shim, 0o755)
+	t.write("main.c", "int main(void){ return 0; }\n")
+	try:
+		r = t.fmake(env={"CC": shim})
+	except Failure as exc:
+		check("killed by signal 15 (SIGTERM)" in str(exc),
+		      f"the signal is named: {exc}")
+	else:
+		raise Failure(f"a killed fmake returned {r.returncode} as if it "
+		              f"had merely failed: {r.stdout}{r.stderr}")
 
 
 CROSS_CC = "aarch64-linux-gnu-gcc"
