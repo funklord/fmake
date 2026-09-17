@@ -304,7 +304,8 @@ that had been green about nothing for five commits ·
 [251. A cache section that is present and wrong is a traceback](#251-a-cache-section-that-is-present-and-wrong-is-a-traceback) ·
 [252. A pid space that wraps in minutes, and a case run once more](#252-a-pid-space-that-wraps-in-minutes-and-a-case-run-once-more) ·
 [253. A tree's own situc outranks the installed one](#253-a-trees-own-situc-outranks-the-installed-one) ·
-[254. A file standing in for libc is said out loud](#254-a-file-standing-in-for-libc-is-said-out-loud)
+[254. A file standing in for libc is said out loud](#254-a-file-standing-in-for-libc-is-said-out-loud) ·
+[255. An include behind a platform guard is not a lost feature](#255-an-include-behind-a-platform-guard-is-not-a-lost-feature)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19878,3 +19879,50 @@ README describes is still the wrong one until either raidcfgd excludes
 `ossacli/src/shim/**` -- a one-line signal into its `project.md`, sent
 -- or the holder takes candidate one. The refusal for `fuzz_ciss`
 stands as it was: two files, no guess.
+
+## 255. An include behind a platform guard is not a lost feature
+
+Building a copy of bbq-predictor with today's fmake: it builds, and
+says
+
+    * src/ui/widget_picture.cpp:15: QCoreApplication on this machine but
+      behind a conditional the preprocessor did not take -- if a feature
+      macro should have turned it on, say so with '@pkg_optional ...'
+    * src/wu/key_source.cpp:7: thread on this machine but behind a
+      conditional ...
+
+Both sit under `#ifdef Q_OS_ANDROID`. Section 40's advisory reports a
+system header the scan saw, the preprocessor never opened, and the
+machine has -- "existence is what keeps this quiet", since `#ifdef
+_WIN32` around `<windows.h>` names a header that is not here. It is
+not enough where the guard names a platform and the header is one
+every platform has: `<QCoreApplication>` and `<thread>` are on this
+machine whatever Android wants with them, and the advice to declare a
+feature macro is wrong advice for a build that is not Android. Four
+trees here build for Android through `tool/android.mk`; hydra keeps its
+Android code in files named `android_*` that the platform rule already
+excludes, which is why it never met this, and bbq-predictor guards
+inline, which is at least as common.
+
+The scan cannot evaluate a conditional and still does not try. What it
+does now is remember: `include_guards` walks the stripped text once,
+keeps a stack of `#if`/`#ifdef`/`#ifndef` texts, replaces the top on
+`#elif`, negates it on `#else`, pops on `#endif`, and records for each
+`#include` the joined stack it sat under -- a separate `inc_guards` key
+in the scan record, by line, since `incs` entries are unpacked as
+three in a dozen places. `compiled_away_includes` skips an include
+whose guard names a platform or architecture macro from a table of the
+usual ones -- `_WIN32`, `__APPLE__`, `__ANDROID__`, `Q_OS_*`,
+`TARGET_OS_*`, `__aarch64__` and their kind. A feature guard beside it
+is still reported: the case puts `<pthread.h>` under `__APPLE__`,
+`<sched.h>` under `Q_OS_ANDROID`, and `<signal.h>` under `HAVE_SIGNALS`
+in one file, and asserts the one line names only `signal.h`. Against
+the old scanner it fails on `pthread.h and 2 other headers`.
+bbq-predictor's copy: two lines to none; openmlx4's one real line --
+`<lzma.h>` under a feature macro its build defines on request -- stays.
+
+What a guard the table does not know gets: the advisory, as before. A
+project with its own platform spelling -- `#ifdef MYAPP_ANDROID` --
+reads the line and finds it wrong once, which is the state every tree
+was in until today, and the table is a list to add to rather than a
+rule to get right.

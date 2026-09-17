@@ -554,6 +554,53 @@ def strip_comments(text):
 
 RE_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"]+)[>"]', re.M)
 
+RE_PP_COND = re.compile(r"^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b(.*)$")
+
+# Macros that name a platform or an architecture rather than a feature.
+# An include guarded by one of these is compiled away on every other
+# platform by design, and the advisory that offers @pkg_optional for a
+# header the preprocessor did not open is wrong advice there: bbq-predictor
+# puts <QCoreApplication> and <thread> behind `#ifdef Q_OS_ANDROID', both
+# headers this machine has, and was told twice to declare a feature macro
+# for a build it never wanted here.
+RE_PLATFORM_MACRO = re.compile(
+    r"\b(?:_WIN32|_WIN64|__CYGWIN__|__MINGW(?:32|64)__|__APPLE__|__MACH__"
+    r"|__ANDROID__|__linux__|__gnu_linux__|__unix__|__unix|__FreeBSD__"
+    r"|__OpenBSD__|__NetBSD__|__DragonFly__|__sun|__EMSCRIPTEN__|__wasm__"
+    r"|__wasi__|__HAIKU__|__QNX__|__VXWORKS__|__hpux|_AIX"
+    r"|Q_OS_[A-Z0-9_]+|TARGET_OS_[A-Z0-9_]+|__x86_64__|__i386__|__aarch64__"
+    r"|__arm__|__ARM_ARCH|__riscv|__mips__|__powerpc__|__powerpc64__"
+    r"|__s390x__|__sparc__)\b")
+
+
+def include_guards(code):
+	"""{line: condition text} for every #include under a #if of some kind.
+
+    The scan cannot evaluate a conditional and does not try; what it can
+    do is remember which conditions an include sat under, so that a
+    reader deciding what "the preprocessor did not open it" means can
+    tell a platform guard from a feature guard. Nested conditions are
+    joined; an #else carries its #if's text with a `!' in front, since
+    what it names is the same macro.
+    """
+	stack, out = [], {}
+	for lineno, line in enumerate(code.split("\n"), 1):
+		m = RE_PP_COND.match(line)
+		if m:
+			word, rest = m.group(1), m.group(2).strip()
+			if word in ("if", "ifdef", "ifndef"):
+				stack.append(f"{word} {rest}")
+			elif word == "elif" and stack:
+				stack[-1] = f"elif {rest}"
+			elif word == "else" and stack:
+				stack[-1] = "!" + stack[-1]
+			elif word == "endif" and stack:
+				stack.pop()
+			continue
+		if stack and RE_INCLUDE.match(line):
+			out[str(lineno)] = " && ".join(stack)
+	return out
+
 # A *definition* -- a name, a parameter list, then a brace. Declarations and
 # calls do not match. Everything found here is confirmed later against the
 # object's symbol table, so these only have to be good, not perfect.
@@ -1008,7 +1055,7 @@ def scan_source(path):
 	code, comments = strip_comments(text)
 	lang = LANGS.get(os.path.splitext(path)[1], _C)
 
-	incs = []
+	incs, inc_guards = [], {}
 	if lang.cpp:
 		# A `.s' is assembled as it stands, so a line beginning `#include'
 		# in one is not an include -- it is a comment on most targets and a
@@ -1017,6 +1064,7 @@ def scan_source(path):
 		for m in RE_INCLUDE.finditer(code):
 			lineno = code.count("\n", 0, m.start()) + 1
 			incs.append([m.group(1), m.group(2), lineno])
+		inc_guards = include_guards(code)
 
 	mods, rust_main = [], False
 	if lang.unit == "crate":
@@ -1059,6 +1107,11 @@ def scan_source(path):
 
 	return {
 	    "incs":     incs,
+	    # Which #if each include sits under, by line, for the advisory
+	    # about includes the preprocessor did not open. A separate key
+	    # rather than a fourth field: `incs' entries are unpacked as
+	    # three in a dozen places.
+	    "inc_guards": inc_guards,
 	    "has_main": rust_main if lang.unit == "crate" else
 	                bool(RE_MAIN.search(code)
 	                     or RE_MACRO_MAIN.search(code)),
@@ -7634,17 +7687,27 @@ def compiled_away_includes(cl, opened, incdirs):
     `<windows.h>` names a header this machine does not have, so there is
     nothing to report; a header that *is* here and was compiled out is a
     feature that could have been on.
+
+    Existence is not enough where the guard names a platform and the
+    header is one every platform has. bbq-predictor's `#ifdef
+    Q_OS_ANDROID` around `<QCoreApplication>` and `<thread>` was reported
+    twice, with advice to declare a feature macro for a build that is
+    not Android. The scan records which conditions each include sat
+    under; one naming a platform or an architecture is not a feature.
     """
 	out, seen = [], set()
 	for u in cl.link:
 		deps = opened.get(u.rel)
 		if deps is None:
 			continue
+		guards = u.scan.get("inc_guards") or {}
 		for kind, name, line in (u.scan.get("incs") or []):
 			if kind != "<":
 				continue
 			key = (u.rel, name)
 			if key in seen:
+				continue
+			if RE_PLATFORM_MACRO.search(guards.get(str(line), "")):
 				continue
 			tail = "/" + name.replace(os.sep, "/")
 			if any(d.endswith(tail) for d in deps):

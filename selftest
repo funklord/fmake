@@ -9017,6 +9017,38 @@ def a_file_standing_in_for_libc_is_said_out_loud(t):
 	check(t.run(prog).stdout == "0\n", "libc's close() is linked now")
 
 
+@case
+def a_header_behind_a_platform_guard_is_not_a_lost_feature(t):
+	"""Existence kept the advisory quiet for <windows.h>, and not for
+	a header every platform has.
+
+	bbq-predictor puts <QCoreApplication> and <thread> behind `#ifdef
+	Q_OS_ANDROID`; both exist on this machine; the build said twice that a
+	feature macro might have turned them on. The scan records which
+	conditions each include sits under now, and one that names a
+	platform or an architecture is not a feature. A feature guard beside
+	it, on a header just as present, is still reported -- the case holds
+	both in one file so that the silence cannot be the whole advisory
+	having gone quiet."""
+	if not os.path.isfile("/usr/include/pthread.h"):
+		raise Skip("no pthread.h to be present behind the guard")
+	t.write("main.c", "#include <stdio.h>\n"
+	        "#ifdef __APPLE__\n#include <pthread.h>\n#endif\n"
+	        "#if defined(Q_OS_ANDROID) && !defined(FMAKE_NEVER)\n"
+	        "#include <sched.h>\n#endif\n"
+	        "#ifdef HAVE_SIGNALS\n#include <signal.h>\n#endif\n"
+	        'int main(void){ puts("built"); return 0; }\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	out = r.stdout + r.stderr
+	lines = [l for l in out.splitlines() if "the preprocessor did not take" in l]
+	check(not any("pthread.h" in l or "sched.h" in l for l in lines),
+	      f"a platform-guarded header is not a lost feature: {lines}")
+	check(any("signal.h" in l for l in lines),
+	      f"a feature-guarded header beside it still is: {out}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
