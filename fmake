@@ -9252,6 +9252,20 @@ def build(args, _bootstrapping=False):
 	passed_over = []
 
 	targets, claimed = [], set()
+	# A section that names a root and no defines is that root's target
+	# under another name. `[target.node_provision_test] root =
+	# "node/test/provision_test.c"' is the only way fmake.toml can pick
+	# one of fuzznet's three provision_test.c, since a section keyed by
+	# the default name reaches all three at once -- and it used to build
+	# a byte-identical second program beside the discovered one, silently
+	# for C and with a refusal for a crate that already said the likely
+	# reading was a rename. With defines it is a second program on
+	# purpose, and stays one.
+	by_root = {}
+	for key, section in conf.targets.items():
+		if (section.get("root") and not section.get("defines")
+		        and not section.get("define")):
+			by_root.setdefault(section["root"], key)
 	for rel in srcs:
 		# A module file is not a program even when it has a `fn main()' in
 		# it: rustc compiles the root, and the root is what says so.
@@ -9286,7 +9300,12 @@ def build(args, _bootstrapping=False):
 				continue
 		if scans[rel]["has_main"] or ann.scalar("kind"):
 			name = ann.scalar("target") or default_name(rel, root)
-			t = Target(rel, root, ann, conf.target(name))
+			if rel in by_root:
+				name = by_root[rel]
+				t = Target(rel, root, ann, conf.target(name))
+				t.name = t.conf.get("name", name)
+			else:
+				t = Target(rel, root, ann, conf.target(name))
 			# Both names are spoken for: the one the section was found under,
 			# and whatever it renamed the target to. Otherwise a section that
 			# renames looks unconsumed and gets built a second time.
@@ -9546,8 +9565,9 @@ def build(args, _bootstrapping=False):
 		if len(rels) > 1:
 			die(f"two targets are both called {fn!r}:\n    "
 			    + "\n    ".join(rels) + "\n"
-			    f"give one of them a different @target, or a name in "
-			    f"{CONF_FILE}.")
+			    f"give one of them a different @target, or in {CONF_FILE} "
+			    f"a section that names its root:\n"
+			    f"    [target.NEW_NAME]\n    root = {rels[0]!r}")
 	refuse_ident_collisions("targets", [t.name for t in targets])
 	for t in targets:
 		if os.path.isdir(os.path.join(outdir, t.filename)):

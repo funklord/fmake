@@ -305,7 +305,8 @@ that had been green about nothing for five commits ·
 [252. A pid space that wraps in minutes, and a case run once more](#252-a-pid-space-that-wraps-in-minutes-and-a-case-run-once-more) ·
 [253. A tree's own situc outranks the installed one](#253-a-trees-own-situc-outranks-the-installed-one) ·
 [254. A file standing in for libc is said out loud](#254-a-file-standing-in-for-libc-is-said-out-loud) ·
-[255. An include behind a platform guard is not a lost feature](#255-an-include-behind-a-platform-guard-is-not-a-lost-feature)
+[255. An include behind a platform guard is not a lost feature](#255-an-include-behind-a-platform-guard-is-not-a-lost-feature) ·
+[256. A stanza naming a root renames the target on it](#256-a-stanza-naming-a-root-renames-the-target-on-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -19926,3 +19927,45 @@ project with its own platform spelling -- `#ifdef MYAPP_ANDROID` --
 reads the line and finds it wrong once, which is the state every tree
 was in until today, and the table is a list to add to rather than a
 rule to get right.
+
+## 256. A stanza naming a root renames the target on it
+
+fuzznet, built from a copy with today's fmake, stops before compiling:
+
+    !!! two targets are both called 'provision_test':
+        node/test/provision_test.c
+        provision/test/provision_test.c
+        sim/test/provision_test.c
+    give one of them a different @target, or a name in fmake.toml.
+
+One collision among 154 programs; its Makefile builds each in place
+(`BUILD_DIR ?= .`), so the names never met there. The refusal is
+right, and the second remedy it offered could not be taken: a section
+is keyed by a target's default name, and `[target.provision_test]`
+reaches all three files at once. The other spelling, `[target.NEW]
+root = "path"`, is documented as a second program from that file with
+`defines` making it a different one -- and without `defines` it built
+a byte-identical twin beside the discovered program, silently for C.
+For a crate the same stanza was refused, with a message saying the
+likely reading was a rename and how one is spelled; which, for three
+files sharing a default name, it is not.
+
+A section that names a root and no defines is now that root's target
+under the section's name, C or crate alike: `by_root` is consulted
+before the default-name lookup when a discovered target is made, the
+section's `name` still wins inside it, and both names are claimed so
+the toml-only pass does not build it again. With `defines` it is the
+second program it always was, which
+`one_source_becomes_two_programs_with_different_defines` still holds.
+The crate case that asserted the refusal asserts the rename instead,
+under a name that says so; its reason for existing -- two rules
+writing one depfile -- cannot arise from one program.
+
+The collision message now shows the spelling that works, with the
+first colliding path filled in. On the fuzznet copy, two such sections
+take it from the refusal to a build: `fuzznetd` and `consumer_check`
+link, 172 tests are held for `fmake test`, and four files inside the
+vendored qtty fail to compile for want of `-Iqtty/include` and
+`_GNU_SOURCE` -- both things fmake names with the key that supplies
+them, and both fuzznet's to say, since it has no `fmake.toml` at all
+and its README shows no fmake line. Signalled into its `project.md`.

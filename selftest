@@ -9049,6 +9049,53 @@ def a_header_behind_a_platform_guard_is_not_a_lost_feature(t):
 	      f"a feature-guarded header beside it still is: {out}")
 
 
+@case
+def a_stanza_naming_a_root_renames_the_target_on_it(t):
+	"""fuzznet keeps three provision_test.c in three module directories.
+
+	fmake refuses the collision and offers `a name in fmake.toml`, and
+	that name could not be given: a section keyed by the default name
+	reaches all three files at once, and `[target.NEW] root = "path"`
+	built a byte-identical second program beside the discovered one --
+	silently for C, with a refusal for a crate that already called the
+	likely reading a rename. A section naming a root and no defines is
+	that root's target under the section's name now; with defines it is
+	the second program it always was."""
+	# Not under test/ and not named _test: fuzznet's are tests and are
+	# built by `fmake test`; the collision is the same for programs.
+	t.write("node/prov.c", "int main(void){ return 1; }\n")
+	t.write("sim/prov.c", "int main(void){ return 2; }\n")
+	t.write("fmake.toml", '[target.node_prov]\nroot = "node/prov.c"\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the rename must settle the collision: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run("node_prov").returncode == 1
+	      and t.run("prov").returncode == 2,
+	      f"each file is one program under its own name: {os.listdir(t.dir)}")
+
+	# One file, one stanza, no defines: a rename, not a twin.
+	u = Tree("root-renames")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("fmake.toml", '[target.other]\nroot = "main.c"\n')
+		r = u.fmake()
+		check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+		here = set(os.listdir(u.dir))
+		check("other" in here and os.path.basename(u.dir) not in here,
+		      f"one program, under the stanza's name: {sorted(here)}")
+		# And with defines, the second program section 202 promised.
+		u.write("fmake.toml", '[target.other]\nroot = "main.c"\n'
+		        'defines = ["OTHER"]\n')
+		r = u.fmake()
+		check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+		here = set(os.listdir(u.dir))
+		check("other" in here and os.path.basename(u.dir) in here,
+		      f"defines make it a second program: {sorted(here)}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
@@ -21559,11 +21606,11 @@ pub extern "C" fn only_thing() -> i32 { 1 }
 
 
 @case
-def a_second_program_from_one_crate_root_is_refused(t):
+def a_second_program_from_one_crate_root_is_the_rename_it_reads_as(t):
 	"""`[target.*] root' naming a source that already roots a program is
 	documented as a second program from that file, and `defines' is what
 	makes it a different one. A crate has neither half: rustc takes no -D,
-	so the second program would be a copy of the first under another name.
+	so a second program would be a copy of the first under another name.
 
 	It was not a harmless copy. Both targets take their depfile path from
 	the crate root, so the ejected make build wrote one file from two
@@ -21571,8 +21618,10 @@ def a_second_program_from_one_crate_root_is_refused(t):
 	generate build/src/main.rs.d" -- which fails the whole build rather
 	than the duplicate.
 
-	The likely reading of that stanza is a rename, so the message says how
-	one is spelled."""
+	This case used to assert a refusal that said the likely reading of
+	the stanza was a rename and how one is spelled. Section 256 made the
+	stanza mean what it reads as: a root and no defines is that root's
+	target under the section's name, for a crate as for a C file."""
 	if not shutil.which("rustc"):
 		raise Skip("rustc not installed")
 	t.write("src/main.rs", "fn main() { println!(\"hi\"); }\n")
@@ -21584,16 +21633,11 @@ root = "src/main.rs"
 
 	r = t.fmake()
 	out = r.stdout + r.stderr
-	check(r.returncode != 0,
-	      f"two programs from one crate root should be refused: {out}")
-	check(name in out,
-	      f"the refusal does not name the target that already builds the "
-	      f"crate: {out}")
-	check("name = " in out,
-	      f"the refusal does not say how a target is renamed, which is what "
-	      f"the stanza was reaching for: {out}")
-	check(not os.path.exists(os.path.join(t.dir, "demo")),
-	      "the refused target was built anyway")
+	check(r.returncode == 0, f"a rename builds: {out}")
+	check(os.path.exists(os.path.join(t.dir, "demo"))
+	      and not os.path.exists(os.path.join(t.dir, name)),
+	      f"one program, under the stanza's name: {sorted(os.listdir(t.dir))}")
+	check(t.run("demo").stdout == "hi\n", "and it is the crate's program")
 
 
 @case

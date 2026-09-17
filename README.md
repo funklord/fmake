@@ -519,6 +519,8 @@ flags = ["--layer", "converse"] # schemas; which situc is [toolchain]
 [target.test_bmp_checked]       # one source, two programs
 root    = "test/test_bmp.c"
 defines = ["SITU_CHECKED"]      # applied to the root TU, not the closure
+                                # without defines, a root names the one
+                                # program from that file: a rename
 
 [install]
 prefix = "/usr/local"
