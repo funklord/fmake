@@ -548,6 +548,9 @@ postinst   = "debian-src/postinst"         # carried verbatim; needs #DEBHELPER#
 category = "app-misc"
 src-uri  = "https://example.invalid/greet/greet-${PV}.tar.gz"  # where a
                                 # release lives is nothing a tree can state
+[alpine]                        # one APKBUILD per tree, in abuild's words
+makedepends = ["zlib-dev"]      # apk's names; derived where apk is installed
+depends     = []                # runtime programs; libraries are traced
 [service.greetd]                # a daemon: the glue for each init
 systemd  = "packaging/greetd.service"
 sysvinit = "packaging/greetd.init"    # an LSB script
@@ -914,6 +917,7 @@ fmake --install          install artifacts and @headers
 fmake --eject > Makefile leave, taking the build with you
 fmake --eject deb        write debian/ and a Makefile; dpkg-buildpackage does the rest
 fmake --eject ebuild     write gentoo/<category>/<name>/ and the Makefile
+fmake --eject apk        write alpine/APKBUILD and the Makefile; abuild does the rest
 fmake --release          everything downloadable, with checksums, and a page
 fmake --arch arm64       build for another architecture, into build-aarch64/
 fmake --clean            remove .fmake/
@@ -952,7 +956,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `--arch NAME` | build for an architecture (`aarch64`, `arm64`, `riscv64`…); the cross compiler is found by asking `dpkg-architecture` and reading PATH, and binaries land under `build-<arch>/` unless `-o` says otherwise |
 | `--explain` | print every decision and why, and build nothing |
 | `--release` | build, then write `release/`: source tarball from git, binary tarball, the `.deb` built from that tarball where `debian/` is committed, the ebuild, `SHA256SUMS`, and an `index.html` with the README rendered through pandoc where it is installed |
-| `--eject [make\|make-fragment\|ninja\|deb\|ebuild]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile; `deb` writes `debian/` and a Makefile into the tree, `ebuild` writes `gentoo/<category>/<name>/` and the Makefile |
+| `--eject [make\|make-fragment\|ninja\|deb\|ebuild\|apk]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile; `deb` writes `debian/` and a Makefile into the tree, `ebuild` writes `gentoo/<category>/<name>/` and the Makefile, `apk` writes `alpine/APKBUILD` and the Makefile |
 | `--force-link SRC` | link a file no symbol reaches |
 | `--widen-all` | compile the whole tree before deciding the link set |
 | `--no-submodules` | do not fetch the git submodules this tree vendors |

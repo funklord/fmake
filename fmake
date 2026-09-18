@@ -1260,6 +1260,14 @@ CONF_SCHEMA = {
         "category": S, "src-uri": S, "keywords": L, "iuse": L,
         "rdepend": L, "bdepend": L,
     },
+	# Alpine's words, per APKBUILD(5). `depends' is runtime programs the
+	# tracer cannot see, as [debian.*] recommends is; shared libraries
+	# arrive as so: dependencies from abuild itself. `source' is where the
+	# tarball is fetched from when it is not the release beside it.
+    "alpine": {
+        "depends": L, "makedepends": L, "checkdepends": L,
+        "subpackages": L, "pkggroups": L, "pkgusers": L, "source": S,
+    },
     "toolchain": {
         "cc": S, "cxx": S, "ar": S, "nm": S, "pkg-config": S,
         "moc": S, "uic": S, "rcc": S, "situc": S,
@@ -1465,6 +1473,7 @@ class Conf:
 		self.package  = self.data.get("package", {})
 		self.debian   = self.data.get("debian", {})
 		self.gentoo   = self.data.get("gentoo", {})
+		self.alpine   = self.data.get("alpine", {})
 		self.tool     = self.data.get("toolchain", {})
 		self.build_tool_conf = self.data.get("build-toolchain", {})
 		profiles      = self.data.get("profile", {})
@@ -10894,6 +10903,9 @@ def build(args, _bootstrapping=False):
 		elif args.eject == "ebuild":
 			eject_ebuild(wanted, closures, resolutions, root, conf, cfg,
 			             pkg, text)
+		elif args.eject == "apk":
+			eject_apkbuild(wanted, closures, resolutions, root, conf, cfg,
+			               pkg, text)
 		else:
 			sys.stdout.write(text)
 		cache.save()
@@ -14977,6 +14989,172 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	return 0
 
 
+def alpine_depends(resolutions, pkg):
+	"""Alpine's -dev package for each pkg-config module, by asking apk.
+
+    The same question dpkg and portageq answer, put to `apk info
+    --who-owns', which exists only on an Alpine machine. Elsewhere every
+    module is unmapped and the APKBUILD says so beside makedepends, as
+    the ebuild does beside RDEPEND, rather than carrying a table of
+    Alpine's names that would go stale.
+    """
+	modules = set()
+	for res in resolutions.values():
+		for _lib, (module, _where, _hdr) in (res or {}).get("proposed",
+		                                                    {}).items():
+			if module:
+				modules.add(module)
+	found, missing = set(), []
+	apk = shutil.which("apk")
+	for module in sorted(modules):
+		pcdir = pkg.variable(module, "pcfiledir") if pkg else None
+		path = os.path.join(pcdir, module + ".pc") if pcdir else None
+		if not apk or not path or not os.path.isfile(path):
+			missing.append(module)
+			continue
+		try:
+			r = subprocess.run([apk, "info", "--who-owns", path],
+			                   capture_output=True, text=True, timeout=60)
+		except (OSError, subprocess.TimeoutExpired):
+			missing.append(module)
+			continue
+		# `<path> is owned by <name>-<version>-r<rel>'.
+		m = re.search(r"is owned by (\S+)-\d[^\s]*-r\d+", r.stdout)
+		if r.returncode == 0 and m:
+			found.add(m.group(1))
+		else:
+			missing.append(module)
+	return sorted(found), missing
+
+
+def eject_apkbuild(targets, closures, resolutions, root, conf, cfg, pkg,
+                   makefile):
+	"""Write alpine/APKBUILD and the Makefile it builds with.
+
+    Section 227 left Alpine out and netcfgd carries one by hand, from
+    which this takes its shape: nothing in it is Alpine's except the
+    dependency names and the init script, and Alpine's init is OpenRC,
+    so the install is `INIT=openrc' and the openrc-run script goes in
+    through the Makefile's own install rule. `-dev' and `-doc' are
+    abuild's default subpackages and split on the paths they own, so
+    they are named where the tree installs headers or man pages and
+    nothing more is said about what goes in them.
+    """
+	name = conf.project.get("name") or os.path.basename(root)
+	if not re.match(r"^[a-z0-9][a-z0-9._+-]*$", name):
+		die(f"{name!r} is not a package name apk accepts; set "
+		    f"[project] name")
+	version = read_root_version(root)
+	if not version:
+		die("no VERSION file at the root. An APKBUILD names its version, "
+		    "and fmake reads it from that file rather than asking twice.")
+	targets = [t for t in targets if not t.test]
+	srcs = [u.rel for cl in closures.values() for u in cl.link]
+	short, _components = identify_license(root, srcs)
+	exe = [t for t in targets if t.kind == "exe" and t.description]
+	synopsis = exe[0].description if exe else ""
+	if not synopsis:
+		synopsis = (conf.package.get("description", "").strip()
+		            .split("\n\n")[0].replace("\n", " ").split(". ")[0]
+		            .rstrip(".").strip())
+	if not synopsis:
+		die(f"{CONF_FILE}: [package] description is needed: its first "
+		    f"sentence is the pkgdesc an APKBUILD requires, and fmake "
+		    f"will not invent one.")
+	maint = conf.package.get("maintainer", "")
+	if not maint:
+		die(f"{CONF_FILE}: [package] maintainer = \"Name <address>\" is "
+		    f"needed: an APKBUILD names one in its first line, and there is "
+		    f"no place in a source tree fmake could read it from honestly.")
+	refuse_to_overwrite(root, "alpine", makefile)
+	services = sorted(conf.services.items())
+	for svc, sec in services:
+		if not sec.get("openrc"):
+			die(f"[service.{svc}] has no openrc script; Alpine's init is "
+			    f"OpenRC, and a package that ships a daemon without a way "
+			    f"to start it under it is one Alpine will not take.")
+	makedepends, unmapped = alpine_depends(resolutions, pkg)
+	makedepends += list(conf.alpine.get("makedepends", []))
+	if unmapped:
+		how = ("no apk on this machine" if not shutil.which("apk")
+		       else "apk does not know which package ships them here")
+		warn(f"makedepends could not be derived for pkg-config module(s) "
+		     f"{', '.join(unmapped)}: {how}. Name them in [alpine] "
+		     f"makedepends.")
+	# abuild's default subpackages, named where there is something for
+	# them to own.
+	subpackages = list(conf.alpine.get("subpackages", []))
+	if not subpackages:
+		if any(t.kind != "exe" and (t.conf.get("headers")
+		                            or t.ann.items("headers"))
+		       for t in targets):
+			subpackages.append("$pkgname-dev")
+		if any(t.conf.get("man") or t.ann.items("man") for t in targets):
+			subpackages.append("$pkgname-doc")
+	if services and "$pkgname-openrc" not in subpackages:
+		subpackages.append("$pkgname-openrc")
+	tests = [t for t in closures if t.test]
+	source = conf.alpine.get("source") or "$pkgname-$pkgver.tar.gz"
+	# Contributor and Maintainer first, where every APKBUILD keeps them
+	# and where abuild's tooling looks for the second.
+	lines = [f"# Contributor: {maint}",
+	         f"# Maintainer: {maint}",
+	         "# Generated by `fmake --eject apk`. The build is the Makefile",
+	         "# beside alpine/, which needs make and a compiler and nothing",
+	         "# from fmake.",
+	         f"pkgname={name}",
+	         f"pkgver={version}",
+	         "pkgrel=0",
+	         f'pkgdesc="{synopsis}"',
+	         f'url="{conf.package.get("homepage", "")}"',
+	         'arch="all"',
+	         f'license="{short}"',
+	         'depends="' + " ".join(conf.alpine.get("depends", [])) + '"',
+	         'makedepends="' + " ".join(makedepends) + '"'
+	         + ("" if not unmapped else
+	            "\n# not derived here (no apk to ask): "
+	            + ", ".join(unmapped)),
+	         'checkdepends="' + " ".join(conf.alpine.get("checkdepends", []))
+	         + '"']
+	for key in ("pkggroups", "pkgusers"):
+		if conf.alpine.get(key):
+			lines.append(f'{key}="{" ".join(conf.alpine[key])}"')
+	lines += ['subpackages="' + " ".join(subpackages) + '"',
+	          f'source="{source}"',
+	          'builddir="$srcdir/$pkgname-$pkgver"']
+	if not tests:
+		lines.append('options="!check"')
+	lines += ["",
+	          "build() {",
+	          "\tmake",
+	          "}",
+	          ""]
+	if tests:
+		lines += ["check() {",
+		          "\tmake test",
+		          "}",
+		          ""]
+	lines += ["package() {",
+	          "\t# INIT=openrc: Alpine's init, and the Makefile's own install",
+	          "\t# rule places the openrc-run script for it.",
+	          '\tmake DESTDIR="$pkgdir" PREFIX=/usr INIT=openrc install',
+	          "}",
+	          "",
+	          "# `abuild checksum' fills this in once the source is beside it.",
+	          'sha512sums=""']
+	text = "\n".join(lines) + "\n"
+	files = {os.path.join("alpine", "APKBUILD"): text, "Makefile": makefile}
+	for rel, body in sorted(files.items()):
+		full = os.path.join(root, rel)
+		os.makedirs(os.path.dirname(full), exist_ok=True)
+		with open(full, "w", encoding="utf-8") as fh:
+			fh.write(body)
+		print(f"{GREEN('->')} {rel}")
+	info(f"wrote an APKBUILD for {name}-{version}; put the release tarball "
+	     f"beside it and run `abuild checksum && abuild -r'")
+	return 0
+
+
 # ---------------------------------------------------------------------------
 # --release
 # ---------------------------------------------------------------------------
@@ -15924,15 +16102,16 @@ def parse_args(argv):
 	                    "instead of filtering candidates by symbol name")
 	p.add_argument("--eject", nargs="?", const="make", default=None,
 	               choices=("make", "make-fragment", "ninja", "deb",
-	                        "ebuild"),
-	               metavar="make|make-fragment|ninja|deb|ebuild",
+	                        "ebuild", "apk"),
+	               metavar="make|make-fragment|ninja|deb|ebuild|apk",
 	               help="write a build file to stdout and exit; needs no "
 	                    "fmake to run afterwards. make-fragment is the same "
 	                    "rules for an existing Makefile to include, with no "
 	                    "default goal and FM_-prefixed variables. deb writes "
 	                    "debian/ and a Makefile into the tree: a Debian "
 	                    "source package that builds with make alone; ebuild "
-	                    "writes gentoo/<category>/<name>/ and the Makefile")
+	                    "writes gentoo/<category>/<name>/ and the Makefile; "
+	                    "apk writes alpine/APKBUILD and the Makefile")
 	p.add_argument("-p", "--profile", default=None, metavar="NAME",
 	               help=f"build profile from [profile.NAME] in {CONF_FILE}")
 	p.add_argument("--install", action="store_true",

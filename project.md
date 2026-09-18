@@ -312,7 +312,8 @@ that had been green about nothing for five commits ·
 [259. Widening reaches into a vendored checkout by token, and what that costs](#259-widening-reaches-into-a-vendored-checkout-by-token-and-what-that-costs) ·
 [260. `test-cwd`: a suite written to run from its own directory](#260-test-cwd-a-suite-written-to-run-from-its-own-directory) ·
 [261. A quote include found beside its includer costs no `-I`](#261-a-quote-include-found-beside-its-includer-costs-no--i) ·
-[262. A resource named through a placeholder is still opened](#262-a-resource-named-through-a-placeholder-is-still-opened)
+[262. A resource named through a placeholder is still opened](#262-a-resource-named-through-a-placeholder-is-still-opened) ·
+[263. `--eject apk`: an APKBUILD from the one package model](#263---eject-apk-an-apkbuild-from-the-one-package-model)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18651,11 +18652,13 @@ with size and checksum, and the README rendered through pandoc where
 the machine has it -- linked as a file where it does not, with the
 absence said rather than hidden.
 
-### What is deliberately out
+### What was deliberately out, and what has come in since
 
 Alpine (`APKBUILD`), OpenWrt (`procd`), Android: netcfgd carries the
 first two by hand and four trees carry the third through
-`tool/android.mk`. Same model, later emitters, and not part of this.
+`tool/android.mk`. Same model, later emitters, and not part of this
+when it was written. Alpine came in as `--eject apk` in section 263;
+procd and Android are still out.
 
 ## 228. Furniture: man pages, desktop entries, icons and metainfo in the plan
 
@@ -20238,3 +20241,52 @@ this matcher's. Not re-measured here; the main program is the
 finding, and it is signalled into hydra's `project.md` with the
 offscreen count, since hydra's `fmake.toml` has no `test-env` and 13
 of the 18 failures in the first run were section 258's display.
+
+## 263. `--eject apk`: an APKBUILD from the one package model
+
+Section 227's third emitter, from the list it left out. netcfgd's
+hand-written `packaging/alpine/APKBUILD.in` is the model and it says
+so itself: "nothing here is Alpine-specific except the init script and
+the dependency names". So the emitter is the ebuild's shape in
+abuild's words, and it reads the same facts the other two read --
+`VERSION`, the licence identified from the root, the program's own
+description as `pkgdesc`, `[package]`'s maintainer and homepage, the
+`[service.*]` glue -- and asks nothing twice.
+
+What is Alpine's. `license=` takes the SPDX expression as identified,
+which is Alpine's spelling. `makedepends` is derived by asking `apk
+info --who-owns` for each pkg-config module's `.pc`, the question
+dpkg and portageq answer for the other two, and on a machine without
+`apk` every module is named in a comment beside an empty list, with
+`[alpine] makedepends` for the names -- the ebuild's arrangement,
+since a table of Alpine's package names would go stale here where
+nothing can check it. `depends` is `[alpine] depends`, runtime
+programs only: shared libraries arrive as `so:` dependencies from
+abuild's tracer, as `${shlibs:Depends}` brings them on Debian.
+Alpine's init is OpenRC, so a service must carry an `openrc` script
+and the package is refused without one, as the ebuild refuses; and
+where the ebuild places the script through `newinitd`, `package()`
+here is one line, `make DESTDIR="$pkgdir" PREFIX=/usr INIT=openrc
+install`, the ejected Makefile's own install rule placing it under
+`/etc/init.d` and no unit anywhere -- which the case proves by running
+that line against a `DESTDIR` and looking. `subpackages` names
+abuild's defaults where the tree gives them something to own: `-dev`
+for a library with headers, `-doc` for a man page, `-openrc` for a
+service; `[alpine] subpackages` says otherwise, and `pkggroups` and
+`pkgusers` pass through for the group netcfgd reserves. `source` is
+the release tarball by its name beside the file, since that is what
+`--release` writes, or `[alpine] source` for a URL; `sha512sums` is
+left for `abuild checksum`, which is the tool that computes it.
+`options="!check"` only where the tree has no tests; otherwise
+`check()` is `make test`.
+
+Proved by reading, as the ebuild was, and it says so: no abuild on
+this machine. `bash -n` accepts the file, every field abuild requires
+is present, and the one command that can be run here -- `package()`'s
+-- was. On the netcfgd copy (the GUI, which is what that copy
+packages) the file comes out with the same fields in the same order as
+the hand-written one, `pkggroups` aside because the copy's
+`fmake.toml` does not ask for it, and `check()` where theirs has
+`options="!check"` because fmake found tests. The refusals: no
+maintainer, no description, a service without an openrc script, an
+`alpine/` already there.

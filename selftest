@@ -9305,6 +9305,85 @@ int main(int argc, char **argv) {
 	      f"a placeholder under /data does not open /unused: {r.stdout}")
 
 
+@case
+def an_apkbuild_is_ejected_in_alpines_words(t):
+	"""Section 227 left Alpine out, and netcfgd carries one by hand.
+
+    No abuild is installed here, so nothing can build the result: the
+    proof is the text, and the half of it that can be run. Asserted:
+    the file lands at alpine/APKBUILD beside the Makefile; `bash -n`
+    accepts it, since an APKBUILD is shell; pkgname, pkgver from the
+    VERSION file, pkgdesc from the program's own description, url,
+    license as the SPDX expression Alpine spells, the maintainer on the
+    first lines, and $pkgname-openrc among the subpackages because a
+    service is shipped; a module apk could not be asked about is named
+    beside makedepends rather than guessed; and package()'s one command,
+    run here against the ejected Makefile with a DESTDIR, places the
+    program and the openrc-run script under /etc/init.d and no systemd
+    unit -- Alpine's init, and only Alpine's.
+
+    Then the refusals: a service with no openrc script, and an alpine/
+    already there.
+    """
+	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
+		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
+	_deb_tree(t)
+	t.write("src/packaging/greetd.openrc",
+	        "#!/sbin/openrc-run\ncommand=/usr/bin/greetd\n")
+	t.write("src/fmake.toml", u_toml(t).replace(
+	    'sysvinit = "packaging/greetd.init"\n',
+	    'sysvinit = "packaging/greetd.init"\nopenrc   = "packaging/greetd.openrc"\n'))
+	r = _deb(t, "--eject", "apk")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--eject apk failed: {said}")
+	path = os.path.join(_src(t), "alpine", "APKBUILD")
+	check(os.path.isfile(path), f"no APKBUILD at {path}")
+	check(os.path.isfile(os.path.join(_src(t), "Makefile")),
+	      "no Makefile beside alpine/")
+	with open(path) as fh:
+		text = fh.read()
+	syntax = subprocess.run(["bash", "-n", path], capture_output=True,
+	                        text=True)
+	check(syntax.returncode == 0, f"bash -n rejects the APKBUILD: {syntax.stderr}")
+	for line in ("# Maintainer: Test Person <test@example.invalid>",
+	             "pkgname=greetd", "pkgver=0.4.1", 'pkgdesc="greeter daemon"',
+	             'url="https://example.invalid/greetd"',
+	             'license="GPL-3.0-or-later"', "$pkgname-openrc",
+	             'builddir="$srcdir/$pkgname-$pkgver"',
+	             "INIT=openrc install", "zlib"):
+		check(line in text, f"the APKBUILD lacks {line!r}:\n{text}")
+	for verb in ("systemctl", "rc-service", "rc-update"):
+		check(not any(l.strip().startswith(verb) for l in text.splitlines()),
+		      f"the APKBUILD calls {verb}:\n{text}")
+
+	# package()'s command, run against the Makefile it names.
+	if shutil.which("make"):
+		dest = os.path.join(t.dir, "pkgdir")
+		r = _run_in(_src(t), "make", "-s", f"DESTDIR={dest}", "PREFIX=/usr",
+		            "INIT=openrc", "install")
+		check(r.returncode == 0, f"package()'s install failed: {r.stdout}{r.stderr}")
+		check(os.path.isfile(os.path.join(dest, "usr/bin/greetd")),
+		      "the program is not under $pkgdir/usr/bin")
+		check(os.path.isfile(os.path.join(dest, "etc/init.d/greetd")),
+		      f"the openrc-run script is not at etc/init.d/greetd: "
+		      f"{sorted(os.listdir(dest))}")
+		check(not glob.glob(os.path.join(dest, "**/*.service"), recursive=True),
+		      "a systemd unit was installed for Alpine")
+
+	# Refusals.
+	r = _deb(t, "--eject", "apk")
+	check(r.returncode != 0 and "alpine already exists" in r.stdout + r.stderr,
+	      f"an existing alpine/ must not be overwritten: {r.stdout}{r.stderr}")
+	u = Tree("apk-no-openrc")
+	try:
+		_deb_tree(u)
+		r = _deb(u, "--eject", "apk")
+		check(r.returncode != 0 and "no openrc script" in r.stdout + r.stderr,
+		      f"a service without an openrc script is refused: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
