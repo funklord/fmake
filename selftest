@@ -9873,6 +9873,49 @@ def a_coverage_build_instruments_both_sides(t):
 		      f"{b.stdout}{b.stderr}")
 
 
+@case
+def the_deb_changelog_date_honours_source_date_epoch(t):
+	"""The date was the one thing in the ejected `debian/' that was not a
+	function of the tree, so two `--eject deb' runs a minute apart wrote
+	different packaging -- unreproducible, which six of these trees set
+	`$SOURCE_DATE_EPOCH' against. fmake reads it now, and formats the
+	changelog date in English by the specification rather than the
+	machine's locale, so the date is a pure function of the epoch."""
+	_deb_tree(t)
+	epoch = "1700000000"   # Tue, 14 Nov 2023 22:13:20 +0000
+	r = _run_in(_src(t), FMAKE, "--eject", "deb", env={"SOURCE_DATE_EPOCH": epoch})
+	check(r.returncode == 0, f"--eject deb failed: {r.stdout}{r.stderr}")
+	with open(os.path.join(_src(t), "debian", "changelog")) as fh:
+		changelog = fh.read()
+	check("Tue, 14 Nov 2023 22:13:20 +0000" in changelog,
+	      f"the changelog date is not the epoch's: {changelog}")
+
+	# A second eject from a fresh copy of the tree, same epoch, is
+	# byte-identical: reproducible.
+	u = Tree("deb-repro")
+	try:
+		_deb_tree(u)
+		r = _run_in(_src(u), FMAKE, "--eject", "deb",
+		            env={"SOURCE_DATE_EPOCH": epoch})
+		check(r.returncode == 0, f"second eject failed: {r.stdout}{r.stderr}")
+		with open(os.path.join(_src(u), "debian", "changelog")) as fh:
+			check(fh.read() == changelog,
+			      "two ejects with one SOURCE_DATE_EPOCH differ")
+	finally:
+		u.cleanup()
+
+	# A value that is not a Unix timestamp is refused, not guessed.
+	v = Tree("deb-bad-epoch")
+	try:
+		_deb_tree(v)
+		r = _run_in(_src(v), FMAKE, "--eject", "deb",
+		            env={"SOURCE_DATE_EPOCH": "yesterday"})
+		check(r.returncode != 0 and "SOURCE_DATE_EPOCH" in r.stdout + r.stderr,
+		      f"a non-timestamp epoch was not refused: {r.stdout}{r.stderr}")
+	finally:
+		v.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

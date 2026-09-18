@@ -324,7 +324,8 @@ that had been green about nothing for five commits ·
 [271. A header on an explicit include path, and a Qt app cross-built for Android](#271-a-header-on-an-explicit-include-path-and-a-qt-app-cross-built-for-android) ·
 [272. `@data`: a program's files under its share directory](#272-data-a-programs-files-under-its-share-directory) ·
 [273. `@polkit`: a PolicyKit action where polkitd reads it](#273-polkit-a-policykit-action-where-polkitd-reads-it) ·
-[274. COVERAGE=1, a gcov build, the third switch](#274-coverage1-a-gcov-build-the-third-switch)
+[274. COVERAGE=1, a gcov build, the third switch](#274-coverage1-a-gcov-build-the-third-switch) ·
+[275. The ejected changelog honours SOURCE_DATE_EPOCH](#275-the-ejected-changelog-honours-source_date_epoch)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20640,3 +20641,25 @@ got two object directories, and that the ejected Makefile has the
 conditional and does not bake `--coverage` into the unconditional
 CFLAGS. gcov reads the result; producing the report is the tree's, as
 running the suite under it is.
+
+## 275. The ejected changelog honours SOURCE_DATE_EPOCH
+
+`--eject deb` writes a `debian/changelog`, and its date was
+`datetime.now()` -- the one thing in the whole ejected `debian/` that
+is not a function of the tree. Two ejects a minute apart wrote two
+different packagings, which is the thing `$SOURCE_DATE_EPOCH` exists to
+stop: six of these trees set it, and dpkg, debhelper and the reproducible
+-builds toolchain all read it so that a package built twice is the same
+package. fmake reads it now -- the changelog date is
+`email.utils.format_datetime` of the epoch when it is set, and of the
+present moment when it is not.
+
+`email.utils` rather than `strftime` because the changelog date is
+English by the Debian specification -- `Tue, 14 Nov 2023` -- and
+`strftime` speaks the machine's locale, which is a second way one tree
+produces two files: a French build would write `mar., 14 nov.` A value
+that is not a whole number of seconds is refused rather than guessed,
+which is what the reproducible-builds standard asks of a tool that
+reads the variable. The case ejects with a fixed epoch and checks the
+date is the epoch's, that a second eject from a fresh copy of the tree
+is byte-identical, and that a non-timestamp value stops the build.
