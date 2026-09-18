@@ -1200,6 +1200,7 @@ CONF_SCHEMA = {
         "defines": L, "define": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
+        "dbus": L, "udev": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "test-cwd": S,
         "version": S, "description": S,
@@ -1217,6 +1218,7 @@ CONF_SCHEMA = {
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
         "mandir": S, "applicationsdir": S, "icondir": S, "metainfodir": S,
+        "dbusdir": S, "udevdir": S,
         "unitdir": S, "sysvinitdir": S, "openrcdir": S, "procddir": S,
     },
 	# A service: the files that start it under each init, and what a
@@ -3786,7 +3788,8 @@ DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
-                  "rule", "man", "desktop", "icons", "metainfo", "aliases"}
+                  "rule", "man", "desktop", "icons", "metainfo", "aliases",
+                  "dbus", "udev"}
 
 # @define and @defines are the same directive. The config file spells it
 # plural because it holds a list; a comment spells it singular because it
@@ -4162,6 +4165,8 @@ DOXYGEN_ALIAS_TEXT = {
     "desktop": "Desktop entries",
     "icons":   "Icons",
     "metainfo": "AppStream metainfo",
+    "dbus":    "D-Bus system bus policy",
+    "udev":    "udev rules",
     "aliases": "Other names this program installs under",
     "cflags":  "Compile flags",
     "ldflags": "Link flags",
@@ -13505,6 +13510,13 @@ INSTALL_DIRS = (
     ("applicationsdir",  "share/applications",    "prefix"),
     ("icondir",          "share/icons/hicolor",   "prefix"),
     ("metainfodir",      "share/metainfo",        "prefix"),
+	# Two more places another program reads and nobody chooses: the
+	# system bus reads its policy from share/dbus-1/system.d, and udev
+	# its rules from lib/udev/rules.d, both under the prefix (a package
+	# lands them under /usr, and /lib/udev is /usr/lib/udev on every
+	# merged-usr system). netcfgd ships one of each beside its units.
+    ("dbusdir",          "share/dbus-1/system.d", "prefix"),
+    ("udevdir",          "lib/udev/rules.d",      "prefix"),
 	# Init glue. A unit goes where systemd looks, under the prefix --
 	# /usr/local/lib/systemd/system is on its search path. An init script
 	# goes in /etc/init.d whatever the prefix, which is why these two are
@@ -13862,6 +13874,16 @@ def furniture_landing(kind, rel, root):
 		return "applicationsdir", base
 	if kind == "metainfo":
 		return "metainfodir", base
+	if kind == "dbus":
+		if not base.endswith(".conf"):
+			die(f"@dbus {rel!r}: a bus policy file ends in .conf, which is "
+			    f"the only kind dbus-daemon reads from system.d")
+		return "dbusdir", base
+	if kind == "udev":
+		if not base.endswith(".rules"):
+			die(f"@udev {rel!r}: a rules file ends in .rules, which is the "
+			    f"only kind udev reads from rules.d")
+		return "udevdir", base
 	if kind == "icons":
 		if base.lower().endswith(".svg"):
 			return "icondir", f"scalable/apps/{base}"
@@ -13952,7 +13974,7 @@ def install_plan(targets, closures, root):
 		# what it cannot place.
 		units = ([closures[t].root] if t.kind == "exe"
 		         else list(closures[t].link))
-		for kind in ("man", "desktop", "icons", "metainfo"):
+		for kind in ("man", "desktop", "icons", "metainfo", "dbus", "udev"):
 			named = list(t.conf.get(kind, []))
 			for u in units:
 				if u is not None:

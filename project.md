@@ -316,7 +316,8 @@ that had been green about nothing for five commits ·
 [263. `--eject apk`: an APKBUILD from the one package model](#263---eject-apk-an-apkbuild-from-the-one-package-model) ·
 [264. procd: OpenWrt's init as a fourth kind of service glue](#264-procd-openwrts-init-as-a-fourth-kind-of-service-glue) ·
 [265. The release carries the APKBUILD](#265-the-release-carries-the-apkbuild) ·
-[266. `[project] test-args`: the argument every suite takes](#266-project-test-args-the-argument-every-suite-takes)
+[266. `[project] test-args`: the argument every suite takes](#266-project-test-args-the-argument-every-suite-takes) ·
+[267. `@dbus` and `@udev`: furniture with a daemon-fixed home](#267-dbus-and-udev-furniture-with-a-daemon-fixed-home)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20350,3 +20351,34 @@ live run and both ejected forms read one function for it. The case
 runs two tests under a project argument, one with an argument of its
 own, and asserts the order on the command line and in the ejected
 rules.
+
+## 267. `@dbus` and `@udev`: furniture with a daemon-fixed home
+
+Section 228 closed with what the first layer still lacked: "services,
+sysusers, D-Bus policy, and data files with no tool-fixed home".
+Services came in section 229. netcfgd ships `packaging/dbus/
+netcfgd-nm.conf` and `packaging/udev/71-netcfgd-modem.rules` beside
+its units, and each is section 228's shape exactly -- a file some
+other program will look for, in a place that program fixes: dbus-
+daemon reads its system-bus policy from `share/dbus-1/system.d`, udev
+its rules from `lib/udev/rules.d`, both under the prefix, `/usr/lib/
+udev` being `/lib/udev` on every merged-usr system and where a
+package lands them either way.
+
+Two rows in `INSTALL_DIRS`, `dbusdir` and `udevdir`, and two
+directives, `@dbus` and `@udev`, read the way `@man` and `@desktop`
+are read -- from a program's root, or from every unit of a library,
+or named under its section. `furniture_landing` places each by
+basename and refuses what the reader would not read: a policy that
+does not end in `.conf`, a rules file that does not end in `.rules`.
+Everything downstream is by row: the live install and uninstall, both
+ejected forms, `--explain`'s `$DBUSDIR` and `$UDEVDIR`, and the deb's
+`.install` lines, which the 31 packaging, release and install cases
+confirm without a line of them changing. The furniture case's tree
+carries six kinds now and asserts the two paths and the two refusals.
+
+Sysusers is the one item of section 228's list still open, and it is
+next: netcfgd reserves a group in three spellings -- `addgroup
+--system` in a Debian postinst, `pkggroups` for Alpine, and nothing
+yet for Gentoo -- which is one fact in three languages, the shape this
+whole layer exists for.

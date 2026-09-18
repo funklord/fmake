@@ -7184,13 +7184,22 @@ outputs = ["gen/vals.c"]
 
 
 def _furniture_tree(t):
-	"""A program with the four kinds of furniture a desktop looks for."""
+	"""A program with the six kinds of furniture other programs look for:
+	four a desktop reads, and the two netcfgd ships beside its units --
+	a system-bus policy and a udev rule (section 267)."""
 	t.write("main.c",
 	        "/*! @man packaging/furn.1\n"
 	        " *  @desktop packaging/se.vibes.furn.desktop\n"
 	        " *  @icons packaging/se.vibes.furn.svg packaging/furn-48.png\n"
 	        " *  @metainfo packaging/se.vibes.furn.metainfo.xml\n"
+	        " *  @dbus packaging/se.vibes.furn.conf\n"
+	        " *  @udev packaging/71-furn.rules\n"
 	        " */\n#include <stdio.h>\nint main(void){ puts(\"hi\"); return 0; }\n")
+	t.write("packaging/se.vibes.furn.conf",
+	        '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus '
+	        'Configuration 1.0//EN" "http://www.freedesktop.org/standards/'
+	        'dbus/1.0/busconfig.dtd">\n<busconfig/>\n')
+	t.write("packaging/71-furn.rules", 'KERNEL=="furn*", MODE="0660"\n')
 	t.write("packaging/furn.1", ".TH FURN 1\n.SH NAME\nfurn \\- a thing\n")
 	t.write("packaging/se.vibes.furn.desktop",
 	        "[Desktop Entry]\nType=Application\nName=furn\nExec=furn\n")
@@ -7215,7 +7224,9 @@ def _write_png(path, w, h):
 
 
 FURNITURE = [
+    "lib/udev/rules.d/71-furn.rules",
     "share/applications/se.vibes.furn.desktop",
+    "share/dbus-1/system.d/se.vibes.furn.conf",
     "share/icons/hicolor/48x48/apps/furn-48.png",
     "share/icons/hicolor/scalable/apps/se.vibes.furn.svg",
     "share/man/man1/furn.1",
@@ -7269,6 +7280,7 @@ def a_programs_furniture_installs_where_its_tools_look(t):
 
 	e = t.fmake("--explain")
 	for line in ("man1/furn.1", "$MANDIR", "scalable/apps/se.vibes.furn.svg",
+	             "$DBUSDIR", "$UDEVDIR",
 	             "48x48/apps/furn-48.png", "$ICONDIR", "$APPLICATIONSDIR",
 	             "$METAINFODIR"):
 		check(line in e.stdout, f"--explain does not say {line}: {e.stdout}")
@@ -7311,7 +7323,13 @@ def a_programs_furniture_installs_where_its_tools_look(t):
 	         "an icon is an SVG or a PNG"),
 	        ("icon that is not square", "@icons", "p/wide.png",
 	         lambda f: _write_png(f, 64, 32),
-	         "not square")):
+	         "not square"),
+	        ("bus policy that is not .conf", "@dbus", "p/furn.xml",
+	         lambda f: open(f, "w").close(),
+	         "ends in .conf"),
+	        ("udev file that is not .rules", "@udev", "p/furn.txt",
+	         lambda f: open(f, "w").close(),
+	         "ends in .rules")):
 		u = Tree("furniture-refuse")
 		try:
 			u.write("main.c", f"/*! {directive} {path} */\n"
