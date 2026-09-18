@@ -536,6 +536,8 @@ maintainer  = "Name <address>"  # required; the version is the VERSION file
 homepage    = "https://example.invalid/greet"
 section     = "utils"           # Debian's archive section
 description = "Greets whoever connects."   # long; a target's own is the synopsis
+groups      = ["greeters"]      # system accounts the software needs: a
+users       = ["greetd"]        # postinst, pkggroups/pkgusers, acct-*
 
 [debian.greetd]                 # per binary package, in Debian's words
 recommends = ["zlib1g"]         # runtime programs have no abstract form

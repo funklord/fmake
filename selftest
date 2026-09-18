@@ -9449,6 +9449,102 @@ def an_argument_every_test_takes_is_said_once(t):
 	      f"{[l for l in mk.splitlines() if '_test' in l and l.startswith(chr(9))]}")
 
 
+@case
+def a_system_account_is_one_fact_in_three_languages(t):
+	"""netcfgd reserves the group `netcfgd` and had spelled it three
+	ways: `addgroup --system` in its Debian postinst, `pkggroups` for
+	Alpine, nothing yet for Gentoo. `[package] groups` and `users` say
+	it once, and each emitter says it in its own words: a postinst that
+	creates them idempotently under getent, with `adduser` depended on
+	as policy asks and debhelper's own snippets kept; abuild's pkggroups
+	and pkgusers; acct-group and acct-user ebuilds in the overlay and
+	in RDEPEND. A user is a group of its own name everywhere. The deb
+	is built and lintian reads it; the plain install says what it did
+	not do."""
+	_deb_tools()
+	_deb_tree(t)
+	t.write("src/packaging/greetd.openrc",
+	        "#!/sbin/openrc-run\ncommand=/usr/bin/greetd\n")
+	t.write("src/fmake.toml", u_toml(t).replace(
+	    'sysvinit = "packaging/greetd.init"\n',
+	    'sysvinit = "packaging/greetd.init"\nopenrc   = "packaging/greetd.openrc"\n')
+	    .replace('[package]\n', '[package]\ngroups = ["greeters"]\nusers = ["greetd"]\n')
+	    + '\n[gentoo]\ncategory = "app-misc"\nsrc-uri = "x-${PV}.tar.gz"\n')
+
+	# Debian.
+	r = _deb(t, "--eject", "deb")
+	check(r.returncode == 0, f"--eject deb failed: {r.stdout}{r.stderr}")
+	with open(os.path.join(_src(t), "debian", "greetd.postinst")) as fh:
+		post = fh.read()
+	for line in ("getent group greeters >/dev/null || addgroup --system --quiet greeters",
+	             "getent passwd greetd >/dev/null || adduser --system --quiet --group",
+	             "#DEBHELPER#"):
+		check(line in post, f"the postinst lacks {line!r}:\n{post}")
+	with open(os.path.join(_src(t), "debian", "control")) as fh:
+		control = fh.read()
+	check(re.search(r"^Package: greetd\n(?:.*\n)*?Depends: .*\badduser\b", control, re.M),
+	      f"the program package does not depend on adduser:\n{control}")
+	b = _run_in(_src(t), "dpkg-buildpackage", "-b", "-us", "-uc")
+	check(b.returncode == 0, f"dpkg-buildpackage failed:\n{b.stdout[-1500:]}\n{b.stderr[-1500:]}")
+	prog = next(os.path.join(t.dir, n) for n in os.listdir(t.dir)
+	            if n.startswith("greetd_") and n.endswith(".deb"))
+	ctl = os.path.join(t.dir, "ctl")
+	subprocess.run(["dpkg-deb", "-e", prog, ctl], check=True)
+	with open(os.path.join(ctl, "postinst")) as fh:
+		built = fh.read()
+	check("addgroup --system --quiet greeters" in built and "deb-systemd-invoke" in built,
+	      f"the built postinst lost the accounts or debhelper's snippets:\n{built}")
+	lint = subprocess.run(["lintian", "--no-tag-display-limit", prog],
+	                      capture_output=True, text=True)
+	check(not [l for l in lint.stdout.splitlines() if l.startswith("E:")],
+	      f"lintian errors: {lint.stdout}")
+
+	# Alpine and Gentoo, from the same two lines.
+	r = _deb(t, "--eject", "apk")
+	check(r.returncode == 0, f"--eject apk failed: {r.stdout}{r.stderr}")
+	with open(os.path.join(_src(t), "alpine", "APKBUILD")) as fh:
+		apk = fh.read()
+	check('pkggroups="greeters greetd"' in apk and 'pkgusers="greetd"' in apk,
+	      f"the APKBUILD lacks the accounts:\n{apk}")
+	r = _deb(t, "--eject", "ebuild")
+	check(r.returncode == 0, f"--eject ebuild failed: {r.stdout}{r.stderr}")
+	g = os.path.join(_src(t), "gentoo")
+	with open(os.path.join(g, "app-misc", "greetd", "greetd-0.4.1.ebuild")) as fh:
+		eb = fh.read()
+	check("acct-group/greeters" in eb and "acct-user/greetd" in eb,
+	      f"the ebuild does not depend on the accounts:\n{eb}")
+	for rel, want in (("acct-group/greeters/greeters-0.ebuild", "inherit acct-group"),
+	                  ("acct-user/greetd/greetd-0.ebuild", "ACCT_USER_GROUPS=( greetd )")):
+		p = os.path.join(g, rel)
+		check(os.path.isfile(p), f"no {rel} in the overlay")
+		with open(p) as fh:
+			check(want in fh.read(), f"{rel} lacks {want!r}")
+
+	# The plain install runs nothing privileged, and says so.
+	r = _deb(t, "--install", "--destdir", os.path.join(t.dir, "stage"))
+	check(r.returncode == 0 and "addgroup --system greeters" in r.stdout + r.stderr
+	      and "adduser --system --group --no-create-home greetd" in r.stdout + r.stderr,
+	      f"the install does not say what a package would create: {r.stdout}{r.stderr}")
+
+	# A tree with its own postinst keeps it, and is told the accounts
+	# are its script's business.
+	u = Tree("accounts-own-postinst")
+	try:
+		_deb_tree(u)
+		u.write("src/packaging/postinst", "#!/bin/sh\nset -e\n#DEBHELPER#\n")
+		u.write("src/fmake.toml", u_toml(u)
+		        .replace('[package]\n', '[package]\ngroups = ["greeters"]\n')
+		        .replace('[debian.greetd]\n',
+		                 '[debian.greetd]\npostinst = "packaging/postinst"\n'))
+		r = _deb(u, "--eject", "deb")
+		check(r.returncode == 0 and "has to create greeters itself" in r.stdout + r.stderr,
+		      f"a hand-written postinst is not told: {r.stdout}{r.stderr}")
+		with open(os.path.join(_src(u), "debian", "greetd.postinst")) as fh:
+			check("addgroup" not in fh.read(), "the hand-written postinst was rewritten")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

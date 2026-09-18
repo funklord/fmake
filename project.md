@@ -317,7 +317,8 @@ that had been green about nothing for five commits ·
 [264. procd: OpenWrt's init as a fourth kind of service glue](#264-procd-openwrts-init-as-a-fourth-kind-of-service-glue) ·
 [265. The release carries the APKBUILD](#265-the-release-carries-the-apkbuild) ·
 [266. `[project] test-args`: the argument every suite takes](#266-project-test-args-the-argument-every-suite-takes) ·
-[267. `@dbus` and `@udev`: furniture with a daemon-fixed home](#267-dbus-and-udev-furniture-with-a-daemon-fixed-home)
+[267. `@dbus` and `@udev`: furniture with a daemon-fixed home](#267-dbus-and-udev-furniture-with-a-daemon-fixed-home) ·
+[268. System accounts: one fact in three languages](#268-system-accounts-one-fact-in-three-languages)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20382,3 +20383,40 @@ next: netcfgd reserves a group in three spellings -- `addgroup
 --system` in a Debian postinst, `pkggroups` for Alpine, and nothing
 yet for Gentoo -- which is one fact in three languages, the shape this
 whole layer exists for.
+
+## 268. System accounts: one fact in three languages
+
+The last of section 228's list. netcfgd reserves the group `netcfgd`
+-- the one `ncfg control set` points a policy at -- and had spelled
+it three ways: `addgroup --system netcfgd` in its Debian postinst,
+`pkggroups="netcfgd"` in its APKBUILD, and nothing yet for Gentoo.
+`[package] groups` and `users` say it once; a user is a group of its
+own name everywhere, which is what `adduser --system --group`, abuild
+and acct-user all do, and names are checked once for the shape every
+distribution's tools accept. Ids are never chosen: the distribution's.
+
+Each emitter says it in its own words:
+
+- **deb.** The package holding the programs -- the one named as the
+  source under the default split -- gets a `postinst` that creates
+  each under `getent`, so an upgrade creates nothing twice, with
+  `#DEBHELPER#` below it so debhelper's own start-and-restart snippets
+  keep their place, and `adduser` in its Depends as policy 3.5 asks.
+  A tree that carries its own postinst keeps it and is told the
+  accounts are its script's business, which is netcfgd's case. The
+  case builds the package, reads the accounts and debhelper's snippets
+  back out of the built postinst, and lintian reports no error.
+- **apk.** `pkggroups` and `pkgusers`, abuild's own fields, merged
+  with `[alpine]`'s.
+- **ebuild.** Accounts are packages on Gentoo. `acct-group/NAME` and
+  `acct-user/NAME` go into RDEPEND, and the overlay gains a one-line
+  ebuild for each beside the program's, `ACCT_*_ID=-1` so the id is
+  the machine's -- a fixed id is Gentoo's registry's to assign.
+- **A plain install** copies files and runs nothing privileged, so it
+  prints what a package would have done and the command that does it.
+
+Not written: a `sysusers.d` file. It is systemd's mechanism, this
+workspace's own Devuan carries no `systemd-sysusers` to read one, and
+a file nothing runs beside a postinst that does the work would be the
+same fact a fourth time. The option is open if a systemd-only tree
+wants it.
