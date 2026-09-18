@@ -5744,6 +5744,42 @@ def compile_cmd(u, cfg, incflags):
 	        + incflags + cfg.cflags + u.own + cfg.override)
 
 
+def write_compile_commands(dbpath, units, cfg, incflags, root):
+	"""Write a clangd compilation database of what fmake compiles.
+
+    One entry per C or C++ unit, its `arguments' the exact list
+    `compile_cmd' hands the compiler -- reused rather than re-rendered,
+    so the database an editor reads cannot disagree with the build. A
+    crate has no clang command (rust-analyzer reads Cargo, not this),
+    so crates are left out rather than listed with a rustc line clangd
+    cannot parse. Absolute paths throughout: clangd resolves `file'
+    against `directory', and fmake compiles with absolute source and
+    object paths, so the directory is only where relative -I flags in
+    it would resolve -- the tree root, which is what they are relative
+    to.
+    """
+	root = os.path.abspath(root)
+	entries = []
+	for u in units:
+		if u.lang.unit == "crate":
+			continue
+		entries.append({
+		    "directory": root,
+		    "file": u.abs,
+		    "arguments": compile_cmd(u, cfg, incflags),
+		    "output": u.obj,
+		})
+	os.makedirs(os.path.dirname(os.path.abspath(dbpath)), exist_ok=True)
+	tmp = dbpath + ".tmp"
+	with open(tmp, "w", encoding="utf-8") as fh:
+		json.dump(entries, fh, indent=1)
+		fh.write("\n")
+	os.replace(tmp, dbpath)
+	info(f"wrote {_rel(dbpath, root)} with {len(entries)} "
+	     f"entr{'y' if len(entries) == 1 else 'ies'}")
+	return 0
+
+
 def crate_cmd(u, cfg, out, exe=False):
 	"""The one rustc call that builds a crate.
 
@@ -8848,6 +8884,7 @@ def build(args, _bootstrapping=False):
 		sub.targets, sub.output = [name], tooldir
 		sub.explain = sub.install = False
 		sub.eject, sub.dry_run = None, False
+		sub.compile_commands = None
 		sub.quiet = not VERBOSE
 		# A generator runs here, on the machine doing the building, so it must
 		# not be compiled with the toolchain aimed at the target. That is what
@@ -10961,6 +10998,11 @@ def build(args, _bootstrapping=False):
 		return 1 if broken or mirage else 0
 
 	all_units = [units[r] for r in sorted(units)]
+	if args.compile_commands:
+		dbpath = (args.compile_commands if os.path.isabs(args.compile_commands)
+		          else os.path.join(root, args.compile_commands))
+		cache.save()
+		return write_compile_commands(dbpath, all_units, cfg, incflags, root)
 	if args.explain:
 		for t in wanted:
 			explain(t, closures[t], cfg, incflags, outdir, all_units, root,
@@ -16234,6 +16276,11 @@ def parse_args(argv):
 	               help="print the inferred build and exit: every target, "
 	                    "its link set and why, and the exact compile and "
 	                    "link command lines")
+	p.add_argument("--compile-commands", nargs="?",
+	               const="compile_commands.json", default=None,
+	               metavar="PATH",
+	               help="write a clangd compilation database (default "
+	                    "compile_commands.json) of every compile and exit")
 	p.add_argument("-n", "--dry-run", action="store_true",
 	               help="print commands without running them")
 	p.add_argument("-i", "--interactive", action="store_true",

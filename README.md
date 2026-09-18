@@ -919,6 +919,7 @@ fmake                    build every program in the tree
 fmake myapp              build one
 fmake flash              run a .PHONY rule from fmake.mk
 fmake --explain          print every decision and why
+fmake --compile-commands write compile_commands.json for clangd
 fmake --install          install artifacts and @headers
 fmake --eject > Makefile leave, taking the build with you
 fmake --eject deb        write debian/ and a Makefile; dpkg-buildpackage does the rest
@@ -961,6 +962,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `--ldflags 'FLAGS'` | extra link flags |
 | `--arch NAME` | build for an architecture (`aarch64`, `arm64`, `riscv64`…); the cross compiler is found by asking `dpkg-architecture` and reading PATH, and binaries land under `build-<arch>/` unless `-o` says otherwise |
 | `--explain` | print every decision and why, and build nothing |
+| `--compile-commands [PATH]` | write a clangd compilation database (default `compile_commands.json`) of every compile, and build nothing; the entries are the exact commands fmake compiles with |
 | `--release` | build, then write `release/`: source tarball from git, binary tarball, the `.deb` built from that tarball where `debian/` is committed, the ebuild and the APKBUILD, `SHA256SUMS`, and an `index.html` with the README rendered through pandoc where it is installed |
 | `--eject [make\|make-fragment\|ninja\|deb\|ebuild\|apk]` | write a build file to stdout; `make-fragment` is includable by an existing Makefile; `deb` writes `debian/` and a Makefile into the tree, `ebuild` writes `gentoo/<category>/<name>/` and the Makefile, `apk` writes `alpine/APKBUILD` and the Makefile |
 | `--force-link SRC` | link a file no symbol reaches |

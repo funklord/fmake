@@ -318,7 +318,8 @@ that had been green about nothing for five commits ·
 [265. The release carries the APKBUILD](#265-the-release-carries-the-apkbuild) ·
 [266. `[project] test-args`: the argument every suite takes](#266-project-test-args-the-argument-every-suite-takes) ·
 [267. `@dbus` and `@udev`: furniture with a daemon-fixed home](#267-dbus-and-udev-furniture-with-a-daemon-fixed-home) ·
-[268. System accounts: one fact in three languages](#268-system-accounts-one-fact-in-three-languages)
+[268. System accounts: one fact in three languages](#268-system-accounts-one-fact-in-three-languages) ·
+[269. A compilation database, from what fmake compiles](#269-a-compilation-database-from-what-fmake-compiles)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20420,3 +20421,38 @@ workspace's own Devuan carries no `systemd-sysusers` to read one, and
 a file nothing runs beside a postinst that does the work would be the
 same fact a fourth time. The option is open if a systemd-only tree
 wants it.
+
+## 269. A compilation database, from what fmake compiles
+
+The one piece of build tooling every C and C++ editor wants and fmake
+did not write: `compile_commands.json`, the clangd compilation
+database. CMake writes one, ninja has `-t compdb`, meson and bear
+both produce them; a tree built with fmake had no way to give clangd
+the flags, so an editor guessed and got the includes, the standard,
+and the `-D`s wrong.
+
+`--compile-commands` writes it and builds nothing, the shape
+`--explain` has. Every C or C++ unit fmake would compile gets an
+entry, and its `arguments` are `compile_cmd` -- the same list the
+build hands the compiler, reused rather than rendered a second time,
+so the database and the build cannot drift the way two copies of a
+command line do. That is the whole design of it: an editor that reads
+this sees the tree exactly as fmake builds it, per-unit `@define`s,
+`@pkg` flags, the Qt major, the platform of a cross build and all.
+Crates are left out -- rust-analyzer reads Cargo, not this, and a
+rustc line is not one clangd could parse.
+
+Absolute paths throughout, since clangd resolves `file` against
+`directory` and reads the database from anywhere; the directory is the
+tree root, which is where a relative `-I` in the arguments resolves.
+The default name is `compile_commands.json` at the root, where clangd
+looks; a path names another, and its directory is made. Written
+through a temp file and renamed, like the cache, so an editor watching
+it never reads half of one.
+
+The case builds a two-source tree with a subdirectory header, checks
+the two sources are listed and the header is not, and -- the check
+that makes it more than a shape test -- takes one entry's `arguments`,
+runs them, and confirms they compile the file: a database entry that
+is not a real command is the failure a compilation database has, and
+this one cannot ship it.

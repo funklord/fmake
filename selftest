@@ -9545,6 +9545,62 @@ def a_system_account_is_one_fact_in_three_languages(t):
 		u.cleanup()
 
 
+@case
+def a_compilation_database_lists_what_fmake_compiles(t):
+	"""clangd and every C/C++ editor read compile_commands.json, and
+	fmake knows every compile command it runs. `--compile-commands`
+	writes them, reusing the same `compile_cmd` the build does, so the
+	database an editor reads cannot disagree with the build. A quote
+	include's directory is on the line (section 261 keeps it off only
+	where the compiler looks anyway, which is the includer's own dir),
+	a header is not a translation unit and is not listed, and each
+	entry's arguments are a command that actually compiles the file --
+	asserted by running one."""
+	t.write("main.c", '#include "sub/h.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", f()); return 0; }\n')
+	t.write("sub/h.h", "int f(void);\n")
+	t.write("sub/f.c", '#include "h.h"\nint f(void){ return 3; }\n')
+
+	r = t.fmake("--compile-commands")
+	check(r.returncode == 0, f"--compile-commands failed: {r.stdout}{r.stderr}")
+	db = os.path.join(t.dir, "compile_commands.json")
+	check(os.path.isfile(db), "no compile_commands.json was written")
+	with open(db) as fh:
+		entries = json.load(fh)
+	by_file = {os.path.relpath(e["file"], t.dir): e for e in entries}
+	check(set(by_file) == {"main.c", "sub/f.c"},
+	      f"the database lists {sorted(by_file)}, not the two sources")
+	for rel, e in by_file.items():
+		check(os.path.isabs(e["file"]) and e["directory"] == t.dir,
+		      f"{rel}: file must be absolute and directory the tree root: {e}")
+		check("-c" in e["arguments"] and e["file"] in e["arguments"],
+		      f"{rel}: arguments are not a compile of the file: {e['arguments']}")
+		check(any(a == "-I" + t.dir for a in e["arguments"]),
+		      f"{rel}: the tree's own include directory is not on the line: "
+		      f"{e['arguments']}")
+
+	# The entry is a real command: run main.c's and see an object appear.
+	obj = os.path.join(t.dir, "run.o")
+	args = [a if a != by_file["main.c"]["output"] else obj
+	        for a in by_file["main.c"]["arguments"]]
+	# drop the depfile flags so the run needs no writable .fmake
+	args = [a for i, a in enumerate(args)
+	        if a not in ("-MD", "-MF") and (i == 0 or args[i-1] != "-MF")]
+	run = subprocess.run(args, capture_output=True, text=True)
+	check(run.returncode == 0 and os.path.isfile(obj),
+	      f"the database's own command did not compile the file: "
+	      f"{run.stdout}{run.stderr}")
+
+	# A named path, and the header is still not an entry there either.
+	r = t.fmake("--compile-commands", "build/cdb.json")
+	check(r.returncode == 0 and os.path.isfile(os.path.join(t.dir, "build", "cdb.json")),
+	      f"a named path was not written: {r.stdout}{r.stderr}")
+
+	# It builds nothing and installs nothing: a mode, like --explain.
+	check(not os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
+	      "--compile-commands linked a program; it should only describe")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
