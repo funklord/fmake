@@ -9657,6 +9657,60 @@ def a_package_set_outside_the_default_pkg_config_path_is_found(t):
 	      f"against the tree: {r.stdout}{r.stderr}")
 
 
+@case
+def a_header_on_an_explicit_include_path_proposes_no_package(t):
+	"""A cross build against a Qt kit puts the kit's own include on the
+	path and must not then have pkg-config answer `<QApplication>` with
+	the host Qt's -I -- the collision the Android trial hit, where host
+	and kit Qt headers on one line gave `QStringPrivate` undefined. A
+	header found under a `[project] include-dirs` directory is resolved
+	the way a header in the tree is, not proposed: no package, no
+	package's -I. Shown here without Qt -- a decoy .pc whose -I would
+	appear were the header proposed, and a copy of the header on the
+	explicit path that keeps it from being."""
+	if not shutil.which("pkg-config") and not shutil.which("pkgconf"):
+		raise Skip("no pkg-config")
+	kit = os.path.join(t.dir, "kit")
+	t.write("kit/thing/api.h", "int api(void);\n")
+	# the same header under the .pc's own directory, so without the
+	# primitive pkg-config attributes <thing/api.h> to the package
+	decoy = os.path.join(t.dir, "decoy")
+	t.write("decoy/thing/api.h", "int api(void);\n")
+	t.write("pc/thingpkg.pc",
+	        f"prefix={t.dir}\nName: thingpkg\nDescription: d\nVersion: 1\n"
+	        f"Cflags: -I{decoy}\nLibs:\n")
+	t.write("main.c", "#include <thing/api.h>\n"
+	        "int api(void){ return 1; }\nint main(void){ return api() - 1; }\n")
+	t.write("fmake.toml",
+	        f'[project]\ninclude-dirs = ["{kit}"]\n'
+	        f'[toolchain]\npkg-config-path = ["{os.path.join(t.dir, "pc")}"]\n')
+
+	r = t.fmake("-n")
+	check(r.returncode == 0, f"dry run failed: {r.stdout}{r.stderr}")
+	check(f"-I{decoy}" not in r.stdout,
+	      f"the decoy package was proposed for a header on the explicit "
+	      f"include path: {r.stdout}")
+	check(f"-I{kit}" in r.stdout,
+	      f"the explicit include directory is not on the line: {r.stdout}")
+	r = t.fmake()
+	check(r.returncode == 0, f"the build failed: {r.stdout}{r.stderr}")
+
+	# The primitive is scoped: a header NOT on an explicit path is still
+	# proposed, so a real dependency is not lost.
+	u = Tree("still-proposed")
+	try:
+		if not _have_pkg("zlib"):
+			raise Skip("zlib has no pkg-config file here")
+		u.write("main.c", "#include <zlib.h>\n#include <stdio.h>\n"
+		        'int main(void){ printf("%s\\n", zlibVersion()); return 0; }\n')
+		r = u.fmake()
+		check(r.returncode == 0, f"zlib build failed: {r.stdout}{r.stderr}")
+		check(u.run(os.path.basename(u.dir)).stdout.strip(),
+		      "a genuinely external header was not resolved to its package")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

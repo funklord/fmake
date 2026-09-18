@@ -606,6 +606,20 @@ directories, prepended to any `PKG_CONFIG_PATH` the caller set and made
 absolute against the tree; a full `[toolchain] sysroot` still replaces
 the search path outright, as it always did.
 
+**A header on a `[project] include-dirs` path is resolved, not
+proposed.** When a tree puts a directory on the include path itself --
+a Qt kit's `include/`, a cross prefix -- a `<header>` found there is
+treated the way a header in the tree is: no package is asked for it, so
+no package's `-I` joins the line. Without this a cross build resolved
+`<QApplication>` through the host's pkg-config and put the host Qt's
+headers beside the kit's, which does not compile. It is what lets fmake
+cross-compile a Qt application for Android from ordinary keys --
+`[toolchain] cc`/`cxx` pointing at the NDK, `os = "android"`,
+`include-dirs` and `lib-dirs` at the kit, `moc` at the host Qt of the
+kit's version -- with the kit's `libQt6*_arm64-v8a.so` resolved by
+symbol like any other library. The APK itself -- `androiddeployqt`,
+Gradle, signing -- is not fmake's; the cross build of the code is.
+
 **And those flags reach the questions.** `[project] cflags` are on the
 command line when fmake asks `-print-multiarch` and `-print-search-dirs`,
 so a `--target` or an `-m32` there moves the triplet and the library search

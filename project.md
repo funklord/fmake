@@ -320,7 +320,8 @@ that had been green about nothing for five commits ·
 [267. `@dbus` and `@udev`: furniture with a daemon-fixed home](#267-dbus-and-udev-furniture-with-a-daemon-fixed-home) ·
 [268. System accounts: one fact in three languages](#268-system-accounts-one-fact-in-three-languages) ·
 [269. A compilation database, from what fmake compiles](#269-a-compilation-database-from-what-fmake-compiles) ·
-[270. A package set off the default pkg-config path](#270-a-package-set-off-the-default-pkg-config-path)
+[270. A package set off the default pkg-config path](#270-a-package-set-off-the-default-pkg-config-path) ·
+[271. A header on an explicit include path, and a Qt app cross-built for Android](#271-a-header-on-an-explicit-include-path-and-a-qt-app-cross-built-for-android)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20498,3 +20499,61 @@ Gradle, signing -- remains a pipeline through three external tools and
 the copyright holder's to call for, and the Android Qt kit in
 particular ships `modules/*.json` for CMake rather than usable `.pc`
 files, so this helps a cross Qt build without finishing that one.
+
+## 271. A header on an explicit include path, and a Qt app cross-built for Android
+
+Section 270 let a build point pkg-config at a kit; the Android Qt kit
+answered nothing there, because it ships `modules/*.json` for CMake
+and no usable `.pc`. So the kit's includes go on `[project]
+include-dirs` instead -- and that exposed the real blocker, which is
+general and not Qt's. `propose_from_headers` asks pkg-config to resolve
+every `<angle>` header that is not in the tree, and a Qt kit's headers
+are not in the tree, so `<QApplication>` was answered by the *host*
+Qt's `.pc` and the host Qt's `-I` went on the line beside the kit's.
+Two Qts on one command line do not compile: `QStringPrivate`
+undefined, `QJsonDocument` incomplete -- the errors the first Android
+trial hit.
+
+A header found under a `[project] include-dirs` directory is resolved
+now, not proposed: the same standing a header in the tree has, checked
+the same way, `os.path.isfile` under an explicit `-I` before pkg-config
+is consulted. A tree that put the directory on the path meant the
+header to be found there, and asking pkg-config for a package to
+supply a header the line already has is what brought the wrong `-I`.
+The primitive is scoped -- a header not on an explicit path is still
+proposed, so a real dependency is not lost, which the case checks with
+zlib beside the decoy.
+
+With it, fmake cross-compiles a Qt Widgets application for Android
+from ordinary keys and nothing Qt-aware: `[toolchain]` cc/cxx at the
+NDK's `aarch64-linux-android26-clang(++)`, `os = "android"`, `arch =
+"aarch64"`, ar/nm at the NDK's llvm tools, `include-dirs` at the kit's
+`include` and its per-module subdirectories, `lib-dirs` at the kit's
+`lib`, and moc/uic/rcc at the host Qt of the kit's version (moc runs
+on the build machine and emits C++, section 17). Measured on a copy of
+bbq-predictor against Qt 6.12's `android_arm64_v8a` kit and NDK 27:
+`fmake` builds an `ELF 64-bit ARM aarch64` executable whose `readelf
+-d` names `libQt6Core_arm64-v8a.so`, `libQt6Widgets_arm64-v8a.so` and
+the rest -- the kit's own ABI-suffixed libraries, chosen by fmake's
+symbol scan against the kit `lib` directory with no knowledge that
+they are Qt or that this is Android. The `-l<name>_arm64-v8a` spelling
+is just the filename the scan read, which is section 3 working on a
+library it had never seen.
+
+The case is the primitive, not the Android build, since the suite
+cannot assume an NDK or a kit and an Android binary cannot be run here
+to prove it: a decoy `.pc` whose `-I` would appear were its header
+proposed, and a copy of that header on an explicit include path that
+keeps it from being. The Android result is the measurement that
+motivated it, recorded here rather than asserted in a test -- the same
+honesty section 234's cross build keeps, where what can be checked
+without the target hardware is the ELF machine and not the run.
+
+**What this is not.** It is the cross build of the *code*, and that is
+all. The `.apk` -- `androiddeployqt` laying out the package,
+Gradle assembling and signing it, the OpenSSL and TLS-backend
+arrangement `harmonization.md` records, the manifest and versionCode
+-- is a pipeline through three external tools that four trees already
+drive from `tool/android.mk`, and it is the copyright holder's to ask
+for as its own piece of work rather than fmake's to grow. What fmake
+now does is produce the shared objects that pipeline packages.

@@ -7319,6 +7319,15 @@ class PkgConfig:
 		# configuration still gets the default rather than no answer, and
 		# replaced by qt_preference() once a named moc is known.
 		self.qt_order = tuple(m[:len("Qt0")] for m in QT_CORE_MODULES)
+		# Directories the tree stated on `[project] include-dirs'. A header
+		# found under one is already on the compile line and needs no
+		# package proposed for it -- the same standing a header in the
+		# tree has. It is what lets a cross build against a Qt kit or any
+		# prefixed set (section 271) put the kit's own include on the path
+		# and not have pkg-config answer `<QApplication>' with the host
+		# Qt's -I, which is the collision the Android trial hit. Set by
+		# build() once the dirs are resolved.
+		self.explicit_incs = ()
 		# Where the preprocessor already looks. A .pc naming one of these
 		# claims every header on the machine and owns none of them; see
 		# by_includedir. Part of the cache key rather than only of the
@@ -7709,6 +7718,13 @@ def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
 			seen.add(name)
 			if proj is not None and proj.resolve_header(name, u.rel, kind):
 				continue        # a project header that happens to use <>
+			# A header the tree put on the path deliberately is resolved,
+			# not proposed: proposing it would ask pkg-config for a
+			# package and bring that package's own -I, which on a cross
+			# build is the host's and wrong.
+			if any(os.path.isfile(os.path.join(d, name))
+			       for d in pkg.explicit_incs):
+				continue
 			got = pkg.for_header(name, store, sig)
 			if got is None:
 				continue
@@ -10104,10 +10120,14 @@ def build(args, _bootstrapping=False):
 	for flag in moc_incflags:
 		if flag not in base_incflags:
 			base_incflags.append(flag)
+	explicit_incs = []
 	for d in conf.project.get("include-dirs", []):
-		flag = "-I" + (d if os.path.isabs(d) else os.path.join(root, d))
+		full = d if os.path.isabs(d) else os.path.join(root, d)
+		explicit_incs.append(full)
+		flag = "-I" + full
 		if flag not in base_incflags:
 			base_incflags.append(flag)
+	pkg.explicit_incs = explicit_incs
 
 	for rel in sorted(candidates):
 		unit(rel)
