@@ -584,7 +584,8 @@ src-uri  = "https://example.invalid/greet/greet-${PV}.tar.gz"  # where a
 makedepends = ["zlib-dev"]      # apk's names; derived where apk is installed
 depends     = []                # runtime programs; libraries are traced
 [service.greetd]                # a daemon: the glue for each init
-systemd  = "packaging/greetd.service"
+systemd  = "packaging/greetd.service"  # or a list, for a .timer or .socket
+                                #   beside the .service, named for the service
 sysvinit = "packaging/greetd.init"    # an LSB script
 openrc   = "packaging/greetd.openrc"  # an openrc-run script
 procd    = "packaging/greetd.procd"   # OpenWrt's: rc.common + USE_PROCD=1

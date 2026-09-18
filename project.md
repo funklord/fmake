@@ -329,7 +329,8 @@ that had been green about nothing for five commits ·
 [276. A test double under `tests/` stays out of a non-test program](#276-a-test-double-under-tests-stays-out-of-a-non-test-program) ·
 [277. `@version_script`: a shared library's exported symbols](#277-version_script-a-shared-librarys-exported-symbols) ·
 [278. `@kind module`: a plainly-named loadable object](#278-kind-module-a-plainly-named-loadable-object) ·
-[279. `@completion`: a bash completion under the command name](#279-completion-a-bash-completion-under-the-command-name)
+[279. `@completion`: a bash completion under the command name](#279-completion-a-bash-completion-under-the-command-name) ·
+[280. A service's companion systemd units](#280-a-services-companion-systemd-units)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20844,3 +20845,44 @@ file is the one that matters. It checks the ejected Makefile installs it by
 command too, and refuses a program that names two. Reverting the landing to
 the file's basename installs it where bash-completion will not look, and
 the case fails on the command-named path being absent.
+
+## 280. A service's companion systemd units
+
+ossacli's `ossa-metrics` is a timer, not a daemon: a `.timer` that fires a
+`.service` on a schedule, two systemd units for one thing. The `[service]`
+model carried one unit file per init -- a `.service` for systemd, an LSB
+script for sysvinit, an openrc-run script for openrc, a procd script -- and
+had no way to name the timer beside the service it fires. The same shape
+covers a socket-activated daemon (a `.socket` before its `.service`) and a
+path unit, so it is the general systemd case rather than one project's.
+
+`systemd` now takes a string or a list. A new schema kind, `SL`, accepts
+either, and `service_glue` flattens a list into one install row per unit,
+so the plan and both ejected builds place every unit under the unit
+directory behind the same `INIT=systemd` guard the single unit already had.
+The other three inits stay scalar: only systemd activates one service
+through another file.
+
+The deb needed the most care and got the least code. Units are placed
+there by debhelper, not by the `.install` file -- fmake links each to
+`debian/<pkg>.<service>.<type>`, and `dh_installsystemd --name=<service>`
+reads the whole set and enables whichever units carry an `[Install]`
+section. A timer has `WantedBy=timers.target`; a timer-fired service has no
+`[Install]` at all, so debhelper enables the timer and leaves the service
+to it, which is exactly right and needed no fmake logic beyond linking each
+unit under its own type. apkbuild is untouched: Alpine is openrc, and reads
+none of this.
+
+The one rule the list adds is that companion units share the service's
+name: the deb reaches them with a single `--name=<service>`, which matches
+only `<service>.*`, so a unit named otherwise would be installed by `make
+install` and then left in `debian/tmp` for `dh_missing` to refuse the
+package over -- the quiet packaging failure section 227 already paid for. A
+list whose names drift is refused at load, naming the offender; a single
+unit is the service's own name already, so the check bites only a list.
+
+The case ejects a Makefile for a service carrying a `.service` and a
+`.timer`, installs it with `INIT=systemd`, and finds both units under the
+unit directory -- reverting the flatten to keep only the first drops the
+timer and the case fails on the pair. A second tree names a mismatched
+companion and is refused.

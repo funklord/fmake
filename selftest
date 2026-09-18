@@ -7575,6 +7575,61 @@ def _deb_tools():
 
 
 @case
+def a_service_installs_its_companion_systemd_units(t):
+	"""ossacli's `ossa-metrics' is a timer, not a daemon: a `.timer' that
+	fires a `.service', two units for one thing, where `[service.NAME]
+	systemd' had named one. It takes a list now -- a `.socket' or a `.path'
+	beside a `.service' is the same shape -- and installs them together,
+	under one name so the deb's `dh_installsystemd --name' reads the whole
+	set and enables whichever carries an [Install] section (the timer), not
+	the service it fires.
+
+	Proven through the ejected build with INIT=systemd, since this machine
+	may run another init: both units land under the unit directory. And a
+	companion whose name is not the service's is refused, because one
+	`--name' would not reach it and dh_missing would refuse the leftover."""
+	if shutil.which("make"):
+		t.write("main.c", "int main(void){ return 0; }\n")
+		t.write("systemd/metrics.service",
+		        "[Unit]\nDescription=m\n[Service]\nExecStart=/usr/bin/x\n")
+		t.write("systemd/metrics.timer",
+		        "[Unit]\n[Timer]\nOnCalendar=hourly\n"
+		        "[Install]\nWantedBy=timers.target\n")
+		t.write("fmake.toml", '[service.metrics]\nsystemd = '
+		        '["systemd/metrics.service", "systemd/metrics.timer"]\n')
+		ej = t.fmake("--eject", "make")
+		check(ej.returncode == 0, f"--eject failed: {ej.stderr}")
+		t.write("Makefile", ej.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		dest = os.path.join(t.dir, "st")
+		b = _run_in(t.dir, "make", "-s", "install",
+		            env={"DESTDIR": dest, "INIT": "systemd"})
+		check(b.returncode == 0, f"install failed: {b.stdout}{b.stderr}")
+		units = sorted(f for _base, _d, fs in os.walk(dest) for f in fs
+		               if f.endswith((".service", ".timer")))
+		check(units == ["metrics.service", "metrics.timer"],
+		      f"both companion units should install under systemd: {units}")
+
+	# A companion whose name is not the service's is refused: one --name
+	# would not reach it. Checked at load, so any command triggers it.
+	u = Tree("svc-mismatch")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("systemd/metrics.service",
+		        "[Unit]\n[Service]\nExecStart=/x\n")
+		u.write("systemd/other.timer",
+		        "[Unit]\n[Timer]\nOnCalendar=hourly\n"
+		        "[Install]\nWantedBy=timers.target\n")
+		u.write("fmake.toml", '[service.metrics]\nsystemd = '
+		        '["systemd/metrics.service", "systemd/other.timer"]\n')
+		r = u.fmake("--eject", "make")
+		check(r.returncode != 0 and "companion" in r.stdout + r.stderr,
+		      f"a mismatched companion should be refused: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_debian_source_package_is_ejected_and_builds(t):
 	"""Section 227's second layer: `--eject deb', proved by dpkg and lintian.
 

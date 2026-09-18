@@ -1188,6 +1188,7 @@ CONF_FILE = "fmake.toml"
 S, L = "str", "list"      # scalar string, list of strings
 B = "bool"                # true/false, for a fact with two answers
 N = "int"                 # a whole number, for a count or a duration
+SL = "str-or-list"        # a string or a list: a service's companion units
 
 CONF_SCHEMA = {
     "project": {
@@ -1242,7 +1243,7 @@ CONF_SCHEMA = {
 	# a plain install places the glue and starts nothing, since starting
 	# a daemon is a package's act and not a file copy's.
     "service": {"*": {
-        "systemd": S, "sysvinit": S, "openrc": S, "procd": S,
+        "systemd": SL, "sysvinit": S, "openrc": S, "procd": S,
         "enable": B, "start": B, "restart-on-upgrade": B,
         "package": S,
     }},
@@ -1328,6 +1329,12 @@ def _conf_check(table, spec, where, out):
 			if not (isinstance(value, list)
 			        and all(isinstance(v, str) for v in value)):
 				out.append(f"{where}.{key}: expected a list of strings")
+		elif kind is SL:
+			if not (isinstance(value, str)
+			        or (isinstance(value, list)
+			            and all(isinstance(v, str) for v in value))):
+				out.append(f"{where}.{key}: expected a string or a list "
+				           f"of strings")
 		elif kind is B:
 			if not isinstance(value, bool):
 				out.append(f"{where}.{key}: expected true or false")
@@ -14018,14 +14025,25 @@ def service_glue(conf, root):
 	"""Every [service.NAME] file, checked, as (name, glue, rel)."""
 	out = []
 	for name, sec in sorted(conf.services.items()):
-		files = [(g, sec[g]) for g in ("systemd", "sysvinit", "openrc",
-		                               "procd")
-		         if sec.get(g)]
+		# `systemd' may name several units -- a `.timer' beside its
+		# `.service', a `.socket' before it -- because that is how systemd
+		# activates one thing, and the packaging enables whichever of them
+		# carries an [Install] section. The other inits name one script.
+		files = []
+		for g in ("systemd", "sysvinit", "openrc", "procd"):
+			v = sec.get(g)
+			if not v:
+				continue
+			if isinstance(v, list):
+				files += [(g, one) for one in v]
+			else:
+				files.append((g, v))
 		if not files:
 			die(f"{CONF_FILE}: [service.{name}] names no file: give it a "
 			    f"`systemd', a `sysvinit', an `openrc' or a `procd' "
 			    f"script, or all of them -- one package has to start it "
 			    f"under whichever init the machine runs.")
+		systemd_units = [rel for g, rel in files if g == "systemd"]
 		for glue, rel in files:
 			if not os.path.isfile(os.path.join(root, rel)):
 				die(f"{CONF_FILE}: [service.{name}] {glue} = {rel!r} does "
@@ -14035,6 +14053,17 @@ def service_glue(conf, root):
 				die(f"{CONF_FILE}: [service.{name}] systemd = {rel!r}: a "
 				    f"unit file ends in .service, .socket, .timer or "
 				    f".path, which is how systemd knows what it is")
+			# Companion units share the service's name: the deb enables
+			# them with `dh_installsystemd --name={name}', which reads only
+			# units called {name}.*, and a stray-named one would be left in
+			# debian/tmp for dh_missing to refuse. One unit is the service's
+			# own name already; the check bites only where a list drifts.
+			if (glue == "systemd" and len(systemd_units) > 1
+			        and os.path.basename(rel).rsplit(".", 1)[0] != name):
+				die(f"{CONF_FILE}: [service.{name}] systemd = {rel!r}: a "
+				    f"companion unit is named for its service, `{name}"
+				    f".<service|timer|socket|path>', so one `--name' "
+				    f"installs them together")
 			out.append((name, glue, rel))
 	return out
 
@@ -15122,7 +15151,14 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 		for svc, sec in svc_of.get(p["name"], []):
 			# Links, not copies: debhelper reads through them, and the
 			# file stays where the tree keeps it, so there is one.
-			links[f"debian/{p['name']}.{svc}.service"] = sec["systemd"]
+			sd = sec["systemd"]
+			for unit in ([sd] if isinstance(sd, str) else sd):
+				# One link per unit, named by its type -- `.service',
+				# `.timer', `.socket' -- so `dh_installsystemd --name=<svc>'
+				# reads the whole set and enables whichever carries an
+				# [Install] section (the timer, not the service it fires).
+				ext = os.path.basename(unit).rsplit(".", 1)[1]
+				links[f"debian/{p['name']}.{svc}.{ext}"] = unit
 			links[f"debian/{p['name']}.{svc}.init"] = sec["sysvinit"]
 		dsec = conf.debian.get(p["name"], {})
 		if p["name"] == accounts_pkg and (groups or users):
@@ -15377,8 +15413,9 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	     '\temake DESTDIR="${D}" PREFIX=/usr LIBDIR="/usr/$(get_libdir)" \\',
 	     '\t\tCC="$(tc-getCC)" INIT=none install']
 	for svc, sec in services:
-		if sec.get("systemd"):
-			e.append(f'\tsystemd_dounit "{sec["systemd"]}"')
+		sd = sec.get("systemd")
+		for unit in ([sd] if isinstance(sd, str) else (sd or [])):
+			e.append(f'\tsystemd_dounit "{unit}"')
 		e.append(f'\tnewinitd "{sec["openrc"]}" {svc}')
 	e.append("}")
 	restarts = [svc for svc, sec in services
