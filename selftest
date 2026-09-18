@@ -14013,6 +14013,96 @@ const char *greet(void){ return "from the shared object"; }
 	check("-shared" in e, f"the link should pass -shared: {e}")
 
 
+def _dynexports(path):
+	"""The defined dynamic symbols a shared object exports."""
+	r = subprocess.run(["nm", "-D", "--defined-only", path],
+	                   capture_output=True, text=True)
+	out = set()
+	for line in r.stdout.splitlines():
+		parts = line.split()
+		if len(parts) >= 3 and parts[1] in ("T", "t", "D", "B", "R", "W"):
+			out.add(parts[2].split("@")[0])
+	return out
+
+
+@case
+def a_version_script_controls_what_a_shared_library_exports(t):
+	"""ossacli links libossa.so with -Wl,--version-script,libossa.map so the
+	nine simfw_* simulator symbols and fourteen internal ossa_* helpers stay
+	in the archive its tests use and out of the shared object anyone links.
+	Without it every external-linkage symbol is exported, carrying no prefix
+	and free to collide with a consumer's own names.
+
+	@version_script names the map, and its two halves are both here. The
+	flag: only the listed symbol is exported, the internal one made local.
+	And the dependency: the map is a link prerequisite, so widening the
+	exported set relinks the .so -- without that a change to who is public
+	leaves the old shared object in place, the stale-artifact failure the
+	build rules are most careful about."""
+	t.write("greet.c",
+	        "/*! @file\n"
+	        " *  @kind shared\n"
+	        " *  @target greet\n"
+	        " *  @version 0.1\n"
+	        " *  @version_script greet.map\n"
+	        " */\n"
+	        "int greet_public(void){ return 7; }\n"
+	        "int greet_internal(void){ return 42; }\n")
+	t.write("greet.map",
+	        "GREET_0 {\n\tglobal:\n\t\tgreet_public;\n"
+	        "\tlocal:\n\t\t*;\n};\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	so = os.path.join(t.dir, "libgreet.so")
+	check(os.path.exists(so), f"expected libgreet.so: {os.listdir(t.dir)}")
+	syms = _dynexports(so)
+	check("greet_public" in syms,
+	      f"the listed symbol must be exported: {sorted(syms)}")
+	check("greet_internal" not in syms,
+	      f"an unlisted symbol must be local, not exported: {sorted(syms)}")
+
+	# The map is a link dependency: widen the exported set and the .so must
+	# relink. Reverting the input that carries the map leaves it as it was.
+	t.write("greet.map",
+	        "GREET_0 {\n\tglobal:\n\t\tgreet_public;\n"
+	        "\t\tgreet_internal;\n\tlocal:\n\t\t*;\n};\n")
+	r = t.fmake()
+	check(r.returncode == 0, f"rebuild failed: {r.stdout}{r.stderr}")
+	syms = _dynexports(so)
+	check("greet_internal" in syms,
+	      f"a changed map must relink the shared object: {sorted(syms)}")
+
+
+@case
+def a_version_script_belongs_to_a_shared_library_only(t):
+	"""A program and a static archive have no exported-symbol table to
+	script, and a map named but not present is a slip worth a message rather
+	than a link that fails deep in ld naming a file nobody set. Both are
+	caught once the kind is final and before anything compiles."""
+	t.write("main.c",
+	        "/*! @file\n *  @version_script m.map\n */\n"
+	        "int main(void){ return 0; }\n")
+	t.write("m.map", "X { local: *; };\n")
+	r = t.fmake()
+	check(r.returncode != 0, "a version script on a program should be refused")
+	check("shared library" in r.stdout + r.stderr,
+	      f"the refusal says what a version script is for: {r.stderr}")
+
+	u = Tree("vs-missing")
+	try:
+		u.write("z.c",
+		        "/*! @file\n *  @kind shared\n *  @target z\n"
+		        " *  @version_script nope.map\n */\n"
+		        "int z_sym(void){ return 0; }\n")
+		r = u.fmake()
+		check(r.returncode != 0, "a missing map should be refused")
+		check("not a file" in r.stdout + r.stderr,
+		      f"the refusal names the missing map: {r.stderr}")
+	finally:
+		u.cleanup()
+
+
 @case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""

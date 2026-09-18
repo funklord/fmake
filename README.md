@@ -339,6 +339,14 @@ the archive and the `.so`, from one set of sources, which is how a
 distribution ships a library — with one `.pc` and one soname chain; the
 archive is `lib<name>.a` and appears as the target `<name>_static`.
 
+`@version_script PATH` (or `[target.NAME] version-script`) links a shared
+library against a version script — the list of symbols it exports, with
+everything else made local — so an internal helper, or an `LD_PRELOAD`
+simulator that carries no project prefix, does not leak out of the `.so`
+that consumers link. The map is a link prerequisite, so widening or
+narrowing the exported set relinks the library; fmake refuses it on a
+program or a static archive, which have no such table to control.
+
 **Tests are not built by the default build.** A `main()` under `test/` or
 `tests/`, or in a file called `foo_test.c` or `test_foo.c`, roots a test
 program — and a plain `fmake` builds the library and the programs without
@@ -457,6 +465,7 @@ like `@brief` are ignored.
 | `@dbus PATH…` / `@udev PATH…` / `@polkit PATH…` | A system-bus policy (`.conf`, to `share/dbus-1/system.d`), udev rules (`.rules`, to `lib/udev/rules.d`) and a PolicyKit action (`.policy`, to `share/polkit-1/actions`), installed where those daemons read |
 | `@data PATH…` | Data files (globs, `**` and all) installed under `share/<program>/`, each keeping its path relative to the tree; name files, not a directory |
 | `@version X.Y.Z` | Publishable: writes a `.pc`, and versions a `.so` with its soname chain |
+| `@version_script PATH` | A shared library's exported-symbol map (`ld --version-script`); a link prerequisite, so a changed export set relinks; refused off a shared library |
 | `@rule …` | A build rule, in Makefile syntax (below) |
 
 `fmake --doxygen-aliases` emits an `ALIASES` block so Doxygen renders these

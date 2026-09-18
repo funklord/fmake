@@ -1218,7 +1218,7 @@ CONF_SCHEMA = {
         "dbus": L, "udev": L, "polkit": L, "data": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "test-cwd": S,
-        "version": S, "description": S,
+        "version": S, "version-script": S, "description": S,
     }},
     "generate": {"*": {
         "command": S, "inputs": L, "outputs": L, "depends": L,
@@ -3807,7 +3807,8 @@ RE_DOXY_OPEN = re.compile(r"^\s*(?://[/!]|/\*[*!])")
 RE_DIRECTIVE = re.compile(r"^[@\\](\w+)\b[ \t]*(.*)$")
 
 # Replace whatever came before; last one wins.
-DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version"}
+DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version",
+                    "version_script"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
@@ -4197,6 +4198,7 @@ DOXYGEN_ALIAS_TEXT = {
     "ldflags": "Link flags",
     "define":  "Defines",
     "std":     "Language standard",
+    "version_script": "Shared library version script",
     "test":    "Test program",
     "os":      "Operating systems",
     "arch":    "Architectures",
@@ -8238,7 +8240,7 @@ class Target:
 
 	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
 	             "test_group", "test_why", "version", "description",
-	             "stem", "publishes_pc")
+	             "stem", "publishes_pc", "version_script")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
@@ -8250,6 +8252,12 @@ class Target:
 		# and inventing "0.0.0" would publish a number nobody chose into a
 		# file other projects then depend on.
 		self.version = ann.scalar("version")
+		# The version script a shared library links with: the list of
+		# symbols it exports, everything else made local. A path in the
+		# tree, valid only on a shared library (checked once the kind is
+		# final), and made a link prerequisite so a change to the exported
+		# set relinks the `.so'.
+		self.version_script = ann.scalar("version_script")
 		self.description = None
 		# The artifact's name where it is not the target's: a `library'
 		# twin is the target `ossa_static' and the file `libossa.a'. The
@@ -8306,6 +8314,8 @@ class Target:
 		if section.get("sources"):
 			self.members = list(section["sources"])
 		self.version = section.get("version") or self.version
+		self.version_script = (section.get("version-script")
+		                       or self.version_script)
 		self.description = section.get("description") or self.description
 
 	@property
@@ -8347,7 +8357,7 @@ class Target:
 		return "%s.%s" % (self.filename, self.version.split(".")[0])
 
 
-def link_cmd(t, cl, cfg, outdir, libflags=()):
+def link_cmd(t, cl, cfg, outdir, libflags=(), root=None):
 	"""The exact command that produces this artifact.
 
     One implementation, used both to link and to report. Two would drift, and
@@ -8388,11 +8398,21 @@ def link_cmd(t, cl, cfg, outdir, libflags=()):
 				return ["cp", arcs[0].obj, out]
 		return [cfg.ar, "rcs", out] + objs
 	cxx = any(u.cxx for u in cl.link)
+	shared = []
+	if t.kind == "shared":
+		shared = ["-shared", "-Wl,-soname," + t.soname]
+		# The version script is placed before the objects, where ld reads
+		# its options. Named by an absolute path like the objects are: the
+		# link runs from wherever fmake was invoked, not from the tree root,
+		# so a tree-relative name reaches ld as "cannot open linker script".
+		if t.version_script:
+			vs = (os.path.join(root, t.version_script) if root
+			      else t.version_script)
+			shared.append("-Wl,--version-script," + vs)
 	# Resolved libraries first, then whatever the user named, so an explicit
 	# --ldflags always has the last word.
 	return ([cfg.driver(cxx)]
-	        + (["-shared", "-Wl,-soname," + t.soname]
-	           if t.kind == "shared" else [])
+	        + shared
 	        + ["-o", out] + objs + archive_flags(cl)
 	        + list(libflags) + cfg.link_flags())
 
@@ -8444,7 +8464,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	objs = (crate_inputs(cl.root, root)
 	        if cl.root.crate_exe else [u.obj for u in cl.link])
 	out = os.path.join(outdir, name)
-	cmd = link_cmd(t, cl, cfg, outdir, libflags)
+	cmd = link_cmd(t, cl, cfg, outdir, libflags, root)
 
 	# `-o dist` names somewhere to put the artifacts, not somewhere that must
 	# already exist. Without this the linker fails with "cannot open output
@@ -8475,7 +8495,14 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# inputs and the invocation are unchanged, the output is too.
 	key = None
 	if cache is not None and root is not None:
-		key = _link_key(cmd, objs, cache, root)
+		# The version script is consumed by the link but is not an object,
+		# so its content joins the key here or a change to the exported set
+		# leaves the `.so' as it was -- the stale-artifact failure the
+		# comment above is about, one input further out.
+		inputs = objs
+		if t.version_script:
+			inputs = objs + [os.path.join(root, t.version_script)]
+		key = _link_key(cmd, inputs, cache, root)
 		store = cache.data.setdefault("links", {})
 		# Keyed by what was produced, not by what it is called. A tool a
 		# generator `uses' is linked twice in one run -- once by the nested
@@ -8824,7 +8851,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	if len(built) > 2:
 		print(f"    {DIM('... %d more' % (len(built) - 2))}")
 	# The same call the linker gets, not a second rendering of it.
-	shown = link_cmd(t, cl, cfg, outdir, res["ldflags"] if res else [])
+	shown = link_cmd(t, cl, cfg, outdir, res["ldflags"] if res else [], root)
 	print(f"    {DIM(_show_cmd(shown, root))}")
 
 	# What ships. The packaging evaluation asked for exactly this: "which
@@ -9626,6 +9653,23 @@ def build(args, _bootstrapping=False):
 	for t in targets:
 		if t.members is not None and t.conf.get("sources"):
 			t.members = _expand_sources(t.conf["sources"], root, proj, t.name)
+
+	# A version script lists the symbols a shared library exports and hides
+	# the rest; a program and a static archive have no exported-symbol table
+	# to script, so it is a shared library's alone. Checked here, where the
+	# kind is final -- a `library' has become its shared half and its static
+	# twin -- and before anything compiles, so a wrong kind or a missing map
+	# is a message rather than a link that fails naming a file nobody set.
+	for t in targets:
+		if not t.version_script:
+			continue
+		if t.kind != "shared":
+			die(f"{t.rel}: @version_script controls what a shared library "
+			    f"exports, but {t.name} has kind {t.kind} -- for a program's "
+			    f"own exported symbols use @ldflags -Wl,--dynamic-list")
+		if not os.path.isfile(os.path.join(root, t.version_script)):
+			die(f"{t.rel}: @version_script {t.version_script!r} is not a "
+			    f"file in the tree")
 
 	# A tree whose only programs are tests is a library with tests beside
 	# it, and a plain build should produce the library. Before tests were
@@ -11892,6 +11936,10 @@ def expand_libraries(targets):
 		twin.name = t.name + "_static"
 		twin.publishes_pc = False
 		twin.description = t.description
+		# The archive exports nothing to control -- a version script is a
+		# property of the shared object alone, and `ar' would not know what
+		# to do with one.
+		twin.version_script = None
 		out += [t, twin]
 	return out
 
@@ -12794,7 +12842,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"{art(t.filename)}: $({P}{ident}_OBJS)"
 		  + (f" {' '.join(blobs)}" if blobs else "")
 		  + (f" {' '.join(arcs or crate_arcs)}"
-		     if (arcs or crate_arcs) else ""))
+		     if (arcs or crate_arcs) else "")
+		  + (f" {t.version_script}" if t.version_script else ""))
 		if outdir:
 			a("\t@mkdir -p $(@D)")
 		if t.kind == "static" and not objs and len(crate_arcs) == 1:
@@ -12806,7 +12855,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a("\trm -f $@")
 			a("\t$(AR) rcs $@ $^")
 		elif t.kind == "shared":
-			a(f"\t$({driver}) -shared -Wl,-soname,{t.soname} -o $@ {objs_txt}{tail}")
+			vs = (f" -Wl,--version-script,{t.version_script}"
+			      if t.version_script else "")
+			a(f"\t$({driver}) -shared -Wl,-soname,{t.soname}{vs} "
+			  f"-o $@ {objs_txt}{tail}")
 		else:
 			a(f"\t$({driver}) -o $@ {objs_txt}{tail}")
 		a("")
@@ -13137,7 +13189,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("  description = LD $out")
 	a("")
 	a("rule solink")
-	a("  command = $driver -shared -Wl,-soname,$soname -o $out $in $arcs $libs $ldflags")
+	a("  command = $driver -shared -Wl,-soname,$soname $version_script "
+	  "-o $out $in $arcs $libs $ldflags")
 	a("  description = LD $out")
 	a("")
 	a("rule archive")
@@ -13433,13 +13486,21 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
 		# Implicit inputs so a changed archive relinks; the command line
 		# places them after the objects and groups them when there is more
-		# than one, neither of which an input list can express.
-		after = (" | " + " ".join(arcs)) if arcs else ""
+		# than one, neither of which an input list can express. The version
+		# script joins them for the same reason -- a changed export set is a
+		# relink -- while its flag rides the rule variable below.
+		implicit = list(arcs)
+		if t.version_script:
+			implicit.append(_ninja(t.version_script))
+		after = (" | " + " ".join(implicit)) if implicit else ""
 		a(f"build {art(t.filename)}: {rule} {objs}{after}")
 		if t.kind != "static":
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
 			if t.kind == "shared":
 				a(f"  soname = {t.soname}")
+				if t.version_script:
+					a(f"  version_script = "
+					  f"-Wl,--version-script,{t.version_script}")
 			if arcs:
 				txt = " ".join(arcs)
 				if len(arcs) > 1:

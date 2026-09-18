@@ -326,7 +326,8 @@ that had been green about nothing for five commits ·
 [273. `@polkit`: a PolicyKit action where polkitd reads it](#273-polkit-a-policykit-action-where-polkitd-reads-it) ·
 [274. COVERAGE=1, a gcov build, the third switch](#274-coverage1-a-gcov-build-the-third-switch) ·
 [275. The ejected changelog honours SOURCE_DATE_EPOCH](#275-the-ejected-changelog-honours-source_date_epoch) ·
-[276. A test double under `tests/` stays out of a non-test program](#276-a-test-double-under-tests-stays-out-of-a-non-test-program)
+[276. A test double under `tests/` stays out of a non-test program](#276-a-test-double-under-tests-stays-out-of-a-non-test-program) ·
+[277. `@version_script`: a shared library's exported symbols](#277-version_script-a-shared-librarys-exported-symbols)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20715,3 +20716,48 @@ into the test binary that references it, and running it confirms the
 double, since a real `close(3)' would fail. Reverting the one line that
 drops the interposer pulls the double back into the daemon in libc's
 place, and the case fails there.
+
+## 277. `@version_script`: a shared library's exported symbols
+
+ossacli links `libossa.so` with `-Wl,--version-script,libossa.map`, a map
+that names the fifty-odd `ossa_*` functions the library offers and hides
+everything else. Without it the shared object exported every symbol with
+external linkage: fourteen internal `ossa_*` helpers and nine `simfw_*`
+simulator functions -- the latter carrying no project prefix at all,
+generic enough (`simfw_write`, `simfw_exec`) to collide with a consumer's
+own names, and reachable from any program that linked the library.
+`code-style.md` asks for the prefix on anything a linker outside the
+module can reach, and these reached it. Its own tree never saw the leak,
+because every binary and test links the static archive, which is
+unaffected and still carries everything the tests read back.
+
+`@version_script PATH` (or `[target.NAME] version-script`) is that map.
+fmake links the shared object with `-Wl,--version-script,<path>` and does
+the two things a hand-written rule has to remember. It makes the map a
+link prerequisite, so widening or narrowing the exported set relinks the
+`.so' -- the flag alone would leave a stale shared object with the old
+visibility, since nothing else in the link changed, which is the
+quiet-stale-artifact failure the dependency rules are most careful about.
+And it refuses the directive on anything but a shared library: a program
+and a static archive have no exported-symbol table to script, checked once
+the kind is final -- so a `library' has already split into its shared half
+and its `_static' twin, and only the shared half carries the script -- and
+before anything compiles, so a wrong kind or a missing map is a message
+rather than a link that fails deep in `ld' naming a file nobody set.
+
+The path is the map's, tree-relative as declared, but the live link names
+it by an absolute path: the link runs from wherever fmake was invoked, not
+from the tree root, so a relative name reaches `ld' as "cannot open linker
+script" -- found the first time the case ran under the suite, which invokes
+fmake with `-C` from elsewhere, where a build run from the tree root had
+hidden it. The ejected Makefile and `build.ninja` keep the relative name,
+because they run from the root, and carry the map as a prerequisite so an
+edit to the exported set relinks there too.
+
+The case builds a shared library whose map exports one of its two
+functions, and reads the dynamic symbol table with `nm -D`: the listed
+symbol is exported, the other is local. Then it widens the map and rebuilds
+-- the newly listed symbol must appear, which fails if the map is not a
+link input. Removing the flag exports both; dropping the map from the link
+key leaves the second symbol hidden after the change. A second case refuses
+the directive on a program and on a shared library whose map is missing.
