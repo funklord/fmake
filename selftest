@@ -9037,6 +9037,8 @@ def a_file_standing_in_for_libc_is_said_out_loud(t):
 	      and f"linked into {prog} in libc's place" in said
 	      and "pulled in by main.c" in said,
 	      f"the interposition is named, with what pulled it: {said}")
+	check("move it under tests/" in said,
+	      f"the note points at the painless fix, tests/: {said}")
 	check(t.run(prog).stdout == "42\n",
 	      "and the rule itself is unchanged: the tree's close() is linked")
 
@@ -9047,6 +9049,59 @@ def a_file_standing_in_for_libc_is_said_out_loud(t):
 	check("libc provides too" not in r.stdout + r.stderr,
 	      f"with the shim excluded there is nothing to say: {r.stdout}{r.stderr}")
 	check(t.run(prog).stdout == "0\n", "libc's close() is linked now")
+
+
+def _defines_close(path):
+	"""Whether the binary defines close() itself, rather than importing it.
+
+	A double that section 3 linked in shows as a defined text symbol; libc's
+	close() is an undefined dynamic import. nm's `T'/`t' is the tell -- and a
+	stripped binary would defeat it, but fmake -Os does not strip."""
+	if not os.path.exists(path):
+		return False
+	r = subprocess.run(["nm", path], capture_output=True, text=True)
+	for line in r.stdout.splitlines():
+		parts = line.split()
+		if len(parts) >= 3 and parts[1] in ("T", "t") and parts[2] == "close":
+			return True
+	return False
+
+
+@case
+def a_test_double_under_tests_is_kept_from_a_non_test_program(t):
+	"""Section 276: the painless half of section 219.
+
+	219 named the file that stands in for libc and offered `[project]
+	exclude', which drops the file from the build outright -- so a test that
+	wants the double cannot link it either. The obvious home for a double is
+	`tests/', and a library already drops what lives there from its
+	membership; a program's closure did not, so a double under `tests/' was
+	pulled into a daemon in libc's place exactly as one at the root is.
+
+	Put it under `tests/' and the same convention that keeps the test
+	binaries out of the default build keeps the double out of every non-test
+	program -- and it is still there for the test that exists to link it."""
+	t.write("src/daemon.c", "#include <unistd.h>\n"
+	        "int main(void){ return close(3) == 0 ? 0 : 1; }\n")
+	t.write("tests/close_double.c", "/* a test double, as a daemon test "
+	        "would carry one */\nint close(int fd){ (void)fd; return 0; }\n")
+	t.write("tests/daemon_test.c", "#include <unistd.h>\n"
+	        "int main(void){ return close(3) == 0 ? 0 : 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"default build failed: {out}")
+	check("libc provides too" not in out,
+	      f"a double under tests/ must not be pulled into the daemon: {out}")
+	check(not _defines_close(os.path.join(t.dir, "daemon")),
+	      "the daemon must resolve close() from libc, not from the double")
+
+	# Scoped, not banished: the test that exists to link the double still
+	# does, and running it proves the double -- real close(3) would fail.
+	r = t.fmake("test")
+	check(r.returncode == 0, f"test build/run failed: {r.stdout}{r.stderr}")
+	check(_defines_close(os.path.join(t.dir, "daemon_test")),
+	      "the test binary should link the double it references")
 
 
 @case

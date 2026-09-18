@@ -358,6 +358,15 @@ RUN client_test
 * 1 test passed
 ```
 
+A double under a test directory that stands in for a library function —
+one defining `close()`, say, or another name the C library provides — is
+kept out of every non-test program: fmake links the real library there,
+and the double only where a test pulls it in. So an `LD_PRELOAD` shim or
+test double kept in `tests/` cannot end up in a shipped binary the way one
+loose in the tree can (see Pitfalls), and no manual exclude list is needed.
+A test helper that defines the project's *own* symbols is an ordinary
+dependency, built and linked wherever it is used.
+
 `@test live` puts a test in a group of its own, which `fmake test` does not
 run and `fmake live` does -- for the tests that differ in what they *need*
 rather than in what they check, like the ones wanting a network. A `live/`
@@ -1232,6 +1241,18 @@ in that list and do not need to be — a declared target still gets its own.)
 registered by a macro. Nothing refers to them, so the closure correctly drops
 them — and says so: `not compiled: nothing reaches it`. `@sources` in a source
 file, or `--force-link`, asserts them into the build.
+
+**A file that stands in for a library, linked in its place.** A file that
+defines `close()`, or any name the C library also provides, is a tree file
+like any other, and fmake's rule is that the tree beats the library — so an
+`LD_PRELOAD` shim or a test double loose in the tree is linked into a program
+that meant to call the real one. fmake says so, naming the file, the symbol,
+the program and what pulled it. The painless fix is where the file lives: a
+double under `tests/` that stands in for a library function is kept out of
+every non-test program automatically, and linked only where a test pulls it.
+If the override is deliberate — a project genuinely replacing `close()` —
+that is what it does, and `[project] exclude` in `fmake.toml` silences the
+note.
 
 **⚠ A Qt resource whose path is assembled with no literal.** rcc is decided by
 the `":/..."` paths your code names. If a path is built entirely at runtime

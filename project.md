@@ -325,7 +325,8 @@ that had been green about nothing for five commits ·
 [272. `@data`: a program's files under its share directory](#272-data-a-programs-files-under-its-share-directory) ·
 [273. `@polkit`: a PolicyKit action where polkitd reads it](#273-polkit-a-policykit-action-where-polkitd-reads-it) ·
 [274. COVERAGE=1, a gcov build, the third switch](#274-coverage1-a-gcov-build-the-third-switch) ·
-[275. The ejected changelog honours SOURCE_DATE_EPOCH](#275-the-ejected-changelog-honours-source_date_epoch)
+[275. The ejected changelog honours SOURCE_DATE_EPOCH](#275-the-ejected-changelog-honours-source_date_epoch) ·
+[276. A test double under `tests/` stays out of a non-test program](#276-a-test-double-under-tests-stays-out-of-a-non-test-program)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20663,3 +20664,54 @@ which is what the reproducible-builds standard asks of a tool that
 reads the variable. The case ejects with a fixed epoch and checks the
 date is the epoch's, that a second eject from a fresh copy of the tree
 is byte-identical, and that a non-timestamp value stops the build.
+
+## 276. A test double under `tests/` stays out of a non-test program
+
+Section 219 found ossacli's `LD_PRELOAD` `close()' shim linked into a
+storage probe in libc's place: section 3 takes the tree over the library,
+and a file that defines a libc name is a tree file like any other. The
+remedy it offered was `[project] exclude`, which removes the file from the
+build outright -- so a project could not keep a double out of its shipped
+program without also keeping it from the test that exists to link it. The
+holder asked for the painless form: put the double where doubles go and
+have fmake keep it out, and detect the leak with helpful text where it
+still happens.
+
+The obvious home for a double is `tests/'. A library's membership already
+drops what lives there -- `libsitu.a' does not carry the codec its tests
+generate -- but a program's link closure did not, so a double under
+`tests/' was pulled into a daemon exactly as one at the root is.
+`schema_pool', the per-program pool already trimmed of the schemas a
+target never included, now also drops a test-material file from a non-test
+program when that file defines a name libc provides. That is section 219's
+first candidate -- the closure stops taking the tree in libc's place --
+scoped by two facts at once: the file is test material, and it stands in
+for the library. A test keeps its own material, because a test binary is
+what the double exists to be linked into.
+
+The scope is the whole point, and the first cut got it wrong. Dropping
+*all* test material from a non-test program broke a program that reaches a
+`@kind static` helper library under `tests/' for an ordinary project
+symbol -- `only_a_program_can_be_a_test' builds exactly that, and the deb
+fixture links a helper the same way. A support library a program depends
+on is a dependency, not a leak; what makes a double different is that it
+stands in for libc, which is the set section 219's warning is already
+checked against. Keying the exclusion on `u.strong & libc_exports' keeps
+the helper and drops only the interposer.
+
+Where a shim is loose in the tree rather than under `tests/', it is still
+pulled and still named -- the holder may mean the override -- and the note
+now leads with the painless fix: move it under `tests/' and fmake keeps it
+out of every non-test program, or `[project] exclude` if it must stay put.
+The README states the rule twice, once as the convention under *Libraries,
+programs and tests* and once as the pitfall a loose shim is, so a reader
+meets it whether they are placing a double or chasing a wrong binary.
+
+The case builds a daemon that leaves `close()' for libc and a double under
+`tests/' that defines it. The default build must not pull the double --
+proved by the interpose note staying silent and by `nm' finding no
+`close()' defined in the daemon -- while `fmake test' links the double
+into the test binary that references it, and running it confirms the
+double, since a real `close(3)' would fail. Reverting the one line that
+drops the interposer pulls the double back into the daemon in libc's
+place, and the case fails there.
