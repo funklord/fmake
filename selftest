@@ -9398,6 +9398,39 @@ def an_apkbuild_is_ejected_in_alpines_words(t):
 		u.cleanup()
 
 
+@case
+def an_argument_every_test_takes_is_said_once(t):
+	"""raidcfgd's Makefile runs every suite as `./$suite fixture`, and
+	one of its 23 defaults to another directory when the argument is
+	missing. That is an argument every test takes, and `[target.NAME]
+	test-args` under 23 sections is the fact repeated 23 times.
+	`[project] test-args` says it once; a target's own follow it, added
+	to rather than replacing, as `test-env` is; and both ejected builds
+	carry the pair in that order."""
+	_suite(t)
+	t.write("tests/arg_test.c", "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){\n"
+	        "\tfor (int i = 1; i < argc; i++) printf(\"%s%s\", i > 1 ? \" \" : \"\", argv[i]);\n"
+	        '\tputs(""); return argc < 2; }\n')
+	t.write("tests/other_test.c", "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){\n"
+	        '\tprintf("other %s\\n", argc > 1 ? argv[1] : "-"); return argc < 2; }\n')
+	t.write("fmake.toml",
+	        '[project]\ntest-args = ["fixture"]\n'
+	        '[target.arg_test]\ntest-args = ["--verbose"]\n')
+
+	r = t.fmake("test")
+	check(r.returncode == 0, f"fmake test failed: {r.stdout}{r.stderr}")
+	check("fixture --verbose\n" in r.stdout,
+	      f"the project's argument first, then the target's: {r.stdout}")
+	check("other fixture" in r.stdout,
+	      f"a test with no arguments of its own gets the project's: {r.stdout}")
+	mk = t.fmake("--eject", "make").stdout
+	check("./arg_test fixture --verbose" in mk and "./other_test fixture" in mk,
+	      f"the ejected rules carry both: "
+	      f"{[l for l in mk.splitlines() if '_test' in l and l.startswith(chr(9))]}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

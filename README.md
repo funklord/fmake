@@ -378,7 +378,9 @@ That buys a fast default build, and it is paid for by the object cache above
 being keyed on the configuration — otherwise "build only what you asked for"
 is how a stale binary gets tested. `@test` and `@test no` in the source, or
 `test = true` / `false` under `[target.NAME]`, override the guess;
-`test-args` under `[target.NAME]` gives a test its arguments; `test-cwd`
+`test-args` under `[target.NAME]` gives a test its arguments, after any
+under `[project]` that every test takes -- raidcfgd hands each suite its
+fixture directory that way; `test-cwd`
 under either names the directory, inside the tree, it runs from -- for a
 suite written to run from `test/`, opening `fixture/<name>` -- and the
 ejected builds `cd` there for the run; `test-env`

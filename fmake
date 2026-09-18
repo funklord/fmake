@@ -1179,7 +1179,8 @@ CONF_SCHEMA = {
         "name": S, "std": S, "profile": S, "needs": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
         "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
-        "test-timeout": N, "test-env": L, "test-cwd": S, "rustflags": L,
+        "test-timeout": N, "test-env": L, "test-cwd": S, "test-args": L,
+        "rustflags": L,
     },
     "profile": {"*": {
         "std": S, "cflags": L, "ldflags": L, "defines": L, "define": L,
@@ -2183,6 +2184,20 @@ def wants_a_display(env):
 	                                    "WAYLAND_DISPLAY"))
 
 
+def test_args(conf, t):
+	"""The arguments a test runs with: the project's, then the target's.
+
+    raidcfgd's Makefile runs every suite as `./$$suite fixture', the
+    directory the fixtures live in, and one of its 23 tests defaults to
+    another name when the argument is missing. That is an argument every
+    test takes, and writing it under 23 sections is the fact repeated
+    23 times. Added to rather than replaced, as test-env is: a target's
+    own arguments follow the project's.
+    """
+	return (list(conf.project.get("test-args", []))
+	        + list(t.conf.get("test-args", [])))
+
+
 def test_cwd(conf, t, root):
 	"""The directory a test runs from, tree-relative, or "" for the root.
 
@@ -2248,7 +2263,7 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
 	not_run = []
 	for t in sorted(targets, key=lambda x: x.name):
 		exe = os.path.abspath(os.path.join(outdir, t.filename))
-		argv = [exe] + list(t.conf.get("test-args", []))
+		argv = [exe] + test_args(conf, t)
 		cwd = os.path.join(root, test_cwd(conf, t, root))
 		limit = t.conf.get("test-timeout", default) or None
 		pairs = test_env_pairs(conf, t, bin_paths)
@@ -12283,7 +12298,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		  + ("".join(" " + d for d in _dep) if _dep else ""))
 		for t in sorted(by_group[g], key=lambda x: x.name):
 			argv = " ".join(_mk_cmd(shlex.quote(x))
-			                for x in t.conf.get("test-args", []))
+			                for x in test_args(conf, t))
 			env = " ".join(_mk_cmd(_sh_env(p))
 			               for p in test_env_pairs(conf, t, eject_bins))
 			where = test_cwd(conf, t, root)
@@ -13300,7 +13315,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			    _nj_esc(_sh_env(p))
 			    for p in test_env_pairs(conf, t, eject_bins)] + [
 			    " ".join(_nj_esc(shlex.quote(x))
-			             for x in [prog] + list(t.conf.get("test-args", [])))]
+			             for x in [prog] + test_args(conf, t))]
 			return " ".join(words)
 		# Each test in a subshell, so a `cd' for one does not move the next.
 		cmds = " && ".join(f"({_run_one(t)})" if test_cwd(conf, t, root)

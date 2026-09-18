@@ -315,7 +315,8 @@ that had been green about nothing for five commits ·
 [262. A resource named through a placeholder is still opened](#262-a-resource-named-through-a-placeholder-is-still-opened) ·
 [263. `--eject apk`: an APKBUILD from the one package model](#263---eject-apk-an-apkbuild-from-the-one-package-model) ·
 [264. procd: OpenWrt's init as a fourth kind of service glue](#264-procd-openwrts-init-as-a-fourth-kind-of-service-glue) ·
-[265. The release carries the APKBUILD](#265-the-release-carries-the-apkbuild)
+[265. The release carries the APKBUILD](#265-the-release-carries-the-apkbuild) ·
+[266. `[project] test-args`: the argument every suite takes](#266-project-test-args-the-argument-every-suite-takes)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20333,3 +20334,19 @@ release page lists files by name, so it goes in as
 summed with the rest. The release case ejects it beside the deb and
 the ebuild -- over the same Makefile, which the overwrite rule accepts
 as the same file -- and asserts it in the listing.
+
+## 266. `[project] test-args`: the argument every suite takes
+
+Section 260 left raidcfgd at 22 of 23: `test_manual` takes the fixture
+directory as `argv[1]` and defaults to a name that is not there, and
+its Makefile runs every suite as `./$$suite fixture`. `[target.test_
+manual] test-args = ["fixture"]` was the line offered, and it is the
+right one for that test; it is also the fact the Makefile states once
+and fmake would have taken 23 times, since every suite there is run
+the same way. `test-args` under `[project]` is the argument every test
+takes, and a target's own follow it -- added to, not replacing, which
+is the rule `test-env` already has for the same pair of scopes. The
+live run and both ejected forms read one function for it. The case
+runs two tests under a project argument, one with an argument of its
+own, and asserts the order on the command line and in the ejected
+rules.
