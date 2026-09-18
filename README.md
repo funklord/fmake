@@ -352,7 +352,9 @@ program or a static archive, which have no such table to control.
 `lib` prefix, no soname and no `.pc`, since nothing links it by name. fmake
 builds it but does not install it: a Qt plugin, a preload shim and a
 `dlopen` plugin each belong somewhere different, so where it loads from is
-the project's to say. ossacli's `ossa-sgshim.so` is one.
+the project's to say. ossacli's `ossa-sgshim.so` is one. A module's sources
+are its own — a shim that defines `close()` is not pulled into a program
+that calls the real one, the way nothing links a module.
 
 **Tests are not built by the default build.** A `main()` under `test/` or
 `tests/`, or in a file called `foo_test.c` or `test_foo.c`, roots a test

@@ -330,7 +330,8 @@ that had been green about nothing for five commits ·
 [277. `@version_script`: a shared library's exported symbols](#277-version_script-a-shared-librarys-exported-symbols) ·
 [278. `@kind module`: a plainly-named loadable object](#278-kind-module-a-plainly-named-loadable-object) ·
 [279. `@completion`: a bash completion under the command name](#279-completion-a-bash-completion-under-the-command-name) ·
-[280. A service's companion systemd units](#280-a-services-companion-systemd-units)
+[280. A service's companion systemd units](#280-a-services-companion-systemd-units) ·
+[281. A module's sources are its own](#281-a-modules-sources-are-its-own)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20886,3 +20887,43 @@ The case ejects a Makefile for a service carrying a `.service` and a
 unit directory -- reverting the flatten to keep only the first drops the
 timer and the case fails on the pair. A second tree names a mismatched
 companion and is refused.
+
+## 281. A module's sources are its own
+
+This one was found by building a real tree rather than reading its
+Makefile, which is what the harmonization rule about an fmake build line
+asks for. With sections 277 and 278 in place, ossacli's whole tree was
+declared to fmake -- `libossa` as a `@kind library` with its version
+script, the two `.so` shims as `@kind module`, the three programs -- and it
+built every artifact. But it printed section 219's warning twice:
+`src/shim/sgshim.c defines close() ... linked into ossacli, ossa-check in
+libc's place -- pulled in by src/lib/transport_sg.c`, and the same for
+`fopen()` into ossa-metrics.
+
+The shim was declared a module, and its object still leaked into the
+programs. `sgshim.c` defines `close()` to fake a controller; the library's
+`transport_sg.c` calls the real `close()` and leaves it undefined; section
+3 found a tree file defining `close()` -- the shim -- and pulled it in,
+exactly the storage-tool-invents-hardware failure section 219 is about. In
+the hand-written Makefile this cannot happen: `sgshim.c` has its own
+`-shared` rule and is compiled into nothing else. fmake had no equivalent,
+because a module's source sat in the pool like any other file.
+
+Nothing links a module -- it is opened by path -- so its sources belong to
+it alone. The fix is the section 276 shape from a third direction: after
+the schemas a target never included and the `tests/` doubles that stand in
+for libc, `schema_pool` now also drops every module's own sources from a
+program's pool. A module keeps them, through the declared-membership or
+whole-tree closure it already used; every other target builds as though the
+module's files were not in the tree. Unlike the `tests/` exclusion this one
+needs no libc test: a module is not a library, nothing is meant to link its
+symbols, so the exclusion is unconditional rather than scoped to the
+interposers.
+
+With it, ossacli builds clean and correct under fmake: `ossacli` imports
+`close` from libc, `ossa-sgshim.so` carries its own, and `libossa.so`
+exports its fifty-four `ossa_*` symbols with the simulator hidden. The case
+builds a program that calls `close()` beside a module that defines it: the
+program must resolve `close()` from libc and the module must keep its own.
+Reverting the exclusion pulls the shim into the program, and the case
+fails there -- the warning returning with it.

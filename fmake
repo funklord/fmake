@@ -10592,11 +10592,27 @@ def build(args, _bootstrapping=False):
 				                        if u.rel in test_material
 				                        and (u.strong & libc_syms)}
 
+		# A module's sources are its own. Section 278 builds a loadable
+		# object -- an LD_PRELOAD shim, a plugin -- and its files define
+		# names (sgshim.c's `close()', section 219) that section 3 would
+		# otherwise pull into a program that left them for libc. Nothing
+		# links a module, so its sources belong to it alone and stay out of
+		# every other target's closure, the way a module's own rule in a
+		# hand-written Makefile compiles them nowhere else.
+		module_material = set()
+		for m in wanted:
+			if m.kind == "module":
+				module_material.add(m.rel)
+				module_material.update(m.members or ())
+
 		def schema_pool(t):
 			"""`pool` without what this program must not link: the schemas
-			it never included, and -- unless it is itself a test -- a double
-			under `tests/' that stands in for a libc function."""
+			it never included, a module's sources, and -- unless it is
+			itself a test -- a double under `tests/' that stands in for a
+			libc function."""
 			base = pool
+			if module_material:
+				base = [u for u in base if u.rel not in module_material]
 			if t.test_group is None and interposing_material:
 				base = [u for u in base if u.rel not in interposing_material]
 			if not schema_src:

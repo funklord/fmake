@@ -14258,6 +14258,35 @@ def a_module_is_a_plainly_named_loadable_object(t):
 
 
 @case
+def a_modules_sources_are_kept_out_of_other_targets(t):
+	"""ossacli's `ossa-sgshim.so' shim defines `close()' to fake a
+	controller; its programs call the real `close()'. Building both under
+	fmake surfaced this: section 3 pulled the shim's `close()' into the
+	programs in libc's place (section 219), because the shim is a module but
+	its source sat in the pool like any other and defined a symbol the
+	programs left undefined. Nothing links a module -- it is loaded by path
+	-- so its sources are its own, kept out of every other target's closure
+	the way a module's own rule in a hand-written Makefile compiles them
+	nowhere else. Found by building a real tree, not by reading its
+	Makefile."""
+	t.write("src/prog.c", "#include <unistd.h>\n"
+	        "int main(void){ return close(3) == 0 ? 0 : 1; }\n")
+	t.write("src/shim.c", "/*! @file\n *  @kind module\n"
+	        " *  @target shim\n */\n"
+	        "int close(int fd){ (void)fd; return 0; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check("libc provides too" not in out,
+	      f"a module's shim must not be pulled into the program: {out}")
+	check(not _defines_close(os.path.join(t.dir, "prog")),
+	      "the program must resolve close() from libc, not from the module")
+	check(_defines_close(os.path.join(t.dir, "shim.so")),
+	      "the module keeps its own interposer")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")
