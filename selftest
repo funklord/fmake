@@ -9260,6 +9260,51 @@ def a_quote_include_beside_its_includer_costs_no_include_directory(t):
 		u.cleanup()
 
 
+@case
+def a_resource_named_through_a_placeholder_is_still_opened(t):
+	"""hydra names every icon it has as `QStringLiteral(":/ui/%1.svg")
+	.arg(name)`, and its fallback marks as `":/icon/hydra-%1.png"`. The
+	prefix match asked whether a declared path started with `/ui/%1.svg`,
+	none did, and the hydra fmake built shipped without its icons -- no
+	link error, a runtime warning per icon, and `--explain` listing the
+	.qrc as "not opened by this program". What is literal in such a
+	string is the text before the placeholder, and that is a prefix like
+	any other."""
+	_need_qt()
+	t.write("assets/greeting.txt", "hello from the resource\n")
+	t.write("assets/app.qrc", _qrc("/data", "greeting.txt", ""))
+	t.write("main.cpp", """
+#include <QCoreApplication>
+#include <QFile>
+#include <QString>
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    const QString which = argc > 1 ? argv[1] : "greeting";
+    QFile f(QStringLiteral(":/data/%1.txt").arg(which));
+    if (!f.open(QIODevice::ReadOnly)) return 2;
+    return f.readAll().trimmed() == "hello from the resource" ? 0 : 1;
+}
+""")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check("RCC assets/app.qrc" in r.stdout,
+	      f"a placeholder literal is evidence the resource is opened: {r.stdout}")
+	got = t.run(os.path.basename(t.dir))
+	check(got.returncode == 0,
+	      f"the resource was not readable at runtime (exit {got.returncode})")
+	check('"/data/%1.txt"' in t.fmake("--explain").stdout,
+	      "--explain names the literal that decided it")
+
+	# And a placeholder that names another prefix is still no evidence
+	# for this resource.
+	t.write("extra/unused.txt", "nobody wants this\n")
+	t.write("extra/unused.qrc", _qrc("/unused", "unused.txt", ""))
+	r = t.fmake()
+	check("RCC extra/unused.qrc" not in r.stdout + r.stderr,
+	      f"a placeholder under /data does not open /unused: {r.stdout}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

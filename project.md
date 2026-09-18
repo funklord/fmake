@@ -311,7 +311,8 @@ that had been green about nothing for five commits ·
 [258. A Qt test that aborts with no display is told the key](#258-a-qt-test-that-aborts-with-no-display-is-told-the-key) ·
 [259. Widening reaches into a vendored checkout by token, and what that costs](#259-widening-reaches-into-a-vendored-checkout-by-token-and-what-that-costs) ·
 [260. `test-cwd`: a suite written to run from its own directory](#260-test-cwd-a-suite-written-to-run-from-its-own-directory) ·
-[261. A quote include found beside its includer costs no `-I`](#261-a-quote-include-found-beside-its-includer-costs-no--i)
+[261. A quote include found beside its includer costs no `-I`](#261-a-quote-include-found-beside-its-includer-costs-no--i) ·
+[262. A resource named through a placeholder is still opened](#262-a-resource-named-through-a-placeholder-is-still-opened)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20198,3 +20199,42 @@ excluded too, `fmake test` builds and runs 171 tests and 170 pass;
 the one that fails is built by its Makefile only under `FLOG_ON`, a
 define fmake was not told. A five-line `fmake.toml`, and it is in
 fuzznet's `project.md`.
+
+## 262. A resource named through a placeholder is still opened
+
+hydra's suite under `fmake test`, offscreen: 46 unit tests build and
+run, six fail. Four want a local server or the network and are the
+suite's own; `test_replay` says
+
+    qt.svg: Cannot open file ':/ui/drawer.svg', because: No such file or directory
+
+and `--explain hydra` says why: `hydra_seed.qrc` is opened, by the
+literal `":/sample-tree.txt"` in `main.cpp`, and `icon/hydra.qrc` is
+not listed at all -- no program opens it, as far as fmake could see.
+hydra names every icon it has as `QStringLiteral(":/ui/%1.svg")
+.arg(bundled)` and its marks as `":/icon/hydra-%1.png"`, and those are
+the only `":/"` literals under `/ui` and `/icon` in the tree. The
+prefix match, written for `":/icons/" + name`, asked whether any
+declared path started with `/ui/%1.svg`; none did. So the hydra fmake
+builds ships without its icons -- no link error, one runtime warning
+per icon, which is the class this document ranks worst and the shape
+section 17 named as the limit: "a resource path assembled with no
+`:/...` literal anywhere". This one has the literal. What is literal
+in `":/ui/%1.svg"` is the text before the placeholder, `/ui/`, and
+that is a directory prefix like any other.
+
+`qrc_used_by` takes the text before the first `%` as a prefix when a
+literal carries one -- Qt's `%1`, printf's `%s`, either -- and matches
+it as it matches a trailing-slash literal. `--explain hydra` now lists
+`icon/hydra.qrc "/icon/hydra-%1.png" in src/main.cpp`. The case opens
+`":/data/%1.txt".arg(which)`, asserts rcc runs and the program reads
+the resource, and that a second `.qrc` under another prefix is still
+left alone; the old matcher fails it on rcc never running.
+
+`test_replay` in hydra is not fixed by this alone: its closure has to
+reach the file carrying the literal for the resource to be seeded
+into that test, and whether it does is hydra's link set rather than
+this matcher's. Not re-measured here; the main program is the
+finding, and it is signalled into hydra's `project.md` with the
+offscreen count, since hydra's `fmake.toml` has no `test-env` and 13
+of the 18 failures in the first run were section 258's display.

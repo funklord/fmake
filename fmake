@@ -3185,6 +3185,16 @@ def qrc_used_by(scan, paths, stem):
 		# miss those, silently, until the program ran.
 		if lit in paths or any(p.startswith(lit) for p in paths):
 			return f'"{lit}"'
+		# The other way real code assembles a name: a placeholder in the
+		# literal, `QStringLiteral(":/ui/%1.svg").arg(name)' or a printf
+		# `":/icon/hydra-%s.png"'. hydra names every icon it has that way
+		# and no other, so the prefix match saw `/ui/%1.svg' start no
+		# declared path and the program fmake built shipped without its
+		# icons -- silently, the runtime warning being the first word of
+		# it. What is literal is the text before the placeholder.
+		head = lit.split("%", 1)[0]
+		if head != lit and any(p.startswith(head) for p in paths):
+			return f'"{lit}"'
 	return None
 
 
