@@ -319,7 +319,8 @@ that had been green about nothing for five commits ·
 [266. `[project] test-args`: the argument every suite takes](#266-project-test-args-the-argument-every-suite-takes) ·
 [267. `@dbus` and `@udev`: furniture with a daemon-fixed home](#267-dbus-and-udev-furniture-with-a-daemon-fixed-home) ·
 [268. System accounts: one fact in three languages](#268-system-accounts-one-fact-in-three-languages) ·
-[269. A compilation database, from what fmake compiles](#269-a-compilation-database-from-what-fmake-compiles)
+[269. A compilation database, from what fmake compiles](#269-a-compilation-database-from-what-fmake-compiles) ·
+[270. A package set off the default pkg-config path](#270-a-package-set-off-the-default-pkg-config-path)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20456,3 +20457,44 @@ that makes it more than a shape test -- takes one entry's `arguments`,
 runs them, and confirms they compile the file: a database entry that
 is not a real command is the failure a compilation database has, and
 this one cannot ship it.
+
+## 270. A package set off the default pkg-config path
+
+The Android measurement (recorded above section 263 in this session's
+notes, not built) turned up a general gap on its way: fmake could not
+find a Qt kit's libraries at all, because a kit's `.pc` files sit
+outside pkg-config's built-in search path and the only way fmake had
+to move that path was a whole `[toolchain] sysroot`, which a kit is
+not. The same wall stands in front of any library under `/opt` or a
+home prefix, or a foreign-architecture package tree assembled short of
+a sysroot: the header does not resolve, so no `-I` and no `-l` are
+added, and the build fails on a missing include for a library that is
+plainly there.
+
+`[toolchain] pkg-config-path` is a list of directories, prepended to
+whatever `PKG_CONFIG_PATH` the caller's environment already carried --
+prepended so a tree's own kit wins -- and made absolute against the
+tree, since pkg-config runs with the tree as its working directory and
+a relative dir would mean nothing from there. A `sysroot` still sets
+`PKG_CONFIG_LIBDIR`, which replaces the search path rather than adding
+to it; the two compose exactly as pkg-config's own two variables do.
+Nothing else changed: the signature that reconfigures a build reads the
+search path back out of this same environment, so pointing at a new
+`.pc` directory rebuilds what depends on it without a special case.
+
+The case builds a "kit" beside the source tree -- a header under
+`include/frob/`, a stub `libfrob.a`, and a `frob.pc` naming both --
+and a program that includes `<frob/frob.h>`. Beside rather than inside,
+so the header is a genuine system-style include fmake's own basename
+fallback cannot reach: without the path the build stops on
+`frob/frob.h: No such file`, with it the header, the `-I` and the `-l`
+all come from the `.pc` and the program runs. A relative
+`../kit/pkgconfig` is asserted to resolve against the tree and not the
+caller's directory.
+
+This is section 227's Android item reduced to the part that is
+general and fmake's own; the rest of Android -- androiddeployqt,
+Gradle, signing -- remains a pipeline through three external tools and
+the copyright holder's to call for, and the Android Qt kit in
+particular ships `modules/*.json` for CMake rather than usable `.pc`
+files, so this helps a cross Qt build without finishing that one.

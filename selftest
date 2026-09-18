@@ -9601,6 +9601,62 @@ def a_compilation_database_lists_what_fmake_compiles(t):
 	      "--compile-commands linked a program; it should only describe")
 
 
+@case
+def a_package_set_outside_the_default_pkg_config_path_is_found(t):
+	"""A Qt kit, an /opt install, a foreign-arch cross tree short of a
+	whole sysroot: its `.pc` files sit outside pkg-config's built-in
+	path, so a build against it could not resolve the header, and thus
+	could not add the `-I` or the `-l`. Measured against a real Android
+	Qt kit, where nothing here could point pkg-config at it. `[toolchain]
+	pkg-config-path` names the directories, prepended to what the caller
+	set, made absolute against the tree."""
+	if not shutil.which("pkg-config") and not shutil.which("pkgconf"):
+		raise Skip("no pkg-config to point anywhere")
+	# The kit lives beside the source tree, not in it, so its header is a
+	# genuine system-style include the .pc must supply -- fmake's own
+	# basename fallback cannot reach it.
+	kit = os.path.join(t.dir, "kit")
+	t.write("kit/include/frob/frob.h", "int frobnicate(void);\n")
+	impl = os.path.join(t.dir, "frob_impl.c")
+	with open(impl, "w") as fh:
+		fh.write("int frobnicate(void){ return 7; }\n")
+	obj = os.path.join(t.dir, "frob.o")
+	subprocess.run(["cc", "-c", impl, "-o", obj], check=True)
+	os.makedirs(os.path.join(kit, "lib"))
+	subprocess.run(["ar", "rcs", os.path.join(kit, "lib", "libfrob.a"), obj],
+	               check=True)
+	t.write("kit/pkgconfig/frob.pc",
+	        f"prefix={kit}\nName: frob\nDescription: outside the path\n"
+	        "Version: 1.0\nCflags: -I${prefix}/include\n"
+	        "Libs: -L${prefix}/lib -lfrob\n")
+	t.write("src/main.c", "#include <frob/frob.h>\n#include <stdio.h>\n"
+	        'int main(void){ printf("%d\\n", frobnicate()); return 0; }\n')
+	src = _src(t)
+
+	# Without the path: the header is on no include path here.
+	r = _run_in(src, FMAKE)
+	check(r.returncode != 0 and "frob/frob.h" in r.stdout + r.stderr,
+	      f"the kit's header should be unresolvable without the path: "
+	      f"{r.stdout}{r.stderr}")
+
+	# With it: the header, the -I, the -l all come from the .pc.
+	t.write("src/fmake.toml",
+	        f'[toolchain]\npkg-config-path = ["{kit}/pkgconfig"]\n')
+	r = _run_in(src, FMAKE)
+	check(r.returncode == 0, f"with the path the build should succeed: "
+	      f"{r.stdout}{r.stderr}")
+	check(_run_in(src, os.path.join(src, "src")).stdout == "7\n",
+	      "the program built against the kit does not run")
+
+	# A relative directory is resolved against the tree, not the cwd.
+	t.write("src/fmake.toml",
+	        '[toolchain]\npkg-config-path = ["../kit/pkgconfig"]\n')
+	shutil.rmtree(os.path.join(src, ".fmake"), ignore_errors=True)
+	r = _run_in(src, FMAKE)
+	check(r.returncode == 0, f"a relative pkg-config-path was not resolved "
+	      f"against the tree: {r.stdout}{r.stderr}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

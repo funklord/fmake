@@ -569,6 +569,9 @@ procd    = "packaging/greetd.procd"   # OpenWrt's: rc.common + USE_PROCD=1
 [toolchain]                     # cross-compiling
 cc   = "aarch64-linux-gnu-gcc"
 arch = "aarch64"
+pkg-config-path = ["/opt/kit/lib/pkgconfig"]  # a .pc set off the default
+                                # path: a Qt kit, an /opt prefix, a cross
+                                # tree short of a whole sysroot
 
 [build-toolchain]               # tools that must run on *this* machine
 cc = "cc"
@@ -593,6 +596,15 @@ for the triplet where it exists, then PATH is read for `<arch>-*-gcc` and
 binaries land under `build-<arch>/` so two architectures do not overwrite
 each other. A `$CC` or `[toolchain] cc` for a different architecture is
 refused naming both.
+
+**A package set off pkg-config's own path is found by naming it.** A Qt
+kit, a library under `/opt` or a home prefix, a foreign-architecture
+tree that is not a whole sysroot: its `.pc` files are somewhere
+pkg-config does not look, so the header does not resolve and neither the
+`-I` nor the `-l` is added. `[toolchain] pkg-config-path` lists the
+directories, prepended to any `PKG_CONFIG_PATH` the caller set and made
+absolute against the tree; a full `[toolchain] sysroot` still replaces
+the search path outright, as it always did.
 
 **And those flags reach the questions.** `[project] cflags` are on the
 command line when fmake asks `-print-multiarch` and `-print-search-dirs`,

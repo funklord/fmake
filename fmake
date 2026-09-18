@@ -1283,6 +1283,7 @@ CONF_SCHEMA = {
         "moc": S, "uic": S, "rcc": S, "situc": S,
         "rustc": S, "rust-edition": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
+        "pkg-config-path": L,
     },
 	# The machine doing the building, as opposed to the one being built for.
 	# Only generators need it: a tool named by `uses` is compiled in order to
@@ -5121,6 +5122,17 @@ class Config:
 		self.rcc    = tool.get("rcc")
 		self.situc  = tool.get("situc")
 		self.extra_libdirs = list(tool.get("lib-dirs", []))
+		# Extra directories to search for .pc files, prepended to
+		# PKG_CONFIG_PATH. A Qt kit, an /opt install, a foreign-arch
+		# package tree short of a whole sysroot: their .pc files sit
+		# outside pkg-config's built-in path, so without this the header
+		# does not resolve and neither the -I nor the -l is added. Made
+		# absolute against the tree, since pkg-config runs with cwd=root
+		# and a relative dir would mean nothing from there.
+		_root = os.path.abspath(args.directory)
+		self.pkg_config_path = [
+		    d if os.path.isabs(d) else os.path.join(_root, d)
+		    for d in tool.get("pkg-config-path", [])]
 		self.ccver  = tool_version(self.cc)
 		self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
 		# The profile is in here through cflags, so switching profiles gets a
@@ -7284,7 +7296,7 @@ class PkgConfig:
 	"""pkg-config, for the -I flags a library's own headers need."""
 
 	def __init__(self, configured=None, sysroot=None, triplet=None,
-	             sysincs=()):
+	             sysincs=(), pc_path=()):
 		self.exe = (shutil.which(configured) if configured else None) \
 		           or shutil.which("pkg-config") or shutil.which("pkgconf")
 		self._flags = {}
@@ -7336,6 +7348,17 @@ class PkgConfig:
 				libdirs.append(os.path.join(sysroot, base, "pkgconfig"))
 			self.env["PKG_CONFIG_SYSROOT_DIR"] = sysroot
 			self.env["PKG_CONFIG_LIBDIR"] = ":".join(libdirs)
+		# Prepended, so a tree's own kit wins over anything the caller's
+		# environment already put on the path, while still deferring to
+		# PKG_CONFIG_LIBDIR when a sysroot set one (a sysroot replaces the
+		# search path outright; this adds to it, which is what the two
+		# variables mean). The cache signature reads the search path back
+		# out of this env, so pointing at a new .pc directory reconfigures
+		# on its own.
+		if pc_path:
+			was = self.env.get("PKG_CONFIG_PATH", "")
+			self.env["PKG_CONFIG_PATH"] = ":".join(
+			    list(pc_path) + ([was] if was else []))
 
 	def _run(self, args):
 		return subprocess.run([self.exe] + args, capture_output=True,
@@ -8821,7 +8844,8 @@ def build(args, _bootstrapping=False):
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.
 	pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet,
-	                   default_include_dirs(cfg))
+	                   default_include_dirs(cfg),
+	                   pc_path=cfg.pkg_config_path)
 	# Before anything resolves a header, so that every Qt answer in this
 	# build comes from the one major -- including the moc outputs, whose
 	# includes are the ones that gave the disagreement away.
