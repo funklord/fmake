@@ -313,7 +313,8 @@ that had been green about nothing for five commits ·
 [260. `test-cwd`: a suite written to run from its own directory](#260-test-cwd-a-suite-written-to-run-from-its-own-directory) ·
 [261. A quote include found beside its includer costs no `-I`](#261-a-quote-include-found-beside-its-includer-costs-no--i) ·
 [262. A resource named through a placeholder is still opened](#262-a-resource-named-through-a-placeholder-is-still-opened) ·
-[263. `--eject apk`: an APKBUILD from the one package model](#263---eject-apk-an-apkbuild-from-the-one-package-model)
+[263. `--eject apk`: an APKBUILD from the one package model](#263---eject-apk-an-apkbuild-from-the-one-package-model) ·
+[264. procd: OpenWrt's init as a fourth kind of service glue](#264-procd-openwrts-init-as-a-fourth-kind-of-service-glue)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18657,8 +18658,9 @@ absence said rather than hidden.
 Alpine (`APKBUILD`), OpenWrt (`procd`), Android: netcfgd carries the
 first two by hand and four trees carry the third through
 `tool/android.mk`. Same model, later emitters, and not part of this
-when it was written. Alpine came in as `--eject apk` in section 263;
-procd and Android are still out.
+when it was written. Alpine came in as `--eject apk` in section 263
+and procd as a fourth kind of service glue in section 264; Android is
+still out.
 
 ## 228. Furniture: man pages, desktop entries, icons and metainfo in the plan
 
@@ -20290,3 +20292,31 @@ the hand-written one, `pkggroups` aside because the copy's
 `options="!check"` because fmake found tests. The refusals: no
 maintainer, no description, a service without an openrc script, an
 `alpine/` already there.
+
+## 264. procd: OpenWrt's init as a fourth kind of service glue
+
+The second of section 227's three. netcfgd ships `packaging/procd/
+netcfgd` beside its unit, its LSB script and its openrc-run script: a
+fourth program for the same job, `#!/bin/sh /etc/rc.common` with
+`USE_PROCD=1`, describing the daemon for procd to supervise. It reads
+the same directory the other two scripts do, `/etc/init.d`, so it is
+the third row for one path -- `procddir`, placed only when `INIT` is
+`procd`, exactly as `sysvinitdir` and `openrcdir` are placed for
+theirs. `[service.NAME] procd = "path"` names it; a service still
+needs at least one of the four.
+
+Detection gains one test, first: `/sbin/procd` executable. An OpenWrt
+box has procd as pid 1 and none of the other marks, so it cannot be
+confused with the three, and the one spelling shared by the live
+install and both ejected forms -- `INIT_DETECT_SH` and `detect_init`
+-- carries it in the same order. `INIT=procd` on an ejected build
+places the script and nothing else, `INIT=none` still places nothing,
+and the case that walks every init through the live install, make and
+ninja walks five now, with the procd file told apart from the two
+sharing its path by its first line.
+
+The packaging emitters do not read it: Debian has no procd, Alpine
+and Gentoo run OpenRC, and a package for OpenWrt is an `ipk` fmake
+does not write. What this buys today is the install rule -- `make
+INIT=procd install` on the box, or `fmake --install` on one -- and the
+model the ipk emitter would read when it comes.

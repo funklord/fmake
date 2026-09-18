@@ -7325,7 +7325,7 @@ def a_programs_furniture_installs_where_its_tools_look(t):
 
 
 def _service_tree(t):
-	"""A daemon with glue for all three inits."""
+	"""A daemon with glue for all four inits."""
 	t.write("main.c", '#include <stdio.h>\nint main(void){ puts("d"); return 0; }\n')
 	t.write("packaging/svcd.service",
 	        "[Unit]\nDescription=svc\n[Service]\nExecStart=/usr/local/bin/svc\n"
@@ -7335,11 +7335,19 @@ def _service_tree(t):
 	        "### END INIT INFO\nexec /usr/local/bin/svc\n")
 	t.write("packaging/svcd.openrc",
 	        "#!/sbin/openrc-run\ncommand=/usr/local/bin/svc\n")
+	# procd's script, as netcfgd ships one for OpenWrt: rc.common runs
+	# it, and USE_PROCD=1 hands the service to procd to supervise.
+	t.write("packaging/svcd.procd",
+	        "#!/bin/sh /etc/rc.common\nUSE_PROCD=1\nSTART=50\n"
+	        "start_service() {\n\tprocd_open_instance\n"
+	        "\tprocd_set_param command /usr/local/bin/svc\n"
+	        "\tprocd_close_instance\n}\n")
 	t.write("fmake.toml", """
 [service.svcd]
 systemd  = "packaging/svcd.service"
 sysvinit = "packaging/svcd.sysvinit"
 openrc   = "packaging/svcd.openrc"
+procd    = "packaging/svcd.procd"
 """)
 
 
@@ -7349,6 +7357,7 @@ GLUE = {
     "systemd":  ("usr/local/lib/systemd/system/svcd.service", "[Unit]"),
     "sysvinit": ("etc/init.d/svcd", "#!/bin/sh"),
     "openrc":   ("etc/init.d/svcd", "#!/sbin/openrc-run"),
+    "procd":    ("etc/init.d/svcd", "#!/bin/sh /etc/rc.common"),
 }
 
 
@@ -7402,7 +7411,8 @@ def a_service_is_placed_for_the_init_that_will_run_it(t):
 	placed = _glue_under(stage)
 	check(len(placed) == 1,
 	      f"a live install placed {len(placed)} init files, not one: {placed}")
-	running = ("openrc" if os.path.isdir("/run/openrc")
+	running = ("procd" if os.access("/sbin/procd", os.X_OK)
+	           else "openrc" if os.path.isdir("/run/openrc")
 	           else "systemd" if os.path.isdir("/run/systemd/system")
 	           else "sysvinit")
 	check(placed[0] == GLUE[running],
@@ -7414,7 +7424,7 @@ def a_service_is_placed_for_the_init_that_will_run_it(t):
 	      f"uninstall left: {_glue_under(stage)}")
 
 	e = t.fmake("--explain").stdout
-	for var in ("$UNITDIR", "$SYSVINITDIR", "$OPENRCDIR"):
+	for var in ("$UNITDIR", "$SYSVINITDIR", "$OPENRCDIR", "$PROCDDIR"):
 		check(var in e, f"--explain does not list {var}: {e}")
 
 	for backend, out, cmd in (("make", "Makefile", ["make", "-s"]),
@@ -7428,7 +7438,7 @@ def a_service_is_placed_for_the_init_that_will_run_it(t):
 			check(ej.returncode == 0, f"--eject {backend}: {ej.stderr}")
 			u.write(out, ej.stdout)
 			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
-			for init in ("systemd", "sysvinit", "openrc", "none"):
+			for init in ("systemd", "sysvinit", "openrc", "procd", "none"):
 				dest = os.path.join(u.dir, "st-" + init)
 				b = _run_in(u.dir, *cmd, "install",
 				            env={"DESTDIR": dest, "INIT": init})

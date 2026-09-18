@@ -555,6 +555,7 @@ depends     = []                # runtime programs; libraries are traced
 systemd  = "packaging/greetd.service"
 sysvinit = "packaging/greetd.init"    # an LSB script
 openrc   = "packaging/greetd.openrc"  # an openrc-run script
+procd    = "packaging/greetd.procd"   # OpenWrt's: rc.common + USE_PROCD=1
 # `--install` places the one for the init this machine runs; an ejected
 # build asks the same question at install time through INIT, and takes
 # INIT=none from a package build. enable, start and restart-on-upgrade

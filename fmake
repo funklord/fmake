@@ -1216,7 +1216,7 @@ CONF_SCHEMA = {
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
         "mandir": S, "applicationsdir": S, "icondir": S, "metainfodir": S,
-        "unitdir": S, "sysvinitdir": S, "openrcdir": S,
+        "unitdir": S, "sysvinitdir": S, "openrcdir": S, "procddir": S,
     },
 	# A service: the files that start it under each init, and what a
 	# package does with it. The three flags are read by the packaging
@@ -1224,7 +1224,7 @@ CONF_SCHEMA = {
 	# a plain install places the glue and starts nothing, since starting
 	# a daemon is a package's act and not a file copy's.
     "service": {"*": {
-        "systemd": S, "sysvinit": S, "openrc": S,
+        "systemd": S, "sysvinit": S, "openrc": S, "procd": S,
         "enable": B, "start": B, "restart-on-upgrade": B,
         "package": S,
     }},
@@ -12677,7 +12677,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			     else f"$({install_var(base)})/{_mk_flag(sub)}"))
 		if any(p[2] in INIT_GLUE for p in plan):
 			a("# Which init the service glue below is for: systemd, sysvinit,")
-			a("# openrc, or none. Detected from the machine running make,")
+			a("# openrc, procd, or none. Detected from the machine running make,")
 			a("# because an init reads one directory and a script for the")
 			a("# wrong one is executed at boot and fails there. A package")
 			a("# build passes INIT=none and places the glue through its own")
@@ -13500,6 +13500,11 @@ INSTALL_DIRS = (
     ("unitdir",          "lib/systemd/system",    "prefix"),
     ("sysvinitdir",      "/etc/init.d",           None),
     ("openrcdir",        "/etc/init.d",           None),
+	# procd, OpenWrt's init, reads the same directory as the other two
+	# and its script is a third program again: `#!/bin/sh /etc/rc.common'
+	# with USE_PROCD=1, describing the service for procd to supervise.
+	# netcfgd ships one beside its unit and its openrc-run script.
+    ("procddir",         "/etc/init.d",           None),
 )
 INSTALL_DEFAULTS = {key: default for key, default, _base in INSTALL_DIRS}
 # The rows a plan can name, in the order the ejected install rules list
@@ -13510,19 +13515,24 @@ INSTALL_LANDINGS = tuple(key for key, _d, _b in INSTALL_DIRS
 # live install only when that init is the one running, and by an ejected
 # build only when INIT names it -- the rest of the plan is unconditional.
 INIT_GLUE = {"unitdir": "systemd", "sysvinitdir": "sysvinit",
-             "openrcdir": "openrc"}
+             "openrcdir": "openrc", "procddir": "procd"}
 # One spelling of the detection, shared by the live install and both
 # emitters so that they cannot disagree about what this machine runs.
-# openrc first: a machine running OpenRC on top of a systemd-free base
-# has /run/openrc and no /run/systemd/system, and the reverse never
-# occurs. Neither present is the traditional answer, sysvinit.
-INIT_DETECT_SH = ("if [ -d /run/openrc ]; then echo openrc; "
+# procd first: an OpenWrt box has /sbin/procd as its pid 1 and none of
+# the other marks. openrc next: a machine running OpenRC on top of a
+# systemd-free base has /run/openrc and no /run/systemd/system, and
+# the reverse never occurs. Neither present is the traditional answer,
+# sysvinit.
+INIT_DETECT_SH = ("if [ -x /sbin/procd ]; then echo procd; "
+                  "elif [ -d /run/openrc ]; then echo openrc; "
                   "elif [ -d /run/systemd/system ]; then echo systemd; "
                   "else echo sysvinit; fi")
 
 
 def detect_init():
 	"""The init this machine is running, by the same test the shell uses."""
+	if os.access("/sbin/procd", os.X_OK):
+		return "procd"
 	if os.path.isdir("/run/openrc"):
 		return "openrc"
 	if os.path.isdir("/run/systemd/system"):
@@ -13735,13 +13745,14 @@ def service_glue(conf, root):
 	"""Every [service.NAME] file, checked, as (name, glue, rel)."""
 	out = []
 	for name, sec in sorted(conf.services.items()):
-		files = [(g, sec[g]) for g in ("systemd", "sysvinit", "openrc")
+		files = [(g, sec[g]) for g in ("systemd", "sysvinit", "openrc",
+		                               "procd")
 		         if sec.get(g)]
 		if not files:
 			die(f"{CONF_FILE}: [service.{name}] names no file: give it a "
-			    f"`systemd', a `sysvinit' or an `openrc' script, or all "
-			    f"three -- one package has to start it under whichever "
-			    f"init the machine runs.")
+			    f"`systemd', a `sysvinit', an `openrc' or a `procd' "
+			    f"script, or all of them -- one package has to start it "
+			    f"under whichever init the machine runs.")
 		for glue, rel in files:
 			if not os.path.isfile(os.path.join(root, rel)):
 				die(f"{CONF_FILE}: [service.{name}] {glue} = {rel!r} does "
