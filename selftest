@@ -9814,6 +9814,65 @@ def a_polkit_action_installs_where_polkitd_reads(t):
 		u.cleanup()
 
 
+@case
+def a_coverage_build_instruments_both_sides(t):
+	"""Eight of these trees run under `make coverage`, and fmake had
+	DEBUG and SANITIZE but no third switch. `COVERAGE=1` adds
+	`--coverage`, gcov's instrumentation, to compile and to link -- both,
+	because it is a runtime as well: compiled and not linked leaves
+	`__gcov_*` undefined, the same shape SANITIZE has. A coverage build
+	gets its own object directory, and running the program writes the
+	`.gcda` gcov reads."""
+	t.write("main.c", "#include <stdio.h>\n"
+	        "int f(int x){ if (x > 0) return 1; return 0; }\n"
+	        'int main(void){ printf("%d\\n", f(3)); return 0; }\n')
+	prog = os.path.basename(t.dir)
+
+	# A plain build: no instrumentation.
+	check(t.fmake().returncode == 0, "the plain build failed")
+	check(not glob.glob(os.path.join(t.dir, ".fmake", "obj", "*", "*.gcno")),
+	      "a plain build produced coverage notes")
+
+	# COVERAGE=1: builds, links (no undefined __gcov), runs, writes .gcda.
+	r = t.fmake(env={"COVERAGE": "1"})
+	check(r.returncode == 0,
+	      f"the coverage build failed to compile or link -- __gcov_* "
+	      f"undefined is the both-sides failure: {r.stdout}{r.stderr}")
+	notes = glob.glob(os.path.join(t.dir, ".fmake", "obj", "*", "*.gcno"))
+	check(notes, "the coverage build produced no .gcno notes")
+	run = t.run(prog, env={"GCOV_PREFIX_STRIP": "0"})
+	check(run.returncode == 0 and run.stdout == "1\n",
+	      f"the instrumented program did not run: {run.stdout}{run.stderr}")
+	data = glob.glob(os.path.join(t.dir, ".fmake", "obj", "*", "*.gcda"))
+	check(data, "running the coverage build wrote no .gcda profile")
+
+	# Its own object directory: the plain and coverage objects do not
+	# share a key, so switching does not reuse the other's build.
+	dirs = os.listdir(os.path.join(t.dir, ".fmake", "obj"))
+	check(len(dirs) == 2, f"coverage did not get its own object dir: {dirs}")
+
+	# The ejected make build carries the switch, and bakes nothing when
+	# it is off.
+	mk = t.fmake("--eject", "make").stdout
+	check("$(COVERAGE)" in mk and "--coverage" in mk,
+	      "the ejected Makefile has no COVERAGE conditional")
+	# base_cflags is clean: --coverage is only inside the conditional,
+	# never in the unconditional CFLAGS assignment.
+	head = mk.split("ifneq")[0]
+	check("--coverage" not in head,
+	      "a plain (COVERAGE unset) build would bake --coverage")
+	if shutil.which("make"):
+		with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+			fh.write(mk)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		os.remove(os.path.join(t.dir, prog))
+		b = _run_in(t.dir, "make", "-s", "COVERAGE=1")
+		gcno = glob.glob(os.path.join(t.dir, "**", "*.gcno"), recursive=True)
+		check(b.returncode == 0 and gcno,
+		      f"the ejected make COVERAGE build did not instrument: "
+		      f"{b.stdout}{b.stderr}")
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

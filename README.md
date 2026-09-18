@@ -1031,16 +1031,19 @@ runtime, and the compiler links the runtime only if it sees the flag again
 at link time. Per-file `@cflags` are not on it, and must not be: those
 belong to one translation unit, which is why `@ldflags` exists separately.
 
-**Two switches, spelled as the sibling projects spell them:**
+**Three switches, spelled as the sibling projects spell them:**
 
 | | |
 |---|---|
 | `DEBUG=1` | `-Og -g` instead of `-Os`. A debug build rather than a release carrying symbols. |
 | `SANITIZE=1` | adds `-fsanitize=address,undefined -fno-omit-frame-pointer`, to the compile **and the link** |
+| `COVERAGE=1` | adds `--coverage` (gcov instrumentation), to the compile **and the link**; `-Cinstrument-coverage` for a crate |
 
 They are independent — `SANITIZE=1` alone sanitizes a release build, which
-is the build you ship. `0` and empty mean off. `--cflags` cannot drop the
-sanitizer, though a file's own `@cflags` still can, since a
+is the build you ship, and `COVERAGE=1` is what the eight trees that run
+`make coverage` want, usually with `DEBUG=1` so a profile line maps to
+source. `0` and empty mean off. `--cflags` cannot drop the sanitizer or
+the coverage flag, though a file's own `@cflags` still can, since a
 `-fno-sanitize=` written next to the code is someone saying they know about
 that file.
 
@@ -1050,8 +1053,8 @@ object can never be linked into a plain build — the failure that makes
 hand-written Makefiles tell you to `make clean` when you change these.
 
 **They survive `--eject`.** The emitted Makefile carries both switches, so
-`make DEBUG=1` and `make SANITIZE=1` mean there what they mean here — `0`
-and empty included. The emitted test is `$(filter-out 0,$(DEBUG))` rather
+`make DEBUG=1`, `make SANITIZE=1` and `make COVERAGE=1` mean there what
+they mean here — `0` and empty included. The emitted test is `$(filter-out 0,$(DEBUG))` rather
 than `ifdef DEBUG`, which is the idiom everyone reaches for and would make
 `DEBUG=0` mean *on*. The ejected file is the same either way, so ejecting
 while sanitizing does not bake a sanitizer into it.

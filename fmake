@@ -316,6 +316,15 @@ DEBUG_RUSTFLAGS   = ["-C", "opt-level=0", "-C", "debuginfo=2"]
 # because that is the build being shipped. SANITIZE=1 alone, DEBUG=1
 # SANITIZE=1, either.
 SANITIZE_CFLAGS = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+# COVERAGE turns on gcov instrumentation, which is what eight of these
+# trees run under `make coverage'. `--coverage' is the driver's own alias
+# for `-fprofile-arcs -ftest-coverage', and it is an instrumentation and a
+# runtime alike -- link_flags() already carries it to the link, and names
+# it there. Independent of DEBUG and SANITIZE, though a coverage run is
+# usually a DEBUG=1 one so a line maps to source. For a crate rustc's own
+# source-based coverage, a different mechanism with the same intent.
+COVERAGE_CFLAGS = ["--coverage"]
+COVERAGE_RUSTFLAGS = ["-C", "instrument-coverage"]
 
 
 def _switch(name, env=None):
@@ -338,6 +347,11 @@ def debug_wanted(env=None):
 def sanitize_wanted(env=None):
 	"""Whether $SANITIZE asks for the address and UB sanitizers."""
 	return _switch("SANITIZE", env)
+
+
+def coverage_wanted(env=None):
+	"""Whether $COVERAGE asks for a gcov build."""
+	return _switch("COVERAGE", env)
 
 
 def default_cflags(env=None):
@@ -5059,6 +5073,8 @@ class Config:
 		self.opt_flags = [] if args.cflags else default_cflags()
 		self.sanitize_flags = (list(SANITIZE_CFLAGS) if sanitize_wanted()
 		                       else [])
+		self.coverage_flags = (list(COVERAGE_CFLAGS) if coverage_wanted()
+		                       else [])
 
 		self.cflags   = list(self.opt_flags)
 		self.cflags  += conf.cflags()
@@ -5069,7 +5085,8 @@ class Config:
 		# every Rust toolchain already uses for this.
 		self.rustflags = default_rustflags() + shell_split(
 		    os.environ.get("RUSTFLAGS", ""), "$RUSTFLAGS") \
-		    + conf.rustflags()
+		    + conf.rustflags() \
+		    + (list(COVERAGE_RUSTFLAGS) if coverage_wanted() else [])
 
 		# $SANITIZE goes to both sides, and the link side is the one that
 		# matters. A sanitizer is a runtime as well as an instrumentation:
@@ -5087,10 +5104,11 @@ class Config:
 			self.cflags.append("--sysroot=" + self.sysroot)
 			self.ldflags.insert(0, "--sysroot=" + self.sysroot)
 
-		# Last, and it has to stay last: base_cflags() takes these back off
-		# the end by length, so anything appended after them would be
-		# removed instead.
+		# Last, and they have to stay last: base_cflags() takes these two
+		# bands back off the end by length, so anything appended after
+		# them would be the one removed.
 		self.cflags += self.sanitize_flags
+		self.cflags += self.coverage_flags
 
 		if not shutil.which(self.cc):
 			# `CC="clang --target=aarch64-linux-gnu"' is how a toolchain
@@ -5188,7 +5206,8 @@ class Config:
         legitimately writes `-Os` in its own cflags does not have somebody
         else's flag removed from it.
         """
-		end = len(self.cflags) - len(self.sanitize_flags)
+		end = (len(self.cflags) - len(self.sanitize_flags)
+		       - len(self.coverage_flags))
 		return self.cflags[len(self.opt_flags):end]
 
 	def add_tree_flag(self, flag):
@@ -5201,7 +5220,8 @@ class Config:
         """
 		if flag in self.cflags:
 			return
-		self.cflags.insert(len(self.cflags) - len(self.sanitize_flags), flag)
+		self.cflags.insert(len(self.cflags) - len(self.sanitize_flags)
+		                   - len(self.coverage_flags), flag)
 		self.refresh_key()
 
 	def refresh_key(self):
@@ -12356,6 +12376,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(var("CXXFLAGS", san, "+="))
 	# No LDFLAGS line: it is defined as $(CFLAGS) above, so adding one here
 	# would put the sanitizer on the link twice.
+	a("endif")
+	a("")
+	a("# Set COVERAGE=1 for a gcov build. --coverage is an instrumentation")
+	a("# and a runtime, so it is on both sides; LDFLAGS is $(CFLAGS) above.")
+	a(f"ifneq ($(filter-out 0,$(COVERAGE)),)")
+	cov = " ".join(_eject_flags(COVERAGE_CFLAGS, root, _mk_flag))
+	a(var("CFLAGS", cov, "+="))
+	a(var("CXXFLAGS", cov, "+="))
 	a("endif")
 	a("")
 	# The default target does not build tests, and a separate one builds

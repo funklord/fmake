@@ -323,7 +323,8 @@ that had been green about nothing for five commits ·
 [270. A package set off the default pkg-config path](#270-a-package-set-off-the-default-pkg-config-path) ·
 [271. A header on an explicit include path, and a Qt app cross-built for Android](#271-a-header-on-an-explicit-include-path-and-a-qt-app-cross-built-for-android) ·
 [272. `@data`: a program's files under its share directory](#272-data-a-programs-files-under-its-share-directory) ·
-[273. `@polkit`: a PolicyKit action where polkitd reads it](#273-polkit-a-policykit-action-where-polkitd-reads-it)
+[273. `@polkit`: a PolicyKit action where polkitd reads it](#273-polkit-a-policykit-action-where-polkitd-reads-it) ·
+[274. COVERAGE=1, a gcov build, the third switch](#274-coverage1-a-gcov-build-the-third-switch)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20608,3 +20609,34 @@ the deb `.install`. The case installs an action, checks it lands under
 `share/polkit-1/actions/`, that uninstall removes it and the ejected
 Makefile carries it, and that a file that is not a `.policy` is
 refused.
+
+## 274. COVERAGE=1, a gcov build, the third switch
+
+Eight of these trees run their suite under `make coverage`, and fmake
+had two build switches -- DEBUG and SANITIZE -- and not the one they
+use. `COVERAGE=1` adds `--coverage`, the driver's alias for
+`-fprofile-arcs -ftest-coverage`, to the compile and to the link. Both
+sides, because `--coverage` is an instrumentation and a runtime alike:
+`link_flags()` already carried it to the link and named it there in so
+many words, so the switch is the band, not the plumbing. A crate gets
+`-C instrument-coverage`, rustc's own source-based coverage, the same
+intent by a different mechanism, as DEBUG already has a C band and a
+Rust one.
+
+It is the third switchable band, beside DEBUG and SANITIZE:
+`base_cflags` strips all three off the end by length for the ejected
+build's conditionals, and `add_tree_flag` inserts in front of all
+three so `-fPIC` and the optional macros are not the flag a length
+slice removes. The build is keyed on it like the others -- a coverage
+object gets its own directory and can never be linked into a plain
+build -- and the ejected Makefile carries a `COVERAGE` conditional
+beside SANITIZE's, `$(filter-out 0,$(COVERAGE))` so `0` is off; ninja,
+which has no conditionals, bakes whatever COVERAGE was at eject time.
+
+The case builds plain (no `.gcno`) and with `COVERAGE=1` (which must
+compile and link -- undefined `__gcov_*` is the both-sides failure),
+runs the program and finds the `.gcda` it wrote, checks the two builds
+got two object directories, and that the ejected Makefile has the
+conditional and does not bake `--coverage` into the unconditional
+CFLAGS. gcov reads the result; producing the report is the tree's, as
+running the suite under it is.
