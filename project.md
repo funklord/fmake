@@ -327,7 +327,8 @@ that had been green about nothing for five commits ·
 [274. COVERAGE=1, a gcov build, the third switch](#274-coverage1-a-gcov-build-the-third-switch) ·
 [275. The ejected changelog honours SOURCE_DATE_EPOCH](#275-the-ejected-changelog-honours-source_date_epoch) ·
 [276. A test double under `tests/` stays out of a non-test program](#276-a-test-double-under-tests-stays-out-of-a-non-test-program) ·
-[277. `@version_script`: a shared library's exported symbols](#277-version_script-a-shared-librarys-exported-symbols)
+[277. `@version_script`: a shared library's exported symbols](#277-version_script-a-shared-librarys-exported-symbols) ·
+[278. `@kind module`: a plainly-named loadable object](#278-kind-module-a-plainly-named-loadable-object)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20761,3 +20762,43 @@ symbol is exported, the other is local. Then it widens the map and rebuilds
 link input. Removing the flag exports both; dropping the map from the link
 key leaves the second symbol hidden after the change. A second case refuses
 the directive on a program and on a shared library whose map is missing.
+
+## 278. `@kind module`: a plainly-named loadable object
+
+ossacli builds two shared objects that are not libraries: `ossa-sgshim.so`,
+an `LD_PRELOAD` shim that fakes a RAID controller for the tests, and
+`ossa-capture.so`, a capture tool. Each is opened by path -- preloaded, or
+`dlopen`ed -- and nothing links it, so it wants a plain name and none of
+the furniture a library carries. `@kind shared` could not spell them: it
+makes `lib<name>.so` with a soname chain and, when versioned, a `.pc`. The
+four kinds fmake had -- `exe`, `shared`, `static`, `library` -- had no room
+for the loadable object that is the fifth thing a C tree commonly builds.
+
+`@kind module` is it, the object libtool spells `-module` for the same
+reason. It builds with `-shared` and `-fPIC` like a shared library, and
+differs in every place the difference shows: `filename` is `<name>.so' with
+no `lib' prefix, the link records no soname (nothing opens it by that name,
+so the promise a soname makes has no reader), `pc_text` writes no `.pc', and
+`install_plan` passes it by entirely. That last is the one judgement in the
+feature. A Qt plugin belongs under `$libdir/<app>/`, an `LD_PRELOAD` shim is
+run from wherever it was built, and a `dlopen` plugin's directory is
+compiled into the program that opens it -- three different answers fmake
+cannot choose between, so it builds the object and leaves the placement to
+the project. ossacli's own install rule ships neither shim, which is the
+measurement that said this is right rather than a gap to fill later.
+
+Both emitters gained the branch: the Makefile links a module with `-shared`
+and no soname, and `build.ninja` gets a `module` rule beside `solink`. The
+`-fPIC` decision, which keyed on `any(t.kind == "shared")`, now includes a
+module -- a loadable object built without position-independent code links
+on some targets and fails on others, the kind of difference that shows up
+as a bug report from one machine.
+
+The case builds a program beside a module that defines `close()`. The
+module lands as `preload.so`, not `libpreload.so`; it carries its
+interposer, which a link without `-shared` could not; and `--install`
+stages the program under `bin/` and leaves the module alone. Reverting the
+`filename` branch names the artifact `preload` with no suffix; reverting the
+`install_plan` skip stages `preload.so` beside the program; reverting the
+link branch drops `-shared` and the module fails to link for want of a
+`main`. Each revert fails a different one of the three checks.

@@ -14104,6 +14104,49 @@ def a_version_script_belongs_to_a_shared_library_only(t):
 
 
 @case
+def a_module_is_a_plainly_named_loadable_object(t):
+	"""ossacli builds `ossa-sgshim.so' and `ossa-capture.so' -- an
+	LD_PRELOAD shim and a capture tool, each a shared object opened by path,
+	not a library anyone links. `@kind shared' cannot name them: it makes
+	`lib<name>.so' with a soname and a `.pc'. `@kind module' is the loadable
+	object libtool spells `-module' -- built with `-shared', named by exactly
+	what loads it, with no `lib' prefix, no soname, and no `.pc'.
+
+	Three things one at a time. It builds to `<name>.so', not `lib<name>.so'.
+	It is a real shared object, which linking without `-shared' could not be
+	-- a preload shim defines `close()', and the object carries that
+	definition. And `--install' passes it by: where a plugin loads from is
+	the project's to say, and ossacli's own install rule ships neither shim,
+	while the program beside it here is installed as usual."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("src/preload.c",
+	        "/*! @file\n *  @kind module\n *  @target preload\n */\n"
+	        "int close(int fd){ (void)fd; return 0; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check(os.path.exists(os.path.join(t.dir, "preload.so")),
+	      f"a module is named <name>.so: {os.listdir(t.dir)}")
+	check(not os.path.exists(os.path.join(t.dir, "libpreload.so")),
+	      "a module carries no lib prefix -- that is the shared-library name")
+	check("close" in _dynexports(os.path.join(t.dir, "preload.so")),
+	      "the module is a real shared object carrying its interposer")
+
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--prefix", stage)
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	staged = []
+	for base, _dirs, files in os.walk(stage):
+		staged += [os.path.join(base, f) for f in files]
+	check(any(f.endswith("/main") or f.endswith("/" + os.path.basename(t.dir))
+	          for f in staged) or any("bin" in f for f in staged),
+	      f"the program should be installed: {staged}")
+	check(not any(f.endswith("preload.so") for f in staged),
+	      f"a module is a build product, not installed: {staged}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")

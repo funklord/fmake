@@ -3827,7 +3827,7 @@ DIRECTIVES = DIRECTIVE_SCALAR | DIRECTIVE_LIST
 # arrive. It is expanded into a `shared' target and a `static' twin as
 # soon as the targets are known, so nothing downstream meets a fourth
 # kind -- see expand_libraries.
-KINDS = ("exe", "shared", "static", "library")
+KINDS = ("exe", "shared", "static", "library", "module")
 
 # The split above is what decides whether a directive replaces or accumulates,
 # so it has to be the single statement of that fact rather than a comment next
@@ -8339,6 +8339,12 @@ class Target:
 			return "lib%s.so" % (self.stem or self.name)
 		if self.kind == "static":
 			return "lib%s.a" % (self.stem or self.name)
+		# A module is a loadable object -- an LD_PRELOAD shim, a dlopen
+		# plugin -- named by exactly what loads it, with no `lib' prefix and
+		# no soname. libtool spells this `-module' for the same reason: it
+		# is not a library anything links against.
+		if self.kind == "module":
+			return "%s.so" % self.name
 		return self.name
 
 	@property
@@ -8399,6 +8405,11 @@ def link_cmd(t, cl, cfg, outdir, libflags=(), root=None):
 		return [cfg.ar, "rcs", out] + objs
 	cxx = any(u.cxx for u in cl.link)
 	shared = []
+	if t.kind == "module":
+		# A loadable module is shared but records no soname: nothing links
+		# it by name, it is opened by path, so a soname would be a promise
+		# no consumer reads.
+		shared = ["-shared"]
 	if t.kind == "shared":
 		shared = ["-shared", "-Wl,-soname," + t.soname]
 		# The version script is placed before the objects, where ld reads
@@ -9978,7 +9989,7 @@ def build(args, _bootstrapping=False):
 	# Decided here, before the object directory is named, because -fPIC has
 	# to be part of the configuration identity: building only the program and
 	# then building the library as well must not reuse the non-PIC objects.
-	if any(t.kind == "shared" for t in wanted):
+	if any(t.kind in ("shared", "module") for t in wanted):
 		cfg.add_tree_flag("-fPIC")
 
 	# "Found means defined" is a fact about the build, not about the file
@@ -12859,6 +12870,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			      if t.version_script else "")
 			a(f"\t$({driver}) -shared -Wl,-soname,{t.soname}{vs} "
 			  f"-o $@ {objs_txt}{tail}")
+		elif t.kind == "module":
+			a(f"\t$({driver}) -shared -o $@ {objs_txt}{tail}")
 		else:
 			a(f"\t$({driver}) -o $@ {objs_txt}{tail}")
 		a("")
@@ -13193,6 +13206,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	  "-o $out $in $arcs $libs $ldflags")
 	a("  description = LD $out")
 	a("")
+	a("rule module")
+	a("  command = $driver -shared -o $out $in $arcs $libs $ldflags")
+	a("  description = LD $out")
+	a("")
 	a("rule archive")
 	a("  command = rm -f $out && $ar rcs $out $in")
 	a("  description = AR $out")
@@ -13483,7 +13500,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		if t.kind == "static" and not objs.strip() and len(crate_arcs) == 1:
 			a(f"build {art(t.filename)}: copy {crate_arcs[0]}")
 			continue
-		rule = {"static": "archive", "shared": "solink"}.get(t.kind, "link")
+		rule = {"static": "archive", "shared": "solink",
+		        "module": "module"}.get(t.kind, "link")
 		# Implicit inputs so a changed archive relinks; the command line
 		# places them after the objects and groups them when there is more
 		# than one, neither of which an input list can express. The version
@@ -13846,7 +13864,7 @@ def pc_text(t, conf, prefix=None, ldflags=(), root=None):
     the ordinary case, and a .pc with baked paths is wrong the moment it is
     relocated.
     """
-	if t.kind == "exe" or not t.version or not t.publishes_pc:
+	if t.kind in ("exe", "module") or not t.version or not t.publishes_pc:
 		return None
 	p = install_dirs(conf, prefix)
 	# The prefix this .pc will be TRUE at, which is not always the one
@@ -14149,6 +14167,13 @@ def install_plan(targets, closures, root):
     """
 	planned = []
 	for t in targets:
+		# A loadable module is a build product, not something fmake ships: a
+		# Qt plugin, an LD_PRELOAD shim and a dlopen plugin each belong
+		# somewhere different, and fmake cannot know which. It builds the
+		# `.so'; where it loads from is the project's to say, so `--install'
+		# and the ejected install rule pass it by, as ossacli's shims are.
+		if t.kind == "module":
+			continue
 		where = "bindir" if t.kind == "exe" else "libdir"
 		mode = 0o755 if t.kind != "static" else 0o644
 		if t.kind == "shared" and t.version:

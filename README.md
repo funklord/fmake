@@ -174,7 +174,7 @@ is not in the sources.
 | situ: which schemas to compile | **Always** — a source includes the header a schema would write | `[situ] flags` for the rung |
 | Vendored submodules | **Always** — `.gitmodules`, fetched before the tree is read | `--no-submodules` declines it |
 | A program's name | **Almost always** — the file, or its directory for `main.c` | `@target`, `[target.*] name` |
-| A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library` |
+| A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library\|module` |
 | Which programs are tests | **Sometimes** — a test directory or a `test_` name; `tests/live/` is the `live` group | `@test`, `@test no` |
 | Generated sources | **Never** — a generator is a command nobody can infer | `[generate.*]`, `@rule`, `fmake.mk` |
 | A macro the build injects | **Never** — `-DVERSION=...` is not in the tree | `[project] defines`, `$file(VERSION)` |
@@ -347,6 +347,13 @@ that consumers link. The map is a link prerequisite, so widening or
 narrowing the exported set relinks the library; fmake refuses it on a
 program or a static archive, which have no such table to control.
 
+`@kind module` builds a *loadable* shared object — a plugin opened with
+`dlopen`, or an `LD_PRELOAD` shim — named by exactly what loads it, with no
+`lib` prefix, no soname and no `.pc`, since nothing links it by name. fmake
+builds it but does not install it: a Qt plugin, a preload shim and a
+`dlopen` plugin each belong somewhere different, so where it loads from is
+the project's to say. ossacli's `ossa-sgshim.so` is one.
+
 **Tests are not built by the default build.** A `main()` under `test/` or
 `tests/`, or in a file called `foo_test.c` or `test_foo.c`, roots a test
 program — and a plain `fmake` builds the library and the programs without
@@ -447,7 +454,7 @@ like `@brief` are ignored.
 | Directive | Means |
 |---|---|
 | `@target NAME` | Name of the artifact this file roots — a name, not a path; `-o` moves output |
-| `@kind exe\|shared\|static\|library` | Build an archive or `.so` from this file's closure, or both with `library`; `exe` is inferred from `main()` |
+| `@kind exe\|shared\|static\|library\|module` | Build an archive or `.so` from this file's closure, or both with `library`; `module` is a plainly-named loadable object (a plugin or `LD_PRELOAD` shim); `exe` is inferred from `main()` |
 | `@pkg NAME [OP VER]` | pkg-config dependency, version constraint optional |
 | `@pkg_optional NAME defines MACRO` | Define `MACRO` for the whole tree if pkg-config finds `NAME`; this file gets `NAME`'s cflags |
 | `@libs NAME…` | Raw `-l`, for libraries with no `.pc` file |
