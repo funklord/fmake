@@ -7837,6 +7837,9 @@ def a_release_carries_everything_downloadable_with_its_checksum(t):
 	src = _src(t)
 	_run_in(src, "git", "init", "-q", ".")
 	check(_deb(t, "--eject", "deb").returncode == 0, "--eject deb failed")
+	check(_deb(t, "--eject", "apk").returncode == 0,
+	      "--eject apk over the deb's Makefile was refused, though it is "
+	      "the same file")
 	check(_deb(t, "--eject", "ebuild").returncode == 0,
 	      "--eject ebuild over the deb's Makefile was refused, though it is "
 	      "the same file")
@@ -7853,6 +7856,7 @@ def a_release_carries_everything_downloadable_with_its_checksum(t):
 	have = sorted(os.listdir(out))
 	for f in ("greetd-0.4.1.tar.gz", "greetd_0.4.1_amd64.deb",
 	          "libgreet-dev_0.4.1_amd64.deb", "greetd-0.4.1.ebuild",
+	          "greetd-0.4.1.APKBUILD",
 	          "SHA256SUMS", "index.html", "README.md"):
 		check(f in have, f"release/ lacks {f}: {have}")
 	bins = [f for f in have if f.startswith("greetd-0.4.1-") and f.endswith(".tar.gz")]

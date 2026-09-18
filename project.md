@@ -314,7 +314,8 @@ that had been green about nothing for five commits ·
 [261. A quote include found beside its includer costs no `-I`](#261-a-quote-include-found-beside-its-includer-costs-no--i) ·
 [262. A resource named through a placeholder is still opened](#262-a-resource-named-through-a-placeholder-is-still-opened) ·
 [263. `--eject apk`: an APKBUILD from the one package model](#263---eject-apk-an-apkbuild-from-the-one-package-model) ·
-[264. procd: OpenWrt's init as a fourth kind of service glue](#264-procd-openwrts-init-as-a-fourth-kind-of-service-glue)
+[264. procd: OpenWrt's init as a fourth kind of service glue](#264-procd-openwrts-init-as-a-fourth-kind-of-service-glue) ·
+[265. The release carries the APKBUILD](#265-the-release-carries-the-apkbuild)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20320,3 +20321,15 @@ and Gentoo run OpenRC, and a package for OpenWrt is an `ipk` fmake
 does not write. What this buys today is the install rule -- `make
 INIT=procd install` on the box, or `fmake --install` on one -- and the
 model the ipk emitter would read when it comes.
+
+## 265. The release carries the APKBUILD
+
+Section 227's release page is "everything downloadable that this tree
+can produce", and section 263 added something it can produce. The
+ebuild is copied into `release/` by its own name, which carries the
+package and version; every tree's APKBUILD is called `APKBUILD`, and a
+release page lists files by name, so it goes in as
+`<name>-<version>.APKBUILD`, described as such in the table and
+summed with the rest. The release case ejects it beside the deb and
+the ebuild -- over the same Makefile, which the overwrite rule accepts
+as the same file -- and asserts it in the listing.

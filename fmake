@@ -15299,6 +15299,15 @@ def do_release(targets, closures, root, outdir, conf, cfg, args):
 					made.append((f, "Gentoo ebuild"))
 					info(f"ebuild: {f}")
 
+	# 4b. the APKBUILD, copied under a name that says whose it is: every
+	# tree's is called APKBUILD, and a release page lists files by name.
+	apkbuild = os.path.join(root, "alpine", "APKBUILD")
+	if os.path.isfile(apkbuild):
+		f = f"{name}-{version}.APKBUILD"
+		shutil.copy2(apkbuild, os.path.join(out, f))
+		made.append((f, "Alpine APKBUILD"))
+		info(f"APKBUILD: {f}")
+
 	# 5. checksums, and the page
 	sums = []
 	for f, _what in made:
