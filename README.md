@@ -471,6 +471,7 @@ like `@brief` are ignored.
 | `@desktop PATH…` / `@icons PATH…` / `@metainfo PATH…` | A program's desktop entry, icons (SVG, or a square PNG sized from its own header) and AppStream metainfo, installed where a desktop looks |
 | `@dbus PATH…` / `@udev PATH…` / `@polkit PATH…` | A system-bus policy (`.conf`, to `share/dbus-1/system.d`), udev rules (`.rules`, to `lib/udev/rules.d`) and a PolicyKit action (`.policy`, to `share/polkit-1/actions`), installed where those daemons read |
 | `@data PATH…` | Data files (globs, `**` and all) installed under `share/<program>/`, each keeping its path relative to the tree; name files, not a directory |
+| `@completion PATH` | A bash completion, installed to `share/bash-completion/completions/` under the command name (not the file's) — one per program |
 | `@version X.Y.Z` | Publishable: writes a `.pc`, and versions a `.so` with its soname chain |
 | `@version_script PATH` | A shared library's exported-symbol map (`ld --version-script`); a link prerequisite, so a changed export set relinks; refused off a shared library |
 | `@rule …` | A build rule, in Makefile syntax (below) |

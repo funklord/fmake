@@ -9870,6 +9870,62 @@ def a_polkit_action_installs_where_polkitd_reads(t):
 
 
 @case
+def a_bash_completion_installs_under_the_command_name(t):
+	"""ossacli ships `ossacli.bash' to
+	`share/bash-completion/completions/ossacli' -- renamed to the command,
+	because bash-completion sources `completions/<cmd>' the first time <cmd>
+	is completed. It is the one furniture file whose installed name is the
+	target's and not its own, which is what `@completion' does that a plain
+	copy to a share directory does not.
+
+	A program only, one per program, and the rename is the whole point: the
+	file lands as the command, not as `<file>.bash'."""
+	t.write("main.c", "/*! @file\n *  @target mytool\n"
+	        " *  @completion mytool.bash\n */\n"
+	        "int main(void){ return 0; }\n")
+	t.write("mytool.bash", 'complete -W "list add" mytool\n')
+
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage, "--prefix", "/usr")
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	comp = os.path.join(stage, "usr/share/bash-completion/completions")
+	want = os.path.join(comp, "mytool")
+	check(os.path.isfile(want),
+	      f"the completion is not at completions/<command>: "
+	      f"{sorted(glob.glob(os.path.join(comp, '*')))}")
+	check(not os.path.exists(os.path.join(comp, "mytool.bash")),
+	      "the completion kept its own name -- it must be the command name")
+	check("complete -W" in open(want).read(),
+	      "the installed completion is not the file that was named")
+	check("$COMPLETIONDIR" in t.fmake("--explain").stdout,
+	      "--explain does not name $COMPLETIONDIR")
+
+	r = t.fmake("--uninstall", "--destdir", stage, "--prefix", "/usr")
+	check(r.returncode == 0 and not os.path.isfile(want),
+	      "uninstall left the completion behind")
+
+	if shutil.which("make"):
+		mk = t.fmake("--eject", "make").stdout
+		check("bash-completion/completions" in mk
+		      and "$(COMPLETIONDIR)/mytool" in mk,
+		      "the ejected Makefile does not install the completion by command")
+
+	# One per program: two would land on the one command name.
+	u = Tree("comp-two")
+	try:
+		u.write("main.c", "/*! @file\n *  @target t\n"
+		        " *  @completion a.bash\n *  @completion b.bash\n */\n"
+		        "int main(void){ return 0; }\n")
+		u.write("a.bash", "\n")
+		u.write("b.bash", "\n")
+		r = u.fmake("--install", "--destdir", os.path.join(u.dir, "s"))
+		check(r.returncode != 0 and "one" in r.stdout + r.stderr,
+		      f"two completions were not refused: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_coverage_build_instruments_both_sides(t):
 	"""Eight of these trees run under `make coverage`, and fmake had
 	DEBUG and SANITIZE but no third switch. `COVERAGE=1` adds

@@ -1215,7 +1215,7 @@ CONF_SCHEMA = {
         "defines": L, "define": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
-        "dbus": L, "udev": L, "polkit": L, "data": L,
+        "dbus": L, "udev": L, "polkit": L, "data": L, "completion": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "test-cwd": S,
         "version": S, "version-script": S, "description": S,
@@ -3813,7 +3813,7 @@ DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version",
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
                   "rule", "man", "desktop", "icons", "metainfo", "aliases",
-                  "dbus", "udev", "polkit", "data"}
+                  "dbus", "udev", "polkit", "data", "completion"}
 
 # @define and @defines are the same directive. The config file spells it
 # plural because it holds a list; a comment spells it singular because it
@@ -4193,6 +4193,7 @@ DOXYGEN_ALIAS_TEXT = {
     "udev":    "udev rules",
     "polkit":  "PolicyKit action",
     "data":    "Data files installed under the program's share directory",
+    "completion": "Bash completion, installed under the command name",
     "aliases": "Other names this program installs under",
     "cflags":  "Compile flags",
     "ldflags": "Link flags",
@@ -13757,6 +13758,11 @@ INSTALL_DIRS = (
 	# what raidtray ships to say which of its operations need which
 	# authority. A `.policy' by extension, like the two above.
     ("polkitdir",        "share/polkit-1/actions", "prefix"),
+	# bash-completion loads a file named for the COMMAND from
+	# share/bash-completion/completions when that command is completed, so
+	# ossacli ships ossacli.bash to completions/ossacli -- the one furniture
+	# file whose installed name is the target's, not its own.
+    ("completiondir",    "share/bash-completion/completions", "prefix"),
 	# Init glue. A unit goes where systemd looks, under the prefix --
 	# /usr/local/lib/systemd/system is on its search path. An init script
 	# goes in /etc/init.d whatever the prefix, which is why these two are
@@ -14265,6 +14271,30 @@ def install_plan(targets, closures, root):
 				rel = os.path.relpath(h, root)
 				planned.append(("tree", rel, "datadir",
 				                f"{t.name}/{rel}", 0o644))
+
+		# @completion: a bash completion installs under the COMMAND it
+		# completes, not the file's own name -- bash-completion sources
+		# `completions/<cmd>' the first time <cmd> is completed, so ossacli
+		# ships `ossacli.bash' to `completions/ossacli'. A program only: a
+		# library is not a command anyone completes. One per program, since
+		# they would all land on the one command name; a project shipping a
+		# generated completion names the built file here and a @rule makes
+		# it, the same as any other tree file the install reads.
+		if t.kind == "exe":
+			comp = list(t.conf.get("completion", []))
+			for u in units:
+				if u is not None:
+					comp += u.ann.items("completion")
+			comp = list(dict.fromkeys(comp))
+			if len(comp) > 1:
+				die(f"@completion (for {t.name}): {len(comp)} named, and a "
+				    f"program has one -- they would all install as the "
+				    f"command {t.name}. Name the one bash completion.")
+			for f in comp:
+				if not os.path.isfile(os.path.join(root, f)):
+					die(f"@completion {f!r} does not exist (named for "
+					    f"{t.name})")
+				planned.append(("tree", f, "completiondir", t.name, 0o644))
 
 		# A second name for one program: netcfgd installs `netcfgd-tui'
 		# as a link to `netcfgd-gui', reads argv[0], and a name ending
