@@ -9770,6 +9770,50 @@ def data_files_install_under_the_programs_share_directory(t):
 		u.cleanup()
 
 
+@case
+def a_polkit_action_installs_where_polkitd_reads(t):
+	"""raidtray ships `se.vibes.raidtray.policy` to
+	`share/polkit-1/actions/`, which is where polkitd reads an action
+	file -- the same shape as `@dbus` and `@udev` (section 267), a file
+	another daemon looks for in a place it fixes. `@polkit` places it,
+	by basename, and refuses anything not ending `.policy`."""
+	t.write("main.c", "/*! @polkit packaging/se.vibes.tool.policy */\n"
+	        "#include <stdio.h>\nint main(void){ puts(\"p\"); return 0; }\n")
+	t.write("packaging/se.vibes.tool.policy",
+	        '<?xml version="1.0"?>\n<policyconfig/>\n')
+	name = os.path.basename(t.dir)
+
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage, "--prefix", "/usr")
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	want = os.path.join(stage, "usr/share/polkit-1/actions/se.vibes.tool.policy")
+	check(os.path.isfile(want),
+	      f"the action is not at share/polkit-1/actions: "
+	      f"{sorted(glob.glob(os.path.join(stage, 'usr/share/**'), recursive=True))}")
+	check("$POLKITDIR" in t.fmake("--explain").stdout,
+	      "--explain does not name $POLKITDIR")
+	r = t.fmake("--uninstall", "--destdir", stage, "--prefix", "/usr")
+	check(r.returncode == 0 and not os.path.isfile(want),
+	      "uninstall left the action behind")
+
+	# The ejected build and the deb carry it by row, like the rest.
+	if shutil.which("make"):
+		mk = t.fmake("--eject", "make").stdout
+		check("polkit-1/actions" in mk,
+		      "the ejected Makefile does not install the action")
+
+	# Not a .policy is refused.
+	u = Tree("polkit-refuse")
+	try:
+		u.write("main.c", "/*! @polkit p/thing.xml */\nint main(void){ return 0; }\n")
+		u.write("p/thing.xml", "<x/>\n")
+		r = u.fmake("--install", "--destdir", os.path.join(u.dir, "s"))
+		check(r.returncode != 0 and ".policy" in r.stdout + r.stderr,
+		      f"a non-.policy file was not refused: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 

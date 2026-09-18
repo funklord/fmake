@@ -1200,7 +1200,7 @@ CONF_SCHEMA = {
         "defines": L, "define": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
-        "dbus": L, "udev": L, "data": L,
+        "dbus": L, "udev": L, "polkit": L, "data": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "test-cwd": S,
         "version": S, "description": S,
@@ -3797,7 +3797,7 @@ DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version"}
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
                   "rule", "man", "desktop", "icons", "metainfo", "aliases",
-                  "dbus", "udev", "data"}
+                  "dbus", "udev", "polkit", "data"}
 
 # @define and @defines are the same directive. The config file spells it
 # plural because it holds a list; a comment spells it singular because it
@@ -4175,6 +4175,7 @@ DOXYGEN_ALIAS_TEXT = {
     "metainfo": "AppStream metainfo",
     "dbus":    "D-Bus system bus policy",
     "udev":    "udev rules",
+    "polkit":  "PolicyKit action",
     "data":    "Data files installed under the program's share directory",
     "aliases": "Other names this program installs under",
     "cflags":  "Compile flags",
@@ -13616,6 +13617,10 @@ INSTALL_DIRS = (
 	# merged-usr system). netcfgd ships one of each beside its units.
     ("dbusdir",          "share/dbus-1/system.d", "prefix"),
     ("udevdir",          "lib/udev/rules.d",      "prefix"),
+	# PolicyKit reads an action file from share/polkit-1/actions; it is
+	# what raidtray ships to say which of its operations need which
+	# authority. A `.policy' by extension, like the two above.
+    ("polkitdir",        "share/polkit-1/actions", "prefix"),
 	# Init glue. A unit goes where systemd looks, under the prefix --
 	# /usr/local/lib/systemd/system is on its search path. An init script
 	# goes in /etc/init.d whatever the prefix, which is why these two are
@@ -13983,6 +13988,12 @@ def furniture_landing(kind, rel, root):
 			die(f"@udev {rel!r}: a rules file ends in .rules, which is the "
 			    f"only kind udev reads from rules.d")
 		return "udevdir", base
+	if kind == "polkit":
+		if not base.endswith(".policy"):
+			die(f"@polkit {rel!r}: a PolicyKit action file ends in "
+			    f".policy, which is the only kind polkitd reads from "
+			    f"actions")
+		return "polkitdir", base
 	if kind == "icons":
 		if base.lower().endswith(".svg"):
 			return "icondir", f"scalable/apps/{base}"
@@ -14073,7 +14084,8 @@ def install_plan(targets, closures, root):
 		# what it cannot place.
 		units = ([closures[t].root] if t.kind == "exe"
 		         else list(closures[t].link))
-		for kind in ("man", "desktop", "icons", "metainfo", "dbus", "udev"):
+		for kind in ("man", "desktop", "icons", "metainfo", "dbus", "udev",
+		             "polkit"):
 			named = list(t.conf.get(kind, []))
 			for u in units:
 				if u is not None:

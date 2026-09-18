@@ -322,7 +322,8 @@ that had been green about nothing for five commits ·
 [269. A compilation database, from what fmake compiles](#269-a-compilation-database-from-what-fmake-compiles) ·
 [270. A package set off the default pkg-config path](#270-a-package-set-off-the-default-pkg-config-path) ·
 [271. A header on an explicit include path, and a Qt app cross-built for Android](#271-a-header-on-an-explicit-include-path-and-a-qt-app-cross-built-for-android) ·
-[272. `@data`: a program's files under its share directory](#272-data-a-programs-files-under-its-share-directory)
+[272. `@data`: a program's files under its share directory](#272-data-a-programs-files-under-its-share-directory) ·
+[273. `@polkit`: a PolicyKit action where polkitd reads it](#273-polkit-a-policykit-action-where-polkitd-reads-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20591,3 +20592,19 @@ with a two-level `assets/` tree, checks the files land under
 away, that the ejected make build installs the same set, and that a
 bare directory is refused -- and against the tree before it, `@data` is
 ignored and nothing lands at all.
+
+## 273. `@polkit`: a PolicyKit action where polkitd reads it
+
+The same shape as section 267's `@dbus` and `@udev`, met in a third
+tree: raidtray ships `se.vibes.raidtray.policy` to
+`share/polkit-1/actions/`, which is where polkitd reads the file that
+says which of a program's privileged operations need which authority.
+A file another daemon looks for in a place it fixes, so `@polkit`
+places it by basename under a `polkitdir` row and refuses anything not
+ending `.policy`, as `@dbus` refuses a non-`.conf` and `@udev` a
+non-`.rules`. Everything downstream is by row and unchanged: the live
+install and uninstall, both ejected builds, `--explain`'s `$POLKITDIR`,
+the deb `.install`. The case installs an action, checks it lands under
+`share/polkit-1/actions/`, that uninstall removes it and the ejected
+Makefile carries it, and that a file that is not a `.policy` is
+refused.
