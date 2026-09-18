@@ -446,6 +446,7 @@ like `@brief` are ignored.
 | `@aliases NAME…` | Other names this program installs under, as links beside it — a program that reads `argv[0]` gets a second command rather than a flag |
 | `@desktop PATH…` / `@icons PATH…` / `@metainfo PATH…` | A program's desktop entry, icons (SVG, or a square PNG sized from its own header) and AppStream metainfo, installed where a desktop looks |
 | `@dbus PATH…` / `@udev PATH…` | A system-bus policy (`.conf`, to `share/dbus-1/system.d`) and udev rules (`.rules`, to `lib/udev/rules.d`), installed where those daemons read |
+| `@data PATH…` | Data files (globs, `**` and all) installed under `share/<program>/`, each keeping its path relative to the tree; name files, not a directory |
 | `@version X.Y.Z` | Publishable: writes a `.pc`, and versions a `.so` with its soname chain |
 | `@rule …` | A build rule, in Makefile syntax (below) |
 

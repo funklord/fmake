@@ -1200,7 +1200,7 @@ CONF_SCHEMA = {
         "defines": L, "define": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
-        "dbus": L, "udev": L,
+        "dbus": L, "udev": L, "data": L,
         "test": B, "test-group": S, "test-args": L,
         "test-timeout": N, "test-env": L, "test-cwd": S,
         "version": S, "description": S,
@@ -3797,7 +3797,7 @@ DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version"}
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
                   "rule", "man", "desktop", "icons", "metainfo", "aliases",
-                  "dbus", "udev"}
+                  "dbus", "udev", "data"}
 
 # @define and @defines are the same directive. The config file spells it
 # plural because it holds a list; a comment spells it singular because it
@@ -4175,6 +4175,7 @@ DOXYGEN_ALIAS_TEXT = {
     "metainfo": "AppStream metainfo",
     "dbus":    "D-Bus system bus policy",
     "udev":    "udev rules",
+    "data":    "Data files installed under the program's share directory",
     "aliases": "Other names this program installs under",
     "cflags":  "Compile flags",
     "ldflags": "Link flags",
@@ -13603,6 +13604,11 @@ INSTALL_DIRS = (
     ("applicationsdir",  "share/applications",    "prefix"),
     ("icondir",          "share/icons/hicolor",   "prefix"),
     ("metainfodir",      "share/metainfo",        "prefix"),
+	# A program's own data with no tool-fixed home -- schemas, profiles,
+	# fonts -- under share/<name>/, which is where situc keeps its `std/'
+	# schemas, beerssh its fonts and netcfgd its profiles. Section 228
+	# named this as the layer's last unbuilt kind.
+    ("datadir",          "share",                 "prefix"),
 	# Two more places another program reads and nobody chooses: the
 	# system bus reads its policy from share/dbus-1/system.d, and udev
 	# its rules from lib/udev/rules.d, both under the prefix (a package
@@ -14077,6 +14083,33 @@ def install_plan(targets, closures, root):
 					die(f"@{kind} {f!r} does not exist (named for {t.name})")
 				directory, name = furniture_landing(kind, f, root)
 				planned.append(("tree", f, directory, name, 0o644))
+
+		# @data: files with no tool-fixed home, under share/<name>/. Each
+		# entry is a file or a glob (`**' reaches down a tree, as in
+		# @sources and fmake.toml), and each file lands preserving its
+		# path relative to the root -- situc's `std/crc.situ' at
+		# share/situc/std/crc.situ -- which is what its own Makefile, and
+		# beerssh's and netcfgd's, already do by hand. A directory named
+		# outright is refused: a glob says which files, where a directory
+		# would silently sweep whatever appeared in it later.
+		named = list(t.conf.get("data", []))
+		for u in units:
+			if u is not None:
+				named += u.ann.items("data")
+		for pat in dict.fromkeys(named):
+			hits = sorted(glob.glob(os.path.join(root, pat), recursive=True))
+			files = [h for h in hits if os.path.isfile(h)]
+			if not files:
+				if os.path.isdir(os.path.join(root, pat)):
+					die(f"@data {pat!r} is a directory (named for "
+					    f"{t.name}); name the files, `{pat}/**', so a file "
+					    f"added later is a change to the build and not a "
+					    f"silent addition to the package")
+				die(f"@data {pat!r} matched no file (named for {t.name})")
+			for h in files:
+				rel = os.path.relpath(h, root)
+				planned.append(("tree", rel, "datadir",
+				                f"{t.name}/{rel}", 0o644))
 
 		# A second name for one program: netcfgd installs `netcfgd-tui'
 		# as a link to `netcfgd-gui', reads argv[0], and a name ending

@@ -321,7 +321,8 @@ that had been green about nothing for five commits ·
 [268. System accounts: one fact in three languages](#268-system-accounts-one-fact-in-three-languages) ·
 [269. A compilation database, from what fmake compiles](#269-a-compilation-database-from-what-fmake-compiles) ·
 [270. A package set off the default pkg-config path](#270-a-package-set-off-the-default-pkg-config-path) ·
-[271. A header on an explicit include path, and a Qt app cross-built for Android](#271-a-header-on-an-explicit-include-path-and-a-qt-app-cross-built-for-android)
+[271. A header on an explicit include path, and a Qt app cross-built for Android](#271-a-header-on-an-explicit-include-path-and-a-qt-app-cross-built-for-android) ·
+[272. `@data`: a program's files under its share directory](#272-data-a-programs-files-under-its-share-directory)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -20557,3 +20558,36 @@ arrangement `harmonization.md` records, the manifest and versionCode
 drive from `tool/android.mk`, and it is the copyright holder's to ask
 for as its own piece of work rather than fmake's to grow. What fmake
 now does is produce the shared objects that pipeline packages.
+
+## 272. `@data`: a program's files under its share directory
+
+Section 228 closed its list with services, D-Bus policy and accounts
+built and one kind named but not: "data files with no tool-fixed home".
+The three trees that install such files spell it the same way by hand:
+situ puts its `std/*.situ` schemas under `share/situc/std/`, beerssh
+its bundled fonts under `share/beerssh/fonts/`, netcfgd its profiles
+under `share/netcfgd/profile/`. A program's own data -- a schema, a
+font, a default profile -- has no directory a tool fixes for it the way
+`dbus-daemon` fixes one for a policy, so the convention is a
+directory named for the program under `share`.
+
+`@data`, or `[target.NAME] data`, takes files or globs and lands each
+under `$(DATADIR)/<program>/` preserving its path relative to the tree
+root: `std/crc.situ` becomes `share/situc/std/crc.situ`, which is what
+all three Makefiles produce. Globs expand as they do in `@sources` and
+`fmake.toml`, `**` reaching down a tree. A directory named outright is
+refused with the glob to write instead -- `@data std` says "install
+std", and a file dropped into `std/` later would join the package with
+no change to the build anybody could see, which is the silent-growth
+failure `build-and-commit.md` names for a `clean` glob and `@sources`
+already refuses.
+
+`datadir` is a row of `INSTALL_DIRS` like the rest, so everything is by
+row and nothing else changed: the live install and uninstall, both
+ejected builds, `--explain`'s `$DATADIR`, and the deb `.install` lines
+carry the data files with no special case. The case installs a program
+with a two-level `assets/` tree, checks the files land under
+`share/<name>/assets/` keeping their paths, that uninstall takes them
+away, that the ejected make build installs the same set, and that a
+bare directory is refused -- and against the tree before it, `@data` is
+ignored and nothing lands at all.

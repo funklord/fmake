@@ -9711,6 +9711,65 @@ def a_header_on_an_explicit_include_path_proposes_no_package(t):
 		u.cleanup()
 
 
+@case
+def data_files_install_under_the_programs_share_directory(t):
+	"""Section 228's last unbuilt kind: a program's own data with no
+	tool-fixed home -- situc's schemas, beerssh's fonts, netcfgd's
+	profiles, each under share/<name>/ by hand. `@data`, or `[target.*]
+	data`, takes files or globs and lands each preserving its path
+	relative to the root, so `assets/x` goes to share/<name>/assets/x.
+	A directory named outright is refused: a glob says which files."""
+	t.write("main.c", "/*! @data assets/**\n */\n#include <stdio.h>\n"
+	        'int main(void){ puts("d"); return 0; }\n')
+	t.write("assets/schema/one.json", '{"a":1}\n')
+	t.write("assets/two.txt", "two\n")
+	name = os.path.basename(t.dir)
+
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage, "--prefix", "/usr")
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	want = sorted([f"usr/share/{name}/assets/schema/one.json",
+	               f"usr/share/{name}/assets/two.txt"])
+	got = sorted(os.path.relpath(os.path.join(d, f), stage)
+	             for d, _s, fs in os.walk(os.path.join(stage, "usr/share"))
+	             for f in fs)
+	check(got == want, f"data landed at {got}, wanted {want}")
+	check("$DATADIR" in t.fmake("--explain").stdout,
+	      "--explain does not name $DATADIR for the data files")
+	r = t.fmake("--uninstall", "--destdir", stage, "--prefix", "/usr")
+	left = [os.path.join(d, f)
+	        for d, _s, fs in os.walk(os.path.join(stage, "usr/share"))
+	        for f in fs]
+	check(r.returncode == 0 and not left,
+	      f"uninstall left the data files behind: {left}")
+
+	# The ejected make build installs the same set.
+	if shutil.which("make"):
+		mk = t.fmake("--eject", "make").stdout
+		with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+			fh.write(mk)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		dest = os.path.join(t.dir, "mstage")
+		b = _run_in(t.dir, "make", "-s", f"DESTDIR={dest}", "PREFIX=/usr", "install")
+		check(b.returncode == 0, f"ejected install failed: {b.stdout}{b.stderr}")
+		check(os.path.isfile(os.path.join(dest, "usr/share", name, "assets/two.txt")),
+		      f"the ejected make build did not install the data: "
+		      f"{os.listdir(dest) if os.path.isdir(dest) else 'nothing'}")
+
+	# A directory named outright is refused, with the glob to write instead.
+	u = Tree("data-dir-refused")
+	try:
+		u.write("main.c", '/*! @data assets */\nint main(void){ return 0; }\n')
+		u.write("assets/x", "x\n")
+		r = u.fmake("--install", "--destdir", os.path.join(u.dir, "s"))
+		check(r.returncode != 0 and "is a directory" in r.stdout + r.stderr
+		      and "assets/**" in r.stdout + r.stderr,
+		      f"a data directory was not refused with the glob: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
 CROSS_CC = "aarch64-linux-gnu-gcc"
 
 
