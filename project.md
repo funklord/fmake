@@ -21031,8 +21031,35 @@ the harmonization rule asks for one beside the make line, and they
 declined to write one that does not build the kernel's `ioctl`. The
 one-line workaround available to them, `"ossacli/src/shim/**"` in
 `exclude`, was deliberately not taken on the grounds that it would hide
-a real finding from the tool the finding is for. That is the right call
-and the reason it is recorded here.
+a real finding from the tool the finding is for.
+
+**That held for a day.** Their copyright holder instructed the exclude
+after this was published, and raidcfgd `4f16af9` took it, with
+`365cd8d` adding `include-dirs = ["fuzznet", "src", "daemon"]`. The
+session's reading -- that reversing a decision their README states
+belongs to the holder rather than to a session -- was right about who
+decides, and the holder decided the other way. With both lines a plain
+`fmake` at `2d34233` builds every target that project owns, ten of
+them, and `ciss_probe` carries `U ioctl@GLIBC_2.2.5` and no simfw
+symbol, checked with `nm`. It still exits 1 on nineteen files, every
+one under `fuzznet/qtty/`, which is section 259's widening and not
+theirs.
+
+**Two observations came out of taking it, and both are about how fmake
+says things rather than what it does.** The `include-dirs` suggestion
+arrives as one sentence -- *all of those together: ['fuzznet/qtty/
+include', 'daemon']* -- mixing a directory in the invoking tree, which
+their Makefile already passes, with a directory in a vendored checkout
+fmake is widening into and nothing there references. They took the
+first and refused the second, and the refusal cost a paragraph in their
+`fmake.toml`. A suggestion that separated the two would make the second
+read as the finding it is rather than as the next line to paste. And
+the failure summary prints five files and *... and 16 more*: read as
+printed it looks like the widening alone, and enumerating every `in
+<file>` line showed two of the twenty-one were theirs -- the two a
+reader can actually fix. Leading with the files in the invoking tree,
+or saying how many of the N are outside it, would put those two in the
+first five. Neither was filed as a defect and both are worth fixing.
 
 **The open question, which is fmake's.** Nothing in raidcfgd declares a
 module, so inferring one from "built only into a `-shared` target" does
@@ -21113,8 +21140,14 @@ holds it -- because if the session that wrote it had been cleared, that
 file would be the only copy. It is not: section 174 carries its
 reproduction, its rung experiment, the list of `situc` commands fmake
 does not drive, and the finding about their twelfth test. The file is
-the relay, and this is the record. Whether it is committed remains
-theirs.
+the relay, and this is the record.
+
+It is deleted: their copyright holder said to, and their session
+checked before removing it -- that section 174 really holds the
+content, and that nothing in situ reads the directory -- then removed
+that one file by name and left the other ten. The process is the part
+worth recording, since a peer saying *nothing is lost* is a claim about
+somebody else's tree until the person holding it verifies it.
 
 **What is still not measured, and stays named.** situ's Python suite and
 its double compilation of each generated test, checked and released,
@@ -21319,7 +21352,10 @@ tools.
 
 **The design space, and it is fmake's call.** A per-target `install =
 false` is the smallest thing that says it, and it reads as the exact
-opposite of what `[install]` already means. A directory convention --
+opposite of what `[install]` already means -- though the semantics
+exist in one place already: a `@kind module` is built and not
+installed, because a plugin, a preload shim and a Qt plugin each belong
+somewhere different and fmake declines to guess. A directory convention --
 `example/` and `examples/` implying it, the way `tests/` implies its own
 handling -- costs no configuration at all in the common case, and
 section 242 is the precedent for how that gets decided here: one name
@@ -21529,6 +21565,22 @@ comes back unchanged, which is what the code did before, so an
 arrangement neither of us has thought of gets git's own error rather
 than fmake's guess.
 
+**Verified where it was reported**, which a case in this suite cannot
+do: fuzzypickles ran `--dry-run` at `0d0b5e0` and got `git -C
+<tree>/fuzznet submodule update --init --recursive -- monocypher` --
+parent directory, child's relative path -- then ran it for real and
+fetched `fuzznet/monocypher`. `git ls-tree HEAD` against each checkout
+afterwards showed every readable submodule still at the commit its
+gitlink names, which is the half of *never `--remote`* only a real
+fetch can show.
+
+**And one consequence, recorded so nobody reads it later as drift.**
+fmake fetches every submodule git reports, so a plain run in that tree
+also fetches `fuzznet/monocypher`, which their own build does not need
+and their `make submodules` deliberately does not take. Both are
+right: fmake gives what `git clone --recursive` gives, and their target
+gives the subset that compiles.
+
 **The case, and its control.** A fixture in the new arrangement -- clone,
 then `submodule update --init -- vendor` and not `--recursive`, so the
 parent is in step and the grandchild is not. It asserts the arrangement
@@ -21568,9 +21620,10 @@ here and does not need to be: what the entry asks of them -- name
 for a fault that is not there. It is recorded in this document as well
 as in theirs, because a signal sent out had no copy here and the one
 in their tree was therefore the only one -- so the tree that could have
-said it was stale had nothing written down to say it with. That is
-fuzzypickles' generalisation and it is worth keeping as a rule for this
-project: **a signal this project sends into another tree gets an entry
+said it was stale had nothing written down to say it with. That generalisation is
+claude-guidelines', made about a signal this project had sent that same
+tree, and fuzzypickles relayed it rather than claiming it; it is worth
+keeping as a rule here: **a signal this project sends into another tree gets an entry
 here too**, or its correction has nowhere to land. They have struck
 their entry in `62e70e0`, naming this section at its head rather than
 answering it further down.
@@ -21670,10 +21723,14 @@ size.**
   key, a module that can link a declared library, or the section 276
   machinery pointed at interposers rather than at `tests/` doubles, is
   this project's.
-- **The README oversells it.** *"ossacli's `ossa-sgshim.so` is one"* is
-  true of what that file is and not of what fmake can currently build,
-  and that sentence is what sent raidcfgd looking. It wants correcting
-  whichever way the above is decided.
+- **fmake's own README oversells it.** *"ossacli's `ossa-sgshim.so` is
+  one"*, in the `@kind module` paragraph, is true of what that file is
+  and not of what fmake can currently build, and that sentence is what
+  sent raidcfgd looking. It carries the limit now and wants rewriting
+  properly whichever way the above is decided. ossacli's own README is
+  not the one at fault: it explains why `src/shim/` is excluded and
+  what the binary printed with nothing preloaded, which stays accurate
+  either way.
 
 **What ossacli did, which is the right answer for them**: nothing. The
 annotation stays out and `exclude` stays in, because taking it would
@@ -21715,6 +21772,17 @@ rather than the citations. Their text is otherwise as they wrote it,
 including the correction they made an hour later -- the three bounded
 runs, which replaced a paragraph saying the remedy had not been
 tested.
+
+ossacli's session had predicted this collision hours earlier, in the
+shape of two sessions each appending to their own document and picking
+the next number by reading it. What happened is sharper and is their
+sharpening: the second writer was in *this* tree, editing the numbered
+document itself, and the first had already published a citation to
+that number from another tree. **A number can be cited before the
+document that owns it has been pushed**, and the citation is what makes
+a renumber expensive rather than free -- so a section number is safe to
+quote only after a push, which is where three separate exchanges this
+evening ended up.
 
 beerssh's README carries the fmake line the harmonization rule asks for,
 and on this machine it does not build:
