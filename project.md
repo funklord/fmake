@@ -21979,3 +21979,48 @@ a warning that fired on every module would pass the first three
 assertions. Against the previous commit the case fails: the module
 builds, the line is absent, and exit is 0 -- which is exactly ossacli's
 report.
+
+### And it was wrong once before it was right, in the population it was built for
+
+ossacli re-ran their five against the first version and got **one true
+finding and one false one in a single run**, which is the sharpest
+thing that tree could have told me. The true one is the whole point:
+
+    * ossa-sgshim.so links with 6 undefined symbol(s) that this tree
+      defines elsewhere, and nothing linked it
+      src/lib/simfw.c is linked into ossa-check, ossa-metrics, ossacli
+      as well, and a module's sources are its own -- so naming it here
+      takes it out of that link set, which is a trade fmake has no way
+      to decline yet
+
+Their words for it: run 3 stated by the tool at the moment run 4 goes
+wrong, which is where it belongs. The false one was `ossa-capture.so`,
+on `fopen`: `capture.c` calls it to write its log and `sgshim.c`
+defines it, **because interposing on libc is the entire job of an
+LD_PRELOAD shim**. So "a symbol this tree defines elsewhere" catches
+every libc function one module interposes and another calls -- and the
+trees whose modules are interposers are exactly the population the
+warning was built for. Worse than noise, the trade sentence then reads
+as though there were a trade to make, when naming `sgshim.c` in the
+capture shim's sources would link a whole interposer into it.
+
+**The discriminator is theirs and it is one sentence**: `fopen` is
+resolved from libc and `simfw_exec` is resolved from nowhere. A module
+that has loaded thousands of times in that tree's own suite is not a
+module that cannot load, and `ldd` says so. So the check now subtracts
+what the module already links an answer for -- libc's exports, which
+section 219's machinery already reads and caches, and this target's own
+resolution, which covers a module that links `-lssl` and interposes
+`SSL_read` without a second mechanism. The case carries their
+arrangement: one module defining `fopen`, another calling it, and the
+caller must produce no line.
+
+**Two things this says about the shape of the check**, both worth
+keeping. A warning aimed at a population should be tried against the
+thing that population is *for* -- the first version was tested against
+a module missing a source, which is the fault, and not against a module
+interposing a libc name, which is the job. And an artifact reading is
+not automatically the last word: `nm -D` was right that `fopen` is
+undefined in that object, and undefined is not the same as unsupplied.
+The model knew what the link had resolved; the artifact knew what was
+left; the answer needed both.

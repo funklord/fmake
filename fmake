@@ -7226,7 +7226,8 @@ def module_undefined(cfg, path):
 	return out
 
 
-def module_wants_the_tree(t, cl, path, cfg, units, linked_by=None):
+def module_wants_the_tree(t, cl, path, cfg, units, linked_by=None,
+                          res=None, libc=()):
 	"""Warn when a module needs a symbol this tree defines elsewhere.
 
     Not every undefined symbol is a fault -- libc's are the ordinary case,
@@ -7256,6 +7257,28 @@ def module_wants_the_tree(t, cl, path, cfg, units, linked_by=None):
     here rather than papered over.
     """
 	want = module_undefined(cfg, path)
+	# What the module already links an answer for is not missing, however
+	# the tree also spells it. Reported from ossacli, where the first
+	# version of this warned twice in one run -- once correctly, on five
+	# `simfw_*' this tree defines and nothing supplies, and once on
+	# `fopen': their `ossa-capture.so' calls it, their `ossa-sgshim.so'
+	# defines it because interposing on libc is what an LD_PRELOAD shim
+	# is, and the condition "a symbol this tree defines elsewhere" catches
+	# every libc function one module interposes and another calls. That is
+	# not an edge case in this population; it is what modules are for.
+	#
+	# The discriminator is the one they named: `fopen' is resolved from
+	# libc and `simfw_exec' is resolved from nowhere. A capture shim that
+	# has loaded thousands of times in that tree's own suite is not a
+	# module that cannot load. libc's exports come from the set section
+	# 219 already keeps, and the rest from this target's own resolution,
+	# so a module that links `-lssl' and interposes `SSL_read' is covered
+	# by the same sentence without a second mechanism.
+	want -= set(libc or ())
+	if res:
+		want -= set(res.get("implicit") or ())
+		for lib in res.get("chosen") or ():
+			want -= set((res.get("why") or {}).get(lib, ()))
 	if not want:
 		return
 	inside = {u.rel for u in cl.link}
@@ -11297,7 +11320,12 @@ def build(args, _bootstrapping=False):
 	# library fmake cannot resolve yet.
 	built, failed, changed = [], [], False
 	# Which targets link each file, for the module warning below: the
-	# remedy it offers is free only for a file nothing else links.
+	# remedy it offers is free only for a file nothing else links. And
+	# libc's exports, read once and only where there is a module to ask
+	# about -- a tree with none must not pay an nm for a set nothing
+	# reads.
+	module_libc = (libc_exports(cfg, cache)
+	               if any(t.kind == "module" for t in wanted) else set())
 	linked_by = {}
 	for t in wanted:
 		for u in closures[t].link:
@@ -11319,7 +11347,7 @@ def build(args, _bootstrapping=False):
 		# the line a week ago.
 		if ok and not args.dry_run and t.kind == "module":
 			module_wants_the_tree(t, closures[t], out, cfg, units,
-			                      linked_by)
+			                      linked_by, res, module_libc)
 
 	cache.save()
 	if args.dry_run and not (args.install or args.uninstall):

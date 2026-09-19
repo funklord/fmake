@@ -14355,6 +14355,31 @@ def a_module_that_cannot_load_is_said_at_the_link(t):
 	      f"a module whose undefined symbols are libc's was warned about, "
 	      f"so the check fires on every module: {out}")
 
+	# And the control that the first version of this failed, reported from
+	# ossacli: one module interposes a libc function and another calls it,
+	# so the caller's undefined `fopen' IS defined elsewhere in this tree
+	# -- by an interposer, which is what a module is for. Their run warned
+	# twice, once on five `simfw_*' that nothing supplies and once on
+	# `fopen', and the second names a shim their suite preloads 42 times.
+	# What separates them is that one is resolved from libc and the other
+	# from nowhere.
+	t.write("shim.c", "#include <stdio.h>\n"
+	        "FILE *fopen(const char *p, const char *m)"
+	        "{ (void)p; (void)m; return 0; }\n")
+	t.write("cap.c", "#include <stdio.h>\n"
+	        "int cap_go(void){ FILE *f = fopen(\"/dev/null\", \"w\");"
+	        " return f ? 1 : 0; }\n")
+	t.write("fmake.toml", '[target.shim]\nkind    = "module"\n'
+	        'sources = ["shim.c"]\n\n'
+	        '[target.cap]\nkind    = "module"\n'
+	        'sources = ["cap.c"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check("cap.so links with" not in out,
+	      f"a module calling a libc function another module interposes "
+	      f"was reported as unable to load: {out}")
+
 
 @case
 def a_tree_with_no_main_is_a_library(t):
