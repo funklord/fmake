@@ -20927,3 +20927,49 @@ builds a program that calls `close()` beside a module that defines it: the
 program must resolve `close()` from libc and the module must keep its own.
 Reverting the exclusion pulls the shim into the program, and the case
 fails there -- the warning returning with it.
+
+## 282. From ossacli: `test = false` makes a test an installed program
+
+Reported from ossacli 2026-09-19, measured against this tree's `HEAD`
+rather than the installed `fmake`, which is six weeks old there.
+
+That tree's three test programs under `test/` are not all standalone
+pass/fail cases: `big_passthru` and `shim_wide` exercise its `LD_PRELOAD`
+shim, which its `make test` preloads and `fmake test` cannot, so run bare
+they fail and `fmake test` reports 2 of 5 failed. Reaching for the
+vocabulary that looked like "this is not a test":
+
+    [target.shim_wide]
+    test = false
+
+    * built ossacli, ossa-check, ossa-metrics, shim_wide
+
+    target shim_wide (exe)  [no @target]
+      installs
+        shim_wide                           -> $BINDIR
+
+It does not mark the program as not-a-test. It makes it an ordinary
+program -- built by default and installed to `$BINDIR` -- so a RAID
+tool's package would have shipped a test driver beside `ossacli`. The
+same tree had just been bitten by the other half of that shape, a
+`main()` under `example/` that fmake built as a fourth program and
+would have installed; it is the reason they were reading `--explain`
+closely enough to notice this one.
+
+The reading that produced it: `test = false` reads as the negation of
+"this file is a test", and a file under `test/` that is not a test is
+naturally a helper rather than something to install. What the key
+actually says is "do not treat this as a test", and everything else
+follows from the default for a `main()` anywhere in the tree.
+
+They backed it out and kept two failing tests instead, on the grounds
+that two failing tests are better than two shipped test drivers, with
+the count pinned in their README and a gate. Recorded here rather than
+fixed from there, per the harmonization rule. Whether the answer is a
+different key, a `test = false` that also declines to install, or a
+sentence in the manual saying what it does, is this project's call --
+and the middle one would be a behaviour change for anybody already
+using the key the other way.
+
+`test-args` did exactly what it says on that tree's fuzz driver, which
+is what took it from three failures to two.
