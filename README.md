@@ -355,7 +355,9 @@ builds it but does not install it: a Qt plugin, a preload shim and a
 the project's to say. ossacli's `ossa-sgshim.so` is the shape of one, and
 also the case this cannot express yet: a module whose own sources need a
 symbol from the library beside it has no way to say so, and links with it
-undefined. A module's sources are its own — a shim that defines `close()` is not pulled into a program
+undefined. fmake says so at the link -- naming the symbol, the file in
+this tree that defines it, and whether naming that file in `sources`
+would take it out of another target -- and cannot resolve it for you. A module's sources are its own — a shim that defines `close()` is not pulled into a program
 that calls the real one, the way nothing links a module.
 
 **Tests are not built by the default build.** A `main()` under `test/` or

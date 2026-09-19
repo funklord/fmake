@@ -7192,6 +7192,108 @@ def libc_exports(cfg, cache):
 	return syms
 
 
+def module_undefined(cfg, path):
+	"""Symbols a built module still needs from whatever opens it.
+
+    `-shared' permits an undefined symbol, which is the whole reason a
+    plugin can call back into its host -- and the reason a module missing
+    one of its own sources links clean, is reported on the success line,
+    and fails at `dlopen' in a program with no fmake anywhere near it.
+    Reported from ossacli, whose `ossa-sgshim.so' built green and would
+    not load: `undefined symbol: simfw_default'.
+
+    Read off the artifact rather than off the closure, so the answer
+    accounts for what the link actually resolved, every library included;
+    the model knows what fmake asked for and the dynamic table knows what
+    it got. Same line format and the same reader as `read_symbols' and
+    `lib_exports', for the reason recorded there.
+
+    An nm that cannot read this file says nothing. The same nm read every
+    object in this build a moment ago -- `read_symbols' dies where it
+    cannot -- so a failure here is not a state worth a warning's
+    speculation, and a warning is not the place to raise it.
+    """
+	r = subprocess.run([cfg.nm, "--undefined-only", "--format=posix", "-D",
+	                    path], capture_output=True, text=True,
+	                   errors="replace")
+	if r.returncode != 0:
+		return set()
+	out = set()
+	for line in r.stdout.splitlines():
+		m = RE_NM_POSIX.match(line)
+		if m and m.group("type") == NM_UNDEF:
+			out.add(m.group("name").split("@")[0])
+	return out
+
+
+def module_wants_the_tree(t, cl, path, cfg, units, linked_by=None):
+	"""Warn when a module needs a symbol this tree defines elsewhere.
+
+    Not every undefined symbol is a fault -- libc's are the ordinary case,
+    and a plugin calling back into the program that loads it is a design.
+    What is reportable is the narrower thing: a symbol left undefined that
+    a file *in this tree* defines and that this module does not build. The
+    module was either meant to include that file, or is relying on a
+    loader that has it, and only the project knows which -- so this says
+    what it found and names the file, rather than refusing.
+
+    Exact symbols, not tokens. The widening scan matches names to propose
+    a file, and guessing is right there because the cost of a wrong guess
+    is a compile; here both sides are nm's own output for objects this
+    build produced, so a match is a fact and the message can say so.
+
+    Modules only. A shared library is linked by name, so anything it lacks
+    surfaces at the link of whatever links it -- which in this tree is a
+    link fmake performs itself and reports. Nothing links a module, and
+    that is exactly what removes the second chance.
+
+    The remedy is offered only where it is free. Where the defining file
+    is also in another target's link set, naming it in `sources' takes it
+    out of that one -- a module's sources are its own, unconditionally --
+    so the advice would trade a module that cannot load for a program
+    that cannot link. That is what ossacli measured across all five of
+    their runs and the one case fmake has no answer for, so it is said
+    here rather than papered over.
+    """
+	want = module_undefined(cfg, path)
+	if not want:
+		return
+	inside = {u.rel for u in cl.link}
+	found = {}
+	for u in units.values():
+		if u.rel in inside or not u.compiled:
+			continue
+		for sym in want & u.strong:
+			found.setdefault(sym, u.rel)
+	if not found:
+		return
+	warn(f"{t.filename} links with {len(found)} undefined symbol(s) that "
+	     f"this tree defines elsewhere, and nothing linked it")
+	for sym in sorted(found)[:5]:
+		note(f"{sym} is defined by {found[sym]}, which this module does "
+		     f"not build")
+	if len(found) > 5:
+		note(f"... and {len(found) - 5} more")
+	note(f"whatever opens it has to supply them: a program does not "
+	     f"export its own symbols to a preloaded or dlopen'd object "
+	     f"unless it was linked with -rdynamic, so this is a `dlopen' "
+	     f"failure at run time rather than a build error here")
+	shared = {}
+	for rel in set(found.values()):
+		who = [n for n in (linked_by or {}).get(rel, ()) if n != t.name]
+		if who:
+			shared[rel] = who
+	free = sorted(set(found.values()) - set(shared))
+	if free:
+		note(f"{tgt_section(t.name)} sources = [..., "
+		     f"{toml_string(free[0])}] builds it in")
+	for rel in sorted(shared)[:3]:
+		note(f"{rel} is linked into {', '.join(sorted(shared[rel]))} as "
+		     f"well, and a module's sources are its own -- so naming it "
+		     f"here takes it out of that link set, which is a trade "
+		     f"fmake has no way to decline yet")
+
+
 def libc_interposed(closures, targets, exports):
 	"""(file, symbol, puller) -> target names, for every closure pull of
     a symbol libc also provides. Section 219's two candidates were to
@@ -11194,6 +11296,13 @@ def build(args, _bootstrapping=False):
 	# discard the others -- you did not ask for the test binary that needs a
 	# library fmake cannot resolve yet.
 	built, failed, changed = [], [], False
+	# Which targets link each file, for the module warning below: the
+	# remedy it offers is free only for a file nothing else links.
+	linked_by = {}
+	for t in wanted:
+		for u in closures[t].link:
+			linked_by.setdefault(u.rel, []).append(t.name)
+
 	for t in wanted:
 		res = resolutions.get(t)
 		out, did, ok = link_target(t, closures[t], cfg, outdir,
@@ -11202,6 +11311,15 @@ def build(args, _bootstrapping=False):
 		                           cache, root, quiet=args.quiet)
 		changed = changed or did
 		(built if ok else failed).append((t.filename, closures[t], res))
+		# Outside `if did', like the version-fallback note further down
+		# and for the same reason: this is a claim about the artifact,
+		# which does not stop being true because nothing was rebuilt.
+		# Under that guard it would print once and never again, which is
+		# how a module that cannot load gets shipped by somebody who saw
+		# the line a week ago.
+		if ok and not args.dry_run and t.kind == "module":
+			module_wants_the_tree(t, closures[t], out, cfg, units,
+			                      linked_by)
 
 	cache.save()
 	if args.dry_run and not (args.install or args.uninstall):

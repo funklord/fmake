@@ -343,7 +343,8 @@ that had been green about nothing for five commits ·
 [290. A nested submodule's path is not a pathspec at the top](#290-a-nested-submodules-path-is-not-a-pathspec-at-the-top) ·
 [291. From fuzzypickles: a prefix that is a claim, and no way to deny it](#291-from-fuzzypickles-a-prefix-that-is-a-claim-and-no-way-to-deny-it) ·
 [292. What `@kind module` cannot say: five runs from ossacli](#292-what-kind-module-cannot-say-five-runs-from-ossacli) ·
-[293. `[project] exclude` does not reach the inferred include path](#293-project-exclude-does-not-reach-the-inferred-include-path)
+[293. `[project] exclude` does not reach the inferred include path](#293-project-exclude-does-not-reach-the-inferred-include-path) ·
+[294. A module that cannot load is said at the link](#294-a-module-that-cannot-load-is-said-at-the-link)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21149,6 +21150,19 @@ that one file by name and left the other ten. The process is the part
 worth recording, since a peer saying *nothing is lost* is a claim about
 somebody else's tree until the person holding it verifies it.
 
+**What the twelve tests do not reach, named because the number reads
+wider than it is.** `fmake test` there builds and runs the generated C
+suite, and C is the only backend in anything fmake compiles in that
+tree -- situ's C++, Rust and Python outputs are situc's to test. situ
+fixed a fault the same evening that proves the point: an `authenticated`
+region's `_covered` accessor emitted an inverted range in three
+backends and not in C. That run would have passed it untouched. Their
+own entry reached the same gap from the other side -- their tests
+exercised the backend that was right -- and the shape both arrived at
+is worth the sentence: **a gate is only as good as which reader it
+asks.** Not a gap in `fmake test`: reaching into three more toolchains
+would be a build tool doing a schema compiler's testing for it.
+
 **What is still not measured, and stays named.** situ's Python suite and
 its double compilation of each generated test, checked and released,
 which its own `fmake.toml` says fmake is not attempting -- unchanged
@@ -21574,6 +21588,20 @@ afterwards showed every readable submodule still at the commit its
 gitlink names, which is the half of *never `--remote`* only a real
 fetch can show.
 
+**Fixing it produced a class of failure no fixture could have
+anticipated**, which is worth more than the fix. With the grandchild
+fetched, fuzzypickles' next plain run came back rc 1 on 29 files:
+`fuzznet` vendors its own monocypher, byte-identical to theirs at the
+same 4.0.3, so the fetch put two `monocypher.h` in one tree and the
+include became ambiguous. fmake named both candidates with the `[project]
+include-dirs` line for each and refused to choose, which is section 3
+doing its job and took them two minutes -- and their `878f99c` is the
+only one of seven entries in that file that disambiguates rather than
+locates. Neither project is wrong: fuzznet needs its own to build
+standalone. **A previously unambiguous include can be made ambiguous by
+fetching a submodule**, and the condition did not exist until the fetch
+worked.
+
 **And one consequence, recorded so nobody reads it later as drift.**
 fmake fetches every submodule git reports, so a plain run in that tree
 also fetches `fuzznet/monocypher`, which their own build does not need
@@ -21709,13 +21737,16 @@ not for the simulator sitting behind it.
 **Two defects and a design question fall out, and they are not the same
 size.**
 
-- **A module links with undefined symbols and nothing says so.** That is
-  run 4, and it is fmake's: `-shared` permits undefined symbols, so the
-  link succeeds and the failure arrives at `dlopen` in whatever program
-  preloads it, weeks later. Every other artifact fmake produces has its
-  symbols decided by section 3; a module is the one that ships
-  unresolved. Saying so at link time is a warning fmake can compute from
-  what it already knows.
+- ~~**A module links with undefined symbols and nothing says so.**~~
+  **Fixed; see section 294.** That was run 4, and it was fmake's:
+  `-shared` permits undefined symbols, so the link succeeds and the
+  failure arrives at `dlopen` in whatever program preloads it, weeks
+  later. Every other artifact fmake produces has its symbols decided by
+  section 3; a module is the one that ships unresolved. fmake now reads
+  the built `.so`'s dynamic table and names any undefined symbol this
+  tree defines in a file the module does not build -- including, where
+  that file is in another target's link set, the fact that the obvious
+  remedy is run 3.
 - **`sources` does two jobs at once**, in their words: it says which
   files a target is built from, and by saying so it claims them away
   from everyone else. Those came apart here -- they wanted the second
@@ -21872,3 +21903,79 @@ rather than declined. Both earlier failing runs were at load 186 to 225
 with another session's sweep in the tree, so the reading was deliberately
 retaken at load 200 rising to 211: identical output, same file, same
 count of 110.
+
+## 294. A module that cannot load is said at the link
+
+Section 292's first defect, fixed. ossacli's run 4 is the case: with
+`sources = ["src/shim/sgshim.c"]` their tree built, exited 0, printed
+`* built ossacli, ossa-capture.so, ossa-sgshim.so, ossa-check,
+ossa-metrics`, and the shim then failed at load with `undefined symbol:
+simfw_default`. Their own words for why that decides the loudness: it
+is not a quiet omission but a positive report of something that does
+not work, and the failure arrives at `dlopen` in a program with no
+fmake anywhere near it.
+
+**Why the link cannot say it and fmake can.** `-shared` permits an
+undefined symbol, and has to: that is what lets a plugin call back into
+the program that loads it. So the linker is right to accept what it
+accepts, and every other artifact fmake produces has its symbols
+decided by section 3 -- a module is the one that ships unresolved.
+
+**The narrow thing that is reportable**, and it is narrow deliberately:
+a symbol left undefined **that a file in this tree defines and this
+module does not build**. Not a count of undefined symbols, which for
+every module ever written is mostly libc; not a refusal, since only the
+project knows what opens it. `module_wants_the_tree` reads the built
+`.so`'s dynamic table with `nm -D --undefined-only` and intersects it
+with the strong symbols of compiled units outside the module's link
+set.
+
+    * shim.so links with 1 undefined symbol(s) that this tree defines
+      elsewhere, and nothing linked it
+      helper is defined by helper.c, which this module does not build
+      whatever opens it has to supply them: a program does not export
+      its own symbols to a preloaded or dlopen'd object unless it was
+      linked with -rdynamic, so this is a `dlopen' failure at run time
+      rather than a build error here
+
+**Read off the artifact rather than off the closure**, which is the
+choice worth recording. fmake's model knows what it asked the link for;
+the dynamic table knows what it got, libraries included -- so a symbol
+some `-l` turned out to supply never reaches the warning, and one the
+model thought was covered does. Exact symbols on both sides, since both
+are nm's own output for objects this build produced: widening matches
+name *tokens* because there a wrong guess costs a compile, and here a
+match is a fact.
+
+**And the remedy is offered only where it is free**, which is section
+292's other half arriving in the message rather than in a document. If
+the defining file is in another target's link set, naming it in
+`sources` takes it out of that one -- a module's sources are its own,
+unconditionally, section 281 -- so the advice would trade a module that
+cannot load for a program that cannot link, which is ossacli's run 3.
+So the warning says that instead:
+
+      helper.c is linked into main as well, and a module's sources are
+      its own -- so naming it here takes it out of that link set, which
+      is a trade fmake has no way to decline yet
+
+The gap section 292 records is untouched: there is still no way to say
+*this module links that library*, and this does not invent one. What
+has changed is that the tree is told before it ships rather than by a
+loader afterwards.
+
+**Said on every run, not only when something relinked.** A claim about
+an artifact does not stop being true because nothing was rebuilt, and
+the case asserts it on a second run that rebuilds nothing -- the
+failure that guard would otherwise produce is a module that cannot load
+being shipped by somebody who saw the line a week ago. It is the same
+reasoning as the version-fallback note, which sits outside the same
+guard for the same reason.
+
+**The control is the half that makes it a check rather than a counter.**
+A module whose leftovers are all libc's must say nothing, so the case
+rewrites the shim to call `printf` and asserts silence; without that,
+a warning that fired on every module would pass the first three
+assertions. Against the previous commit the case fails: the module
+builds, the line is absent, and exit is 0 -- which is exactly ossacli's
+report.

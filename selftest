@@ -14287,6 +14287,76 @@ def a_modules_sources_are_kept_out_of_other_targets(t):
 
 
 @case
+def a_module_that_cannot_load_is_said_at_the_link(t):
+	"""`-shared' permits an undefined symbol -- that is what lets a plugin
+	call back into its host -- so a module missing one of its own sources
+	links clean and is reported on the success line. ossacli measured what
+	that costs: with `sources = ["src/shim/sgshim.c"]' their tree built,
+	exit 0, `* built ... ossa-sgshim.so ...', and the shim then failed at
+	load with `undefined symbol: simfw_default'. The failure arrives at
+	`dlopen', in a program with no fmake anywhere near it, and for a plugin
+	in a daemon it is a feature that is simply missing at run time.
+
+	Every other artifact fmake produces has its symbols decided by section
+	3; the module is the one that ships unresolved, and fmake knows enough
+	at link time to say so. Not to refuse: a symbol the loader supplies is
+	the design, and only the project knows which it has.
+
+	So the warning is narrow, and the two halves below are what makes it
+	narrow rather than a count of undefined symbols. It fires on a symbol
+	this tree defines in a file the module does not build -- read off the
+	artifact's dynamic table, so it accounts for what the link actually
+	resolved -- and it says nothing when everything left over is libc's,
+	which is the ordinary case for every module ever written.
+
+	It is also asserted on a second run that rebuilds nothing. This is a
+	claim about the artifact rather than about the work, and under a
+	`changed' guard it would print once and never again -- which is how a
+	module that cannot load gets shipped by somebody who saw the line a
+	week ago."""
+	t.write("main.c", "#include <stdio.h>\nint helper(void);\n"
+	        "int main(void){ printf(\"%d\\n\", helper()); return 0; }\n")
+	t.write("helper.c", "int helper(void){ return 7; }\n")
+	t.write("shim.c", "int helper(void);\n"
+	        "int shim_go(void){ return helper() + 1; }\n")
+	t.write("fmake.toml", '[target.shim]\nkind    = "module"\n'
+	        'sources = ["shim.c"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a module with an undefined symbol still builds -- the loader "
+	      f"may supply it: {out}")
+	check("shim.so links with 1 undefined symbol" in out,
+	      f"nothing said that the module cannot load: {out}")
+	check("helper is defined by helper.c" in out,
+	      f"the warning does not name the symbol and the file: {out}")
+	# The remedy is not free here, and the warning has to say so: helper.c
+	# is in the program's link set, and a module's sources are its own, so
+	# naming it would trade a module that cannot load for a program that
+	# cannot link. That is ossacli's run 3.
+	check("linked into main" in out or "linked into" in out,
+	      f"the warning offers a remedy without its cost: {out}")
+
+	again = t.fmake()
+	out2 = again.stdout + again.stderr
+	check("shim.so links with 1 undefined symbol" in out2,
+	      f"a run that rebuilt nothing stopped saying it, so the claim "
+	      f"about the artifact depends on the work: {out2}")
+
+	# The control: everything left over is libc's, which is every module
+	# anyone has ever written, and there is nothing to say.
+	t.write("shim.c", "#include <stdio.h>\n"
+	        "int shim_go(void){ printf(\"x\\n\"); return 1; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check("undefined symbol" not in out,
+	      f"a module whose undefined symbols are libc's was warned about, "
+	      f"so the check fires on every module: {out}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")
