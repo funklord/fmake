@@ -20126,6 +20126,100 @@ def a_submodule_that_vendors_one_of_its_own_is_fetched_too(t):
 
 
 @case
+def a_child_submodule_is_fetched_when_its_parent_is_already_in_step(t):
+	"""The arrangement the three-deep case above does not have: the parent
+	sits at its pin and only the grandchild is empty, so the one row
+	`submodule status --recursive` prints is `vendor/inner` -- a path
+	relative to the top root, which `git -C <top> submodule update --
+	vendor/inner` will not take, because a pathspec there names a
+	submodule of the repository it runs in.
+
+	Reported from fuzzypickles, where `fuzznet` is at its pin and
+	`fuzznet/monocypher` is not fetched, and fmake stopped dead on git's
+	own `pathspec 'fuzznet/monocypher' did not match any file(s)`. The
+	case above passes with the bug present because there the parent is
+	unfetched too: its row IS a valid top-level pathspec, and `--recursive`
+	brings the child along before the child's row is reached. Depth was
+	never the variable.
+
+	The status assertion below is the fixture's control. Without it a
+	clone that happened to fetch both would build for the wrong reason,
+	and this case would pass while touching nothing."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	work = tempfile.mkdtemp(prefix="fmake-child-sub-")
+	env = dict(os.environ, GIT_ALLOW_PROTOCOL="file")
+	allow = ["-c", "protocol.file.allow=always"]
+
+	def git(where, *a):
+		return subprocess.run(["git", "-C", where, *a],
+		                      capture_output=True, text=True)
+	try:
+		deep, mid, top = (os.path.join(work, n) for n in ("deep", "mid", "top"))
+		for d in (deep, mid, top):
+			os.makedirs(d)
+			git(d, "init", "-q", ".")
+			git(d, "config", "user.email", "t@example.invalid")
+			git(d, "config", "user.name", "t")
+		with open(os.path.join(deep, "deep.c"), "w") as fh:
+			fh.write("int deep_answer(void){ return 7; }\n")
+		with open(os.path.join(deep, "deep.h"), "w") as fh:
+			fh.write("int deep_answer(void);\n")
+		git(deep, "add", "-A"); git(deep, "commit", "-qm", "deep")
+
+		with open(os.path.join(mid, "mid.c"), "w") as fh:
+			fh.write('#include "inner/deep.h"\n'
+			         "int mid_answer(void){ return deep_answer(); }\n")
+		with open(os.path.join(mid, "mid.h"), "w") as fh:
+			fh.write("int mid_answer(void);\n")
+		add = subprocess.run(["git", "-C", mid, *allow, "submodule", "add",
+		                      "-q", deep, "inner"],
+		                     capture_output=True, text=True)
+		if add.returncode != 0:
+			raise Skip("this git will not add a submodule over a local path")
+		git(mid, "add", "-A"); git(mid, "commit", "-qm", "mid")
+
+		with open(os.path.join(top, "main.c"), "w") as fh:
+			fh.write('#include <stdio.h>\n#include "vendor/mid.h"\n'
+			         'int main(void){ printf("%d\\n", mid_answer()); '
+			         'return 0; }\n')
+		subprocess.run(["git", "-C", top, *allow, "submodule", "add", "-q",
+		                mid, "vendor"], capture_output=True, text=True)
+		git(top, "add", "-A"); git(top, "commit", "-qm", "top")
+
+		tree = os.path.join(work, "fresh")
+		subprocess.run(["git", *allow, "clone", "-q", top, tree],
+		               capture_output=True, text=True)
+		# The parent only, and not --recursive: this is the state a
+		# person is in after fetching what the top level reported.
+		subprocess.run(["git", "-C", tree, *allow, "submodule", "update",
+		                "--init", "--", "vendor"],
+		               capture_output=True, text=True)
+		rows = [l for l in git(tree, "submodule", "status",
+		                       "--recursive").stdout.splitlines() if l.strip()]
+		stale = [l for l in rows if l.startswith("-")]
+		check(len(stale) == 1 and "vendor/inner" in stale[0]
+		      and any(l.startswith(" ") and l.rstrip().endswith("(heads/master)")
+		              and " vendor " in l for l in rows),
+		      f"the fixture is not in the state this case is about -- the "
+		      f"parent in step and the grandchild alone unfetched: {rows}")
+
+		r = subprocess.run([FMAKE, "-C", tree], capture_output=True,
+		                   text=True, env=env)
+		check(r.returncode == 0,
+		      f"a child submodule under a parent already in step is not "
+		      f"fetched: {r.stdout[-400:]}{r.stderr[-400:]}")
+		check("vendor/inner/deep.c" in r.stdout,
+		      f"the grandchild's source was never compiled: {r.stdout}")
+		got = subprocess.run([os.path.join(tree, "fresh")],
+		                     capture_output=True, text=True)
+		check(got.stdout.strip() == "7",
+		      f"the program does not run: {got.stdout!r}")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
 def an_ejected_build_fetches_the_submodule_too(t):
 	"""An ejected Makefile is the project's build once it is committed, so
 	it inherits the rule rather than being exempt from it. Before this, a

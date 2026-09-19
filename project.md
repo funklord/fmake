@@ -339,7 +339,8 @@ that had been green about nothing for five commits ·
 [286. The packaged fmake, and an identity that reads like a commit](#286-the-packaged-fmake-and-an-identity-that-reads-like-a-commit) ·
 [287. There is no way to say "build it, and do not install it"](#287-there-is-no-way-to-say-build-it-and-do-not-install-it) ·
 [288. A sibling's suite reads fmake's output, and says which strings](#288-a-siblings-suite-reads-fmakes-output-and-says-which-strings) ·
-[289. qtty does not build at its HEAD, and the remedy fmake printed works](#289-qtty-does-not-build-at-its-head-and-the-remedy-fmake-printed-works)
+[289. qtty does not build at its HEAD, and the remedy fmake printed works](#289-qtty-does-not-build-at-its-head-and-the-remedy-fmake-printed-works) ·
+[290. A nested submodule's path is not a pathspec at the top](#290-a-nested-submodules-path-is-not-a-pathspec-at-the-top)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21432,3 +21433,74 @@ example's header at all is a question about their tree that a build tool
 has no view on. What it says about fmake is the good half -- the failure
 is loud, the file is named, the remedy is exact and was verified to
 work.
+
+## 290. A nested submodule's path is not a pathspec at the top
+
+Reported from fuzzypickles at `ed9cabd` against this tree at `2d34233`,
+with the source reading attached and labelled as a claim about somebody
+else's tree to be checked rather than taken. It was right.
+
+    $ python3 /home/funk/src/fmake/fmake --explain
+    * SUB fuzznet/monocypher (not initialised)
+    !!! fetching the submodule fuzznet/monocypher failed:
+        error: pathspec 'fuzznet/monocypher' did not match any file(s)
+            known to git
+    rc=1
+
+`submodules_to_fetch` takes its rows from `git submodule status
+--recursive`, whose paths are relative to the top root; `fetch_submodules`
+then ran `git -C <root> submodule update --init --recursive -- <that
+path>`. A pathspec there names a submodule of the repository git is run
+in, and a child belongs to its parent, so git refuses and section 188's
+`die` fires on a tree that is perfectly buildable. `--no-submodules`
+gets past it, and with that everything else there works.
+
+**Why section 188's three-deep fixture passed with this present, which
+is the part to keep.** That fixture has top vendoring mid vendoring
+deep, and *nothing fetched*: the parent's own row is a valid top-level
+pathspec, `--recursive` brings the child along while fetching it, and
+the child's row is satisfied before it is reached. fuzzypickles' tree is
+the same depth in a different arrangement -- `fuzznet` at its pin,
+`fuzznet/monocypher` empty -- so the only row to act on is the one git
+cannot match. **Depth was the variable the fixture was built around and
+arrangement was the one that mattered.** A case built to exercise a
+mechanism exercises one configuration of it, and the configuration is
+usually the one the author met first -- which is why it passed for two
+weeks with the defect in place, in a suite that has a case for this
+exact feature.
+
+Reproduced here outside fmake, on three throwaway repositories in the
+same arrangement, because a fix aimed at git's behaviour should be
+checked against git rather than against a belief about it:
+
+    git -C fresh submodule status --recursive
+     b944a57... vendor (heads/master)
+    -4620cbb... vendor/inner
+
+    git -C fresh          submodule update --init --recursive -- vendor/inner
+        error: pathspec 'vendor/inner' did not match any file(s) known to git
+    git -C fresh/vendor   submodule update --init --recursive -- inner
+        Submodule path 'inner': checked out '4620cbb...'
+
+**The fix is `submodule_owner`**, which walks the declarations down from
+the root -- `.gitmodules` at each level names its own children -- and
+returns the directory whose pathspec the row is, with the row's tail.
+`fetch_submodules` runs git there. Two shapes were available and this is
+the narrower one: collapsing the row to its first path component is
+wrong because a top-level submodule may itself live at
+`vendor/monocypher`, and fetching a top-level ancestor with `--recursive`
+would also reset a parent somebody has deliberately checked out
+elsewhere. This touches only what is missing. A path nothing declares
+comes back unchanged, which is what the code did before, so an
+arrangement neither of us has thought of gets git's own error rather
+than fmake's guess.
+
+**The case, and its control.** A fixture in the new arrangement -- clone,
+then `submodule update --init -- vendor` and not `--recursive`, so the
+parent is in step and the grandchild is not. It asserts the arrangement
+before it asserts the build: exactly one status row, unfetched, and the
+grandchild's. Without that a clone that happened to fetch both would
+build, and the case would pass having touched nothing -- the fixture
+that does not reach the hazard, which sections 112 to 116 are largely
+about.
+

@@ -16118,6 +16118,45 @@ def declared_submodules(root):
 	return [m.group(1) for m in RE_GITMODULES_PATH.finditer(text)]
 
 
+def submodule_owner(root, path):
+	"""(the directory to run git in, the pathspec it will take) for a row.
+
+    `git submodule status --recursive' reports a nested submodule's path
+    relative to the TOP root, and `submodule update' will not take one:
+    its pathspec names a submodule of the repository it is run in, and a
+    child belongs to its parent. Reported from fuzzypickles, whose
+    `fuzznet' is at its pin and whose `fuzznet/monocypher' is empty, so
+    the one row to act on was the one git cannot match:
+
+        error: pathspec 'fuzznet/monocypher' did not match any file(s)
+
+    The three-deep case already here did not catch it, and the reason is
+    the arrangement rather than the depth: there the parent is unfetched
+    too, so the parent's own row IS a top-level pathspec and `--recursive'
+    brings the child in before the child's row is reached. A parent
+    already in step leaves that row alone in the list.
+
+    Walking down the declarations rather than collapsing to the first path
+    component, for two reasons. The component is not the answer -- a
+    top-level submodule may live at `vendor/monocypher' -- and updating an
+    ancestor with `--recursive' would also reset a parent somebody has
+    deliberately checked out elsewhere, where this touches only what is
+    missing. A path nothing declares comes back unchanged, which is what
+    this did before and leaves git to say so.
+
+    It terminates because each step strips a declared prefix and at least
+    its slash, so `rest' is strictly shorter every time round.
+    """
+	where, rest = root, path
+	while True:
+		hit = next((d for d in declared_submodules(where)
+		            if rest == d or rest.startswith(d + "/")), None)
+		if hit is None or hit == rest:
+			return where, rest
+		where = os.path.join(where, hit)
+		rest = rest[len(hit) + 1:]
+
+
 def submodules_to_fetch(root):
 	"""Submodules this tree declares that are not at the commit it names.
 
@@ -16225,14 +16264,15 @@ def fetch_submodules(root, dry_run=False):
 		      "accept that what they contain will be missing.")
 	for path, why in want:
 		info(f"{CYAN('SUB')} {path} ({why})")
+		# Run where the pathspec means something: see submodule_owner.
+		where, spec = submodule_owner(root, path)
+		cmd = ["git", "-C", where, "submodule", "update", "--init",
+		       "--recursive", "--", spec]
 		if dry_run:
-			print(" ".join(shlex.quote(c) for c in
-			               ["git", "-C", root, "submodule", "update",
-			                "--init", "--recursive", "--", path]))
+			print(" ".join(shlex.quote(c) for c in cmd))
 			continue
 		try:
-			r = subprocess.run(["git", "-C", root, "submodule", "update",
-			                    "--init", "--recursive", "--", path],
+			r = subprocess.run(cmd,
 			                   capture_output=True, text=True,
 			                   errors="replace", timeout=600)
 		except (OSError, subprocess.SubprocessError) as exc:
