@@ -21796,6 +21796,9 @@ working tree was dirty with another session's section 290 at the time --
 so the reading below is of the file as it stood, and the names are quoted
 rather than given as line numbers.
 
+Cited by number from beerssh's README since `b520c18`, so this one does
+not move again.
+
 Written into this file by beerssh's own session as section 291 and
 renumbered here: 291 and 292 had been given out as numbers and cited by
 number in fuzzypickles' tree before this arrived, so the entry moved
@@ -21887,16 +21890,35 @@ literal transition in beerssh's own tree was not run: editing a tracked
 `fmake.toml` in a tree other sessions commit from was not worth it, so
 that step is an inference and is labelled as one.
 
-**Run A is a separate finding and owes nothing to the above.** A pristine
-clone fails before the include path is ever reached. beerssh applies six
-patches to its vendored libvterm at build time out of `vterm-patch/`, and
-`src/term/emulator_vterm.cpp` uses `VTERM_PROP_RESET`, which patch 0005
-adds; fmake does not apply them, so that file fails and the link then
-wants every `bssh_emulator` symbol. Whether a build tool should know about
-a consumer's patch series is yours to decide. What is reportable is that
-the tree cannot be built from clean without that step, and that fmake's
-own message named the compile error and the undefined symbols correctly
-and pointed at the right file.
+~~**Run A is a separate finding and owes nothing to the above.**~~
+**Withdrawn by its reporter, and the withdrawal is the better
+finding.** A pristine clone does fail before the include path is
+reached: beerssh applies six patches to its vendored libvterm out of
+`vterm-patch/`, `src/term/emulator_vterm.cpp` uses `VTERM_PROP_RESET`
+which patch 0005 adds, fmake does not apply them, and that file fails
+with the link then wanting every `bssh_emulator` symbol. fmake named
+the compile error and the undefined symbols correctly and pointed at
+the right file.
+
+What was wrong was calling it a finding about fmake. Their README
+documents that step several lines above the sentence being read,
+naming `VTERM_PROP_RESET` and calling the patch step working as
+designed -- and the configuration the README actually claims, vterm
+patched and no Android dependency tree, **builds**: rc 0, and the
+binary prints `beerssh 1.0`. Their words for how it happened: three
+runs all shared a condition the claim does not require, and a
+conclusion was drawn from them anyway. The `--no-submodules`,
+dependency-tree-present arrangement was the only one measured, and it
+is not the one the README is about.
+
+So the state of that README line is the thing worth recording, and it
+is not a defect in either direction: **true on a fresh clone, false on
+any machine where `tool/build-deps-android.sh` has run**, which is
+every machine here that does Android work. Their fix is an addition
+rather than a removal, for exactly that reason. The vendored-patch
+question stays open and stays a design question -- whether a build tool
+should apply a consumer's patch series before building what depends on
+it -- rather than the defect report it was first presented as.
 
 Contention was the comfortable explanation here and it is disproved
 rather than declined. Both earlier failing runs were at load 186 to 225
