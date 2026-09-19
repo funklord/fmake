@@ -332,7 +332,14 @@ that had been green about nothing for five commits ·
 [279. `@completion`: a bash completion under the command name](#279-completion-a-bash-completion-under-the-command-name) ·
 [280. A service's companion systemd units](#280-a-services-companion-systemd-units) ·
 [281. A module's sources are its own](#281-a-modules-sources-are-its-own) ·
-[282. From ossacli: `test = false` makes a test an installed program](#282-from-ossacli-test-false-makes-a-test-an-installed-program)
+[282. From ossacli: `test = false` makes a test an installed program](#282-from-ossacli-test-false-makes-a-test-an-installed-program) ·
+[283. From raidcfgd: a landed fix that nothing arms](#283-from-raidcfgd-a-landed-fix-that-nothing-arms) ·
+[284. situ's twelve tests, and the half of 174 that was not measured](#284-situs-twelve-tests-and-the-half-of-174-that-was-not-measured) ·
+[285. respec: the same binary as make, from two different fmakes](#285-respec-the-same-binary-as-make-from-two-different-fmakes) ·
+[286. The packaged fmake, and an identity that reads like a commit](#286-the-packaged-fmake-and-an-identity-that-reads-like-a-commit) ·
+[287. There is no way to say "build it, and do not install it"](#287-there-is-no-way-to-say-build-it-and-do-not-install-it) ·
+[288. A sibling's suite reads fmake's output, and says which strings](#288-a-siblings-suite-reads-fmakes-output-and-says-which-strings) ·
+[289. qtty does not build at its HEAD, and the remedy fmake printed works](#289-qtty-does-not-build-at-its-head-and-the-remedy-fmake-printed-works)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11858,6 +11865,17 @@ fmake discovers there is nothing to build, so a reader following that README
 is left with a directory in a tree fmake declined. apt-emerge ignores it,
 which is the right local answer and not the right one here.
 
+**Re-measured 2026-09-19**, reported from anti-avx's own session: that
+tree at `0c1e1d2`, this tree at `2d34233`, plain `fmake test`, exit 0
+and `* 5 tests passed` -- the same five, each running its own exhaustive
+sweep. So the five keys of configuration and the assembly support have
+held for a fortnight of fmake's changes. The tree is 14 tracked `.c`
+and `.h` files with six `main()`s -- the five tests and
+`tool/icache_bench`, the one that is not a test -- beside 25 Python
+files that are nothing fmake compiles. Their README's warning about
+`/usr/bin/fmake` being older than the assembly support is one of the
+five collected in section 286, and is the one nobody has re-taken.
+
 Declined here, on the grounds that the state directory holds the scan cache
 and the lock is what makes two concurrent fmakes safe, so moving either
 behind the walk is a load-bearing reorder that should not ride along at the
@@ -14460,10 +14478,13 @@ prevent. And the schema work it did not need -- 28 example schemas
 nothing includes -- is reported per schema and skipped, which is what
 `[situ]` support was written to do.
 
-**Not measured, again, and named so it stays visible.** Whether the
-eleven that build also pass, since fmake declined to run any of them
-while one was broken; and situ's Python suite and its double
-compilation, which its own `fmake.toml` says are not attempted.
+**Both halves measured since; see section 284.** Whether the eleven
+that build also pass went unanswered here because fmake declined to run
+any of them while one was broken. Re-run against situ's HEAD on
+2026-09-19: `test_icmp` compiles -- their breakage, and theirs to fix,
+which they did -- and all twelve pass. situ's Python suite and its
+double compilation remain not attempted, which its own `fmake.toml`
+says and which is the boundary that file draws rather than a gap.
 
 **Relayed on 2026-09-06**, on the copyright holder's instruction, as
 `suggestion/fmake.md` in situ's tree -- a new file, since theirs was
@@ -20974,3 +20995,440 @@ using the key the other way.
 
 `test-args` did exactly what it says on that tree's fuzz driver, which
 is what took it from three failures to two.
+
+## 283. From raidcfgd: a landed fix that nothing arms
+
+Reported from raidcfgd 2026-09-19, measured against this tree at
+`2d34233` -- a scratch copy of their HEAD, submodules at their pinned
+commits, run as `python3 ~/src/fmake/fmake -j 4 --explain ciss_probe`.
+Exit 0, and the link line it printed:
+
+    cc -o ciss_probe .fmake/obj/a993a48f733a/tool/ciss_probe.c.o \
+                     .fmake/obj/a993a48f733a/ossacli/src/shim/sgshim.c.o \
+                     .fmake/obj/a993a48f733a/ossacli/src/lib/simfw.c.o -Os
+
+So a consumer of a vendored `ossacli` still links the `LD_PRELOAD`
+simulator's `close()` and `ioctl()` in libc's place -- section 254's
+shape, unchanged from the `46d130a` measurement their README cites.
+
+**The reason they measured, and it is the part worth keeping.** Section
+281 is exactly this fault and it is fixed; its measurement was taken
+with `@kind module` declared on the two shims, which is what arms it.
+ossacli has not committed those directives: raidcfgd grepped for
+`@kind` under `ossacli/src/` at their pinned `ab3361c` and at ossacli's
+own HEAD `7641fa9`, and got nothing either time. **The tool is fixed and
+the annotation that arms the fix is unwritten**, so the fix reads as
+landed from here and as absent from there, and nothing either tree runs
+would say so. A case proves a mechanism works; it cannot prove anybody
+has used it.
+
+Their remedy was to write no `fmake` line in raidcfgd's README at all --
+the harmonization rule asks for one beside the make line, and they
+declined to write one that does not build the kernel's `ioctl`. The
+one-line workaround available to them, `"ossacli/src/shim/**"` in
+`exclude`, was deliberately not taken on the grounds that it would hide
+a real finding from the tool the finding is for. That is the right call
+and the reason it is recorded here.
+
+**The open question, which is fmake's.** Nothing in raidcfgd declares a
+module, so inferring one from "built only into a `-shared` target" does
+not reach this tree: there is no shared target here, only a program and
+two files that happen to define libc names. The signal fmake does have
+is section 219's, and it already fires -- `c5a9a9d` says a tree file is
+standing in for libc, by name, and then links it anyway. Three answers,
+and the middle one is the change:
+
+- leave it, on section 219's argument: fmake says what it did, and a
+  tree that means to interpose gets what it asked for;
+- prefer libc for a libc name unless something in the tree declares the
+  file, which silently breaks the tree that means to interpose -- a
+  deliberate `malloc` replacement is the ordinary case of that, and it
+  would stop working with no message at all;
+- refuse rather than choose, the section 3 answer, which turns a warning
+  into a stop for trees that build today.
+
+Whichever it is, it is a behaviour change for somebody, and it wants
+deciding once rather than per report.
+
+**The stray include flags they flagged, answered here rather than
+chased.** A `--explain` of one target printed every compile line
+carrying `-I/usr/include/SDL2` and `-I/usr/include/libpng16` for a
+three-file C program that uses neither. That is not section 175's defect
+returning. The package flags fmake puts on a compile line are computed
+once over every source in the tree, deliberately: the comment at the
+site says why, which is that a per-pass set depends on how far widening
+has got, so a file compiled early carries flags fmake later believes it
+did not, its cache key disagrees, and the next build recompiles it for
+nothing. Stable inputs, stable keys, idempotent builds -- and the price
+is that a package any header in the tree proposes contributes its flags
+to every compile line. Section 175's hazard applies and is recorded
+there; section 176 fixed the separate bug that made it fire for a
+package the symbols had *declined*. Written down so the next report of
+this shape finds the reason rather than reopening 175.
+
+## 284. situ's twelve tests, and the half of 174 that was not measured
+
+Section 174 built situ from a copy of `030880f` and left two things
+unmeasured, deliberately and by name: whether the eleven test programs
+that compiled also pass, since fmake declined to run any of them while
+`test_icmp` was broken; and whether the breakage was still there.
+Measured here 2026-09-19, because situ's session had its own suites
+running in its tree and would not add an fmake build underneath them.
+
+    git -C /home/funk/src/situ archive HEAD | tar -x -C <scratch>   # 4ad3448
+    python3 /home/funk/src/fmake/fmake -j4                          # rc 0
+    python3 /home/funk/src/fmake/fmake -j4 test                     # rc 0
+
+    * built situ-walk-c, libsitu.a
+    * 12 tests passed
+
+So both halves close at once. `test_icmp` compiles at situ's HEAD -- the
+three-argument call section 174 traced to their tree was theirs and they
+have fixed it -- and the twelve run and pass under `fmake test`, which
+is the claim situ's `fmake.toml` comment makes and which nobody had
+re-taken since it was written. The rest of that run reproduces section
+174 exactly: the default build compiles three units and stops, naming
+the twelve test programs it has not built and 32 example schemas
+skipped one by one because nothing includes the header each would
+write, and reporting `runtime/rust/situ_rt.rs` as reached by no crate
+root. `fmake test` then compiles 25 units and links the twelve.
+
+**The rung difference is still there and still explains nothing.**
+situ's `test/generated/Makefile` passes `--layer converse` to `situc
+build`; its `fmake.toml` still carries no `[situ] flags`, so fmake still
+compiles the schemas at the default rung -- and all twelve pass at that
+rung. Section 174's experiment said the two rungs emit the same
+declaration for the function that failed; this says the whole suite
+agrees with the Makefile's rung as well, which is a wider statement than
+that experiment made and is the one worth having.
+
+**The correspondence file is a copy, so nothing is lost if it goes.**
+situ's session reported `suggestion/fmake.md` sitting untracked in their
+tree, 4862 bytes, one `git clean` from gone, and asked whether this tree
+holds it -- because if the session that wrote it had been cleared, that
+file would be the only copy. It is not: section 174 carries its
+reproduction, its rung experiment, the list of `situc` commands fmake
+does not drive, and the finding about their twelfth test. The file is
+the relay, and this is the record. Whether it is committed remains
+theirs.
+
+**What is still not measured, and stays named.** situ's Python suite and
+its double compilation of each generated test, checked and released,
+which its own `fmake.toml` says fmake is not attempting -- unchanged
+since 174, and not a gap in fmake so much as the boundary its
+`fmake.toml` draws.
+
+## 285. respec: the same binary as make, from two different fmakes
+
+Reported from respec 2026-09-19, and it is the cleanest positive result
+any tree has sent. Two clean checkouts, each `git archive HEAD | tar -x`
+from respec at `1004e77`, so neither was their working tree:
+
+    cd <checkout-a> && fmake                              # /usr/bin/fmake
+    cd <checkout-b> && python3 /home/funk/src/fmake/fmake # this tree, 2d34233
+
+Both printed the same four lines -- one compile of `engine/t2.c`, the
+link, the note that `platform/apple2/woz2.situ` is not compiled because
+nothing includes the header it would write, and `* built t2` -- and both
+exited 0. Compared against `make engine`, the project's own `-Os` build,
+with `cmp`: the installed fmake's binary, this tree's, and make's are
+**byte-identical**, `text=11560` for all three. They then copied fmake's
+binary over `build/t2` and ran respec's engine differential suite, which
+compares the C evaluator against the PicoLisp one expression by
+expression: 74/74. The artifact works rather than merely building.
+
+**The `woz2.situ` line is fmake reporting something make does not**, and
+it is correct: that tree uses the Python backend and keeps the generated
+file as `woz2_gen.py`, so nothing includes `woz2.h`.
+
+**Their record's own conclusion, which is theirs and not mine**: fmake is
+not a candidate to replace respec's build, and that is not a gap in
+fmake. Its Makefile compiles exactly one C file; the style gate, the
+layer check, the platform selftests, the sabotage selftest and the
+PicoLisp suites are not compilation, and `make check` there is a gate
+rather than a build.
+
+**The README rule has nothing to sit beside.** respec's README is 76
+lines -- Thesis, The docs, Copyright -- and shows no build instructions
+at all, so the harmonization rule asking an `fmake` line beside a `make`
+line is not triggered and the absence is not drift. Worth recording
+because the rule has now produced a line in fifteen trees and this is
+the one where the honest answer is that there is nothing to put it
+beside.
+
+**One thing that fell out of their measurement is a finding about fmake
+rather than about respec**, and it has its own entry: they read the
+parenthesised value in `fmake --version` as a git commit and went
+looking for it. See section 286.
+
+## 286. The packaged fmake, and an identity that reads like a commit
+
+Five trees warn their readers about `/usr/bin/fmake` in five different
+sentences, and not one of them can be checked from the tree it is
+written in. Collected 2026-09-19 while folding the sessions' reports:
+
+    situ      "Not /usr/bin/fmake, which is older than the two fixes
+               this tree needs."   (it does not name the two fixes)
+    qtty      "the packaged one predates $root and leaves the reference
+               in the value as text"
+    anti-avx  "Not /usr/bin/fmake, which is older than the assembly
+               support this needs."
+    hembygd   corrected in place: measured 2026-09-07, the packaged one
+               does build that tree, and the README now gives the
+               command rather than a verdict
+    ossacli   the installed one is silent where this tree warns
+    respec    measured: the installed one and this tree produce the same
+               bytes for that tree (section 285)
+
+**The honest state of the package, measured here.** `dpkg` says `1.0`,
+which is what it has said at every one of its four installs and
+upgrades -- `2026-08-07`, `2026-08-07`, `2026-08-31` and `2026-09-04`,
+from `/var/log/dpkg.log`. So the package version cannot tell two copies
+apart and never could, which is the argument section 224 makes for
+hashing the file.
+
+**Its mtime says 2026-08-04, and that is fmake's own doing.** The file
+is dated the second in the changelog's trailer -- `Tue, 04 Aug 2026
+16:20:53 +0200` -- because section 275 honours `SOURCE_DATE_EPOCH`, so
+the installed file carries the release's date rather than the install's.
+Two sessions read the age off the mtime this week and called it six
+weeks old; `dpkg.log` says it was installed a fortnight ago. A
+reproducible build makes a file's mtime say something true and not the
+thing anybody was asking.
+
+**And the identity reads as a git commit, which cost a session a wrong
+conclusion.** respec's session ran
+
+    /usr/bin/fmake --version     ->  fmake 1.0 (5af02348)
+    git cat-file -t 5af02348     ->  fatal: Not a valid object name
+
+and reported, carefully and with the caveat that it might not matter,
+that the installed binary was built from something this tree no longer
+contains or that the history had been rewritten. Neither is true.
+`5af02348` is the first eight hex of the SHA-256 of the file:
+
+    sha256sum /usr/bin/fmake            5af023488ad04e18...
+    sha256sum ./fmake                   437ce0d34af1198c...
+    python3 ./fmake --version           fmake 1.0 (437ce0d3)
+
+Eight lowercase hex in parentheses after a version string is git's
+spelling, and nothing at the point of use says otherwise -- so the
+reasonable reader asks git, git says no, and the answer is alarming.
+That the check was run and reported rather than acted on is the
+practice working; what it measured was fmake's wording.
+
+**Fixed in the README rather than in the output, and the reason is the
+interface.** `--version`'s first line is what a caller parses; the suite
+anchors a regex to it and a case says in as many words that appending to
+it is a change to a format somebody may already read. Labelling the
+value -- `fmake 1.0 (sha256:5af02348)` -- would say it outright and is
+the change worth making if the line is ever revised for another reason;
+it is not worth making on its own. The README now says what the
+parenthesis holds, which is what hembygd's README had already worked out
+for itself and said in one clause.
+
+**Reproduced three times, which is worth more than this document
+saying it.** situ's, respec's and anti-avx's sessions each ran the two
+commands on this machine after being told the answer, and each reported
+the same pair -- `(5af02348)` installed, `(437ce0d3)` in the checkout --
+with `dpkg -s fmake` saying `Version: 1.0` for the one and no version at
+all for the other. Three independent runs of a command is not three
+witnesses to a design; what it establishes is the narrower thing the
+section needs, that the identity distinguishes two copies the version
+string cannot.
+
+**And the question underneath the five sentences is still open, because
+the one attempt to close it was starved.** anti-avx ran `timeout 900
+/usr/bin/fmake test` to settle whether the packaged one still builds
+that tree, and got exit 124 with no output -- fmake's own suite was
+running on the machine at the time, a dozen compilers deep. They
+recorded it as inconclusive and wrote nothing into their README on the
+strength of it, which is right: section 184 is this project's own
+version of that lesson, and a starved run reads exactly like a refusal.
+
+**What the collection is really evidence for.** Every one of those five
+sentences is a claim about a package on one machine, written in a
+document that travels to machines it was not measured on. hembygd's is
+the shape the others want: run the command, print what it says, and let
+the reader's own copy answer. The identity exists so that command has an
+answer to give.
+
+## 287. There is no way to say "build it, and do not install it"
+
+Section 282 recorded ossacli reaching for `test = false` to mean "this
+is not a test" and getting an installed program. Asked what the right
+key would be, they answered by reading the schema rather than reasoning
+from the name, and the answer generalises past their tree.
+
+**Their case, as its own shape.** In ossacli with only `exclude =
+["debian"]`:
+
+    $ fmake --explain
+    target health_summary (exe)  [no @target]
+      kind        exe: example/health_summary.c defines main()
+      installs
+        health_summary                      -> $BINDIR
+
+    $ fmake
+    * built health_summary, ossacli, ossa-check, ossa-metrics
+
+Four programs where their Makefile's linked list has three and `make
+install` installs three. `example/health_summary.c` is a
+library-integration example: built by the Makefile so that it cannot
+rot, deliberately not installed. **Nothing was wrong with the
+inference**; there is simply no way in the tree to say what the Makefile
+says by leaving a name out of one list. What they did instead was
+`exclude = ["debian", "example", "src/shim"]`, which is right for that
+tree and blunt -- it also stops fmake building the example at all, so
+the example loses the does-it-still-compile property the Makefile gives
+it.
+
+**Why `test = false` is not the key, in their words and checked against
+the schema.** The target section carries `test` and no install key;
+`[install]` holds directories only -- prefix, bindir, libdir and the
+rest. So `test` says whether to RUN a thing and nothing says whether to
+SHIP it, and `test = false` answers the second question as a side effect
+of the first. That is exactly what made it wrong for `shim_wide`, where
+it moved a program from not-built-by-default to built-and-installed.
+
+**Nor is the `tests/` exclusion the analogue**, and this is the
+distinction worth keeping. Section 276 keeps a test double out of
+another target's *closure*: a contamination fault.
+`example/health_summary.c` contaminates nothing -- it is a well-formed
+program that should exist and should not ship. Different fault, and it
+wants a different key.
+
+**Corroborated in a second tree, measured here rather than reported.**
+qtty at `3cadb04`, `fmake --explain`, six targets and all six installed
+to `$BINDIR`:
+
+    chat              example/chat/main.cpp -- an example
+    screen-probe      tool/screen-probe.cpp -- a developer probe
+    qtty-tray-check   tool/tray/main.cpp    -- a gate its Makefile runs
+    qtty-inspect  qtty-negotiate  qtty-replay   -- the three real tools
+
+Three of the six are things qtty's own build makes and does not ship,
+and qtty's `fmake.toml` renames four targets without being able to say
+that about any of them. So the gap is not ossacli's packaging habit; it
+is what every tree does with `example/` and with a probe beside its
+tools.
+
+**The design space, and it is fmake's call.** A per-target `install =
+false` is the smallest thing that says it, and it reads as the exact
+opposite of what `[install]` already means. A directory convention --
+`example/` and `examples/` implying it, the way `tests/` implies its own
+handling -- costs no configuration at all in the common case, and
+section 242 is the precedent for how that gets decided here: one name
+inferred, the general rule refused because a tree sorting its tests into
+`tests/parser/` would silently lose them, and the bar set at *a second
+name gets added when a second tree spells it that way*. `example/` has
+two trees spelling it that way, and they are the two measured above.
+
+The two answers compose badly, which is the part to settle rather than
+to discover later: a convention that installs nothing from `example/`
+makes an `install = true` necessary for the tree that does ship its
+example, and that is a key nobody has asked for. What is not in doubt is
+that the sentence has two independent askers, and that today neither can
+say it at all.
+
+## 288. A sibling's suite reads fmake's output, and says which strings
+
+Reported from ossacli 2026-09-19, unprompted, and the most useful thing
+in their message: their `make test` now runs fmake and parses what it
+prints, so parts of fmake's output are a sibling's gate.
+
+What it depends on:
+
+- `^target <name> (exe)` and `^  link set` in `--explain`, and that a
+  link-set member line is indented four spaces. It counts link-set
+  blocks and refuses anything but three, so a format change fails there
+  loudly rather than reading nothing and reporting success.
+- the literal `in libc's place` in build output, which is `c5a9a9d`'s
+  warning -- section 254.
+
+It exists because the shim getting linked in produced a binary that
+reported a fictitious P410 with nothing preloaded, and a README line
+claiming three programs where fmake built four. So the gate is a real
+regression check against section 219's failure, and it is written the
+right way round: it counts what it expects rather than grepping for the
+absence of a complaint.
+
+**They are not asking for a frozen format**, and fmake should not offer
+one -- it is fmake's output and ossacli chose to parse it. Two things
+follow that are worth knowing here, both theirs:
+
+- if either string is reworded, that suite goes red and says the format
+  moved rather than blaming the tool;
+- if `in libc's place` ever becomes a refusal rather than a warning --
+  one of the three answers section 283 lays out -- ossacli needs telling,
+  because that arm greps for a warning and would then be waiting for
+  something that can no longer appear.
+
+**What this changes here.** Section 213 and its neighbours treat
+fmake's messages as prose to be got right for a reader. One tree now
+treats two of them as an interface, which is a stronger claim on
+`--explain`'s shape than anything in this document so far, and it
+arrived without fmake being asked. The right response is not to freeze
+the wording but to remember who to tell -- and to prefer, where the
+choice exists, changing what fmake *adds* to a line over changing how
+the line begins.
+
+## 289. qtty does not build at its HEAD, and the remedy fmake printed works
+
+qtty's session had run nothing this session and said so plainly rather
+than relaying its README as measurement -- which is the right answer to
+the question and left two claims of theirs unchecked. Both are measured
+here, 2026-09-19, against a `git archive` of qtty `3cadb04` at fmake
+`2d34233`.
+
+**The claim that held.** Two `.cpp` files there had just gained
+`#include "...moc"` lines for classes defined in the `.cpp` itself, and
+the session that added them said `fmake -n` planned both. It does:
+
+    moc ... src/runtime/application.cpp -o .fmake/moc/src/runtime/application.moc
+    moc ... test/suite_runtime.cpp      -o .fmake/moc/test/suite_runtime.moc
+    moc ... src/runtime/tray.cpp        -o .fmake/moc/src/runtime/tray.moc
+
+three `.moc` outputs for the three sources that include one, beside the
+two `moc_*.cpp` for the headers that declare `Q_OBJECT`. Section 17's
+two idioms, both in one tree, and the newer pair costs no configuration.
+
+**The claim that did not arise, because fmake does not read it.** Their
+survey noted that `src/src.pro`'s `HEADERS` lists four of the nine
+tracked headers under `src/`, and wondered whether that matters to
+fmake. It does not: fmake never opens a `.pro` file. Headers reach a
+build here by being included, and `-I` by section 216's rules, so a
+`HEADERS` list is qmake's bookkeeping and invisible from here. Worth a
+sentence because the question was asked at all: a tree with both build
+systems in it will keep raising it, and the answer is that fmake reads
+the sources and `fmake.toml` and nothing else.
+
+**And the thing neither of us expected: the tree does not build.**
+
+    python3 /home/funk/src/fmake/fmake -j4        rc 1
+    * built chat, qtty-inspect, qtty-negotiate, qtty-replay,
+            screen-probe, qtty-tray-check
+    * 1 file(s) did not compile
+      test/suite_router.cpp
+
+    * chat.h: No such file or directory
+      in test/suite_router.cpp
+      chat.h is on no include path here
+      it is in this tree, at example/chat/chat.h
+      [project] include-dirs = ['example/chat'] would find it
+
+So qtty's README line -- `python3 ~/src/fmake/fmake` -- is stale at
+their HEAD: a test suite there has begun including the example's header,
+and their `fmake.toml` says `defines`, `std` and `exclude` but no
+include path. **fmake's diagnosis is the whole of what a report needs**:
+it names the header, says it is on no include path, finds it in the
+tree, and prints the line that fixes it. Applied verbatim to the scratch
+copy, `include-dirs = ['example/chat']` under `[project]`, the build
+exits 0 and compiles the file.
+
+Recorded here and relayed to qtty rather than fixed from here: their
+`fmake.toml` is theirs, and whether a test suite should be including an
+example's header at all is a question about their tree that a build tool
+has no view on. What it says about fmake is the good half -- the failure
+is loud, the file is named, the remedy is exact and was verified to
+work.

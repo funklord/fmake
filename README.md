@@ -1329,7 +1329,11 @@ binary that trade is a loss — measured at 39s against 27s on a 33-file app.
 GPL-3.0-or-later. Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>.
 
 `fmake -V` prints the version, the copyright line and the licence, and
-`fmake --man` carries both in its COPYRIGHT section.
+`fmake --man` carries both in its COPYRIGHT section. The value in
+parentheses after the version is the first eight hex digits of the
+SHA-256 of that file, and is not a git commit: it is what tells two
+copies of one release apart, every package built so far having been
+version `1.0`.
 
 ---
 
