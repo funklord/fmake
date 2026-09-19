@@ -331,7 +331,8 @@ that had been green about nothing for five commits ·
 [278. `@kind module`: a plainly-named loadable object](#278-kind-module-a-plainly-named-loadable-object) ·
 [279. `@completion`: a bash completion under the command name](#279-completion-a-bash-completion-under-the-command-name) ·
 [280. A service's companion systemd units](#280-a-services-companion-systemd-units) ·
-[281. A module's sources are its own](#281-a-modules-sources-are-its-own)
+[281. A module's sources are its own](#281-a-modules-sources-are-its-own) ·
+[282. From ossacli: `test = false` makes a test an installed program](#282-from-ossacli-test-false-makes-a-test-an-installed-program)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
