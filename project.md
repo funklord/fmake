@@ -22019,8 +22019,27 @@ caller must produce no line.
 keeping. A warning aimed at a population should be tried against the
 thing that population is *for* -- the first version was tested against
 a module missing a source, which is the fault, and not against a module
-interposing a libc name, which is the job. And an artifact reading is
-not automatically the last word: `nm -D` was right that `fopen` is
-undefined in that object, and undefined is not the same as unsupplied.
-The model knew what the link had resolved; the artifact knew what was
-left; the answer needed both.
+interposing a libc name, which is the job.
+
+And the second is ossacli's, corrected from the version that stood here
+first. This was written up as *reading the artifact is not the last
+word*, which is the wrong lesson and a dangerous one to leave in a
+document that elsewhere says to prefer the artifact. **The artifact did
+not change.** `ossa-capture.so` has `fopen` undefined in its dynamic
+table before the fix and after it, byte for byte, and `nm -D` was right
+both times. What was wrong was the inference over it: undefinedness is
+*correlated* with unresolvability and is not it, so the reading
+answered a question nobody was asking -- `evidence.md`'s *ask the
+object you mean, not something correlated with it*, met in a place
+where the proxy was the artifact itself. The object that did not move
+is the proof, and the fix is in the reading rather than in the link.
+
+**Confirmed in the tree it came from**, which is the only place it
+could be. Against `7cbd4f4`, with both shims annotated: the
+`ossa-sgshim.so` line is unchanged, there is no `ossa-capture.so` line,
+and all five artifacts build. ossacli then checked that the fix had not
+silenced a real problem rather than assuming it -- `ossa-sgshim.so`
+still carries its six `simfw_*` undefined and still dies with
+`undefined symbol: simfw_default` the moment anything preloads it, so
+the surviving line is the only thing that says so before the failure,
+which is where run 4 began.
