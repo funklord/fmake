@@ -340,7 +340,10 @@ that had been green about nothing for five commits ·
 [287. There is no way to say "build it, and do not install it"](#287-there-is-no-way-to-say-build-it-and-do-not-install-it) ·
 [288. A sibling's suite reads fmake's output, and says which strings](#288-a-siblings-suite-reads-fmakes-output-and-says-which-strings) ·
 [289. qtty does not build at its HEAD, and the remedy fmake printed works](#289-qtty-does-not-build-at-its-head-and-the-remedy-fmake-printed-works) ·
-[290. A nested submodule's path is not a pathspec at the top](#290-a-nested-submodules-path-is-not-a-pathspec-at-the-top)
+[290. A nested submodule's path is not a pathspec at the top](#290-a-nested-submodules-path-is-not-a-pathspec-at-the-top) ·
+[291. From fuzzypickles: a prefix that is a claim, and no way to deny it](#291-from-fuzzypickles-a-prefix-that-is-a-claim-and-no-way-to-deny-it) ·
+[292. What `@kind module` cannot say: five runs from ossacli](#292-what-kind-module-cannot-say-five-runs-from-ossacli) ·
+[293. `[project] exclude` does not reach the inferred include path](#293-project-exclude-does-not-reach-the-inferred-include-path)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21332,6 +21335,15 @@ example, and that is a key nobody has asked for. What is not in doubt is
 that the sentence has two independent askers, and that today neither can
 say it at all.
 
+qtty's session confirmed the second instance from their side after
+reading the measurement: `chat` is an example and `screen-probe` is a
+diagnostic, their `make install` ships two tools plus the headers, the
+library and the pkg-config file and deliberately not those two, and
+they recorded it as a difference between the two builds rather than as
+a bug in fmake. Which is the correct posture and also the reason it
+needs fixing here: a tree that adopts fmake for its build inherits an
+install plan its own packaging would not have written.
+
 ## 288. A sibling's suite reads fmake's output, and says which strings
 
 Reported from ossacli 2026-09-19, unprompted, and the most useful thing
@@ -21434,6 +21446,28 @@ has no view on. What it says about fmake is the good half -- the failure
 is loud, the file is named, the remedy is exact and was verified to
 work.
 
+**They reproduced it before changing anything, and then gated it**, in
+`d604332`. Same method -- `git archive HEAD | tar -x` into scratch --
+same rc 1 and the same diagnostic, rc 0 with the line added. The
+include turns out to be deliberate: the suite tests the example's
+delegate rather than merely linking it, and `test/test.pro` has carried
+the include path and the header for it for some time, so what was short
+was the `fmake.toml` rather than anything in the tree. Their
+`tool/tools-check` now compares the suite's include paths beside the
+tool names and the language standard, as sets of directory names
+because qmake writes `$$QTTY_ROOT/example/chat` where fmake writes it
+relative to the root -- and they emptied `include-dirs` and watched it
+exit 1 naming both sides, which is the half that makes it a gate rather
+than a fix.
+
+That makes four facts of this shape in one `fmake.toml` and the second
+to bite: its own comments record the tray target's name being missed,
+so fmake built `tray` where qmake built `qtty-tray-check` and left an
+untracked binary at the repository root. **A configuration file that
+exists to say what a tool cannot infer is a file that goes stale
+silently**, and the answer that tree keeps arriving at is to compare it
+against the other build rather than to remember.
+
 ## 290. A nested submodule's path is not a pathspec at the top
 
 Reported from fuzzypickles at `ed9cabd` against this tree at `2d34233`,
@@ -21504,3 +21538,269 @@ build, and the case would pass having touched nothing -- the fixture
 that does not reach the hazard, which sections 112 to 116 are largely
 about.
 
+
+## 291. From fuzzypickles: a prefix that is a claim, and no way to deny it
+
+Two results from fuzzypickles at `ed9cabd` against this tree at
+`2d34233`, both run with `--no-submodules` to get past section 290.
+
+**A signal this project left in their tree does not reproduce, and
+they disproved it rather than merely failing to see it.** The entry --
+theirs, section 256 in their numbering, written by an fmake session on
+2026-09-18 and never recorded here -- said `fzpd` no longer builds
+because `daemon/test/entropy_linux_test.c` interposes `getrandom()` and
+fmake refuses two `main()`s in one link set. At `2d34233` the link set
+carries `daemon/entropy_linux.c` and no test TU, and the entropy test
+is among the 81 programs listed as not built by default.
+
+The part worth keeping is what they did next. That file could not
+compile at all in their tree, for want of `daemon` on the include path
+-- so it defined nothing, and **its absence rather than any fix could
+have been what kept `fzpd` quiet**. They put `daemon` on the path
+deliberately, making the interposer a real strong definition, and re-ran:
+no refusal, no test TU, exit 0. So the pull is gone *with the condition
+present*. That is the difference between non-reproduction and a
+disproof, and it is the reason the entry in their tree can now be marked
+overtaken rather than left to be re-derived. Which of `0c8f86c` and
+`1b2f816` retired it, or whether it was ever right, is not established
+here and does not need to be: what the entry asks of them -- name
+`fzpd`'s sources, or amend the README -- is work they would have done
+for a fault that is not there. It is recorded in this document as well
+as in theirs, because a signal sent out had no copy here and the one
+in their tree was therefore the only one -- so the tree that could have
+said it was stale had nothing written down to say it with. That is
+fuzzypickles' generalisation and it is worth keeping as a rule for this
+project: **a signal this project sends into another tree gets an entry
+here too**, or its correction has nowhere to land. They have struck
+their entry in `62e70e0`, naming this section at its head rather than
+answering it further down.
+
+**The prefix arm of the name rule excluded a portable file.**
+`gui/src/android_insets.cpp` is dropped by `filename_platform`'s prefix
+arm on a Linux build. It is not Android-only: `gui/gui.pro` lists it in
+the unconditional `SOURCES`, `fzp_scale_insets` and
+`fzp_combine_insets` are portable arithmetic, and only
+`fzp_system_bar_insets` has an Android body -- inside `#ifdef
+Q_OS_ANDROID`, with an `#else` returning an empty `QMargins`. The cost
+is a link failure in a file that had nothing to do with it:
+
+    LD  fzp-gui
+    main_window.cpp:(.text+0x46b): undefined reference to `fzp_system_bar_insets()'
+    main_window.cpp:(.text+0x482): undefined reference to `fzp_scale_insets(QMargins const&, double)'
+
+**`filename_excludes`' own docstring states the premise this file
+breaks**: *the file is what CMake would have put inside `if(ANDROID)`.
+It carries no self-guard, because the build system was what excluded
+it.* Theirs carries one. The premise is checkable -- an `#ifdef` naming
+the platform the name claims, with an `#else`, is a file saying it
+compiles everywhere -- and whether fmake should read it before trusting
+a name is a design question rather than a bug: the name rule exists
+because a header that is not there is a hard blocker no flag fixes, and
+reading `#ifdef`s to overrule a filename is the beginning of
+understanding the preprocessor, which section 5 declines to do.
+
+**And there is no way to say "the name is not a claim".** An `@os` or
+`@arch` clears the name outright -- that is `filename_excludes`' first
+line -- but `platform_excludes` then filters on whatever list was
+written. So a file that is not platform-specific at all must still name
+a platform list, and fuzzypickles wrote `@os linux android` because
+those are the two their GUI targets. On a NetBSD build that file would
+now be dropped for a reason that is not true: the annotation added to
+deny a wrong claim has become a narrower version of the same wrong
+claim. A spelling meaning *this name carries no platform* -- `@os any`,
+or an `@os` with no list -- would fit exactly, and the vocabulary is
+this project's to choose.
+
+**What worked, and they said so both times.** The link diagnostic named
+the file and the reason, which is what made it a ten-minute fix; and
+their earlier failure, 31 files on `miniz.h`, was fixed from fmake's
+message naming every directory it needed. With both, fmake builds
+`fzp`, `fzpd`, `fzptui` and `fzp-gui` there.
+
+## 292. What `@kind module` cannot say: five runs from ossacli
+
+Section 281 fixed the module rule and section 283 recorded that nothing
+in ossacli arms it. ossacli then tried to arm it, and could not. Five
+runs, all against this tree at `2d34233` on a scratch copy of their HEAD
+with `src/shim` taken out of `[project] exclude`:
+
+1. `@kind module` written in an ordinary `/* */` header does nothing,
+   and fmake says why, with file and line: directives are read from
+   doxygen comments. Their words: a good message for a mistake made from
+   the shape of the directive alone.
+2. `/*! */` with no source list: `ioctl` is defined by both `capture.c`
+   and `sgshim.c`, so fmake refuses, prints the include graph's answer,
+   calls it a guess rather than a decision and says the lists are worth
+   checking. **That last clause did the work**, because the guess was
+   wrong in a way they would not otherwise have looked for.
+3. fmake's suggested `sources = ["src/lib/simfw.c", "src/shim/sgshim.c"]`
+   builds both modules and then fails to link all three programs, each
+   on `simfw_default`: section 281's rule took `simfw.c` out of every
+   other target's closure, and the programs need it.
+4. `sources = ["src/shim/sgshim.c"]` alone: exit 0, everything builds,
+   the three programs carry no interposer -- checked with `nm` rather
+   than by reading the link line -- and **`ossa-sgshim.so` fails at load
+   with `undefined symbol: simfw_default`**.
+5. Adding `[target.ossa] kind = "shared"` with the Makefile's sources
+   builds `libossa.so` too and leaves 4's undefined symbol exactly where
+   it was. They could find no way to say "this module links that
+   library".
+
+**The shape, in this project's terms.** ossacli's shim and ossacli's
+programs both need `simfw.c`. The shim answers from the simulator; the
+programs ship it because `OSSA_TRANSPORT=mock` is a documented feature.
+Section 281's rule is unconditional -- nothing links a module, so its
+sources are its own -- and that argument holds for the interposer and
+not for the simulator sitting behind it.
+
+**Two defects and a design question fall out, and they are not the same
+size.**
+
+- **A module links with undefined symbols and nothing says so.** That is
+  run 4, and it is fmake's: `-shared` permits undefined symbols, so the
+  link succeeds and the failure arrives at `dlopen` in whatever program
+  preloads it, weeks later. Every other artifact fmake produces has its
+  symbols decided by section 3; a module is the one that ships
+  unresolved. Saying so at link time is a warning fmake can compute from
+  what it already knows.
+- **`sources` does two jobs at once**, in their words: it says which
+  files a target is built from, and by saying so it claims them away
+  from everyone else. Those came apart here -- they wanted the second
+  for `sgshim.c` and not for `simfw.c`. Whether the answer is a second
+  key, a module that can link a declared library, or the section 276
+  machinery pointed at interposers rather than at `tests/` doubles, is
+  this project's.
+- **The README oversells it.** *"ossacli's `ossa-sgshim.so` is one"* is
+  true of what that file is and not of what fmake can currently build,
+  and that sentence is what sent raidcfgd looking. It wants correcting
+  whichever way the above is decided.
+
+**What ossacli did, which is the right answer for them**: nothing. The
+annotation stays out and `exclude` stays in, because taking it would
+trade a working shim for one that fails at load. It is written up in
+their `project.md` as *Why the shims are excluded from fmake rather than
+declared as modules*, with all five runs, so the reason is visible here
+rather than looking like an annotation nobody got round to.
+
+**And raidcfgd supplied the cost rather than the symptom**, relayed
+through ossacli at their request and in their words: `ciss_probe` is a
+raw controller probe whose whole job is to issue `SG_IO` to `/dev/sg0`
+and print what the controller said. Built through fmake it gets
+`simfw`'s `ioctl`, so it answers from a simulated Smart Array while
+looking exactly like a tool that read the hardware. **That is not a
+build that fails; it is a storage diagnostic that invents its subject**,
+and the person running it cannot tell. ossacli had the same failure
+before their `exclude` went in -- `ossa-check` reported named alarms on
+an MSA70 shelf that is not on this machine -- so it is measured in two
+trees, with different programs and one cause.
+
+What is new in raidcfgd's instance is the distance: **the tree holding
+the interposer is not the tree building the program.** Nobody editing
+raidcfgd can see that `sgshim.c` is a shim, and nobody editing ossacli
+is present when that probe is linked. `@kind module` puts the fact in
+the file, which is why it is the right place for it and why the five
+runs above matter -- they are about it not yet being sufficient there.
+
+## 293. `[project] exclude` does not reach the inferred include path
+
+Reported from beerssh at `3ae9e0b` against this tree at `4d7fae5`, whose
+working tree was dirty with another session's section 290 at the time --
+so the reading below is of the file as it stood, and the names are quoted
+rather than given as line numbers.
+
+Written into this file by beerssh's own session as section 291 and
+renumbered here: 291 and 292 had been given out as numbers and cited by
+number in fuzzypickles' tree before this arrived, so the entry moved
+rather than the citations. Their text is otherwise as they wrote it,
+including the correction they made an hour later -- the three bounded
+runs, which replaced a paragraph saying the remedy had not been
+tested.
+
+beerssh's README carries the fmake line the harmonization rule asks for,
+and on this machine it does not build:
+
+    $ python3 /home/funk/src/fmake/fmake
+    * beerssh skipped: src/main.cpp did not compile
+    !!! no target could be built
+    rc=1
+
+`-v` names the cause, and it is one header:
+
+    build-deps-android/arm64-v8a/libssh-0.11.5/include/libssh/string.h:23:10:
+        fatal error: libssh/priv.h: No such file or directory
+      in .fmake/moc/keyboard/moc_key_cap.cpp and 110 other file(s)
+
+The include chain ends at Qt's `qarraydata.h:12`, which is
+`#include <string.h>` -- the C library's. It resolved to libssh's,
+because `build-deps-android/arm64-v8a/libssh-0.11.5/include/libssh` is on
+the compile line. libssh's `string.h` then includes `libssh/priv.h`,
+which is not findable from there, and every translation unit that touches
+any Qt header dies.
+
+**beerssh's `fmake.toml` excludes that subtree.** `[project] exclude`
+lists `build-deps-android` and `build-*`, with a comment saying why: two
+prebuilt `libcrypto.a` for the same ABI, and a few hundred targets nobody
+asked for. The exclusion works for what it names -- no OpenSSL target is
+built. It does not reach the include path: a dry run carries 109 `-I`
+flags under the excluded subtree.
+
+Where the two part company, in this tree's own words. `exclude_pattern`
+filters `srcs`, and its docstring says it is wanted "for headers too, not
+just sources" so that an excluded subtree is not moc'd or uic'd.
+`base_incflags` is built from `proj.incdirs`, which the comment beside it
+calls "what the include graph inferred" -- and that set is never put
+through `exclude_pattern`. That same comment already distinguishes
+inferred `proj.incdirs` from a stated `[project] include-dirs`, so the
+two are separable; whether they should be is yours.
+
+**The headers are untracked, which makes this a property of the machine
+rather than of the repository.** Neither `include/libssh/string.h` nor
+`include/libssh/priv.h` is tracked; both are artifacts of an Android
+dependency build. On a clean clone the subtree does not exist, there is
+nothing to shadow, and fmake may well build beerssh. So that README line
+can be honest and still false on every machine here that has done Android
+work. That half is beerssh's to settle, and is recorded because it
+decides who the bug reaches.
+
+**The printed remedy was tested, and it does not fix the build.** Three
+runs against a fresh clone of beerssh at `3ae9e0b` taken from its remote,
+each bounded, with `.fmake` cleared between them:
+
+    A  pristine clone                    VTERM_PROP_RESET not declared
+    B  + vterm patches + the dep tree    #error "no strtoull function found"
+    C  B plus the printed remedy         identical to B, finding for finding
+
+C's compile line carries both the remedy's directory and the inferred
+`.../include/libssh`, confirmed by a dry run, so the remedy landed and
+changed nothing. It changed nothing because **fmake had already inferred
+that directory itself**: with the remedy removed, the dry run still
+carries the bare `.../include` on 41 compile lines. The advice names a
+path fmake put there.
+
+What makes the remedy look right is that the two trees infer different
+sets. In beerssh's working tree only `.../include/libssh` is inferred, so
+`#include "libssh/priv.h"` fails and the remedy would genuinely resolve
+that error. In the clone both are inferred, `priv.h` resolves, and the
+build dies one header deeper inside `priv.h` itself, on its own
+configure-time `#error`. **The clone is therefore the post-remedy working
+tree, and it does not build** -- 110 files, every target skipped. The
+literal transition in beerssh's own tree was not run: editing a tracked
+`fmake.toml` in a tree other sessions commit from was not worth it, so
+that step is an inference and is labelled as one.
+
+**Run A is a separate finding and owes nothing to the above.** A pristine
+clone fails before the include path is ever reached. beerssh applies six
+patches to its vendored libvterm at build time out of `vterm-patch/`, and
+`src/term/emulator_vterm.cpp` uses `VTERM_PROP_RESET`, which patch 0005
+adds; fmake does not apply them, so that file fails and the link then
+wants every `bssh_emulator` symbol. Whether a build tool should know about
+a consumer's patch series is yours to decide. What is reportable is that
+the tree cannot be built from clean without that step, and that fmake's
+own message named the compile error and the undefined symbols correctly
+and pointed at the right file.
+
+Contention was the comfortable explanation here and it is disproved
+rather than declined. Both earlier failing runs were at load 186 to 225
+with another session's sweep in the tree, so the reading was deliberately
+retaken at load 200 rising to 211: identical output, same file, same
+count of 110.
