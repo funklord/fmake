@@ -19656,9 +19656,20 @@ def a_build_waits_for_a_lock_it_cannot_take(t):
     tree, is exactly the question a timing-dependent test cannot answer.
 
     This one takes the lock itself and checks that fmake blocks on it, then
-    that releasing it lets the build through. No timing assumption, so no
-    machine on which it quietly stops testing anything.
-"""
+    that releasing it lets the build through.
+
+    It said "no timing assumption" and had one: it gave fmake three
+    seconds to reach the lock. Under load -- several suites and builds
+    on this machine at once -- startup took longer than that, the lock
+    was released before fmake arrived, and it then took the lock with no
+    wait and printed nothing, so the case failed on the message it exists
+    to check. A case that fails when the machine is busy is a case that
+    will be re-run rather than read.
+
+    So it waits for the child to *reach* the lock rather than for a
+    number: the lock file appearing among its open descriptors is the
+    moment before the block, and there is no deadline on getting there
+    except a cap that means something has gone wrong."""
 	try:
 		import fcntl
 	except ImportError:
@@ -19676,11 +19687,28 @@ def a_build_waits_for_a_lock_it_cannot_take(t):
 		proc = subprocess.Popen([FMAKE, "-C", t.dir, "-B"],
 		                        stdout=subprocess.PIPE,
 		                        stderr=subprocess.STDOUT, text=True)
-		try:
-			proc.wait(timeout=3)
-			raise Failure("fmake built while another run held the lock")
-		except subprocess.TimeoutExpired:
-			pass                      # blocked, which is the point
+		fds = f"/proc/{proc.pid}/fd"
+		deadline = time.time() + 120
+		while True:
+			if proc.poll() is not None:
+				raise Failure("fmake built while another run held the lock")
+			try:
+				at_lock = any(
+				    os.path.realpath(os.path.join(fds, f)) == lock
+				    for f in os.listdir(fds))
+			except OSError:
+				at_lock = False       # it exited between poll and listdir
+			if at_lock:
+				break
+			if time.time() > deadline:
+				raise Failure("fmake never opened the lock file in two "
+				              "minutes, so this case tested nothing")
+			time.sleep(0.05)
+		# Open and flock are microseconds apart; this is slack, not a
+		# deadline, and nothing below depends on how long it took.
+		time.sleep(0.3)
+		check(proc.poll() is None,
+		      "fmake did not block on a lock another process holds")
 	finally:
 		fcntl.flock(held, fcntl.LOCK_UN)
 		held.close()

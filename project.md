@@ -352,7 +352,8 @@ that had been green about nothing for five commits ·
 [299. A directive an old fmake does not know is a comment](#299-a-directive-an-old-fmake-does-not-know-is-a-comment) ·
 [300. `example/` is not shipped, and the plural is not `example/`](#300-example-is-not-shipped-and-the-plural-is-not-example) ·
 [301. A module keeps its interposer and shares everything else](#301-a-module-keeps-its-interposer-and-shares-everything-else) ·
-[302. `@os any`: a name that claims a platform can be denied](#302-os-any-a-name-that-claims-a-platform-can-be-denied)
+[302. `@os any`: a name that claims a platform can be denied](#302-os-any-a-name-that-claims-a-platform-can-be-denied) ·
+[303. A case that said it had no timing assumption had one](#303-a-case-that-said-it-had-no-timing-assumption-had-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -22781,3 +22782,40 @@ than a line -- many such files, or a generated set nobody can annotate
 -- which would argue for `[project]` switching the name rule off
 wholesale rather than for fmake learning the preprocessor. No tree has
 that; fuzzypickles has one file.
+
+## 303. A case that said it had no timing assumption had one
+
+`a_build_waits_for_a_lock_it_cannot_take` failed in a full run while
+this machine was carrying several suites and builds at once, on the
+one thing it exists to check: *it should say why it paused*. It passes
+three times in a row on its own.
+
+**What it does**, and the docstring is worth quoting because it is the
+claim that failed: it takes the lock itself, starts fmake, and checks
+that fmake blocks -- *no timing assumption, so no machine on which it
+quietly stops testing anything.*
+
+**The assumption it had.** `proc.wait(timeout=3)` expecting a timeout
+does two jobs: it establishes that fmake did not finish, and it gives
+fmake three seconds to *reach* the lock. Under load, startup took
+longer than that -- the lock was released before fmake arrived, fmake
+then took it with no contention, printed nothing about waiting, built
+correctly and exited 0. Every assertion about the outcome held and the
+one about the message did not, which reads as a defect in fmake and is
+a property of the machine.
+
+**The fix is to wait for the event rather than for a number.** The
+lock file appearing among the child's open descriptors is the moment
+before the block, so the case polls `/proc/<pid>/fd` until it is
+there, with a two-minute cap that means *something has gone wrong*
+rather than *time to carry on*. Then it releases, and the assertions
+are as they were.
+
+**Why this is worth a section rather than a commit message.** The
+docstring was written to say the case had no timing assumption, and it
+was believed for as long as the machine was quiet. A case that fails
+when the machine is busy is a case that gets re-run rather than read
+-- and this project's own standard is that a green suite is evidence
+only if it inspected something. Three isolated passes are not the
+proof here; the next full run under the same load is, and a run that
+goes green while the machine is idle proves what the old one did.
