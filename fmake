@@ -16251,7 +16251,16 @@ def do_install(targets, closures, root, outdir, conf, args):
 			planned.append((source, dst, None))
 			continue
 		src = os.path.join(outdir if origin == "built" else root, source)
-		if origin == "built" and not os.path.exists(src):
+		# A dry run is the one case where the artifact is *expected* to be
+		# absent: nothing was built, that is what it means. Refusing there
+		# made `-n --install' print the compile lines and then stop on the
+		# first program, so the question it exists to answer -- what would
+		# this install -- had no way to be asked without building first.
+		# Reported from qtty, whose gate compares fmake's plan against
+		# their Makefile's install line and could not run in `make check'
+		# because `--explain' costs a whole-tree compile on a fresh clone.
+		if origin == "built" and not args.dry_run \
+		   and not os.path.exists(src):
 			die(f"{source} has not been built")
 		planned.append((src, dst, mode))
 
@@ -16269,6 +16278,19 @@ def do_install(targets, closures, root, outdir, conf, args):
 	if not planned:
 		info("nothing to install")
 		return 0
+
+	# The caveat that belongs with an answer nothing was built for. The
+	# plan is read off the targets and their directives, which need no
+	# objects -- but the link sets it walks for them have not widened,
+	# since widening is decided from symbols. So a `@man' or `@headers'
+	# on a file that joins a program only through widening is missing
+	# here and present in a real install, and saying which of the two
+	# this is beats a reader discovering it from a package.
+	if args.dry_run:
+		note("this is the plan, not an install: nothing was built and "
+		     "nothing is copied. The link sets behind it have not widened "
+		     "either, so furniture declared in a file that joins a target "
+		     "only by symbol is missing from the list below.")
 
 	def _write(what, do, dst):
 		"""One install step, or a refusal that says where it stopped.

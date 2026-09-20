@@ -14588,6 +14588,72 @@ def a_program_can_be_built_and_not_shipped(t):
 
 
 @case
+def a_dry_run_answers_what_would_be_installed(t):
+	"""`-n --install' printed the compile lines and then stopped on the
+	first program with `has not been built' -- which is true, and is what
+	a dry run means. The one case where the artifact is expected to be
+	absent was the one case that refused.
+
+	Reported from qtty, whose `tools-check' compares fmake's install plan
+	against their Makefile's install line, and which could not run in
+	`make check': `--explain' answers the plan from the link closure, so
+	on a fresh clone it costs a whole-tree compile and the gate would
+	build everything twice. They asserted the static fact instead and
+	said what they would have taken -- a mode that answers from the tree
+	and the toml without objects. This is that mode, and it is the flag
+	that was already there.
+
+	The caveat rides with it rather than being left for somebody to
+	discover: the targets and their directives need no objects, but the
+	link sets walked for their furniture have not widened, because
+	widening is decided from symbols. A `@man' on a file that joins only
+	by symbol is missing here and present in a real install."""
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+	t.write("example/demo.c", "/*! @file\n *  @install no\n */\n"
+	        "int main(void){ return 0; }\n")
+	stage = os.path.join(t.dir, "stage")
+
+	r = t.fmake("-n", "--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"a dry-run install refused: {out}")
+	check("install -m 755" in out and "/bin/" in out,
+	      f"nothing said what would be installed: {out}")
+	check("demo" not in out.split("install -m", 1)[1],
+	      f"the plan ships what @install no keeps out: {out}")
+	check("not an install" in out,
+	      f"the plan does not say it is a plan: {out}")
+
+	# A dry run promises to touch nothing, and this one has to keep that
+	# promise while answering a question about files that do not exist.
+	check(not os.path.exists(stage),
+	      f"the prefix was created by a dry run: {os.listdir(t.dir)}")
+	built = [f for f in os.listdir(t.dir)
+	         if f in ("demo", os.path.basename(t.dir))]
+	check(not built, f"a dry run built something: {built}")
+
+	# And a real install still installs, which is the assertion the change
+	# could most easily have broken -- the guard it now skips in a dry run
+	# is the one that refuses a missing artifact, and the cheapest way to
+	# lose it would be to skip it always.
+	r = t.fmake("--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the real install failed: {out}")
+	staged = []
+	for base, _dirs, files in os.walk(stage):
+		staged += [os.path.basename(f) for f in files]
+	check(staged and "demo" not in staged,
+	      f"the real install disagrees with the plan: {staged}")
+
+	# The refusal itself is not reachable from here, and saying so is the
+	# honest version of not asserting it: a real install builds first, and
+	# section 210 already has fmake relink an artifact whose output is
+	# missing. What would reach it is an artifact removed between the link
+	# and the copy, which no case can arrange without racing the build.
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")

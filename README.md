@@ -1020,7 +1020,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `-j N` | parallel compile jobs (default: cpu count) |
 | `-o DIR` | where to put the artifacts |
 | `-p NAME` | build profile from `[profile.NAME]` |
-| `-n` | print commands, run nothing, and change nothing in the tree |
+| `-n` | print commands, run nothing, and change nothing in the tree — with `--install`, print the install plan without building for it |
 | `-B` | ignore the cache and rebuild |
 | `-i` | ask about what fmake will not guess, and write the answers into `fmake.toml` |
 | `--cflags 'FLAGS'` | replace the default `-Os`; overrides file directives |

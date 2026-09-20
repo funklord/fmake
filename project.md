@@ -346,7 +346,8 @@ that had been green about nothing for five commits ·
 [293. `[project] exclude` does not reach the inferred include path](#293-project-exclude-does-not-reach-the-inferred-include-path) ·
 [294. A module that cannot load is said at the link](#294-a-module-that-cannot-load-is-said-at-the-link) ·
 [295. Whose directory it is, and which files the reader can fix](#295-whose-directory-it-is-and-which-files-the-reader-can-fix) ·
-[296. `@install no`: built, and not shipped](#296-install-no-built-and-not-shipped)
+[296. `@install no`: built, and not shipped](#296-install-no-built-and-not-shipped) ·
+[297. A dry run answers what would be installed](#297-a-dry-run-answers-what-would-be-installed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -22301,6 +22302,35 @@ tool/ciss_probe.c`, and the comment is inert to the compiler, which
 they checked by running the fuzzers rather than by reasoning about
 comments.
 
+### qtty took it for four, and found what asking fmake costs
+
+Four, not the three this document counted: `qtty-negotiate` reports
+what a terminal can do and is a thing to run rather than a thing to
+ship, and it was in the plan beside `chat`, `screen-probe` and
+`qtty-tray-check`. Their `make install` runs `install -m 0755
+$(INSPECT) $(REPLAY)`, so two go to `$PREFIX/bin` where fmake's plan
+had six. All four carry the key now, in their `41219b1`, and their
+`--explain` reads two installs and four `nothing`. **That `--explain`
+names which of the two ways declined each one is what let them check
+it rather than infer it** -- the line added for readability turned out
+to be what made the adoption verifiable.
+
+**And the finding that came with it, which is fmake's.** They wanted
+`tools-check` -- the gate that compares their two build systems -- to
+read the install plan out of fmake rather than re-deriving it, since
+two lists of one thing is the drift that gate exists to catch.
+Measured: 0.7 s with `.fmake/` warm, and **a whole-tree compile cold**,
+because `--explain` answers the plan from the link closure. `make
+check` on a fresh clone would then build everything twice, so it could
+not go in. What they gated instead is the static fact that drifts -- a
+program the Makefile does not install must say `install = false` --
+with the `--explain` command in the comment as the authority, and both
+halves were watched failing rather than assumed: removing one key made
+the live comparison name `qtty-tray-check`, removing another made the
+static one name `screen-probe`.
+
+Their ask was conditional and is now answered: see section 297.
+
 ### `ship it where?` is the other half, and is not implemented
 
 Their observation, offered as scope rather than as a request. raidcfgd's
@@ -22319,3 +22349,49 @@ tree has yet presented. What it would cost if one does: a
 `install`, and every emitter that reads the plan already carrying it,
 since the directory is a field in the plan rather than a branch in each
 of them.
+
+## 297. A dry run answers what would be installed
+
+`fmake -n --install` printed the compile lines it would run and then
+stopped on the first program with `plan has not been built`. True, and
+it is what a dry run means: **the one case where the artifact is
+expected to be absent was the one case that refused.**
+
+qtty found it from the other end. Their `tools-check` compares fmake's
+install plan against their Makefile's install line -- two lists of one
+thing being the drift that gate exists to catch -- and `--explain`
+answers the plan from the link closure, so on a fresh clone it costs a
+whole-tree compile and `make check` would build everything twice. They
+gated the static fact instead and named what they would have taken: a
+mode that answers from the tree and the toml without objects. It was
+the flag that was already there, refusing.
+
+    $ fmake -n --install --prefix /tmp/stage
+      this is the plan, not an install: nothing was built and nothing is
+      copied. The link sets behind it have not widened either, so
+      furniture declared in a file that joins a target only by symbol is
+      missing from the list below.
+    install -m 755 plan /tmp/stage/bin/plan
+
+0.3 s on a cold tree, nothing compiled, nothing staged, and the
+`@install no` program correctly absent.
+
+**The caveat ships with the answer rather than being left to be
+discovered.** Targets and their directives need no objects; the link
+sets walked for their furniture have not widened, because widening is
+decided from symbols. So a `@man` or `@headers` on a file that joins a
+program only by symbol is in a real install and missing here. That is
+the same shape as the note a plain `-n` already prints about libraries,
+and it is printed for the same reason: a dry run that answers a
+narrower question than it appears to is worse than one that refuses.
+
+**One guard was skipped and the case says which.** `origin == "built"
+and not os.path.exists(src)` still refuses in a real install -- the
+cheapest way to lose that would be to skip it unconditionally, so the
+case runs the real install afterwards and checks it both succeeds and
+agrees with the plan. The refusal itself is not reachable from a case:
+a real install builds first, and section 210 already has fmake relink
+an artifact whose output has gone. What would reach it is a file
+removed between the link and the copy, which cannot be arranged without
+racing the build, and saying so is the honest version of not asserting
+it.
