@@ -22592,6 +22592,25 @@ shipped does not stop being true on a build that did nothing. Modules
 and tests are left out of that line -- neither was ever installed, so
 neither is news.
 
+**When to write the key anyway, which qtty answered by keeping one.**
+Their gate asserts from the config side -- *a program `make install`
+does not ship says `install = false` in `fmake.toml`* -- so removing
+`[target.chat]` now that the directory decides it would fail the
+static half while fmake's plan stayed right, and the two halves would
+disagree about a tree that is correct. An explicit statement also
+survives a reorganisation that moves `example/` somewhere the
+inference does not reach. So the convention saves a line in a tree
+that has no gate reading the other side, and costs one in a tree that
+has: **a redundant key is not redundant to whoever is comparing two
+build systems.**
+
+Their sentence for the plural is better than this section's and is
+kept as theirs: two trees spelling it `example/` is a convention, and
+27 programs under `examples/` whose own CMakeLists install them is the
+same word meaning the opposite thing -- **inferring from a word rather
+than from a measurement is how a build system starts being wrong
+confidently.**
+
 **What would move the plural.** A tree that spells it `examples/` and
 means not-shipped, which is section 242's bar and is exactly how
 `live` would gain a second name. llama.cpp is not that tree and is not
