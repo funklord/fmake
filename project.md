@@ -22463,6 +22463,26 @@ and refuses anything but three (section 288). Before this, a pattern of
 theirs that stopped matching and a tree whose targets had gone were the
 same silence.
 
+**And the population of consumers, since the same question applies to
+it.** qtty surveyed their tree rather than guessing: `tool/tools-check`
+is the only thing in it that executes fmake, it reads the `install`
+lines and the count out of `-n --install`, and everything else saying
+`fmake` is prose or their own `fmake.toml`. Their earlier attempt did
+parse `--explain`'s `installs` blocks and that code is gone. So two
+trees parse two commands between them, and both have now said which.
+
+Two edges they named, neither a request and both worth knowing. Their
+`--explain` is parsed by a **human**: the comment beside the live check
+carries `fmake --explain | grep -A1 '^  installs'` as the command that
+re-derives the plan for whoever doubts the static assertion -- so the
+count lands where it is useful although no script of theirs reads it.
+And the README's plain `fmake` line, which the harmonization rule asks
+for, makes fmake's **exit status** a consumer of a sort in fifteen
+trees. That one is not a parse and needs nothing, but it is the other
+route by which a change here reaches a tree: **as a reader's confusion
+rather than as a red gate**, which is the quieter of the two and the
+one nothing reports back.
+
 **Which lists still have no count**, since the question is now asked of
 all of them rather than answered once. The failure summary says `N
 file(s) did not compile`; the unresolved-header groups do not, and
