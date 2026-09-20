@@ -14844,6 +14844,73 @@ def a_modules_simulator_is_shared_and_its_interposer_is_not(t):
 
 
 @case
+def a_name_that_claims_a_platform_can_be_denied(t):
+	"""`@os` and `@arch` clear the filename rule -- a directive is a
+	statement and a name is a convention -- and then the list written
+	decides the build, so a file that is not platform-specific at all had
+	to name platforms anyway.
+
+	Reported from fuzzypickles. `gui/src/android_insets.cpp` is in their
+	unconditional SOURCES, two of its three functions are portable
+	arithmetic and the third has its Android body inside `#ifdef
+	Q_OS_ANDROID` with an `#else`; the prefix arm dropped it on a Linux
+	build and `main_window.cpp` failed to link on two symbols that had
+	nothing to do with Android. They wrote `@os linux android`, which is
+	the annotation added to deny a wrong claim becoming a narrower
+	version of the same wrong claim -- on NetBSD that file is dropped for
+	a reason that is not true.
+
+	`any` is a value on the existing names rather than a directive of its
+	own, and that is section 299 applied on purpose: an old fmake
+	validates a value it does not know and is silent about a name it does
+	not know, so `@os any` fails loudly on an old install where
+	`@portable` would have been read as prose and changed nothing.
+
+	The contradiction is refused rather than resolved. `@os any linux`
+	read as `any` makes the other names decoration and the next reader
+	believes a filter that is not there; read as the list it drops a
+	portable file on the platform nobody tested. Both are silent."""
+	t.write("main.c", "int fzp_scale_insets(int x);\n"
+	        "int main(void){ return fzp_scale_insets(3); }\n")
+	portable = "int fzp_scale_insets(int x){ return x * 2; }\n"
+
+	# The control: the name rule is live, so this case is not passing
+	# because nothing was ever excluded.
+	t.write("gui/src/android_insets.c", portable)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "named for android only" in out,
+	      f"the name rule did not fire, so the denial below proves "
+	      f"nothing: {out}")
+
+	t.write("gui/src/android_insets.c",
+	        "/*! @file\n *  @os any\n */\n" + portable)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"@os any did not deny the name: {out}")
+	check(os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
+	      "the program did not link, so the portable file is still out")
+
+	# Denying the OS claim is not denying every claim: an arch named
+	# beside it still decides.
+	t.write("gui/src/android_insets.c",
+	        "/*! @file\n *  @os any\n *  @arch sparc64\n */\n" + portable)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("@arch sparc64" in out,
+	      f"@os any switched off the arch filter as well: {out}")
+
+	t.write("gui/src/android_insets.c",
+	        "/*! @file\n *  @os any linux\n */\n" + portable)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "says both" in out,
+	      f"@os any linux was not refused, so one of its two readings is "
+	      f"being taken silently: {out}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")
@@ -19590,7 +19657,8 @@ def a_build_waits_for_a_lock_it_cannot_take(t):
 
     This one takes the lock itself and checks that fmake blocks on it, then
     that releasing it lets the build through. No timing assumption, so no
-    machine on which it quietly stops testing anything."""
+    machine on which it quietly stops testing anything.
+"""
 	try:
 		import fcntl
 	except ImportError:

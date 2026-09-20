@@ -351,7 +351,8 @@ that had been green about nothing for five commits ·
 [298. A listing says how many it listed](#298-a-listing-says-how-many-it-listed) ·
 [299. A directive an old fmake does not know is a comment](#299-a-directive-an-old-fmake-does-not-know-is-a-comment) ·
 [300. `example/` is not shipped, and the plural is not `example/`](#300-example-is-not-shipped-and-the-plural-is-not-example) ·
-[301. A module keeps its interposer and shares everything else](#301-a-module-keeps-its-interposer-and-shares-everything-else)
+[301. A module keeps its interposer and shares everything else](#301-a-module-keeps-its-interposer-and-shares-everything-else) ·
+[302. `@os any`: a name that claims a platform can be denied](#302-os-any-a-name-that-claims-a-platform-can-be-denied)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -22708,3 +22709,75 @@ there is now is a tree that no longer needs to say it, because the file
 both want is shared rather than claimed. A module that genuinely wants
 a `.so` at load time -- rather than a source both build -- is still
 unexpressed, and no tree has asked for it.
+
+## 302. `@os any`: a name that claims a platform can be denied
+
+Section 291's sharper half, closed. The other half -- reading a file's
+own `#ifdef` before trusting its name -- is refused below, with what
+would reopen it.
+
+**The gap, in fuzzypickles' words and measurements.** `@os` and `@arch`
+clear the filename rule outright, because a directive is a statement
+and a name is a convention -- and then `platform_excludes` filters on
+whatever list was written. So a file that is not platform-specific at
+all had to name platforms anyway. Their
+`gui/src/android_insets.cpp` is in `gui.pro`'s unconditional
+`SOURCES`, `fzp_scale_insets` and `fzp_combine_insets` are portable
+arithmetic, and only `fzp_system_bar_insets` has an Android body --
+inside `#ifdef Q_OS_ANDROID`, with an `#else`. The prefix arm dropped
+it on a Linux build and `main_window.cpp` failed to link on two
+symbols that have nothing to do with Android. They wrote `@os linux
+android`, and said what that is: **the annotation added to deny a
+wrong claim had become a narrower version of the same wrong claim**,
+since on a NetBSD build the file is dropped for a reason that is not
+true.
+
+    /*! @file
+     *  @os any
+     */
+
+`any` clears the name like any `@os`, and then matches every platform
+instead of one. `@arch any` is the same for the other axis, and
+denying one claim is not denying the other: `@os any` beside `@arch
+sparc64` still builds only there.
+
+**A value on the existing names, not a directive of its own, and that
+is section 299 applied on purpose.** An old fmake validates a value it
+does not know and is silent about a *name* it does not know -- so `@os
+any` on the packaged fmake excludes the file everywhere and the link
+says so, where `@portable` would have been read as prose and quietly
+changed nothing. The taxonomy ossacli measured yesterday decided the
+spelling of this feature today, which is the first time it has been
+used for that.
+
+**`@os any linux` is refused rather than resolved.** Read as `any` the
+other names are decoration and the next reader believes a filter that
+is not there; read as the list, `any` is decoration and a portable
+file is dropped on the platform nobody tested. Both are silent, which
+is what the word exists to stop, so fmake names the file and both
+readings and stops.
+
+### The other half: reading the file's own guard, refused
+
+`filename_excludes`' docstring states the premise fuzzypickles' file
+breaks -- *the file is what CMake would have put inside `if(ANDROID)`.
+It carries no self-guard, because the build system was what excluded
+it.* Theirs carries one, and the disagreement is checkable, so the
+question was whether fmake should read an `#ifdef Q_OS_ANDROID ...
+#else` before trusting a name.
+
+No, on three grounds. Section 5 declines to understand the
+preprocessor, and a self-guard is a preprocessor fact: reading it
+properly means evaluating nested conditions, `#elif`, and macros a
+flag defined, which is a compiler. Reading it improperly -- does the
+text contain `#ifdef <platform macro>` and an `#else` -- replaces one
+convention with another and would be wrong on a file that guards a
+*part* of itself while the rest genuinely is Android's. And the cost
+of not doing it is now one line in the file, exact, and read by
+somebody who knows the answer.
+
+**What would reopen it**: a tree where the denial is a burden rather
+than a line -- many such files, or a generated set nobody can annotate
+-- which would argue for `[project]` switching the name rule off
+wholesale rather than for fmake learning the preprocessor. No tree has
+that; fuzzypickles has one file.

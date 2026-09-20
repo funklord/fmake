@@ -4163,12 +4163,35 @@ def filename_excludes(rel, ann, want_os=None, want_arch=None):
 	        f"@{kind} overrides the name")
 
 
+# The word that denies a claim rather than making one. `@os' and `@arch'
+# clear the filename rule outright -- a directive is a statement and a name
+# is a convention -- but the list written then decides the build, so a file
+# that is not platform-specific at all had to name platforms anyway.
+# fuzzypickles wrote `@os linux android' on `gui/src/android_insets.cpp',
+# whose Android body is guarded in the file and whose other two functions
+# are portable arithmetic, because those are the two their GUI targets:
+# on a NetBSD build it would be dropped for a reason that is not true, and
+# the annotation added to deny a wrong claim had become a narrower version
+# of the same wrong claim.
+#
+# A value on the existing names rather than a directive of its own, which
+# is section 299's taxonomy applied on purpose: an old fmake validates a
+# value it does not know and is silent about a name it does not know, so
+# `@os any' fails on an old install -- the file is excluded everywhere and
+# the link says so -- where `@portable' would have been read as prose and
+# quietly changed nothing.
+PLATFORM_ANY = "any"
+
+
 def platform_excludes(ann, want_os=None, want_arch=None):
 	"""Why this TU is not built for the target platform, or None if it is.
 
     The platform tested is the one being built *for*. On a native build that
     is the host; on a cross build [toolchain] os/arch says otherwise, and
     testing the host instead is silently wrong every time.
+
+    `@os any' and `@arch any' are the denial: they clear the filename rule
+    the way any `@os' does, and then match every platform instead of one.
     """
 	want_os = canon_platform("os", want_os or host_os())
 	want_arch = canon_platform("arch", want_arch or host_arch())
@@ -4177,12 +4200,34 @@ def platform_excludes(ann, want_os=None, want_arch=None):
 	# about a wrong decision, and quoting the canonical form back would
 	# hide which word in the file did it.
 	oses = [o.lower() for o in ann.items("os")]
-	if oses and want_os not in [canon_platform("os", o) for o in oses]:
+	if oses and PLATFORM_ANY not in oses \
+	   and want_os not in [canon_platform("os", o) for o in oses]:
 		return f"@os {' '.join(oses)} (building for {want_os})"
 	arches = [a.lower() for a in ann.items("arch")]
-	if arches and want_arch not in [canon_platform("arch", a) for a in arches]:
+	if arches and PLATFORM_ANY not in arches \
+	   and want_arch not in [canon_platform("arch", a) for a in arches]:
 		return f"@arch {' '.join(arches)} (building for {want_arch})"
 	return None
+
+
+def platform_contradiction(ann, rel):
+	"""`@os any linux' says two things, and only one of them can be meant.
+
+    Refused rather than resolved either way. Read as `any' the other names
+    are decoration and the next reader believes a filter that is not there;
+    read as the list, `any' is decoration and a file meant to be portable
+    is dropped on the platform nobody tested. Both are silent, which is
+    what the word exists to stop.
+    """
+	for kind in ("os", "arch"):
+		names = [x.lower() for x in ann.items(kind)]
+		if PLATFORM_ANY in names and len(set(names)) > 1:
+			others = [n for n in dict.fromkeys(names) if n != PLATFORM_ANY]
+			die(f"{rel}: @{kind} {' '.join(dict.fromkeys(names))} says both "
+			    f"that this builds anywhere and that it builds only on "
+			    f"{', '.join(others)}.\n"
+			    f"@{kind} any on its own denies the name; "
+			    f"@{kind} {' '.join(others)} names the platforms.")
 
 
 DOXYGEN_ALIAS_TEXT = {
@@ -9454,6 +9499,7 @@ def build(args, _bootstrapping=False):
 			excluded[rel] = f"[project] exclude = {pat!r}"
 		else:
 			ann = Ann(scans[rel].get("dirs"))
+			platform_contradiction(ann, rel)
 			why = platform_excludes(ann, cfg.os, cfg.arch)
 			from_name = False
 			if not why:

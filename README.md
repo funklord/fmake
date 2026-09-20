@@ -472,6 +472,7 @@ like `@brief` are ignored.
 | `@test [GROUP]` / `@test no` | This program is (or is not) a test; `GROUP` puts it in a group `fmake test` skips |
 | `@install no` / `@install yes` | Build this and do not ship it — an example kept compiling, a probe beside the tools; `--install`, the ejected install rule and every package format pass it by. A program under `example/` is not shipped by default, and `yes` is how that one is |
 | `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms; overrides a `_platform` suffix |
+| `@os any` / `@arch any` | The name makes no claim: keep this file on every platform, which a `_platform` suffix or prefix would otherwise deny. Naming `any` beside a platform is refused — it says two things |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |
 | `@man PATH…` | Manual pages, installed under `man<N>` by their suffix |
