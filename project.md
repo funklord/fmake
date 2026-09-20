@@ -22514,6 +22514,35 @@ the `--explain` output distinguishes *the key took effect* from *the
 key was ignored*, and what caught it was the one thing that is neither
 -- the ejected install rule, which is the artifact.
 
+### Narrowed: an unknown name is inert, an unknown value is caught
+
+ossacli corrected this section by going to check the sentence it
+ends with. On the same `/usr/bin/fmake` `1.0 (5af02348)`, with
+`@kind module` on their shims:
+
+    !!! src/shim/capture.c: kind 'module' is not one of exe, shared, static
+    rc 1
+
+Reproduced here on a two-file tree: `@kind module` is refused with
+exit 1, and `@install no` is accepted with exit 0. **`@kind` is a
+directive that version knows and `module` is a value it does not --
+and values are validated, where an unrecognised directive *name* is
+read as prose and dropped.** `@install` was a new name; `@kind module`
+is a new value for an old name, and which half of the syntax is new
+decides whether an old tool is silent.
+
+Both of us had generalised from `@install` to annotations at large,
+and the counter-example was one command away in either tree.
+
+**The consequence is for how features are added here**, which is why
+they sent it: a feature spelled as a new *value* on an existing key
+fails loudly on an old install for free, and one that introduces a
+*name* does not. Only the second kind needs `[project] needs`, a note
+in the manual, or the config spelling below. `@install` is the second
+kind and nothing retro-fits it -- there is no existing key it could
+have been a value of -- but the next feature can be asked the question
+before it is spelled.
+
 **Measured here, and the asymmetry is the answer to what they asked.**
 Against `/usr/bin/fmake` `1.0 (5af02348)`, dated 2026-09-04, on a tree
 whose `example/demo.c` must not ship:

@@ -487,14 +487,16 @@ like `@brief` are ignored.
 `fmake --doxygen-aliases` emits an `ALIASES` block so Doxygen renders these
 instead of warning about them.
 
-**A directive an fmake does not know is a comment; a config key it does not
-know is refused.** Measured against the packaged fmake of 2026-09-04, which
-predates `@install`: the directive is read as ordinary comment text and the
-program is installed anyway, while `[target.demo] install = false` stops the
-build with *unknown key 'install'* and lists the keys that version has. Where
-a tree has to build with whatever fmake a machine happens to carry, the
-config spelling is the one that fails loudly — and where the two spellings
-exist for one fact, that is the difference between them.
+**An older fmake is silent about a directive *name* it does not know, and
+refuses a *value* it does not know.** Measured against the packaged fmake of
+2026-09-04, which predates `@install` and `@kind module`: `@install no` is
+read as ordinary comment text and the program is installed anyway, while
+`@kind module` stops the build with *kind 'module' is not one of exe, shared,
+static*. A config key behaves like the second — `[target.demo] install =
+false` stops it with *unknown key 'install'* and lists the keys that version
+has. So where a tree has to build with whatever fmake a machine happens to
+carry, a new directive name is the one spelling that can quietly do nothing,
+and the config file is the one that cannot.
 
 ### `fmake.mk` — rules, and flags for the whole project
 
