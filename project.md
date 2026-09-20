@@ -22385,6 +22385,41 @@ the same shape as the note a plain `-n` already prints about libraries,
 and it is printed for the same reason: a dry run that answers a
 narrower question than it appears to is worse than one that refuses.
 
+**Taken into a gate the same day, and what that turned up.** qtty put
+it in `make check` at `1e4e069`: 2.3 s in their tree with nothing
+compiled, and the plan it prints is the two programs their `make
+install` ships. They kept both halves for the reason the two fail at
+different moments -- the static one goes red the instant somebody adds
+a program and forgets the key, the live one says what fmake would do
+-- and watched three ways of failing before trusting either: a removed
+key naming `qtty-negotiate` from both halves, `FMAKE` pointed at
+nothing, and the restored file exiting 0.
+
+**Their second case is the one worth copying.** With fmake absent the
+gate skips rather than failing, because fmake lives outside that tree
+and a contributor without it must still be able to run `make check` --
+and it prints a line saying only `fmake.toml` was compared, so a green
+run cannot be read as the comparison having happened. Their first
+version made absence a failure, which would have broken the gate for
+anybody who has not cloned fmake. That is `evidence.md`'s vacuous pass
+answered in both directions at once: the check that cannot run says so,
+and the one that can is not made mandatory to say it.
+
+**And an observation about the output, which produced one line of
+change.** `-n --install` prints the whole build plan first and the
+install lines at the end, because that is what `-n` means -- so the
+first thing a caller reaches for is `head`, and `head` shows compile
+commands and reads as though nothing were planned. They filter with
+`sed`, and said plainly it was not a request. It is section 295's lens
+pointed at this command, though, so the dry run now ends with the count
+the real install has always printed:
+
+    * 1 file(s) would be installed under /tmp/stage
+
+which is what a `tail` or a `grep '^\*'` can answer, and which states
+the population the lines above are drawn from. Putting the plan first
+would be the odd choice and is not done.
+
 **One guard was skipped and the case says which.** `origin == "built"
 and not os.path.exists(src)` still refuses in a real install -- the
 cheapest way to lose that would be to skip it unconditionally, so the

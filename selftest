@@ -14624,6 +14624,15 @@ def a_dry_run_answers_what_would_be_installed(t):
 	      f"the plan ships what @install no keeps out: {out}")
 	check("not an install" in out,
 	      f"the plan does not say it is a plan: {out}")
+	# A count at the end, because -n prints the build plan first and the
+	# first thing a caller reaches for is `head' -- which shows compile
+	# commands and reads as nothing having been planned. qtty filters
+	# with sed; the count is what a tail or a grep can answer, and it
+	# states the population the install lines are drawn from.
+	check("1 file(s) would be installed" in out,
+	      f"the plan does not say how many files it is: {out}")
+	check("installed 1 file(s)" not in out,
+	      f"a dry run claims to have installed something: {out}")
 
 	# A dry run promises to touch nothing, and this one has to keep that
 	# promise while answering a question about files that do not exist.

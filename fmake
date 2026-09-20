@@ -16342,20 +16342,27 @@ def do_install(targets, closures, root, outdir, conf, args):
 		installed += 1
 		print(f"{GREEN('->')} {dst}")
 
-	if not args.dry_run:
-		# Only where it is true. An absolute [install] libdir -- /opt/thing
-		# is somebody's ordinary layout -- puts files outside the prefix,
-		# and the summary went on naming the prefix anyway. The `->' lines
-		# above say where each one went, so the clause is dropped rather
-		# than replaced when it would be a claim about somewhere the files
-		# are not.
-		stem = paths["prefix"].rstrip("/")
-		dests = {os.path.dirname(dst) for _s, dst, _m in planned}
-		if args.destdir:
-			stem = os.path.join(args.destdir, stem.lstrip("/"))
-		under = all(d == stem or d.startswith(stem + "/") for d in dests)
-		where = f" under {paths['prefix']}" if under else ""
-		info(f"installed {len(planned)} file(s){where}")
+	# Only where it is true. An absolute [install] libdir -- /opt/thing
+	# is somebody's ordinary layout -- puts files outside the prefix, and
+	# the summary went on naming the prefix anyway. The `->' lines above
+	# say where each one went, so the clause is dropped rather than
+	# replaced when it would be a claim about somewhere the files are not.
+	stem = paths["prefix"].rstrip("/")
+	dests = {os.path.dirname(dst) for _s, dst, _m in planned}
+	if args.destdir:
+		stem = os.path.join(args.destdir, stem.lstrip("/"))
+	under = all(d == stem or d.startswith(stem + "/") for d in dests)
+	where = f" under {paths['prefix']}" if under else ""
+	# The dry run gets one too, and it is not symmetry for its own sake.
+	# `-n --install' prints the whole build plan before the install
+	# lines, because that is what -n means -- so the first thing a caller
+	# reaches for is `head', and `head' shows compile commands and looks
+	# like nothing was planned. Reported from qtty, who filter with sed.
+	# A count at the end is what a `tail' or a `grep "^\*"' can answer,
+	# and it states the population the lines above are drawn from, which
+	# is what section 295 is about from the other side.
+	info(f"installed {len(planned)} file(s){where}" if not args.dry_run
+	     else f"{len(planned)} file(s) would be installed{where}")
 	return 0
 
 # ---------------------------------------------------------------------------
