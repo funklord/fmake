@@ -21926,6 +21926,32 @@ question stays open and stays a design question -- whether a build tool
 should apply a consumer's patch series before building what depends on
 it -- rather than the defect report it was first presented as.
 
+**How widespread it is, measured rather than left to be guessed.**
+beerssh read every `fmake.toml` in the workspace -- fourteen have one
+-- took each `[project] exclude`, walked every excluded directory that
+exists, and looked for C standard and common POSIX header basenames
+under it. **One hit: their own.** `build-deps-android` carries
+`ctype.h`, `poll.h`, `string.h`, `threads.h` and `time.h`; hydra and
+bbq-predictor exclude `build-*` with nothing shadowing under it,
+fuzzypickles excludes 23 paths and none shadow, five trees have no
+exclude at all, and the other three Android projects have no
+dependency-building script of their own. Structural, and they say so:
+excludes and file names read from the trees, not an observation of
+anybody's actual `-I` list, since a dry run writes `.fmake` into a tree
+somebody else is working in.
+
+Their first pass said two and they corrected it before sending, which
+is the half worth keeping: the header list had been seeded with
+`types.h`, `utils.h`, `config.h` and `version.h`, none of which any
+toolchain owns, and that reported a second hit under thorvg where
+nothing includes `<utils.h>` and nothing shadows. **One tree is a
+different finding from two.** Two would have made this a pattern
+across the Android projects and an argument for fmake handling it;
+one makes it a local collision with a build step no sibling has, and
+leaves the open question where it was -- whether an exclude should
+reach the include set the graph infers is a question about the right
+semantics, not a defect biting a fleet.
+
 Contention was the comfortable explanation here and it is disproved
 rather than declined. Both earlier failing runs were at load 186 to 225
 with another session's sweep in the tree, so the reading was deliberately
