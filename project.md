@@ -349,7 +349,8 @@ that had been green about nothing for five commits ·
 [296. `@install no`: built, and not shipped](#296-install-no-built-and-not-shipped) ·
 [297. A dry run answers what would be installed](#297-a-dry-run-answers-what-would-be-installed) ·
 [298. A listing says how many it listed](#298-a-listing-says-how-many-it-listed) ·
-[299. A directive an old fmake does not know is a comment](#299-a-directive-an-old-fmake-does-not-know-is-a-comment)
+[299. A directive an old fmake does not know is a comment](#299-a-directive-an-old-fmake-does-not-know-is-a-comment) ·
+[300. `example/` is not shipped, and the plural is not `example/`](#300-example-is-not-shipped-and-the-plural-is-not-example)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21388,11 +21389,12 @@ inferred, the general rule refused because a tree sorting its tests into
 name gets added when a second tree spells it that way*. `example/` has
 two trees spelling it that way, and they are the two measured above.
 
-**The key is implemented; see section 296.** The convention is not,
-and with the key in place it composes rather than competing -- a
-convention would be a default and `install = true` the override. What
-follows was the argument against doing the convention first, and it
-still says why the key came first: a convention that installs nothing from `example/`
+**Both are implemented: the key is section 296 and the convention is
+section 300.** The key came first and that order was the point --
+with it in place the convention is a default and `install = true` is
+the override, where the other way round the convention would have
+forced a key nobody had asked for. What follows was the argument for
+that order: a convention that installs nothing from `example/`
 makes an `install = true` necessary for the tree that does ship its
 example, and that is a key nobody has asked for. What is not in doubt is
 that the sentence has two independent askers, and that today neither can
@@ -22550,3 +22552,49 @@ and they have put it to their copyright holder twice. Recorded here
 because **this is what "the installed fmake is behind" costs when it
 stops being a note in five READMEs and starts blocking adoption**, and
 section 286 collected those notes a day before this happened.
+
+## 300. `example/` is not shipped, and the plural is not `example/`
+
+Section 287's other half, on section 242's terms: infer the name the
+trees use, refuse the wider rule, and let a directive overrule the
+directory, because a directive is a statement and a directory is a
+guess.
+
+**One name, and the plural refused on evidence.** `example/` is what
+ossacli and qtty both spell and both mean *built so it cannot rot,
+never shipped*. `examples/` is where llama.cpp keeps 27 C and C++
+programs, and its own `examples/*/CMakeLists.txt` carry
+`install(TARGETS ${TARGET} RUNTIME)` -- so in the largest C++ tree on
+this machine the plural names a directory whose contents **are** the
+product. Inferring there would have stopped somebody shipping their
+binaries, silently, which is the failure section 57 calls worse than
+the one the feature fixes.
+
+The split is empirical and thin, and saying so is part of recording
+it: two trees against one. What makes it safe to act on anyway is that
+both directions have an override and fmake says which it took --
+`@install yes` ships an `example/` program, `@install no` or
+`install = false` declines a plural one, and neither tree is left
+without a sentence.
+
+**The guess is audible, which is the part that is not section 242's.**
+That section's inference shows up in `--explain`, and for a test group
+that is enough: the effect is visible the moment somebody runs the
+suite. Here the effect is a program missing from a package weeks
+later, so the build itself says it:
+
+    demo is built and not installed: example/ is an example directory,
+    and @install yes ships it
+
+Every run rather than only when something was rebuilt, for the reason
+the version-fallback note beside it gives: a program quietly not being
+shipped does not stop being true on a build that did nothing. Modules
+and tests are left out of that line -- neither was ever installed, so
+neither is news.
+
+**What would move the plural.** A tree that spells it `examples/` and
+means not-shipped, which is section 242's bar and is exactly how
+`live` would gain a second name. llama.cpp is not that tree and is not
+a private project either; it is evidence about the word rather than a
+vote, and it is the only C tree on this machine using the plural at
+all.

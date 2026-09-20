@@ -8433,6 +8433,36 @@ def _ann_test(ann, rel=""):
 	return value
 
 
+# One name, and the plural is refused. Both trees that asked for section
+# 296 spell it `example/' and both mean "built so it cannot rot, never
+# shipped" -- while `examples/' is where llama.cpp keeps 27 C and C++
+# programs whose own CMakeLists carry `install(TARGETS ${TARGET}
+# RUNTIME)'. So the plural is a directory whose contents are the
+# product, at least in the one large tree on this machine that uses it,
+# and inferring from it would silently stop shipping somebody's
+# binaries. Section 242 settled this shape for `tests/live/': infer the
+# name the trees actually use, refuse the wider rule, and add a second
+# when a second tree spells it that way and means it.
+EXAMPLE_DIRS = {"example"}
+
+
+def looks_like_an_example(rel):
+	"""Why this file's program is not shipped, or None.
+
+    A directory convention, so it is a guess and says so: `--explain'
+    names it, and a build that declines to install something on this
+    evidence says that out loud rather than only in the plan. `@install
+    yes' or `install = true' ships it, which is the same shape as a
+    `@test' under `tests/live/' returning that one to the default group
+    -- a directive is a statement and a directory is a guess.
+    """
+	parts = rel.replace(os.sep, "/").split("/")
+	for p in parts[:-1]:
+		if p.lower() in EXAMPLE_DIRS:
+			return f"{p}/ is an example directory"
+	return None
+
+
 def _ann_install(ann, rel=""):
 	"""What `@install` said: None if absent, else True or False.
 
@@ -8471,7 +8501,7 @@ class Target:
 	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
 	             "test_group", "test_why", "version", "description",
 	             "stem", "publishes_pc", "version_script",
-	             "installed", "install_why")
+	             "installed", "install_why", "install_guess")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
@@ -8520,8 +8550,13 @@ class Target:
 		# a plugin loads from is the project's to say -- and this is the
 		# same fact for a program, said by whoever knows it.
 		want = _ann_install(ann, rel) if rel else None
+		guessed = looks_like_an_example(rel) if rel and want is None else None
 		self.installed = True if want is None else want
 		self.install_why = "" if want is None else f"@install in {rel}"
+		self.install_guess = False
+		if guessed:
+			self.installed, self.install_why = False, guessed
+			self.install_guess = True
 		said = _ann_test(ann, rel)
 		found = looks_like_a_test(rel) if rel else None
 		if said is False:
@@ -8552,6 +8587,7 @@ class Target:
 			self.installed = bool(section["install"])
 			self.install_why = (f"[target.*] install = "
 			                    f"{str(self.installed).lower()}")
+			self.install_guess = False
 		if section.get("sources"):
 			self.members = list(section["sources"])
 		self.version = section.get("version") or self.version
@@ -11653,6 +11689,23 @@ def build(args, _bootstrapping=False):
 			     f"= ['-D{name}=\"{version_says}\"'] supplies it")
 		if len(fallen) > 3:
 			note(f"... and {len(fallen) - 3} more")
+
+		# A convention is a guess, and a guess that changes what ships
+		# has to be met where somebody is looking. `--explain' names it
+		# and nobody runs `--explain' when the build works, so this says
+		# it beside the artifacts -- every run rather than only when
+		# something was rebuilt, because a program quietly not being
+		# shipped does not stop being true on a no-op build. The same
+		# reasoning as the version-fallback note above it.
+		guessed = [t for t in wanted
+		           if not t.installed and t.install_guess
+		           and not t.test and t.kind != "module"]
+		for t in guessed[:3]:
+			note(f"{t.filename} is built and not installed: "
+			     f"{t.install_why}, and @install yes ships it")
+		if len(guessed) > 3:
+			note(f"... and {len(guessed) - 3} more built and not "
+			     f"installed")
 
 		names = ", ".join(n for n, _, _ in built)
 		if built:

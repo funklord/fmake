@@ -176,7 +176,7 @@ is not in the sources.
 | A program's name | **Almost always** — the file, or its directory for `main.c` | `@target`, `[target.*] name` |
 | A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library\|module` |
 | Which programs are tests | **Sometimes** — a test directory or a `test_` name; `tests/live/` is the `live` group | `@test`, `@test no` |
-| Which programs ship | **Sometimes** — every program does, and a module never does | `@install no`, `[target.*] install` |
+| Which programs ship | **Sometimes** — every program does, a module never does, and a program under `example/` does not | `@install no`, `@install yes`, `[target.*] install` |
 | Generated sources | **Never** — a generator is a command nobody can infer | `[generate.*]`, `@rule`, `fmake.mk` |
 | A macro the build injects | **Never** — `-DVERSION=...` is not in the tree | `[project] defines`, `$file(VERSION)` |
 | Public headers to install | **Never** — which headers are API is a decision | `@headers` |
@@ -470,7 +470,7 @@ like `@brief` are ignored.
 | `@define NAME[=VAL]` | Convenience for `-D` |
 | `@std c17\|c++20\|…` | Language standard |
 | `@test [GROUP]` / `@test no` | This program is (or is not) a test; `GROUP` puts it in a group `fmake test` skips |
-| `@install no` | Build this and do not ship it — an example kept compiling, a probe beside the tools; `--install`, the ejected install rule and every package format pass it by |
+| `@install no` / `@install yes` | Build this and do not ship it — an example kept compiling, a probe beside the tools; `--install`, the ejected install rule and every package format pass it by. A program under `example/` is not shipped by default, and `yes` is how that one is |
 | `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms; overrides a `_platform` suffix |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |
@@ -546,6 +546,7 @@ sources = ["src/alpha.c", "src/shared.c"]
 
 [target.demo]                   # built so it cannot rot, never shipped
 install = false                 # `test = false` is a different question
+                                # under example/ this is already the default
 
 [target.client_test]            # `fmake test` runs it with an argument
 test-args    = ["doc/schema/socket.json"]
