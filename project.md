@@ -22156,6 +22156,40 @@ answer, since `fuzznet/qtty/include` is inside the checkout and
 `fuzznet/qtty` **is** the checkout; `in_vendor` is that, and
 `vendor_of` is now one line on top of it.
 
+**Verified in the tree that produced the shape, which found one thing
+the fixture could not.** raidcfgd re-ran both against raidcfgd at
+`7f6964a`: the two files they could act on are the first two lines
+where they had been inside the `... and 16 more`, and `21 minus 19
+says how many are mine without my counting`. The per-header clause
+fires at each error rather than only in the combined line, which is
+what they had asked for.
+
+And it named the wrong checkout. It said `inside fuzznet`, where the
+checkout that owns those headers is `fuzznet/qtty` -- raidcfgd vendors
+fuzznet, fuzznet vendors qtty, and `fuzznet/.gitmodules` is where the
+second edge is declared. True and useless: it sends a reader to
+fuzznet's session to ask about qtty's headers, and fuzznet would
+rightly say they are not theirs. The cause is that `vendored_dirs`
+read the top-level `.gitmodules` only, so the nearest enclosing
+checkout was never in the set to be found; it walks down now, each
+submodule's own file naming its children, and `in_vendor` was already
+nearest-first. **A fixture vendoring one level cannot show this**, and
+the reconstruction behind these two cases vendors exactly one -- so
+the case for it builds the two-deep arrangement outright.
+
+**And a correction to the report, from the same run.** The original
+said the two files were buried on a plain `fmake`. They are not: a
+whole-tree run there fails 19 files, all fuzznet's, and the summary
+reads correctly. The burying needs *named* targets, because a target's
+own directory goes on its include path, so `fmake raidtray raidcfgd`
+resolves `daemon/` headers that a whole-tree build leaves unresolved.
+Their words for it: the report gave the right symptom and the wrong
+invocation, and a reconstruction from what was written reconstructed
+the wrong run and got the right fix anyway. Worth keeping because it
+is the good case of that -- the fixture was built from the *shape* of
+the complaint rather than from its command line, and the shape was
+what was right in it.
+
 **A limit the fixture found, recorded rather than fixed.**
 `vendored_dirs` walks the directories that lead to a *source*, so a
 vendored subtree contributing only headers is invisible to the `.git`

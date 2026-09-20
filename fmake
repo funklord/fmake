@@ -4571,6 +4571,28 @@ def walk_tree(root):
 	return sorted(srcs), sorted(hdrs)
 
 
+def _gitmodule_paths(path):
+	"""The paths one `.gitmodules' declares, relative to its own tree.
+
+    Read directly rather than through `git config -f', for the reason
+    `declared_submodules' gives: the case most in need of an answer is a
+    tree git cannot answer about. A path out of the tree is not ours to
+    reason about and an absolute one is not a subtree at all, so both are
+    dropped rather than resolved.
+    """
+	try:
+		with open(path, encoding="utf-8", errors="replace") as f:
+			text = f.read()
+	except OSError:
+		return []
+	out = []
+	for m in re.finditer(r"(?m)^[ \t]*path[ \t]*=[ \t]*(.+?)[ \t]*$", text):
+		p = m.group(1).strip().strip('"').strip("/")
+		if p and not p.startswith("/") and ".." not in p.split("/"):
+			out.append(os.path.normpath(p))
+	return out
+
+
 def vendored_dirs(root, srcs):
 	"""Subtrees that are a checkout of some other project.
 
@@ -4586,19 +4608,21 @@ def vendored_dirs(root, srcs):
     with nothing to compile in it does not need naming.
     """
 	out, seen = set(), set()
-	gm = os.path.join(root, ".gitmodules")
-	if os.path.isfile(gm):
-		try:
-			with open(gm, encoding="utf-8", errors="replace") as f:
-				text = f.read()
-		except OSError:
-			text = ""
-		for m in re.finditer(r"(?m)^[ \t]*path[ \t]*=[ \t]*(.+?)[ \t]*$", text):
-			p = m.group(1).strip().strip('"').strip("/")
-			# A path out of the tree is not ours to reason about, and an
-			# absolute one is not a subtree at all.
-			if p and not p.startswith("/") and ".." not in p.split("/"):
-				out.add(os.path.normpath(p))
+	# Nested, because the answer has to be the checkout that owns the
+	# file and a consumer's `.gitmodules' names only its own children.
+	# Reported from raidcfgd, which vendors fuzznet, which vendors qtty:
+	# the headers under `fuzznet/qtty/include' were attributed to
+	# `fuzznet', which is true and sends a reader to the wrong project's
+	# session -- fuzznet would rightly say qtty's headers are not theirs.
+	# A submodule's own file names its children, so this walks down.
+	queue = _gitmodule_paths(os.path.join(root, ".gitmodules"))
+	while queue:
+		sub = queue.pop()
+		if sub in out:
+			continue
+		out.add(sub)
+		queue += [os.path.normpath(os.path.join(sub, c)) for c in
+		          _gitmodule_paths(os.path.join(root, sub, ".gitmodules"))]
 	for rel in srcs:
 		d = os.path.dirname(rel)
 		while d and d not in seen:

@@ -14432,6 +14432,40 @@ def a_suggested_include_path_says_whose_tree_it_is_in(t):
 
 
 @case
+def the_checkout_named_is_the_one_that_owns_the_file(t):
+	"""raidcfgd vendors fuzznet, which vendors qtty, and the headers under
+	`fuzznet/qtty/include' were attributed to `fuzznet'. True, and it
+	sends a reader to the wrong project: fuzznet would say, correctly,
+	that qtty's headers are not theirs.
+
+	The cause is that a consumer's `.gitmodules' names its own children
+	and nothing else -- `fuzznet/qtty' is declared in fuzznet's file, one
+	level down -- so the nearest enclosing checkout was not in the set to
+	be found. `vendored_dirs' walks down now.
+
+	Reported after verifying the fix that produced it, which is the part
+	worth keeping: a fixture vendoring one level cannot show this, and
+	the reconstruction behind the previous case vendors exactly one."""
+	t.write("main.c", '#include "vlib/string.h"\n'
+	        "int main(void){ return vend(); }\n")
+	t.write(".gitmodules", '[submodule "outer"]\n\tpath = outer\n'
+	        "\turl = https://example.invalid/outer.git\n")
+	t.write("outer/.gitmodules", '[submodule "inner"]\n\tpath = inner\n'
+	        "\turl = https://example.invalid/inner.git\n")
+	t.write("outer/outer.c", "int outer_thing(void){ return 1; }\n")
+	t.write("outer/inner/include/vlib/string.h", "int vend(void);\n")
+	t.write("outer/inner/inner.c", "int vend(void){ return 2; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("outer/inner/include is inside outer/inner" in out,
+	      f"the clause names the outer checkout rather than the one that "
+	      f"owns the header: {out}")
+	check("inside outer," not in out and "inside outer:" not in out,
+	      f"the outermost checkout is still being named: {out}")
+
+
+@case
 def the_files_that_did_not_compile_lead_with_this_trees_own(t):
 	"""A truncated list is a choice about what the reader sees first, and
 	it was making it by path. Reported from raidcfgd: 21 files did not
