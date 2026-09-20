@@ -22190,6 +22190,13 @@ is the good case of that -- the fixture was built from the *shape* of
 the complaint rather than from its command line, and the shape was
 what was right in it.
 
+**The arrangements this walk has to survive, named because the next
+change to it will want them.** raidcfgd is two deep in both directions
+-- `fuzznet` vendoring `qtty` and `quirc`, and `ossacli` vendored
+directly -- so that tree exercises a nested checkout and a flat one at
+once. It is the tree to re-run against, and its session offered it for
+exactly that.
+
 **A limit the fixture found, recorded rather than fixed.**
 `vendored_dirs` walks the directories that lead to a *source*, so a
 vendored subtree contributing only headers is invisible to the `.git`
@@ -22211,7 +22218,7 @@ the project vendoring it.
 
 Section 287's gap, closed with the key rather than the convention.
 
-Two trees asked and neither could say it. ossacli's
+Three trees have it now and none could say it before. ossacli's
 `example/health_summary.c` is a library-integration example, built by
 their Makefile so that it cannot rot and deliberately left out of `make
 install`; fmake found its `main()`, built it, and put it in `$BINDIR`
@@ -22273,3 +22280,42 @@ missing is a holder's decision about a directory name, which is what
 **The case would pass with installation broken altogether**, so it
 asserts the ordinary program lands as well -- the population assertion
 that stops a negative check reporting on an empty set.
+
+### A third tree, and the sharper reason
+
+raidcfgd took it the same day, four sites, and their case is closer to
+the shim than to an example that must not rot. Their `make install`
+ships six binaries; fmake's plan had ten, the extra four being
+`ciss_probe` and three fuzz drivers. `ciss_probe` is the one worth
+naming: it issues `SG_IO` to `/dev/sg0` and prints what the controller
+said, so a second build system inferring *program, therefore `$BINDIR`*
+leaves a raw controller probe on a user's `PATH`.
+
+They annotated the sources rather than the config, matching what that
+tree already does with `@target`, on the grounds that the fact is about
+the file -- and in a `/*!` block **because of ossacli's run 1**, which
+measured that an ordinary `/*` header is ignored. Without that finding
+these would have been four no-ops that read correctly. Verified both
+ways: `--explain` ends `installs / nothing / @install in
+tool/ciss_probe.c`, and the comment is inert to the compiler, which
+they checked by running the fuzzers rather than by reasoning about
+comments.
+
+### `ship it where?` is the other half, and is not implemented
+
+Their observation, offered as scope rather than as a request. raidcfgd's
+four privileged helpers **are** installed -- to `$LIBEXEC`, because they
+have no business on a `PATH`. That is a destination rather than a
+yes-or-no, and `[install]` has no `libexecdir` and no per-target way to
+choose one: fmake puts an `exe` in `bindir` and everything else in
+`libdir`, and those are the only two answers it has.
+
+Not built, and their reasoning for not asking is the right one: it
+costs that tree nothing, since they do not install through fmake and
+their README says so. **It wants a tree that installs through fmake and
+has something privileged**, which is section 125's rule and which no
+tree has yet presented. What it would cost if one does: a
+`libexecdir` under `[install]`, a per-target destination beside
+`install`, and every emitter that reads the plan already carrying it,
+since the directory is a field in the plan rather than a branch in each
+of them.
