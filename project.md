@@ -348,7 +348,8 @@ that had been green about nothing for five commits ·
 [295. Whose directory it is, and which files the reader can fix](#295-whose-directory-it-is-and-which-files-the-reader-can-fix) ·
 [296. `@install no`: built, and not shipped](#296-install-no-built-and-not-shipped) ·
 [297. A dry run answers what would be installed](#297-a-dry-run-answers-what-would-be-installed) ·
-[298. A listing says how many it listed](#298-a-listing-says-how-many-it-listed)
+[298. A listing says how many it listed](#298-a-listing-says-how-many-it-listed) ·
+[299. A directive an old fmake does not know is a comment](#299-a-directive-an-old-fmake-does-not-know-is-a-comment)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -22491,3 +22492,61 @@ a parser can count them itself. The rule is not that every line gets a
 tally -- it is that **a list somebody parses should state its own
 population**, and the way to know which those are is that two trees
 have now told this project they were parsing something.
+
+## 299. A directive an old fmake does not know is a comment
+
+Reported from ossacli, who adopted `@install no`, verified it against
+this tree's HEAD in a scratch copy -- example built, `installs:
+nothing`, the ejected install rule naming exactly the three programs
+-- and then **reverted it**, because the fmake on this machine's PATH
+predates the directive and reads it as ordinary comment text. Under
+that fmake the example is installed, along with five test programs,
+and nothing anywhere says so.
+
+Their sentence for the shape: an annotation an old tool does not know
+is not an error, it is a comment. No amount of reading the source or
+the `--explain` output distinguishes *the key took effect* from *the
+key was ignored*, and what caught it was the one thing that is neither
+-- the ejected install rule, which is the artifact.
+
+**Measured here, and the asymmetry is the answer to what they asked.**
+Against `/usr/bin/fmake` `1.0 (5af02348)`, dated 2026-09-04, on a tree
+whose `example/demo.c` must not ship:
+
+    @install no in the file        installs demo, says nothing
+    [target.demo] install = false  !!! fmake.toml is not valid:
+                                       [target.demo]: unknown key
+                                       'install' (expected one of: ...)
+
+**The config spelling fails loudly and lists the keys that version
+has; the directive is inert.** So where a tree must build with
+whatever fmake a machine happens to carry, the config file is the
+spelling that cannot silently do nothing -- and the README says so
+now. It is not a fix for ossacli's problem, it is a choice between a
+build that stops and a package that ships something its author
+declared unshipped, which is a choice worth being able to make on
+purpose.
+
+**What cannot be done, so that nobody re-derives it.** An old binary
+cannot be taught to warn about a name it does not have, and the
+general form -- warn on any unknown `@word` -- is not available
+either: fmake reads directives out of doxygen comments, where
+`@param`, `@return` and every other doxygen command are ordinary
+content, and a project may define aliases of its own. A
+nearest-known-name heuristic catches a typo and would not have caught
+this, since `@install` is not near anything that fmake of September
+knew. The mechanism fmake does have is `[project] needs`, which
+refuses an fmake older than a stated version -- and it is inert for
+this, because it compares against a release number that has not
+moved. That is a consequence of the release position rather than a
+gap to close here, and it is recorded rather than acted on.
+
+**Two of this project's own features are sitting behind that PATH
+binary in ossacli**: `@install no`, reverted, and section 298's
+`explained N target(s)`, which their gate would have to require. Both
+are written up in their `project.md` as deferred with the same blocker
+named -- a package built from this tree that wants root to install --
+and they have put it to their copyright holder twice. Recorded here
+because **this is what "the installed fmake is behind" costs when it
+stops being a note in five READMEs and starts blocking adoption**, and
+section 286 collected those notes a day before this happened.
