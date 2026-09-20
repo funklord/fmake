@@ -14663,6 +14663,50 @@ def a_dry_run_answers_what_would_be_installed(t):
 
 
 @case
+def a_listing_says_how_many_it_listed(t):
+	"""A consumer parsing fmake's output cannot tell "fmake found
+	nothing" from "my pattern stopped matching" unless the output says
+	how many there were. Two trees parse it: ossacli's `make test' counts
+	link-set blocks in `--explain' and refuses anything but three, and
+	qtty's `tools-check' reads the install lines out of `-n --install'.
+
+	qtty found it the hard way, one commit after quoting the rule at
+	something else: their gate read the install lines and nothing else,
+	so a plan with nothing in it and a `sed' that had stopped matching
+	were the same outcome. With a count beside the list there is a second
+	reading to compare against, and a plan with files in it and no line
+	extracted is a parse that broke -- which their gate now says, instead
+	of blaming the install list and sending the next reader to fmake.toml.
+	They proved it by pointing the sed at the wrong word and watching it
+	say so.
+
+	`evidence.md` calls this a count and an exit code being halves of one
+	result. The same thing holds inside one command's output: the list is
+	the answer and the count is what makes the answer falsifiable."""
+	t.write("a.c", "int main(void){ return 0; }\n")
+	t.write("b.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ return 1; }\n")
+
+	ex = t.fmake("--explain")
+	check(ex.returncode == 0, f"--explain failed: {ex.stdout}{ex.stderr}")
+	def blocks_in(text):
+		return len([l for l in text.splitlines() if l.startswith("target ")])
+
+	check(blocks_in(ex.stdout) == 2,
+	      f"expected two target blocks: {ex.stdout}")
+	check("explained 2 target(s)" in ex.stdout,
+	      f"--explain does not say how many blocks it printed, so a "
+	      f"parser cannot tell a break from an empty tree: {ex.stdout}")
+
+	# And the count is of what was printed rather than of something
+	# adjacent: one target asked for, one block, one in the line.
+	one = t.fmake("--explain", "a")
+	check(blocks_in(one.stdout) == 1
+	      and "explained 1 target(s)" in one.stdout,
+	      f"the count disagrees with the blocks above it: {one.stdout}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")

@@ -347,7 +347,8 @@ that had been green about nothing for five commits ·
 [294. A module that cannot load is said at the link](#294-a-module-that-cannot-load-is-said-at-the-link) ·
 [295. Whose directory it is, and which files the reader can fix](#295-whose-directory-it-is-and-which-files-the-reader-can-fix) ·
 [296. `@install no`: built, and not shipped](#296-install-no-built-and-not-shipped) ·
-[297. A dry run answers what would be installed](#297-a-dry-run-answers-what-would-be-installed)
+[297. A dry run answers what would be installed](#297-a-dry-run-answers-what-would-be-installed) ·
+[298. A listing says how many it listed](#298-a-listing-says-how-many-it-listed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -22430,3 +22431,43 @@ an artifact whose output has gone. What would reach it is a file
 removed between the link and the copy, which cannot be arranged without
 racing the build, and saying so is the honest version of not asserting
 it.
+
+## 298. A listing says how many it listed
+
+Section 297 ended the dry-run install with a count, for a reader who
+would otherwise reach for `head` and see compile commands. qtty put it
+in their gate and found it was doing something else, and the something
+else is the general rule.
+
+**Their live half read the install lines and nothing else**, so *fmake
+planned nothing* and *this `sed` stopped matching* were the same
+outcome -- `evidence.md`'s *a count and an exit code are halves of one
+result*, met inside one command's output, and walked into one commit
+after they had quoted that rule at something else. With `* N file(s)
+would be installed` beside the list there is a second reading to
+compare against: **a plan with files in it and no line extracted is a
+parse that broke**, which their gate now says instead of blaming the
+install list and sending the next reader to `fmake.toml`. They watched
+it by pointing the `sed` at the wrong word -- *fmake planned 2 file(s)
+and this gate read none of them*, exit 1 -- and an older fmake that
+prints no count makes the cross-check absent rather than failed, the
+same shape as the missing-fmake skip beside it.
+
+**Their sentence for it is the rule**: the value is not the
+convenience, it is that a consumer parsing the output can tell its own
+breakage from fmake's answer.
+
+So `--explain` ends the same way now, `* explained N target(s)`, and
+it has a consumer already: ossacli's `make test` counts link-set blocks
+and refuses anything but three (section 288). Before this, a pattern of
+theirs that stopped matching and a tree whose targets had gone were the
+same silence.
+
+**Which lists still have no count**, since the question is now asked of
+all of them rather than answered once. The failure summary says `N
+file(s) did not compile`; the unresolved-header groups do not, and
+neither does `* built X, Y, Z`, though that one names every artifact so
+a parser can count them itself. The rule is not that every line gets a
+tally -- it is that **a list somebody parses should state its own
+population**, and the way to know which those are is that two trees
+have now told this project they were parsing something.

@@ -11426,6 +11426,15 @@ def build(args, _bootstrapping=False):
 			        {"exe": rcc_exe, "jobs": qrc_jobs} if rcc_exe else None,
 			        {"exe": situc_exe, "jobs": situ_jobs}
 			        if situc_exe else None)
+		# How many blocks that was, for the same reason the dry-run
+		# install says how many files it planned. Two trees parse this
+		# output -- ossacli's `make test' counts link-set blocks and
+		# refuses anything but three -- and without a count of its own a
+		# parser cannot tell "fmake found nothing" from "my pattern
+		# stopped matching". qtty put it exactly: the value of the line
+		# is not the convenience, it is that a consumer can tell its own
+		# breakage from fmake's answer.
+		info(f"explained {len(wanted)} target(s)")
 		cache.save()
 		return 0
 
