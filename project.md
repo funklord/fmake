@@ -344,7 +344,8 @@ that had been green about nothing for five commits ·
 [291. From fuzzypickles: a prefix that is a claim, and no way to deny it](#291-from-fuzzypickles-a-prefix-that-is-a-claim-and-no-way-to-deny-it) ·
 [292. What `@kind module` cannot say: five runs from ossacli](#292-what-kind-module-cannot-say-five-runs-from-ossacli) ·
 [293. `[project] exclude` does not reach the inferred include path](#293-project-exclude-does-not-reach-the-inferred-include-path) ·
-[294. A module that cannot load is said at the link](#294-a-module-that-cannot-load-is-said-at-the-link)
+[294. A module that cannot load is said at the link](#294-a-module-that-cannot-load-is-said-at-the-link) ·
+[295. Whose directory it is, and which files the reader can fix](#295-whose-directory-it-is-and-which-files-the-reader-can-fix)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21062,6 +21063,11 @@ reader can actually fix. Leading with the files in the invoking tree,
 or saying how many of the N are outside it, would put those two in the
 first five. Neither was filed as a defect and both are worth fixing.
 
+**Both done; see section 295.** The discriminator each needed already
+existed -- `vendored_dirs`, which is how a `main()` in a submodule
+stops rooting a target -- and neither change asks a new question of
+the tree.
+
 **The open question, which is fmake's.** Nothing in raidcfgd declares a
 module, so inferring one from "built only into a `-shared` target" does
 not reach this tree: there is no shared target here, only a program and
@@ -22065,3 +22071,74 @@ still carries its six `simfw_*` undefined and still dies with
 `undefined symbol: simfw_default` the moment anything preloads it, so
 the surviving line is the only thing that says so before the failure,
 which is where run 4 began.
+
+## 295. Whose directory it is, and which files the reader can fix
+
+Two presentation findings from raidcfgd, reported as observations
+rather than defects and recorded in section 283 as worth fixing. They
+are one fault: **fmake was printing things that are true of the tree
+and sorting them by path, in a tree that is two projects.**
+
+**The suggestion mixed a directory they own with one they do not.**
+What they were handed was a single sentence -- *all of those together:
+[project] include-dirs = ['fuzznet/qtty/include', 'daemon']* -- where
+`daemon` is their own directory, already on their Makefile's command
+line, and `fuzznet/qtty/include` is inside a transitive submodule
+nothing in their tree references. They took the first, refused the
+second, and the refusal cost a paragraph in their `fmake.toml`. The
+syntax is identical and the decisions are not: one is configuration,
+the other is a decision to reach into somebody else's sources. It now
+reads
+
+      those in this project together: [project] include-dirs = ['sub/include']
+      and 'vend/include', inside vend: another project's checkout, so
+      that one is a decision rather than the same line again
+
+and the per-header remedy carries the same clause, since that is the
+line somebody fixing one error at a time actually sees.
+
+**The truncated list was choosing what to show by path.** 21 files did
+not compile, five were printed, and the two that were theirs -- the
+only two they could act on -- were not among the five, because
+nineteen were in the checkout they widen into and sorted ahead
+alphabetically. They found their own by enumerating every `in <file>`
+line by hand. The list now puts the invoking tree's own files first and
+counts the rest:
+
+      7 file(s) did not compile
+        zbroken.c
+        vend/broken1.c
+        ...
+        6 of them are in vend, which is another project's checkout
+        rather than this tree's source
+
+Both halves are needed. Without the count a reader cannot tell whether
+what is behind the `... and 16 more` is theirs; without the ordering
+the ones they can fix are behind it.
+
+**Neither change asks a new question of the tree.** `vendored_dirs`
+already exists and is not a guess -- `.gitmodules` is this repository
+stating that a path belongs to somebody else, and a `.git` inside a
+subdirectory is git having put a checkout there -- and it is what
+already stops a `main()` in a submodule rooting a target. What was
+missing was a version of `vendor_of` that lets a *directory* be its own
+answer, since `fuzznet/qtty/include` is inside the checkout and
+`fuzznet/qtty` **is** the checkout; `in_vendor` is that, and
+`vendor_of` is now one line on top of it.
+
+**A limit the fixture found, recorded rather than fixed.**
+`vendored_dirs` walks the directories that lead to a *source*, so a
+vendored subtree contributing only headers is invisible to the `.git`
+half of the rule -- the first version of the case had exactly that
+shape and the new lines did not fire. The `.gitmodules` half is
+unaffected, which is the half that covers a real submodule, so this is
+a gap for an untracked checkout that ships headers and no sources.
+Worth knowing before somebody reports the symptom.
+
+**The lens both of these came through is worth more than either.** A
+message is read by somebody standing in one tree, and a build fmake
+resolves may span two. Everything it prints that lists files or
+directories is a candidate for the same fault -- which of these is
+mine? -- and sorting by path answers it wrongly at exactly the moment
+the answer matters, because a vendored checkout is usually larger than
+the project vendoring it.

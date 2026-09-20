@@ -4607,20 +4607,33 @@ def vendored_dirs(root, srcs):
 	return out
 
 
-def vendor_of(rel, dirs):
-	"""The vendored subtree this file is in, or None.
+def in_vendor(rel, dirs):
+	"""The vendored subtree this path is in, or is, or None.
 
     Nearest first, so a submodule inside a submodule is attributed to the
-    one that actually contains the file.
+    one that actually contains the path.
+
+    Separate from `vendor_of' because a directory has to be able to be its
+    own answer. That is what an include path needs: `fuzznet/qtty/include'
+    is inside the checkout, and `fuzznet/qtty' *is* the checkout.
     """
 	if not dirs:
 		return None
-	d = os.path.dirname(rel)
+	d = rel
 	while d:
 		if d in dirs:
 			return d
 		d = os.path.dirname(d)
 	return None
+
+
+def vendor_of(rel, dirs):
+	"""The vendored subtree this file is in, or None.
+
+    A file, so the question starts one directory up -- a source is never
+    itself a checkout.
+    """
+	return in_vendor(os.path.dirname(rel), dirs)
 
 
 def _mod_dir(rel):
@@ -6107,7 +6120,8 @@ def _same_file(path, size):
 
 
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
-                  broken=None, tree_headers=(), quiet=False, origins=None):
+                  broken=None, tree_headers=(), quiet=False, origins=None,
+                  vendored=()):
 	"""Compile what is stale. Returns True if anything was actually built.
 
     `broken` collects the files that would not compile, so the caller can
@@ -6304,6 +6318,19 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					want = include_root_for(here, miss)
 					note(f"[project] include-dirs = "
 					     f"[{want!r}] would find it")
+					# Whose directory it is changes what the line means.
+					# Reported from raidcfgd, who were handed one sentence
+					# naming two of their own directories and a third
+					# inside a transitive submodule nothing in their tree
+					# references -- so the line read as the next thing to
+					# paste, and refusing the third took a paragraph in
+					# their fmake.toml to explain.
+					owner = in_vendor(want, vendored)
+					if owner:
+						note(f"   {want} is inside {owner}, a checkout of "
+						     f"another project: naming it accepts that "
+						     f"this tree reaches into their sources, "
+						     f"which is a decision rather than a fix")
 					if want not in need_dirs:
 						need_dirs.append(want)
 				else:
@@ -6335,9 +6362,21 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		# layout produces a group per header -- thorvg gave ten -- and
 		# collecting them by hand to re-run is work fmake has already done.
 		if len(need_dirs) > 1:
-			shown = ", ".join(repr(d) for d in need_dirs)
-			note(f"all of those together: [project] include-dirs = "
-			     f"[{shown}]")
+			# Two sentences rather than one, for raidcfgd's reason above:
+			# a directory this project owns and a directory in a checkout
+			# it is widening into are the same syntax and different
+			# decisions, and only the first is a line to paste.
+			ours = [d for d in need_dirs if not in_vendor(d, vendored)]
+			theirs = [d for d in need_dirs if in_vendor(d, vendored)]
+			if ours:
+				shown = ", ".join(repr(d) for d in ours)
+				note(f"{'those in this project' if theirs else 'all of those'}"
+				     f" together: [project] include-dirs = [{shown}]")
+			for owner in sorted({in_vendor(d, vendored) for d in theirs}):
+				inside = [d for d in theirs if in_vendor(d, vendored) == owner]
+				note(f"and {', '.join(repr(d) for d in inside)}, inside "
+				     f"{owner}: another project's checkout, so that one is "
+				     f"a decision rather than the same line again")
 		if not VERBOSE:
 			note("-v for the full compiler output")
 		say()
@@ -10577,7 +10616,7 @@ def build(args, _bootstrapping=False):
 		compile_units(pool + [variants[k] for k in sorted(variants)],
 		              cfg, cache, root, incflags, jobs, args.dry_run,
 		              broken, tree_headers=hdrs, quiet=args.quiet,
-		              origins=generated_from)
+		              origins=generated_from, vendored=vendored)
 		# The architecture to require is whatever fmake just compiled. Asking
 		# the objects avoids having to know anything about toolchain
 		# triplets, and is right by construction -- but it means waiting
@@ -11606,11 +11645,28 @@ def build(args, _bootstrapping=False):
 		# `broken' holds unit keys, and a variant's carries the target it
 		# was compiled for behind a NUL. Printing the key raw showed
 		# `t.c t_checked', which reads as two files and is one.
-		for key in sorted(broken)[:5]:
+		# Sorted so the invoking tree's own files come first, and the
+		# vendored ones are counted rather than listed. Reported from
+		# raidcfgd: 21 files, five printed, and the two that were theirs
+		# -- the only two they could act on -- were not among the five,
+		# because nineteen were in a checkout they widen into and sorted
+		# ahead alphabetically. A truncated list is a choice about what
+		# the reader sees first, and it was making it by path.
+		keys = sorted(broken, key=lambda k: (
+		    bool(vendor_of(k.partition("\0")[0], vendored)), k))
+		for key in keys[:5]:
 			rel, _, variant = key.partition("\0")
 			note(f"{rel} ({variant})" if variant else rel)
-		if len(broken) > 5:
-			note(f"... and {len(broken) - 5} more")
+		if len(keys) > 5:
+			note(f"... and {len(keys) - 5} more")
+		elsewhere = {}
+		for key in keys:
+			owner = vendor_of(key.partition("\0")[0], vendored)
+			if owner:
+				elsewhere[owner] = elsewhere.get(owner, 0) + 1
+		for owner, n in sorted(elsewhere.items()):
+			note(f"{n} of them are in {owner}, which is another project's "
+			     f"checkout rather than this tree's source")
 
 	if failed:
 		say()

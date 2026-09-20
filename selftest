@@ -14382,6 +14382,93 @@ def a_module_that_cannot_load_is_said_at_the_link(t):
 
 
 @case
+def a_suggested_include_path_says_whose_tree_it_is_in(t):
+	"""Reported from raidcfgd, who were handed one sentence: *all of those
+	together: [project] include-dirs = ['fuzznet/qtty/include', 'daemon']*.
+	Two of those were their own directories, which their Makefile already
+	passes; the third was inside a transitive submodule nothing in their
+	tree references. They took `daemon', refused the other, and the
+	refusal cost a paragraph in their `fmake.toml' to explain.
+
+	The syntax is the same and the decisions are not. Naming a directory
+	this project owns is configuration; naming one inside somebody else's
+	checkout is a decision to reach into their sources, and a line that
+	presents both as one thing to paste is advice that has to be undone
+	by whoever reads it carefully.
+
+	The header is placed by basename, so a tree header called `time.h'
+	is the reliable way to be here: `resolve_header' refuses a basename
+	the toolchain owns, which is the case the docstring there names, and
+	the compiler then cannot find it either."""
+	t.write("main.c", '#include "pkg/time.h"\n#include "other.h"\n'
+	        "int main(void){ return helper() + other(); }\n")
+	t.write("other.h", "int other(void);\n")
+	t.write("other.c", '#include "other.h"\n#include "vlib/string.h"\n'
+	        "int other(void){ return vend(); }\n")
+	t.write("sub/include/pkg/time.h", "int helper(void);\n")
+	# A `.git' file rather than a directory: that is what git puts in a
+	# submodule checkout, and `vendored_dirs' asks only whether the path
+	# exists. The subtree also needs a source, since that scan walks the
+	# directories that lead to one.
+	t.write("vend/.git", "gitdir: ../.git/modules/vend\n")
+	t.write("vend/include/vlib/string.h", "int vend(void);\n")
+	t.write("vend/vend.c", "int vend(void){ return 2; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("include-dirs = ['sub/include']" in out,
+	      f"the project's own directory is not offered on its own: {out}")
+	check("'sub/include', 'vend/include'" not in out
+	      and "'vend/include', 'sub/include'" not in out,
+	      f"the combined line still mixes this tree's directory with one "
+	      f"in a vendored checkout: {out}")
+	check("inside vend" in out,
+	      f"nothing says the second directory is another project's: {out}")
+	# And the per-header remedy carries it too, since that is the line a
+	# reader following one error at a time actually sees.
+	check("vend/include is inside vend" in out,
+	      f"the single-header remedy does not say whose directory it is: "
+	      f"{out}")
+
+
+@case
+def the_files_that_did_not_compile_lead_with_this_trees_own(t):
+	"""A truncated list is a choice about what the reader sees first, and
+	it was making it by path. Reported from raidcfgd: 21 files did not
+	compile, five were printed, and the two that were theirs -- the only
+	two they could act on -- were not among the five, because nineteen
+	were in a checkout they widen into and sorted ahead alphabetically.
+	They found their own two by enumerating every `in <file>' line by
+	hand.
+
+	So the tree's own files come first and the vendored ones are counted
+	rather than listed. Both halves matter: without the count a reader
+	cannot tell whether the rest are theirs, and without the ordering the
+	ones they can fix are behind an `... and 16 more'."""
+	t.write("main.c",
+	        "int a1(void); int a2(void); int a3(void); int a4(void);\n"
+	        "int a5(void); int a6(void); int mine(void);\n"
+	        "int main(void){ return a1() + a2() + a3() + a4() + a5()"
+	        " + a6() + mine(); }\n")
+	t.write("vend/.git", "gitdir: ../.git/modules/vend\n")
+	for i in range(1, 7):
+		t.write(f"vend/broken{i}.c", f"int a{i}(void){{ return ; }}\n")
+	# Named so it sorts last, which is the arrangement that produced the
+	# report: alphabetically it is behind every vendored file.
+	t.write("zbroken.c", "int mine(void){ return ; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("7 file(s) did not compile" in out, f"expected seven: {out}")
+	listed = out.split("did not compile", 1)[1]
+	first = [l.strip() for l in listed.splitlines()[1:6]]
+	check(first and first[0] == "zbroken.c",
+	      f"the file this tree owns is not first in the list: {first}")
+	check("6 of them are in vend" in out,
+	      f"nothing says how many of them are another project's: {out}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")
