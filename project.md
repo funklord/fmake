@@ -345,7 +345,8 @@ that had been green about nothing for five commits ·
 [292. What `@kind module` cannot say: five runs from ossacli](#292-what-kind-module-cannot-say-five-runs-from-ossacli) ·
 [293. `[project] exclude` does not reach the inferred include path](#293-project-exclude-does-not-reach-the-inferred-include-path) ·
 [294. A module that cannot load is said at the link](#294-a-module-that-cannot-load-is-said-at-the-link) ·
-[295. Whose directory it is, and which files the reader can fix](#295-whose-directory-it-is-and-which-files-the-reader-can-fix)
+[295. Whose directory it is, and which files the reader can fix](#295-whose-directory-it-is-and-which-files-the-reader-can-fix) ·
+[296. `@install no`: built, and not shipped](#296-install-no-built-and-not-shipped)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21384,8 +21385,11 @@ inferred, the general rule refused because a tree sorting its tests into
 name gets added when a second tree spells it that way*. `example/` has
 two trees spelling it that way, and they are the two measured above.
 
-The two answers compose badly, which is the part to settle rather than
-to discover later: a convention that installs nothing from `example/`
+**The key is implemented; see section 296.** The convention is not,
+and with the key in place it composes rather than competing -- a
+convention would be a default and `install = true` the override. What
+follows was the argument against doing the convention first, and it
+still says why the key came first: a convention that installs nothing from `example/`
 makes an `install = true` necessary for the tree that does ship its
 example, and that is a key nobody has asked for. What is not in doubt is
 that the sentence has two independent askers, and that today neither can
@@ -22168,3 +22172,70 @@ directories is a candidate for the same fault -- which of these is
 mine? -- and sorting by path answers it wrongly at exactly the moment
 the answer matters, because a vendored checkout is usually larger than
 the project vendoring it.
+
+## 296. `@install no`: built, and not shipped
+
+Section 287's gap, closed with the key rather than the convention.
+
+Two trees asked and neither could say it. ossacli's
+`example/health_summary.c` is a library-integration example, built by
+their Makefile so that it cannot rot and deliberately left out of `make
+install`; fmake found its `main()`, built it, and put it in `$BINDIR`
+beside the three real programs. qtty is the same shape three times: an
+example, a screen probe and a tray gate, all six of its targets in the
+install plan where its own `make install` ships two and the headers.
+
+**What was available before, and why neither worked.** `test = false`
+is what ossacli reached for, and section 282 is what it cost: `test`
+says whether to RUN a thing, so turning it off moved a program from
+not-built-by-default to built-and-installed -- the opposite of what
+they meant. Excluding the directory is the other, and it is what they
+took: it also stops the file compiling, which is the property the
+Makefile was keeping, since an example nothing builds is an example
+that rots.
+
+**Both spellings, because both trees have both.**
+
+    /*! @file
+     *  @install no
+     */
+
+    [target.demo]
+    install = false
+
+The directive is the fact in the file, where whoever knows it is
+standing; the key is the same fact for a tree that keeps its decisions
+in one place. `@install yes` is accepted and says so outright, since a
+directive that can only turn something on would have nothing to say --
+the default is yes.
+
+**Declined in the plan, which is the whole of the implementation.**
+`install_plan` is what `--install`, both ejected builds, `--eject deb`,
+`ebuild`, `apk` and `--release` all read, and section 227 made that
+sharing the point rather than a tidiness. So one `continue` beside the
+one a module already gets covers every format at once, and the case
+checks the ejected Makefile rather than trusting that: an install rule
+that shipped what `--install` does not would be exactly the pair
+`install_plan` exists to stop.
+
+**What `--explain` had to gain.** An empty installs block reads as
+fmake having forgotten, so a target that ships nothing says which of
+the two ways said so:
+
+    installs
+      nothing                           @install in example/demo.c
+
+**The convention was not implemented, and the reason is section 242.**
+Inferring it from `example/` and `examples/` is the other half of 287,
+and it now composes rather than competing -- with the key in place a
+convention is a default and `install = true` is the override, which is
+the objection that stood against doing it first. What 242 settled for
+`tests/live/` applies unchanged: one name inferred, the general rule
+refused, and a second name added when a second tree spells it that
+way. Both trees here spell it `example/`, so the bar is met; what is
+missing is a holder's decision about a directory name, which is what
+242 was too.
+
+**The case would pass with installation broken altogether**, so it
+asserts the ordinary program lands as well -- the population assertion
+that stops a negative check reporting on an empty set.

@@ -14469,6 +14469,91 @@ def the_files_that_did_not_compile_lead_with_this_trees_own(t):
 
 
 @case
+def a_program_can_be_built_and_not_shipped(t):
+	"""The sentence two trees asked for and neither could say. ossacli's
+	`example/health_summary.c' is a library-integration example, built by
+	their Makefile so that it cannot rot and deliberately left out of
+	`make install'; fmake found its `main()', built it, and put it in
+	`$BINDIR' beside the three real programs. qtty is the same shape three
+	times over -- an example, a screen probe and a tray gate, all six of
+	its targets installed where its own `make install' ships two.
+
+	`test = false' is what ossacli reached for and section 282 is what it
+	cost: `test' says whether to RUN a thing, so turning it off moved a
+	program from not-built-by-default to built-and-installed, which is the
+	opposite of what they meant. The questions are orthogonal, and this is
+	the second one.
+
+	Excluding the directory is the other thing available today, and it is
+	what they took. It also stops the file being compiled, which is the
+	property the Makefile was keeping: an example that nothing builds is an
+	example that rots.
+
+	Both spellings, because both trees have both. `@install no' is the fact
+	in the file, where whoever knows it is standing; `[target.NAME] install
+	= false' is the same fact for a tree that keeps its decisions in one
+	place. And the ejected build is checked rather than assumed: everything
+	downstream of `install_plan' inherits this, which is the whole reason
+	to decline there and not in `--install'."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("example/demo.c", "/*! @file\n *  @install no\n */\n"
+	        "int main(void){ return 0; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check(os.path.exists(os.path.join(t.dir, "demo")),
+	      f"the example is not shipped, which is not a reason to stop "
+	      f"building it: {os.listdir(t.dir)}")
+
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--prefix", stage)
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	staged = []
+	for base, _dirs, files in os.walk(stage):
+		staged += [os.path.relpath(os.path.join(base, f), stage)
+		           for f in files]
+	check(any(f.endswith("main") or f.endswith(os.path.basename(t.dir))
+	          for f in staged),
+	      f"the ordinary program was not installed, so this case would "
+	      f"pass with install broken altogether: {staged}")
+	check(not any(os.path.basename(f) == "demo" for f in staged),
+	      f"@install no did not keep the example out: {staged}")
+
+	ex = t.fmake("--explain")
+	check("@install in example/demo.c" in ex.stdout,
+	      f"--explain does not say why nothing is installed, so the "
+	      f"absence reads as fmake having forgotten: {ex.stdout}")
+
+	# The same fact from fmake.toml, for a tree that keeps its decisions
+	# in one file -- and the directive removed, so this is the config
+	# doing it rather than the leftover annotation.
+	t.write("example/demo.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", '[target.demo]\ninstall = false\n')
+	shutil.rmtree(stage, ignore_errors=True)
+	r = t.fmake("--install", "--prefix", stage)
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	staged = []
+	for base, _dirs, files in os.walk(stage):
+		staged += [os.path.basename(f) for f in files]
+	check("demo" not in staged,
+	      f"[target.demo] install = false did not keep it out: {staged}")
+
+	# And the ejected Makefile, which is the check that this was declined
+	# in the plan rather than in --install: an install rule that ships it
+	# anyway would be the two implementations install_plan exists to stop.
+	mk = t.fmake("--eject", "make")
+	check(mk.returncode == 0, f"eject failed: {mk.stdout}{mk.stderr}")
+	text = mk.stdout
+	rule = text.split("\ninstall:", 1)[1].split("\n\n", 1)[0]
+	check("demo" not in rule,
+	      f"the ejected install rule ships what --install does not: {rule}")
+	check("demo" in text,
+	      "the ejected build should still build it -- not shipping a "
+	      "program is not a reason to stop compiling it")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")

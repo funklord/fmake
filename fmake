@@ -1217,7 +1217,7 @@ CONF_SCHEMA = {
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
         "dbus": L, "udev": L, "polkit": L, "data": L, "completion": L,
-        "test": B, "test-group": S, "test-args": L,
+        "test": B, "test-group": S, "test-args": L, "install": B,
         "test-timeout": N, "test-env": L, "test-cwd": S,
         "version": S, "version-script": S, "description": S,
     }},
@@ -3815,7 +3815,7 @@ RE_DIRECTIVE = re.compile(r"^[@\\](\w+)\b[ \t]*(.*)$")
 
 # Replace whatever came before; last one wins.
 DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version",
-                    "version_script"}
+                    "version_script", "install"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
@@ -4208,6 +4208,8 @@ DOXYGEN_ALIAS_TEXT = {
     "std":     "Language standard",
     "version_script": "Shared library version script",
     "test":    "Test program",
+    "install": "Installed by --install (no for a program that is built "
+               "and not shipped)",
     "os":      "Operating systems",
     "arch":    "Architectures",
     "sources": "Extra sources",
@@ -8407,12 +8409,45 @@ def _ann_test(ann, rel=""):
 	return value
 
 
+def _ann_install(ann, rel=""):
+	"""What `@install` said: None if absent, else True or False.
+
+    The sentence two trees asked for and neither could say: build this and
+    do not ship it. ossacli's `example/health_summary.c` is a
+    library-integration example, built by their Makefile so that it cannot
+    rot and deliberately left out of `make install'; qtty's `example/chat',
+    its `screen-probe' and its tray gate are the same shape. fmake found
+    every one of them, correctly, and put them all in `$BINDIR'.
+
+    Reaching for `test = false' is what ossacli tried, and section 282 is
+    what that cost: `test' says whether to RUN a thing, so turning it off
+    moved a program from not-built-by-default to built-and-installed. The
+    two questions are orthogonal and this is the second one.
+
+    `no' rather than a bare `@install', because the default is yes and a
+    directive that can only turn something on would have nothing to say.
+    """
+	if "install" not in ann.raw:
+		return None
+	line, args = ann.raw["install"][-1]
+	if len(args) > 1:
+		die(f"{rel}:{line}: @install {' '.join(args)} takes one word: "
+		    f"`no`, or `yes` to say so outright")
+	value = str(ann.scalar("install", "yes")).lower()
+	if value in ("no", "false", "0"):
+		return False
+	if value in ("yes", "true", "1"):
+		return True
+	die(f"{rel}:{line}: @install {value} is not yes or no")
+
+
 class Target:
 	"""One artifact: what roots it, what it is called, and what kind it is."""
 
 	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
 	             "test_group", "test_why", "version", "description",
-	             "stem", "publishes_pc", "version_script")
+	             "stem", "publishes_pc", "version_script",
+	             "installed", "install_why")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
@@ -8457,6 +8492,12 @@ class Target:
 				if len(words) > 1:
 					die(f"{rel}:{line}: @{name} {' '.join(words)} takes one "
 					    f"word. Put each directive on its own line.")
+		# Built and not shipped. A module is already this by kind -- where
+		# a plugin loads from is the project's to say -- and this is the
+		# same fact for a program, said by whoever knows it.
+		want = _ann_install(ann, rel) if rel else None
+		self.installed = True if want is None else want
+		self.install_why = "" if want is None else f"@install in {rel}"
 		said = _ann_test(ann, rel)
 		found = looks_like_a_test(rel) if rel else None
 		if said is False:
@@ -8483,6 +8524,10 @@ class Target:
 		if section.get("test-group"):
 			self.test_group = section["test-group"]
 			self.test_why = f"[target.*] test-group = {self.test_group!r}"
+		if "install" in section:
+			self.installed = bool(section["install"])
+			self.install_why = (f"[target.*] install = "
+			                    f"{str(self.installed).lower()}")
 		if section.get("sources"):
 			self.members = list(section["sources"])
 		self.version = section.get("version") or self.version
@@ -9055,6 +9100,12 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 				arrow = "->" if origin != "symlink" else "->(link)"
 				print(f"    {name:<{W}}{arrow} {var}"
 				      + (f"   [{source}]" if origin == "symlink" else ""))
+		elif not t.installed:
+			# The absence has to be readable, or it looks like fmake
+			# forgot. Whichever of the two ways said so is named, the
+			# way the test line names @test or the toml.
+			print(f"  {CYAN('installs')}")
+			print(f"    {_col('nothing', W)}{DIM(t.install_why)}")
 	print()
 
 # ---------------------------------------------------------------------------
@@ -14426,6 +14477,16 @@ def install_plan(targets, closures, root):
 		# `.so'; where it loads from is the project's to say, so `--install'
 		# and the ejected install rule pass it by, as ossacli's shims are.
 		if t.kind == "module":
+			continue
+		# Said outright, by the one who knows. Two trees build a program
+		# they do not ship -- an example kept compiling so it cannot rot,
+		# a probe beside the tools -- and had no way to say so: excluding
+		# the directory stops it being built at all, which is the property
+		# they were keeping, and `test = false' means something else
+		# (section 282). Everything else here follows from the plan, so
+		# declining at the plan is declining in --install, in both ejected
+		# builds and in every package format at once.
+		if not t.installed:
 			continue
 		where = "bindir" if t.kind == "exe" else "libdir"
 		mode = 0o755 if t.kind != "static" else 0o644
