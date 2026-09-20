@@ -350,7 +350,8 @@ that had been green about nothing for five commits ·
 [297. A dry run answers what would be installed](#297-a-dry-run-answers-what-would-be-installed) ·
 [298. A listing says how many it listed](#298-a-listing-says-how-many-it-listed) ·
 [299. A directive an old fmake does not know is a comment](#299-a-directive-an-old-fmake-does-not-know-is-a-comment) ·
-[300. `example/` is not shipped, and the plural is not `example/`](#300-example-is-not-shipped-and-the-plural-is-not-example)
+[300. `example/` is not shipped, and the plural is not `example/`](#300-example-is-not-shipped-and-the-plural-is-not-example) ·
+[301. A module keeps its interposer and shares everything else](#301-a-module-keeps-its-interposer-and-shares-everything-else)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21762,13 +21763,15 @@ size.**
   tree defines in a file the module does not build -- including, where
   that file is in another target's link set, the fact that the obvious
   remedy is run 3.
-- **`sources` does two jobs at once**, in their words: it says which
+- ~~**`sources` does two jobs at once**~~ **-- answered in section
+  301, by the third of the three.** In their words: it says which
   files a target is built from, and by saying so it claims them away
   from everyone else. Those came apart here -- they wanted the second
-  for `sgshim.c` and not for `simfw.c`. Whether the answer is a second
-  key, a module that can link a declared library, or the section 276
-  machinery pointed at interposers rather than at `tests/` doubles, is
-  this project's.
+  for `sgshim.c` and not for `simfw.c`. Of a second key, a module that
+  can link a declared library, and the section 276 machinery pointed
+  at interposers, the last is theirs and is the one that needed no new
+  vocabulary: a module now keeps a source that defines what libc
+  defines and shares one that does not.
 - **fmake's own README oversells it.** *"ossacli's `ossa-sgshim.so` is
   one"*, in the `@kind module` paragraph, is true of what that file is
   and not of what fmake can currently build, and that sentence is what
@@ -22617,3 +22620,62 @@ means not-shipped, which is section 242's bar and is exactly how
 a private project either; it is evidence about the word rather than a
 vote, and it is the only C tree on this machine using the plural at
 all.
+
+## 301. A module keeps its interposer and shares everything else
+
+Section 292's open half, closed where ossacli said to look rather than
+where the section proposed.
+
+The five runs left three candidate answers: a second key splitting what
+`sources` does, a module that can link a declared library, or the
+`tests/` machinery pointed at interposers. The third is theirs, offered
+with the caveat that they had not read enough of that path to know what
+it would cost, and it is the one that needs no new vocabulary at all.
+
+**What the rule was.** Section 281 kept every source a module declares
+out of every other target's closure, unconditionally, because nothing
+links a module. **What that cost**, measured by ossacli: their shim
+calls a simulator, `src/lib/simfw.c`, which their three programs also
+link because `OSSA_TRANSPORT=mock` is a documented feature. Declaring
+only the shim left the module undefined at `dlopen` (run 4); declaring
+both took the simulator out of every other target and all three
+programs stopped linking on `simfw_default` (run 3). There was no
+fourth thing to try.
+
+**Their Makefile does neither**, and that is the answer: it links the
+archive into the `-shared` rule *and* into the programs, because the
+simulator is ordinary shared code and only the interposer stands in for
+anything. So the rule narrows to what it was always about --
+
+    a module keeps a source that defines what libc defines,
+    and shares one that does not
+
+-- which is the same discriminator section 276 uses for a double under
+`tests/`, computed from the same `libc_exports` set section 219 already
+reads. Their sentence for why that is the line: it is exactly and only
+what `sgshim.c` does to `close()` and `ioctl()`, while saying nothing
+about the simulator it calls.
+
+**Where libc cannot be read, the old rule stands.** The hazard section
+281 guards is a storage tool inventing a controller, and *cannot tell*
+has to fall on the conservative side of that -- so a cross build with
+no readable libc keeps every module source to its module, as before.
+The same applies to a source that has not compiled: nothing is known
+about what it defines, so it keeps section 281's answer rather than
+getting a guess.
+
+**One rule producing both halves is what the case asserts**, because
+they fail in opposite directions. The program must not carry the shim's
+`close()`, which is section 219's failure; the module must not be
+missing `simfw_default`, which is a plugin that loads nowhere. A fixture
+in ossacli's arrangement checks both with `nm`, runs the program, and
+checks that section 294's warning stays quiet -- a module that has
+everything it needs must not be told it does not. Against the previous
+commit the case fails on run 3's symptom, the programs not linking.
+
+**What this does not add**, and section 292's list is unchanged on it:
+there is still no way to say *this module links that library*. What
+there is now is a tree that no longer needs to say it, because the file
+both want is shared rather than claimed. A module that genuinely wants
+a `.so` at load time -- rather than a source both build -- is still
+unexpressed, and no tree has asked for it.

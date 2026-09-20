@@ -14777,6 +14777,73 @@ def an_example_directory_is_not_shipped_and_says_so(t):
 
 
 @case
+def a_modules_simulator_is_shared_and_its_interposer_is_not(t):
+	"""Section 281 kept every source a module declares out of every other
+	target, and section 292 is what that cost. ossacli's shim calls a
+	simulator, `src/lib/simfw.c', which their three programs also link
+	because `OSSA_TRANSPORT=mock' is a documented feature. Declaring only
+	the shim left `ossa-sgshim.so' undefined at `dlopen'; declaring both
+	took the simulator out of every other target and all three programs
+	stopped linking on `simfw_default'. Five runs, and no fourth thing to
+	try.
+
+	Their Makefile does neither, and that is the answer: it links the
+	archive into the `-shared' rule and into the programs, because the
+	simulator is ordinary shared code and only the interposer stands in
+	for anything. So the rule narrows to what it was always about -- a
+	module keeps a source that defines what libc defines, and shares one
+	that does not, which is the same discriminator the `tests/' doubles
+	use and is where ossacli pointed.
+
+	Both halves are asserted here because they fail in opposite
+	directions: the program must not carry the shim's `close()', which is
+	section 219's storage tool inventing a controller, and the module must
+	not be missing `simfw_default', which is a plugin that loads nowhere.
+	One rule has to produce both."""
+	t.write("src/lib/simfw.c", "int simfw_default(void){ return 7; }\n")
+	t.write("src/shim/sgshim.c", "#include <unistd.h>\n"
+	        "int simfw_default(void);\n"
+	        "int close(int fd){ (void)fd; return simfw_default() ? 0 : -1; }\n")
+	t.write("main.c", "#include <unistd.h>\n#include <stdio.h>\n"
+	        "int simfw_default(void);\n"
+	        "int main(void){ printf(\"%d\\n\", simfw_default());"
+	        " return close(3) == 0 ? 0 : 0; }\n")
+	t.write("fmake.toml", '[target.sgshim]\nkind    = "module"\n'
+	        'sources = ["src/shim/sgshim.c", "src/lib/simfw.c"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the programs stopped linking, which is ossacli's run 3: {out}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	mod = os.path.join(t.dir, "sgshim.so")
+	check(os.path.exists(mod), f"no module was built: {os.listdir(t.dir)}")
+
+	# The program: simulator yes, interposer no.
+	syms = subprocess.run(["nm", prog], capture_output=True, text=True).stdout
+	check(" T simfw_default" in syms or " t simfw_default" in syms,
+	      f"the program did not get the shared simulator: {syms}")
+	check(not _defines_close(prog),
+	      "the program carries the shim's close(), which is section 219's "
+	      "storage tool inventing a controller")
+
+	# The module: both, and nothing left for a loader to supply.
+	check(_defines_close(mod), "the module lost its own interposer")
+	undef = subprocess.run(["nm", "-D", "--undefined-only", mod],
+	                       capture_output=True, text=True).stdout
+	check("simfw_default" not in undef,
+	      f"the module still needs the simulator from its loader, which "
+	      f"is ossacli's run 4: {undef}")
+	check("links with" not in out,
+	      f"the undefined-symbol warning fired on a module that has "
+	      f"everything it needs: {out}")
+
+	got = subprocess.run([prog], capture_output=True, text=True)
+	check(got.stdout.strip() == "7",
+	      f"the program does not run: {got.stdout!r} {got.stderr!r}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")

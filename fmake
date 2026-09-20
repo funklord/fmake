@@ -10867,18 +10867,54 @@ def build(args, _bootstrapping=False):
 				                        if u.rel in test_material
 				                        and (u.strong & libc_syms)}
 
-		# A module's sources are its own. Section 278 builds a loadable
-		# object -- an LD_PRELOAD shim, a plugin -- and its files define
-		# names (sgshim.c's `close()', section 219) that section 3 would
-		# otherwise pull into a program that left them for libc. Nothing
-		# links a module, so its sources belong to it alone and stay out of
-		# every other target's closure, the way a module's own rule in a
-		# hand-written Makefile compiles them nowhere else.
+		# A module's *interposing* sources are its own. Section 278 builds
+		# a loadable object -- an LD_PRELOAD shim, a plugin -- and its
+		# files define names (sgshim.c's `close()', section 219) that
+		# section 3 would otherwise pull into a program that left them for
+		# libc. Nothing links a module, so those belong to it alone, the
+		# way a module's own rule in a hand-written Makefile compiles them
+		# nowhere else.
+		#
+		# Section 281 made that unconditional and section 292 is what it
+		# cost. ossacli's shim calls a simulator, `src/lib/simfw.c', which
+		# their three programs also link because `OSSA_TRANSPORT=mock' is
+		# a documented feature. Declaring only the shim left the module
+		# undefined at `dlopen'; declaring both took simfw out of every
+		# other target and the three programs stopped linking. Their
+		# Makefile does neither: it links the archive into the `-shared'
+		# rule and into the programs, because the simulator is ordinary
+		# shared code and only the interposer stands in for anything.
+		#
+		# So the same discriminator as the `tests/' doubles above, which
+		# is where ossacli pointed: a file is kept to the module when it
+		# defines something libc also defines, and is shared like any
+		# other source when it does not. Their words for why that is the
+		# right line -- it is exactly and only what sgshim.c does to
+		# `close()' and `ioctl()', while saying nothing about the
+		# simulator it calls.
+		#
+		# Unless libc cannot be read, and then the old rule stands: the
+		# hazard it guards is a storage tool inventing a controller, and
+		# "cannot tell" has to fall on the conservative side of that.
 		module_material = set()
+		module_rels = set()
 		for m in wanted:
 			if m.kind == "module":
-				module_material.add(m.rel)
-				module_material.update(m.members or ())
+				module_rels.add(m.rel)
+				module_rels.update(m.members or ())
+		if module_rels:
+			libc_syms = libc_exports(cfg, cache)
+			if not libc_syms:
+				module_material = set(module_rels)
+			else:
+				known = {u.rel: u for u in pool}
+				for rel in module_rels:
+					u = known.get(rel)
+					# Not compiled yet, or not in the pool at all: nothing
+					# is known about what it defines, so it keeps section
+					# 281's answer rather than getting a guess.
+					if u is None or not u.compiled or (u.strong & libc_syms):
+						module_material.add(rel)
 
 		def schema_pool(t):
 			"""`pool` without what this program must not link: the schemas
