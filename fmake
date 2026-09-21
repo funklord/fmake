@@ -6445,6 +6445,30 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					# references -- so the line read as the next thing to
 					# paste, and refusing the third took a paragraph in
 					# their fmake.toml to explain.
+					# Whether taking that remedy would shadow the
+					# toolchain's own headers, which fmake can see and
+					# the reader cannot. beerssh's case exactly: naming
+					# the directory resolves the error it was printed
+					# for and puts libssh's `string.h' in front of the C
+					# library's for every file in the build, so for that
+					# tree the answer was the exclude and the printed
+					# advice was the wrong half of the choice. It says
+					# both halves now.
+					root_dir = os.path.join(root, want)
+					shadows = sorted({
+					    os.path.relpath(h, want).replace(os.sep, "/")
+					    for h in tree_headers
+					    if (h == want or h.startswith(want + "/"))
+					    and os.path.relpath(h, want).replace(os.sep, "/")
+					    in STANDARD_HEADERS})
+					if shadows:
+						note(f"   {want} also holds "
+						     f"{', '.join(shadows[:3])}"
+						     + (" ..." if len(shadows) > 3 else "")
+						     + f", which the toolchain owns: naming it "
+						       f"puts that in front of the C library's "
+						       f"for every file, so excluding the "
+						       f"subtree may be the answer instead")
 					# And whether this tree already said not to look
 					# there. An exclude reaches the include path now, so
 					# a header under an excluded subtree is missing on
@@ -11485,8 +11509,22 @@ def build(args, _bootstrapping=False):
 		interposed = libc_interposed(closures, wanted,
 		                             libc_exports(cfg, cache))
 		refuse = []
+		forgiven = {}
 		for (rel, sym, by), names in sorted(interposed.items()):
 			if Ann(scans.get(rel, {}).get("dirs")).raw.get("interpose"):
+				# Silenced, and said anyway. Reported from ossacli, whose
+				# `make test' had adopted this warning as a detector for
+				# an adjacent question -- not "is this deliberate" but
+				# "did the shim reach the three programs" -- so an
+				# annotation that legitimately answers the first would
+				# have silently removed the second. Measured there: their
+				# own nm arm knew four of the shim's names and fmake's
+				# warning covered the other twelve. A note keeps the set
+				# available to a consumer who wants to diff it against
+				# their own list without compiling anything, while
+				# dropping the framing that says something is wrong.
+				forgiven.setdefault((rel, tuple(sorted(names))),
+				                    set()).add(sym)
 				continue
 			owner = vendor_of(rel, vendored)
 			if owner:
@@ -11499,6 +11537,12 @@ def build(args, _bootstrapping=False):
 			     f"target; under tests/ it is kept out of every non-test "
 			     f"program; [project] exclude drops it. `@interpose' says "
 			     f"this is meant and silences this")
+		for (rel, names), syms in sorted(forgiven.items()):
+			shown = sorted(syms)
+			note(f"{rel} interposes on purpose (@interpose): "
+			     + ", ".join(f"{x}()" for x in shown[:6])
+			     + (f" and {len(shown) - 6} more" if len(shown) > 6 else "")
+			     + f" -- linked into {', '.join(names)} in libc's place")
 		if refuse:
 			rel, sym, by, names, owner = refuse[0]
 			more = (f"\n{len(refuse) - 1} more file(s) in a vendored "

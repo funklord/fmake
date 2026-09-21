@@ -50,6 +50,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import traceback
 import time
 import tomllib
 
@@ -15053,6 +15054,14 @@ def an_exclude_reaches_the_include_path_too(t):
 	      f"message: {out}")
 	check("under [project] exclude = 'deps'" in out,
 	      f"nothing says the exclude is why it is not on the path: {out}")
+	# And that taking the remedy has a cost fmake can see and the reader
+	# cannot. beerssh's answer for their tree was the exclude rather than
+	# the include-dirs line, and said the printed advice was the wrong
+	# half of the choice; fmake knows the directory holds a header the
+	# toolchain owns, so it says both halves.
+	check("which the toolchain owns" in out and "string.h" in out,
+	      f"the remedy does not say it would shadow the C library's "
+	      f"header, which is the other half of the choice: {out}")
 
 	# And the printed remedy works: a statement beats a filter.
 	t.write("fmake.toml", '[project]\nexclude = ["deps"]\n'
@@ -15139,9 +15148,20 @@ def a_vendored_interposer_is_refused_and_your_own_is_only_said(t):
 	        "int close(int fd){ (void)fd; return 0; }\n")
 	r = t.fmake()
 	out = r.stdout + r.stderr
-	check(r.returncode == 0 and "in libc's place" not in out,
+	check(r.returncode == 0 and "* src/shim.c defines close()" not in out,
 	      f"@interpose did not silence the warning, so a tree that means "
 	      f"it has no way to agree: {out}")
+	# Silenced, and said anyway. Reported from ossacli, who had adopted
+	# this warning as a detector for an adjacent question -- not "is this
+	# deliberate" but "did the shim reach the three programs" -- so the
+	# annotation that answers the first would have removed the second
+	# without anybody noticing. Measured there: their own nm arm knew
+	# four of the shim's sixteen names and fmake's warning covered the
+	# other twelve. The note keeps the set greppable and drops the
+	# framing that says something is wrong.
+	check("interposes on purpose (@interpose): close()" in out,
+	      f"nothing says what was forgiven, so a consumer using the "
+	      f"warning as a detector loses it silently: {out}")
 
 
 @case
@@ -24991,7 +25011,17 @@ def run_case(c, _again=False):
 	except Failure as exc:
 		return "fail", str(exc) + (f"\n       tree: {t.dir}" if KEEP else "")
 	except Exception as exc:                           # noqa: BLE001
-		return "err", repr(exc)
+		# With the line it came from. `OSError(26, 'Text file busy')' is
+		# what this reported once, from a full run on a loaded machine
+		# and never again -- and a repr with no frame cannot be chased
+		# afterwards, so the one occurrence bought nothing but a rerun.
+		# An unexpected exception is the case that most needs the
+		# traceback and was the one throwing it away.
+		where = traceback.extract_tb(exc.__traceback__)
+		at = f" at {where[-1].filename.rsplit('/', 1)[-1]}:" \
+		     f"{where[-1].lineno}" if where else ""
+		return "err", f"{exc!r}{at}\n       " + "\n       ".join(
+		    traceback.format_exc().splitlines()[-6:])
 	finally:
 		t.cleanup()
 

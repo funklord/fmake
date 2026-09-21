@@ -22984,6 +22984,41 @@ plainly see, so the diagnostic says which:
          not on the path: naming it above overrides that for this one
          directory
 
+**Confirmed in the tree it came from, with the hazard live.** beerssh
+built at their `449371a` against this tree's `a29d754`, with
+`build-deps-android/arm64-v8a/libssh-0.11.5/include/libssh` still on
+disk and still untracked -- the configuration that had died on
+`libssh/priv.h` across `moc_key_cap.cpp` and 110 other files. `* built
+beerssh, authenticated, plaintext`, and the binary prints `beerssh
+1.0`. The only mentions of that subtree left are three
+version-in-a-comment notices, not include flags.
+
+Their process correction is worth as much as the result and is theirs:
+two earlier runs were worthless and would have reached this project as
+facts about fmake. One built their own half-finished edit of
+`terminal_view.cpp`; the other started while a sabotage runner was
+part-way through deliberately breaking a file in the same tree. Both
+would have read as *still broken after your fix*, and one `git status`
+before measuring catches both. **A measurement of somebody else's fix
+is only as clean as the tree it is taken in.**
+
+**And the printed remedy now says both halves.** They left one thing
+open, declining to judge this project's output from outside: for a
+tree in their position the `include-dirs` line is the wrong half of
+the choice, since naming the directory resolves the error it was
+printed for and puts libssh's `string.h` in front of the C library's
+for every file. fmake can see that and the reader cannot -- the
+directory's contents are right there in the header scan -- so the
+remedy carries it:
+
+       deps/inc also holds string.h, which the toolchain owns: naming it
+       puts that in front of the C library's for every file, so excluding
+       the subtree may be the answer instead
+
+Only where it is true: the check is for a header under that directory
+whose path relative to it is a name `STANDARD_HEADERS` holds, which is
+the same set the resolver already refuses to guess about.
+
 **What this does not do.** An excluded source still contributes no
 include directory and never did -- measured while building the fixture,
 where a `#include` in an excluded file infers nothing either before or
@@ -23039,6 +23074,52 @@ submodule rooting a target, sharpened in section 301 to name the
 nearest checkout. The remedy each population needs is different too:
 yours is `@kind module` or `tests/` or `@interpose`, theirs is
 `[project] exclude` or a patch to a tree you may not own.
+
+### Silencing it removed somebody else's detector, so it says what it forgave
+
+ossacli found this within the hour and it is the sharpest thing said
+about the directive. `@interpose` asserts *this file interposes on
+purpose*, which is true of their shim. What their `make test` uses the
+warning for is a different question -- *did the shim reach the three
+programs, which must never define a libc symbol* -- and both are true
+of one file, so the annotation answers the first and silences the
+second.
+
+**Measured, and the coverage loss was most of it.** Their own `nm` arm
+knew four names: `ioctl`, `opendir`, `open`, `fopen`. `src/shim`
+defines sixteen between its two files, and the other twelve --
+`close`, `closedir`, `fopen64`, `__open_2`, `open64`, `__open64_2`,
+`openat`, `__openat_2`, `openat64`, `__openat64_2`, `readdir`,
+`readdir64` -- were covered *only* by fmake's warning. Adopting
+`@interpose` would have left twelve interposers guarded by nothing
+with their gate still green. They fixed it on their side by deriving
+the list with `nm` behind a floor refusing a derivation under ten,
+which is the right half to fix: **a borrowed guarantee is one nobody
+is maintaining.**
+
+So the directive silences the warning and fmake says what it forgave,
+as a note rather than a warning, which is their suggestion taken:
+
+      src/shim.c interposes on purpose (@interpose): close() -- linked
+      into interp2 in libc's place
+
+A consumer can diff that against their own list without compiling
+anything, which is exactly what ossacli had to do the hard way.
+
+**The general shape, since it is not about this directive.** A warning
+a tool emits for its own reasons gets adopted downstream as a detector
+for something adjacent, and an annotation that legitimately silences
+it is then a silent coverage loss in a tree the tool cannot see.
+Sections 288 and 298 record who parses what; this is the same fact
+from the other end -- **what a tool stops saying is as much an
+interface as what it says.**
+
+**They are not adopting it yet, and the reason is measurement rather
+than reluctance**: the packaged fmake here ignores an unknown
+directive name, so they cannot observe the annotation doing anything
+on this machine, and adding it would be writing an assertion they
+cannot test. It goes in with the `.deb`, which waits on the same sudo
+as everything else.
 
 **What this costs, stated rather than discovered.** A tree that builds
 today and links a vendored interposer by closure stops building until
