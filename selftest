@@ -15383,6 +15383,106 @@ def an_exclude_reaches_the_include_path_too(t):
 
 
 @case
+def a_subtree_exclude_drops_the_directory_it_names(t):
+	"""`vendor' and `vendor/**' are one instruction to a reader and were
+	two to fmake.
+
+	`exclude_pattern' asks about a PATH. For the directory itself neither
+	`fnmatch("vendor", "vendor/**")' nor `"vendor".startswith("vendor/")'
+	is true, so a subtree pattern excluded every file under the directory
+	and left the directory on the include path. Two spellings a reader
+	would call identical, one of them silently weaker.
+
+	**The inferred directory has to BE the one the pattern names**, which
+	is the whole reason this needs a fixture of its own. The beerssh case
+	beside it infers `deps/inc' while excluding `deps', and
+	`fnmatch("deps/inc", "deps/**")' matches happily -- so assertions
+	added there passed with the fix reverted, and the mutation is what
+	said so. A check that cannot fail is worse than no check, and this one
+	was two lines from being exactly that.
+
+	Found while deliberately testing this feature: a fixture written with
+	the wrong spelling produced a clean pass, and on the strength of it a
+	claim was retracted to the project that had reported the bug. The
+	claim was right.
+
+	The rule stays narrow, and the third state is why it is `rstrip' and
+	not a prefix test: excluding a subdirectory says nothing about its
+	parent."""
+	t.write("vendor/thing.h", "#pragma once\nint thing(void);\n")
+	t.write("vendor/thing.c", '#include "thing.h"\nint thing(void){ return 4; }\n')
+	t.write("src/main.c", '#include "thing.h"\n'
+	        "int main(void){ return thing() - 4; }\n")
+
+	# Bare: the directory is dropped and the header is not found.
+	t.write("fmake.toml", '[project]\nexclude = ["vendor"]\n')
+	out = t.fmake().stdout + t.fmake().stderr
+	check("under [project] exclude = 'vendor'" in out,
+	      f"the bare spelling did not drop the inferred include dir: {out}")
+
+	# Subtree: the same, and this is what was broken.
+	t.write("fmake.toml", '[project]\nexclude = ["vendor/**"]\n')
+	out = t.fmake().stdout + t.fmake().stderr
+	check("under [project] exclude = 'vendor/**'" in out,
+	      f"the subtree spelling excluded the files and kept the include "
+	      f"directory, so the two spellings still disagree: {out}")
+
+	# And narrow: a pattern naming something INSIDE the directory must
+	# leave the directory alone.
+	t.write("vendor/sub/other.h", "int other(void);\n")
+	t.write("fmake.toml", '[project]\nexclude = ["vendor/sub/**"]\n')
+	out = t.fmake("-v").stdout
+	check("dropped by [project] exclude: vendor\n" not in out
+	      and "kept: vendor" in out,
+	      f"excluding a subdirectory dropped its parent's include dir: "
+	      f"{out}")
+
+
+@case
+def the_inferred_include_dirs_are_reported_whether_or_not_any_are_dropped(t):
+	"""The set was printed only where part of it was destroyed.
+
+	`-v` said "N inferred include dir(s) dropped by [project] exclude"
+	and said nothing at all when nothing was dropped, so the only way to
+	learn what the include graph had proposed was to provoke a drop by
+	adding an exclude. hydra had to do exactly that to answer a question
+	about their own build, six exchanges into an investigation that a
+	single `-v` should have ended -- and their doing it is what turned a
+	weak absence into a contradiction worth chasing, because a bare
+	"nothing was dropped" cannot distinguish "nothing was proposed" from
+	"everything survived".
+
+	A set worth printing when it loses a member is worth printing when it
+	does not. This is the positive half, and the case asserts it fires on
+	a tree with nothing excluded at all -- which is the configuration the
+	old line could never speak in."""
+	t.write("src/thing.h", "#pragma once\nint thing(void);\n")
+	t.write("src/thing.c", '#include "thing.h"\nint thing(void){ return 3; }\n')
+	t.write("src/main.c", '#include "thing.h"\n'
+	        "int main(void){ return thing() - 3; }\n")
+	t.write("test/test_thing.c", '#include "thing.h"\n'
+	        "int main(void){ return thing() - 3; }\n")
+
+	# `fmake test', because the program's own TUs all sit in src/ and
+	# resolve "thing.h" beside themselves -- a quote include found next to
+	# its includer costs no -I, so a src-only build infers nothing and
+	# correctly reports none. The test TU is the one that cannot, and is
+	# therefore the one whose inference anybody wants to see.
+	out = t.fmake("test", "-v").stdout
+	check("inferred include dir(s) kept" in out,
+	      f"nothing reported what the include graph proposed, so the only "
+	      f"way to see it is still to provoke a drop: {out}")
+	check("kept: src" in out,
+	      f"the kept set does not name the directory it inferred: {out}")
+
+	# Quiet by default: this is a -v line and must not reach an ordinary
+	# build, which would put a line about include paths on every run.
+	out = t.fmake("test").stdout
+	check("inferred include dir" not in out,
+	      f"the inference report reached a non-verbose build: {out}")
+
+
+@case
 def a_vendored_interposer_is_refused_and_your_own_is_only_said(t):
 	"""Section 283 recorded three answers to the libc-interposition rule
 	-- keep warning, prefer libc, or refuse -- and left them to the

@@ -359,7 +359,8 @@ that had been green about nothing for five commits ·
 [306. The interposition rule, decided: whose file it is](#306-the-interposition-rule-decided-whose-file-it-is) ·
 [307. The honest fallback was being scolded, and the remedy copied the number](#307-the-honest-fallback-was-being-scolded-and-the-remedy-copied-the-number) ·
 [308. The version reader answered about a tree the file was not in](#308-the-version-reader-answered-about-a-tree-the-file-was-not-in) ·
-[309. Where the weight actually sat, and a file left in somebody's tree](#309-where-the-weight-actually-sat-and-a-file-left-in-somebodys-tree)
+[309. Where the weight actually sat, and a file left in somebody's tree](#309-where-the-weight-actually-sat-and-a-file-left-in-somebodys-tree) ·
+[310. Two spellings of one exclude, and a set reported only when it lost](#310-two-spellings-of-one-exclude-and-a-set-reported-only-when-it-lost)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2502,7 +2503,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **556** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **558** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -23501,3 +23502,121 @@ Makefile and `objsets` wants link sets only. And they noted that the
 `-n` blindness in 307 and 308 was worth writing down only because the
 report format asked how to re-take the measurement, which is the
 format earning itself rather than a finding.
+
+---
+
+## 310. Two spellings of one exclude, and a set reported only when it lost
+
+Both from the same investigation with hydra, and neither is what that
+investigation was about -- which is the argument for finishing a lens
+rather than stopping when the question that prompted it is answered.
+Their case is still open; these are two things found on the way.
+
+### `vendor` and `vendor/**` were one instruction and two behaviours
+
+`exclude_pattern` asks about a **path**. For the directory itself
+neither `fnmatch("vendor", "vendor/**")` nor
+`"vendor".startswith("vendor/")` holds, so a subtree pattern excluded
+every file under a directory and left the directory on the inferred
+include path. Two spellings a reader would call identical, one of them
+silently weaker, and nothing saying so.
+
+The rule is one line and stays narrow deliberately:
+
+    pat.rstrip("/*") == d      vendor/**        -> drops vendor
+                               vendor/sub/**    -> leaves vendor alone
+
+Excluding a subdirectory says nothing about its parent, and the
+mutation that widens `==` to `startswith` turns the case red on exactly
+that.
+
+**The advice had to move with it, and did not at first.** The drop
+happened while the message explaining it did not, because
+`compile_units` was handed the raw `exclude_pattern` and the include
+path now asked a different question. A remedy that told a reader to
+name a directory the config had already refused would be the wrong half
+of the choice -- the fault section 305 was written against, arriving
+one layer up. Both now ask `incdir_excluded`.
+
+**The case for it needed its own fixture, and the mutation is what said
+so.** The first version added two assertions to
+`an_exclude_reaches_the_include_path_too`, which infers `deps/inc`
+while excluding `deps` -- and `fnmatch("deps/inc", "deps/**")` matches
+happily, so the asymmetry was never exercised and **the additions
+passed with the fix reverted**. Vacuous, in a case about exclusion, two
+lines from looking like coverage. The inferred directory has to BE the
+one the pattern names, which is a fixture where the header sits at the
+top of the excluded directory.
+
+**And the same wrong spelling had already cost a retraction.** A fixture
+written with `src/**` produced a clean pass, and on the strength of it
+this project told hydra that section 305 was not their cause. It may
+well be; the retraction was sent on a negative whose lens was wrong. The
+rule that came out of it is in `evidence.md`'s language and is worth
+stating in this tree's: **a negative result is only as good as the
+pattern behind it, and the pattern belongs in the same sentence as the
+result.** Saying "I could not reproduce it" without saying "with
+`src/**`" is how a correct claim gets withdrawn.
+
+### A set reported only where part of it was destroyed
+
+`-v` printed `N inferred include dir(s) dropped by [project] exclude`
+and printed nothing at all when nothing was dropped. So the only way to
+learn what the include graph had proposed was **to provoke a drop by
+adding an exclude**, which is what hydra did -- six exchanges into an
+investigation that one `-v` should have ended.
+
+It is the vacuous-pass shape pointed at a diagnostic rather than a
+check: a bare "no drop line" cannot distinguish *nothing was proposed*
+from *everything survived*, and those send a reader to opposite places.
+Their control -- add a bare `src` to the exclude list, watch the drop
+line appear -- is what turned their absence into a contradiction worth
+sending, and it is a positive control for a probe rather than for a
+gate, which is a use of the technique this document had not recorded.
+
+A set worth printing when it loses a member is worth printing when it
+does not. The kept set has a line now, `-v` only, and the case asserts
+it fires on a tree with nothing excluded at all -- the configuration the
+old line could never speak in -- and that it stays out of an ordinary
+build.
+
+### A design question answered from a principle, twice
+
+Neither of these is in the tree and both belong here, because the
+second is the same error as the retraction above and arrived within the
+hour.
+
+hydra asked whether a macro a header's *shape* depends on could be
+inferred from anywhere but the file carrying the annotation. The answer
+given was no, from the principle that an annotation is a property of
+the TU it sits in -- true of `@define`, `@cflags` and `@std`, which is
+why it sounded right. **`@pkg_optional` is not one of them.** The macro
+it names becomes a tree flag defined for every unit; only the package's
+own cflags stay with the annotating unit. The split is deliberate, the
+comment at that site names hydra's file and hydra's class, and it cites
+section 240 -- **their own report of this exact collision.**
+
+So a limit was confirmed to the project that had already had it fixed,
+on their own evidence, six sections earlier. `working-practice.md` has
+the rule and this is what it is for: before deferring something as a
+design limit, check whether the project has already decided it
+somewhere else under a different name. A wrongly-deferred question is
+caught by nothing -- it sits looking like diligence while the asker
+designs around a constraint that is not there.
+
+**The symmetry is hydra's and is the better statement of it.** Both
+retractions today were this project reasoning about its own tool
+instead of reading it; both of their halves were that tree reasoning
+about itself instead of reading its own `project.md`, which had
+recorded the same report six weeks earlier and still called it
+"currently broken" in the present tense. Each side was holding the file
+that would have settled it. **The failure is not ignorance of the
+other's tree, which is expected, but not reading one's own**, which is
+the cheaper lookup and the one nothing prompts.
+
+**What this does not do is answer hydra's question**, and the entry says
+so rather than implying the fix closed it. Their tree infers `src`,
+their globs do not drop it, and it reaches none of 211 compile lines.
+That is still unexplained. What changed is that the next person to meet
+it can see the inferred set in one run instead of deducing it from what
+the tool destroys.

@@ -10735,10 +10735,34 @@ def build(args, _bootstrapping=False):
 	# names one directory inside it gets exactly that -- which is the
 	# remedy this prints when a header goes missing, and it would be no
 	# remedy at all if the exclude outranked it.
+	# A directory is excluded by a pattern naming it, and also by one
+	# naming everything under it -- `src' and `src/**' mean the same thing
+	# to a reader and meant different things here. `exclude_pattern' asks
+	# about a PATH: `fnmatch("src", "src/**")' is false and so is
+	# `"src".startswith("src/")', so the directory never matched its own
+	# subtree pattern and kept its `-I' while every file beneath it was
+	# excluded. Measured while deliberately testing this feature, which is
+	# how a trap earns the name: two spellings a reader would call
+	# identical, one of them silently weaker.
+	#
+	# `pat.rstrip("/*") == d' is the whole rule and it stays narrow on
+	# purpose. `src/**' reduces to `src' and drops it;
+	# `src/generated/**' reduces to `src/generated' and leaves `src'
+	# alone, which is right -- excluding a subdirectory says nothing
+	# about its parent.
+	def incdir_excluded(d):
+		pat = exclude_pattern(d)
+		if pat:
+			return pat
+		for pat in conf.project.get("exclude", []):
+			if pat.rstrip("/*") == d:
+				return pat
+		return None
+
 	excluded_incdirs = {}
 	kept_incdirs = []
 	for d in sorted(proj.incdirs | {"."}):
-		pat = exclude_pattern(d) if d != "." else None
+		pat = incdir_excluded(d) if d != "." else None
 		if pat:
 			excluded_incdirs[d] = pat
 		else:
@@ -10747,6 +10771,16 @@ def build(args, _bootstrapping=False):
 		vinfo(f"{len(excluded_incdirs)} inferred include dir(s) dropped by "
 		      f"[project] exclude: "
 		      + ", ".join(sorted(excluded_incdirs)[:4]))
+	# And what survived, which had no line at all. The set was reported
+	# only where part of it was destroyed, so the one way to see what the
+	# include graph had proposed was to provoke a drop by adding an
+	# exclude -- which is what hydra had to do to answer a question about
+	# their own build, six exchanges in. A set worth printing when it
+	# loses a member is worth printing when it does not.
+	inferred = [d for d in kept_incdirs if d != "."]
+	vinfo(f"{len(inferred)} inferred include dir(s) kept"
+	      + (": " + ", ".join(inferred[:4]) if inferred else "")
+	      + (" ..." if len(inferred) > 4 else ""))
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in kept_incdirs]
 	# The same set `install_subpath' reads, recorded where it is known --
@@ -11021,7 +11055,13 @@ def build(args, _bootstrapping=False):
 		              cfg, cache, root, incflags, jobs, args.dry_run,
 		              broken, tree_headers=hdrs, quiet=args.quiet,
 		              origins=generated_from, vendored=vendored,
-		              excluded=exclude_pattern)
+		              # The directory-aware rule, not the path one. The
+		              # advice names a DIRECTORY to add, so it must ask
+		              # the question the include path asked: `vendor/**'
+		              # drops `vendor' now, and a remedy that did not say
+		              # so would tell a reader to name a directory the
+		              # config has already refused.
+		              excluded=incdir_excluded)
 		# The architecture to require is whatever fmake just compiled. Asking
 		# the objects avoids having to know anything about toolchain
 		# triplets, and is right by construction -- but it means waiting
