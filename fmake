@@ -10777,8 +10777,19 @@ def build(args, _bootstrapping=False):
 	# exclude -- which is what hydra had to do to answer a question about
 	# their own build, six exchanges in. A set worth printing when it
 	# loses a member is worth printing when it does not.
+	# "besides the tree root", because the root is always on the path and
+	# is not inferred, so it is counted by neither line. Without those
+	# four words the count is read as a total: hydra saw `0 kept' while
+	# `-I<root>' was on all 211 of their compile lines, took the zero for
+	# a contradiction, and struck a correct entry in their own record on
+	# the strength of it. Their statement of the rule is the one to keep
+	# -- a count whose population excludes something the reader can see
+	# on every compile line will be misread by somebody eventually, and
+	# naming the exclusion costs four words. This line was one commit old
+	# when it produced the confusion it had been added to prevent.
 	inferred = [d for d in kept_incdirs if d != "."]
-	vinfo(f"{len(inferred)} inferred include dir(s) kept"
+	vinfo(f"{len(inferred)} inferred include dir(s) kept besides the "
+	      f"tree root"
 	      + (": " + ", ".join(inferred[:4]) if inferred else "")
 	      + (" ..." if len(inferred) > 4 else ""))
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root

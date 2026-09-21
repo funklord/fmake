@@ -15433,7 +15433,7 @@ def a_subtree_exclude_drops_the_directory_it_names(t):
 	t.write("fmake.toml", '[project]\nexclude = ["vendor/sub/**"]\n')
 	out = t.fmake("-v").stdout
 	check("dropped by [project] exclude: vendor\n" not in out
-	      and "kept: vendor" in out,
+	      and "kept besides the tree root: vendor" in out,
 	      f"excluding a subdirectory dropped its parent's include dir: "
 	      f"{out}")
 
@@ -15472,8 +15472,21 @@ def the_inferred_include_dirs_are_reported_whether_or_not_any_are_dropped(t):
 	check("inferred include dir(s) kept" in out,
 	      f"nothing reported what the include graph proposed, so the only "
 	      f"way to see it is still to provoke a drop: {out}")
-	check("kept: src" in out,
-	      f"the kept set does not name the directory it inferred: {out}")
+	check("kept besides the tree root: src" in out,
+	      f"the kept set does not name the directory it inferred, or does "
+	      f"not say which population it counts: {out}")
+
+	# The population, pinned as text because the wording IS the fix. The
+	# root is always on the path and is not inferred, so neither line
+	# counts it -- and a bare "0 kept" beside `-I<root>' on every compile
+	# line reads as a contradiction. hydra struck a correct entry in
+	# their own record over exactly that, one commit after this line was
+	# added to prevent that class of confusion.
+	t.write("fmake.toml", '[project]\nexclude = ["src"]\n')
+	out = t.fmake("test", "-v").stdout
+	check("0 inferred include dir(s) kept besides the tree root" in out,
+	      f"the zero case does not name what it excludes, which is the "
+	      f"reading that misled: {out}")
 
 	# Quiet by default: this is a -v line and must not reach an ordinary
 	# build, which would put a line about include paths on every run.

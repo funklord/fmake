@@ -23614,9 +23614,64 @@ that would have settled it. **The failure is not ignorance of the
 other's tree, which is expected, but not reading one's own**, which is
 the cheaper lookup and the one nothing prompts.
 
+### The new line misread within a day, and the four words that fix it
+
+The kept line was one commit old when it produced the confusion it had
+been added to prevent. hydra re-took their measurement with it, saw
+
+    * 0 inferred include dir(s) kept
+
+while `-I<root>` sat on all 211 of their compile lines, read the zero
+as a total, took it for a contradiction, and **struck a correct entry
+in their own record** on the strength of it. The root is always on the
+path and is not inferred, so neither line counts it -- the pair was
+consistent and said so to anyone who had read the loop.
+
+**Their account of why is better than the one offered them**, and the
+correction went the generous way first: this project said the wording
+had invited it, and they refused that as untrue. The line said `kept`
+and they read it as `kept in total`; nothing in it claimed to count the
+root. What is fair is narrower and is theirs: **a count whose
+population excludes something the reader can see on every compile line
+will be misread by somebody eventually, and naming the exclusion costs
+four words.** It now reads `kept besides the tree root`, and the case
+pins that text rather than the number, because the wording is the fix.
+
+**The other half of their diagnosis is the one worth carrying further.**
+They did not reason from the code; they reasoned from two printed lines
+and preferred the one agreeing with compile entries they had already
+read -- and `0 kept` agreeing with 211 entries carrying no
+`-I<root>/src` is **one witness twice**, both downstream of the same
+run. That is `evidence.md`'s independence rule applied to two outputs
+of a single measurement rather than to two documents, which is a use of
+it this tree had not written down.
+
+And the argument for printing both numbers is now stronger than the one
+the change was made on. It was justified as readability. What it
+actually bought was a visible discrepancy: a tool printing only `kept`
+would have said 0 and been believed, and one printing only `dropped`
+said 1 and was. Neither of us made that argument at the time.
+
 **What this does not do is answer hydra's question**, and the entry says
-so rather than implying the fix closed it. Their tree infers `src`,
-their globs do not drop it, and it reaches none of 211 compile lines.
-That is still unexplained. What changed is that the next person to meet
-it can see the inferred set in one run instead of deducing it from what
-the tool destroys.
+so rather than implying the fix closed it -- **and the re-take with the
+kept line falsified how that question had been written here.** This
+entry said their tree infers `src`, their globs do not drop it, and it
+reaches none of 211 compile lines. The first clause is wrong. Measured
+with the new line, conditions otherwise matched:
+
+    no exclude naming src     0 kept, no drop line   -> total 0
+    exclude = ["src", ...]    0 kept, 1 dropped      -> total 1
+
+Nothing is inferred in that tree until an exclude is added, and then
+something is. So `0 kept` was never in tension with 211 entries
+carrying no `-I<root>/src`; those agree, and agreeing is all they do.
+The open question is not why an inferred directory fails to arrive. It
+is **why an exclude changes what the tree infers at all**, when in a
+fixture of the same shape the total is 1 either way.
+
+That is a sharper question than the one this entry was written with,
+and it is sharper because an instrument added in this commit was
+pointed at it the day it landed. What changed is that the next person
+can read the inferred set in one run instead of deducing it from what
+the tool destroys -- and the first thing that reading did was correct
+the paragraph describing it.
