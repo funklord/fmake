@@ -13515,6 +13515,38 @@ def build_state_is_kept_out_of_version_control(t):
 		check(fh.read().count(".fmake") == 1,
 		      "the ignore entry was added more than once")
 
+	# Nor once per DIRECTORY, which is the same fault the check above
+	# guards against, reached from a subdirectory instead of a rerun.
+	# Reported from hydra: `fmake -C src' created a .gitignore inside
+	# src/ although the repository's own root file already covered the
+	# path. The guard asks "is a repository here", which git answers by
+	# climbing, while the write lands in the build root -- so the two
+	# were asking about different directories, and the answer was a
+	# stray file in somebody's tree.
+	#
+	# A real repository, because the fake `.git' above is enough for the
+	# `exists' half and not for git, which is the whole point of the
+	# fallback: where git cannot answer, the file read still decides.
+	outer = os.path.join(t.dir, "outer")
+	src = os.path.join(outer, "src")
+	t.write("outer/src/main.c", "int main(void){ return 0; }\n")
+	_run_in(outer, "git", "init", "-q", ".")
+	t.write("outer/.gitignore", ".fmake/\n")
+	check(t.fmake("-C", src).returncode == 0, "subdirectory build failed")
+	check(not os.path.exists(os.path.join(src, ".gitignore")),
+	      "a .gitignore was written into a subdirectory of a repository "
+	      "whose root file already ignores the path")
+
+	# The other direction, so the guard is not simply "never write in a
+	# subdirectory": a repository that ignores nothing still gets the
+	# courtesy, because the cache is real and would otherwise show up as
+	# untracked.
+	os.unlink(os.path.join(outer, ".gitignore"))
+	shutil.rmtree(os.path.join(src, ".fmake"), ignore_errors=True)
+	check(t.fmake("-C", src).returncode == 0, "second subdirectory build failed")
+	check(os.path.exists(os.path.join(src, ".gitignore")),
+	      "a repository that ignores nothing was left without the line")
+
 
 @case
 def declared_libs_are_linked_regardless(t):

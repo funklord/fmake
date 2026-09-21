@@ -358,7 +358,8 @@ that had been green about nothing for five commits ·
 [305. An exclude reaches the include path](#305-an-exclude-reaches-the-include-path) ·
 [306. The interposition rule, decided: whose file it is](#306-the-interposition-rule-decided-whose-file-it-is) ·
 [307. The honest fallback was being scolded, and the remedy copied the number](#307-the-honest-fallback-was-being-scolded-and-the-remedy-copied-the-number) ·
-[308. The version reader answered about a tree the file was not in](#308-the-version-reader-answered-about-a-tree-the-file-was-not-in)
+[308. The version reader answered about a tree the file was not in](#308-the-version-reader-answered-about-a-tree-the-file-was-not-in) ·
+[309. Where the weight actually sat, and a file left in somebody's tree](#309-where-the-weight-actually-sat-and-a-file-left-in-somebodys-tree)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -23411,3 +23412,92 @@ The report is removed for the reason the other seven were, and
 against a tree that has since changed, kept beside a corrected account
 only invites reading the stale one. It stays in the history, one commit
 back.
+
+---
+
+## 309. Where the weight actually sat, and a file left in somebody's tree
+
+hydra read section 308 and sent two corrections and an observation. All
+three are theirs; what follows in this project's voice is only what was
+done about them.
+
+**The weight sat on the finding they had not reported.** Section 308
+treats their report as being about the `VERSION` lookup, because that is
+what the report was about. It is not what was wrong with their tree.
+Their `fmake.toml` also carries
+
+    cflags = ['-DHYDRA_VERSION="(link sets only; see fmake.toml)"']
+
+so `HYDRA_VERSION` was configured all along, and `fmake -C src` could not
+see it **because it could not see the file it was in**. Their
+measurement, which is the discriminating one and which this project did
+not take:
+
+    from the root   -Os -DHYDRA_VERSION="(link sets only; ...)" ...
+    from src/       ../fmake.toml is one directory above ... and is not read
+
+So the third row of 308's table -- the unread config, the row that was
+not in their report and was found here while verifying it -- is the one
+that mattered for that tree, and the two rows the report was about were
+not. **A report names the symptom its author met, and the fault can be
+one file over.** It resolved something on their side rather than here:
+their `tool/objsets.py` has always run fmake with `cwd=ROOT` while the
+README documented `fmake -C src`, so the tree knew the right invocation
+and the document did not. Their README says `fmake hydra -j2` now.
+
+**A claim this project made about their tree was wrong.** They were told
+"your Makefile never invokes fmake -- it mentions it only in comments",
+which came from grepping their Makefile for `fmake` and reading the two
+hits without following the target. `make -C test objsets` runs
+`tool/objsets.py`, which runs fmake. The conclusion it was offered in
+support of -- that their packaging is qmake and debhelper and never
+meets `--eject` -- survives, and the premise was still an unmeasured
+claim about somebody else's build, which is the thing `evidence.md`
+names.
+
+**And fmake was leaving a file in their repository.** `fmake -C src`
+wrote a `.gitignore` holding `.fmake/` into `src/`, although hydra's own
+root `.gitignore` covers it at line 16. Reproduced here:
+
+    ensure_gitignore  guard: is a repository here?   git answers by CLIMBING
+                      write: <build root>/.gitignore lands in the SUBDIRECTORY
+
+The two halves ask about different directories, so any build rooted below
+a repository got a new file. It only ever read `<root>/.gitignore` and
+never the effective ignore state, though `git_ignored` was already in
+this file and answers exactly that question. It does now, and the four
+behaviours are pinned: already ignored from anywhere writes nothing, a
+repository ignoring nothing still gets the line, a plain root build is
+unchanged, and a tree with no repository is untouched.
+
+**The courtesy stays where it is a courtesy.** Not writing at all in a
+subdirectory was the other available answer and is worse: the cache is
+real, and a tree that ignores nothing would then carry it as untracked
+output with nothing to say so. What was wrong was writing where it added
+nothing, not writing at all. hydra put the principle better than the fix
+does -- a write into somebody's repository should be a decision rather
+than a side effect of where the build was rooted.
+
+**The comment on that fix was wrong for twenty minutes, and the
+mutation is what caught it.** It said the trailing slash in
+`git_ignored(root, [f"{STATE_DIR}/"])` was load-bearing, because
+`check-ignore` on a bare path cannot match a `dir/` pattern for a
+directory that does not exist. That is true of `check-ignore` and false
+here: the build lock creates the state directory before this runs, so
+the bare path matches too. Removing the slash was mutated in and **the
+suite stayed green**, which is what a mutation is for -- the case could
+not tell the two apart, and the comment claimed a test's worth of
+support it did not have. The slash is kept for a smaller reason, stated
+as such: the answer then does not depend on a caller further up creating
+a directory first. Nothing pins it, and the entry says so rather than
+leaving a reader to assume the green run covered it.
+
+**Their two other observations, neither acted on.** Seventy-two test
+sources do not compile from hydra's root, all for the one reason fmake
+names precisely -- `node.h` is on no include path, and
+`[project] include-dirs = ['src']` would find it. They recorded the
+option rather than setting it, since their test tree has its own
+Makefile and `objsets` wants link sets only. And they noted that the
+`-n` blindness in 307 and 308 was worth writing down only because the
+report format asked how to re-take the measurement, which is the
+format earning itself rather than a finding.

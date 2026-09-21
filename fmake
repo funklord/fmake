@@ -17364,6 +17364,36 @@ def ensure_gitignore(root):
 	# case where `.git' is somewhere else entirely.
 	if not (git_dir(root) or os.path.exists(os.path.join(root, ".git"))):
 		return
+	# Already ignored, from anywhere -- so write nothing. The guard above
+	# asks "is a repository here", which git answers by climbing, while
+	# the write below lands in the BUILD ROOT: for `fmake -C src' those
+	# are different directories, and the result was a .gitignore created
+	# inside a subdirectory of a repository whose own root file already
+	# covered the path. Reported from hydra, who found the stray file and
+	# removed it, and who put it the right way round -- a write into
+	# somebody's repository should be a decision rather than a side
+	# effect of where the build was rooted.
+	#
+	# The trailing slash says "a directory" and is deliberate, but it is
+	# NOT load-bearing today and the first version of this comment claimed
+	# it was. `.fmake/' in an ignore file matches a directory only, so
+	# `check-ignore' on a bare path answers "not ignored" for a path that
+	# does not exist yet -- measured. What makes that moot here is that
+	# the build lock has already created the state directory by the time
+	# this runs, so the bare path matches too: removing the slash was
+	# mutated in and the suite stayed green, which is how the claim was
+	# caught. It is kept because the answer then does not depend on a
+	# caller further up happening to create a directory first, and that
+	# ordering is not this function's to rely on. No case pins it, and
+	# one that did would be pinning the lock's behaviour rather than
+	# this.
+	#
+	# An empty answer means no git, no repository, or a git that could
+	# not answer, and `git_ignored' returns one for all three. That is
+	# the safe direction here: it falls through to the file read below,
+	# which is what decided this before git was asked at all.
+	if git_ignored(root, [f"{STATE_DIR}/"]):
+		return
 	path = os.path.join(root, ".gitignore")
 	try:
 		with open(path) as fh:
