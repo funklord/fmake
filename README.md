@@ -488,6 +488,14 @@ like `@brief` are ignored.
 `fmake --doxygen-aliases` emits an `ALIASES` block so Doxygen renders these
 instead of warning about them.
 
+**`fmake --features` prints what this copy understands** — every directive
+name, the directive values that are checked rather than free text, and every
+`fmake.toml` key, one per line, derived from the same tables the parser
+reads. It exists so a tree can ask instead of building a fixture:
+`fmake --features | grep -qx 'directive os=any'` answers whether the fmake on
+this machine has that value, and on one too old to have the flag at all the
+grep finds nothing and says no by a different route.
+
 **An older fmake is silent about a directive *name* it does not know, and
 refuses a *value* it does not know.** Measured against the packaged fmake of
 2026-09-04, which predates `@install` and `@kind module`: `@install no` is
@@ -1055,6 +1063,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `--man` | write the manual page as roff, for packaging |
 | `--completion [bash]` | write a shell completion |
 | `--doxygen-aliases` | write an ALIASES block, so Doxygen renders the directives instead of warning about them |
+| `--features` | list the directive names, directive values and `fmake.toml` keys this copy understands, so a tree can ask rather than build a fixture |
 | `-V` | print the version |
 | `-h` | the same list as this table, from the program |
 | `-v` / `-q` | more / less output |

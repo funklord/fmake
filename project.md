@@ -353,7 +353,8 @@ that had been green about nothing for five commits ·
 [300. `example/` is not shipped, and the plural is not `example/`](#300-example-is-not-shipped-and-the-plural-is-not-example) ·
 [301. A module keeps its interposer and shares everything else](#301-a-module-keeps-its-interposer-and-shares-everything-else) ·
 [302. `@os any`: a name that claims a platform can be denied](#302-os-any-a-name-that-claims-a-platform-can-be-denied) ·
-[303. A case that said it had no timing assumption had one](#303-a-case-that-said-it-had-no-timing-assumption-had-one)
+[303. A case that said it had no timing assumption had one](#303-a-case-that-said-it-had-no-timing-assumption-had-one) ·
+[304. `--features`: what this copy understands, asked rather than measured](#304---features-what-this-copy-understands-asked-rather-than-measured)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -22819,3 +22820,58 @@ when the machine is busy is a case that gets re-run rather than read
 only if it inspected something. Three isolated passes are not the
 proof here; the next full run under the same load is, and a run that
 goes green while the machine is idle proves what the old one did.
+
+## 304. `--features`: what this copy understands, asked rather than measured
+
+Two trees built a fixture to find out whether the fmake on a machine
+knows something, and both were right to. ossacli could not tell a
+`@kind module` that took effect from one that was ignored, and only
+the ejected install rule -- the artifact -- settled it. fuzzypickles
+ran three cells with a positive control to establish that this
+machine's packaged fmake does not know `@os any`:
+
+    @os linux        built            the control: the probe can report inclusion
+    (no directive)   excluded by name
+    @os any          excluded: @os any (building for linux)
+
+The third line is section 299's taxonomy in the field -- the value is
+validated, the name rule is cleared, the file is excluded everywhere
+-- and it printed the value back, which is what made one run enough.
+
+**What neither could use is `--version`.** `1.0 (5af02348)` against a
+commit id says nothing about order to anybody who does not hold this
+project's history, so the string that identifies a copy exactly
+(section 286) cannot answer *does this copy know X*. Those are
+different questions and the second had no answer at all.
+
+    $ fmake --features | grep -qx 'directive os=any'
+
+is the answer, and on an fmake too old to have the flag argparse exits
+2, the grep finds nothing, and the tree reads *not supported* by a
+different route. It lists every directive name, the directive values
+that are checked rather than free text -- `kind=module`, `os=any`,
+`install=no` -- and every `fmake.toml` key, with the count section 298
+asks of a list somebody parses.
+
+**Derived, which is the only reason it is worth having.** A directive
+that exists is in `DIRECTIVES`, a kind in `KINDS`, a key in
+`CONF_SCHEMA`; a list kept beside them would be the same fact stated
+twice and would go stale the first time somebody added a directive
+without reading the docstring that told them to. The case asserts the
+derivation rather than the contents -- it reads the tables out of the
+script and requires the two sets to be equal -- and a sabotage that
+drops one name from the list fails it by name.
+
+**What it deliberately does not carry.** Behaviour: that `example/` is
+not installed, that a module shares a non-interposing source, that a
+dry run can answer the install plan. A name cannot say those, and a
+feature list that tried would be a changelog with a grep interface.
+Names and values are what a tree asks about because they are what a
+tree writes.
+
+**And it does not make an old fmake newer**, which is the thing this
+does not solve: fuzzypickles is keeping `@os linux android` until the
+packaged one understands the denial, because a hypothetical wrong
+answer on NetBSD is worth less than a build that fails on the machine
+in front of them. That judgement is theirs and right, and the blocker
+under it is the same one section 299 ends on.

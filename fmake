@@ -4419,6 +4419,54 @@ def man_page(parser):
 	return "\n".join(out) + "\n"
 
 
+def feature_list():
+	"""Every name and value this fmake understands, one per line.
+
+    Two trees have now had to build a fixture to find out whether the
+    fmake on a machine knows something. ossacli could not tell a `@kind
+    module' that worked from one ignored, and fuzzypickles ran three
+    cells with a positive control to establish that this machine's
+    packaged fmake does not know `@os any'. Both measurements were
+    right and both cost a scratch tree, and `fmake --version' cannot
+    help: `1.0 (5af02348)' against a commit says nothing about order to
+    anybody who does not hold the history.
+
+    Derived from the tables rather than written out, which is the whole
+    of why it can be trusted: a directive that exists is in `DIRECTIVES',
+    a kind in `KINDS', a config key in `CONF_SCHEMA', and a list kept by
+    hand beside them would be a second statement of the same fact and
+    would go stale the first time somebody added one without reading
+    this. Section 298's rule applies to it as to any list somebody
+    parses -- it says how many lines it printed.
+
+    What it deliberately does not carry is behaviour: that `example/' is
+    not installed, or that a module shares a non-interposing source, are
+    not things a name can answer, and a feature list that tried would be
+    a changelog with a grep interface. Names and values are what a tree
+    asks about because they are what it writes.
+    """
+	out = []
+	for name in sorted(DIRECTIVES):
+		out.append(f"directive {name}")
+	# The values that are checked rather than free text. A `@cflags'
+	# takes anything; a `@kind' does not, and an unknown one is refused,
+	# which is exactly the case a tree wants to ask about first.
+	for kind in sorted(KINDS):
+		out.append(f"directive kind={kind}")
+	for axis in ("os", "arch"):
+		out.append(f"directive {axis}={PLATFORM_ANY}")
+	for word in ("no", "yes"):
+		out.append(f"directive install={word}")
+		out.append(f"directive test={word}")
+	for section in sorted(CONF_SCHEMA):
+		spec = CONF_SCHEMA[section]
+		keys = spec.get("*") if "*" in spec else spec
+		for key in sorted(keys):
+			out.append(f"config {section}.{key}")
+	out.append(f"* {len(out)} feature(s)")
+	return "\n".join(out) + "\n"
+
+
 def doxygen_aliases():
 	"""An ALIASES block, so Doxygen renders the directives instead of
     warning about unknown commands."""
@@ -17173,6 +17221,10 @@ def parse_args(argv):
 	               help="install prefix (default /usr/local, or [install])")
 	p.add_argument("--destdir", default=None,
 	               help="staging root prepended to every install path")
+	p.add_argument("--features", action="store_true",
+	               help="print the directive names, directive values and "
+	                    "config keys this fmake understands, one per line, "
+	                    "so a tree can ask rather than build a fixture")
 	p.add_argument("--doxygen-aliases", action="store_true",
 	               help="print an ALIASES block for your Doxyfile, so Doxygen "
 	                    "renders the directives instead of warning about them")
@@ -17313,6 +17365,9 @@ def main(argv):
 	VERBOSE = args.verbose
 	if args.eject:
 		PROGRESS = sys.stderr
+	if args.features:
+		sys.stdout.write(feature_list())
+		return 0
 	if args.doxygen_aliases:
 		sys.stdout.write(doxygen_aliases())
 		return 0

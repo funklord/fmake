@@ -14911,6 +14911,59 @@ def a_name_that_claims_a_platform_can_be_denied(t):
 
 
 @case
+def the_feature_list_is_derived_from_the_tables(t):
+	"""Two trees have had to build a fixture to find out whether the fmake
+	on a machine knows something. ossacli could not tell a `@kind module`
+	that worked from one ignored; fuzzypickles ran three cells with a
+	positive control to establish that this machine's packaged fmake does
+	not know `@os any`. Both were right, both cost a scratch tree, and
+	`--version` cannot help -- `1.0 (5af02348)` against a commit says
+	nothing about order to anybody who does not hold the history.
+
+	`--features` is the answer to that, and the only thing that makes it
+	worth having is that it is derived: a directive that exists is in
+	`DIRECTIVES`, a kind in `KINDS`, a config key in `CONF_SCHEMA`. A
+	hand-kept list beside them would be the same fact stated twice and
+	would go stale the first time somebody added a directive without
+	reading this docstring -- so the case checks the derivation rather
+	than the contents, by asserting that every directive fmake parses is
+	listed and nothing else is.
+
+	On an older fmake the flag is unknown and argparse exits 2, so a
+	probe grepping for a line gets nothing and reads it as *not
+	supported*, which is the right answer by a different route."""
+	out = subprocess.run([FMAKE, "--features"], capture_output=True,
+	                     text=True)
+	check(out.returncode == 0, f"--features failed: {out.stderr}")
+	lines = out.stdout.splitlines()
+	listed = {l.split(" ", 1)[1] for l in lines if l.startswith("directive ")}
+
+	# Derived, not written out: read the tables from the source of truth
+	# -- the script itself -- and require the two to agree exactly.
+	src = open(FMAKE).read()
+	names = set(re.findall(r'"(\w+)"',
+	                       re.search(r"DIRECTIVE_SCALAR = \{(.*?)\}", src,
+	                                 re.S).group(1)))
+	names |= set(re.findall(r'"(\w+)"',
+	                        re.search(r"DIRECTIVE_LIST = \{(.*?)\}", src,
+	                                  re.S).group(1)))
+	bare = {x for x in listed if "=" not in x}
+	check(bare == names,
+	      f"the list and the tables disagree: only in the list "
+	      f"{sorted(bare - names)}, only in the tables {sorted(names - bare)}")
+
+	# The two questions the trees actually asked.
+	check("os=any" in listed and "kind=module" in listed
+	      and "install" in bare,
+	      f"the values two trees had to build fixtures for are not "
+	      f"answerable: {sorted(listed)}")
+	check("config target.install" in lines,
+	      f"the config keys are not listed: {lines[:5]}")
+	check(lines[-1] == f"* {len(lines) - 1} feature(s)",
+	      f"the list does not state its own population: {lines[-1]!r}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")
