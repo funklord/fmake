@@ -23148,6 +23148,33 @@ Sections 288 and 298 record who parses what; this is the same fact
 from the other end -- **what a tool stops saying is as much an
 interface as what it says.**
 
+**And the sharper form, which is ossacli's and came out of the third
+fault.** A borrowed guarantee fails three ways, and only two of them
+announce themselves:
+
+    the lender stops saying it          a changed message
+    the lender says it about something  a changed message
+      adjacent
+    the lender was saying it wrong      nothing at all
+      all along
+
+The third is this project's own bug above: their sixteen-symbol shim
+would have printed as one, and from the borrower's side *1 against 16*
+reads either as a catastrophic disagreement in the wrong tree or, if
+the list is trusted, as one symbol guarded and sixteen believed --
+**a number looks like an answer whatever produced it.** Their remedy
+for the first instance is what made the third free: the list is
+derived with `nm` from their own shims and consults fmake's for
+nothing.
+
+Their gate now keys on `(@interpose)`, a thing this project has
+promised, rather than on a thing it happened to print -- and they
+relayed that promise in fmake's voice rather than asserting it in
+theirs, because the packaged fmake there cannot emit either line, so a
+claim in their voice would have been checked by nobody. That is
+`evidence.md`'s rule about whose voice a cross-tree fact is written in,
+applied to a promise rather than to a measurement.
+
 **They are not adopting it yet, and the reason is measurement rather
 than reluctance**: the packaged fmake here ignores an unknown
 directive name, so they cannot observe the annotation doing anything
