@@ -14952,6 +14952,26 @@ def the_feature_list_is_derived_from_the_tables(t):
 	      f"the list and the tables disagree: only in the list "
 	      f"{sorted(bare - names)}, only in the tables {sorted(names - bare)}")
 
+	# Complete with respect to what the PARSER ASKS FOR, not only to the
+	# tables. fuzzypickles put the gap precisely: asserting the list
+	# equals DIRECTIVE_SCALAR | DIRECTIVE_LIST makes it complete against
+	# those tables and cannot see a directive handled somewhere else, and
+	# the whole value of the flag to them is that a `no' is trustworthy
+	# -- a consumer reading one cannot tell "not supported" from
+	# "supported elsewhere and unlisted". Measured when they asked: no
+	# such name exists. This is what keeps it that way.
+	consulted = set(re.findall(
+	    r'\b(?:ann|head|a)\.(?:scalar|items|groups)\(\s*"(\w+)"', src))
+	consulted |= set(re.findall(r'\.raw(?:\.get)?[\(\[]\s*"(\w+)"', src))
+	aliased = set(re.findall(
+	    r'"(\w+)"', re.search(r"DIRECTIVE_ALIAS = \{(.*?)\}", src,
+	                          re.S).group(1)))
+	missing = sorted(consulted - bare - aliased)
+	check(not missing,
+	      f"the parser reads directives that --features does not list, so "
+	      f"a tree reading `no' cannot tell unsupported from unlisted: "
+	      f"{missing}")
+
 	# The two questions the trees actually asked.
 	check("os=any" in listed and "kind=module" in listed
 	      and "install" in bare,

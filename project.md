@@ -22862,6 +22862,25 @@ derivation rather than the contents -- it reads the tables out of the
 script and requires the two sets to be equal -- and a sabotage that
 drops one name from the list fails it by name.
 
+**Complete against the tables is not complete, and fuzzypickles said
+so before anybody acted on the flag.** Asserting that the list equals
+`DIRECTIVE_SCALAR | DIRECTIVE_LIST` makes it complete with respect to
+those tables and cannot see a directive the parser handles somewhere
+else -- and the whole value of the flag to a consumer is that a `no`
+is trustworthy, where an unlisted-but-supported name makes `no` mean
+two things. Measured when they asked: **no such name exists.** Every
+`ann.scalar`, `ann.items`, `ann.groups` and `.raw` lookup in the
+script names something the tables hold.
+
+That was true rather than guaranteed, so the case now asserts it: it
+reads the names the parser consults out of the source and requires
+every one to be listed. A sabotage adding `u.ann.scalar("dialect")`
+beside `@std` fails it by name. The seven table entries no such lookup
+names -- `dbus`, `desktop`, `icons`, `metainfo`, `polkit`, `udev`,
+`defines` -- are read through a loop over furniture kinds rather than
+by literal, which is why the check is one-directional: everything
+consulted must be listed, and the list is allowed to be wider.
+
 **What it deliberately does not carry.** Behaviour: that `example/` is
 not installed, that a module shares a non-interposing source, that a
 dry run can answer the install plan. A name cannot say those, and a
