@@ -2414,6 +2414,63 @@ def a_version_above_the_build_root_is_named_rather_than_missed(t):
 
 
 @case
+def packaging_refuses_a_version_it_can_see_and_says_where_it_is(t):
+	"""The half that was already behaving, and was still not saying it.
+
+	`--eject deb' from a subdirectory whose VERSION is at the repository
+	root refuses with `no VERSION file at the root'. That is correct and
+	it is loud, which is why it was left alone when the two diagnostics
+	beside it were fixed -- the complaint in section 308 was about
+	silence, and this does not go quiet. What it did do is refuse without
+	mentioning the one file that explains the refusal.
+
+	**The refusal stays, and that is the point rather than a limitation.**
+	A diagnostic naming the wrong version misleads whoever reads it; a
+	package built from a version taken out of another directory SHIPS
+	one, under a number belonging to a different project, and nobody
+	downstream is placed to notice. So the fix is the sentence, not the
+	value: the four packaging paths name the file they can see and go on
+	refusing to use it.
+
+	All four are checked because each carries its own message, and a
+	shared helper appended to three of four would look exactly like a
+	shared helper appended to all of them."""
+	outer = os.path.join(t.dir, "outer")
+	src = os.path.join(outer, "src")
+	t.write("outer/VERSION", "3.3\n")
+	t.write("outer/src/main.c", "int main(void){ return 0; }\n")
+
+	# No `.git' above: there is nothing this build may call the project,
+	# so the refusal has nothing to add and must not invent any.
+	for mode in ("deb", "ebuild", "apk"):
+		r = t.fmake("-C", src, "--eject", mode)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"--eject {mode} built without a version")
+		check("3.3" not in out,
+		      f"--eject {mode} named a VERSION above a directory that is "
+		      f"not a project root: {out}")
+
+	os.makedirs(os.path.join(outer, ".git"), exist_ok=True)
+	for mode in ("deb", "ebuild", "apk"):
+		r = t.fmake("-C", src, "--eject", mode)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"--eject {mode} took a version from outside the tree")
+		check("no VERSION file at the root" in out,
+		      f"--eject {mode} stopped refusing: {out}")
+		check("../VERSION says 3.3" in out,
+		      f"--eject {mode} refused without naming the file it can "
+		      f"see: {out}")
+
+	# And the release path, which carries the fourth message.
+	r = t.fmake("-C", src, "--release")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, "--release ran without a version")
+	check("../VERSION says 3.3" in out,
+	      f"--release refused without naming the file it can see: {out}")
+
+
+@case
 def a_config_above_the_build_root_is_said_to_be_unread(t):
 	"""A whole `fmake.toml' one directory up, silently not read.
 

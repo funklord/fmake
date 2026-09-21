@@ -1090,6 +1090,12 @@ directory above the build root is named as being there and unread, provided
 that directory is a repository root. Building from the root instead, with
 whatever `exclude` that needs, is the way to have them apply.
 
+The packaging paths — `--eject deb`, `ebuild`, `apk` and `--release` — do
+the same thing one step harder: they name that `VERSION` and still refuse
+to build from it. A wrong version in a message misleads a reader, while a
+package carrying one ships a number belonging to another project, so those
+take it from the tree they were given or they stop.
+
 **`-flto` works with both compilers**, and the closure is unaffected —
 symbols are symbols. GCC's LTO objects are ordinary ELF; clang's are pure
 bitcode, which `nm` reads only where `LLVMgold.so` is installed as a BFD

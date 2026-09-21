@@ -15256,6 +15256,30 @@ def read_root_version(root):
 	return v or None
 
 
+def version_elsewhere(root):
+	"""A sentence naming a VERSION this build root may not use, or ''.
+
+    Appended to the refusals below rather than answering them. A
+    diagnostic that names the wrong version misleads whoever reads it; a
+    PACKAGE built from a version taken out of another directory ships
+    one, under a number that belongs to a different project, and no
+    reader downstream is placed to notice. So packaging keeps refusing
+    where the tree it was given has no VERSION -- what changes is that
+    it stops refusing without mentioning the file it can see.
+
+    `--eject deb' from a subdirectory was the case: correct, loud, and
+    silent about the one fact that explains it, which is section 308's
+    complaint about the diagnostics arriving at the half that was
+    already behaving.
+    """
+	value, outside = _version_nearby(root)
+	if not outside:
+		return ""
+	return (f" {outside} says {value}, and is outside the tree this build "
+	        f"was given: a package version is not taken from another "
+	        f"directory, so build from there instead.")
+
+
 RE_LICENSE_FILE = re.compile(r"^(LICEN[CS]E|COPYING)([-.].+)?$", re.I)
 
 
@@ -15639,7 +15663,8 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	version = read_root_version(root)
 	if not version:
 		die("no VERSION file at the root. A package has a version, and "
-		    "fmake reads it from that file rather than asking twice.")
+		    "fmake reads it from that file rather than asking twice."
+		    + version_elsewhere(root))
 	maint = conf.package.get("maintainer")
 	if not maint or "<" not in maint:
 		die(f"{CONF_FILE}: [package] maintainer = \"Name <address>\" is "
@@ -16118,7 +16143,7 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	if not version:
 		die("no VERSION file at the root. An ebuild is named by its "
 		    "version, and fmake reads it from that file rather than asking "
-		    "twice.")
+		    "twice." + version_elsewhere(root))
 	category = conf.gentoo.get("category")
 	if not category or not re.match(r"^[a-z]+-[a-z]+$", category):
 		die(f"{CONF_FILE}: [gentoo] category = \"app-misc\" (or another of "
@@ -16341,7 +16366,8 @@ def eject_apkbuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	version = read_root_version(root)
 	if not version:
 		die("no VERSION file at the root. An APKBUILD names its version, "
-		    "and fmake reads it from that file rather than asking twice.")
+		    "and fmake reads it from that file rather than asking twice."
+		    + version_elsewhere(root))
 	targets = [t for t in targets if not t.test]
 	srcs = [u.rel for cl in closures.values() for u in cl.link]
 	short, _components = identify_license(root, srcs)
@@ -16495,7 +16521,8 @@ def do_release(targets, closures, root, outdir, conf, cfg, args):
 	name = conf.project.get("name") or os.path.basename(root)
 	version = read_root_version(root)
 	if not version:
-		die("no VERSION file at the root, and a release is named by one.")
+		die("no VERSION file at the root, and a release is named by one."
+		    + version_elsewhere(root))
 	out = os.path.join(root, "release")
 	if os.path.exists(out):
 		die("release/ already exists here. A release is written once, "

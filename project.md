@@ -2501,7 +2501,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **555** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **556** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -23297,16 +23297,30 @@ Measured here on a two-file fixture rather than on their tree, which is
     unguarded reference (build stops)    nothing       the same, at the
                                                        compile error
     fmake.toml one level up              nothing       said to be unread
-    --eject deb                          refuses       unchanged
+    --eject deb / ebuild / apk           refuses       refuses, and names the
+    --release                            refuses       file it will not use
 
 The third row is not in their report and is the worse one. **A whole
 `fmake.toml` is silently not read**, excludes included -- and an exclude
 decides what is compiled rather than what a message says. hydra's own
 config is at its repository root while its README documents
 `fmake -C src`, so none of that file reaches the build its README
-describes. The fourth row is the one already correct: packaging dies
-with `!!! no VERSION file at the root`, which is loud, so it was left
-alone.
+describes.
+
+**The last two rows were left alone at first, and that was half
+right.** Packaging dies with `!!! no VERSION file at the root`, which
+is loud, so it is not the silence this section is about -- but it
+refused without mentioning the one file that explains the refusal, and
+"already loud" is not the same as "already saying it". All four
+packaging paths now name it.
+
+**What they must not do is use it**, and the asymmetry is the whole
+reason the refusal stays. A diagnostic that names the wrong version
+misleads whoever reads it. A package built from a version taken out of
+another directory **ships** one, under a number belonging to a
+different project, and nobody downstream is placed to notice -- the
+same argument `$file()` already makes by refusing a path that leaves
+the tree. So the fix here is the sentence and never the value.
 
 **The question the report framed is not quite the one that decides
 it.** It asked whether the `VERSION` lookup should climb, and named the
@@ -23336,7 +23350,7 @@ rather than a line that would reach the compiler as its own text.
 **The `.git` bound is not decoration and the case checks it both
 ways.** Every scratch tree this suite builds sits directly in the
 temporary directory, so without it a stray `/tmp/VERSION` would answer
-for all 555 cases. Dropping the guard turns the case red on the negative
+for all 556 cases. Dropping the guard turns the case red on the negative
 control, which is the half that would otherwise have gone unwatched.
 
 **The bound has a second half, and it was nearly left out.** Do not
