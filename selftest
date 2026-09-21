@@ -2983,6 +2983,67 @@ int main(int argc, char **argv){
 
 
 @case
+def the_argv_block_says_it_is_a_sample_and_names_what_is_not(t):
+	"""`... N more' read as a courtesy elision and was a dead end.
+
+	The argv block prints the first two compile commands. What that
+	means is that it cannot answer "what was THIS file compiled with"
+	for any file but those two, and the old line did not say so or say
+	where to go instead. hydra wanted the flags for a source that was
+	65th of 72, found `-v' prints no command lines at all, and concluded
+	from the pair that the information did not exist. `--compile-commands'
+	had been writing every one of them the whole time.
+
+	Lifting the cap was the other option and is worse: the block is meant
+	to be read, and 300 compile lines in a tree of 300 sources is not a
+	thing anybody reads. A pointer costs one line; a full listing costs
+	the section.
+
+	**The line makes a claim about another instrument, so the case runs
+	that instrument rather than matching the text.** "showing 2 of N"
+	against the number of entries `--compile-commands` actually writes,
+	because a printed remedy that does not work is worse than none -- the
+	rule section 307 was written for, met here in the milder form of a
+	pointer rather than a command to paste."""
+	for i in range(6):
+		t.write(f"src/f{i}.c", f"int f{i}(void){{ return {i}; }}\n")
+	decls = "".join(f"int f{i}(void);\n" for i in range(6))
+	uses = " + ".join(f"f{i}()" for i in range(6))
+	t.write("src/main.c", decls + f"int main(void){{ return {uses}; }}\n")
+
+	out = t.fmake("--explain").stdout
+	check("showing 2 of 7" in out,
+	      f"the argv block does not say it is a sample or how big the "
+	      f"whole is: {out}")
+	check("--compile-commands" in out,
+	      f"the elision does not name the instrument that answers for "
+	      f"every file: {out}")
+
+	# And the claim is true: that instrument writes exactly that many.
+	t.fmake("--compile-commands")
+	with open(os.path.join(t.dir, "compile_commands.json")) as fh:
+		entries = json.load(fh)
+	check(len(entries) == 7,
+	      f"--explain says 2 of 7 while --compile-commands writes "
+	      f"{len(entries)}, so the pointer sends a reader to an "
+	      f"instrument that disagrees with it")
+
+	# A target under the cap gets no elision line, because there is
+	# nothing elided and a pointer would be noise on every small tree.
+	u = Tree("argv-small")
+	try:
+		u.write("h.c", "int h(void){ return 1; }\n")
+		u.write("main.c", "int h(void);\n"
+		        "int main(void){ return h() - 1; }\n")
+		out = u.fmake("--explain").stdout
+		check("showing 2 of" not in out,
+		      f"a build with nothing elided still printed the sample "
+		      f"line: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def two_mains_two_programs(t):
 	"""Each main() is its own program; shared code is compiled once."""
 	t.write("lib.h", "int shared_calc(int);\n")

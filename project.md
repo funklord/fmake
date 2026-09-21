@@ -361,7 +361,8 @@ that had been green about nothing for five commits ·
 [308. The version reader answered about a tree the file was not in](#308-the-version-reader-answered-about-a-tree-the-file-was-not-in) ·
 [309. Where the weight actually sat, and a file left in somebody's tree](#309-where-the-weight-actually-sat-and-a-file-left-in-somebodys-tree) ·
 [310. Two spellings of one exclude, and a set reported only when it lost](#310-two-spellings-of-one-exclude-and-a-set-reported-only-when-it-lost) ·
-[311. What a diagnostic bought downstream, and what it cost](#311-what-a-diagnostic-bought-downstream-and-what-it-cost)
+[311. What a diagnostic bought downstream, and what it cost](#311-what-a-diagnostic-bought-downstream-and-what-it-cost) ·
+[312. An elision that read as a courtesy and was a dead end](#312-an-elision-that-read-as-a-courtesy-and-was-a-dead-end)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2504,7 +2505,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **558** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **559** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -23816,3 +23817,69 @@ but not the only one.** That covers the file-reading cases this
 document is full of and the two it would otherwise have miscounted --
 and it names the property that actually does the work, which is not
 the reading but the not being the author.
+
+---
+
+## 312. An elision that read as a courtesy and was a dead end
+
+`--explain`'s argv block prints the first two compile commands per
+target and closed with `... N more`. That reads as tidiness -- the rest
+are the same, spared for brevity -- and what it actually meant is that
+the block cannot answer *what was THIS file compiled with* for any file
+but the first two.
+
+hydra wanted the flags for a source that was 65th of 72, to compare two
+fmakes on their own tree. `-v` prints no command lines at all, so
+between the two of them every route was closed, and they concluded the
+information did not exist. **`--compile-commands` had been writing every
+one of them the whole time**, with the include paths resolved, and
+nothing anywhere said so.
+
+So this is the project's own rule about reducing output before knowing
+which part is wanted, built into the tool rather than committed by
+somebody reading it. The cap is right -- 300 compile lines in a tree of
+300 sources is not a thing anybody reads, and the block exists to be
+read. What was wrong is that the elision did not say it was a sample
+and did not name what is not one:
+
+    ... showing 2 of 72; --compile-commands writes every one with
+    its flags
+
+**Lifting the cap was the other option and is worse**, which is worth
+recording because it is the obvious fix. A pointer costs one line; a
+full listing costs the section, and the section is the thing somebody
+came to `--explain` for.
+
+**The case runs the instrument the line points at rather than matching
+the text.** It asserts `showing 2 of 7` against the number of entries
+`--compile-commands` actually writes, so the two cannot drift into
+disagreeing -- a pointer to a tool that answers differently is the
+milder form of the fault section 307 was written for, where a printed
+remedy did not work. Reverting to `... N more` turns it red.
+
+**The first version of the line itself needed 3.12, and the suite
+caught it.** It built the message with an implicit concatenation inside
+the f-string expression, which is PEP 701 -- and `debian/control`
+declares 3.11. What found it is the half of the floor check that needs
+nothing installed: the interpreter half skips here, because python3.11
+is not on this machine and is not on any machine this gets written on,
+which is `evidence.md`'s gate-asleep-where-the-violation-happens
+exactly. The tokenizer pass ran, named the line, and named the version
+it needs against the one the package declares. The message is built
+outside the f-string now.
+
+Worth the sentence because the entry beside it is about a diagnostic
+that could not answer, and this is the same suite's answer arriving
+from the one direction that still worked. A gate with two halves on
+different axes survives losing one; the floor check has three, and the
+two that need nothing installed are the two that matter here.
+
+**And the case leaked a scratch directory in its first version**, which
+is the other half of this document's own advice met from the writing
+side. It builds a second tree to check that a small build prints no
+elision line, and `Tree()` without `try/finally: u.cleanup()` leaves it
+behind -- one per run, for ever. Six existing cases in this suite have
+the pattern right and it was not copied. Found by counting the
+directories before and after rather than by reading, which is what
+`running-code.md` says to do and is the only thing that would have
+found it.

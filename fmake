@@ -9389,7 +9389,32 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	for u in built[:2]:
 		print(f"    {DIM(_show_cmd(compile_cmd(u, cfg, incflags), root))}")
 	if len(built) > 2:
-		print(f"    {DIM('... %d more' % (len(built) - 2))}")
+		# Say it is a sample, and name the thing that is not. `... N
+		# more' reads as a courtesy elision; what it actually means is
+		# that the argv block cannot answer "what was THIS file compiled
+		# with" for any file but the first two, and nothing said where
+		# to go instead. hydra needed the flags for one source that was
+		# 65th of 72 and concluded the information did not exist --
+		# `-v' does not print command lines at all, so between the two
+		# of them every route was closed. `--compile-commands' had
+		# written every one all along.
+		#
+		# Lifting the cap was the other option and is worse: the block
+		# is meant to be read, and 300 compile lines in a tree of 300
+		# sources is not a thing anybody reads. A pointer costs one line
+		# and a full listing costs the section.
+		# Built outside the f-string: an implicit concatenation INSIDE
+		# an f-string expression is PEP 701 and needs 3.12, and
+		# debian/control declares 3.11. The first version of this line
+		# had it that way and the suite caught it -- by the tokenizer
+		# half of the floor check, since the interpreter half skips on
+		# a machine with no python3.11, which is every machine anybody
+		# writes this on. Exactly the gate `evidence.md' describes as
+		# asleep where the violation gets written, saved by the half
+		# that needs nothing installed.
+		more = (f"... showing 2 of {len(built)}; --compile-commands "
+		        f"writes every one with its flags")
+		print(f"    {DIM(more)}")
 	# The same call the linker gets, not a second rendering of it.
 	shown = link_cmd(t, cl, cfg, outdir, res["ldflags"] if res else [], root)
 	print(f"    {DIM(_show_cmd(shown, root))}")
