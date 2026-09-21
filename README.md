@@ -716,7 +716,11 @@ instead, which is how one of two same-named `test/foo_test.c` gets its own
 name. In both shapes the defines reach the **root translation unit only**;
 everything the closure brings in is the same object both programs link,
 which is what makes the second program cost one compile rather than a
-second build. Where that is wrong for a project — where a define changes a
+second build. **`[project] defines` is the other scope and reaches every
+file in the build**, root or not — which is the one to use for a version
+macro, since the file that falls back to `"unknown"` is as often a helper
+as a `main()`. The caveat above is about a target's own section and nothing
+else. Where that is wrong for a project — where a define changes a
 layout — the two builds are two builds, and fmake is not the tool for
 saying so.
 

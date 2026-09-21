@@ -317,6 +317,27 @@ int main(void){ printf("%s\\n", PROBE_VERSION); return 0; }
 	check(t.run(os.path.basename(t.dir)).stdout == "1.2.3\n",
 	      "the program must print the version the file holds")
 
+	# And it reaches every file, not only the root. raidcfgd took this
+	# as the remedy fmake prints for a version fallback and had to ask
+	# before trusting it: their third site is `src/snapshot_metrics.cpp',
+	# which is not a root, and the README's caveat about a TARGET's own
+	# `defines' sits close enough to read as general. A half-fix there
+	# prints the right version from both programs while one path keeps
+	# its "unknown", which the obvious check cannot see.
+	t.write("helper.c", "#ifndef PROBE_VERSION\n"
+	        '#define PROBE_VERSION "unknown"\n#endif\n'
+	        "const char *helper(void){ return PROBE_VERSION; }\n")
+	t.write("main.c", """
+#include <stdio.h>
+const char *helper(void);
+int main(void){ printf("%s %s\\n", PROBE_VERSION, helper()); return 0; }
+""")
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "1.2.3 1.2.3\n",
+	      "a [project] define must reach a file the closure brought in, "
+	      "not only the root -- the fallback is as often in a helper")
+
 
 @case
 def a_define_can_name_the_tree_root(t):

@@ -23240,6 +23240,31 @@ and the case runs it and checks the binary prints the file's
 contents, because a line fmake prints that does not work is worse
 than none.
 
+**Taken at all three sites, and the third needed asking.**
+raidcfgd's `e6b3f4b` carries the `defines` line and their
+`--version` prints `0.1` from both programs, with
+`"unknown (built without a version)"` absent from the strings of
+each. The site that made them ask is `src/snapshot_metrics.cpp`,
+which is **not a root**: the README's caveat that a target's own
+`defines` reach the root translation unit only sits close enough to
+read as general, and a half-fix there prints the right version from
+both programs while one path keeps its fallback -- which neither
+`--version` nor fmake's own count would show. `[project] defines`
+reaches every file in the build, the README now says so where the
+caveat is, and a case pins it with a helper the closure brings in.
+
+Their own correction, since it bears on what this document may claim:
+raidcfgd's `project.md` had said an `exclude` for `fuzznet/qtty/**`
+was in their `fmake.toml` and no such line exists -- wrong on the day
+it was written rather than overtaken, and corrected there. **Nothing
+here repeats it**: section 259 records the exclude as a thing that
+tree *can* do and was told about, which is what it is. The nineteen
+files are in the closure because nothing excludes them, and they stay
+visible for the reason the ossacli shim exclude stayed out until its
+finding was filed -- that one was taken on the holder's instruction
+rather than in passing, and this is the same shape with the same
+owner.
+
 **The instrument note they sent with it**, which belongs beside
 section 297. They reached for `fmake -n` first as the cheap check on
 the interposition question: it exits 0, plans all ten binaries, and
