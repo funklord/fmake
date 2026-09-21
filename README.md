@@ -1079,6 +1079,17 @@ Every flag the program accepts, which is the same list `--man` and
 `$CC`, `$CXX`, `$AR`, `$NM`, `$CFLAGS` and `$LDFLAGS` are honoured and win over
 the config file.
 
+**`-C DIR` moves the whole tree, including where `VERSION` and `fmake.toml`
+are looked for.** Both are read from the directory being built and nowhere
+else, so a project whose sources are in `src/` and whose `VERSION` and
+config sit at the repository root gets neither from `fmake -C src`. That is
+deliberate — an `exclude` written against the repository root means nothing
+from inside `src/`, and `$file()` refuses a path leaving the tree — but
+fmake no longer does it quietly: a `VERSION` or an `fmake.toml` one
+directory above the build root is named as being there and unread, provided
+that directory is a repository root. Building from the root instead, with
+whatever `exclude` that needs, is the way to have them apply.
+
 **`-flto` works with both compilers**, and the closure is unaffected —
 symbols are symbols. GCC's LTO objects are ordinary ELF; clang's are pure
 bitcode, which `nm` reads only where `LLVMgold.so` is installed as a BFD

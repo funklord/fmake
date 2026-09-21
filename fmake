@@ -6091,6 +6091,82 @@ def _missing_header(msg):
 _QUOTE = "['\u2018\u2019]"
 _Q = _QUOTE
 
+
+def _project_above(root):
+	"""The directory holding this build root, when it is the project's.
+
+    None unless the directory above is a repository root and this one is
+    not. Both halves matter and the second was nearly left out: a
+    vendored checkout IS its own project, so a submodule built directly
+    -- `fmake -C ossacli' inside raidcfgd -- must not be answered with
+    the enclosing tree's VERSION, which belongs to somebody else. All
+    four vendored checkouts in this workspace happen to carry their own
+    VERSION, so nothing would have climbed today; that is luck and not a
+    design, and the next one to arrive without one would have been told
+    its parent's number.
+    """
+	above = os.path.dirname(root)
+	if above == root:
+		return None
+	if os.path.exists(os.path.join(root, ".git")):
+		return None
+	if not os.path.exists(os.path.join(above, ".git")):
+		return None
+	return above
+
+
+def _version_nearby(root):
+	"""The tree's VERSION file, or the one directly above it.
+
+    Returns `(value, outside)': `outside' is None when the file is in the
+    tree fmake was given, and its path relative to that tree when it is
+    one directory up and therefore not.
+
+    **One directory, and only the project's.** hydra keeps its sources in
+    `src/' and its VERSION at the repository root, and documents the
+    build as `fmake -C src' -- so every reader of the version here
+    answered about a tree the file is not in, and said nothing at all.
+    The distance is the invocation's: `-C <subdir>' names exactly one
+    directory, so looking exactly one back up is looking where the caller
+    was standing. Which directories qualify is `_project_above''s, and
+    a `stat' rather than a subprocess.
+
+    That bound is also what stops a false positive, and it is not
+    hypothetical -- every scratch tree this suite builds sits directly in
+    the temporary directory, so without it a stray `/tmp/VERSION' would
+    answer for all of them.
+
+    Climbing until a `.git' turns up would cover `src/app/' too, and is
+    the larger decision this declines: it needs a meaning for "the
+    project" spanning any depth, which fmake has deliberately not had.
+    Section 308 records it as the option not taken.
+
+    What comes back from above the tree is never put INTO the build. It is
+    read so that a diagnostic can say the file is there and out of reach;
+    `$file()' still refuses a path leaving the tree, which is what keeps a
+    value from somebody else's VERSION out of a define.
+    """
+	try:
+		with open(os.path.join(root, "VERSION"), encoding="utf-8-sig") as fh:
+			value = fh.read().strip()
+		if value:
+			return (value, None)
+	except OSError:
+		pass
+	above = _project_above(root)
+	if above is None:
+		return (None, None)
+	try:
+		with open(os.path.join(above, "VERSION"), encoding="utf-8-sig") as fh:
+			value = fh.read().strip()
+	except OSError:
+		return (None, None)
+	if not value:
+		return (None, None)
+	return (value, os.path.relpath(os.path.join(above, "VERSION"), root)
+	        .replace(os.sep, "/"))
+
+
 # Four spellings, one per way the three real instances failed. gcc says
 # `undeclared' for C and `was not declared in this scope' for C++; clang
 # says `use of undeclared identifier'; and a source that guards itself
@@ -6129,12 +6205,8 @@ def _undeclared_version(msg, root):
 			break
 	if not name or not name.endswith("VERSION"):
 		return None
-	try:
-		with open(os.path.join(root, "VERSION")) as fh:
-			value = fh.read().strip()
-	except OSError:
-		return None
-	return (name, value) if value else None
+	value, outside = _version_nearby(root)
+	return (name, value, outside) if value else None
 
 
 def _headers_in_tree(name, headers):
@@ -6528,12 +6600,34 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				# line rather than the class of problem. The value is read
 				# from the tree rather than guessed, so it is either right
 				# or the file is wrong, and both are worth knowing.
-				vname, vvalue = found_version
+				vname, vvalue, voutside = found_version
 				note(f"{vname} is defined by no file in this tree, which is "
 				     f"what a build system injecting a version looks like")
-				note(f"VERSION here says {vvalue}")
-				note(f"[project] cflags = ['-D{vname}=\"{vvalue}\"'] "
-				     f"would define it")
+				if voutside:
+					# The file is real and fmake may not read it into
+					# the build: `$file()' refuses a path leaving the
+					# tree, so the remedy below cannot be offered from
+					# here. Saying where the file is beats the silence
+					# this printed instead, which is what hydra got --
+					# the whole block was gated on a VERSION in the tree
+					# and `fmake -C src' is a tree the file is not in.
+					note(f"{voutside} says {vvalue}, one directory above "
+					     f"the tree this build was given, so nothing "
+					     f"here can read it")
+					note(f"building from that directory puts the file in "
+					     f"the tree, and the define can then be taken "
+					     f"from it")
+				else:
+					note(f"VERSION here says {vvalue}")
+					# `$file(VERSION)' rather than the number, which is
+					# section 307's finding arriving at the second site
+					# that prints this advice. Naming the value copies
+					# it into fmake.toml, and a tree with a VERSION file
+					# has arranged for the number to live in one place.
+					note(f"[project] defines = "
+					     f"['{vname}=\"$file(VERSION)\"'] supplies it "
+					     f"from that file, so the number stays in one "
+					     f"place")
 
 			if VERBOSE or len(groups) == 1 and len(hit) == 1:
 				PROGRESS.write(first_err)
@@ -9339,6 +9433,20 @@ def build(args, _bootstrapping=False):
 	cache  = Cache(os.path.join(state, CACHE_FILE))
 	cache.read_only = bool(args.dry_run)
 	conf   = Conf(load_conf(root), args.profile)
+	# A config one directory up is not this build's, and saying nothing
+	# about it is how a whole fmake.toml goes unread without a word.
+	# `fmake -C src' in a tree whose fmake.toml is at the repository
+	# root gets none of it -- not its excludes, which decide what is
+	# compiled -- and exits 0. Not reading it is right: an `exclude'
+	# there is written against that directory and means nothing from
+	# here. Being quiet about it is not, because the file is evidence
+	# that somebody expected fmake to be standing one level up.
+	_above = _project_above(root)
+	if (_above and not os.path.isfile(os.path.join(root, CONF_FILE))
+	        and os.path.isfile(os.path.join(_above, CONF_FILE))):
+		note(f"../{CONF_FILE} is one directory above the tree this "
+		     f"build was given and is not read: its paths are written "
+		     f"against that directory")
 	# fmake.mk may carry project-scope directives beside its rules. They fold
 	# into [project], so the two files say the same things the same way and
 	# a project needing both a rule and a flag needs only one of them.
@@ -9748,11 +9856,11 @@ def build(args, _bootstrapping=False):
 	# up. bbq-predictor prints `bbq-predictor unknown' this way and
 	# raidcfgd `unknown (built without a version)'. What makes it
 	# answerable rather than merely true is the VERSION file beside it.
-	try:
-		with open(os.path.join(root, "VERSION")) as _vfh:
-			version_says = _vfh.read().strip()
-	except OSError:
-		version_says = ""
+	# Or the one directly above it: `fmake -C src' in a tree whose
+	# VERSION is at the repository root had nothing to say here at all,
+	# because the gate below is what decides whether the finding is
+	# printed and it was reading a file that was one directory away.
+	version_says, version_outside = _version_nearby(root)
 	version_fallen = []
 	if version_says:
 		_supplied = " ".join(cfg.cflags)
@@ -11996,9 +12104,26 @@ def build(args, _bootstrapping=False):
 			# before being printed: `$file()' expands in `defines' and
 			# not in `cflags', where it reaches the binary as the
 			# literal text `$file(VERSION)'.
-			note(f"VERSION here says {version_says}; [project] defines "
-			     f"= ['{name}=\"$file(VERSION)\"'] supplies it from "
-			     f"that file, so the number stays in one place")
+			if version_outside:
+				# The file is there and is out of reach: `$file()'
+				# refuses a path leaving the tree, so the remedy below
+				# is not available from here and offering it would
+				# print a line that does not work. What this used to
+				# print was nothing, because the gate above could not
+				# see the file either -- so a binary reporting a made
+				# up version was built in silence, which is the whole
+				# of hydra's finding.
+				note(f"{version_outside} says {version_says}, one "
+				     f"directory above the tree this build was given, "
+				     f"so nothing here can read it")
+				note(f"building from that directory puts the file in "
+				     f"the tree, and the define can then be taken from "
+				     f"it")
+			else:
+				note(f"VERSION here says {version_says}; [project] "
+				     f"defines = ['{name}=\"$file(VERSION)\"'] supplies "
+				     f"it from that file, so the number stays in one "
+				     f"place")
 		if len(fallen) > 3:
 			note(f"... and {len(fallen) - 3} more")
 

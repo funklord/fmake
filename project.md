@@ -357,7 +357,8 @@ that had been green about nothing for five commits ·
 [304. `--features`: what this copy understands, asked rather than measured](#304---features-what-this-copy-understands-asked-rather-than-measured) ·
 [305. An exclude reaches the include path](#305-an-exclude-reaches-the-include-path) ·
 [306. The interposition rule, decided: whose file it is](#306-the-interposition-rule-decided-whose-file-it-is) ·
-[307. The honest fallback was being scolded, and the remedy copied the number](#307-the-honest-fallback-was-being-scolded-and-the-remedy-copied-the-number)
+[307. The honest fallback was being scolded, and the remedy copied the number](#307-the-honest-fallback-was-being-scolded-and-the-remedy-copied-the-number) ·
+[308. The version reader answered about a tree the file was not in](#308-the-version-reader-answered-about-a-tree-the-file-was-not-in)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2500,7 +2501,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **484** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **555** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -23273,3 +23274,126 @@ to a closure event, which the shim pull is. **The tool declaring its
 own vacuous pass is why they did not publish that run as a result**,
 and it is the clearest instance so far of the caveat in 297 doing the
 job it was added for.
+
+---
+
+## 308. The version reader answered about a tree the file was not in
+
+hydra's second report, folded in. It builds now -- 136 of 136, no build
+file, both earlier blockers closed -- and what it came to say is one
+finding with a decision attached, which it correctly declined to take:
+`fmake -C src` cannot see a `VERSION` at the repository root, so the
+whole version diagnosis went quiet for that layout.
+
+**They were right, and the silence is wider than the report knew.**
+Measured here on a two-file fixture rather than on their tree, which is
+`evidence.md`'s rule about a claim you did not take the measurement for:
+
+    fmake -C src, VERSION one level up   before        after
+
+    guarded fallback (builds and lies)   nothing       names the macro, what
+                                                       the binary reports, and
+                                                       where the file is
+    unguarded reference (build stops)    nothing       the same, at the
+                                                       compile error
+    fmake.toml one level up              nothing       said to be unread
+    --eject deb                          refuses       unchanged
+
+The third row is not in their report and is the worse one. **A whole
+`fmake.toml` is silently not read**, excludes included -- and an exclude
+decides what is compiled rather than what a message says. hydra's own
+config is at its repository root while its README documents
+`fmake -C src`, so none of that file reaches the build its README
+describes. The fourth row is the one already correct: packaging dies
+with `!!! no VERSION file at the root`, which is loud, so it was left
+alone.
+
+**The question the report framed is not quite the one that decides
+it.** It asked whether the `VERSION` lookup should climb, and named the
+deciding measurement as how many trees document `fmake -C <subdir>`.
+Taken two ways that would fail differently -- every sibling README's
+fmake line, and where each tree's own `fmake.toml` actually sits --
+**hydra is the only one of the seventeen**, and every other tree builds
+from its root with its config there. On that criterion alone the answer
+is no, and the finding would close unfixed.
+
+It does not close, because the harm measured is not the absent reach.
+**It is the silence.** The fallback was already detected -- `verfall` is
+per-source and needs no `VERSION` -- and the report was suppressed only
+because fmake had no value to quote. So a check written for exactly this
+fault could not fire in the configuration the fault occurs in, which is
+the shape of section 44 and not a missing feature.
+
+**So: do not climb, and stop being quiet.** The reach is two bounds and
+neither is a search. The distance is the invocation's -- `-C <subdir>`
+names one directory, so one back up is where the caller was standing.
+The place is the tree's own -- that directory must hold a `.git`, which
+is what makes it the project rather than merely the parent. Nothing read
+from above ever enters the build: `$file()` still refuses a path leaving
+the tree, so the remedy offered from a subdirectory is where the file is
+rather than a line that would reach the compiler as its own text.
+
+**The `.git` bound is not decoration and the case checks it both
+ways.** Every scratch tree this suite builds sits directly in the
+temporary directory, so without it a stray `/tmp/VERSION` would answer
+for all 555 cases. Dropping the guard turns the case red on the negative
+control, which is the half that would otherwise have gone unwatched.
+
+**The bound has a second half, and it was nearly left out.** Do not
+climb out of a directory that is itself a repository: a vendored
+checkout IS its own project, so `fmake -C ossacli` inside raidcfgd must
+not be answered with raidcfgd's VERSION. That would be worse than the
+silence it replaced -- a wrong version, reported confidently, where
+before there was nothing. It was caught by asking what the new code
+would do to the four vendored checkouts in this workspace rather than
+by a test failing, and **all four carry their own `VERSION`, so nothing
+would have climbed today.** That is luck and not a design: the reading
+that matters is the next checkout to arrive without one, which would
+have been told its parent's number. The guard is a `stat` and the case
+holds both halves.
+
+**The option not taken**, recorded so it is not relitigated: climbing
+until a `.git` turns up, which would cover `src/app/` as well. That
+needs a meaning for "the project" spanning any depth, which fmake has
+deliberately not had -- its claim is that it reads the tree in front of
+it. One directory, at a repository root, is the smallest thing that
+removes the measured harm.
+
+**And section 307's own remedy had not reached the second site that
+prints it.** The compile-error advice still said
+`[project] cflags = ['-DNAME="<the number>"']`, which is the second home
+for the version that 307 refused at the sibling site a fortnight
+earlier, and `cflags` is also where `$file()` does not expand. Both
+sites now print `[project] defines = ['NAME="$file(VERSION)"']`, and
+the case that pinned the old wording was updated rather than left to
+pin it. A correction has to go where it will next be looked for, and
+the existing case was holding the uncorrected copy in place.
+
+**Verified by reverting each of the four changes and watching the named
+check fail**: the climb, the `.git` bound, the config note, and the
+remedy wording. The third anchor broke while being quoted through a
+shell and the mutation helper refused to write rather than reporting a
+green run over an unapplied edit -- section 16's rule about editing
+this suite through files earning itself again, from the tooling side.
+
+**And the dry run is blind here too, reported independently.** hydra
+notes that `fmake -n` exits 0 and resolves no libraries, so neither the
+compile error nor the version report appears in one -- which is
+raidcfgd's instrument note in section 307 arriving from a second tree,
+about a different diagnostic, in the same week. Two trees that did not
+read each other's reports is the kind of corroboration that counts, and
+it says the caveat section 297 added is load-bearing rather than
+decorative: both sessions reached for `-n` as the cheap check first,
+and both were told by the tool why it could not answer.
+
+**What hydra is owed back**: nothing is required of them. Their build
+works, the guard is in their source, and the `-C src` invocation their
+README documents now says what it cannot see rather than saying
+nothing. Whether they move the file, build from the root, or leave it
+is theirs.
+
+The report is removed for the reason the other seven were, and
+`suggestions/` goes with it for the third time -- a snapshot of one run
+against a tree that has since changed, kept beside a corrected account
+only invites reading the stale one. It stays in the history, one commit
+back.

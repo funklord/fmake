@@ -2282,8 +2282,15 @@ def a_version_the_build_system_injects_is_named_with_its_value(t):
 	      f"the missing version was not named: {out}")
 	check("VERSION here says 2.4.1" in out,
 	      f"the value was not read from the VERSION file: {out}")
-	check("""cflags = ['-DMYAPP_VERSION="2.4.1"']""" in out,
-	      f"the exact line to add was not offered: {out}")
+	# `defines' with `$file(VERSION)', not `cflags' with the number.
+	# Section 307 settled that at the sibling site that prints this same
+	# advice -- a remedy naming the value creates the second home for it
+	# that a VERSION file exists to prevent -- and this site kept the old
+	# wording, which is the correction arriving where it will next be
+	# looked for rather than only where it was first made.
+	check("""defines = ['MYAPP_VERSION="$file(VERSION)"']""" in out,
+	      f"the remedy copies the number instead of reading the file: "
+	      f"{out}")
 
 	# The #error spelling, which is openmlx4's and which never reaches the
 	# other three because the preprocessor stops first.
@@ -2309,6 +2316,144 @@ def a_version_the_build_system_injects_is_named_with_its_value(t):
 	out = t.fmake().stdout
 	check("defined by no file in this tree" not in out,
 	      f"a tree with no VERSION file was told what its version is: {out}")
+
+
+@case
+def a_version_above_the_build_root_is_named_rather_than_missed(t):
+	"""hydra's finding: `fmake -C src' answered about a tree the VERSION
+	file is not in, and both version diagnostics went quiet.
+
+	hydra keeps its sources in `src/' and its `VERSION' at the repository
+	root, and its README documents the build as `fmake -C src'. Every
+	reader of the version opened `<build root>/VERSION', so for that
+	layout the file was one directory away and the whole diagnosis was
+	suppressed -- not the remedy, the finding. What hydra got was a binary
+	reporting a version it made up, built in silence, with fmake exiting
+	0: the check written for exactly that fault could not fire in the
+	configuration the fault occurs in.
+
+	Both sites are checked, because both were gated the same way and
+	fixing one would have left the other quiet: the guarded fallback,
+	which builds and lies, and the unguarded reference, which is the
+	compile error hydra hit first.
+
+	**The remedy must not be the in-tree one.** `$file()' refuses a path
+	leaving the tree by design, so offering it from here would print a
+	line that does not work, which is worse than printing none. What is
+	offered instead is where the file is.
+
+	**The reach is bounded by a repository, checked three ways here.** It
+	does not climb when the directory above is merely the parent -- without
+	that, the parent of every scratch tree in this suite is the temporary
+	directory and one stray `/tmp/VERSION' would answer for all of them --
+	it does climb when that directory is the project's, and it does not
+	climb out of a build root that is its own repository, which is the
+	vendored-checkout case where the answer would belong to somebody
+	else."""
+	outer = os.path.join(t.dir, "outer")
+	src = os.path.join(outer, "src")
+	t.write("outer/VERSION", "4.2\n")
+	t.write("outer/src/main.c",
+	        '#include <stdio.h>\n'
+	        '#ifndef APP_VERSION\n'
+	        '#define APP_VERSION "unknown (built without a version)"\n'
+	        '#endif\n'
+	        'int main(void){ printf("%s\\n", APP_VERSION); return 0; }\n')
+
+	# The negative control first: with no `.git' the directory above is
+	# merely the parent, and fmake says nothing about what is in it.
+	out = t.fmake("-C", src).stdout
+	check("4.2" not in out,
+	      f"a VERSION above a directory that is not a project root was "
+	      f"read anyway: {out}")
+
+	os.makedirs(os.path.join(outer, ".git"), exist_ok=True)
+	out = t.fmake("-C", src).stdout
+	check("main.c defines APP_VERSION itself because the build did not"
+	      in out,
+	      f"the invented version went unreported because VERSION was one "
+	      f"directory up: {out}")
+	check('reports "unknown (built without a version)"' in out,
+	      f"the message does not say what the binary reports: {out}")
+	check("../VERSION says 4.2" in out,
+	      f"the file fmake could see was not named: {out}")
+	# The remedy that cannot work must not be the one offered: $file()
+	# refuses a path leaving the tree, so this line would reach the
+	# compiler as its own text.
+	check("$file(VERSION)" not in out,
+	      f"a remedy was offered that $file() refuses, the path leaving "
+	      f"the tree: {out}")
+
+	# The other site, and the one hydra hit first: an unguarded reference,
+	# so the build stops rather than lying.
+	t.write("outer/src/main.c",
+	        '#include <stdio.h>\n'
+	        'int main(void){ printf("%s\\n", APP_VERSION); return 0; }\n')
+	r = t.fmake("-C", src)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, "a tree missing its version macro built anyway")
+	check("APP_VERSION is defined by no file in this tree" in out,
+	      f"the compile error went unanswered because VERSION was one "
+	      f"directory up: {out}")
+	check("../VERSION says 4.2" in out,
+	      f"the file fmake could see was not named at the compile-error "
+	      f"site: {out}")
+
+	# And it does not climb OUT of a project. A vendored checkout is its
+	# own tree, so the enclosing repository's VERSION is somebody else's
+	# number and naming it would be worse than the silence this replaced
+	# -- a wrong version reported confidently. All four vendored
+	# checkouts in this workspace happen to carry their own VERSION, so
+	# nothing would climb today; that is luck rather than a design, and
+	# the next one to arrive without one is what this holds.
+	os.makedirs(os.path.join(src, ".git"), exist_ok=True)
+	out = t.fmake("-C", src).stdout
+	check("4.2" not in out,
+	      f"a build root that is its own repository was answered with "
+	      f"the enclosing project's version: {out}")
+
+
+@case
+def a_config_above_the_build_root_is_said_to_be_unread(t):
+	"""A whole `fmake.toml' one directory up, silently not read.
+
+	Found while folding hydra's report in rather than in the report.
+	hydra's `fmake.toml' is at its repository root and its documented
+	invocation is `fmake -C src', so none of that file reaches the build
+	its README describes -- including an `exclude' list, which decides
+	what is compiled rather than merely what a message says.
+
+	Not reading it stays right: an `exclude' written against the
+	repository root means nothing from inside `src/', and reading paths
+	from outside the tree is the reach fmake declines. Being quiet about
+	it is what changes here. The file is evidence that somebody expected
+	fmake to be standing one directory up.
+
+	Bounded by a `.git' like the VERSION reader beside it, and checked in
+	both directions for the same reason."""
+	outer = os.path.join(t.dir, "outer")
+	src = os.path.join(outer, "src")
+	t.write("outer/fmake.toml", "[project]\nexclude = ['nothing/**']\n")
+	t.write("outer/src/main.c", "int main(void){ return 0; }\n")
+
+	out = t.fmake("-C", src).stdout
+	check("fmake.toml" not in out,
+	      f"a config above a directory that is not a project root was "
+	      f"mentioned: {out}")
+
+	os.makedirs(os.path.join(outer, ".git"), exist_ok=True)
+	out = t.fmake("-C", src).stdout
+	check("../fmake.toml" in out and "is not read" in out,
+	      f"a config one directory above the build root went unmentioned: "
+	      f"{out}")
+
+	# A tree with its own config is not told about one outside it, which
+	# is not its business and would be noise on every build.
+	t.write("outer/src/fmake.toml", "[project]\nexclude = ['nothing/**']\n")
+	out = t.fmake("-C", src).stdout
+	check("../fmake.toml" not in out,
+	      f"a tree with its own config was told about one outside it: "
+	      f"{out}")
 
 
 @case
