@@ -362,7 +362,8 @@ that had been green about nothing for five commits ·
 [309. Where the weight actually sat, and a file left in somebody's tree](#309-where-the-weight-actually-sat-and-a-file-left-in-somebodys-tree) ·
 [310. Two spellings of one exclude, and a set reported only when it lost](#310-two-spellings-of-one-exclude-and-a-set-reported-only-when-it-lost) ·
 [311. What a diagnostic bought downstream, and what it cost](#311-what-a-diagnostic-bought-downstream-and-what-it-cost) ·
-[312. An elision that read as a courtesy and was a dead end](#312-an-elision-that-read-as-a-courtesy-and-was-a-dead-end)
+[312. An elision that read as a courtesy and was a dead end](#312-an-elision-that-read-as-a-courtesy-and-was-a-dead-end) ·
+[313. The unexplained case was two different commands](#313-the-unexplained-case-was-two-different-commands)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -23669,9 +23670,11 @@ something is. So `0 kept` was never in tension with 211 entries
 carrying no `-I<root>/src`; those agree, and agreeing is all they do.
 The open question is not why an inferred directory fails to arrive. It
 is **why an exclude changes what the tree infers at all**, when in a
-fixture of the same shape the total is 1 either way.
+fixture of the same shape the total is 1 either way. **Answered in
+section 313, and the fixture was not of the same shape -- it was being
+run with a different command.**
 
-That is a sharper question than the one this entry was written with,
+That question was sharper than the one this entry was written with,
 and it is sharper because an instrument added in this commit was
 pointed at it the day it landed. What changed is that the next person
 can read the inferred set in one run instead of deducing it from what
@@ -23883,3 +23886,74 @@ the pattern right and it was not copied. Found by counting the
 directories before and after rather than by reading, which is what
 `running-code.md` says to do and is the only thing that would have
 found it.
+
+---
+
+## 313. The unexplained case was two different commands
+
+Sections 310 and 312 leave one thing open: hydra's tree inferred no
+include directory, then inferred one as soon as an exclude was added,
+while a fixture of the same shape inferred one either way. Three
+mechanisms were offered across that investigation and all three were
+wrong, so this one was left as an observation.
+
+**It is not a defect and there is no mechanism to find. The two runs
+scanned different populations, and one of them was mine.** Reproduced
+here exactly, `./fmake` at 6ae8cea, one fixture, `src/theme.h` included
+by `src/main.c` and by `test/test_theme.c`:
+
+    fmake -v                          0 inferred
+    fmake -v, exclude = ["src"]       1 inferred, dropped
+    fmake test -v                     1 inferred, kept: src
+
+The first two lines are hydra's numbers. The third is the one this
+project kept quoting at them.
+
+**The reason is section 261 doing its job**, and the control is what
+proves it rather than the pair above. A quote include found beside its
+includer costs no `-I`, so `src/main.c` saying `#include "theme.h"`
+resolves against its own directory and contributes nothing to the
+inferred set. `test/test_theme.c` cannot do that and falls to the
+basename fallback, which adds `src`. So:
+
+    program in src/, default build     0   -- finds it beside itself
+    program in src/, `fmake test'      1   -- the test TU cannot
+    program moved to app/, default     1   -- now it cannot either
+
+Moving the program out of `src/` flips the default build to 1 with
+nothing else changed, which is the experiment that names the cause
+rather than correlating with it. And the exclude case is the same
+thing from the other side: excluding `src` removes the program from
+the build, leaving the test TU as the population, which infers `src`
+-- and the same exclude then drops it.
+
+**So `fmake` and `fmake test` legitimately infer different include
+paths**, because they compile different translation units, and the
+inferred set is a property of which TUs are in the build and where
+they sit relative to their headers. Both of hydra's readings were
+true. They were true of different builds.
+
+**The error was mine and it is not the one I spent the day guarding
+against.** Every mechanism offered was wrong, and it was wrong because
+the comparison underneath was invalid: their `fmake` against my
+`fmake test`, never stated on either side. hydra spent the morning
+teaching this project to name the binary, after their README said
+`fmake` and they had tested `python3 ~/src/fmake/fmake`. This is the
+same fault one notch along -- **name the command, not only the
+binary** -- and it went unnoticed through six exchanges in which both
+of us were careful about everything else.
+
+The tell was available throughout and neither of us read it: a fixture
+that reproduces a shape but not the numbers has usually been asked a
+different question, and the first thing to compare is the argv, not
+the tree. **Three mechanisms were proposed for a discrepancy that had
+no mechanism**, because a discrepancy is what you get from comparing
+two measurements of different things, and it looks exactly like a
+finding.
+
+**What this does NOT do is change anything in the tool.** There is no
+fix, no case, and nothing to guard: the behaviour is correct and the
+diagnostics were accurate in both runs. The only artifact is this
+entry and the pointer from 310, because a question recorded as open
+and since answered is the kind of sentence that sends the next reader
+at work already done.
