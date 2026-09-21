@@ -15144,8 +15144,10 @@ def a_vendored_interposer_is_refused_and_your_own_is_only_said(t):
 	      f"{out}")
 
 	t.write("src/shim.c", "/*! @file\n *  @interpose\n */\n"
-	        "#include <unistd.h>\n"
-	        "int close(int fd){ (void)fd; return 0; }\n")
+	        "#include <unistd.h>\n#include <stdio.h>\n"
+	        "int close(int fd){ (void)fd; return 0; }\n"
+	        "FILE *fopen(const char *p, const char *m)"
+	        "{ (void)p; (void)m; return 0; }\n")
 	r = t.fmake()
 	out = r.stdout + r.stderr
 	check(r.returncode == 0 and "* src/shim.c defines close()" not in out,
@@ -15162,6 +15164,22 @@ def a_vendored_interposer_is_refused_and_your_own_is_only_said(t):
 	check("interposes on purpose (@interpose): close()" in out,
 	      f"nothing says what was forgiven, so a consumer using the "
 	      f"warning as a detector loses it silently: {out}")
+	# And the note must not carry the warning's phrase. ossacli greps
+	# `in libc's place' and fails on it, so a note saying the same four
+	# words would mean "nobody said this was intended" and "somebody
+	# did" at once -- red on the line that exists to say things are
+	# fine. `(@interpose)' is the token that separates them.
+	check("in libc's place" not in out,
+	      f"the note reuses the warning's phrase, so a consumer keying "
+	      f"on it cannot tell forgiven from warned: {out}")
+	# Every libc name the file defines, not the one that pulled it in:
+	# the closure records one symbol per file, so a shim interposing
+	# sixteen would have been reported as one. A list that is short for
+	# a reason nobody states is worse than none, because diffing a
+	# prefix against a local set produces agreement.
+	check("close(), fopen()" in out,
+	      f"the note lists what pulled the file in rather than what it "
+	      f"defines: {out}")
 
 
 @case

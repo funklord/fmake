@@ -23106,6 +23106,40 @@ as a note rather than a warning, which is their suggestion taken:
 A consumer can diff that against their own list without compiling
 anything, which is exactly what ossacli had to do the hard way.
 
+**The first version of that note was wrong twice, and they caught both
+within the hour** -- one line after this document recorded the shape it
+is an instance of.
+
+It ended *in libc's place*, which is the warning's phrase and the
+literal their gate greps. So the string meant *nobody said this was
+intended* and *somebody did* at once, and the moment they adopted the
+directive their gate would have gone red on the line that exists to
+say things are fine. It ends `deliberately` now, and **`(@interpose)`
+is the token that separates the two lines** -- said here because they
+asked which token is the contract, and a consumer that keys on the
+surrounding words will be wrong later.
+
+And it listed six of sixteen. Their point: a consumer with more
+symbols than the cap is exactly the consumer who needs the list, since
+a short one can be checked by eye, and **diffing a prefix against a
+local set produces agreement, which is the expensive kind of wrong.**
+It prints all of them -- and while fixing that, the list turned out to
+be the wrong set: `libc_interposed` keys on the closure's `why`, which
+records one symbol per file, so a shim interposing sixteen was
+reported as the one that happened to pull it in. It is now what the
+file defines that libc also defines, which is the set they derive with
+`nm` and the only one worth diffing.
+
+**And a correction of their own, which belongs beside the sentence
+this section quotes.** They separately claimed in their own tree that
+a simulator could not produce a case it demonstrably can -- having
+read its default output and concluded a capability was absent, with
+sixty override knobs one grep away. Their words for the class: *I
+measured the run and reported it as a property of the tool*, which is
+the borrowed guarantee again from the other side. Nothing in this
+document rests on that claim; it is recorded because two instances in
+one day from one careful session is the frequency worth knowing.
+
 **The general shape, since it is not about this directive.** A warning
 a tool emits for its own reasons gets adopted downstream as a detector
 for something adjacent, and an annotation that legitimately silences

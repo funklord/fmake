@@ -11506,8 +11506,8 @@ def build(args, _bootstrapping=False):
 		#
 		# `@interpose' is how either says it is meant, and is the thing
 		# that was missing: before it there was no way to agree with fmake.
-		interposed = libc_interposed(closures, wanted,
-		                             libc_exports(cfg, cache))
+		libc_syms = libc_exports(cfg, cache)
+		interposed = libc_interposed(closures, wanted, libc_syms)
 		refuse = []
 		forgiven = {}
 		for (rel, sym, by), names in sorted(interposed.items()):
@@ -11538,11 +11538,32 @@ def build(args, _bootstrapping=False):
 			     f"program; [project] exclude drops it. `@interpose' says "
 			     f"this is meant and silences this")
 		for (rel, names), syms in sorted(forgiven.items()):
-			shown = sorted(syms)
+			# Not "in libc's place", which is the warning's phrase and a
+			# sibling's gate greps it. Reported from ossacli one line
+			# after this project recorded the shape it is an instance of:
+			# the note said the same four words as the warning, so the
+			# string meant "nobody said this was intended" and "somebody
+			# did" at once, and a consumer keying on it would go red on
+			# the line that exists to say things are fine. `(@interpose)'
+			# is the token that separates them and is the one to key on.
+			#
+			# Every symbol, not the first six. A consumer with more
+			# symbols than a cap is exactly the consumer who needs the
+			# list -- a short one can be checked by eye -- and diffing a
+			# prefix against a local set produces agreement, which is the
+			# expensive kind of wrong.
+			# What the file DEFINES that libc also does, not what
+			# happened to pull it in: the closure records one symbol per
+			# file, so `why' would have named `close()' for a shim that
+			# interposes sixteen. ossacli's use for this list is to diff
+			# it against their own derivation, and a list that is
+			# shorter for a reason nobody states is worse than none.
+			u = units.get(rel)
+			defines = sorted((u.strong & libc_syms) if u and u.compiled
+			                 else syms)
 			note(f"{rel} interposes on purpose (@interpose): "
-			     + ", ".join(f"{x}()" for x in shown[:6])
-			     + (f" and {len(shown) - 6} more" if len(shown) > 6 else "")
-			     + f" -- linked into {', '.join(names)} in libc's place")
+			     + ", ".join(f"{x}()" for x in defines)
+			     + f" -- linked into {', '.join(names)} deliberately")
 		if refuse:
 			rel, sym, by, names, owner = refuse[0]
 			more = (f"\n{len(refuse) - 1} more file(s) in a vendored "
