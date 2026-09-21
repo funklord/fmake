@@ -23894,8 +23894,9 @@ found it.
 Sections 310 and 312 leave one thing open: hydra's tree inferred no
 include directory, then inferred one as soon as an exclude was added,
 while a fixture of the same shape inferred one either way. Three
-mechanisms were offered across that investigation and all three were
-wrong, so this one was left as an observation.
+mechanisms were offered across that investigation, two from hydra and
+one from here, and all three were wrong -- so it was left as an
+observation rather than a diagnosis.
 
 **It is not a defect and there is no mechanism to find. The two runs
 scanned different populations, and one of them was mine.** Reproduced
@@ -23933,23 +23934,38 @@ inferred set is a property of which TUs are in the build and where
 they sit relative to their headers. Both of hydra's readings were
 true. They were true of different builds.
 
-**The error was mine and it is not the one I spent the day guarding
-against.** Every mechanism offered was wrong, and it was wrong because
-the comparison underneath was invalid: their `fmake` against my
-`fmake test`, never stated on either side. hydra spent the morning
-teaching this project to name the binary, after their README said
-`fmake` and they had tested `python3 ~/src/fmake/fmake`. This is the
-same fault one notch along -- **name the command, not only the
-binary** -- and it went unnoticed through six exchanges in which both
-of us were careful about everything else.
+**The error is shared, and the first version of this entry took it
+all -- which hydra corrected, because over-taking it loses the sharper
+instance.** The comparison underneath was invalid in both directions:
+their `fmake` against this project's `fmake test`, never stated on
+either side. hydra spent the morning teaching this project to name the
+binary, after their README said `fmake` while they had tested
+`python3 ~/src/fmake/fmake`. This is that fault one notch along --
+**name the command, not only the binary** -- and it survived six
+exchanges in which both of us were careful about everything else.
+
+**Their half is the better instance and is theirs to state.** Every
+measurement they sent carried a sentence saying the explicit
+`include-dirs` had been removed *so that the conditions matched the
+original* -- a clause specifically about matching conditions, naming
+the variable they had controlled and not the one that decided the
+answer. That is `evidence.md`'s marker-of-diligence shape in prose
+rather than in a number: **an assertion of rigour about a comparison
+that was not made is the thing that stops anybody re-checking it**,
+and it is worse than the silent version because it answers the
+question before it is asked. This project's half is duller -- a
+command held constant and never written down.
 
 The tell was available throughout and neither of us read it: a fixture
 that reproduces a shape but not the numbers has usually been asked a
 different question, and the first thing to compare is the argv, not
 the tree. **Three mechanisms were proposed for a discrepancy that had
-no mechanism**, because a discrepancy is what you get from comparing
-two measurements of different things, and it looks exactly like a
-finding.
+no mechanism** -- two of them hydra's and one this project's, which
+is the honest split and not the one first written here -- because a
+discrepancy is what you get from comparing two measurements of
+different things, and it looks exactly like a finding. **Both sides
+invented explanations at about the same rate**, which is what happens
+when the artifact is real and the comparison is not.
 
 **What this does NOT do is change anything in the tool.** There is no
 fix, no case, and nothing to guard: the behaviour is correct and the
