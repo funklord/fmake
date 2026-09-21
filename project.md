@@ -360,7 +360,8 @@ that had been green about nothing for five commits ·
 [307. The honest fallback was being scolded, and the remedy copied the number](#307-the-honest-fallback-was-being-scolded-and-the-remedy-copied-the-number) ·
 [308. The version reader answered about a tree the file was not in](#308-the-version-reader-answered-about-a-tree-the-file-was-not-in) ·
 [309. Where the weight actually sat, and a file left in somebody's tree](#309-where-the-weight-actually-sat-and-a-file-left-in-somebodys-tree) ·
-[310. Two spellings of one exclude, and a set reported only when it lost](#310-two-spellings-of-one-exclude-and-a-set-reported-only-when-it-lost)
+[310. Two spellings of one exclude, and a set reported only when it lost](#310-two-spellings-of-one-exclude-and-a-set-reported-only-when-it-lost) ·
+[311. What a diagnostic bought downstream, and what it cost](#311-what-a-diagnostic-bought-downstream-and-what-it-cost)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -23675,3 +23676,104 @@ pointed at it the day it landed. What changed is that the next person
 can read the inferred set in one run instead of deducing it from what
 the tool destroys -- and the first thing that reading did was correct
 the paragraph describing it.
+
+---
+
+## 311. What a diagnostic bought downstream, and what it cost
+
+Three things from ossacli, recorded with their agreement. None is a
+defect in fmake and none produced a commit to it, which is why they
+are here rather than in a message that nobody re-reads.
+
+### A gate whose subject is decided by its environment
+
+ossacli's build gate ran fmake over their tree and checked it
+succeeded. `libossa.a` is make's output and sits in their tree root, so
+the closure resolved the whole library out of the archive and never
+compiled `src/lib/*.c` -- which fmake reported, one line per source,
+with the consequence spelled out: *editing this file changes nothing*.
+
+What that meant is the finding, and it is theirs: **the gate had been
+proving fmake can link make's output rather than that it can build
+that tree.** Which of the two it tested depended on whether the archive
+happened to exist, and inside `make test` it always does, because make
+has just built it. A fresh checkout takes the other path. Seventeen
+sources or a link, behind one command, and nothing saying which.
+
+**The class, in the phrasing they asked be used rather than their
+own**: a gate whose SUBJECT is decided by its environment rather than
+by what it was written to test. This document has the neighbours -- a
+check whose pass includes the failure, a gate that could not see what
+it was built for -- and had no instance of this one. Theirs is
+sharper than either, because nothing about the run looks wrong: it
+passes, it passes for a real reason, and it passes for a different
+reason on the machine it was written on than on a clean one.
+
+**The attribution splits and they described the split better than this
+would have.** The diagnostic did the hard half -- "these sources were
+not compiled, editing them changes nothing" is a complete finding about
+one run. They asked what it implied about *every previous run*, and
+that question is only obvious once the line exists. Their words for why
+a sweep would not have found it: the thing they would have been
+sweeping for is the thing the tool was hiding.
+
+Fixed on their side by naming the archive in `[project] exclude`, which
+is what fmake's own message recommends, and verified against both the
+packaged and the installed binary before adopting: 12 compile steps,
+three programs, each. Their `f02a3c1`.
+
+### A packaged fmake is testable without installing it
+
+`dpkg-deb -x` into a scratch directory gives a runnable binary, and
+`--explain` analyses without compiling. So a `.deb` can be verified by
+whoever holds the file, which is a better property than "installable"
+and is how they caught an artifact that had drifted from its source.
+Every deb cut here since is checked that way -- extracted and run,
+rather than trusted because the build exited 0.
+
+### Two nm readings are one witness
+
+They confirmed fmake's interposed-symbol list against a set derived
+with `nm`, and reported the match. The match is worth less than it
+looks: **fmake derives that set with nm too** -- `libc_exports` is one
+nm of libc, and the closure's symbol tables come from
+`nm --format=posix` -- so the symbol extraction is one instrument asked
+twice, with the same blind spots on both sides.
+
+What it does confirm is the layer between extraction and output: the
+intersection, the filter, and the capping. That is not nothing, and it
+is exactly where the defect that motivated the uncapped list lived. A
+second witness would be `readelf -Ws` or `objdump -T`, which parse the
+ELF independently of binutils' nm frontend; it was not asked for,
+because for a shim whose symbols are readable in its own source the
+value is low. Recorded so the claim in their tree says what it is.
+
+### And the half of their generalisation that was missing
+
+They wrote that a dependency's new diagnostic is a lens nobody
+downstream has to think of, and that this argues for taking an upgrade
+on its own merits rather than only when a feature is wanted from it.
+True, and it is the flattering half.
+
+**The same commit carried a semantics change with no diagnostic at
+all.** `foo/**` now drops the inferred include directory `foo`, where
+before it excluded the files and left the directory on the path -- so a
+tree spelling its excludes that way would compile something different,
+silently. They were unaffected, and they know that because they
+checked when it was flagged, not because anything told them.
+
+So the rule wants both halves: an upgrade is worth taking for the
+lenses it adds, and worth *reading* for what it changed without saying
+so. They corrected their own entry to carry both (`2a7b410`) and made
+the point that an entry recording only the half where the tool helps is
+the same failure as a summary that reports only the passing arm.
+
+**One thing this says about how the change was announced**, since it
+was nearly done the other way: the semantics change went to them as its
+own paragraph rather than as one line in a list of five commits. They
+say that is what made them run the check at all -- a list describing
+five commits as include paths and VERSION diagnostics would have been
+accurate, and they would have concluded none of it touched them. **An
+accurate summary that leads a reader to the wrong action is the shape
+this document keeps meeting**, and the remedy here was not more detail
+but putting the one consequential item where it could not be skimmed.
