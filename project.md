@@ -354,7 +354,8 @@ that had been green about nothing for five commits ·
 [301. A module keeps its interposer and shares everything else](#301-a-module-keeps-its-interposer-and-shares-everything-else) ·
 [302. `@os any`: a name that claims a platform can be denied](#302-os-any-a-name-that-claims-a-platform-can-be-denied) ·
 [303. A case that said it had no timing assumption had one](#303-a-case-that-said-it-had-no-timing-assumption-had-one) ·
-[304. `--features`: what this copy understands, asked rather than measured](#304---features-what-this-copy-understands-asked-rather-than-measured)
+[304. `--features`: what this copy understands, asked rather than measured](#304---features-what-this-copy-understands-asked-rather-than-measured) ·
+[305. An exclude reaches the include path](#305-an-exclude-reaches-the-include-path)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -21876,6 +21877,9 @@ through `exclude_pattern`. That same comment already distinguishes
 inferred `proj.incdirs` from a stated `[project] include-dirs`, so the
 two are separable; whether they should be is yours.
 
+**They are separated; see section 305.** The inferred set is filtered
+and the stated one is not, which is that reading acted on unchanged.
+
 **The headers are untracked, which makes this a property of the machine
 rather than of the repository.** Neither `include/libssh/string.h` nor
 `include/libssh/priv.h` is tracked; both are artifacts of an Android
@@ -22906,3 +22910,64 @@ packaged one understands the denial, because a hypothetical wrong
 answer on NetBSD is worth less than a build that fails on the machine
 in front of them. That judgement is theirs and right, and the blocker
 under it is the same one section 299 ends on.
+
+## 305. An exclude reaches the include path
+
+Section 293's open question, answered the way its reporter read the
+code: `[project] exclude` filters the sources and now filters the
+include set the graph infers, which is where those two had come apart.
+
+**What it cost, measured by beerssh.** Their `fmake.toml` excludes
+`build-deps-android` -- two prebuilt `libcrypto.a` for one ABI and a
+few hundred targets nobody asked for -- and the build then carried
+**109 `-I` flags from under it**. libssh's `string.h` answered Qt's
+`#include <string.h>`, that header includes `libssh/priv.h`, and every
+translation unit touching any Qt header died: 110 files, all four
+targets skipped. The exclusion did exactly what it said for sources
+and nothing at all for the directories the graph inferred from the
+same subtree, which `exclude_pattern`'s own docstring already said it
+wanted -- *for headers too, not just sources*.
+
+**Why the fix is a filter on the inferred set and only that.**
+`base_incflags` is built from `proj.incdirs`, which the comment beside
+it calls what the include graph inferred; `[project] include-dirs` is
+added separately from the configuration. So a statement stays a
+statement: a tree that excludes a subtree and then names one directory
+inside it gets exactly that directory, which matters because **naming
+it is the remedy fmake prints** and an exclude that outranked it would
+make the remedy a lie.
+
+**Three states, because the change is only right if all three are.**
+The case builds beerssh's tree in five files -- one kept source
+reaching into the excluded subtree, which is what puts the directory
+on every compile line, and another including the C library's
+`<string.h>`:
+
+    before      src/other.c dies on libssh/priv.h
+    after       src/main.c is refused its own header, naming the exclude
+    remedy      include-dirs = ['deps/inc'] resolves it
+
+and the third state asserts the thing beerssh predicted and had not
+run: **taking the remedy brings the shadowing back**, because the
+shadowing header is in the directory being named. That is the honest
+consequence rather than a defect -- a tree in that position wants a
+narrower directory, or none, and now it is choosing rather than
+discovering.
+
+**The message is half the change.** A header refused because its
+directory was excluded reads as fmake failing to find something it can
+plainly see, so the diagnostic says which:
+
+      it is in this tree, at deps/inc/depcfg.h
+      [project] include-dirs = ['deps/inc'] would find it
+         deps/inc is under [project] exclude = 'deps', which is why it is
+         not on the path: naming it above overrides that for this one
+         directory
+
+**What this does not do.** An excluded source still contributes no
+include directory and never did -- measured while building the fixture,
+where a `#include` in an excluded file infers nothing either before or
+after. And section 293's other half, whether a build tool should apply
+a consumer's vendored patch series, is untouched and still a design
+question rather than a defect, its reporter having withdrawn the defect
+framing.

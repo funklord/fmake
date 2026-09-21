@@ -6240,7 +6240,7 @@ def _same_file(path, size):
 
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
                   broken=None, tree_headers=(), quiet=False, origins=None,
-                  vendored=()):
+                  vendored=(), excluded=None):
 	"""Compile what is stale. Returns True if anything was actually built.
 
     `broken` collects the files that would not compile, so the caller can
@@ -6444,6 +6444,18 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					# references -- so the line read as the next thing to
 					# paste, and refusing the third took a paragraph in
 					# their fmake.toml to explain.
+					# And whether this tree already said not to look
+					# there. An exclude reaches the include path now, so
+					# a header under an excluded subtree is missing on
+					# purpose -- and a remedy that did not say so reads
+					# as fmake having failed to find something it can
+					# see.
+					pat = excluded(want) if excluded else None
+					if pat:
+						note(f"   {want} is under [project] exclude = "
+						     f"{pat!r}, which is why it is not on the "
+						     f"path: naming it above overrides that for "
+						     f"this one directory")
 					owner = in_vendor(want, vendored)
 					if owner:
 						note(f"   {want} is inside {owner}, a checkout of "
@@ -10548,8 +10560,34 @@ def build(args, _bootstrapping=False):
 	if situ_outs or generated:
 		proj.reachable_headers(list(situ_outs) + list(generated))
 
+	# `[project] exclude' reaches the include path, not only the sources.
+	# Reported from beerssh, whose fmake.toml excludes `build-deps-android'
+	# -- two prebuilt libcrypto.a for one ABI, and a few hundred targets
+	# nobody asked for -- and whose build then carried 109 `-I' flags from
+	# under it, so libssh's `string.h' answered Qt's `#include <string.h>'
+	# and every translation unit touching a Qt header died on
+	# `libssh/priv.h'. The exclusion did what it said for sources and the
+	# graph's inferred directories never went through it.
+	#
+	# Inferred only. `[project] include-dirs' is a statement and is added
+	# further down from `conf', so a tree that excludes a subtree and then
+	# names one directory inside it gets exactly that -- which is the
+	# remedy this prints when a header goes missing, and it would be no
+	# remedy at all if the exclude outranked it.
+	excluded_incdirs = {}
+	kept_incdirs = []
+	for d in sorted(proj.incdirs | {"."}):
+		pat = exclude_pattern(d) if d != "." else None
+		if pat:
+			excluded_incdirs[d] = pat
+		else:
+			kept_incdirs.append(d)
+	if excluded_incdirs:
+		vinfo(f"{len(excluded_incdirs)} inferred include dir(s) dropped by "
+		      f"[project] exclude: "
+		      + ", ".join(sorted(excluded_incdirs)[:4]))
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
-	                 for d in sorted(proj.incdirs | {"."})]
+	                 for d in kept_incdirs]
 	# The same set `install_subpath' reads, recorded where it is known --
 	# and `[project] include-dirs' with it, which is NOT in `proj.incdirs':
 	# that set is what the include graph inferred, and a directory stated
@@ -10821,7 +10859,8 @@ def build(args, _bootstrapping=False):
 		compile_units(pool + [variants[k] for k in sorted(variants)],
 		              cfg, cache, root, incflags, jobs, args.dry_run,
 		              broken, tree_headers=hdrs, quiet=args.quiet,
-		              origins=generated_from, vendored=vendored)
+		              origins=generated_from, vendored=vendored,
+		              excluded=exclude_pattern)
 		# The architecture to require is whatever fmake just compiled. Asking
 		# the objects avoids having to know anything about toolchain
 		# triplets, and is right by construction -- but it means waiting

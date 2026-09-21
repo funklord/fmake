@@ -169,6 +169,7 @@ is not in the sources.
 | Rebuild after a header changes | **Always** — `-MD` depfiles, read back | — |
 | Which files are another platform's | **Almost always** — `_win32`, `_android`, `_aarch64` suffixes | `@os`, `@arch` |
 | Directories holding no source | **Always** — asked of git, not guessed from the name | `[project] exclude` where git is not told |
+| What an exclude removes | **Both** — the sources under it and the include directories inferred from it | `[project] include-dirs` names one back |
 | Qt: what to moc, uic, rcc | **Always** — `Q_OBJECT` in the text, `.ui` and `.qrc` by extension | `[toolchain] moc` to name a different one |
 | Rust: what a crate contains | **Always** — the root plus what `mod` draws in | `[target.*] name` where the directory name is wrong |
 | situ: which schemas to compile | **Always** — a source includes the header a schema would write | `[situ] flags` for the rung |
@@ -546,7 +547,8 @@ For facts that belong to no single file and need tables.
 ```toml
 [project]
 cflags  = ["-Wall"]
-exclude = ["vendor/**"]
+exclude = ["vendor/**"]         # sources AND the include paths under them;
+                                # include-dirs below names one back
 
 [profile.debug]
 cflags  = ["-Og", "-pg"] # -Os is the default; DEBUG=1 gives -Og -g

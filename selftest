@@ -14984,6 +14984,79 @@ def the_feature_list_is_derived_from_the_tables(t):
 
 
 @case
+def an_exclude_reaches_the_include_path_too(t):
+	"""`[project] exclude` filtered the sources and not the include set
+	the graph infers, so an excluded subtree still put its directories on
+	every compile line.
+
+	Reported from beerssh, whose fmake.toml excludes
+	`build-deps-android` -- two prebuilt `libcrypto.a` for one ABI, and a
+	few hundred targets nobody asked for -- and whose build then carried
+	109 `-I` flags from under it. libssh's `string.h` answered Qt's
+	`#include <string.h>`, that header includes `libssh/priv.h`, and
+	every translation unit touching any Qt header died. The exclusion did
+	exactly what it said for sources, and what it did not say for
+	headers.
+
+	Three states here, because the fix is only right if all three are:
+	the accidental shadowing goes away, a header genuinely wanted from an
+	excluded subtree is refused with the exclude named as the reason, and
+	`[project] include-dirs` still overrides -- a statement beats a
+	filter, and it is the remedy fmake prints.
+
+	The third state is worth the assertion it gets: naming the directory
+	brings the shadowing back, because the shadowing header is in it.
+	That is the honest consequence and beerssh predicted it -- they said
+	they had not run whether the build completes with libssh's
+	`string.h` still in front of the C library's. It does not, and a tree
+	in that position wants a narrower directory or none."""
+	# One kept source reaches into the excluded subtree, which is what
+	# puts its directory on every compile line; another includes the C
+	# library's <string.h> and gets the subtree's instead. That is
+	# beerssh's build in five files.
+	t.write("deps/inc/depcfg.h", "int dep_thing(void);\n")
+	t.write("deps/inc/string.h", '#include "libssh/priv.h"\n'
+	        "int ssh_thing(void);\n")
+	t.write("deps/dep.c", "int dep_thing(void){ return 1; }\n")
+	t.write("src/main.c", '#include "depcfg.h"\n'
+	        "int other(void);\nint main(void){ return other(); }\n")
+	t.write("src/other.c", "#include <string.h>\n"
+	        'int other(void){ return (int)strlen("x"); }\n')
+	t.write("fmake.toml", '[project]\nexclude = ["deps"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("priv.h" not in out,
+	      f"the excluded subtree's string.h answered #include <string.h>, "
+	      f"which is the reported failure: {out}")
+	# And the header the kept source does want is refused with the
+	# reason, rather than quietly answered out of a subtree the project
+	# said to leave alone.
+	check(r.returncode != 0 and "it is in this tree, at deps/inc/depcfg.h"
+	      in out,
+	      f"the header in the excluded subtree was not found for the "
+	      f"message: {out}")
+	check("under [project] exclude = 'deps'" in out,
+	      f"nothing says the exclude is why it is not on the path: {out}")
+
+	# And the printed remedy works: a statement beats a filter.
+	t.write("fmake.toml", '[project]\nexclude = ["deps"]\n'
+	        'include-dirs = ["deps/inc"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("depcfg.h: No such file" not in out,
+	      f"[project] include-dirs did not override the exclude, so the "
+	      f"remedy fmake prints is not one: {out}")
+	# The honest consequence, asserted rather than left to be met: the
+	# directory carries the shadowing header too, so taking the remedy
+	# brings the shadowing back. beerssh predicted this and had not run
+	# it. A tree in that position wants a narrower directory, or none.
+	check("priv.h" in out,
+	      f"naming the directory did not restore what is in it, so this "
+	      f"fixture no longer models the tree it came from: {out}")
+
+
+@case
 def a_tree_with_no_main_is_a_library(t):
 	"""The only thing it could sensibly be."""
 	t.write("a.c", "int add(int a, int b){ return a + b; }\n")
