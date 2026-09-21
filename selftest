@@ -3125,13 +3125,21 @@ def an_interrupted_build_takes_its_compilers_with_it(t):
 		raise Skip("no cc")
 	marks = os.path.join(t.dir, "running")
 	os.makedirs(marks, exist_ok=True)
+	# 120 rather than 6, and the windows below 30 rather than 5. The two
+	# numbers are one measurement: what makes this a test is that the
+	# compilers are gone LONG BEFORE they could have finished on their
+	# own, so the stand-in's life has to dwarf the window and the window
+	# has to survive a loaded machine. At six and five it did neither --
+	# it failed in a full run with one shim still alive, on a machine
+	# carrying several suites, and widening the window alone would have
+	# passed for the wrong reason, the shim having simply finished.
 	shim = t.write("cc-slow", f"""#!/bin/sh
 case " $* " in
   *" -c "*) ;;
   *) exec {shutil.which("cc")} "$@" ;;
 esac
 : > "{marks}/$$"
-sleep 6
+sleep 120
 {shutil.which("cc")} "$@"
 rc=$?
 rm -f "{marks}/$$"
@@ -3171,7 +3179,7 @@ exit $rc
 				return False
 			return True
 
-		deadline = time.time() + 5
+		deadline = time.time() + 30
 		while time.time() < deadline and any(alive(p) for p in pids):
 			time.sleep(0.25)
 		left = [p for p in pids if alive(p)]
@@ -3201,7 +3209,7 @@ for a in "$@"; do
 done
 [ "$slow" = yes ] || exec {shutil.which("cc")} "$@"
 : > "{lmarks}/$$"
-sleep 6
+sleep 120
 {shutil.which("cc")} "$@"
 rc=$?
 rm -f "{lmarks}/$$"
@@ -3225,7 +3233,7 @@ exit $rc
 			check(pids, "the link never started, so nothing was interrupted")
 			lp.send_signal(signal.SIGTERM)
 			lp.wait(timeout=30)
-			deadline = time.time() + 5
+			deadline = time.time() + 30
 			def alive(pid):
 				try:
 					os.kill(int(pid), 0)
@@ -9092,8 +9100,15 @@ def a_file_standing_in_for_libc_is_said_out_loud(t):
 	      and f"linked into {prog} in libc's place" in said
 	      and "pulled in by main.c" in said,
 	      f"the interposition is named, with what pulled it: {said}")
-	check("move it under tests/" in said,
-	      f"the note points at the painless fix, tests/: {said}")
+	# The remedies, and the message's list of them moved when section 306
+	# gave the file a way to say the interposition is meant. What the
+	# assertion is for is that the note is actionable rather than a
+	# statement of fact, so it names the three that keep the file where
+	# it is or take it out, and the one that agrees with it.
+	for remedy in ("@kind module", "tests/", "exclude", "@interpose"):
+		check(remedy in said,
+		      f"the note does not offer {remedy}, so it says what "
+		      f"happened and not what to do: {said}")
 	check(t.run(prog).stdout == "42\n",
 	      "and the rule itself is unchanged: the tree's close() is linked")
 
@@ -15054,6 +15069,79 @@ def an_exclude_reaches_the_include_path_too(t):
 	check("priv.h" in out,
 	      f"naming the directory did not restore what is in it, so this "
 	      f"fixture no longer models the tree it came from: {out}")
+
+
+@case
+def a_vendored_interposer_is_refused_and_your_own_is_only_said(t):
+	"""Section 283 recorded three answers to the libc-interposition rule
+	-- keep warning, prefer libc, or refuse -- and left them to the
+	copyright holder. Section 306 decides, and the line is whose file it
+	is.
+
+	A tree's own file defining a name libc also has is ordinary. glibc
+	2.41 on this machine exports `strlcpy`, `strlcat`, `getline` and
+	`reallocarray`, so every portability shim ever written lives in that
+	population, and refusing them would stop builds that are right.
+
+	A file in a vendored checkout is the other case. Nobody in the
+	consuming tree wrote it, an interposer there is meant to be preloaded
+	rather than linked, and both measured harms are exactly this shape:
+	ossacli's `ossa-check` reporting named alarms on an MSA70 that is not
+	on this machine, and raidcfgd's `ciss_probe` answering from a
+	simulated Smart Array through a vendored ossacli while looking
+	exactly like a tool that read the hardware. A build that fails is
+	better than a storage diagnostic that invents its subject.
+
+	`@interpose` is how either says it is meant, and it is the thing that
+	was missing: before it there was no way to agree with fmake, so the
+	warning was permanent noise for a tree that interposes on purpose."""
+	t.write(".gitmodules", '[submodule "vend"]\n\tpath = vend\n'
+	        "\turl = https://example.invalid/v.git\n")
+	t.write("vend/src/shim.c", "#include <unistd.h>\n"
+	        "int close(int fd){ (void)fd; return 0; }\n")
+	t.write("src/main.c", "#include <unistd.h>\n"
+	        "int main(void){ return close(3); }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a vendored interposer was linked: {out}")
+	check("it is in vend, a checkout of another project" in out,
+	      f"the refusal does not say whose file it is: {out}")
+	check("exclude = [\"vend/**\"]" in out and "@interpose" in out,
+	      f"the refusal does not name both ways out: {out}")
+
+	# The override, for the tree that means it -- including a consumer
+	# who can edit the vendored copy.
+	t.write("vend/src/shim.c", "/*! @file\n *  @interpose\n */\n"
+	        "#include <unistd.h>\n"
+	        "int close(int fd){ (void)fd; return 0; }\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"@interpose did not permit it: {r.stdout}{r.stderr}")
+
+	# And the tree's own file is said and built, not refused: this is the
+	# half that keeps every portability shim building.
+	shutil.rmtree(os.path.join(t.dir, "vend"))
+	os.remove(os.path.join(t.dir, ".gitmodules"))
+	t.write("src/shim.c", "#include <unistd.h>\n"
+	        "int close(int fd){ (void)fd; return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the tree's own interposer was refused, which would stop every "
+	      f"portability shim: {out}")
+	check("in libc's place" in out and "@interpose" in out,
+	      f"the build said nothing about taking the tree's definition: "
+	      f"{out}")
+
+	t.write("src/shim.c", "/*! @file\n *  @interpose\n */\n"
+	        "#include <unistd.h>\n"
+	        "int close(int fd){ (void)fd; return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "in libc's place" not in out,
+	      f"@interpose did not silence the warning, so a tree that means "
+	      f"it has no way to agree: {out}")
 
 
 @case

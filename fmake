@@ -3815,7 +3815,7 @@ RE_DIRECTIVE = re.compile(r"^[@\\](\w+)\b[ \t]*(.*)$")
 
 # Replace whatever came before; last one wins.
 DIRECTIVE_SCALAR = {"target", "kind", "std", "test", "version",
-                    "version_script", "install"}
+                    "version_script", "install", "interpose"}
 # Accumulate across every comment and every file in the link set.
 DIRECTIVE_LIST = {"pkg", "pkg_optional", "libs", "cflags", "ldflags",
                   "define", "defines", "os", "arch", "sources", "headers",
@@ -4255,6 +4255,7 @@ DOXYGEN_ALIAS_TEXT = {
     "test":    "Test program",
     "install": "Installed by --install (no for a program that is built "
                "and not shipped)",
+    "interpose": "Stands in for a libc function on purpose",
     "os":      "Operating systems",
     "arch":    "Architectures",
     "sources": "Extra sources",
@@ -11464,18 +11465,56 @@ def build(args, _bootstrapping=False):
 		# A file the closure took in libc's place. Section 3 takes the
 		# tree over the library, which is right for a project's own
 		# functions and produced a storage tool that invents hardware when
-		# the file was an LD_PRELOAD shim (section 219). Whether the rule
-		# should stop at libc is the copyright holder's question; that the
-		# build says nothing while it happens was not, so it says this.
-		for (rel, sym, by), names in sorted(libc_interposed(
-		        closures, wanted, libc_exports(cfg, cache)).items()):
+		# the file was an LD_PRELOAD shim (section 219).
+		#
+		# Section 306 is where the three answers section 283 recorded were
+		# decided, and the line it draws is whose file it is. A tree's own
+		# file defining a name libc also has is ordinary -- glibc 2.41
+		# here exports strlcpy, strlcat, getline and reallocarray, so
+		# every portability shim ever written is in that population -- and
+		# refusing it would stop builds that are right. A file in a
+		# vendored checkout is the other case: nobody in the consuming
+		# tree wrote it, an interposer there is meant to be preloaded
+		# rather than linked, and both measured harms were exactly this --
+		# ossacli's own shim reaching their programs, and raidcfgd's
+		# `ciss_probe' answering from a simulated controller through a
+		# vendored ossacli.
+		#
+		# `@interpose' is how either says it is meant, and is the thing
+		# that was missing: before it there was no way to agree with fmake.
+		interposed = libc_interposed(closures, wanted,
+		                             libc_exports(cfg, cache))
+		refuse = []
+		for (rel, sym, by), names in sorted(interposed.items()):
+			if Ann(scans.get(rel, {}).get("dirs")).raw.get("interpose"):
+				continue
+			owner = vendor_of(rel, vendored)
+			if owner:
+				refuse.append((rel, sym, by, sorted(names), owner))
+				continue
 			warn(f"{rel} defines {sym}(), which libc provides too, and it "
 			     f"is linked into {', '.join(sorted(names))} in libc's "
-			     f"place -- pulled in by {by}. If it is an LD_PRELOAD "
-			     f"shim or a test double, move it under tests/ and fmake "
-			     f"keeps it out of every non-test program; or [project] "
-			     f"exclude in {CONF_FILE}. If the override is meant, this "
-			     f"is what it does")
+			     f"place -- pulled in by {by}. `@kind module' says it is "
+			     f"a loadable shim and keeps it out of every other "
+			     f"target; under tests/ it is kept out of every non-test "
+			     f"program; [project] exclude drops it. `@interpose' says "
+			     f"this is meant and silences this")
+		if refuse:
+			rel, sym, by, names, owner = refuse[0]
+			more = (f"\n{len(refuse) - 1} more file(s) in a vendored "
+			        f"checkout do the same." if len(refuse) > 1 else "")
+			die(f"{rel} defines {sym}(), which libc provides too, and "
+			    f"nothing in this tree wrote it: it is in {owner}, a "
+			    f"checkout of another project, and the closure is about "
+			    f"to link it into {', '.join(names)} in libc's place -- "
+			    f"pulled in by {by}.{more}\n"
+			    f"An interposer in somebody else's tree is meant to be "
+			    f"preloaded, not linked: a program built this way answers "
+			    f"from it and looks exactly like one that did not.\n"
+			    f"[project] exclude = [{toml_string(owner + '/**')}] "
+			    f"leaves that checkout out of this build, or name the one "
+			    f"subdirectory; `@interpose' in the file says the "
+			    f"interposition is meant, if that tree is yours to edit.")
 
 		# Said outside --explain, because the build that needs to hear it is
 		# the one nobody is inspecting. A feature guarded by a macro fmake

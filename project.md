@@ -355,7 +355,8 @@ that had been green about nothing for five commits ·
 [302. `@os any`: a name that claims a platform can be denied](#302-os-any-a-name-that-claims-a-platform-can-be-denied) ·
 [303. A case that said it had no timing assumption had one](#303-a-case-that-said-it-had-no-timing-assumption-had-one) ·
 [304. `--features`: what this copy understands, asked rather than measured](#304---features-what-this-copy-understands-asked-rather-than-measured) ·
-[305. An exclude reaches the include path](#305-an-exclude-reaches-the-include-path)
+[305. An exclude reaches the include path](#305-an-exclude-reaches-the-include-path) ·
+[306. The interposition rule, decided: whose file it is](#306-the-interposition-rule-decided-whose-file-it-is)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -22816,6 +22817,25 @@ there, with a two-minute cap that means *something has gone wrong*
 rather than *time to carry on*. Then it releases, and the assertions
 are as they were.
 
+### The same class again, one commit later, with two numbers
+
+`an_interrupted_build_takes_its_compilers_with_it` failed the same way
+in the next full run: *fmake exited and left 1 compiler(s) running*.
+Its stand-in compiler sleeps and its window for the children to die
+was five seconds -- and the window could not simply be widened,
+because the stand-in slept **six**. Those two numbers are one
+measurement: what makes the case a test is that the compilers are gone
+long before they could have finished on their own, so a thirty-second
+window against a six-second sleep would pass for the wrong reason,
+every time, with fmake's reaping deleted.
+
+The stand-in sleeps 120 now and the window is 30. Proved by deleting
+the reaping -- `procs = []` in `stop_children` -- where the case
+reports three compilers still alive, so widening did not cost it its
+teeth. **A timing number is rarely alone**: this one had a partner two
+screens away, and changing either by itself would have produced a
+green case that tested nothing.
+
 **Why this is worth a section rather than a commit message.** The
 docstring was written to say the case had no timing assumption, and it
 was believed for as long as the machine was quiet. A case that fails
@@ -22971,3 +22991,59 @@ after. And section 293's other half, whether a build tool should apply
 a consumer's vendored patch series, is untouched and still a design
 question rather than a defect, its reporter having withdrawn the defect
 framing.
+
+## 306. The interposition rule, decided: whose file it is
+
+Section 283 recorded three answers and left them to the copyright
+holder -- keep warning, prefer libc unless the tree declares the file,
+or refuse. The decision is none of the three and is the discriminator
+underneath them: **whose file it is.**
+
+**A tree's own file defining a name libc also has is ordinary.**
+Measured here rather than assumed: glibc 2.41 on this machine exports
+`strlcpy`, `strlcat`, `getline`, `reallocarray`, `memmem` and
+`explicit_bzero`, so every portability shim ever written is in that
+population. Refusing them stops builds that are right, and preferring
+libc silently changes which implementation runs, which is the one
+outcome worse than the present one. Said and linked, as now.
+
+**A file in a vendored checkout is the other case, and both measured
+harms are exactly it.** ossacli's `ossa-check` reported named alarms on
+an MSA70 that is not on this machine; raidcfgd's `ciss_probe` answered
+from a simulated Smart Array through a vendored ossacli, *looking
+exactly like a tool that read the hardware*. Nobody in the consuming
+tree wrote that file, an interposer in somebody else's tree is meant to
+be preloaded rather than linked, and a build that fails is better than
+a storage diagnostic that invents its subject. Refused, naming the
+checkout, the symbol, the program and the puller:
+
+    !!! vend/src/shim.c defines close(), which libc provides too, and
+        nothing in this tree wrote it: it is in vend, a checkout of
+        another project, and the closure is about to link it into interp
+        in libc's place -- pulled in by src/main.c.
+
+**`@interpose` is the thing that was missing**, and it is why the
+refusal is safe: before it there was no way to agree with fmake. A
+tree that interposes on purpose says so and the warning stops; a
+consumer that means to link a vendored interposer -- a vendored
+allocator is the case that exists, `malloc` and `free` being libc
+names -- says so in the file and it builds. Section 299's taxonomy
+makes it a new *name*, so an older fmake ignores it and keeps warning,
+which is the safe direction for a directive whose job is to silence.
+
+**What decided it, given that the two populations could not be
+separated by a symbol.** They can be separated by provenance, and
+fmake already knows provenance exactly -- `.gitmodules` and a `.git`
+in a subdirectory, the same evidence that stops a `main()` in a
+submodule rooting a target, sharpened in section 301 to name the
+nearest checkout. The remedy each population needs is different too:
+yours is `@kind module` or `tests/` or `@interpose`, theirs is
+`[project] exclude` or a patch to a tree you may not own.
+
+**What this costs, stated rather than discovered.** A tree that builds
+today and links a vendored interposer by closure stops building until
+it says one of two things. That is deliberate -- it is raidcfgd's
+`ciss_probe`, which built fine and lied -- and it is the first time
+this project has made a working build fail on purpose. The population
+it can reach is small and known: a vendored checkout, a libc name, and
+no declaration.

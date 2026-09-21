@@ -178,6 +178,7 @@ is not in the sources.
 | A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library\|module` |
 | Which programs are tests | **Sometimes** — a test directory or a `test_` name; `tests/live/` is the `live` group | `@test`, `@test no` |
 | Which programs ship | **Sometimes** — every program does, a module never does, and a program under `example/` does not | `@install no`, `@install yes`, `[target.*] install` |
+| A file standing in for libc | **Reported, never guessed** — yours is linked and said, a vendored one is refused | `@interpose`, `@kind module`, `[project] exclude` |
 | Generated sources | **Never** — a generator is a command nobody can infer | `[generate.*]`, `@rule`, `fmake.mk` |
 | A macro the build injects | **Never** — `-DVERSION=...` is not in the tree | `[project] defines`, `$file(VERSION)` |
 | Public headers to install | **Never** — which headers are API is a decision | `@headers` |
@@ -474,6 +475,7 @@ like `@brief` are ignored.
 | `@install no` / `@install yes` | Build this and do not ship it — an example kept compiling, a probe beside the tools; `--install`, the ejected install rule and every package format pass it by. A program under `example/` is not shipped by default, and `yes` is how that one is |
 | `@os NAME…` / `@arch NAME…` | Build this file only on matching platforms; overrides a `_platform` suffix |
 | `@os any` / `@arch any` | The name makes no claim: keep this file on every platform, which a `_platform` suffix or prefix would otherwise deny. Naming `any` beside a platform is refused — it says two things |
+| `@interpose` | This file stands in for a libc function on purpose. Without it, a file of your own that does is reported and linked, and one in a vendored checkout is refused — nobody in your tree wrote that, and an interposer there is meant to be preloaded |
 | `@sources GLOB…` | Force files into the link that no symbol reaches |
 | `@headers PATH…` | A library's public headers, for `--install` |
 | `@man PATH…` | Manual pages, installed under `man<N>` by their suffix |
