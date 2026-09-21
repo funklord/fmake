@@ -22888,6 +22888,18 @@ feature list that tried would be a changelog with a grep interface.
 Names and values are what a tree asks about because they are what a
 tree writes.
 
+**A third consumer, and the format is now one.** fuzzypickles'
+`project.md` carries `fmake --features | grep -qx 'directive os=any'`
+as the trigger to revisit their annotation, so `directive <name>` and
+`directive <name>=<value>`, one per line, are a format a tree reads --
+the third after ossacli's `--explain` blocks and qtty's install lines
+(sections 288 and 298). Their reason for depending on it is the
+guarantee added after they asked rather than the one that held before:
+a `no` is sound only because it cannot mean *unlisted*, and before
+that case the line would have been right for a reason nobody had
+checked. Rewording these lines costs a sibling's trigger, and the way
+this project knows that is that they said so.
+
 **And it does not make an old fmake newer**, which is the thing this
 does not solve: fuzzypickles is keeping `@os linux android` until the
 packaged one understands the denial, because a hypothetical wrong
