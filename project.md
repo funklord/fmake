@@ -23775,5 +23775,44 @@ say that is what made them run the check at all -- a list describing
 five commits as include paths and VERSION diagnostics would have been
 accurate, and they would have concluded none of it touched them. **An
 accurate summary that leads a reader to the wrong action is the shape
-this document keeps meeting**, and the remedy here was not more detail
-but putting the one consequential item where it could not be skimmed.
+this document keeps meeting**, and the remedy was not more detail.
+
+**Placement was necessary and not sufficient, which is their
+correction to the first version of this paragraph.** What the
+paragraph also carried was a characterisation -- *two of those may
+touch ossacli and are worth a glance rather than a reinstall*. A
+paragraph of its own saying "the subtree-exclude semantics changed"
+would still have read as fmake internals; the clause naming their tree
+as possibly affected is what turned it into an action. So the rule has
+two halves: **put the consequential item where it cannot be skimmed,
+and say who it is consequential for.** The second is the half a writer
+forgets, for the reason that makes it hard to notice -- the writer
+already knows who it affects.
+
+### A claim needs a reader who is not its author
+
+The message recording the above closed with a count -- nine
+corrections between two trees, every one from somebody opening a file
+-- and both halves were wrong in the direction that flattered
+everybody.
+
+**The number was a cross-tree total that neither side could check.**
+Their own record puts their side alone at about a dozen, and they were
+right that a claim spanning two trees is one nobody can verify from
+inside one of them. It arrived in the same message as the observation
+that nothing here survives without somebody checking it, which is the
+whole of what makes it worth recording rather than quietly fixing.
+
+**And "every one came from opening a file" is false**, which matters
+more, because it is the sort of tidy lesson that gets repeated. Two of
+their corrections came from no file at all: the sixteen-symbol match
+being one instrument asked twice, and their generalisation being
+one-sided. Both were somebody reading a claim and noticing what it
+rested on.
+
+Their replacement is the one to keep: **a claim needs a reader who is
+not its author, and opening a file is the commonest way to become one
+but not the only one.** That covers the file-reading cases this
+document is full of and the two it would otherwise have miscounted --
+and it names the property that actually does the work, which is not
+the reading but the not being the author.
