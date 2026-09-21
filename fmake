@@ -896,6 +896,34 @@ RE_DEFINE_VALUED = re.compile(
     r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+(\S[^\n]*)", re.M)
 
 
+def version_fallback_text(root, rel, macro):
+	"""What a file falls back to for a version macro, or None.
+
+    Read at report time rather than carried in the scan: three lines of
+    output do not earn a cache field, and a cache field earns a CACHE_VER
+    bump and a migration for every tree.
+
+    It exists because the message was wrong about the commonest case.
+    raidcfgd's three sites define `"unknown (built without a version)"',
+    deliberately not a plausible-looking number so that a build which was
+    not told says so -- and fmake called that *a version it made up*,
+    scolding a tree for the honest fallback and inverting what it did.
+    The text tells the two apart without guessing, which is why it is
+    printed rather than judged: `"0.1"' is an invented release and
+    `"unknown (...)"' is a declared gap, and the same sentence is right
+    about both.
+    """
+	try:
+		with open(os.path.join(root, rel), errors="replace") as fh:
+			code = fh.read()
+	except OSError:
+		return None
+	for name, value in RE_DEFINE_VALUED.findall(code):
+		if name == macro and value.lstrip().startswith('"'):
+			return value.strip()
+	return None
+
+
 def version_fallbacks(code):
 	"""Version macros this file defines for itself when the build does not.
 
@@ -11956,10 +11984,21 @@ def build(args, _bootstrapping=False):
 		fallen = [(rel, name) for rel, name in version_fallen
 		          if rel in in_artifact]
 		for rel, name in fallen[:3]:
+			text = version_fallback_text(root, rel, name)
 			note(f"{rel} defines {name} itself because the build did "
-			     f"not, so this binary reports a version it made up")
-			note(f"VERSION here says {version_says}; [project] cflags "
-			     f"= ['-D{name}=\"{version_says}\"'] supplies it")
+			     f"not, so this binary reports "
+			     + (text if text else "a version of its own"))
+			# `$file(VERSION)' rather than the number. Suggesting the
+			# contents puts the version in a second place, which is the
+			# one thing a tree with a VERSION file has arranged not to
+			# have -- raidcfgd declined the old advice for exactly that
+			# and gates VERSION against debian/changelog. Measured
+			# before being printed: `$file()' expands in `defines' and
+			# not in `cflags', where it reaches the binary as the
+			# literal text `$file(VERSION)'.
+			note(f"VERSION here says {version_says}; [project] defines "
+			     f"= ['{name}=\"$file(VERSION)\"'] supplies it from "
+			     f"that file, so the number stays in one place")
 		if len(fallen) > 3:
 			note(f"... and {len(fallen) - 3} more")
 

@@ -2103,8 +2103,24 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 	      in out, f"the invented version was not reported: {out}")
 	check("VERSION here says 3.1.4" in out,
 	      f"the real version was not read: {out}")
-	check("""-DAPP_VERSION_STRING="3.1.4\"""" in out,
-	      f"the line that supplies it was not offered: {out}")
+	# The text rather than a judgement about it. raidcfgd's three sites
+	# define "unknown (built without a version)" deliberately, so a
+	# build that was not told says so -- and calling that "a version it
+	# made up" scolded a tree for the honest fallback and inverted what
+	# it did. The value distinguishes an invented release from a
+	# declared gap without fmake having to guess which it is.
+	check('reports "unknown"' in out,
+	      f"the message does not print what the binary will report, so "
+	      f"it cannot tell an invented release from a declared gap: "
+	      f"{out}")
+	# And the remedy must not create a second home for the version.
+	# raidcfgd declined the old one for that: their VERSION file is the
+	# one place and a gate compares it against debian/changelog.
+	# Measured before printing -- $file() expands in `defines' and not
+	# in `cflags', where it reaches the binary as literal text.
+	check("""defines = ['APP_VERSION_STRING="$file(VERSION)"']""" in out,
+	      f"the remedy copies the number instead of reading the file: "
+	      f"{out}")
 
 	# And again on a build that did nothing, which is where this first got
 	# it wrong. The notes above it are about what THIS build decided and
@@ -2114,15 +2130,46 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 	# binary saying "unknown" gets shipped by somebody who saw the warning
 	# a week ago.
 	out = t.fmake().stdout
-	check("reports a version it made up" in out,
+	check('reports "unknown"' in out,
 	      f"a no-op rebuild stopped reporting the invented version: {out}")
+
+	# The same sentence about a file that invents a release rather than
+	# declaring a gap: one message, right about both, which is what
+	# printing the text rather than judging it buys.
+	t.write("main.c", '#include <stdio.h>\n'
+	        '#ifndef APP_VERSION_STRING\n'
+	        '#define APP_VERSION_STRING "0.1"\n'
+	        '#endif\n'
+	        'int main(void){ printf("%s\\n", APP_VERSION_STRING); return 0; }\n')
+	out = t.fmake("-B").stdout
+	check('reports "0.1"' in out,
+	      f"the message does not print an invented release either: {out}")
+
+	# And the remedy runs. A line fmake prints that does not work is
+	# worse than none, and this one was measured wrong before it was
+	# written: the same text under `cflags' reaches the binary as the
+	# literal `$file(VERSION)'.
+	t.write("fmake.toml", '[project]\n'
+	        'defines = [\'APP_VERSION_STRING="$file(VERSION)"\']\n')
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"the printed remedy does not build: {r.stdout}")
+	check(t.run("main" if os.path.exists(os.path.join(t.dir, "main"))
+	            else os.path.basename(t.dir)).stdout.strip() == "3.1.4",
+	      "the printed remedy does not put VERSION's contents in the "
+	      "binary, which is the whole of what it claims")
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	t.write("main.c", '#include <stdio.h>\n'
+	        '#ifndef APP_VERSION_STRING\n'
+	        '#define APP_VERSION_STRING "unknown"\n'
+	        '#endif\n'
+	        'int main(void){ printf("%s\\n", APP_VERSION_STRING); return 0; }\n')
 
 	# Supplied by the build: nothing to say, and saying it anyway would make
 	# the note appear on every correctly-configured tree.
 	t.write("fmake.toml",
 	        '[project]\ncflags = [\'-DAPP_VERSION_STRING="3.1.4"\']\n')
 	out = t.fmake("-B").stdout
-	check("reports a version it made up" not in out,
+	check("defines APP_VERSION_STRING itself" not in out,
 	      f"the note fired on a build that supplies the macro: {out}")
 
 	# An include guard is not a fallback. This is the false positive that
@@ -2134,7 +2181,7 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 	        "int helper(void){ return 0; }\n"
 	        "int main(void){ return helper(); }\n")
 	out = t.fmake("-B").stdout
-	check("reports a version it made up" not in out,
+	check("defines APP_VERSION_STRING itself" not in out,
 	      f"an include guard was read as a version fallback: {out}")
 
 	# Three more refusals, all of them reported from fuzzypickles, which
@@ -2149,7 +2196,7 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 	        "#endif\n"
 	        'int main(void){ printf("%d\\n", GL_VERSION_1_1); return 0; }\n')
 	out = t.fmake("-B").stdout
-	check("reports a version it made up" not in out,
+	check("defines APP_VERSION_STRING itself" not in out,
 	      f"a feature-test macro was read as a version: {out}")
 
 	# And the substring. *Conversion* contains *version*, which is the
@@ -2162,7 +2209,7 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 	        "#endif\n"
 	        'int main(void){ puts(APP_CASE_CONVERSION); return 0; }\n')
 	out = t.fmake("-B").stdout
-	check("reports a version it made up" not in out,
+	check("defines APP_VERSION_STRING itself" not in out,
 	      f"VERSION inside CONVERSION was read as a version macro: {out}")
 
 	# And a fallback in a header no program compiles. "This binary reports
@@ -2175,7 +2222,7 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 	        '#define SPARE_VERSION_STRING "unknown"\n#endif\n')
 	t.write("main.c", "int main(void){ return 0; }\n")
 	out = t.fmake("-B").stdout
-	check("reports a version it made up" not in out,
+	check("defines APP_VERSION_STRING itself" not in out,
 	      f"a header no program compiles is not in any binary: {out}")
 
 

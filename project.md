@@ -356,7 +356,8 @@ that had been green about nothing for five commits ·
 [303. A case that said it had no timing assumption had one](#303-a-case-that-said-it-had-no-timing-assumption-had-one) ·
 [304. `--features`: what this copy understands, asked rather than measured](#304---features-what-this-copy-understands-asked-rather-than-measured) ·
 [305. An exclude reaches the include path](#305-an-exclude-reaches-the-include-path) ·
-[306. The interposition rule, decided: whose file it is](#306-the-interposition-rule-decided-whose-file-it-is)
+[306. The interposition rule, decided: whose file it is](#306-the-interposition-rule-decided-whose-file-it-is) ·
+[307. The honest fallback was being scolded, and the remedy copied the number](#307-the-honest-fallback-was-being-scolded-and-the-remedy-copied-the-number)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -23189,3 +23190,61 @@ it says one of two things. That is deliberate -- it is raidcfgd's
 this project has made a working build fail on purpose. The population
 it can reach is small and known: a vendored checkout, a libc name, and
 no declaration.
+
+## 307. The honest fallback was being scolded, and the remedy copied the number
+
+Two findings from raidcfgd, out of verifying section 283 rather than
+looking for these. Both are about one message and neither is about
+what fmake builds.
+
+**It called a declared gap an invention.** The message read
+
+    daemon/daemon_main.cpp defines RAIDTRAY_VERSION itself because the
+    build did not, so this binary reports a version it made up
+
+and all three of their sites define `"unknown (built without a
+version)"`, with a comment saying it is deliberately *not* a
+plausible-looking number so that a build which was not told says so
+rather than claiming to be a release. Their daemon prints `raidcfgd
+unknown (built without a version)`. So the diagnostic scolded a tree
+for the honest fallback, and inverted what it did.
+
+**fmake never had to guess.** It had already located the `#define` to
+find the macro; reading the replacement text distinguishes `"0.1"`,
+an invented release, from `"unknown (...)"`, a declared gap. Their
+suggested wording is right about both and strictly more informative
+than either judgement, so it is theirs:
+
+    ... so this binary reports "unknown (built without a version)"
+
+**And the remedy created the second home a VERSION file exists to
+prevent.** It offered `[project] cflags = ['-DNAME="<contents>"']`,
+which copies the number into `fmake.toml`, where it goes stale
+silently -- and this workspace keeps the number in one place on
+purpose, raidcfgd gating `VERSION` against `debian/changelog`. They
+declined the advice for that and said what would make it safe: a
+VERSION file read at build time, or a substitution.
+
+**fmake already had the substitution and was not offering it.**
+`$file(VERSION)` exists. What it took to say so correctly was running
+it, which is this project's own rule about a printed remedy and is
+the reason the first draft of this entry was wrong: **`$file()`
+expands in `defines` and not in `cflags`.** The line fmake was about
+to suggest, with `cflags`, reaches the binary as the literal text
+`$file(VERSION)` -- measured, printed by the program. So the remedy
+is
+
+    [project] defines = ['NAME="$file(VERSION)"']
+
+and the case runs it and checks the binary prints the file's
+contents, because a line fmake prints that does not work is worse
+than none.
+
+**The instrument note they sent with it**, which belongs beside
+section 297. They reached for `fmake -n` first as the cheap check on
+the interposition question: it exits 0, plans all ten binaries, and
+says libraries are not resolved in a dry run. It is structurally blind
+to a closure event, which the shim pull is. **The tool declaring its
+own vacuous pass is why they did not publish that run as a result**,
+and it is the clearest instance so far of the caveat in 297 doing the
+job it was added for.
