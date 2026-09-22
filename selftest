@@ -14982,6 +14982,35 @@ def a_truncated_list_says_it_is_one_and_where_the_rest_are(t):
 	check("-v for all" not in out,
 	      f"-v was offered to a run that already has it: {out}")
 
+	# Every truncation in the source goes through the helper, with the
+	# one exception named. Asserting the partition rather than the nine
+	# sites one at a time: a case per site proves the nine that exist and
+	# says nothing about the tenth somebody adds next week, which is the
+	# way this hole appeared in the first place -- sixteen of seventeen
+	# sites not following a convention the seventeenth had.
+	# Read the following line too: the linker site wraps its message, so
+	# `(-v ' lands on the continuation and a line-at-a-time check calls
+	# the one site that was always right the only one that is wrong.
+	# It did, on the first run of this assertion.
+	src_lines = open(FMAKE).read().splitlines()
+	loose = []
+	for i, l in enumerate(src_lines):
+		if not re.search(r'\.\.\. (and )?\{len\(', l):
+			continue
+		if "(-v " in l + " " + (src_lines[i + 1] if i + 1 < len(src_lines) else ""):
+			continue
+		loose.append(l.strip())
+	# The per-error file list, which must NOT be converted: under -v the
+	# branch above it runs instead and prints the whole compiler error,
+	# so a line offering `-v for all' would promise something else.
+	waived = [l for l in loose if "{len(hit) - 4}" in l]
+	check(len(waived) == 1,
+	      f"the named exception is gone or has changed shape, so this "
+	      f"assertion no longer knows what it is waiving: {loose}")
+	check(loose == waived,
+	      f"a truncated list does not go through capped() and does not "
+	      f"say where the rest are: {[l for l in loose if l not in waived]}")
+
 	# And nothing held back means no elision at all.
 	u = Tree("trunc-small")
 	try:

@@ -24058,14 +24058,43 @@ is that the next truncation gets the rule by using it, rather than by
 its author remembering a convention that sixteen of seventeen sites
 had not followed.
 
-**Seven sites converted, ten left, and the ten are named here rather
-than left to be discovered as a gap.** They are the ones whose shape
-is not `for x in list[:N]` followed by a count: three build a string
-with a trailing conditional, one caps at four inside a per-error
-group, one at six in `--explain`'s provider listing, one is the linker
-site that was already right. Converting them is mechanical and was not
-done in the same pass, because a mechanical change across ten
-diagnostics wants its own proof that each one still says what it said.
+**Done in two passes: seven sites, then the remaining nine.** The
+second pass took the four plain-shaped ones with other caps and the
+five that build a string with a trailing conditional, which is every
+truncation in the file except the linker site that was already right
+and the one below that must not be converted.
+
+**The proof for the second pass is a partition rather than nine
+cases.** A case per site proves the nine that exist and says nothing
+about the tenth somebody adds next week -- which is how this hole
+appeared in the first place, sixteen of seventeen sites not following
+a convention the seventeenth had. So the suite reads `fmake`'s own
+source, finds every `... and {len(...)}` that does not say `-v`, and
+asserts the set is exactly the one named waiver. Reverting any
+converted site turns it red; so does *converting the waiver*, which
+is the half that keeps the exception from going stale silently.
+
+That check found a false positive of its own on its first run: the
+linker site wraps its message, so `(-v ` lands on the continuation
+line and a line-at-a-time reading called the one site that was always
+right the only one that was wrong. It reads the following line too.
+
+**One of the ten must NOT be converted, and it is the one that looks
+most convertible.** The per-error file list caps at four and reads
+exactly like the others:
+
+    if VERBOSE or len(groups) == 1 and len(hit) == 1:
+        PROGRESS.write(first_err)
+    elif len(hit) > 1:
+        for u, _e in hit[1:4]: ...
+
+Under `-v` the *first* branch runs and that list is never printed --
+`-v` gives the full compiler error instead, which is a different thing
+rather than more of the same. An elision there saying `-v for all`
+would promise something `-v` does not deliver, which is this section's
+own fault reintroduced by the pass that fixes it. It is named here
+because "ten left" otherwise reads as ten conversions waiting, and the
+next person to work the list would convert it.
 
 **The case checks three states**, and the third is the one that would
 have been skipped: capped and pointing somewhere, whole under `-v`,

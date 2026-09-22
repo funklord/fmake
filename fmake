@@ -9800,11 +9800,12 @@ def build(args, _bootstrapping=False):
 		# as naming the include directory in section 68 rather than
 		# offering to install a package.
 		lines = [f"    {rel}: {why}" for rel, why in sorted(excluded.items())]
+		_ehead, _erest = capped(lines, LINK_ERR_LINES)
 		die(f"every source file is excluded when building for "
 		    f"{cfg.os}/{cfg.arch}\n"
-		    + "\n".join(lines[:LINK_ERR_LINES])
-		    + (f"\n    ... and {len(lines) - LINK_ERR_LINES} more"
-		       if len(lines) > LINK_ERR_LINES else ""))
+		    + "\n".join(_ehead)
+		    + (f"\n    ... and {_erest} more (-v for all)"
+		       if _erest else ""))
 	# Said out loud, because a file that stops being compiled is a file
 	# whose symbols stop existing, and the link error that follows names
 	# neither the file nor the reason. @os or @arch in the file overrides
@@ -11525,10 +11526,10 @@ def build(args, _bootstrapping=False):
 	           for sym, providers in cl.ambiguous]
 	if trouble:
 		first_sym, first_providers = trouble[0][1], trouble[0][2]
-		shown = first_providers[:6]
+		shown, _arest = capped(first_providers, 6)
 		listing = "\n    ".join(shown)
-		if len(first_providers) > len(shown):
-			listing += f"\n    ... and {len(first_providers) - len(shown)} more"
+		if _arest:
+			listing += f"\n    ... and {_arest} more (-v for all)"
 		lines = [f"symbol {first_sym!r} is defined by more than one file:",
 		         "    " + listing,
 		         "fmake will not guess which one belongs in "
@@ -12119,15 +12120,16 @@ def build(args, _bootstrapping=False):
 					if defs & arc_tokens[arc]:
 						displaced[rel] = arc
 						break
-			for rel in sorted(displaced)[:5]:
+			_dhead, _drest = capped(sorted(displaced))
+			for rel in _dhead:
 				warn(f"{rel} is not compiled, and {displaced[rel]} already "
 				     f"provides what it defines: if that archive is output "
 				     f"from another build of this tree it is stale, and "
 				     f"editing {rel} changes nothing. Remove it, or name it "
 				     f"in [project] exclude, to build from source.")
-			if len(displaced) > 5:
-				warn(f"... and {len(displaced) - 5} more source file(s) "
-				     f"standing behind an archive in this tree")
+			if _drest:
+				warn(f"... and {_drest} more source file(s) standing "
+				     f"behind an archive in this tree (-v for all)")
 			rest = [r for r in ignored if r not in displaced]
 			_head, _rest = capped(rest)
 			for rel in _head:
@@ -12255,12 +12257,13 @@ def build(args, _bootstrapping=False):
 		guessed = [t for t in wanted
 		           if not t.installed and t.install_guess
 		           and not t.test and t.kind != "module"]
-		for t in guessed[:3]:
+		_ghead, _grest = capped(guessed, 3)
+		for t in _ghead:
 			note(f"{t.filename} is built and not installed: "
 			     f"{t.install_why}, and @install yes ships it")
-		if len(guessed) > 3:
-			note(f"... and {len(guessed) - 3} more built and not "
-			     f"installed")
+		if _grest:
+			note(f"... and {_grest} more built and not installed "
+			     f"(-v for all)")
 
 		names = ", ".join(n for n, _, _ in built)
 		if built:
@@ -12346,11 +12349,12 @@ def build(args, _bootstrapping=False):
 		# the reader sees first, and it was making it by path.
 		keys = sorted(broken, key=lambda k: (
 		    bool(vendor_of(k.partition("\0")[0], vendored)), k))
-		for key in keys[:5]:
+		_khead, _krest = capped(keys)
+		for key in _khead:
 			rel, _, variant = key.partition("\0")
 			note(f"{rel} ({variant})" if variant else rel)
-		if len(keys) > 5:
-			note(f"... and {len(keys) - 5} more")
+		if _krest:
+			note(f"... and {_krest} more (-v for all)")
 		elsewhere = {}
 		for key in keys:
 			owner = vendor_of(key.partition("\0")[0], vendored)
@@ -13025,9 +13029,11 @@ def _refuse_leading_dash(targets, closures, root, extra=()):
 	bad = sorted({p for p in _eject_paths(targets, closures, root, extra)
 	              if p.startswith("-")})
 	if bad:
+		_bhead, _brest = capped(bad)
 		die("cannot eject a build for a path that begins with `-':\n    "
-		    + "\n    ".join(bad[:5])
-		    + (f"\n    ... and {len(bad) - 5} more" if len(bad) > 5 else "")
+		    + "\n    ".join(_bhead)
+		    + (f"\n    ... and {_brest} more (-v for all)"
+		       if _brest else "")
 		    + "\nA compiler reads it as an option, and no build file can say "
 		      "otherwise:\nboth make and ninja drop a `./' prefix, and gcc "
 		      "rejects `--'.\nRename it. fmake itself builds this tree, "
@@ -13061,10 +13067,11 @@ def _refuse_newlines(targets, closures, root, extra=()):
 		if why:
 			bad[path] = why
 	if bad:
-		shown = sorted(bad)[:5]
+		shown, _brest = capped(sorted(bad))
 		die("cannot eject a build for these paths:\n    "
 		    + "\n    ".join(f"{p!r}  ({bad[p]})" for p in shown)
-		    + (f"\n    ... and {len(bad) - 5} more" if len(bad) > 5 else "")
+		    + (f"\n    ... and {_brest} more (-v for all)"
+		       if _brest else "")
 		    + "\nRename them: ninja has no escape for a newline and Make "
 		      "splits on it.")
 
@@ -13084,10 +13091,11 @@ def _refuse_whitespace(targets, closures, root, extra=()):
 		if why:
 			bad[path] = why
 	if bad:
-		shown = sorted(bad)[:5]
+		shown, _brest = capped(sorted(bad))
 		die("cannot eject a Makefile for these paths:\n    "
 		    + "\n    ".join(f"{p}  ({bad[p]})" for p in shown)
-		    + (f"\n    ... and {len(bad) - 5} more" if len(bad) > 5 else "")
+		    + (f"\n    ... and {_brest} more (-v for all)"
+		       if _brest else "")
 		    + "\nUse `--eject ninja`, which can express all of them.")
 
 
@@ -17368,10 +17376,11 @@ def offer_answers(root, offers):
 		say("")
 		say(f"  Two or more files define {o['sym']!r}, and this build has "
 		    f"all of them:")
-		for p in o["providers"][:6]:
+		_phead, _prest = capped(o["providers"], 6)
+		for p in _phead:
 			say(f"      {p}")
-		if len(o["providers"]) > 6:
-			say(f"      ... and {len(o['providers']) - 6} more")
+		if _prest:
+			say(f"      ... and {_prest} more (-v for all)")
 		say("")
 		say("  fmake decides what to link by reading symbol tables: whatever")
 		say("  defines a symbol something needs gets linked. With two")
