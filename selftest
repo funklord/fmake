@@ -15011,6 +15011,29 @@ def a_truncated_list_says_it_is_one_and_where_the_rest_are(t):
 	      f"a truncated list does not go through capped() and does not "
 	      f"say where the rest are: {[l for l in loose if l not in waived]}")
 
+	# The silent half, which the assertion above is structurally unable
+	# to see: it matches lists that ANNOUNCE a truncation, and a bare
+	# `[:N]' announces nothing. Reported from raidcfgd, who found one of
+	# four -- three of them cut their list with no ellipsis at all.
+	#
+	# A `vinfo' line is the case that cannot be defended: it prints only
+	# under `-v', so there is nowhere further to send a reader and a cap
+	# is a dead end by construction. `(-v for all)' on a line that only
+	# appears under `-v' would be absurd, and a bare `...' is that
+	# absurdity with the absurd part deleted.
+	quiet = []
+	for i, l in enumerate(src_lines):
+		if "vinfo(" not in l:
+			continue
+		for j in range(i, min(i + 6, len(src_lines))):
+			if re.search(r'\[:\d+\]', src_lines[j]):
+				quiet.append(src_lines[j].strip())
+			if src_lines[j].rstrip().endswith(("))", ")")) and j > i:
+				break
+	check(not quiet,
+	      f"a -v line truncates, and -v is where a reader goes when they "
+	      f"want all of it: {quiet}")
+
 	# And nothing held back means no elision at all.
 	u = Tree("trunc-small")
 	try:
@@ -15697,6 +15720,28 @@ def the_inferred_include_dirs_are_reported_whether_or_not_any_are_dropped(t):
 	out = t.fmake("test").stdout
 	check("inferred include dir" not in out,
 	      f"the inference report reached a non-verbose build: {out}")
+
+	# The other half of the pair, and it answers at zero. Reported from
+	# raidcfgd: four excludes, a `kept' line, and no `dropped' line at
+	# all, so they could not tell "nothing was dropped" from "nothing was
+	# said" and went looking for headers under each excluded path to
+	# answer what the line should have told them. An absent line and an
+	# empty one are indistinguishable to a reader, which is the silent
+	# truncation above one level up.
+	t.write("fmake.toml", '[project]\nexclude = ["nothing-here/**"]\n')
+	out = t.fmake("test", "-v").stdout
+	check("0 inferred include dir(s) dropped by [project] exclude" in out,
+	      f"a tree that excludes something was not told how many inferred "
+	      f"include dirs that cost it, which is the question the pair "
+	      f"exists to answer: {out}")
+
+	# But only where the question arises: a tree excluding nothing gets
+	# no line, rather than a zero on every verbose build for ever.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	out = t.fmake("test", "-v").stdout
+	check("dropped by [project] exclude" not in out,
+	      f"a tree with no excludes was told about an exclude it does "
+	      f"not have: {out}")
 
 
 @case

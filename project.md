@@ -24079,6 +24079,59 @@ linker site wraps its message, so `(-v ` lands on the continuation
 line and a line-at-a-time reading called the one site that was always
 right the only one that was wrong. It reads the following line too.
 
+### The population that check was given excluded half the class
+
+**It matched truncations that ANNOUNCE themselves.** `... and
+{len(...)}` is the pattern, so a bare `[:N]` with no elision was
+invisible to it -- and there were four of those, three cutting their
+list with no ellipsis at all. Reported from raidcfgd, who found one by
+reading output rather than source: the kept-include-dirs line, which
+by then was the instrument for answering *did the exclude drop the
+directory I meant*, cut itself at four.
+
+A check written to stop a class recurring, given a population that
+excludes the silent half of it. The seventeen were counted by grepping
+for the elision text, so the count was a measurement of the detector
+rather than of the tree -- `evidence.md`'s *a count inherits its
+detector*, in a sweep run specifically to avoid that.
+
+**All four are `vinfo` lines, which is the case that cannot be
+defended at all.** A `-v` line prints only under `-v`, so there is
+nowhere further to send a reader: `(-v for all)` there would be
+absurd, and a bare `...` is that absurdity with the absurd part
+deleted. They list everything now, and the check reads `vinfo` blocks
+for a bare `[:N]` as well as scanning for announced truncations.
+
+### An absent line and an empty one say the same nothing
+
+raidcfgd's second report, and the shape one level up from a silent
+truncation. They had four excludes, got a `kept` line and **no
+`dropped` line at all**, and could not tell *nothing was dropped* from
+*nothing was said* -- so they went looking for headers under each
+excluded path to answer what the line should have told them.
+
+The pair was asymmetric because this project made it so: `kept` was
+deliberately unconditional, on §310's argument that a set worth
+printing when it loses a member is worth printing when it does not,
+and `dropped` was left printing only when non-empty. Half a pair
+answering at zero and the other half vanishing is worse than either
+rule applied to both.
+
+It prints whenever the project configures any exclude, at zero if that
+is the answer -- tied to whether excludes exist rather than printed
+always, because in a tree that excludes nothing the question does not
+arise. **The measurement that settled their case is worth keeping**:
+an excluded directory's headers never reach the inferred path at all,
+because the exclusion removes them before resolution, so the include
+fails to resolve rather than resolving into a directory that is then
+dropped. Their `cannot` was stronger than they claimed.
+
+**Five instances of one class in one evening, four of them this
+project's own from that day**: three silent truncations, one announced
+without an instrument, and one absent line. The common shape is a
+report whose silence is ambiguous, and it is worth more than any of
+the individual fixes.
+
 **One of the ten must NOT be converted, and it is the one that looks
 most convertible.** The per-error file list caps at four and reads
 exactly like the others:
