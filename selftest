@@ -14943,6 +14943,59 @@ def the_files_that_did_not_compile_lead_with_this_trees_own(t):
 
 
 @case
+def a_truncated_list_says_it_is_one_and_where_the_rest_are(t):
+	"""`... and N more' read as a courtesy and was a dead end.
+
+	Found by fixing the same hole in `--explain''s argv block and then
+	counting the rest: seventeen truncations in this file, exactly one of
+	which named an instrument -- the linker spew, which had the right
+	shape all along (`if VERBOSE or len(lines) <= CAP'). So `-v' was the
+	answer everywhere and nothing said so, and under `-v' the lists were
+	still cut to five.
+
+	`capped()' is that one site's rule with a name, so the next
+	truncation gets it by using the helper rather than by its author
+	remembering. Three states, because the fix is only right if all
+	three are: capped and pointing somewhere, whole under `-v', and
+	silent when there is nothing held back -- the last because an
+	elision promising `-v' to somebody who already passed it is worse
+	than no line."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	for i in range(1, 8):
+		t.write(f"un{i}.c", f"int unused{i}(void){{ return {i}; }}\n")
+
+	out = t.fmake().stdout + t.fmake().stderr
+	shown = [l for l in out.splitlines() if "not compiled: nothing reaches" in l]
+	check(len(shown) == 5,
+	      f"the list is not capped at five any more: {len(shown)}")
+	check("... and 2 more (-v for all)" in out,
+	      f"the elision does not say it is one, or where the rest are: "
+	      f"{out}")
+
+	# Whole under -v, and no line promising a flag that is already on.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	out = t.fmake("-v").stdout
+	shown = [l for l in out.splitlines() if "not compiled: nothing reaches" in l]
+	check(len(shown) == 7,
+	      f"-v did not show the whole list, which is the thing the "
+	      f"elision promises: {len(shown)} of 7")
+	check("-v for all" not in out,
+	      f"-v was offered to a run that already has it: {out}")
+
+	# And nothing held back means no elision at all.
+	u = Tree("trunc-small")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("un1.c", "int unused1(void){ return 1; }\n")
+		out = u.fmake().stdout + u.fmake().stderr
+		check("more (-v for all)" not in out,
+		      f"a list with nothing held back still printed an elision: "
+		      f"{out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_program_can_be_built_and_not_shipped(t):
 	"""The sentence two trees asked for and neither could say. ossacli's
 	`example/health_summary.c' is a library-integration example, built by

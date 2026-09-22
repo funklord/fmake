@@ -434,6 +434,32 @@ def say(m=""):    print(m, file=PROGRESS)
 def info(m):  say(f"{GREEN('*')} {m}")
 def warn(m):  say(f"{YELLOW('*')} {m}")
 def note(m):  say(f"{DIM('  ' + m)}")
+def capped(items, cap=5):
+	"""What to print now, and how many are being held back.
+
+    Every truncated list in this file had the same hole and the argv
+    block in `--explain' is where it was found: `... and N more' reads
+    as a courtesy elision, and says neither that it IS one nor where
+    the rest are. Measured when that one was fixed -- seventeen
+    truncations, exactly one of which named an instrument, and that one
+    (the linker spew) had the right shape all along:
+
+        if VERBOSE or len(lines) <= LINK_ERR_LINES: show them all
+
+    So `-v' is the answer and always was; nothing said so. This is that
+    site's rule with a name, so the next truncation gets it by using
+    the helper rather than by its author remembering.
+
+    Returns the prefix and the held-back count, which is 0 under `-v' --
+    so a caller's elision line disappears rather than promising a `-v'
+    that is already on.
+    """
+	items = list(items)
+	if VERBOSE or len(items) <= cap:
+		return items, 0
+	return items[:cap], len(items) - cap
+
+
 def vinfo(m):
 	if VERBOSE:
 		say(f"{DIM('*')} {DIM(m)}")
@@ -2808,12 +2834,13 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	# 233 case_N symbols and lands exactly there.
 	stranded = sorted({o for o in produced
 	                   if os.path.splitext(o)[1] in UNBUILT_SRC_EXTS})
-	for rel in stranded[:5]:
+	_head, _rest = capped(stranded)
+	for rel in _head:
 		note(f"{rel} was generated and nothing will compile it: fmake "
 		     f"builds C, C++, assembly and Rust, not "
 		     f"{os.path.splitext(rel)[1]}")
-	if len(stranded) > 5:
-		note(f"... and {len(stranded) - 5} more")
+	if _rest:
+		note(f"... and {_rest} more (-v for all)")
 
 	return produced
 
@@ -7609,11 +7636,12 @@ def module_wants_the_tree(t, cl, path, cfg, units, linked_by=None,
 		return
 	warn(f"{t.filename} links with {len(found)} undefined symbol(s) that "
 	     f"this tree defines elsewhere, and nothing linked it")
-	for sym in sorted(found)[:5]:
+	_head, _rest = capped(sorted(found))
+	for sym in _head:
 		note(f"{sym} is defined by {found[sym]}, which this module does "
 		     f"not build")
-	if len(found) > 5:
-		note(f"... and {len(found) - 5} more")
+	if _rest:
+		note(f"... and {_rest} more (-v for all)")
 	note(f"whatever opens it has to supply them: a program does not "
 	     f"export its own symbols to a preloaded or dlopen'd object "
 	     f"unless it was linked with -rdynamic, so this is a `dlopen' "
@@ -9715,10 +9743,11 @@ def build(args, _bootstrapping=False):
 		elif rel in hdrs:
 			hdrs.remove(rel)
 	if unreadable:
-		for rel, why in sorted(unreadable.items())[:5]:
+		_head, _rest = capped(sorted(unreadable.items()))
+		for rel, why in _head:
 			warn(f"{rel}: {why}")
-		if len(unreadable) > 5:
-			note(f"... and {len(unreadable) - 5} more")
+		if _rest:
+			note(f"... and {_rest} more (-v for all)")
 
 	# ---- platform filtering -------------------------------------------
 	# A TU excluded here never exists as far as the rest of the build is
@@ -12100,11 +12129,12 @@ def build(args, _bootstrapping=False):
 				warn(f"... and {len(displaced) - 5} more source file(s) "
 				     f"standing behind an archive in this tree")
 			rest = [r for r in ignored if r not in displaced]
-			for rel in rest[:5]:
+			_head, _rest = capped(rest)
+			for rel in _head:
 				note(f"{rel} not compiled: nothing reaches it "
 				     f"(--force-link if it is needed anyway)")
-			if len(rest) > 5:
-				note(f"... and {len(rest) - 5} more")
+			if _rest:
+				note(f"... and {_rest} more (-v for all)")
 			# The same answer, for a .rs no crate draws in -- and asked
 			# after the build rather than before it, because the scan is
 			# not the authority on what a crate contains. `mod' is what
@@ -12143,22 +12173,24 @@ def build(args, _bootstrapping=False):
 			# .qrc is not a source file, so --force-link refuses it by
 			# name, and the generated qrc_*.cpp does not exist to be named
 			# until rcc has already been decided on.
-			for rel in qrc_unused[:5]:
+			_qhead, _qrest = capped(qrc_unused)
+			for rel in _qhead:
 				stem = os.path.splitext(os.path.basename(rel))[0]
 				note(f"{rel} not built: no source names a path it declares "
 				     f"(Q_INIT_RESOURCE({stem}) says so outright)")
-			if len(qrc_unused) > 5:
-				note(f"... and {len(qrc_unused) - 5} more resource(s)")
+			if _qrest:
+				note(f"... and {_qrest} more resource(s) (-v for all)")
 			# A schema nothing includes is not an error -- a tree of
 			# them is a library a program takes two from -- but it is
 			# invisible, and what it hides is a test meant to exercise a
 			# format that includes the wrong header and passes.
-			for rel in situ_unused[:5]:
+			_shead, _srest = capped(situ_unused)
+			for rel in _shead:
 				stem = os.path.basename(rel)[:-len(SITU_EXT)]
 				note(f"{rel} not compiled: nothing includes "
 				     f"\"{stem}.h\", which is what it would write")
-			if len(situ_unused) > 5:
-				note(f"... and {len(situ_unused) - 5} more schema(s)")
+			if _srest:
+				note(f"... and {_srest} more schema(s) (-v for all)")
 		# Outside `if changed', unlike everything above it. Those report
 		# what THIS build decided, and repeating them on a no-op run is
 		# the noise that guard exists to stop. This reports what the
@@ -12176,7 +12208,8 @@ def build(args, _bootstrapping=False):
 		in_artifact = {u.rel for _n, cl, _r in built for u in cl.link}
 		fallen = [(rel, name) for rel, name in version_fallen
 		          if rel in in_artifact]
-		for rel, name in fallen[:3]:
+		_fhead, _frest = capped(fallen, 3)
+		for rel, name in _fhead:
 			text = version_fallback_text(root, rel, name)
 			note(f"{rel} defines {name} itself because the build did "
 			     f"not, so this binary reports "
@@ -12209,8 +12242,8 @@ def build(args, _bootstrapping=False):
 				     f"defines = ['{name}=\"$file(VERSION)\"'] supplies "
 				     f"it from that file, so the number stays in one "
 				     f"place")
-		if len(fallen) > 3:
-			note(f"... and {len(fallen) - 3} more")
+		if _frest:
+			note(f"... and {_frest} more (-v for all)")
 
 		# A convention is a guess, and a guess that changes what ships
 		# has to be met where somebody is looking. `--explain' names it

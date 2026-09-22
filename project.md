@@ -364,7 +364,8 @@ that had been green about nothing for five commits ·
 [311. What a diagnostic bought downstream, and what it cost](#311-what-a-diagnostic-bought-downstream-and-what-it-cost) ·
 [312. An elision that read as a courtesy and was a dead end](#312-an-elision-that-read-as-a-courtesy-and-was-a-dead-end) ·
 [313. The unexplained case was two different commands](#313-the-unexplained-case-was-two-different-commands) ·
-[314. A cost reported only where it was being paid off](#314-a-cost-reported-only-where-it-was-being-paid-off)
+[314. A cost reported only where it was being paid off](#314-a-cost-reported-only-where-it-was-being-paid-off) ·
+[315. Seventeen truncations, one of which said where the rest were](#315-seventeen-truncations-one-of-which-said-where-the-rest-were)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2512,7 +2513,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **560** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **561** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24027,3 +24028,53 @@ Mutating the helper to count the current build's own directory turns
 that red, where the main assertion stays green -- an off-by-one that
 reports `1 object dir(s) from other configurations` to somebody who
 has only ever built one way.
+
+---
+
+## 315. Seventeen truncations, one of which said where the rest were
+
+§312 fixed `--explain`'s argv block, which said `... N more` and named
+nothing. The obvious next question is how many other lists do that, and
+the answer is the reason this is a section rather than a footnote:
+**seventeen truncations in `fmake`, and exactly one named an
+instrument.**
+
+That one is the linker spew, and it had the right shape all along:
+
+    if VERBOSE or len(lines) <= LINK_ERR_LINES:   # show them all
+    ...
+    note(f"... {n} more linker lines (-v for all)")
+
+So `-v` was the answer everywhere and nothing said so -- and worse,
+under `-v` the other lists were *still* cut to five, so a reader who
+took the hint from the one site that gave it got the same truncated
+list back.
+
+`capped()` is that site's rule with a name. It returns the prefix and
+the held-back count, and the count is zero under `-v`, so a caller's
+elision line disappears rather than promising a flag that is already
+on. **The point of the helper is not the three lines it saves** -- it
+is that the next truncation gets the rule by using it, rather than by
+its author remembering a convention that sixteen of seventeen sites
+had not followed.
+
+**Seven sites converted, ten left, and the ten are named here rather
+than left to be discovered as a gap.** They are the ones whose shape
+is not `for x in list[:N]` followed by a count: three build a string
+with a trailing conditional, one caps at four inside a per-error
+group, one at six in `--explain`'s provider listing, one is the linker
+site that was already right. Converting them is mechanical and was not
+done in the same pass, because a mechanical change across ten
+diagnostics wants its own proof that each one still says what it said.
+
+**The case checks three states**, and the third is the one that would
+have been skipped: capped and pointing somewhere, whole under `-v`,
+and **silent when nothing is held back**. An elision offering `-v` to
+somebody who already passed `-v` is worse than no line, and it is the
+state a fixture built to demonstrate truncation never enters.
+
+Mutating `capped()` to ignore `VERBOSE` leaves the first assertion
+green -- the list is still capped, the line still points at `-v` --
+and turns the second red at `5 of 7`. The pointer surviving while the
+thing it points at stops working is exactly the failure this section
+is about, which is why that assertion is the one worth having.
