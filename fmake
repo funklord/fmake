@@ -14385,7 +14385,30 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("rule cxx")
 	a("  command = $cxx $cflags $extra $cflags_last -c $in -o $out -MD -MF $out.d")
 	a("  depfile = $out.d")
-	a("  deps = gcc")
+	# `deps = gcc' folds the depfile into ninja's own .ninja_deps and
+	# deletes it, which is faster and is what every other rule here
+	# does -- and it breaks a `-fmodules-ts' compile. Measured 5 clean
+	# runs each way on one fixture: with it, gcc says "inputs may not
+	# also have inputs" and writes no object, 5 of 5; without it, 0 of
+	# 5. The argv gcc receives is byte-identical either way, checked
+	# through a wrapper, and so is the environment; the same command
+	# run by hand, under `sh -c', serially, and with `-v' succeeds
+	# every time. So WHY ninja's dependency mode changes what that
+	# compile does is not known here -- what is known is which line
+	# does it, which is enough to stop emitting the line.
+	#
+	# The cost is stated rather than hidden: ninja keeps the depfiles
+	# on disk for this rule instead of folding them away, so a module
+	# tree carries one .d per object. That is the trade for an ejected
+	# build that works, and it applies only where an interface is
+	# present.
+	# From the closures rather than from `every', which this function
+	# does not build until further down. Same question, asked of what is
+	# in scope: any unit any target links that declares a module.
+	_has_modules = any(u.scan.get("modiface")
+	                   for cl in closures.values() for u in cl.link)
+	if not _has_modules:
+		a("  deps = gcc")
 	a("  description = CXX $in")
 	a("")
 	# Assembly the preprocessor never sees. The depfile is the assembler's,
@@ -14645,26 +14668,6 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# A generator's own tool waits for the submodules and not for what it
 	# is about to write: see _tool_units.
 	tool_after = (" || " + " ".join(subs_order)) if subs_order else ""
-	# Refused rather than emitted. The ordering below is correct -- ninja
-	# accepts the file and schedules base, then mid, then main -- and the
-	# compile then fails under ninja with gcc's "inputs may not also have
-	# inputs", for a command that succeeds run by hand, under `sh -c',
-	# with and without the output directory present, serially and with
-	# `-v'. Measured, not diagnosed: the difference between ninja running
-	# that command and this shell running it has not been found, so what
-	# is known is that the emitted file does not build.
-	#
-	# `--eject make' does build a module tree and is verified by a case,
-	# so section 2's exit is not closed -- one of its two doors is, and
-	# saying which beats handing somebody a build file that stops on the
-	# first interface.
-	if any(u.scan.get("modiface") for u in every.values()):
-		die("--eject ninja does not support C++20 modules yet.\n"
-		    "The ordering is emitted correctly and the compile then "
-		    "fails under ninja for a command that works run by hand, "
-		    "which is not understood and so is not shipped.\n"
-		    "`--eject make' builds a module tree and is the way out of "
-		    "fmake for one.")
 	# Same ordering the make backend emits, in ninja's spelling: `||' is
 	# its order-only, so an importer waits for the interface's object
 	# without taking it as an input.

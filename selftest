@@ -16127,14 +16127,41 @@ int main(){ return twice(21) == 42 ? 0 : 1; }
 			check(u.run(os.path.basename(u.dir)).returncode == 0,
 			      "the program from the ejected build is wrong")
 
-		# And ninja is refused rather than emitted, because what it
-		# emits does not build -- measured, not diagnosed. A refusal
-		# names which door is shut; a broken build file does not.
-		r = u.fmake("--eject", "ninja")
-		out = r.stdout + r.stderr
-		check(r.returncode != 0 and "does not support C++20 modules" in out,
-		      f"--eject ninja should refuse a module tree rather than "
-		      f"write a file that stops on the first interface: {out}")
+		# And ninja, which needed one line removed rather than a
+		# refusal. `deps = gcc' folds the depfile into ninja's own store
+		# and breaks a -fmodules-ts compile: measured 5 clean runs each
+		# way, 5 of 5 failing with it and 0 of 5 without, for an argv
+		# that is byte-identical through a wrapper. Why ninja's
+		# dependency mode changes what that compile does is not known;
+		# which line does it is, and that is what the build file omits.
+		if shutil.which("ninja"):
+			nj = u.fmake("--eject", "ninja").stdout
+			check("deps = gcc" not in nj.split("rule cxx", 1)[1]
+			      .split("rule ", 1)[0],
+			      f"the cxx rule still folds depfiles away, which stops "
+			      f"a module compile: {nj}")
+			u.write("build.ninja", nj)
+			for junk in (os.path.basename(u.dir), "build", "gcm.cache",
+			             ".fmake"):
+				shutil.rmtree(os.path.join(u.dir, junk), ignore_errors=True)
+			r = _run_in(u.dir, "ninja", "-f", "build.ninja")
+			check(r.returncode == 0,
+			      f"the ejected ninja module build does not work: "
+			      f"{r.stdout}{r.stderr}")
+			check(u.run(os.path.basename(u.dir)).returncode == 0,
+			      "the program from the ejected ninja build is wrong")
+
+		# And a tree with no modules keeps it, because dropping it
+		# everywhere would slow every other build to fix this one.
+		v = Tree("nj-plain")
+		try:
+			v.write("main.c", "int main(void){ return 0; }\n")
+			nj = v.fmake("--eject", "ninja").stdout
+			check(nj.count("deps = gcc") >= 2,
+			      f"a tree with no modules lost ninja's dependency mode: "
+			      f"{nj}")
+		finally:
+			v.cleanup()
 	finally:
 		u.cleanup()
 

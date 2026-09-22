@@ -1928,8 +1928,8 @@ rather than code, and one lesson about testing.
   clang. `-ffunction-sections` only changes what the linker discards,
   which is downstream of everything fmake decides.
 - ~~**C++ modules are not built at all**~~ **Named modules are built
-  now; see §317.** gcc only, no header units, and `--eject ninja`
-  refuses a module tree while `--eject make` builds one. What the entry
+  now; see §317.** gcc only, no header units; both `--eject` backends
+  build a module tree. What the entry
   had right was the diagnosis -- an interface has to be compiled before
   anything importing it, and fmake compiled in no order. What it had
   wrong was that this made modules unreachable: the order is a
@@ -24293,23 +24293,53 @@ compile line is already absolute, so compiles run from the object
 directory and the BMIs land under `.fmake/` where `--clean` removes
 them and `.gitignore` already covers them.
 
-### The exit, and the door that is shut
+### The exit: one line, not a refusal
 
-`--eject make` builds a module tree: the ordering goes out as
-order-only prerequisites and the case runs `make` over the result
-rather than reading it. `--eject ninja` **refuses**.
+Both backends build a module tree. The ordering goes out as order-only
+prerequisites -- `|` in make, `||` in ninja -- and both cases run the
+result rather than reading it.
 
-The ninja file it would write is not obviously wrong -- ninja accepts
-it and schedules base, then mid, then main -- and the compile then
-fails with gcc's `inputs may not also have inputs`, for a command that
-succeeds run by hand, under `sh -c`, with and without the output
-directory present, serially, and with `-v`. **The difference between
-ninja running that command and a shell running it has not been
-found.** So what is known is that the emitted file does not build, and
-that is what the refusal says.
+**ninja needed one line removed, and finding which took longer than
+the feature.** `--eject ninja` was shipped refusing module trees,
+because the file it wrote was accepted by ninja, scheduled correctly,
+and then failed at the first compile with gcc's `inputs may not also
+have inputs` -- for a command that succeeded run by hand, under
+`sh -c`, with and without the output directory, serially and with
+`-v`. That entry said the difference had not been found, and it was
+honest and wrong to stop there.
 
-Recorded this way deliberately: an unexplained failure in code just
-written is not a coincidence to keep, and the honest state is a named
-refusal rather than a build file that stops on the first interface.
-Principle 5 asks for an exit, and one of its two doors is open and
-verified.
+The line is `deps = gcc`. Measured five clean runs each way on one
+fixture: **5 of 5 fail with it, 0 of 5 without**. The argv gcc
+receives is byte-identical either way, checked through a wrapper
+script, and so is the environment, checked by dumping both. So *why*
+ninja's dependency mode changes what that compile does is still not
+known -- what is known is which line does it, and that is enough to
+stop emitting the line.
+
+Dropped only from the `cxx` rule and only where an interface is
+present; `cc` keeps it and a tree with no modules is untouched, since
+slowing every other build to fix this one would be the wrong trade.
+The cost is stated: a module tree carries one `.d` per object instead
+of folding them into `.ninja_deps`.
+
+### Two of this investigation's own checks could not fail
+
+Worth recording because both were mine and both produced a confident
+wrong answer.
+
+**The bisect that cleared the culprit.** The variant `build.ninja`
+files were written with `printf '%s'` over a string holding literal
+`\n`, which `printf` does not interpret in an argument -- so all three
+were malformed, ninja failed on each for an unrelated reason, and a
+`grep` for the real error found nothing and reported *ok*. Three
+variants, including one byte-identical to a case just watched fail.
+
+**And a conclusion from a single run, twice.** An `echo` prefix made
+one run pass and that was read as meaningful; a later single run
+failed and that was read as meaningful too. Only five runs each way
+settled it, and the answer contradicted both.
+
+The shape is this document's own and it arrived inside the tool
+written to enforce it: **a detector reporting absence is worth nothing
+until it has been seen to report presence**, and a fixture generator
+is a detector.
