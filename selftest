@@ -25025,6 +25025,70 @@ def defines_on_a_library_target_are_refused(t):
 
 
 @case
+def a_target_can_compile_its_whole_closure_its_own_way(t):
+	"""`defines' reaches a target's root translation unit. `cflags'
+	reaches everything that target links.
+
+	Section 15 recorded the gap and the reason it was a gap: "the same
+	file compiled two ways for two targets -- that needs per-target
+	object directories, and nothing asks for it yet". The object path
+	already carried a variant tag, so what was missing was not the
+	directory but the closure.
+
+	**And the closure is the whole of it, which is why this case does not
+	stop at what the programs print.** A -D can change what a translation
+	unit DEFINES, so a flagged target has to be closed over objects
+	compiled with its flags. Borrowing the shared pool's answer and then
+	linking variant objects would decide membership about one set of
+	objects and act on another -- section 3's rule applied to the wrong
+	build, and it would look right in every tree where the flag only
+	changes behaviour rather than symbols.
+
+	So the fixture is built so the link SETS differ: `pick()' is defined
+	by `impl_new.c' under the flag and by `impl_old.c' without it. Two
+	programs, one symbol, two different providers."""
+	t.write("impl_new.c", "#ifdef FEATURE\n#include <stdio.h>\n"
+	        'void pick(void){ printf("new\\n"); }\n#endif\n')
+	t.write("impl_old.c", "#ifndef FEATURE\n#include <stdio.h>\n"
+	        'void pick(void){ printf("old\\n"); }\n#endif\n')
+	t.write("plain.c", "void pick(void);\nint main(void){ pick(); return 0; }\n")
+	t.write("fancy.c", "void pick(void);\nint main(void){ pick(); return 0; }\n")
+	t.write("fmake.toml", '[target.fancy]\ncflags = ["-DFEATURE=1"]\n')
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	check(t.run("plain").stdout == "old\n",
+	      "the unflagged program did not get the unflagged source")
+	check(t.run("fancy").stdout == "new\n",
+	      "the flagged program did not get the flagged source, so its "
+	      "cflags reached the root and nothing below it")
+
+	# The property the design rests on: two closures, two answers.
+	out = t.fmake("--explain").stdout
+	fancy = out.split("fancy", 1)[1] if "fancy" in out else ""
+	check("impl_new.c.fancy.o" in out,
+	      f"the flagged target did not link its own object: {out}")
+	check("impl_old.c.o" in out and "impl_old.c.fancy.o" not in out,
+	      f"the unflagged provider was compiled the flagged way, so the "
+	      f"two targets are not closing independently: {out}")
+
+	# And a tree that asks for none of this is untouched: no variant
+	# objects at all, which is what keeps the cost paid only by askers.
+	u = Tree("ptf-none")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.fmake()
+		objs = []
+		for base, _sub, files in os.walk(os.path.join(u.dir, ".fmake")):
+			objs += [f for f in files if f.endswith(".o")]
+		check(objs and not any(f.count(".") > 2 for f in objs),
+		      f"a tree with no per-target cflags grew variant objects: "
+		      f"{objs}")
+	finally:
+		u.cleanup()
+
+
+@case
 def the_ejected_builds_keep_both_objects(t):
 	"""The failure this was written against: one source, two sets of
 	flags, and an object list keyed on the path.

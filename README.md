@@ -720,9 +720,35 @@ second build. **`[project] defines` is the other scope and reaches every
 file in the build**, root or not — which is the one to use for a version
 macro, since the file that falls back to `"unknown"` is as often a helper
 as a `main()`. The caveat above is about a target's own section and nothing
-else. Where that is wrong for a project — where a define changes a
-layout — the two builds are two builds, and fmake is not the tool for
-saying so.
+else.
+
+**`cflags` in a target's own section reach everything that target links**,
+which is the answer where `defines` is the wrong scope — where the flag
+changes a layout, or decides which file provides a symbol at all.
+`[target.fancy] cflags = ["-DFEATURE=1"]` gives `fancy` its own copy of
+every object in its closure, compiled that way, while the programs beside
+it keep theirs. The objects are distinct files, so nothing is shared that
+should not be:
+
+```
+cc -c impl_new.c -o .fmake/obj/<cfg>/impl_new.c.fancy.o ... -DFEATURE=1
+cc -c impl_old.c -o .fmake/obj/<cfg>/impl_old.c.o        ...
+```
+
+**The link sets may differ, and that is the point rather than a side
+effect.** A `-D` can change which symbols a translation unit defines, so a
+flagged target is *closed* over its own objects as well as compiled from
+them: given `pick()` defined in `impl_new.c` under the flag and in
+`impl_old.c` without it, `fancy` links the first and `plain` the second,
+and each reports the other as defining nothing it reaches. Deciding
+membership from the shared objects and then linking the flagged ones would
+answer the question about one build and act on another.
+
+It costs what it says: a target with `cflags` compiles its own closure, so
+two such targets over one tree are two compiles of the shared part. Only
+targets that ask pay it, and a tree using none of this grows no extra
+objects. It is a program's question — a library or module target is
+refused rather than quietly building a pool nothing links.
 
 **`defines` never reach a crate, so they are refused there.** `defines` is
 `-D`, which rustc does not take, and there is no per-target `rustflags` — a

@@ -365,7 +365,8 @@ that had been green about nothing for five commits ·
 [312. An elision that read as a courtesy and was a dead end](#312-an-elision-that-read-as-a-courtesy-and-was-a-dead-end) ·
 [313. The unexplained case was two different commands](#313-the-unexplained-case-was-two-different-commands) ·
 [314. A cost reported only where it was being paid off](#314-a-cost-reported-only-where-it-was-being-paid-off) ·
-[315. Seventeen truncations, one of which said where the rest were](#315-seventeen-truncations-one-of-which-said-where-the-rest-were)
+[315. Seventeen truncations, one of which said where the rest were](#315-seventeen-truncations-one-of-which-said-where-the-rest-were) ·
+[316. A target that compiles its whole closure its own way](#316-a-target-that-compiles-its-whole-closure-its-own-way)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2120,12 +2121,16 @@ rather than code, and one lesson about testing.
   (§103, and `SONAME` itself was §22). What is left is a manifest, which
   §93 argues is a much larger promise than the rest and is declined rather
   than pending.
-- **Per-TU flags are per TU, not per target.** Two binaries sharing 90% of their
-  TUs compile those once, and `@cflags`/`@define` belong to the *file*, so there
-  is exactly one object per file and no conflict. What is impossible is the same
-  file compiled two ways for two targets — that needs per-target object
-  directories, and nothing asks for it yet. `-fPIC` sidesteps the question by
-  being applied tree-wide whenever any target is shared.
+- ~~**Per-TU flags are per TU, not per target.**~~ **Implemented; see
+  §316.** The entry was right about the shape and wrong about the cost:
+  it said the same file compiled two ways for two targets "needs
+  per-target object directories", and the object path had carried a
+  variant tag since the root-defines work, so what was missing was not
+  the directory but the *closure*. `[target.*] cflags` gives a program
+  its own copy of everything it links. `@cflags`/`@define` still belong
+  to the file, and a tree that asks for none of this grows no extra
+  objects. `-fPIC` still sidesteps the question by being applied
+  tree-wide whenever any target is shared.
 - **A library ignores `@sources` and the closure alike**, exactly as this
   entry always said — and being ignored was invisible, which it did not say.
   `@sources` means *force this into the link that no symbol reaches*; it is
@@ -2513,7 +2518,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **561** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **562** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24181,3 +24186,66 @@ green -- the list is still capped, the line still points at `-v` --
 and turns the second red at `5 of 7`. The pointer surviving while the
 thing it points at stops working is exactly the failure this section
 is about, which is why that assertion is the one worth having.
+
+---
+
+## 316. A target that compiles its whole closure its own way
+
+`[target.*] defines` reaches a program's root translation unit.
+`[target.*] cflags` reaches everything that program links.
+
+§15 had this as a limit and stated it precisely: *"the same file
+compiled two ways for two targets -- that needs per-target object
+directories, and nothing asks for it yet."* The first half was wrong
+about where the work was. The object path has carried a variant tag
+since the root-defines work -- `objdir/rel.<variant>.o` -- so the
+directory was never the missing piece. **What was missing was the
+closure.**
+
+### Compiling differently is the easy half
+
+A `-D` can change what a translation unit *defines*, not only how it
+behaves. So a flagged target has to be **closed over objects compiled
+with its flags**, not merely linked against them. Borrowing the shared
+pool's closure and then substituting variant objects would decide
+membership about one set of objects and act on another -- §3's rule
+applied to the wrong build -- and it would look correct in every tree
+where the flag changes behaviour and not symbols, which is most of
+them.
+
+The fixture is built so it cannot look correct that way. `pick()` is
+defined by `impl_new.c` under the flag and by `impl_old.c` without it:
+
+    fancy   links impl_new.c.fancy.o   impl_old.c defines nothing reachable
+    plain   links impl_old.c.o         impl_new.c defines nothing reachable
+
+Two programs, one symbol, two providers, two closures. Reverting
+either half -- closing over the shared pool, or dropping the flags from
+the pool's units -- turns the case red on the same assertion, which is
+the one that says the flagged program got the flagged *source* rather
+than the flagged root.
+
+### What it costs, and who pays
+
+A target with `cflags` compiles its own closure, so two such targets
+over one tree compile the shared part twice. That is what the feature
+means rather than an inefficiency in it, and **only targets that ask
+pay**: the pool is built for flagged targets alone, and a case asserts
+a tree using none of this grows no variant objects at all.
+
+**Refused on a library or module rather than ignored.** A library
+closes over its declared or reachable members without going through
+`schema_pool`, so a pool built for one would be compiled and never
+linked. That is §250's directive-that-does-nothing, and worse here
+than usual: the objects exist afterwards and look like evidence it
+worked.
+
+### The entry was wrong in the direction that keeps work undone
+
+"Nothing asks for it yet" was true when written and had stopped being
+a reason: `-fPIC` is applied tree-wide precisely to sidestep this
+question, which is the workaround a missing feature leaves behind, and
+the root-defines work had already built the mechanism the entry said
+was missing. A limit recorded with a cost attached is re-read as a
+decision, and nobody re-derives the cost -- this one had fallen by the
+time anybody did.

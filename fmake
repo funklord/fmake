@@ -1268,6 +1268,13 @@ CONF_SCHEMA = {
 		# closure -- the shared objects are shared, which is what its own
 		# Makefile does and what its runtime header declares safe.
         "defines": L, "define": L,
+		# Unlike `defines', which reaches this target's root translation
+		# unit only, `cflags' reaches every unit in its closure -- which
+		# means its own copy of every object. Section 316: a -D can change
+		# what a TU defines, so a target compiled differently has to be
+		# CLOSED differently too, and borrowing the shared pool's answer
+		# would be closing over objects this program does not link.
+        "cflags": L,
         "sources": L, "libs": L, "pkg": L, "ldflags": L, "headers": L,
         "man": L, "desktop": L, "icons": L, "metainfo": L, "aliases": L,
         "dbus": L, "udev": L, "polkit": L, "data": L, "completion": L,
@@ -11138,9 +11145,55 @@ def build(args, _bootstrapping=False):
 
 	while True:
 		pool = [units[r] for r in sorted(units)]
+		# A target whose stanza carries `cflags' gets its own copy of the
+		# whole tree, not only of its root. Rebuilt each time round
+		# because widening adds units, and a pool that was a copy of the
+		# tree before the widening is a copy of a smaller tree.
+		#
+		# It has to be a separate POOL and not a separate link line: a -D
+		# can change what a translation unit defines, so the closure for
+		# this target has to run over objects compiled with its flags.
+		# Borrowing the shared pool's closure and then linking variant
+		# objects would answer the membership question about one set of
+		# objects and act on another -- section 3's rule applied to the
+		# wrong build.
+		tpools = {}
+		for t in targets:
+			tflags = t.conf.get("cflags", [])
+			if not tflags:
+				continue
+			# Refused rather than ignored. A library closes over its
+			# declared or reachable members without going through
+			# `schema_pool', so a pool built for one would be compiled
+			# and never linked -- the directive that does nothing, which
+			# section 250 is about and which is worse here because the
+			# objects exist and look like evidence it worked.
+			if t.kind != "exe":
+				die(f"{CONF_FILE}: {tgt_section(t.name)} cflags compiles "
+				    f"this target's whole closure its own way, and that "
+				    f"is a program's question: {t.name} is {t.kind}. "
+				    f"[project] cflags reaches every target, and @cflags "
+				    f"in a file reaches that file.")
+			ident = _mk_ident(t.name)
+			tp = {}
+			for rel, u in units.items():
+				# A crate is rustc's to flag and an archive is not
+				# compiled here; both stay shared, and `cflags' says so
+				# rather than producing a copy that differs in nothing.
+				if u.crate or u.prebuilt or u.archive:
+					tp[rel] = u
+					continue
+				v = Unit(rel, root, objdir, scans[rel],
+				         members=crates.get(rel, [])[1:], variant=ident)
+				v.own = list(u.own) + tflags
+				tp[rel] = v
+			tpools[t.name] = tp
 		# Compiled with the pool and closed over without it, which is the
 		# whole of what makes a variant work.
-		compile_units(pool + [variants[k] for k in sorted(variants)],
+		compile_units(pool + [variants[k] for k in sorted(variants)]
+		              + [tpools[n][r] for n in sorted(tpools)
+		                 for r in sorted(tpools[n])
+		                 if tpools[n][r].variant],
 		              cfg, cache, root, incflags, jobs, args.dry_run,
 		              broken, tree_headers=hdrs, quiet=args.quiet,
 		              origins=generated_from, vendored=vendored,
@@ -11339,12 +11392,29 @@ def build(args, _bootstrapping=False):
 					if u is None or not u.compiled or (u.strong & libc_syms):
 						module_material.add(rel)
 
+		def _root_unit(t):
+			"""The root this target closes from, in its own flavour.
+
+            A flagged target's root has to come out of that target's pool
+            or the closure starts from an object the program will not
+            link -- and then the first symbol it needs is answered by the
+            shared copy, quietly, and the flags reach nothing below the
+            root.
+            """
+			if t.name in tpools and t.rel in tpools[t.name]:
+				return tpools[t.name][t.rel]
+			return variants.get(t.name) or units[t.rel]
+
 		def schema_pool(t):
 			"""`pool` without what this program must not link: the schemas
 			it never included, a module's sources, and -- unless it is
 			itself a test -- a double under `tests/' that stands in for a
 			libc function."""
-			base = pool
+			# A flagged target closes over its own copies. Everything
+			# below filters that set the same way it filters the shared
+			# one, so the two differ in which objects they name and in
+			# nothing else.
+			base = list(tpools[t.name].values()) if t.name in tpools else pool
 			if module_material:
 				base = [u for u in base if u.rel not in module_material]
 			if t.test_group is None and interposing_material:
@@ -11407,8 +11477,7 @@ def build(args, _bootstrapping=False):
 				# came out empty but one that was never fmake's to compute.
 				closures[t] = Closure(units[t.rel])
 			elif t.kind == "exe":
-				closures[t] = close_over_symbols(variants.get(t.name)
-				                                 or units[t.rel],
+				closures[t] = close_over_symbols(_root_unit(t),
 				                                 schema_pool(t), forced,
 				                                 forced_why)
 				# A resource is asserted, not deduced -- nothing references
@@ -11430,7 +11499,7 @@ def build(args, _bootstrapping=False):
 					extra_why = dict(forced_why)
 					extra_why.update(add)
 					closures[t] = close_over_symbols(
-					    variants.get(t.name) or units[t.rel], schema_pool(t),
+					    _root_unit(t), schema_pool(t),
 					    forced + [units[o] for o in sorted(add)], extra_why)
 			else:
 				members = [u for u in pool
