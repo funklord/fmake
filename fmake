@@ -6523,7 +6523,22 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		    + "\nA module cannot import something that imports it back, "
 		      "and there is no order that would build this.")
 
-	_compile_cwd = os.path.dirname(todo[0].obj) if todo[0].obj else root
+	# Only where a module is actually in the build. gcc writes its BMIs
+	# relative to the working directory, which is why this exists -- but
+	# changing the working directory changes how a RELATIVE flag in
+	# somebody's own cflags resolves, and that is every tree rather than
+	# the module ones. Confined here on purpose: a `-Ivendor' in
+	# `[project] cflags' means `<root>/vendor' and has to keep meaning
+	# it.
+	#
+	# Measured while checking that: `-include inc/prelude.h' survives the
+	# change, but only because `-I<root>' is on the line and gcc searches
+	# the include path for it. Surviving by a coincidence on the command
+	# line is not a property worth relying on for every build in every
+	# tree, and nothing here needs it outside a module build.
+	_compile_cwd = None
+	if module_exports and todo[0].obj:
+		_compile_cwd = os.path.dirname(todo[0].obj)
 	# Not on a dry run, which compiles nothing and so needs nowhere to put
 	# it. The link below already guarded this; here it did not, so `-n'
 	# left an object directory behind in a tree it had promised only to

@@ -15700,6 +15700,37 @@ def the_inferred_include_dirs_are_reported_whether_or_not_any_are_dropped(t):
 	t.write("test/test_thing.c", '#include "thing.h"\n'
 	        "int main(void){ return thing() - 3; }\n")
 
+	# A module build changes the working directory compiles run from, so
+	# gcc's BMIs land under .fmake/ instead of in somebody's source tree.
+	# That must not reach a build with no modules in it: a relative flag
+	# in a project's own cflags means `<root>/thing' and has to keep
+	# meaning it. Checked by asking where a compile actually ran, because
+	# the obvious fixture -- a relative -I -- passes either way once
+	# `-I<root>' is on the line, which is a coincidence and not a
+	# property.
+	probe = os.path.join(t.dir, "ccprobe")
+	with open(probe, "w") as fh:
+		fh.write("#!/bin/sh\necho \"$PWD\" >> %s/cwd.log\nexec cc \"$@\"\n"
+		         % t.dir)
+	os.chmod(probe, 0o755)
+	t.write("plain_tree.c", "int plain_tree(void){ return 1; }\n")
+	t.fmake(env={"CC": probe})
+	logged = os.path.join(t.dir, "cwd.log")
+	if os.path.exists(logged):
+		with open(logged) as fh:
+			where = {l.strip() for l in fh if l.strip()}
+		# Not the object directory, which is the thing a module build
+		# changes it to. NOT "the tree root": compiles inherit whatever
+		# directory fmake was invoked from, which is pre-existing and is
+		# what a relative flag has always resolved against. The first
+		# version of this assertion asserted the tree root and failed on
+		# the suite's own working directory -- a fixture measuring the
+		# harness rather than the tool.
+		check(where and not any(".fmake" in w for w in where),
+		      f"a build with no modules compiled from inside the state "
+		      f"directory, which changes what a relative flag in "
+		      f"somebody's cflags means: {where}")
+
 	# `fmake test', because the program's own TUs all sit in src/ and
 	# resolve "thing.h" beside themselves -- a quote include found next to
 	# its includer costs no -I, so a src-only build infers nothing and

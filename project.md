@@ -24316,10 +24316,32 @@ turns it red.
 **Where the BMIs go was a decision, not a default.** gcc writes
 `gcm.cache/` relative to the working directory and offers no flag to
 move it, so the working directory is what decides whether a module
-build leaves a cache in somebody's source tree. Every path on a
-compile line is already absolute, so compiles run from the object
+build leaves a cache in somebody's source tree. Every path fmake puts
+on a compile line is already absolute, so compiles run from the object
 directory and the BMIs land under `.fmake/` where `--clean` removes
 them and `.gitignore` already covers them.
+
+**Confined to module builds, and it was not at first.** "Every path
+fmake puts on the line" is not every path on the line: a relative flag
+in somebody's own `cflags` resolves against the working directory too,
+so moving it moves their flag. That reached every tree rather than the
+module ones, for a fix no other build needs.
+
+The fixture that looked like it cleared this passed for the wrong
+reason. `-include inc/prelude.h` still compiles from the object
+directory -- because `-I<root>` is on the line and gcc searches the
+include path for it. **Surviving by a coincidence of what else is on
+the command line is not a property**, and it would hold until the
+first tree whose relative flag is not an include.
+
+The assertion that pins it took two goes, and the first was worse than
+useless: it required compiles to run from the tree root, and they do
+not. They inherit whatever directory `fmake` was invoked from, which
+is pre-existing and is what a relative flag has always resolved
+against. So the first version failed on the suite's own working
+directory -- **a fixture measuring the harness rather than the tool**.
+What it checks now is the real invariant: not inside the state
+directory.
 
 ### The exit: one line, not a refusal
 
