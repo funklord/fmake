@@ -366,7 +366,8 @@ that had been green about nothing for five commits ·
 [313. The unexplained case was two different commands](#313-the-unexplained-case-was-two-different-commands) ·
 [314. A cost reported only where it was being paid off](#314-a-cost-reported-only-where-it-was-being-paid-off) ·
 [315. Seventeen truncations, one of which said where the rest were](#315-seventeen-truncations-one-of-which-said-where-the-rest-were) ·
-[316. A target that compiles its whole closure its own way](#316-a-target-that-compiles-its-whole-closure-its-own-way)
+[316. A target that compiles its whole closure its own way](#316-a-target-that-compiles-its-whole-closure-its-own-way) ·
+[317. Modules needed an order, and an edge nobody had named](#317-modules-needed-an-order-and-an-edge-nobody-had-named)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1926,28 +1927,15 @@ rather than code, and one lesson about testing.
   the closure is unaffected. Guarded by two cases, one of which needs no
   clang. `-ffunction-sections` only changes what the linker discards,
   which is downstream of everything fmake decides.
-- **C++ modules are not built at all**, and the entry that used to sit here
-  was wrong in the part that mattered. It said the closure is unaffected
-  because symbols are symbols, so modules degrade the guess rather than the
-  answer, and the worst case is falling back to compiling the whole tree.
-  **Measured: `--widen-all` fails identically**, because the problem is not
-  which files were chosen. A module interface must be compiled into a BMI
-  before anything importing it, and the importer must be handed that BMI by
-  name — an ordering *between* translation units, which fmake's model does
-  not have and which no candidate set supplies. The same measurement showed
-  the compiler can do it in three ordered phases, so the gap is entirely
-  fmake's; `.cppm` and `.ixx` are not in `CXX_EXTS` either, so the
-  conventional spelling of a module interface is not even a source here.
-  What exists now is an honest refusal: a file that imports a module is told
-  so, and told that `--widen-all` is not the way out, because the compiler's
-  own `module 'hello' not found` reads like a missing include path and sends
-  the reader hunting for a `-I`. Building them is a feature, not a fix.
-- ~~**Generated sources.**~~ Closed; see §7. The prediction that it would need a
-  two-pass scan was wrong — running the generators before the tree is walked
-  makes their output an ordinary source, with no special case downstream.
-- ~~**Cross-compilation is started, not finished.**~~ Closed; see §5. Library
-  resolution answers for the target machine, verified end to end against a real
-  aarch64 toolchain.
+- ~~**C++ modules are not built at all**~~ **Named modules are built
+  now; see §317.** gcc only, no header units, and `--eject ninja`
+  refuses a module tree while `--eject make` builds one. What the entry
+  had right was the diagnosis -- an interface has to be compiled before
+  anything importing it, and fmake compiled in no order. What it had
+  wrong was that this made modules unreachable: the order is a
+  levelisation, and the half nobody had named was that `import` is an
+  edge the include graph cannot see, so the interface was never a
+  candidate to compile in any order.
 - **A tree whose sibling programs reuse class names cannot be built at
   once.** Three of Qt's painting examples each define a class `Window`, so the
   symbol has three strong providers and §3 refuses. Correct, and a real limit
@@ -2518,7 +2506,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **562** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **564** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24249,3 +24237,79 @@ the root-defines work had already built the mechanism the entry said
 was missing. A limit recorded with a cost attached is re-read as a
 decision, and nobody re-derives the cost -- this one had fallen by the
 time anybody did.
+
+---
+
+## 317. Modules needed an order, and an edge nobody had named
+
+§15 said C++20 modules were not built at all, and its diagnosis was
+right: an interface has to be compiled into a BMI before anything
+importing it, and fmake compiled translation units in whatever order
+the pool handed back. What the entry got wrong is that it treated the
+ordering as the whole problem.
+
+**It was the visible half.** The other one is that `import greet;` is
+an edge the include graph cannot see. §3's candidate set is built by
+walking includes, and an import is not an include -- so the interface
+was never *chosen* to compile, in any order. Widening cannot rescue it
+either: a module's exports have module linkage, so the definition scan
+that finds a plain C function has nothing to match.
+
+Measured before it was written down. With ordering in and import edges
+out, a two-file module tree reports `1 candidates` for two sources and
+the importer fails on a BMI that was never going to exist. The two
+mutations have distinct signatures, which is what makes them worth
+keeping:
+
+    no ordering        [1/2] both compiled, wrong order
+    no import edges    [1/1] the interface never compiled at all
+
+### What it does, and what it refuses
+
+Levels rather than a serialisation, so a tree with no module interface
+is compiled exactly as before and pays a single pass over the todo
+list to discover that. `export module` in a plain `.cpp` works: the
+graph reads what a file says about itself, and `.cppm`/`.ixx` only
+decide whether the driver has to be told the language -- without
+`-x c++`, g++ calls an interface a linker input, **exits 0 and writes
+no object**.
+
+`-fmodules-ts` is tree-wide when any interface is present, for the
+reason `-fPIC` is: the importer is what reads the BMI, and an object
+compiled without the flag cannot link against ones compiled with it.
+
+Three things are refused by name rather than met as compiler errors,
+because each produces a message naming a symptom:
+
+    import <string>;     "failed to read compiled module"
+    a clang build        "unknown argument: -fmodules-ts"
+    import nothing has   "module not found", which reads as a missing -I
+
+**Where the BMIs go was a decision, not a default.** gcc writes
+`gcm.cache/` relative to the working directory and offers no flag to
+move it, so the working directory is what decides whether a module
+build leaves a cache in somebody's source tree. Every path on a
+compile line is already absolute, so compiles run from the object
+directory and the BMIs land under `.fmake/` where `--clean` removes
+them and `.gitignore` already covers them.
+
+### The exit, and the door that is shut
+
+`--eject make` builds a module tree: the ordering goes out as
+order-only prerequisites and the case runs `make` over the result
+rather than reading it. `--eject ninja` **refuses**.
+
+The ninja file it would write is not obviously wrong -- ninja accepts
+it and schedules base, then mid, then main -- and the compile then
+fails with gcc's `inputs may not also have inputs`, for a command that
+succeeds run by hand, under `sh -c`, with and without the output
+directory present, serially, and with `-v`. **The difference between
+ninja running that command and a shell running it has not been
+found.** So what is known is that the emitted file does not build, and
+that is what the refusal says.
+
+Recorded this way deliberately: an unexplained failure in code just
+written is not a coincidence to keep, and the honest state is a named
+refusal rather than a build file that stops on the first interface.
+Principle 5 asks for an exit, and one of its two doors is open and
+verified.

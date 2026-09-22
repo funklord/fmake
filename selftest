@@ -16042,28 +16042,29 @@ int main(){ Widget w; Gadget g; printf("%d\\n", w.value() + g.n); return 0; }
 
 
 @case
-def a_module_import_is_told_fmake_does_not_build_modules(t):
-	"""§15 said modules degrade the guess. They defeat the build.
+def a_module_interface_is_built_before_what_imports_it(t):
+	"""§15 said modules defeat the build. They needed an order.
 
-	The entry recorded that `import std;' breaks the include-graph
-	candidate heuristic, that the closure is unaffected because symbols are
-	symbols, and that the worst case is falling back to compiling the whole
-	tree. Measured, the last part is not true: `--widen-all' fails
-	identically, because the problem is not which files were chosen. A
-	module interface has to be compiled into a BMI *before* anything
-	importing it, and the importer has to be handed that BMI by name --
-	an ordering between translation units, which fmake does not have and
-	which no candidate set supplies.
+	The entry recorded the diagnosis correctly -- a module interface has
+	to be compiled into a BMI *before* anything importing it, and fmake
+	compiled translation units in no particular order -- and drew the
+	wrong conclusion from it, that this was a limit rather than a
+	missing pass. It also recorded that `--widen-all' does not help,
+	which was true and remains true for a different reason.
 
-	Left alone the failure is the compiler's `module 'hello' not found',
-	which reads exactly like a missing include path. Every remedy fmake
-	offers around it is about include paths, so a reader following them
-	is adjusting flags for a build that cannot work whatever the flags say.
+	**An import is an edge the include graph cannot see**, and that is
+	the half that had to come first. Widening cannot rescue it either: a
+	module's exports have module linkage, so the definition scan that
+	finds a plain C function has nothing to match. Without following
+	import edges into the candidate set, the interface is simply never
+	compiled and the importer fails on a BMI that was never going to
+	exist -- measured, before that was there.
 
-	Keyed on the scan rather than on that message, so this case needs no
-	particular compiler: `import hello;' fails to compile under any of
-	them, and what fmake says is drawn from what the file says about
-	itself."""
+	The order is levels rather than a serialisation, so a tree with no
+	module interface is compiled exactly as it was and pays nothing.
+	`export module' in a plain `.cpp' works too: the graph reads what the
+	file says about itself, and the extension only decides whether the
+	driver has to be told the language."""
 	t.write("hello.cpp", """
 export module hello;
 export int twice(int v) { return 2 * v; }
@@ -16074,23 +16075,121 @@ int main(){ return twice(21) == 42 ? 0 : 1; }
 """)
 	r = t.fmake()
 	out = r.stdout + r.stderr
-	check(r.returncode != 0, f"a modules tree should not report success: {out}")
-	check("does not build C++20 modules" in out,
-	      f"the reader should be told that, not left with the compiler's "
-	      f"word for it: {out}")
-	check("hello" in out, f"the module that was imported should be named: {out}")
-	check("no order" in out,
-	      f"the reason is the ordering, and saying so is what stops a flag "
-	      f"hunt: {out}")
+	check(r.returncode == 0, f"a module tree should build now: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the built program did not run correctly")
+	# The interface first, which is the whole of what was missing.
+	order = [l for l in out.splitlines() if "hello.cpp" in l or "main.cpp" in l]
+	check(order and "hello.cpp" in order[0],
+	      f"the importer was compiled before the interface it imports: "
+	      f"{order}")
 
-	# The measured half. --widen-all is the documented escape when scanning
-	# cannot see something, and it is the wrong instinct here -- so the
-	# message says so, and this checks the claim rather than repeating it.
+	# A chain, so the order is a sort and not a two-element special case.
+	u = Tree("mod-chain")
+	try:
+		u.write("base.cppm", "export module base;\n"
+		        "export int base_value(void){ return 40; }\n")
+		u.write("mid.cppm", "export module mid;\nimport base;\n"
+		        "export int mid_value(void){ return base_value() + 2; }\n")
+		u.write("main.cpp", "import mid;\n"
+		        "int main(){ return mid_value() - 42; }\n")
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"a two-deep module chain did not build: {r.stdout}{r.stderr}")
+		seen = [l for l in r.stdout.splitlines()
+		        if any(f in l for f in ("base.cppm", "mid.cppm", "main.cpp"))]
+		check(len(seen) == 3 and "base.cppm" in seen[0]
+		      and "mid.cppm" in seen[1],
+		      f"the chain was not compiled in dependency order: {seen}")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "the chained program did not run correctly")
+
+		# The exit has to work too, or a module tree is one nobody can
+		# leave -- which is principle 5, not a nicety. The ejected make
+		# build carries the ordering as order-only prerequisites and the
+		# `-x c++' the driver needs, and is run here rather than read.
+		if shutil.which("make"):
+			mk = u.fmake("--eject").stdout
+			check("| $(BUILD_DIR)/base.cppm.o" in mk
+			      or "| $(BUILD_DIR)/mid.cppm.o" in mk,
+			      f"the ejected build has no ordering, so make is free to "
+			      f"compile an importer first: {mk}")
+			u.write("Makefile.gen", mk)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			for junk in (os.path.basename(u.dir), "build", "gcm.cache"):
+				shutil.rmtree(os.path.join(u.dir, junk), ignore_errors=True)
+				if os.path.exists(os.path.join(u.dir, junk)):
+					os.unlink(os.path.join(u.dir, junk))
+			r = _run_in(u.dir, "make", "-f", "Makefile.gen")
+			check(r.returncode == 0,
+			      f"the ejected module build does not work: {r.stdout}"
+			      f"{r.stderr}")
+			check(u.run(os.path.basename(u.dir)).returncode == 0,
+			      "the program from the ejected build is wrong")
+
+		# And ninja is refused rather than emitted, because what it
+		# emits does not build -- measured, not diagnosed. A refusal
+		# names which door is shut; a broken build file does not.
+		r = u.fmake("--eject", "ninja")
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "does not support C++20 modules" in out,
+		      f"--eject ninja should refuse a module tree rather than "
+		      f"write a file that stops on the first interface: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
+def an_import_nothing_exports_is_not_an_include_problem(t):
+	"""Every other remedy around a failed compile is about include paths,
+	and none of them can resolve an import.
+
+	Before modules were built this said "fmake does not build C++20
+	modules", which is now false and would send a reader to work around
+	something that works. What survives is the case the build genuinely
+	cannot answer: an import whose interface is in no file this tree
+	contains. That reads as a missing include path and is not one."""
+	t.write("main.cpp", "import nowhere;\nint main(){ return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"this cannot build: {out}")
+	check("no file in this tree exports it" in out,
+	      f"the reader is left with the compiler's word for it: {out}")
+	check("an import is not an include" in out,
+	      f"nothing stops the reader hunting for a -I: {out}")
+
+
+@case
+def a_header_unit_and_a_clang_module_build_are_refused_by_name(t):
+	"""Both fail at the compiler with a message about a symptom.
+
+	`import <string>;' needs the standard library's headers built as
+	BMIs first, and says "failed to read compiled module". A clang build
+	says "unknown argument: -fmodules-ts", because clang wants a
+	`--precompile' step per interface and an explicit `-fmodule-file='
+	on every importer instead. Neither sends a reader anywhere, so both
+	are refused before anything is compiled and the refusal says which
+	of the two it is."""
+	t.write("s.cppm", "export module s;\nimport <string>;\n"
+	        "export int f(void){ return 1; }\n")
+	t.write("main.cpp", "import s;\nint main(){ return f() - 1; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, "a header unit cannot be built")
+	check("header unit" in out and "<string>" in out,
+	      f"the refusal does not name what it refused: {out}")
+	check("global module fragment" in out,
+	      f"nothing says what to write instead: {out}")
+
+	if not shutil.which("clang++"):
+		raise Skip("clang++ not installed, so its refusal cannot be shown")
+	t.write("s.cppm", "export module s;\nexport int f(void){ return 1; }\n")
 	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
-	w = t.fmake("--widen-all")
-	check(w.returncode != 0,
-	      f"--widen-all must not be reported as a way out of this: "
-	      f"{w.stdout}{w.stderr}")
+	r = t.fmake(env={"CXX": "clang++"})
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"clang cannot build these and should say so: {out}")
+	check("clang" in out and "--precompile" in out,
+	      f"the refusal does not say what clang wants instead: {out}")
 
 
 @case

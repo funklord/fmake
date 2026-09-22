@@ -109,6 +109,7 @@ import copy
 import datetime
 import email.utils
 import hashlib
+import itertools
 import json
 import fnmatch
 import glob
@@ -207,7 +208,8 @@ class Lang:
     exactly the terms a compiled one does, and section 3 needed no change
     to admit a language it had never heard of.
     """
-	__slots__ = ("name", "tag", "cxx", "cpp", "dep_via_as", "unit")
+	__slots__ = ("name", "tag", "cxx", "cpp", "dep_via_as", "unit",
+	             "module_iface")
 
 	def __init__(self, name, tag, cxx=False, cpp=True, dep_via_as=False,
 	             unit="object"):
@@ -223,6 +225,14 @@ class Lang:
 		# this would be a second unit kind and not a fifth row; it is both,
 		# because the row is where the unit kind has anywhere to live.
 		self.unit = unit
+		# A module interface unit. Only the extension differs from C++ --
+		# the driver does not recognise `.cppm' or `.ixx' and treats one
+		# as a linker input, exiting 0 and building nothing, so the
+		# language has to say `this is C++' on the command line. Measured
+		# before it was written down: `g++ -c greet.cppm' warns "linker
+		# input file unused because linking not done" and produces no
+		# object.
+		self.module_iface = False
 
 	def dep_flags(self, dep, phony=False):
 		"""Flags that make this language's compiler write `dep'.
@@ -246,6 +256,8 @@ class Lang:
 
 _C   = Lang("C", "CC ")
 _CXX = Lang("C++", "CXX", cxx=True)
+_CXXM = Lang("C++ module", "CXXM", cxx=True)
+_CXXM.module_iface = True
 # `.s' is assembled as it stands; `.S' goes through cpp first, which is what
 # makes #include and -D mean something in one and not the other, and is why
 # they are two entries rather than one with a special case.
@@ -260,6 +272,7 @@ _RUST = Lang("Rust", "RS ", cpp=False, unit="crate")
 LANGS = {
     ".c": _C,
     ".cc": _CXX, ".cpp": _CXX, ".cxx": _CXX, ".c++": _CXX, ".C": _CXX,
+    ".cppm": _CXXM, ".ixx": _CXXM,
     ".s": _ASM, ".S": _ASM_CPP,
     ".rs": _RUST,
 }
@@ -802,6 +815,8 @@ RE_DECLARATOR = re.compile(r'(?:^|,)[ \t]*\*?[ \t]*([A-Za-z_][A-Za-z0-9_]*)')
 # has been measured here. What a file says about itself does not.
 RE_MODULE_IFACE = re.compile(
     r'^[ \t]*export[ \t]+module[ \t]+([A-Za-z_][A-Za-z0-9_.:]*)', re.M)
+RE_MODULE_HEADER_UNIT = re.compile(
+    r'^[ \t]*(?:export[ \t]+)?import[ \t]*[<"]([^>"]+)[>"][ \t]*;', re.M)
 RE_MODULE_IMPORT = re.compile(
     r'^[ \t]*(?:export[ \t]+)?import[ \t]+([A-Za-z_][A-Za-z0-9_.:]*)[ \t]*;',
     re.M)
@@ -1193,6 +1208,7 @@ def scan_source(path):
 	    "qobject":  bool(RE_QOBJECT.search(code)),
 	    "modiface": sorted(set(RE_MODULE_IFACE.findall(code))),
 	    "modimp":   sorted(set(RE_MODULE_IMPORT.findall(code))),
+	    "modhdr":   sorted(set(RE_MODULE_HEADER_UNIT.findall(code))),
 	    "qrc":      sorted(set(RE_QRC_PATH.findall(code))),
 	    "qrc_init": sorted(set(RE_QRC_INIT.findall(code))),
 	    "verfall":  version_fallbacks(code),
@@ -4975,6 +4991,7 @@ class Project:
 			self.src_by_stem.setdefault(
 			    os.path.basename(os.path.splitext(s_)[0]), []).append(s_)
 		self.incdirs = set()
+		self._modexp = None
 
 	def incdir_for(self, resolved, inc_name):
 		return include_root_for(resolved, inc_name)
@@ -5051,6 +5068,23 @@ class Project:
 		matches = self.src_by_stem.get(os.path.basename(stem), ())
 		return matches[0] if len(matches) == 1 else None
 
+	def module_exporter(self, name):
+		"""The file whose `export module' names this, or None.
+
+        Built once and cached: the question is asked per import edge and
+        the answer cannot change while a scan is in hand. A name nothing
+        exports is somebody else's module -- the standard library's, or
+        one this build does not contain -- and gets None rather than a
+        guess, exactly as an include that resolves to nothing falls
+        through to library resolution.
+        """
+		if self._modexp is None:
+			self._modexp = {}
+			for rel, scan in self.scans.items():
+				for exported in (scan.get("modiface") or []):
+					self._modexp.setdefault(exported, rel)
+		return self._modexp.get(name)
+
 	def candidates(self, root_src):
 		"""Include-graph reachable TUs from a root. A guess, nothing more.
 
@@ -5071,6 +5105,18 @@ class Project:
 			scan = self.scans.get(cur)
 			if not scan:
 				continue
+			# `import greet;' is an edge the include graph cannot see, and
+			# widening cannot rescue it either: a module's exports have
+			# module linkage, so the definition scan that finds a plain
+			# C function has nothing to match. Without this a module
+			# interface is simply never compiled, and the importer fails
+			# on a BMI that was never going to exist -- which is what it
+			# did, for one fixture, before this was here.
+			for name in (scan.get("modimp") or []):
+				src = self.module_exporter(name)
+				if src and src not in out:
+					out.add(src)
+					queue.append(src)
 			for kind, name, _line in scan["incs"]:
 				h = self.resolve_header(name, cur, kind)
 				if not h or h in seen_h:
@@ -5980,7 +6026,15 @@ def compile_cmd(u, cfg, incflags):
 	if u.lang.unit == "crate":
 		return crate_cmd(u, cfg, u.obj)
 	cc = cfg.driver(u.cxx)
-	return ([cc, "-c", u.abs, "-o", u.obj] + u.lang.dep_flags(u.dep)
+	# `-x c++' before the file, because the driver decides the language
+	# from the extension and knows neither `.cppm' nor `.ixx': without it
+	# g++ calls the interface a linker input, exits 0, and writes no
+	# object. `-fmodules-ts' goes on every unit in a build that has any
+	# module in it, interface and importer alike, since the importer is
+	# the one that has to read the BMI.
+	lang_flag = ["-x", "c++"] if u.lang.module_iface else []
+	return ([cc, "-c"] + lang_flag + [u.abs, "-o", u.obj]
+	        + u.lang.dep_flags(u.dep)
 	        + incflags + cfg.cflags + u.own + cfg.override)
 
 
@@ -6373,9 +6427,44 @@ def _same_file(path, size):
 	return size is None or size == have
 
 
+def _module_levels(units):
+	"""`units` split so each level imports only what earlier ones export.
+
+    None when no order exists, which means an import cycle. A build with
+    no module interface in it returns one level holding everything, which
+    is the shape every build had before modules and costs one pass over
+    the list to discover.
+
+    The graph is read off what each file says about itself -- `export
+    module X' and `import X' -- rather than from the compiler, for the
+    reason `RE_MODULE_IFACE' already gives: the compiler's wording for
+    this differs between vendors and releases and only one has been
+    measured here, while what a file says about itself does not.
+    """
+	exporter = {}
+	for u in units:
+		for name in (u.scan.get("modiface") or []):
+			exporter[name] = u
+	if not exporter:
+		return [list(units)]
+	levels, placed, rest = [], set(), list(units)
+	while rest:
+		ready = [u for u in rest
+		         if all(exporter[m] is u or id(exporter[m]) in placed
+		                for m in (u.scan.get("modimp") or [])
+		                if m in exporter)]
+		if not ready:
+			return None
+		levels.append(ready)
+		placed.update(id(u) for u in ready)
+		ready_ids = {id(u) for u in ready}
+		rest = [u for u in rest if id(u) not in ready_ids]
+	return levels
+
+
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
                   broken=None, tree_headers=(), quiet=False, origins=None,
-                  vendored=(), excluded=None):
+                  vendored=(), excluded=None, module_exports=()):
 	"""Compile what is stale. Returns True if anything was actually built.
 
     `broken` collects the files that would not compile, so the caller can
@@ -6407,6 +6496,26 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	if not todo:
 		return False
 
+	# C++20 modules: an importer has to be compiled after the interface it
+	# imports, because the BMI does not exist until then. Everything else
+	# in this file is order-free by construction -- section 3 decides
+	# membership from symbols and compiles in whatever order the pool
+	# hands back -- so this is the one place a build has a shape.
+	#
+	# Levels rather than a full serialisation: units that import nothing
+	# unbuilt go together, and the parallelism only narrows where the
+	# graph says it must. A tree with no module interface never enters
+	# this at all and is compiled exactly as before.
+	order = _module_levels(todo)
+	if order is None:
+		names = sorted({m for u in todo
+		                for m in (u.scan.get("modiface") or [])})
+		die("import cycle between module interfaces: "
+		    + ", ".join(names[:6])
+		    + "\nA module cannot import something that imports it back, "
+		      "and there is no order that would build this.")
+
+	_compile_cwd = os.path.dirname(todo[0].obj) if todo[0].obj else root
 	# Not on a dry run, which compiles nothing and so needs nowhere to put
 	# it. The link below already guarded this; here it did not, so `-n'
 	# left an object directory behind in a tree it had promised only to
@@ -6430,7 +6539,15 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			# one. fmake itself is unaffected -- it runs a list.
 			print(" ".join(shlex.quote(c) for c in cmd))
 			return u, 0, ""
-		r = run_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+		# gcc writes its BMIs to `gcm.cache/' relative to the working
+		# directory and offers no flag to move it, so the working
+		# directory is what decides whether a module build leaves a
+		# cache in somebody's source tree. Every path on the command
+		# line is absolute, so this changes nothing else -- and it puts
+		# the BMIs under `.fmake/' where `--clean' already removes them
+		# and `.gitignore' already covers them.
+		r = run_child(cmd, cwd=_compile_cwd, stdout=subprocess.PIPE,
+		              stderr=subprocess.PIPE,
 		              text=True, errors="replace")
 		# A compiler that exits 0 and writes nothing. Measured with a
 		# driver that does exactly that: the compile "succeeded", nm was
@@ -6446,7 +6563,8 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		return u, r.returncode, r.stderr
 
 	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-		for u, rc, err in pool.map(run_one, todo):
+		for u, rc, err in itertools.chain.from_iterable(
+		        pool.map(run_one, level) for level in order):
 			done[0] += 1
 			tag = u.lang.tag
 			# A variant is the same file compiled again with a define of
@@ -6529,22 +6647,30 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			# include paths -- so a reader following them is being sent to
 			# adjust flags for a build that cannot work whatever the flags
 			# say.
+			# Modules are built now, so the old blanket "fmake does not
+			# build C++20 modules" is gone from here -- it would send a
+			# reader to work around a thing that works. What remains is
+			# the one case the build cannot answer: an import whose
+			# interface is in no file this tree contains, which reads as
+			# a missing include path and is not one.
 			imported = first_unit.scan.get("modimp") or []
-			if imported:
-				note(f"{first_unit.rel} imports {', '.join(imported)}, and "
-				     f"fmake does not build C++20 modules")
-				# The reason, because "not supported" invites the obvious
-				# wrong guess that a flag or a wider candidate set is all
-				# it needs. A module interface has to be compiled into a
-				# BMI *before* anything importing it, and the importer has
-				# to be handed that BMI by name; fmake compiles
-				# translation units in no particular order and passes no
-				# such flag. Measured: --widen-all fails identically, so
-				# the usual escape is not one here.
-				note("a module interface must be compiled before the files "
-				     "that import it, and fmake compiles in no order")
-				note("--widen-all does not help: the ordering is the "
-				     "problem, not which files were chosen")
+			orphan = [m for m in imported if m not in module_exports]
+			if orphan:
+				note(f"{first_unit.rel} imports {', '.join(orphan)}, and "
+				     f"no file in this tree exports "
+				     f"{'them' if len(orphan) > 1 else 'it'}")
+				# Said because every other remedy in this block is about
+				# include paths, and none of them can help: an import is
+				# not an include and no -I resolves one. Measured when
+				# the candidate set first followed import edges --
+				# without an exporter there is nothing to compile first,
+				# so the BMI the compiler asks for was never going to
+				# exist.
+				note("an import is not an include: no -I resolves it, and "
+				     "--widen-all does not help either")
+				note("the interface has to be a file here that says "
+				     "`export module NAME;', or the module belongs to "
+				     "something fmake is not building")
 
 			miss = _missing_header(msg)
 			if miss:
@@ -10604,6 +10730,49 @@ def build(args, _bootstrapping=False):
 	if any(t.kind in ("shared", "module") for t in wanted):
 		cfg.add_tree_flag("-fPIC")
 
+	# Tree-wide for the same reason -fPIC is: the flag has to be on the
+	# IMPORTER as much as on the interface, since the importer is what
+	# reads the BMI, and an object compiled without it cannot be linked
+	# with objects compiled with it. Deciding per unit would mean knowing
+	# which units import transitively before anything is compiled, which
+	# is the question the levels answer afterwards.
+	#
+	# Only where a module interface is actually in the build. A tree with
+	# none never sees the flag and is compiled exactly as it was.
+	if any(scans[rel].get("modiface") for rel in srcs if rel in scans):
+		# Refused here rather than met as a compiler error, because both
+		# of these produce messages that name the symptom and not the
+		# cause. A header unit says "failed to read compiled module" and
+		# a clang build says "unknown argument: -fmodules-ts", and
+		# neither sends a reader anywhere useful.
+		hdr = sorted({(rel, h) for rel in srcs if rel in scans
+		              for h in (scans[rel].get("modhdr") or [])})
+		if hdr:
+			rel, h = hdr[0]
+			die(f"{rel} imports the header unit <{h}>, and fmake does "
+			    f"not build header units.\n"
+			    f"A header unit has to be compiled into a BMI before "
+			    f"anything that imports it, including the standard "
+			    f"library's own headers, and fmake has no rule that "
+			    f"builds one.\n"
+			    f"`#include <{h}>' in the global module fragment does "
+			    f"the same job and needs nothing built first."
+			    + (f"\n{len(hdr) - 1} more file(s) do the same."
+			       if len(hdr) > 1 else ""))
+		drv = os.path.basename(cfg.driver(True))
+		if "clang" in drv:
+			die(f"this tree has C++20 module interfaces and {drv} builds "
+			    f"them a different way than fmake knows.\n"
+			    f"gcc takes `-fmodules-ts' and writes its BMIs itself; "
+			    f"clang wants a separate `--precompile' step per "
+			    f"interface and an explicit `-fmodule-file=' on every "
+			    f"importer, which fmake does not emit.\n"
+			    f"Build the modules with gcc, or drop the module "
+			    f"interfaces -- refused rather than attempted, because "
+			    f"a half-supported module build fails at the importer "
+			    f"with a message about a BMI nobody asked for.")
+		cfg.add_tree_flag("-fmodules-ts")
+
 	# "Found means defined" is a fact about the build, not about the file
 	# that said it. hydra's theme.h declares a stand-in `class QDBusVariant
 	# {}' unless HYDRA_HAVE_DBUS is defined, and the macro came from
@@ -11203,7 +11372,9 @@ def build(args, _bootstrapping=False):
 		              # drops `vendor' now, and a remedy that did not say
 		              # so would tell a reader to name a directory the
 		              # config has already refused.
-		              excluded=incdir_excluded)
+		              excluded=incdir_excluded,
+		              module_exports={m for sc in scans.values()
+		                              for m in (sc.get("modiface") or [])})
 		# The architecture to require is whatever fmake just compiled. Asking
 		# the objects avoids having to know anything about toolchain
 		# triplets, and is right by construction -- but it means waiting
@@ -13744,6 +13915,21 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# express them.
 	a("# ---- objects " + "-" * 50)
 	a("")
+	# Which object exports which module, so an importer can be given an
+	# order-only prerequisite on it. Without this the ejected build has
+	# no ordering at all and make compiles in whatever order it likes --
+	# measured: an ejected module tree failed at the importer with gcc's
+	# "returning to the gate for a mechanical issue", which is a BMI that
+	# does not exist yet and says so in nobody's words.
+	#
+	# Order-only (`|') rather than a normal prerequisite, because the
+	# object is not an input to the compile: it must merely have happened.
+	# A normal one would also put it on `$^', which this file has a rule
+	# about.
+	_mod_obj = {}
+	for _n, _u in every.items():
+		for _m in (_u.scan.get("modiface") or []):
+			_mod_obj[_m] = f"$({P}BUILD_DIR)/{_n}.o"
 	for name in sorted(every):
 		u = every[name]
 		rel = u.rel
@@ -13760,7 +13946,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		after = ([] if u.rel in tool_units else
 		         ([f"$({P}GENERATED)"] if gen_outs else [])
 		         + ([f"$({P}GENHDRS)"] if genhdrs else [])) \
-		        + [f"{sub}/.git" for sub in subs]
+		        + [f"{sub}/.git" for sub in subs] \
+		        + sorted({_mod_obj[m] for m in (u.scan.get("modimp") or [])
+		                  if m in _mod_obj and _mod_obj[m] != obj})
 		order_only = (" | " + " ".join(after)) if after else ""
 		a(f"{obj}: {_eject_src(rel)}{order_only}")
 		a("\t@mkdir -p $(@D)")
@@ -13770,8 +13958,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# prerequisite that is gone; a Makefile has no such luxury, and an
 		# ejected Makefile is a Makefile someone will edit.
 		dep = " ".join(u.lang.dep_flags("$(@:.o=.d)", phony=True))
+		# The driver knows neither `.cppm' nor `.ixx' and would treat one
+		# as a linker input, so it is told the language here exactly as
+		# `compile_cmd' tells it.
+		xflag = "-x c++ " if u.lang.module_iface else ""
 		a(f"\t$({var}) $({P}{flags}){' ' + own if own else ''} $({P}CFLAGS_LAST) "
-		  f"-c $< -o $@ {dep}")
+		  f"-c {xflag}$< -o $@ {dep}")
 		a("")
 
 	if crate_libs:
@@ -14453,13 +14645,52 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# A generator's own tool waits for the submodules and not for what it
 	# is about to write: see _tool_units.
 	tool_after = (" || " + " ".join(subs_order)) if subs_order else ""
+	# Refused rather than emitted. The ordering below is correct -- ninja
+	# accepts the file and schedules base, then mid, then main -- and the
+	# compile then fails under ninja with gcc's "inputs may not also have
+	# inputs", for a command that succeeds run by hand, under `sh -c',
+	# with and without the output directory present, serially and with
+	# `-v'. Measured, not diagnosed: the difference between ninja running
+	# that command and this shell running it has not been found, so what
+	# is known is that the emitted file does not build.
+	#
+	# `--eject make' does build a module tree and is verified by a case,
+	# so section 2's exit is not closed -- one of its two doors is, and
+	# saying which beats handing somebody a build file that stops on the
+	# first interface.
+	if any(u.scan.get("modiface") for u in every.values()):
+		die("--eject ninja does not support C++20 modules yet.\n"
+		    "The ordering is emitted correctly and the compile then "
+		    "fails under ninja for a command that works run by hand, "
+		    "which is not understood and so is not shipped.\n"
+		    "`--eject make' builds a module tree and is the way out of "
+		    "fmake for one.")
+	# Same ordering the make backend emits, in ninja's spelling: `||' is
+	# its order-only, so an importer waits for the interface's object
+	# without taking it as an input.
+	_mod_obj = {}
+	for _n, _u in every.items():
+		for _m in (_u.scan.get("modiface") or []):
+			_mod_obj[_m] = f"$build_dir/{_ninja(_n)}.o"
 	for name in sorted(every):
 		u = every[name]
-		a(f"build $build_dir/{_ninja(name)}.o: "
-		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}"
-		  f"{tool_after if u.rel in tool_units else after}")
-		if u.own:
-			a(f"  extra = {' '.join(_eject_flags(u.own, root, _nj_flag))}")
+		mine = f"$build_dir/{_ninja(name)}.o"
+		mods = sorted({_mod_obj[m] for m in (u.scan.get("modimp") or [])
+		               if m in _mod_obj and _mod_obj[m] != mine})
+		tail = tool_after if u.rel in tool_units else after
+		if mods:
+			tail = (tail + " " + " ".join(mods)) if tail \
+			       else (" || " + " ".join(mods))
+		a(f"build {mine}: "
+		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}{tail}")
+		# `-x c++' for a module interface, for the reason compile_cmd
+		# gives: the driver does not know the extension and would call
+		# it a linker input.
+		own = list(u.own)
+		if u.lang.module_iface:
+			own = ["-x", "c++"] + own
+		if own:
+			a(f"  extra = {' '.join(_eject_flags(own, root, _nj_flag))}")
 	# One edge per crate, with the members as implicit inputs. The depfile
 	# ninja reads afterwards is rustc's own and names the real module
 	# graph, so a member the `mod' scan missed still forces a rebuild.
