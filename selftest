@@ -16259,6 +16259,36 @@ def a_header_unit_and_a_clang_module_build_are_refused_by_name(t):
 	check("global module fragment" in out,
 	      f"nothing says what to write instead: {out}")
 
+	# And the remedy it prints is run, which is this project's rule about
+	# printed advice: `#include' in the global module fragment does the
+	# job the header unit was reaching for. Checked alongside a relative
+	# `[project] include-dirs', because that is the configuration the
+	# working-directory confinement in 423863d is about and no tree had
+	# exercised the two together -- a module build is the only one that
+	# moves the working directory, so a tree with no modules cannot see
+	# the hazard even with a relative key. Raised by ossacli, whose own
+	# include-dirs is relative and whose tree has no modules.
+	# TWO headers of this basename, so fmake's own inference declines and
+	# the explicit `include-dirs' is the only thing that can resolve it.
+	# With one, the inference finds it and the key is not load-bearing --
+	# the first version of this fixture had one, and the mutation that
+	# stops absolutising the key left it green. A fixture that passes
+	# whether or not the thing under test works is the third of these
+	# today.
+	t.write("include/dep/val.h", "#define DEP_ANSWER 1\n")
+	t.write("other/dep/val.h", "#define DEP_ANSWER 999\n")
+	t.write("s.cppm", "module;\n#include <dep/val.h>\n"
+	        "export module s;\nexport int f(void){ return DEP_ANSWER; }\n")
+	t.write("fmake.toml", '[project]\ninclude-dirs = ["include"]\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the remedy the header-unit refusal prints does not build, or "
+	      f"a relative include-dirs stopped resolving once the working "
+	      f"directory moved: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program built through the global module fragment is wrong")
+
 	if not shutil.which("clang++"):
 		raise Skip("clang++ not installed")
 	# clang builds them now, by different flags rather than a different

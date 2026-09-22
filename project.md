@@ -2494,6 +2494,28 @@ recreated a file it had deliberately deleted. Both looked green. Neither was
 testing anything. A test that passes because the code is right and one that
 passes because it tests nothing are indistinguishable without this step.
 
+**And a green MUTATION run has two causes, which is the half this rule
+used to leave implicit.** Stated as a pair by ossacli 2026-09-22, out of
+three of theirs and one of mine in one evening:
+
+    the sabotage did not apply        green, proved nothing
+    it applied, the check was blind   green, proved nothing
+
+Theirs were all the first kind -- an edit the compiler optimised away, an
+anchor that matched two sites, an "append" that was an insertion. Mine
+was the second: a fixture with one `dep/val.h`, where the explicit
+`[project] include-dirs` under test was never load-bearing because
+fmake's own inference finds a uniquely-named header. The mutation applied
+cleanly and the case stayed green. Two headers of that basename make the
+inference decline, and then it goes red.
+
+**So the step is confirming the CHECK GOES RED, not confirming the
+sabotage landed.** Those are different acts -- one is about the edit, the
+other about the instrument -- and only the second catches both kinds.
+Their sentence for why the weaker one feels sufficient is the one to
+keep: *"the edit is in the file" and "the check can see the edit" felt
+like one fact.*
+
 It also found drift the other way. Adding assertions to `Ann` — so the
 scalar/list table would be enforced rather than decorative — failed
 immediately on existing code that had been reading every directive as a list.
@@ -24342,6 +24364,31 @@ against. So the first version failed on the suite's own working
 directory -- **a fixture measuring the harness rather than the tool**.
 What it checks now is the real invariant: not inside the state
 directory.
+
+**And `cflags` is not the only relative key.** Raised by ossacli, whose
+`[project] include-dirs` is `["include"]`: if that resolved the same
+way, a tree with a relative one would have moved under the change too.
+It does not -- `include-dirs` is made absolute where it becomes a flag,
+`d if os.path.isabs(d) else os.path.join(root, d)` -- so it is safe by
+construction rather than by luck, which is a better answer than the
+measurement that prompted it.
+
+**Their measurement could not have found it either way**, and that is
+the part worth keeping. ossacli has no module interface, and a build
+with none never moves the working directory -- so their tree cannot
+see this hazard whatever key it uses. The configuration that can is
+modules AND a relative key together, which no tree had, and which is
+now a case.
+
+**The case for it passed for the wrong reason first**, which is the
+third fixture in an evening to do so. One header named `val.h` is
+found by fmake's own include-dir inference, so the explicit key is not
+load-bearing and the mutation that stops absolutising it stays green.
+Two headers of that basename make the inference decline, and then only
+the explicit key can resolve it. The rule that catches this is
+ossacli's: **confirm the sabotage did what you think before reading
+what the check said** -- here it applied cleanly and the check could
+not see it.
 
 ### The exit: one line, not a refusal
 
