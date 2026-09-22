@@ -12732,7 +12732,13 @@ def clean_says_how_much_it_freed(t):
 	after a single change of default flags.
 
 	That is the intended trade and it is invisible. The size makes it
-	visible at the one moment somebody is asking."""
+	visible at the one moment somebody is asking.
+
+	**That moment is after the decision it should inform**, which is what
+	`a_build_says_what_other_configurations_are_costing` adds beside this:
+	the same number under `-v` on an ordinary build, where somebody can
+	still act on it. This case is the `--clean` half and stays as it
+	is."""
 	t.write("main.c", "int main(void){ return 0; }\n")
 	check(t.fmake().returncode == 0, "build failed")
 	check(t.fmake(env={"DEBUG": "1"}).returncode == 0, "debug build failed")
@@ -12750,6 +12756,61 @@ def clean_says_how_much_it_freed(t):
 	r = t.fmake("--clean")
 	check("nothing to clean" in r.stdout + r.stderr,
 	      f"a second clean should say there was nothing: {r.stdout}")
+
+
+@case
+def a_build_says_what_other_configurations_are_costing(t):
+	"""`--clean' reported the cost at the moment it was being paid off.
+
+	One object directory is kept per configuration on purpose and nothing
+	reclaims the ones that fall out of use -- 274M and 14M side by side in
+	a real project after one change of default flags, and hydra's own
+	.gitignore records a cache that reached 146M under their src/ from a
+	trial nobody finished. The size was reported by `--clean', which is
+	after somebody has decided to delete everything and is therefore too
+	late to inform that decision.
+
+	Section 310's lesson, one subject along: a set reported only where it
+	is destroyed. This says the same number on an ordinary build.
+
+	**Not a prune, and the case pins that.** Pruning by age or by size is
+	a policy nobody has asked for, so the directories are still there
+	afterwards; only the silence goes. How loud this should be is the same
+	question as whether to prune, which is why it is `-v' -- deciding it
+	while adding a count would be settling an open question in passing."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "build failed")
+
+	# One configuration: there is no other, and nothing to say.
+	out = t.fmake("-v").stdout
+	check("object dir(s) from other configurations" not in out,
+	      f"a tree with one configuration was told about others: {out}")
+
+	# A second and a third, each leaving its own set behind.
+	check(t.fmake("--cflags", "-O0 -g").returncode == 0, "second build failed")
+	check(t.fmake("--cflags", "-O2").returncode == 0, "third build failed")
+	objs = os.listdir(os.path.join(t.dir, ".fmake", "obj"))
+	check(len(objs) == 3,
+	      f"three configurations should hold three object dirs: {objs}")
+
+	out = t.fmake("-v").stdout
+	check("2 object dir(s) from other configurations" in out,
+	      f"the held configurations were not counted, or not against the "
+	      f"one being built: {out}")
+	check(re.search(r"\d+(\.\d+)?[BKMG]; --clean reclaims them", out),
+	      f"no size, or no pointer to the thing that reclaims it: {out}")
+
+	# Quiet without -v: this is a fact about disk, not about the build,
+	# and a line on every ordinary run is the noise that gets a
+	# diagnostic ignored.
+	out = t.fmake().stdout
+	check("object dir(s) from other configurations" not in out,
+	      f"the report reached an ordinary build: {out}")
+
+	# And it reports rather than reclaims. The directories survive.
+	check(len(os.listdir(os.path.join(t.dir, ".fmake", "obj"))) == 3,
+	      "saying how much is held removed some of it, which is a policy "
+	      "nobody asked for")
 
 
 @case

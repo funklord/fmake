@@ -10602,6 +10602,15 @@ def build(args, _bootstrapping=False):
 		if pkg.for_module(module, hdr_store, pkg_sig):
 			cfg.add_tree_flag("-D" + macro)
 	objdir = os.path.join(state, "obj", cfg.key)
+	# Said here rather than at `--clean', which is where the cost used to
+	# become visible and is after the decision it should inform. Verbose
+	# only: how loud this should be is the same question as whether to
+	# prune, and that is section 15's open one rather than something to
+	# settle while adding a count.
+	_held = held_objdirs(state, cfg.key)
+	if _held:
+		vinfo(f"{len(_held)} object dir(s) from other configurations, "
+		      f"{_human(sum(b for _n, b in _held))}; --clean reclaims them")
 
 	# @sources, resolved next to the file that asked for them, then from the
 	# project root. Same semantics as --force-link: the files nothing
@@ -17482,6 +17491,51 @@ def ensure_gitignore(root):
 			fh.write(f"{STATE_DIR}/\n")
 	except OSError:
 		pass
+
+
+def held_objdirs(state, current_key):
+	"""Object directories this build is not using, with their sizes.
+
+    One is kept per configuration on purpose -- switching profile,
+    toolchain or $DEBUG and switching back costs nothing the second time
+    -- and nothing reclaims the ones that fall out of use. Section 15
+    records a real project holding 274M and 14M side by side after a
+    single change of default flags, and hydra's .gitignore records a
+    cache that reached 146M under their src/ from a trial nobody
+    finished.
+
+    What was missing is not a policy but a number. `--clean' says how
+    much it freed, which section 15 calls the one moment the trade is
+    visible -- and that moment is after the decision to delete
+    everything, which is too late to inform it. This is the same shape
+    as the inferred include dirs in section 310: a set reported only
+    where it is destroyed.
+
+    Deliberately NOT a prune. Pruning by age or by size is a policy
+    nobody has asked for, and choosing one while reporting the number
+    would be deciding it in passing.
+    """
+	objroot = os.path.join(state, "obj")
+	try:
+		names = sorted(os.listdir(objroot))
+	except OSError:
+		return []
+	out = []
+	for name in names:
+		if name == current_key:
+			continue
+		d = os.path.join(objroot, name)
+		if not os.path.isdir(d) or os.path.islink(d):
+			continue
+		total = 0
+		for base, _sub, files in os.walk(d):
+			for f in files:
+				try:
+					total += os.lstat(os.path.join(base, f)).st_size
+				except OSError:
+					pass
+		out.append((name, total))
+	return out
 
 
 def _human(n):

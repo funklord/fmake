@@ -363,7 +363,8 @@ that had been green about nothing for five commits ·
 [310. Two spellings of one exclude, and a set reported only when it lost](#310-two-spellings-of-one-exclude-and-a-set-reported-only-when-it-lost) ·
 [311. What a diagnostic bought downstream, and what it cost](#311-what-a-diagnostic-bought-downstream-and-what-it-cost) ·
 [312. An elision that read as a courtesy and was a dead end](#312-an-elision-that-read-as-a-courtesy-and-was-a-dead-end) ·
-[313. The unexplained case was two different commands](#313-the-unexplained-case-was-two-different-commands)
+[313. The unexplained case was two different commands](#313-the-unexplained-case-was-two-different-commands) ·
+[314. A cost reported only where it was being paid off](#314-a-cost-reported-only-where-it-was-being-paid-off)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2219,9 +2220,14 @@ rather than code, and one lesson about testing.
   configuration on purpose, so switching profiles, toolchains or `$DEBUG`
   costs nothing the second time -- and nothing removes the ones that fall
   out of use. A real project held 274M and 14M side by side after a single
-  change of default flags. `--clean` is the only reclamation and it now
-  says how much it freed, which is the one moment the trade is visible.
-  Pruning by age or by size is a policy nobody has asked for.
+  change of default flags, and hydra's `.gitignore` records a cache that
+  reached 146M under their `src/` from a trial nobody finished.
+  `--clean` is still the only reclamation. **It is no longer the only
+  moment the trade is visible** -- an ordinary `-v` build says how many
+  object directories belong to other configurations and what they come
+  to, which is the same number at a moment somebody can still act on.
+  See §314. Pruning by age or by size remains a policy nobody has asked
+  for, and reporting the number is deliberately not one.
 - **A build with a permanently broken file never reaches a fixed point.**
   A file that failed to compile is retried on every build, because the fix
   might be outside it — an installed header, a corrected include path — and a
@@ -2506,7 +2512,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **559** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **560** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -23973,3 +23979,51 @@ diagnostics were accurate in both runs. The only artifact is this
 entry and the pointer from 310, because a question recorded as open
 and since answered is the kind of sentence that sends the next reader
 at work already done.
+
+---
+
+## 314. A cost reported only where it was being paid off
+
+One object directory is kept per configuration on purpose, and nothing
+reclaims the ones that fall out of use. §15 has held that as a known
+trade for a long time, with a number attached: 274M and 14M side by
+side in a real project after one change of default flags. hydra's
+`.gitignore` carries another, written by whoever met it -- a cache that
+reached **146M** under their `src/` from a trial nobody finished.
+
+The size was reported by `--clean`, and §15 called that *the one moment
+the trade is visible*. It is the wrong moment. `--clean` is run by
+somebody who has already decided to delete everything, so the number
+arrives after the decision it should have informed, and the person who
+would have wanted it -- somebody wondering what is in `.fmake/` -- had
+no way to ask.
+
+So an ordinary `-v` build now says it:
+
+    * 2 object dir(s) from other configurations, 7.9K; --clean reclaims them
+
+**This is §310's lesson one subject along**, which is why it was worth
+doing rather than filing: there the inferred include dirs were reported
+only on the path that destroyed part of the set, and here a disk cost
+was reported only on the path that destroys all of it. A set worth
+counting when it goes is worth counting while it is there.
+
+**What it deliberately is not is a prune**, and the case pins that by
+asserting the directories are still present afterwards. Pruning by age
+or by size is a policy nobody has asked for, and choosing one while
+adding a count would be settling an open question in passing -- §15
+still records it as open, and this entry does not close it.
+
+**Its loudness is the same question and got the same answer.** `-v`
+rather than ordinary output, because how much a user should be nagged
+about disk they agreed to spend is a policy too, and the argument for
+printing it on every build is the argument for pruning it, one step
+weaker. A wrong choice there is a line on every build in every tree,
+which is the shape that gets a diagnostic ignored rather than read.
+
+The control is the case's first assertion and it is the one that
+earned itself: a tree with a single configuration must say nothing.
+Mutating the helper to count the current build's own directory turns
+that red, where the main assertion stays green -- an off-by-one that
+reports `1 object dir(s) from other configurations` to somebody who
+has only ever built one way.
