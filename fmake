@@ -6032,7 +6032,15 @@ def compile_cmd(u, cfg, incflags):
 	# object. `-fmodules-ts' goes on every unit in a build that has any
 	# module in it, interface and importer alike, since the importer is
 	# the one that has to read the BMI.
-	lang_flag = ["-x", "c++"] if u.lang.module_iface else []
+	# `-x c++' for gcc, `-x c++-module' for clang: clang needs to be told
+	# this is an interface and not merely C++, or it compiles the file as
+	# an ordinary TU and the importer finds no BMI. Both must precede the
+	# source, which is why this is here rather than in `u.own' -- an `-x'
+	# after the file it describes governs nothing.
+	lang_flag = []
+	if u.lang.module_iface:
+		lang_flag = ["-x", "c++-module" if "clang" in os.path.basename(cc)
+		             else "c++"]
 	return ([cc, "-c"] + lang_flag + [u.abs, "-o", u.obj]
 	        + u.lang.dep_flags(u.dep)
 	        + incflags + cfg.cflags + u.own + cfg.override)
@@ -10739,6 +10747,14 @@ def build(args, _bootstrapping=False):
 	#
 	# Only where a module interface is actually in the build. A tree with
 	# none never sees the flag and is compiled exactly as it was.
+	# Set by the clang branch below and read where the units are built,
+	# which is past the point `objdir' exists. Initialised HERE and not
+	# beside that read: the first version put it after this block, so
+	# the branch set it and the initialiser then cleared it, and the
+	# per-unit flags were silently never applied. The build still ran,
+	# the interfaces still compiled, and only the importer failed --
+	# with clang's "module not found", which names the symptom.
+	_module_flags = None
 	if any(scans[rel].get("modiface") for rel in srcs if rel in scans):
 		# Refused here rather than met as a compiler error, because both
 		# of these produce messages that name the symptom and not the
@@ -10761,17 +10777,25 @@ def build(args, _bootstrapping=False):
 			       if len(hdr) > 1 else ""))
 		drv = os.path.basename(cfg.driver(True))
 		if "clang" in drv:
-			die(f"this tree has C++20 module interfaces and {drv} builds "
-			    f"them a different way than fmake knows.\n"
-			    f"gcc takes `-fmodules-ts' and writes its BMIs itself; "
-			    f"clang wants a separate `--precompile' step per "
-			    f"interface and an explicit `-fmodule-file=' on every "
-			    f"importer, which fmake does not emit.\n"
-			    f"Build the modules with gcc, or drop the module "
-			    f"interfaces -- refused rather than attempted, because "
-			    f"a half-supported module build fails at the importer "
-			    f"with a message about a BMI nobody asked for.")
-		cfg.add_tree_flag("-fmodules-ts")
+			# clang reaches the same place by different flags, and they
+			# are per unit rather than tree-wide: the interface writes
+			# its BMI beside its object with `-fmodule-output', and each
+			# importer is handed the ones it names. gcc keeps a cache
+			# and needs neither.
+			#
+			# `-std=c++20' only when nothing else sets one. gcc accepts
+			# `export module' under `-fmodules-ts' at its default std;
+			# clang does not, and refuses the first interface. Not
+			# forced over a project that states its own std -- that is
+			# the project's to decide, and a tree asking for c++23 gets
+			# modules from it anyway.
+			if not any(f.startswith("-std=")
+			           for f in cfg.cflags + list(cfg.override)):
+				cfg.add_tree_flag("-std=c++20")
+			_module_flags = {m: rel for rel in srcs if rel in scans
+			                 for m in (scans[rel].get("modiface") or [])}
+		else:
+			cfg.add_tree_flag("-fmodules-ts")
 
 	# "Found means defined" is a fact about the build, not about the file
 	# that said it. hydra's theme.h declares a stand-in `class QDBusVariant
@@ -11123,6 +11147,40 @@ def build(args, _bootstrapping=False):
 
 	for rel in sorted(units):
 		units[rel].own = own_flags(units[rel])
+
+	# clang's module flags, applied here because they name paths under
+	# `objdir' and that is not known where the compiler was chosen. An
+	# interface writes its BMI beside its object; an importer is handed
+	# the BMI of every module it names that this tree exports. A name
+	# nothing here exports gets nothing, exactly as an include that
+	# resolves to nothing falls through -- and the compile then fails
+	# with fmake's own "no file in this tree exports it" rather than a
+	# missing-BMI message.
+	if _module_flags is not None:
+		def _pcm(rel):
+			return os.path.join(objdir, rel + ".pcm")
+		for rel, u in units.items():
+			sc = scans.get(rel) or {}
+			if sc.get("modiface"):
+				os.makedirs(os.path.dirname(_pcm(rel)), exist_ok=True)
+				u.own = list(u.own) + ["-fmodule-output=" + _pcm(rel)]
+			# Transitively, not just what this file names. clang loads a
+			# BMI and then needs the BMIs that one refers to, so a file
+			# importing `mid' which imports `base' must be handed both
+			# -- measured: with direct imports only, `base' and `mid'
+			# compile and `main' fails with "module 'base' not found",
+			# naming a module it does not import. gcc needs none of this
+			# because its cache answers by name.
+			want, seen = list(sc.get("modimp") or []), set()
+			while want:
+				m = want.pop()
+				if m in seen or m not in _module_flags:
+					continue
+				seen.add(m)
+				want += (scans.get(_module_flags[m], {}).get("modimp") or [])
+			for m in sorted(seen):
+				u.own = list(u.own) + [
+				    f"-fmodule-file={m}={_pcm(_module_flags[m])}"]
 
 	# A target whose stanza carries defines gets its own object for its root
 	# translation unit: same source, same everything else, one -D more. The

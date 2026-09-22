@@ -1928,8 +1928,8 @@ rather than code, and one lesson about testing.
   clang. `-ffunction-sections` only changes what the linker discards,
   which is downstream of everything fmake decides.
 - ~~**C++ modules are not built at all**~~ **Named modules are built
-  now; see §317.** gcc only, no header units; both `--eject` backends
-  build a module tree. What the entry
+  now; see §317.** gcc and clang, no header units; both `--eject`
+  backends build a module tree. What the entry
   had right was the diagnosis -- an interface has to be compiled before
   anything importing it, and fmake compiled in no order. What it had
   wrong was that this made modules unreachable: the order is a
@@ -24278,12 +24278,40 @@ no object**.
 reason `-fPIC` is: the importer is what reads the BMI, and an object
 compiled without the flag cannot link against ones compiled with it.
 
-Three things are refused by name rather than met as compiler errors,
+Two things are refused by name rather than met as compiler errors,
 because each produces a message naming a symptom:
 
     import <string>;     "failed to read compiled module"
-    a clang build        "unknown argument: -fmodules-ts"
     import nothing has   "module not found", which reads as a missing -I
+
+### clang was a third refusal for an hour, and was different flags
+
+It was shipped refused, on the grounds that clang wants a
+`--precompile` step per interface and an explicit `-fmodule-file=` on
+every importer -- a different SHAPE of build, not a different flag
+set. That is one way to drive clang and it is not the only one:
+`-fmodule-output=<path>` writes the BMI as a side effect of an
+ordinary `-c`, which is gcc's shape exactly. So the difference is
+per-unit flags, and the refusal was measuring the first thing tried
+rather than what the compiler can do.
+
+    gcc     -fmodules-ts tree-wide, -x c++, BMIs in its own cache
+    clang   -x c++-module, -fmodule-output=<pcm> on the interface,
+            -fmodule-file=NAME=<pcm> on each importer, -std=c++20
+
+`-std=c++20` only where the project states no std of its own: gcc
+accepts `export module` at its default under `-fmodules-ts` and clang
+does not, and a tree asking for c++23 should get modules from that
+rather than be overridden.
+
+**The transitive set is the part a two-file fixture cannot show.**
+clang loads a BMI and then wants the BMIs that one refers to, so a
+file importing `mid` which imports `base` must be handed **both** --
+and with direct imports only, `base` and `mid` compile cleanly and
+`main` fails with *module 'base' not found*, naming a module it does
+not import. gcc needs none of it, because its cache answers by name.
+The chain case exists for that and the mutation dropping transitivity
+turns it red.
 
 **Where the BMIs go was a decision, not a default.** gcc writes
 `gcm.cache/` relative to the working directory and offers no flag to

@@ -16104,6 +16104,26 @@ int main(){ return twice(21) == 42 ? 0 : 1; }
 		check(u.run(os.path.basename(u.dir)).returncode == 0,
 		      "the chained program did not run correctly")
 
+		# clang needs the TRANSITIVE set of BMIs, which is the half that
+		# a two-file fixture cannot show: it loads mid's BMI and then
+		# wants base's, which main does not import and would never name.
+		# Measured -- with direct imports only, base and mid compile and
+		# main fails with "module 'base' not found", naming a module it
+		# does not import.
+		if shutil.which("clang++"):
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			for junk in (os.path.basename(u.dir), "build", "gcm.cache"):
+				shutil.rmtree(os.path.join(u.dir, junk), ignore_errors=True)
+			r = u.fmake(env={"CXX": "clang++"})
+			check(r.returncode == 0,
+			      f"clang did not build the two-deep chain, which is "
+			      f"where the transitive BMI set is needed: {r.stdout}"
+			      f"{r.stderr}")
+			check(u.run(os.path.basename(u.dir)).returncode == 0,
+			      "the clang-built chained program is wrong")
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			u.fmake()
+
 		# The exit has to work too, or a module tree is one nobody can
 		# leave -- which is principle 5, not a nicety. The ejected make
 		# build carries the ordering as order-only prerequisites and the
@@ -16209,14 +16229,18 @@ def a_header_unit_and_a_clang_module_build_are_refused_by_name(t):
 	      f"nothing says what to write instead: {out}")
 
 	if not shutil.which("clang++"):
-		raise Skip("clang++ not installed, so its refusal cannot be shown")
+		raise Skip("clang++ not installed")
+	# clang builds them now, by different flags rather than a different
+	# shape: `-fmodule-output' writes the BMI beside the object, and each
+	# importer is handed the ones it needs by path. The header unit above
+	# is refused under either compiler.
 	t.write("s.cppm", "export module s;\nexport int f(void){ return 1; }\n")
 	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
 	r = t.fmake(env={"CXX": "clang++"})
-	out = r.stdout + r.stderr
-	check(r.returncode != 0, f"clang cannot build these and should say so: {out}")
-	check("clang" in out and "--precompile" in out,
-	      f"the refusal does not say what clang wants instead: {out}")
+	check(r.returncode == 0,
+	      f"clang should build a module tree: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the clang-built module program is wrong")
 
 
 @case
