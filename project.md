@@ -24132,6 +24132,27 @@ without an instrument, and one absent line. The common shape is a
 report whose silence is ambiguous, and it is worth more than any of
 the individual fixes.
 
+**Sixth, and it is the check itself.** raidcfgd's closing observation
+-- a count inherits the shape of the query that produced it, and the
+query is the thing nobody re-reads -- was pointed back at this suite's
+source-reading cases. They came back clean: every one carries a
+liveness guard in the form this tree already uses, `check(len(pairs) >
+20, "only N entries read out of fmake")`, which is the confirm-it-
+inspected-something rule applied systematically.
+
+Every one except the silent-truncation check written half an hour
+earlier. It asserts an EMPTY set, so a broken `vinfo(` match or a
+broken regex reports a clean tree exactly as loudly as a clean tree
+does -- **the vacuous pass, in the check written to close the vacuous
+pass**. It counts the verbose lines it visited and refuses when that
+is implausibly small; sabotaging the scan now says *its empty result
+means nothing* rather than passing.
+
+Which is the argument for the lens rather than for the fix. Nothing
+was wrong with the suite's convention; what was wrong was the one case
+that had not been held to it, and it was the newest and the one whose
+author was most confident about this exact class.
+
 **One of the ten must NOT be converted, and it is the one that looks
 most convertible.** The per-error file list caps at four and reads
 exactly like the others:

@@ -15021,15 +15021,25 @@ def a_truncated_list_says_it_is_one_and_where_the_rest_are(t):
 	# is a dead end by construction. `(-v for all)' on a line that only
 	# appears under `-v' would be absurd, and a bare `...' is that
 	# absurdity with the absurd part deleted.
-	quiet = []
+	quiet, seen = [], 0
 	for i, l in enumerate(src_lines):
 		if "vinfo(" not in l:
 			continue
+		seen += 1
 		for j in range(i, min(i + 6, len(src_lines))):
 			if re.search(r'\[:\d+\]', src_lines[j]):
 				quiet.append(src_lines[j].strip())
 			if src_lines[j].rstrip().endswith(("))", ")")) and j > i:
 				break
+	# This asserts an EMPTY set, so it passes just as loudly when the
+	# scan above finds nothing to look at -- a broken `vinfo(' match or
+	# a broken regex reports a clean tree. The same guard the rest of
+	# this suite puts on its source readers, and it is here because the
+	# check it guards was written to close this very class and shipped
+	# without one.
+	check(seen > 10,
+	      f"only {seen} verbose lines found in fmake, so this scanned the "
+	      f"wrong thing and its empty result means nothing")
 	check(not quiet,
 	      f"a -v line truncates, and -v is where a reader goes when they "
 	      f"want all of it: {quiet}")
