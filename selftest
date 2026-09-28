@@ -10620,6 +10620,64 @@ int main(void){ puts("hi"); return 0; }
 
 
 @case
+def every_arch_the_canonicaliser_names_has_an_elf_machine(t):
+	"""The fourth hand-written list, and the one that had no gate.
+
+	Section 15 names three load-bearing hand-written lists -- linker
+	symbols, interposer libraries, the builtin header table -- and records
+	that all three are checked against the machine, sections 104 and 105.
+	`ELF_MACHINES' is a fourth. It was not on that list and had no check,
+	and section 318 is what an ungated list does: four architectures whose
+	canonical name matched no entry, so declaring one switched the ELF
+	architecture check off and said nothing.
+
+	Fixing the four closed the instances. This closes the class, which is
+	the thing section 4186 did not do when it found the same fault for
+	`amd64' and left four siblings live. **Adding an architecture to
+	PLATFORM_SUFFIXES without an ELF entry is a red suite now**, rather
+	than a hole nobody meets until they type the name.
+
+	A comparison of two tables in fmake's own source, so it needs no
+	toolchain and runs everywhere -- which matters, because the case that
+	measures the behaviour needs a cross compiler and skips without one.
+	The gate that catches this on a developer's machine has to be the one
+	that needs nothing installed."""
+	src = open(FMAKE).read()
+
+	blk = src[src.index("PLATFORM_SUFFIXES = {"):]
+	blk = blk[:blk.index("\n}")]
+	canon = sorted({m for m in re.findall(r'\("arch",\s*"(\w+)"\)', blk)})
+
+	elf = src[src.index("ELF_MACHINES = {"):]
+	elf = elf[:elf.index("\n}")]
+	names = set(re.findall(r'"(\w+)"', elf))
+	aliased = set(re.findall(r'\("(\w+)",\s*"\w+"\)',
+	                        src[src.index("for _canon, _elf_name in ("):][:400]))
+
+	# Read something, or an empty result means nothing -- the guard every
+	# source reader in this suite carries.
+	check(len(canon) >= 6,
+	      f"only {len(canon)} canonical arch names read out of fmake, so "
+	      f"this parsed the wrong thing")
+	check(len(names) >= 8,
+	      f"only {len(names)} ELF machine names read out of fmake")
+
+	missing = [c for c in canon if c not in names | aliased]
+	check(not missing,
+	      f"canon_platform can produce {missing}, and ARCH_ELF_CODE "
+	      f"resolves none of them -- so declaring one switches the ELF "
+	      f"architecture check off silently, which is section 318")
+
+	# The other direction: an ELF name canon_platform would rewrite into
+	# something unresolvable. None today, and it is the same hole mirrored.
+	bad = [n for n in sorted(names)
+	       if re.search(r'"%s":\s*\("arch",\s*"(?!%s")' % (n, n), blk)]
+	check(not bad,
+	      f"canon_platform rewrites the ELF machine name(s) {bad} into "
+	      f"something else, so an object of that machine cannot be matched")
+
+
+@case
 def an_arch_the_canonicaliser_names_is_one_the_check_can_read(t):
 	"""The architecture guard was off for four real architectures.
 

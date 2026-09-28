@@ -2529,7 +2529,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **565** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **566** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24517,3 +24517,39 @@ most needs that line is the one who has just typed a name fmake cannot
 verify against. Same family as §310, §312 and §315 -- a report whose
 silence is ambiguous -- which is how this was found: the lens was still
 in hand.
+
+### The cause was a fourth ungated list, and that is what got closed
+
+§15 names three hand-written load-bearing lists -- linker-provided
+symbols, interposer libraries, the builtin header table -- and records
+that **all three are checked against the machine**, §104 and §105.
+`ELF_MACHINES` is a fourth. It was not on that list and had no check,
+and the four silent architectures are what an ungated list does.
+
+Fixing the four closes the instances. What closes the class is an
+assertion that **every canonical arch `canon_platform` can produce is
+resolvable by `ARCH_ELF_CODE`** -- a comparison of two tables in
+fmake's own source, in both directions. Adding an architecture to
+`PLATFORM_SUFFIXES` without an ELF entry is a red suite now.
+
+That distinction is the whole of why this entry exists rather than a
+one-line fix. §4186 found this exact fault for `amd64`, fixed the
+instance, and left four siblings live -- because a guard whose failure
+is silence gets fixed where somebody was standing and nowhere else.
+
+**It needs no toolchain, which is the point.** The case that measures
+the behaviour needs a cross compiler and skips without one -- so on a
+developer's machine it is usually asleep, which is `evidence.md`'s
+gate-weakest-where-it-matters exactly. The gate that catches this where
+the code is written has to be the one that needs nothing installed.
+
+**And it was made to fail twice before being trusted**, because an
+assertion over two tables that already agree is otherwise a green light
+with no demonstrated ability to be anything else:
+
+    added "loong64" to PLATFORM_SUFFIXES   red, naming loong64
+    broke the table parse in the case      red, "only 0 names read"
+
+The second is the one that matters more. Without it the assertion is
+worth nothing the first time somebody edits the regex, and a comparison
+over an empty set passes exactly as loudly as one over a correct set.
