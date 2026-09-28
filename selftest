@@ -180,6 +180,88 @@ def before_externals(explain_out):
 	return re.split(r"\n  external symbols", explain_out)[0]
 
 
+_SYSTEM_HEADERS = None
+
+
+def system_header_names():
+	"""Header names the compiler resolves for an angle include, top level only.
+
+    An independent reading of the fact fmake's own predicate reads, which is
+    the point: a second copy of fmake's parser would be one witness twice.
+    The compiler resolves <name> as `dir/name` for each search directory, so
+    only the top level of each counts -- walking them recursively reports
+    `config.h` as a system header on the strength of
+    /usr/include/somepackage/config.h, which no include ever reaches.
+    """
+	global _SYSTEM_HEADERS
+	if _SYSTEM_HEADERS is None:
+		cxx = os.environ.get("CXX") or "g++"
+		r = subprocess.run([cxx, "-E", "-Wp,-v", "-xc++", os.devnull],
+		                   capture_output=True, text=True, errors="replace")
+		dirs, inside = [], False
+		for line in r.stderr.splitlines():
+			if line.startswith("#include <...>"):
+				inside = True
+			elif inside:
+				if not line.startswith(" "):
+					break
+				d = line.strip().split(" (")[0]
+				if os.path.isdir(d):
+					dirs.append(d)
+		got = set()
+		for d in dirs:
+			try:
+				got |= {f for f in os.listdir(d)
+				        if os.path.isfile(os.path.join(d, f))}
+			except OSError:
+				pass
+		_SYSTEM_HEADERS = got
+	return _SYSTEM_HEADERS
+
+
+_BORROWED = None
+
+
+def a_system_header_the_list_omits():
+	"""A header this toolchain has, fmake's list does not name, and a C file
+    can include on its own -- or None.
+
+    Chosen by measurement rather than written down, so the cases using it
+    are about the class and not about whichever name was convenient. The
+    last clause is what makes it usable: the first unlisted name here
+    alphabetically is `FlexLexer.h`, which is C++ and stops on <iostream>
+    inside a .c file, so a case built on it goes red for a reason that has
+    nothing to do with what it asserts.
+    """
+	global _BORROWED
+	if _BORROWED is None:
+		# Filled in one assignment, not marked empty and then filled: -j
+		# runs cases in threads of one process, so a second thread that
+		# arrives during the probing must not read the sentinel as the
+		# answer. Written the other way first, and it skipped this case
+		# under -j4 while passing on its own -- a memo race presenting as
+		# "this machine has no such header".
+		chosen = ""
+		cc = os.environ.get("CC") or "cc"
+		for name in sorted(system_header_names() - standard_headers()):
+			r = subprocess.run([cc, "-fsyntax-only", "-xc", "-"],
+			                   input=f"#include <{name}>\n",
+			                   capture_output=True, text=True,
+			                   errors="replace")
+			if r.returncode == 0:
+				chosen = name
+				break
+		_BORROWED = chosen
+	return _BORROWED or None
+
+
+def standard_headers():
+	"""fmake's built-in fast-path list, read out of its source."""
+	m = re.search(r'STANDARD_HEADERS = frozenset\("""(.*?)"""',
+	              open(FMAKE).read(), re.S)
+	return set(m.group(1).split()) if m else set()
+
+
 def compiled(r):
 	"""Files fmake compiled in this invocation, from the progress lines."""
 	out = []
@@ -9747,6 +9829,106 @@ def a_quote_include_beside_its_includer_costs_no_include_directory(t):
 		      "the directory is on the path for the angle include")
 	finally:
 		u.cleanup()
+
+
+@case
+def a_toolchain_header_the_list_never_named_is_still_not_shadowed(t):
+	"""STANDARD_HEADERS was a hand-written claim about somebody else's
+	headers, and it was short. `endian.h`, `error.h`, `getopt.h` and
+	`malloc.h` are all in /usr/include on this machine and none of them was
+	in it, so a tree holding a file of that name had its directory put in
+	front of the C library's for every compile -- the stdint.h incident the
+	list exists to prevent, arriving by the one route a list cannot cover.
+
+	The name is chosen by asking the system rather than written here, so
+	the case is about the class and not about `error.h`: whatever the
+	toolchain has that the list omits is what gets tried. Pinning a name
+	would make this a fifth hand-written list.
+
+	The second half is the control, and it fails the way the real thing
+	fails: a name the toolchain does NOT have must still be resolved out of
+	the tree, so a predicate that simply refused every angle include would
+	go red here rather than look like a pass."""
+	check(len(standard_headers()) >= 40,
+	      f"only {len(standard_headers())} names read out of "
+	      f"STANDARD_HEADERS, so this parsed the wrong thing")
+	name = a_system_header_the_list_omits()
+	if not name:
+		raise Skip("no header here is both the toolchain's and unlisted")
+
+	# A tree copy that cannot be compiled, so winning the match is loud.
+	t.write(f"vendor/{name}", f'#error "the tree own {name} won the match"\n')
+	t.write("main.c", f"#include <{name}>\nint main(void){{ return 0; }}\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"<{name}> is the toolchain's and vendor/{name} must not stand in "
+	      f"for it: {r.stdout}{r.stderr}")
+
+	# The control. Same shape, a name nothing outside the tree has.
+	u = Tree("owned-here")
+	try:
+		mine = "fmake_case_" + name
+		u.write(f"vendor/{mine}", "#define MINE 0\n")
+		u.write("main.c", f"#include <{mine}>\nint main(void){{ return MINE; }}\n")
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"<{mine}> is nobody else's, so vendor/ must still be put on "
+		      f"the path: {r.stdout}{r.stderr}")
+		check("-Ivendor" in u.fmake("--explain").stdout,
+		      "and the directory is named for it")
+	finally:
+		u.cleanup()
+
+
+@case
+def the_search_path_is_asked_of_the_c_driver_when_the_cxx_one_is_missing(t):
+	"""`default_include_dirs` asked the C++ driver and stopped there. A
+	machine with `cc` and no `g++` is ordinary -- a container, a build
+	image, an embedded toolchain -- and there both readings come back
+	empty, so everything downstream behaves as though the compiler searches
+	nowhere: pkg-config attributes headers it should not, and the header
+	predicate answers False for <stdio.h>.
+
+	Which is not a theoretical loss. With the C rung removed and CXX
+	pointing at nothing, this tree's `vendor/` wins the match and the build
+	fails -- measured, and it is what the third rung is for."""
+	name = a_system_header_the_list_omits()
+	if not name:
+		raise Skip("no header here is both the toolchain's and unlisted")
+	t.write(f"vendor/{name}", f'#error "the tree own {name} won the match"\n')
+	t.write("main.c", f"#include <{name}>\nint main(void){{ return 0; }}\n")
+	r = t.fmake(env={"CXX": "/nonexistent/g++"})
+	check(r.returncode == 0,
+	      f"with no C++ driver the C one must still say where headers are: "
+	      f"{r.stdout}{r.stderr}")
+
+
+@case
+def a_quote_include_still_finds_the_tree_own_copy_of_a_system_name(t):
+	"""The predicate above is asked about angle includes only, and this is
+	the measurement that decided it. situ keeps `runtime/c/situ.h` and
+	includes it from `runtime/cpp/situ.hpp` as "situ.h" -- not beside the
+	includer, so it reaches the basename fallback -- and situ installs
+	/usr/include/situ.h. A predicate applied to both bracket kinds builds
+	that tree against the copy it had installed rather than the one it is
+	compiling, which is a version skew nothing reports.
+
+	Swept across the sibling private trees: six hold a header whose name
+	the system also has at the top of a search directory, and every include
+	of one is a quote include. So the bracket is what separates "somebody
+	else owns this name" from "this tree chose it"."""
+	name = a_system_header_the_list_omits()
+	if not name:
+		raise Skip("no header here is both the toolchain's and unlisted")
+
+	t.write(f"other/{name}", "#define MINE 0\n")
+	t.write("sub/main.c", f'#include "{name}"\nint main(void){{ return MINE; }}\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f'"{name}" in quotes is the tree asking for its own: '
+	      f"{r.stdout}{r.stderr}")
+	check("-Iother" in t.fmake("--explain").stdout,
+	      f"so other/ is on the path: {t.fmake('--explain').stdout[:400]}")
 
 
 @case

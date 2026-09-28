@@ -4954,6 +4954,13 @@ def is_cxx(rel):
 # tree has that name, which is a useful guess for a vendored <vterm.h> and
 # a catastrophic one for <stdint.h>.
 #
+# This is a fast path now rather than the answer. toolchain_owns_header
+# asks the compiler, which is exact and covers the names nobody thought to
+# write down; the list stays because these are the names every tree
+# includes, and answering them from memory saves asking about each one.
+# It is also what decides on a machine where the compiler named no search
+# path at all.
+#
 # fuzzypickles vendors thorvg, which vendors rapidjson, which ships an
 # MSVC-only stdint.h. That was the only stdint.h in the tree, so it won the
 # basename match, its directory went on the include path for every compile,
@@ -4975,8 +4982,11 @@ wordexp.h
 
 
 class Project:
-	def __init__(self, root, srcs, hdrs, scans):
+	def __init__(self, root, srcs, hdrs, scans, owns=None):
 		self.root  = root
+		# Whether the toolchain owns an include name. None means nobody
+		# asked the compiler, and STANDARD_HEADERS decides alone.
+		self.owns  = owns
 		self.srcs  = srcs
 		self.hdrs  = hdrs
 		self.scans = scans
@@ -5024,6 +5034,18 @@ class Project:
 		# The basename fallback is a guess, and it must not be made about a
 		# name the toolchain owns. See STANDARD_HEADERS.
 		if os.path.basename(inc_name) in STANDARD_HEADERS:
+			return None
+		# The same question, asked of the compiler rather than of a list,
+		# and only about an angle include. A quote include that has got
+		# this far is the tree looking for its own file under a name it
+		# chose: situ's `runtime/cpp/situ.hpp' includes "situ.h" from
+		# `runtime/c/', and situ installs /usr/include/situ.h -- so a
+		# predicate applied to both kinds would build that tree against
+		# the copy it had installed rather than the one it is compiling.
+		# Measured across the sibling trees: six own a header whose name
+		# the system also has at the top of a search directory, and every
+		# include of one is a quote include.
+		if kind == "<" and self.owns and self.owns(inc_name):
 			return None
 		matches = self.hdr_by_name.get(os.path.basename(inc_name), [])
 		if len(matches) == 1:
@@ -5410,6 +5432,8 @@ class Config:
 		# The profile is in here through cflags, so switching profiles gets a
 		# separate object directory rather than invalidating the old one.
 		self._libdirs = None
+		self._sysincdirs = None
+		self._owns_header = {}
 		self.refresh_key()
 
 	def link_flags(self):
@@ -5532,6 +5556,18 @@ class Config:
 		if self._libdirs is None:
 			self._libdirs = lib_search_dirs(self)
 		return self._libdirs
+
+	@property
+	def sysincdirs(self):
+		"""Where the preprocessor looks without being told, asked once.
+
+        Cached because three callers wanted it and each was spawning its
+        own pair of probes; the header predicate is a fourth, and it asks
+        per unresolved include rather than per build.
+        """
+		if self._sysincdirs is None:
+			self._sysincdirs = default_include_dirs(self)
+		return self._sysincdirs
 
 # ---------------------------------------------------------------------------
 # Hashing & cache
@@ -6756,12 +6792,18 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					# advice was the wrong half of the choice. It says
 					# both halves now.
 					root_dir = os.path.join(root, want)
+					# The same question the resolver asks, and it
+					# was asked of the list here too -- so the advice
+					# was silent about exactly the names the list
+					# omits. `error.h' and `endian.h' shadow the C
+					# library as thoroughly as `string.h' does.
 					shadows = sorted({
 					    os.path.relpath(h, want).replace(os.sep, "/")
 					    for h in tree_headers
 					    if (h == want or h.startswith(want + "/"))
-					    and os.path.relpath(h, want).replace(os.sep, "/")
-					    in STANDARD_HEADERS})
+					    and toolchain_owns_header(
+					        cfg,
+					        os.path.relpath(h, want).replace(os.sep, "/"))})
 					if shadows:
 						note(f"   {want} also holds "
 						     f"{', '.join(shadows[:3])}"
@@ -7950,9 +7992,51 @@ def default_include_dirs(cfg):
 	# at all. Written first as `a or b' over those strings, this could not
 	# fire: the failing probe always won. Asking whether the list came back
 	# empty is the question the fallback exists to ask.
+	# And the C driver last, because the C++ one is not always installed.
+	# A machine with cc and no g++ is ordinary -- a container, a build
+	# image, an embedded toolchain -- and there the two readings above are
+	# both empty. Everything reading this then behaves as though the
+	# compiler searches nowhere: pkg-config attributes headers it should
+	# not, and toolchain_owns_header answers False for <stdio.h>. Asking
+	# cc for the C search path is strictly more than nothing, and it is the
+	# right answer for a tree with no C++ in it at all.
 	ask = ["-E", "-Wp,-v", "-xc++", os.devnull]
+	cask = ["-E", "-Wp,-v", "-xc", os.devnull]
 	return (read([cfg.driver(True), *cfg.probe_flags, *ask])
-	        or read([cfg.driver(True), *ask]))
+	        or read([cfg.driver(True), *ask])
+	        or read([cfg.cc, *cfg.probe_flags, *cask])
+	        or read([cfg.cc, *cask]))
+
+
+def toolchain_owns_header(cfg, inc_name):
+	"""Whether the compiler resolves `inc_name' with no help from the tree.
+
+    The question STANDARD_HEADERS was written to answer, asked of the
+    toolchain instead of a list. A list of names is a claim about somebody
+    else's headers maintained by hand, and it was wrong: `endian.h',
+    `error.h', `getopt.h' and `malloc.h' are all in /usr/include here and
+    none of them was in it, so a tree holding a file of that name had its
+    directory put in front of the C library's for every compile -- which
+    is the stdint.h incident the list exists to prevent, arriving by the
+    one route the list cannot cover.
+
+    Asked by the include's full spelling rather than its basename, because
+    that is what the compiler resolves: <fuzznet/link/link.h> is not
+    <link.h>, and /usr/include/link.h must not answer for it.
+
+    An empty search path -- no compiler, or a driver that refused the
+    probe -- makes this False for every name, which leaves STANDARD_HEADERS
+    deciding alone. That is the behaviour this replaced rather than a
+    silent widening, and `-v' says when it happens.
+    """
+	if os.path.basename(inc_name) in STANDARD_HEADERS:
+		return True
+	got = cfg._owns_header.get(inc_name)
+	if got is None:
+		got = any(os.path.isfile(os.path.join(d, inc_name))
+		          for d in cfg.sysincdirs)
+		cfg._owns_header[inc_name] = got
+	return got
 
 
 def default_link_dirs(cfg):
@@ -9731,7 +9815,7 @@ def build(args, _bootstrapping=False):
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.
 	pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet,
-	                   default_include_dirs(cfg),
+	                   cfg.sysincdirs,
 	                   pc_path=cfg.pkg_config_path)
 	# Before anything resolves a header, so that every Qt answer in this
 	# build comes from the one major -- including the moc outputs, whose
@@ -10277,7 +10361,15 @@ def build(args, _bootstrapping=False):
 		srcs.sort()
 		scan_all(srcs)
 
-	proj = Project(root, srcs, hdrs, scans)
+	proj = Project(root, srcs, hdrs, scans,
+	               owns=lambda n: toolchain_owns_header(cfg, n))
+	# A predicate that cannot answer says so, because its silence is the
+	# permissive direction: with no search path every name reads as the
+	# tree's, which is the guess STANDARD_HEADERS exists to refuse.
+	if VERBOSE and not cfg.sysincdirs:
+		note(f"[headers] {cfg.driver(True)} named no search path, so an "
+		     f"unresolved angle include is judged by the built-in list "
+		     f"alone")
 
 	# ---- crates -------------------------------------------------------
 	# Rust before targets, because it decides which .rs files can root one.
@@ -11422,7 +11514,7 @@ def build(args, _bootstrapping=False):
 		              for rel in srcs if rel not in crate_members]
 		pkg_cflags, _ = propose_from_headers(every_unit, pkg, hdr_store,
 		                                     proj,
-		                                     default_include_dirs(cfg))
+		                                     cfg.sysincdirs)
 		incflags = base_incflags + [f for f in pkg_cflags
 		                            if f not in base_incflags]
 
@@ -12236,7 +12328,7 @@ def build(args, _bootstrapping=False):
 		# module name to offer: the reader knows which package ships the
 		# header and fmake does not.
 		incdirs = [f[2:] for f in incflags if f.startswith("-I")]
-		incdirs += default_include_dirs(cfg)
+		incdirs += cfg.sysincdirs
 		# One line per file, not per include. A guarded block opens with
 		# fourteen headers from the same package in hydra's case, and
 		# fourteen lines saying the same thing is how a real finding gets

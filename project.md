@@ -368,7 +368,8 @@ that had been green about nothing for five commits ·
 [315. Seventeen truncations, one of which said where the rest were](#315-seventeen-truncations-one-of-which-said-where-the-rest-were) ·
 [316. A target that compiles its whole closure its own way](#316-a-target-that-compiles-its-whole-closure-its-own-way) ·
 [317. Modules needed an order, and an edge nobody had named](#317-modules-needed-an-order-and-an-edge-nobody-had-named) ·
-[318. The architecture check was off for four architectures](#318-the-architecture-check-was-off-for-four-architectures)
+[318. The architecture check was off for four architectures](#318-the-architecture-check-was-off-for-four-architectures) ·
+[319. The list of headers the toolchain owns, replaced by asking it](#319-the-list-of-headers-the-toolchain-owns-replaced-by-asking-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2277,6 +2278,14 @@ rather than code, and one lesson about testing.
   A fourth would be the signal that the provider model wants a real predicate
   rather than another list, and the threshold is stated here so it is agreed in
   advance rather than argued about at the time.
+  **The threshold has since fired twice, and only one of the two wanted a
+  predicate.** `ELF_MACHINES` was a fourth list and is gated rather than
+  replaced -- §318, because the tables are both in fmake's own source and a
+  comparison needs no toolchain. `STANDARD_HEADERS` was a fifth and **is
+  replaced** -- §319, because fmake was already asking the compiler where it
+  looks for headers, so the predicate costs fewer subprocesses than the list
+  did. So the deciding question is not the count but whether the answer is
+  already being paid for.
   **§17 did not trip it.** `Q_OBJECT` and the Qt `.pc` module names are a
   *generator trigger* — what to run and where to find it — not another class of
   thing that looks like a provider and is not. The provider model was untouched
@@ -2529,7 +2538,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **566** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **569** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24553,3 +24562,131 @@ with no demonstrated ability to be anything else:
 The second is the one that matters more. Without it the assertion is
 worth nothing the first time somebody edits the regex, and a comparison
 over an empty set passes exactly as loudly as one over a correct set.
+
+---
+
+## 319. The list of headers the toolchain owns, replaced by asking it
+
+`STANDARD_HEADERS` is the set of names fmake refuses to resolve out of the
+tree. It exists because the basename fallback -- an unmatched include
+resolved to the one tree file with that name -- is a useful guess for a
+vendored `<vterm.h>` and a catastrophic one for `<stdint.h>`: fuzzypickles
+vendors thorvg, which vendors rapidjson, which ships an MSVC-only
+`stdint.h`, and 54 files failed on `#error "Use this header only with
+Microsoft Visual C++ compilers!"` because that one file four levels down
+won the match and its directory went on every compile line.
+
+It had 65 names, written by hand from ISO C and POSIX, and the toolchain on
+this machine has **541** at the top of a search directory. Four of the
+missing ones are ordinary:
+
+    endian.h   error.h   getopt.h   malloc.h
+
+All four are in `/usr/include`. A tree holding a file of any of those names
+had its directory put in front of the C library's for every compile -- the
+incident the list exists to prevent, arriving by the one route a list
+cannot cover. Reproduced:
+
+    vendor/error.h   #error "the tree's own error.h won the match"
+    main.c           #include <error.h>
+
+    before   main.c did not compile
+    after    built
+
+### Why this one could be replaced when §104's could not
+
+§104 refused to replace `LINKER_SYMBOLS` with detection, on the grounds
+that reading the default linker script is a subprocess on every build for
+an answer that changes only when binutils does, and §17 says fmake does not
+probe. The right move there was to leave the list and have the suite
+compare it against `ld --verbose`.
+
+That argument does not reach this list, and the difference is the cost.
+**fmake already asks the compiler where it looks for headers.**
+`default_include_dirs` parses the `#include <...>` block out of
+`cpp -Wp,-v`, and three callers wanted it -- each spawning its own pair of
+probes. It is one cached answer on `Cfg` now, and the predicate is
+`os.path.isfile` against those directories, memoised per include name. So
+the replacement made the build do *fewer* subprocesses than the list did.
+
+The list stays as a fast path, because every tree includes those 65 names
+and answering them from memory saves asking. It also decides alone where
+the compiler named no search path at all, which `-v` now says.
+
+### The search path had only two rungs, and both are C++
+
+Asking the compiler is only as good as the asking. `default_include_dirs`
+tried the C++ driver with this project's flags, then the C++ driver bare,
+and stopped. A machine with `cc` and no `g++` is ordinary -- a container, a
+build image, an embedded toolchain -- and there both rungs come back empty,
+so **everything downstream behaves as though the compiler searches
+nowhere**: pkg-config attributes headers it should not, and the predicate
+answers False for `<stdio.h>`.
+
+That was not a hole the predicate introduced; it was already there, and the
+predicate is what made it matter. Measured, with the C rung removed and
+`CXX` pointing at nothing:
+
+    vendor/<name> wins the match, and main.c does not compile
+
+A third rung asks `cc` for the C search path. It is strictly more than
+nothing and it is the right answer for a tree with no C++ in it at all.
+
+### The bracket is what the question turns on
+
+The predicate is asked about angle includes only, and that was measured
+rather than assumed. Applied to both kinds it breaks situ: `runtime/cpp/
+situ.hpp` includes `"situ.h"` from `runtime/c/`, which is not beside the
+includer and so reaches the basename fallback -- and situ installs
+`/usr/include/situ.h`. A predicate indifferent to the bracket builds that
+tree against the copy it had installed rather than the one it is compiling,
+which is a version skew nothing reports.
+
+Swept across the sibling private trees, comparing tracked header names
+against the top level of the toolchain's search directories: six hold a
+header whose name the system also has, and **every include of one is a
+quote include**. So the bracket separates "somebody else owns this name"
+from "this tree chose it", and it separates them cleanly on the evidence
+available.
+
+Asked by the include's full spelling, too, not its basename:
+`<fuzznet/link/link.h>` is not `<link.h>`, and `/usr/include/link.h` must
+not answer for it. The list is still consulted by basename, which is what
+it always did.
+
+### The advice was silent about the same names
+
+The `[project] include-dirs` suggestion warns when naming a directory would
+put a toolchain header in front of the C library's -- beerssh's case, where
+libssh's `string.h` would reach every file in the build. It asked the list,
+so it was silent about exactly the names the list omits. It asks the
+predicate now.
+
+### The cases, and what each sabotage proves
+
+    predicate removed          the shadowed build goes red
+    predicate on both kinds    the quote include goes red
+    predicate always true      the CONTROL goes red
+    C rung removed             the no-g++ case goes red
+
+The third is the one worth keeping. The case has two halves: a name the
+toolchain has, which must not be shadowed, and a name nothing outside the
+tree has, which must still be resolved out of it. Without the second, a
+predicate that refused every angle include would look like a pass.
+
+**The name is chosen by measurement, not written down.** The case asks the
+system for a header the list omits and the C compiler can include on its
+own -- otherwise it would be a fifth hand-written list, and the first
+attempt picked `FlexLexer.h`, which is C++ and stops on `<iostream>` inside
+a `.c` file. That selection is what the suite is really asserting about:
+whatever this toolchain has that fmake does not name.
+
+### The suite's own bug, found by the suite
+
+The memo behind that selection was written as "mark it empty, then fill
+it". `-j` runs cases in threads of one process, so a second thread
+arriving during the probing read the sentinel as the answer: the case
+**skipped under `-j4` and passed on its own**, reporting "this machine has
+no such header". Filled in one assignment now. A memo race presenting as
+an environmental absence is the shape `evidence.md` names -- an empty
+result that reads exactly like a real one.
