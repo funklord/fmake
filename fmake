@@ -12523,7 +12523,8 @@ def build(args, _bootstrapping=False):
 			     "table of an archive nothing has built yet.")
 		return 0
 	if args.dry_run and args.install:
-		return do_install(wanted, closures, root, outdir, conf, args)
+		return do_install(wanted, closures, root, outdir, conf, args,
+		                  proj)
 	# `--uninstall -n' is the one anybody should run first, so it has to
 	# reach the plan rather than stopping at the dry-run gate above.
 	if args.dry_run and args.uninstall:
@@ -12767,7 +12768,8 @@ def build(args, _bootstrapping=False):
 
 	if args.install and not failed:
 		say()
-		return do_install(wanted, closures, root, outdir, conf, args)
+		return do_install(wanted, closures, root, outdir, conf, args,
+		                  proj)
 
 	if args.release and not failed:
 		say()
@@ -15881,6 +15883,41 @@ def unpublished_headers(targets, closures, root):
 	return {h: sorted(where) for h, where in sorted(orphans.items())}
 
 
+def unpublished_dependencies(targets, closures, root, proj):
+	"""Tree headers a published header includes and nothing publishes.
+
+    An install whose `includedir' cannot be compiled, reported before it is
+    written. Measured: a library publishing `inc/api.h' which includes
+    "detail.h" installs one file, exits 0, says nothing, and the first
+    consumer to type `#include <api.h>' gets
+
+        api.h:3:10: fatal error: detail.h: No such file or directory
+
+    Nothing else in fmake could catch it. The library builds, because the
+    tree has both files; `@headers' does what it was told; the install plan
+    is right about what it was asked to install. The fault is in what was
+    asked for, and the only thing that knows is the include graph -- which
+    is why this is a report rather than a refusal: that graph is textual and
+    §3's guess, so an include behind `#ifdef BUILDING_FOO' would be a false
+    finding, and a false finding here lands in the one place fmake asks to
+    be trusted.
+
+    Reported per missing header rather than per publisher, because the fix
+    is one directive for the missing file however many headers reach it.
+    """
+	published = {source for _, source, directory, _, _
+	             in install_plan(targets, closures, root)
+	             if directory == "includedir"}
+	if not published:
+		return {}
+	missing = {}
+	for h in sorted(published):
+		for reached in sorted(proj.reachable_headers([h])):
+			if reached not in published:
+				missing.setdefault(reached, []).append(h)
+	return missing
+
+
 # ---------------------------------------------------------------------------
 # --eject deb
 # ---------------------------------------------------------------------------
@@ -17399,7 +17436,7 @@ def do_uninstall(targets, closures, root, conf, args):
 	return 0
 
 
-def do_install(targets, closures, root, outdir, conf, args):
+def do_install(targets, closures, root, outdir, conf, args, proj):
 	refuse_install_escapes(conf, args)
 	paths = install_paths(conf, args)
 	planned = []
@@ -17460,6 +17497,20 @@ def do_install(targets, closures, root, outdir, conf, args):
 		     f"{', '.join(sources)} reaches only a program, and a program "
 		     f"publishes no API. Put the directive on the library's source, "
 		     f"or name it in [target.NAME] headers to publish it anyway")
+
+	# The other half of the same question, and the one that produces a
+	# broken install rather than a silent no-op: a header that IS published
+	# and includes one that is not.
+	# `proj' is required rather than defaulted: a keyword with a None
+	# default would make this check silently absent for any caller added
+	# later, which is the shape of a guard whose failure is silence.
+	for header, by in unpublished_dependencies(targets, closures, root,
+	                                           proj).items():
+		warn(f"{header} is included by {', '.join(by)}, which this "
+		     f"installs, and is not installed itself: a consumer of "
+		     f"{by[0]} stops on `{os.path.basename(header)}: No such file "
+		     f"or directory'. Publish it too -- @headers {header} -- or "
+		     f"move the include out of the published header")
 
 	if not planned:
 		info("nothing to install")

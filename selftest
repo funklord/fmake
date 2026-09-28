@@ -7068,6 +7068,72 @@ def a_library_resolves_its_own_includes_like_a_program(t):
 
 
 @case
+def a_published_header_whose_own_include_is_not_published_is_reported(t):
+	"""An install whose `includedir` cannot be compiled, and nothing said so.
+
+	    inc/api.h    @headers, and includes "detail.h"
+	    inc/detail.h neither published nor mentioned
+
+	fmake installed one header, exited 0, printed nothing, and the first
+	consumer to type `#include <api.h>` got
+
+	    api.h:3:10: fatal error: detail.h: No such file or directory
+
+	Measured against a staged install before the check existed, which is
+	the half that makes this a bug rather than a tidiness: the library
+	built, `@headers` did what it was told, and the install plan was right
+	about what it had been asked to install. The fault is in what was asked
+	for, and the only thing that can see it is the include graph.
+
+	A report and not a refusal, because that graph is textual: an include
+	behind `#ifdef BUILDING_FOO` would be a false finding in the one place
+	fmake asks to be trusted.
+
+	The second half is the control, and it is the assertion that matters
+	most -- a check that warned unconditionally would pass the first half
+	and look right. Publishing both must silence it, and the staged headers
+	must then actually compile, which is the property the warning stands
+	for.
+	"""
+	t.write("inc/api.h",
+	        '#pragma once\n#include "detail.h"\nint api_add(int a, int b);\n')
+	t.write("inc/detail.h", "#pragma once\n#define API_ONE 1\n")
+	body = ('#include "api.h"\n'
+	        "int api_add(int a, int b){ return a + b + API_ONE - 1; }\n")
+	t.write("api.c", "/*! @target apilib\n    @kind static\n"
+	                 "    @version 1.0\n    @headers inc/api.h */\n" + body)
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the install itself succeeds: {out}")
+	check("inc/detail.h" in out and "is not installed itself" in out,
+	      f"the unpublished include must be named: {out}")
+	check(not os.path.exists(os.path.join(stage, "include", "detail.h")),
+	      "and it really is absent, which is what the warning is about")
+
+	# The control: publish both, and the warning goes away -- and the
+	# staged headers compile, which is the fact the warning stands for.
+	t.write("api.c", "/*! @target apilib\n    @kind static\n"
+	                 "    @version 1.0\n    @headers inc/api.h\n"
+	                 "    @headers inc/detail.h */\n" + body)
+	shutil.rmtree(stage, ignore_errors=True)
+	r = t.fmake("--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"publishing both installs cleanly: {out}")
+	check("is not installed itself" not in out,
+	      f"and says nothing, having nothing to say: {out}")
+	t.write("consumer.c",
+	        "#include <api.h>\nint main(void){ return api_add(1, 2) - 3; }\n")
+	c = subprocess.run([os.environ.get("CC") or "cc", "-c",
+	                    "-I", os.path.join(stage, "include"),
+	                    os.path.join(t.dir, "consumer.c"),
+	                    "-o", os.path.join(t.dir, "consumer.o")],
+	                   capture_output=True, text=True, errors="replace")
+	check(c.returncode == 0,
+	      f"the staged headers must compile on their own: {c.stderr}")
+
+
+@case
 def a_published_header_keeps_the_path_it_is_included_by(t):
 	"""`include/pkg/api.h' installed as `$includedir/api.h'.
 

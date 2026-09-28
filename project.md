@@ -369,7 +369,8 @@ that had been green about nothing for five commits ·
 [316. A target that compiles its whole closure its own way](#316-a-target-that-compiles-its-whole-closure-its-own-way) ·
 [317. Modules needed an order, and an edge nobody had named](#317-modules-needed-an-order-and-an-edge-nobody-had-named) ·
 [318. The architecture check was off for four architectures](#318-the-architecture-check-was-off-for-four-architectures) ·
-[319. The list of headers the toolchain owns, replaced by asking it](#319-the-list-of-headers-the-toolchain-owns-replaced-by-asking-it)
+[319. The list of headers the toolchain owns, replaced by asking it](#319-the-list-of-headers-the-toolchain-owns-replaced-by-asking-it) ·
+[320. An installed includedir that could not be compiled](#320-an-installed-includedir-that-could-not-be-compiled)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2538,7 +2539,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **569** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **570** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24690,3 +24691,97 @@ arriving during the probing read the sentinel as the answer: the case
 no such header". Filled in one assignment now. A memo race presenting as
 an environmental absence is the shape `evidence.md` names -- an empty
 result that reads exactly like a real one.
+
+---
+
+## 320. An installed includedir that could not be compiled
+
+`@headers` publishes a library's public headers. It publishes exactly what
+it is told, and nothing looked at what those headers themselves include:
+
+    inc/api.h      @headers, and includes "detail.h"
+    inc/detail.h   neither published nor mentioned
+
+    $ fmake --install --prefix stage
+    -> stage/lib/libapilib.a
+    -> stage/include/api.h
+    -> stage/lib/pkgconfig/apilib.pc
+    * installed 3 file(s)
+
+Exit 0, three files, no warning. Then, measured against that staged tree
+rather than reasoned about:
+
+    stage/include/api.h:3:10: fatal error: detail.h:
+        No such file or directory
+
+**Nothing else in fmake could have caught it, and that is the point of the
+entry rather than a detail of it.** The library builds, because the tree
+holds both files. `@headers` did exactly what it was told. The install plan
+is correct about what it was asked to install -- it even refuses two files
+landing on one name, §7's ambiguity rule. The fault is in *what was asked
+for*, and the only thing in the tool that can see it is the include graph.
+
+So the check walks it: for every header the plan lands in `includedir`,
+every tree header reachable from it that the plan does not also land there.
+
+### Report, not refuse
+
+The graph is textual and is §3's guess. An include behind `#ifdef
+BUILDING_FOO` is not a consumer's problem, and reporting it would be a
+false finding in the one place fmake asks to be trusted -- so this warns
+and names both remedies, publish it too or move the include out.
+
+That is the same judgement `unpublished_headers` already makes for the
+mirror-image fault, a `@headers` on a program's source that installs
+nothing. The two are halves of one question and now sit together: one
+reports a directive read and discarded, the other a directive obeyed into
+a broken result.
+
+### What the control asserts, and why it is the important half
+
+    check never reports        the shadowed install goes red
+    check reports always       the CONTROL goes red
+
+A warning that fired unconditionally would pass the first assertion and
+look right. So the case publishes both headers in its second half,
+requires silence -- and then **compiles a consumer against the staged
+include directory**, which is the property the warning is a proxy for
+rather than the warning's own wording.
+
+### The false-positive rate is unmeasured, and the sweep said nothing
+
+Five sibling trees were unpacked with `git archive` and given
+`fmake -n --install`: ossacli, situ, fuzznet, qtty, raidcfgd. **Zero
+findings, and zero is not evidence here** -- their plans published no
+headers at all, so the check ran over an empty set and reported success
+exactly as loudly as a real pass.
+
+The reason is worth recording: **no private tree uses `@headers`.**
+Measured across ten of them, source and `fmake.toml` alike, the directive
+appears nowhere. qtty and ossacli are libraries with public headers and
+they install them from their own Makefiles, not through fmake. So this
+check is exercised by the suite's fixtures and by nothing else, and the
+first real tree to adopt `@headers` is where its noise will be measured.
+
+Recorded rather than left implicit, because an empty sweep and an absent
+sweep read identically afterwards.
+
+### What it does not cover
+
+It reports at install time, which is where `unpublished_headers` reports
+and the moment somebody is looking. **An ejected build carries the same
+plan and prints nothing**, so `--eject make` writes an install rule with
+the same hole, and `--eject deb` a `-dev` package with it -- where the
+consequence is worse, because a broken `-dev` package is somebody else's
+build failing. Pinned here rather than fixed: the ejected build is a
+snapshot of a plan that was reported on when it was made, and whether the
+emission should re-report is a question about how much an ejected build
+should say, not about this check.
+
+### And `proj` is a required argument
+
+`do_install` gained the include graph to ask the question. It was written
+first as `proj=None`, which would make the check silently absent for any
+caller added later -- a guard whose failure is silence, which is the fault
+§318 and §319 were both about. It is positional now, and both call sites
+pass it.
