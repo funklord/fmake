@@ -6327,6 +6327,10 @@ def _headers_in_tree(name, headers):
 
 
 _ARCH_CHECKED = set()
+# Said once per name rather than once per object, for the same reason
+# `_ARCH_CHECKED' exists: a line repeated per translation unit reads as
+# several problems.
+_ARCH_UNKNOWN = set()
 
 
 def check_object_arch(u, cfg):
@@ -6343,9 +6347,16 @@ def check_object_arch(u, cfg):
     knowledge of triplets. Once per architecture per run, so the cost is
     one 20-byte read rather than one per object.
 
-    Silent when it cannot know: an architecture missing from ELF_MACHINES,
-    a non-ELF object, an unreadable file. A guard that guesses is worse
-    than none, and this one only ever speaks when both sides are certain.
+    Silent about the VERDICT when it cannot know: an architecture no ELF
+    machine is named for, a non-ELF object, an unreadable file. A guard
+    that guesses is worse than none, and this one only ever speaks when
+    both sides are certain.
+
+    It is no longer silent about being OFF. `ARCH_ELF_CODE' has the four
+    canonical names this used to miss; what is left is a name fmake
+    genuinely cannot verify against, and `-v' says so once. An absent
+    line and a passing check read the same, and the reader who most needs
+    to know is the one who has just typed a name it does not know.
     """
 	# A generator is compiled for the build machine on purpose, so its
 	# objects do not match the target and must not be judged against it.
@@ -6354,12 +6365,19 @@ def check_object_arch(u, cfg):
 	# firing here first would replace it with a worse one.
 	if cfg.for_build_machine:
 		return
-	want = None
-	for code, name in ELF_MACHINES.items():
-		if name == cfg.arch:
-			want = code
-			break
-	if want is None or want in _ARCH_CHECKED:
+	want = ARCH_ELF_CODE.get(cfg.arch)
+	if want is None:
+		# Still silent about the verdict, because a guess is worse than
+		# none -- but no longer silent about being off. An absent line
+		# and a passing check read the same, and the reader who most
+		# needs to know is the one who has just typed an arch fmake
+		# cannot verify against.
+		if cfg.arch not in _ARCH_UNKNOWN:
+			_ARCH_UNKNOWN.add(cfg.arch)
+			vinfo(f"no ELF machine is named {cfg.arch!r}, so the "
+			      f"architecture check is off for this build")
+		return
+	if want in _ARCH_CHECKED:
 		return
 	ident = elf_identity(u.obj)
 	if ident is None:
@@ -7404,6 +7422,40 @@ ELF_MACHINES = {
     0xF3: "riscv", 0x08: "mips", 0x14: "ppc", 0x15: "ppc64",
     0x02: "sparc", 0x32: "ia64", 0x16: "s390",
 }
+
+
+# Canonical arch name -> ELF machine code, which is the lookup
+# `check_object_arch' needs and did not have. It searched ELF_MACHINES for
+# a name equal to `cfg.arch' and gave up silently when none matched -- and
+# `cfg.arch' comes from `canon_platform', whose canonical spellings carry
+# the width or the endianness where ELF_MACHINES does not. Four of them
+# therefore matched nothing, so declaring one switched the architecture
+# check off:
+#
+#     riscv64   ELF_MACHINES says riscv     s390x    says s390
+#     ppc64le   says ppc64                  mips64   says mips
+#
+# Measured against an installed aarch64 cross compiler: a tree declaring
+# any of those four built an aarch64 binary and said nothing, while
+# `x86_64' and `ppc64' were refused. Section 4186 records this exact fault
+# being found and fixed for `amd64'; these are its four siblings, and the
+# silence is not section 6346's "cannot know" -- these machines ARE in the
+# table, under another spelling. fmake was disagreeing with its own
+# canonicaliser.
+#
+# The aliases are derived from ELF_MACHINES rather than written as codes,
+# so the two cannot drift apart.
+#
+# It stays a machine-code comparison and the alias inherits that: EM_PPC64
+# is `ppc64' and `ppc64le' both, and EM_RISCV is riscv32 and riscv64 both,
+# so this catches the wrong MACHINE and not the wrong width or byte order.
+# That is the granularity the check always had -- `ident[2] != want' reads
+# the machine alone -- and widening it is a separate question from having
+# the lookup work at all.
+ARCH_ELF_CODE = {name: code for code, name in ELF_MACHINES.items()}
+for _canon, _elf_name in (("riscv64", "riscv"), ("ppc64le", "ppc64"),
+                          ("mips64", "mips"), ("s390x", "s390")):
+	ARCH_ELF_CODE[_canon] = ARCH_ELF_CODE[_elf_name]
 
 
 # What an unreadable file is, as distinct from one that is not ELF. Both

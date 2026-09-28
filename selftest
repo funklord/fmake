@@ -10620,6 +10620,69 @@ int main(void){ puts("hi"); return 0; }
 
 
 @case
+def an_arch_the_canonicaliser_names_is_one_the_check_can_read(t):
+	"""The architecture guard was off for four real architectures.
+
+	`check_object_arch' searched ELF_MACHINES for a name equal to
+	`cfg.arch' and returned silently when none matched. `cfg.arch' comes
+	from `canon_platform', whose canonical spellings carry the width or
+	the endianness where ELF_MACHINES does not -- so `riscv64', `ppc64le',
+	`mips64' and `s390x' matched nothing, and declaring one switched the
+	check off.
+
+	Measured against the installed aarch64 cross compiler before the fix:
+	those four built an aarch64 binary and said nothing, while `x86_64'
+	and `ppc64' were refused. **Not section 6346's "cannot know"** -- all
+	four machines are in the table, under another spelling. Section 4186
+	records the same fault found and fixed for `amd64'; these are its
+	siblings, and the silence is why they survived it.
+
+	The guard is most needed exactly here: on riscv64, ppc64le, mips64 and
+	s390x there is no native compiler, so a wrong `$CC' is likeliest, and
+	the check that exists for that was the one switched off.
+
+	A name nothing is spelled for -- a typo -- still gets no verdict,
+	because a guard that guesses is worse than none. What it gets now is
+	`-v' saying the check is off, since an absent line and a passing check
+	read the same."""
+	if not _cross_available():
+		raise Skip("no working aarch64 cross toolchain")
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+	cross = {"CC": "aarch64-linux-gnu-gcc"}
+
+	# The four that were silent, and two that always worked. All six are a
+	# mismatch against an aarch64 compiler, so all six must refuse.
+	for arch in ("riscv64", "ppc64le", "mips64", "s390x", "x86_64", "ppc64"):
+		t.write("fmake.toml", '[toolchain]\narch = "%s"\n' % arch)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake(env=cross)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a tree declaring {arch} built with an aarch64 compiler and "
+		      f"was not refused, so the architecture check is off for a "
+		      f"machine ELF_MACHINES knows: {out}")
+		check("aarch64" in out,
+		      f"the refusal does not name what was actually compiled: {out}")
+
+	# And the compiler that does match is not refused, which is what keeps
+	# the six above worth anything.
+	t.write("fmake.toml", '[toolchain]\narch = "aarch64"\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake(env=cross)
+	check(r.returncode == 0,
+	      f"the matching architecture was refused: {r.stdout}{r.stderr}")
+
+	# A name nothing is spelled for: no verdict, and `-v' says why.
+	t.write("fmake.toml", '[toolchain]\narch = "banana"\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	out = t.fmake("-v", env=cross).stdout
+	check("architecture check is off" in out and "banana" in out,
+	      f"a name fmake cannot verify against left no trace, so an "
+	      f"unverified build reads exactly like a verified one: {out}")
+
+
+@case
 def a_cross_build_derives_the_cxx_compiler(t):
 	"""Naming the compiler is supposed to be enough, and was not for C++.
 

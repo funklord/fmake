@@ -367,7 +367,8 @@ that had been green about nothing for five commits ·
 [314. A cost reported only where it was being paid off](#314-a-cost-reported-only-where-it-was-being-paid-off) ·
 [315. Seventeen truncations, one of which said where the rest were](#315-seventeen-truncations-one-of-which-said-where-the-rest-were) ·
 [316. A target that compiles its whole closure its own way](#316-a-target-that-compiles-its-whole-closure-its-own-way) ·
-[317. Modules needed an order, and an edge nobody had named](#317-modules-needed-an-order-and-an-edge-nobody-had-named)
+[317. Modules needed an order, and an edge nobody had named](#317-modules-needed-an-order-and-an-edge-nobody-had-named) ·
+[318. The architecture check was off for four architectures](#318-the-architecture-check-was-off-for-four-architectures)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2528,7 +2529,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **564** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **565** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24440,3 +24441,79 @@ The shape is this document's own and it arrived inside the tool
 written to enforce it: **a detector reporting absence is worth nothing
 until it has been seen to report presence**, and a fixture generator
 is a detector.
+
+---
+
+## 318. The architecture check was off for four architectures
+
+`check_object_arch` reads the ELF header of a compiled object and
+refuses one built for a machine the tree did not ask for. It is §23's
+evidence pointed at fmake's own output, and it exists because a C++
+compiler that did not derive from the toolchain prefix once produced an
+x86-64 binary for a tree declaring aarch64, with `built prog` as the
+only output.
+
+It was **silently off** for `riscv64`, `ppc64le`, `mips64` and `s390x`.
+
+The lookup searched `ELF_MACHINES` for a name equal to `cfg.arch` and
+returned when none matched. `cfg.arch` comes from `canon_platform`,
+whose canonical spellings carry the width or the byte order where
+`ELF_MACHINES` does not:
+
+    canonical   ELF_MACHINES   canonical   ELF_MACHINES
+    riscv64     riscv          mips64      mips
+    ppc64le     ppc64          s390x       s390
+
+Measured against the installed aarch64 cross compiler, before the fix.
+All six of these are a mismatch against an aarch64 compiler:
+
+    x86_64   refused          riscv64   built an aarch64 binary, silent
+    ppc64    refused          ppc64le   built, silent
+                              mips64    built, silent
+                              s390x     built, silent
+
+**It is not §6346's "cannot know".** That entry justifies silence for an
+architecture missing from `ELF_MACHINES`, and all four of these are in
+it -- under another spelling. fmake was disagreeing with its own
+canonicaliser, which is a different thing from not knowing.
+
+**§4186 records this exact fault, found and fixed, for `amd64`.** That
+entry says `[toolchain] arch = "amd64"` "also turned the ELF
+architecture check off, silently, because that walks ELF_MACHINES
+looking for a name equal to `cfg.arch` and none is spelled that way".
+The fix was to canonicalise, and it fixed the instance. Four siblings
+of the same shape stayed live for as long as nobody typed them --
+**which is the whole property of a guard whose failure is silence: it
+is fixed where somebody was standing and nowhere else.**
+
+And the guard is most needed exactly where it was off. On riscv64,
+ppc64le, mips64 and s390x there is no native compiler, so a wrong `$CC`
+is likelier than anywhere else, and the check that exists for that was
+the one switched off.
+
+### The fix, and what it deliberately does not do
+
+`ARCH_ELF_CODE` is the lookup the check wanted: canonical name to
+machine code, with the four aliases **derived from `ELF_MACHINES`
+rather than written as codes**, so the two cannot drift apart.
+
+It stays a machine-code comparison and the aliases inherit that. EM_PPC64
+is `ppc64` and `ppc64le` both, EM_RISCV is riscv32 and riscv64 both, so
+this catches the wrong *machine* and not the wrong width or byte order.
+That is the granularity the check always had -- `ident[2] != want` reads
+the machine alone -- and widening it is a separate question from having
+the lookup work at all. Stated rather than left for somebody to discover
+by declaring `ppc64le` and getting a big-endian object.
+
+**A name nothing is spelled for still gets no verdict**, because a guard
+that guesses is worse than none, and that half of §6346 is right. What it
+gets now is `-v` saying the check is off:
+
+    * no ELF machine is named 'banana', so the architecture check is
+      off for this build
+
+An absent line and a passing check read the same, and the reader who
+most needs that line is the one who has just typed a name fmake cannot
+verify against. Same family as §310, §312 and §315 -- a report whose
+silence is ambiguous -- which is how this was found: the lens was still
+in hand.
