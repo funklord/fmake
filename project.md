@@ -385,7 +385,8 @@ that had been green about nothing for five commits ·
 [332. A source that needed a target's define, compiled without it](#332-a-source-that-needed-a-targets-define-compiled-without-it) ·
 [333. The database an editor reads, disagreeing with the build](#333-the-database-an-editor-reads-disagreeing-with-the-build) ·
 [334. Two features of one session, colliding on the BMI](#334-two-features-of-one-session-colliding-on-the-bmi) ·
-[335. A per-target define moc never saw](#335-a-per-target-define-moc-never-saw)
+[335. A per-target define moc never saw](#335-a-per-target-define-moc-never-saw) ·
+[336. Half a fix, eight weeks apart](#336-half-a-fix-eight-weeks-apart)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2564,7 +2565,8 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **584** now
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 585
+on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -2574,6 +2576,16 @@ about 20 minutes at `-j2` and over an hour at `-j1` on a box with a dozen
 other builds on it. Filtering by name is the way to work — `./selftest
 rcc` is seven cases and a few seconds — and the full run is for before a
 commit.
+
+**The 2026-09-29 growth is the price of that day's findings, and worth
+naming so nobody trims it blind.** Nineteen cases were added and they carry
+about forty build invocations between them, most compiling C++ modules --
+the loops are what multiply: two compilers by two ejected backends in the
+staleness case, both compilers in the invalidation case, both backends in
+the two eject cases. Every one of those multipliers is tied to a fault it
+caught: the four-cell matrix found three, and clang had to be there because
+it names a BMI differently from g++. So the run is slower for the reason a
+run should be.
 
 Cases needing something absent from the machine skip rather than fail — a
 cross toolchain, `ninja`, a library, Qt. A skip is not a pass; check the
@@ -25804,3 +25816,91 @@ from it is that a remedy in a message is a claim like any other.
     warning removed              red: nothing names the collision
     condition widened to every
     per-target -D                red: a tree that should be silent warns
+
+---
+
+## 336. Half a fix, eight weeks apart
+
+`@pkg_optional NAME defines MACRO` was reported broken by hydra twice, at
+opposite ends of the same feature. The first report made the macro
+tree-wide -- §243, whose case names them. This is the other half.
+
+    5af02348  macro NOT tree-wide   a test including a header shaped by the
+    (Aug 4)                         macro took the stub branch, met the real
+                                    class, and collided
+    c45bf146  macro tree-wide,      the same test took the real branch:
+    (Sep 29)  cflags not            `QDBusVariant: No such file or directory'
+
+**Neither binary on the machine built hydra.** The feature could not support
+the one pattern it exists for -- a header that keeps one shape whether or
+not the package is there -- because the macro is what sends another file
+into the real-package branch and the include path stayed with the annotated
+file.
+
+Reproduced here in the reporter's exact shape, a bare `#include
+<QDBusVariant>` under the macro. An earlier fixture of mine did NOT
+reproduce it, and the reason is worth keeping: it wrote
+`<QtDBus/QDBusVariant>`, which resolves under Qt6Core's include root, so no
+QtDBus path was needed. One header spelling decided whether the bug
+appeared.
+
+### Paths and defines follow the macro; nothing else does
+
+A `-std=` or an `-fno-exceptions` in somebody's `.pc` is theirs. Letting an
+optional dependency change how every unrelated file in the tree is compiled
+is a larger thing than letting it supply an include path, so the spread is
+`PATH_CFLAGS` and `-D` only. That line is a judgement rather than a
+measurement, so the case pins it -- an unchecked narrowing is a comment
+nobody reads.
+
+    nothing spreads          red: the shaped header is not includable
+    everything spreads       red: an unrelated file gets -fno-common
+
+### Which shapes it reaches, measured
+
+    consumer reaches the package header      pre-fix    with fix
+    only through a tree header               FAILS      builds
+    on its own include line                  builds     builds
+
+The second row is the header-proposal route: an include the unit itself
+writes resolves to the package and its flags go global by the ordinary
+path. That is why the reporter's own tree builds on the unfixed binary --
+their test writes `<QtDBus/QDBusVariant>` on its own line as well as
+reaching it through the shaped header -- and why my prediction that their
+tree would fail was wrong. They named that difference while explicitly
+declining to assert the mechanism; the mechanism was the one they declined
+to claim.
+
+**Four things I inferred about their tree today were wrong**: that the old
+binary built it, that the cflags reach only the annotated file, the
+mechanism I retracted, and this prediction. Everything they labelled a
+guess held. The rule is `evidence.md`'s -- a claim about another tree is a
+measurement you did not take -- and a session quoting it four times in an
+afternoon while breaking it four times is the useful record here.
+
+The fix reached all three emission paths for free, which is worth
+contrasting with §327, §328 and §333: those needed new plumbing and the
+plumbing lagged. This one used `add_tree_flag`, a carrier every path
+already reads, so ejected make, ejected ninja and the deb Makefile all
+build the failing shape from clean without being touched. **Where a new
+fact can ride an existing carrier, it reaches the paths nobody remembered
+to update.**
+
+### How the report was worth more than its mechanism
+
+The reporter labelled the mechanism a guess and the reproduction a fact,
+then withdrew the mechanism entirely on finding they had run a packaged
+binary eight weeks old. The reproduction survived the withdrawal and the
+bug was real in the current tree -- a different symptom, the same feature,
+found because the shape was specific enough to try.
+
+Three claims of mine were wrong along the way and the record is worth more
+than the tidy version. I said the cflags reach only the annotated file: true
+of the annotation path, incomplete, because an include that *resolves* to a
+package pulls its flags in globally by the ordinary proposal route -- which
+fires for a header the unit itself includes and not for one reached through
+another header. I said the old binary built their tree: an inference, and
+they measured otherwise. And I reached the first wrong reading by piping
+`--explain` through a `sed` that stripped every `-I` before I read it, which
+is this project's own rule about reducing a check's output, broken while
+answering somebody else's question.

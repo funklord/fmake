@@ -9537,6 +9537,102 @@ def a_live_directory_puts_its_tests_in_the_live_group(t):
 
 
 @case
+def an_optional_packages_paths_and_defines_follow_its_macro(t):
+	"""`@pkg_optional NAME defines MACRO` is a rule in three parts, and only
+	the first was pinned.
+
+	    the MACRO                      tree-wide
+	    the package's -I and -D        tree-wide, because the macro is what
+	                                   sends another file into the
+	                                   real-package branch
+	    anything else in its cflags    the annotated file only
+
+	The middle part was missing, and its absence was a bug rather than an
+	untested rule. Reported from hydra twice, eight weeks apart, at opposite
+	ends of the same feature: first the macro was not tree-wide, so a test
+	including a header shaped by it took the stub branch and collided with
+	the real class; that was fixed, and then the macro was tree-wide while
+	the include path was not, so the same test took the real branch and got
+
+	    QDBusVariant: No such file or directory
+
+	Half a fix, and the feature could not support the one pattern it exists
+	for -- a header that keeps one shape whether or not the package is
+	there.
+
+	The third part is a judgement rather than a measurement: a `-std=` or an
+	`-fno-exceptions` in somebody's `.pc` is theirs, and letting an optional
+	dependency change how every unrelated file in the tree is compiled is a
+	larger thing than letting it supply an include path. So paths and
+	defines spread and the rest does not, and this case pins that line --
+	without it the narrowing is a comment nobody checks.
+
+	The package is built in the fixture, because zlib's cflags are empty on
+	this machine and an installed package cannot be relied on to carry all
+	three kinds of flag."""
+	if not shutil.which("pkg-config"):
+		raise Skip("pkg-config not installed")
+	# Outside the tree: a .pc inside it is not a package.
+	pkgdir = os.path.join(os.path.dirname(t.dir),
+	                      os.path.basename(t.dir) + "-pkg")
+	try:
+		os.makedirs(os.path.join(pkgdir, "include", "optlib"), exist_ok=True)
+		os.makedirs(os.path.join(pkgdir, "pc"), exist_ok=True)
+		with open(os.path.join(pkgdir, "include", "optlib", "opt.h"),
+		          "w") as fh:
+			fh.write("#pragma once\nstruct opt_t { int n; };\n")
+		with open(os.path.join(pkgdir, "pc", "optlib.pc"), "w") as fh:
+			fh.write(f"prefix={pkgdir}\nincludedir=${{prefix}}/include\n\n"
+			         "Name: optlib\nDescription: an optional package\n"
+			         "Version: 1.0\n"
+			         "Cflags: -I${includedir} -DOPTLIB_LIB -fno-common\n")
+		env = {"PKG_CONFIG_PATH": os.path.join(pkgdir, "pc")}
+
+		# The shape the fault needs: a header that changes on the macro and
+		# reaches the real package, included by a file that never named it.
+		t.write("shape.h", "#pragma once\n#ifdef HAVE_OPTLIB\n"
+		        "#include <optlib/opt.h>\n#else\n"
+		        "struct opt_t { int n; };\n#endif\n")
+		t.write("uses.c", "/*! @pkg_optional optlib defines HAVE_OPTLIB */\n"
+		        '#include "shape.h"\nint uses(void){ return 1; }\n')
+		t.write("other.c", '#include "shape.h"\nint uses(void);\n'
+		        "int main(void){ struct opt_t o; o.n = 0; return uses() - 1 + o.n; }\n")
+		r = t.fmake(env=env)
+		check(r.returncode == 0,
+		      f"a header shaped by the macro must be includable by a file "
+		      f"that never named the package: {r.stdout}{r.stderr}")
+
+		lines = {}
+		for line in t.fmake("--explain", env=env).stdout.splitlines():
+			s = line.strip()
+			for name in ("uses.c", "other.c"):
+				if f" -c {name} " in s:
+					lines[name] = s
+		check(len(lines) == 2,
+		      f"both compile lines have to be read, or this asserts about "
+		      f"nothing: {sorted(lines)}")
+
+		inc = "-I" + os.path.join(pkgdir, "include")
+		for name, s in lines.items():
+			check("-DHAVE_OPTLIB" in s, f"{name} must get the macro: {s}")
+			check(inc in s,
+			      f"{name} must get the package's include path -- the macro "
+			      f"sends it into the branch that needs it: {s}")
+			check("-DOPTLIB_LIB" in s,
+			      f"{name} must get the package's own defines, for the same "
+			      f"reason: {s}")
+		# And the line that is a judgement: everything else stays put.
+		check("-fno-common" in lines["uses.c"],
+		      f"the annotated file still gets the whole cflags: "
+		      f"{lines['uses.c']}")
+		check("-fno-common" not in lines["other.c"],
+		      f"but an optional package must not change how an unrelated "
+		      f"file is compiled: {lines['other.c']}")
+	finally:
+		shutil.rmtree(pkgdir, ignore_errors=True)
+
+
+@case
 def a_found_optional_package_defines_its_macro_for_the_whole_tree(t):
 	"""Reported from hydra: `--eject` failed inside Qt's own header.
 

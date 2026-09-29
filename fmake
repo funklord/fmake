@@ -11393,8 +11393,27 @@ def build(args, _bootstrapping=False):
 	hdr_store = cache.data.setdefault("headers", {})
 	pkg_sig = pkg.signature()
 	for (module, macro), users in sorted(optional.items()):
-		if pkg.for_module(module, hdr_store, pkg_sig):
+		got = pkg.for_module(module, hdr_store, pkg_sig)
+		if got:
 			cfg.add_tree_flag("-D" + macro)
+			# The include path and the package's own defines follow the
+			# macro tree-wide, because the macro is what sends another file
+			# into the real-package branch of a header that shapes itself
+			# on it. Without them that branch has no include path: hydra's
+			# `theme.h' does `#include <QDBusVariant>' under the macro and
+			# is included by a test, and the test compiled with the macro
+			# defined and QtDBus's -I missing -- `QDBusVariant: No such
+			# file or directory'. The feature could not support the one
+			# pattern it exists for.
+			#
+			# Only paths and defines. A `-std=' or an `-fno-exceptions' in
+			# somebody's .pc is theirs and not this tree's, and stays with
+			# the file that named the package -- spreading those would let
+			# an optional dependency change how every unrelated file is
+			# compiled.
+			for _f in (got[1] or []):
+				if _f.startswith(PATH_CFLAGS) or _f.startswith("-D"):
+					cfg.add_tree_flag(_f)
 	objdir = os.path.join(state, "obj", cfg.key)
 	# Said here rather than at `--clean', which is where the cost used to
 	# become visible and is after the decision it should inform. Verbose
