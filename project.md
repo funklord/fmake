@@ -373,7 +373,8 @@ that had been green about nothing for five commits ·
 [320. An installed includedir that could not be compiled](#320-an-installed-includedir-that-could-not-be-compiled) ·
 [321. The .pc said how to link and not how to compile](#321-the-pc-said-how-to-link-and-not-how-to-compile) ·
 [322. The define that changed a struct and was not published](#322-the-define-that-changed-a-struct-and-was-not-published) ·
-[323. The staging directory that read as three bugs](#323-the-staging-directory-that-read-as-three-bugs)
+[323. The staging directory that read as three bugs](#323-the-staging-directory-that-read-as-three-bugs) ·
+[324. The byte comparison that compared none of the interesting bytes](#324-the-byte-comparison-that-compared-none-of-the-interesting-bytes)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -25052,3 +25053,51 @@ a line the next reader will believe in.
 Twice in two sections now, which is worth naming as a habit rather than
 two incidents: **a defensive clause added while writing a filter is worth
 sabotaging before it is kept.**
+
+---
+
+## 324. The byte comparison that compared none of the interesting bytes
+
+`an_ejected_build_writes_the_same_pkgconfig_file` compares the `.pc` an
+ejected Makefile and an ejected `build.ninja` write against the one fmake
+writes, byte for byte. That is the right assertion -- a relationship
+rather than either value, so it cannot go stale as fields are added -- and
+it is why the `${prefix}` trap was caught, Make having eaten a
+pkg-config variable.
+
+`pc_text` then gained two arguments over §321 and §322, `public_pkgs` and
+`public_defines`, and three call sites were changed to pass them: the
+install, the ejected Makefile and the ejected ninja. **Dropping one of
+them at one of the two eject sites left this case green.** Measured by
+doing it, twice, once per argument.
+
+The check was real and the comparison was real. Its fixture published no
+package, declared no define, and its header tested no macro -- so the two
+`.pc` files had none of the fields that can now differ, and a comparison
+over identical eight-line files reports agreement exactly as loudly as one
+that discriminates.
+
+### What the fixture carries now
+
+`@pkg greetpkg` against a package built outside the tree, `@define
+GREET_LOUD`, and a published header that includes the package's header and
+tests the macro -- so fmake's `.pc` holds `Requires: greetpkg` and
+`-DGREET_LOUD`, and both ejected builds have to reproduce them. Each
+argument is caught on its own: dropping either at either eject site now
+fails, checked one at a time rather than one on top of the other, since a
+sabotage applied over another is not isolated.
+
+The fixture also asserts that it produced those two fields before
+comparing anything, so a fixture that stops producing them fails as itself
+rather than as an agreement between two empty sets.
+
+### The lesson is about adding an argument, not about .pc files
+
+A relationship assertion is only as strong as the population it spans, and
+**nothing about adding a parameter to a shared function tells you which
+existing test covers the call sites.** The three sites were found by
+grepping and all three were changed correctly; what was missing was any
+way to know that. The general move: after threading a new value through
+several call sites, sabotage ONE of them and find out which test speaks.
+If none does, the test that should is the one whose fixture excludes the
+new field.

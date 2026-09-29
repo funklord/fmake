@@ -13175,59 +13175,110 @@ def an_ejected_build_writes_the_same_pkgconfig_file(t):
 	Compared byte for byte against fmake's own, which is how the first
 	version was caught: `${prefix}` is a pkg-config variable *and* a Make
 	variable reference, and Make wins. The recipe ran, succeeded, and wrote
-	a .pc with empty paths -- section 26's trap, in a new file."""
+	a .pc with empty paths -- section 26's trap, in a new file.
+
+	**The fixture carries a public define and a public package, and that is
+	load-bearing.** A byte comparison is only as strong as the fields the
+	two sides have to agree about, and this one had none of the ones that
+	can differ: no `@pkg`, no `@define`, and a header testing no macro. So
+	when `pc_text` gained two arguments and three call sites were changed
+	to pass them, dropping one of those at ONE of the two eject sites left
+	this case green -- measured by doing it. A relationship assertion over
+	a population that excludes the interesting case reports agreement
+	exactly as loudly as a real one.
+	"""
 	if not shutil.which("pkg-config"):
 		raise Skip("pkg-config not installed")
-	t.write("greet.h", "#pragma once\nconst char *greet(void);\n")
-	t.write("greet.c", """
+	# Outside the tree, or fmake resolves <greetpkg/aux.h> against the
+	# tree's own copy by basename and the package is not one.
+	pkgdir = os.path.join(os.path.dirname(t.dir),
+	                      os.path.basename(t.dir) + "-pkg")
+	try:
+		os.makedirs(os.path.join(pkgdir, "include", "greetpkg"),
+		            exist_ok=True)
+		os.makedirs(os.path.join(pkgdir, "pc"), exist_ok=True)
+		with open(os.path.join(pkgdir, "include", "greetpkg", "aux.h"),
+		          "w") as fh:
+			fh.write("#pragma once\n#define GREETPKG 1\n")
+		with open(os.path.join(pkgdir, "pc", "greetpkg.pc"), "w") as fh:
+			fh.write(f"prefix={pkgdir}\n"
+			         "includedir=${prefix}/include\n\n"
+			         "Name: greetpkg\nDescription: a package elsewhere\n"
+			         "Version: 2.0\nCflags: -I${includedir}\n")
+		pcpath = os.path.join(pkgdir, "pc")
+		penv = {"PKG_CONFIG_PATH": pcpath}
+
+		t.write("greet.h", "#pragma once\n#include <greetpkg/aux.h>\n"
+		        "#ifdef GREET_LOUD\nint greet_loud(void);\n#endif\n"
+		        "const char *greet(void);\n")
+		t.write("greet.c", """
 /*! @file
  *  @kind    static
  *  @target  greet
  *  @headers greet.h
  *  @version 1.2.3
+ *  @pkg     greetpkg
+ *  @define  GREET_LOUD
  */
 #include "greet.h"
+int greet_loud(void){ return GREETPKG; }
 const char *greet(void){ return "hi"; }
 """)
-	check(t.fmake().returncode == 0, "build failed")
-	with open(os.path.join(t.dir, "greet.pc")) as fh:
-		mine = fh.read()
+		r = t.fmake(env=penv)
+		check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+		with open(os.path.join(t.dir, "greet.pc")) as fh:
+			mine = fh.read()
+		# Checked here so a fixture that stops producing them fails as
+		# itself, rather than as an agreement between two empty sets.
+		check("Requires: greetpkg" in mine and "-DGREET_LOUD" in mine,
+		      f"the fixture must produce both new fields or the comparison "
+		      f"below is over nothing: {mine!r}")
 
-	for kind, cmd in (("make", ["make", "-s"]),
-	                  ("ninja", ["ninja", "-f", "build.ninja"])):
-		if not shutil.which(cmd[0]):
-			continue
-		r = t.fmake("--eject", *([] if kind == "make" else ["ninja"]))
-		check(r.returncode == 0, f"eject {kind} failed: {r.stderr}")
-		name = "Makefile" if kind == "make" else "build.ninja"
-		with open(os.path.join(t.dir, name), "w") as fh:
-			fh.write(r.stdout)
-		# Deleted, so the rule has to produce it rather than the tree
-		# happening to still hold fmake's copy.
-		os.remove(os.path.join(t.dir, "greet.pc"))
-		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
-		stage = os.path.join(t.dir, "by-" + kind)
-		run = _run_in(t.dir, *(cmd + ["install", "DESTDIR=" + stage]
-		                       if kind == "make" else cmd))
-		if kind == "ninja":
-			check(run.returncode == 0, f"the ninja build failed: {run.stderr}")
-			run = _run_in(t.dir, "ninja", "-f", "build.ninja", "install",
-			              env={"DESTDIR": stage})
-		check(run.returncode == 0,
-		      f"the ejected {kind} install failed: {run.stdout}{run.stderr}")
-		got = os.path.join(stage, "usr", "local", "lib", "pkgconfig",
-		                   "greet.pc")
-		check(os.path.exists(got), f"the ejected {kind} wrote no .pc")
-		with open(got) as fh:
-			theirs = fh.read()
-		check(theirs == mine,
-		      f"the ejected {kind} .pc differs from fmake's:\n"
-		      f"  fmake: {mine!r}\n  {kind}: {theirs!r}")
-		env = dict(os.environ, PKG_CONFIG_PATH=os.path.dirname(got))
-		v = subprocess.run(["pkg-config", "--modversion", "greet"],
-		                   capture_output=True, text=True, env=env)
-		check(v.returncode == 0 and v.stdout.strip() == "1.2.3",
-		      f"pkg-config will not read the ejected {kind} .pc: {v.stderr}")
+		for kind, cmd in (("make", ["make", "-s"]),
+		                  ("ninja", ["ninja", "-f", "build.ninja"])):
+			if not shutil.which(cmd[0]):
+				continue
+			r = t.fmake("--eject", *([] if kind == "make" else ["ninja"]),
+			            env=penv)
+			check(r.returncode == 0, f"eject {kind} failed: {r.stderr}")
+			name = "Makefile" if kind == "make" else "build.ninja"
+			with open(os.path.join(t.dir, name), "w") as fh:
+				fh.write(r.stdout)
+			# Deleted, so the rule has to produce it rather than the tree
+			# happening to still hold fmake's copy.
+			os.remove(os.path.join(t.dir, "greet.pc"))
+			shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+			stage = os.path.join(t.dir, "by-" + kind)
+			run = _run_in(t.dir, *(cmd + ["install", "DESTDIR=" + stage]
+			                       if kind == "make" else cmd),
+			              env={"PKG_CONFIG_PATH": pcpath})
+			if kind == "ninja":
+				check(run.returncode == 0,
+				      f"the ninja build failed: {run.stdout}{run.stderr}")
+				run = _run_in(t.dir, "ninja", "-f", "build.ninja", "install",
+				              env={"DESTDIR": stage,
+				                   "PKG_CONFIG_PATH": pcpath})
+			check(run.returncode == 0,
+			      f"the ejected {kind} install failed: "
+			      f"{run.stdout}{run.stderr}")
+			got = os.path.join(stage, "usr", "local", "lib", "pkgconfig",
+			                   "greet.pc")
+			check(os.path.exists(got), f"the ejected {kind} wrote no .pc")
+			with open(got) as fh:
+				theirs = fh.read()
+			check(theirs == mine,
+			      f"the ejected {kind} .pc differs from fmake's:\n"
+			      f"  fmake: {mine!r}\n  {kind}: {theirs!r}")
+			env = dict(os.environ,
+			           PKG_CONFIG_PATH=os.pathsep.join(
+			               [os.path.dirname(got), pcpath]))
+			v = subprocess.run(["pkg-config", "--modversion", "greet"],
+			                   capture_output=True, text=True, env=env)
+			check(v.returncode == 0 and v.stdout.strip() == "1.2.3",
+			      f"pkg-config will not read the ejected {kind} .pc: "
+			      f"{v.stderr}")
+	finally:
+		shutil.rmtree(pkgdir, ignore_errors=True)
 
 
 @case
