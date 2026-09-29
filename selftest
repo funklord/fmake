@@ -7068,6 +7068,95 @@ def a_library_resolves_its_own_includes_like_a_program(t):
 
 
 @case
+def a_pc_publishes_a_define_a_published_header_tests(t):
+	"""The quietest of the three .pc faults, and the only one with no
+	error at all.
+
+	    inc/rec.h    @headers; `struct rec' gains a field under REC_EXTRA
+	    rec.c        @define REC_EXTRA
+
+	The install is clean, the .pc is well formed, and a consumer compiles
+	and links and runs -- reporting sizeof 4 where the library says 8.
+	Measured before the fix. `Libs.private' missing gives an undefined
+	reference and `Requires' missing gives a fatal error; this gives a
+	structure the two sides disagree about and a program that keeps going.
+
+	Published only when a published header TESTS the macro. A define used
+	inside the implementation is nobody else's business, and putting it on
+	a consumer's command line would change their compilation for no
+	reason. So the filter is the header's own preprocessor conditionals,
+	intersected with what the library was really built with -- and the
+	intersection is what makes it precise, because an include guard and
+	__STDC_VERSION__ are in the header's set too and are in nobody's -D
+	list.
+
+	The control is the second define. REC_LOGGING is declared beside
+	REC_EXTRA and tested only in the .c, so the computation runs either
+	way and has to choose: a fix that published every -D the library was
+	built with passes the first assertion and fails here. That is the
+	shape the sibling case had to be rewritten for -- a control the code
+	never reaches proves nothing -- so it is built in from the start this
+	time.
+	"""
+	t.write("inc/rec.h",
+	        "#pragma once\n#include <stddef.h>\n"
+	        "struct rec {\n\tint a;\n#ifdef REC_EXTRA\n\tint b;\n#endif\n};\n"
+	        "size_t rec_size(void);\n")
+	t.write("rec.c", "/*! @target recs\n    @kind static\n"
+	                 "    @version 1.0\n    @define REC_EXTRA\n"
+	                 "    @define REC_LOGGING\n    @headers inc/rec.h */\n"
+	                 '#include "rec.h"\n'
+	                 "#ifdef REC_LOGGING\nstatic const int logging = 1;\n"
+	                 "#else\nstatic const int logging = 0;\n#endif\n"
+	                 "size_t rec_size(void){ return sizeof(struct rec)"
+	                 " + 0 * logging; }\n")
+	# Outside the tree: a prefix inside it leaves a second rec.h and the
+	# next build cannot resolve the name against two candidates.
+	stage = os.path.join(os.path.dirname(t.dir),
+	                     os.path.basename(t.dir) + "-stage")
+	try:
+		r = t.fmake("--install", "--prefix", stage)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the library builds and installs: {out}")
+		text = open(os.path.join(stage, "lib", "pkgconfig",
+		                         "recs.pc")).read()
+		cflags = [l for l in text.splitlines()
+		          if l.startswith("Cflags:")][0]
+		check("-DREC_EXTRA" in cflags,
+		      f"a define the published header tests must be published: "
+		      f"{text}")
+		check("REC_LOGGING" not in cflags,
+		      f"and one only the implementation tests must not be -- it "
+		      f"would change a consumer's build for no reason: {text}")
+
+		# The property the line stands for, and the only one that would
+		# have caught this before: the two sides agree about the struct.
+		t.write("use.c",
+		        "#include <rec.h>\n#include <stddef.h>\n"
+		        "int main(void){ return sizeof(struct rec) == rec_size()"
+		        " ? 0 : 1; }\n")
+		pcdir = os.path.join(stage, "lib", "pkgconfig")
+		env = dict(os.environ, PKG_CONFIG_PATH=pcdir)
+		got = subprocess.run(["pkg-config", "--cflags", "--libs", "recs"],
+		                     capture_output=True, text=True, env=env)
+		if got.returncode != 0:
+			raise Skip("pkg-config cannot read the staged .pc here")
+		exe = os.path.join(t.dir, "use")
+		c = subprocess.run([os.environ.get("CC") or "cc",
+		                    os.path.join(t.dir, "use.c"),
+		                    *shlex.split(got.stdout), "-o", exe],
+		                   capture_output=True, text=True, errors="replace")
+		check(c.returncode == 0,
+		      f"a consumer compiles on the published flags: {c.stderr}")
+		ran = subprocess.run([exe], capture_output=True, text=True)
+		check(ran.returncode == 0,
+		      "and agrees with the library about sizeof(struct rec) -- "
+		      "which is the fault, since nothing else reports it")
+	finally:
+		shutil.rmtree(stage, ignore_errors=True)
+
+
+@case
 def a_pc_says_which_packages_a_consumer_needs_to_compile(t):
 	"""`Libs.private` was measured missing and fixed; the compile half was
 	not. A library whose PUBLISHED header includes another package's header

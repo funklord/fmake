@@ -1189,8 +1189,33 @@ def scan_source(path):
 		defs -= DECL_WORDS
 	_dirs_and_typos = parse_directives(comments, os.path.basename(path))
 
+	# Every macro named in a preprocessor conditional in this file. For a
+	# PUBLISHED header this is the ABI question: a define the library was
+	# built with and the header tests changes what a consumer's copy of
+	# that header means, and a consumer who is not told compiles a
+	# different structure against the same library. See
+	# `public_defines' in resolve_libraries.
+	#
+	# `defined' is dropped because it is the operator, not a macro; a
+	# numeric literal never matches, having a digit first. Nothing else is
+	# filtered here: an include guard and __STDC_VERSION__ are named too,
+	# and what makes the set precise is intersecting it with the defines
+	# the library was actually built with rather than trying to recognise
+	# a project macro by its spelling.
+	# Line by line, because RE_PP_COND is anchored and carries no re.M --
+	# `finditer' over the whole file matches at position 0 and nowhere
+	# else, which is a silent empty set. Written that way first.
+	cond_macros = set()
+	for _line in code.split("\n"):
+		_m = RE_PP_COND.match(_line)
+		if _m and _m.group(1) in ("if", "ifdef", "ifndef", "elif"):
+			cond_macros |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*",
+			                              _m.group(2)))
+	cond_macros.discard("defined")
+
 	return {
 	    "incs":     incs,
+	    "cond_macros": sorted(cond_macros),
 	    # Which #if each include sits under, by line, for the advisory
 	    # about includes the preprocessor did not open. A separate key
 	    # rather than a fourth field: `incs' entries are unpacked as
@@ -8926,6 +8951,40 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 				       for d in dirs for name in foreign):
 					res["public_pkgs"].append(module)
 
+	# The defines a consumer must compile the published headers with, which
+	# is the same question as public_pkgs above and the one with the
+	# quietest failure of the three. Measured: a library built with
+	# -DREC_EXTRA publishing a header whose `struct rec' gains a field
+	# under it installs cleanly, and a consumer compiles, links and runs --
+	# reporting sizeof 4 where the library says 8. No compile error, no
+	# link error, and a structure the two sides disagree about.
+	#
+	# Published only when a PUBLISHED header tests the macro. A define used
+	# inside the implementation is nobody else's business and pushing it
+	# onto a consumer's command line would change their compilation for no
+	# reason -- so the filter is the header's own preprocessor conditionals
+	# (`cond_macros'), intersected with what this library was really built
+	# with. That intersection is what makes it precise: an include guard
+	# and __STDC_VERSION__ are in the header's set too and are in nobody's
+	# -D list.
+	res["public_defines"] = []
+	if proj is not None:
+		heads = published_headers(t, cl)
+		tested = set()
+		for h in heads:
+			tested.update(proj.scans.get(h, {}).get("cond_macros", ()))
+			for r in proj.reachable_headers([h]):
+				tested.update(proj.scans.get(r, {}).get("cond_macros", ()))
+		if tested:
+			built = list(cfg.cflags) + list(cfg.override)
+			for u in cl.link:
+				built += list(u.own)
+			for flag in dict.fromkeys(f for f in built
+			                          if f.startswith("-D")):
+				name = flag[2:].split("=", 1)[0]
+				if name in tested and flag not in res["public_defines"]:
+					res["public_defines"].append(flag)
+
 	res["declared"] = [d for d in declared if d not in res["chosen"]]
 	res["wrap"] = wrap_flags(cl)
 	# Two or more resolved archives get a group, for the reason
@@ -12834,6 +12893,8 @@ def build(args, _bootstrapping=False):
 			               (resolutions.get(t) or {}).get("ldflags") or (),
 			               root,
 			               (resolutions.get(t) or {}).get("public_pkgs")
+			               or (),
+			               (resolutions.get(t) or {}).get("public_defines")
 			               or ())
 			if text is None:
 				continue
@@ -14434,6 +14495,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		                   (resolutions.get(t) or {}).get("ldflags") or (),
 		                   root,
 		                   (resolutions.get(t) or {}).get("public_pkgs")
+		                   or (),
+		                   (resolutions.get(t) or {}).get("public_defines")
 		                   or ())) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
 		for t, text in pcs:
@@ -15187,6 +15250,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		                   (resolutions.get(t) or {}).get("ldflags") or (),
 		                   root,
 		                   (resolutions.get(t) or {}).get("public_pkgs")
+		                   or (),
+		                   (resolutions.get(t) or {}).get("public_defines")
 		                   or ())) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
 		# The prefix line reads the same PREFIX the install steps above
@@ -15398,7 +15463,8 @@ def install_rows_for(plan):
 	return rows
 
 
-def pc_text(t, conf, prefix=None, ldflags=(), root=None, public=()):
+def pc_text(t, conf, prefix=None, ldflags=(), root=None, public=(),
+            defines=()):
 	"""The pkg-config file for a library, or None if none was asked for.
 
     fmake resolves libraries *through* pkg-config -- a header proposes a
@@ -15478,7 +15544,10 @@ def pc_text(t, conf, prefix=None, ldflags=(), root=None, public=()):
 			extra.append(flag)
 	if extra:
 		lines.append("Libs.private: " + " ".join(extra))
-	lines.append("Cflags: -I${includedir}")
+	# The defines belong in Cflags beside the -I, and they are the one thing
+	# here that is safe to bake: a macro name is not a path, so it means the
+	# same on the machine this file ends up on.
+	lines.append(" ".join(["Cflags: -I${includedir}", *defines]))
 	return "\n".join(lines) + "\n"
 
 

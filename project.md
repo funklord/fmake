@@ -371,7 +371,8 @@ that had been green about nothing for five commits ·
 [318. The architecture check was off for four architectures](#318-the-architecture-check-was-off-for-four-architectures) ·
 [319. The list of headers the toolchain owns, replaced by asking it](#319-the-list-of-headers-the-toolchain-owns-replaced-by-asking-it) ·
 [320. An installed includedir that could not be compiled](#320-an-installed-includedir-that-could-not-be-compiled) ·
-[321. The .pc said how to link and not how to compile](#321-the-pc-said-how-to-link-and-not-how-to-compile)
+[321. The .pc said how to link and not how to compile](#321-the-pc-said-how-to-link-and-not-how-to-compile) ·
+[322. The define that changed a struct and was not published](#322-the-define-that-changed-a-struct-and-was-not-published)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2540,7 +2541,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **571** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **572** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24893,3 +24894,88 @@ That is not a bug: fmake names both files and the remedy for each, which is
 how it was recognised rather than debugged. But it is a trap for a fixture,
 and it is why these cases stage outside the tree. The §320 case escaped it
 only by removing the staging directory between its two installs.
+
+---
+
+## 322. The define that changed a struct and was not published
+
+The third of the `.pc` faults, and the only one with no error at all.
+§321 fixed the compile side by naming packages; a define the library was
+built with is the same question again, and its failure is quieter than
+either of the other two.
+
+    inc/rec.h    @headers; `struct rec' gains a field under REC_EXTRA
+    rec.c        @define REC_EXTRA
+
+    Name: recs
+    Libs: -L${libdir} -lrecs
+    Cflags: -I${includedir}
+
+A consumer compiling and linking on exactly those flags:
+
+    consumer sizeof=4    library says=8
+
+**No compile error, no link error, and a program that keeps running.**
+`Libs.private` missing gives an undefined reference; §321's missing
+`Requires` gives a fatal error naming the header. This gives two sides
+that disagree about a structure's layout and nothing anywhere that says
+so, which is the memory-corruption shape rather than the build-failure
+shape.
+
+### The filter is the header's own conditionals
+
+Published only when a published header tests the macro. A define used
+inside the implementation is nobody else's business, and putting it on a
+consumer's command line would change their compilation for no reason.
+
+So the scan gained one fact -- `cond_macros`, every macro named in a
+`#if`, `#ifdef`, `#ifndef` or `#elif` in the file -- and the published
+set is that, over the published headers and their in-tree closure,
+intersected with the `-D` flags the library was really built with
+(`cfg.cflags`, `cfg.override`, and each unit's own).
+
+**The intersection is what makes it precise.** An include guard and
+`__STDC_VERSION__` are in a header's `cond_macros` too, and are in
+nobody's `-D` list, so no attempt is made to recognise a project macro by
+its spelling. A macro name is also the one thing here safe to bake into a
+published file: it is not a path, so it means the same on the machine the
+file ends up on.
+
+### Two instrument faults, both caught before they mattered
+
+`RE_PP_COND` is anchored and carries no `re.M`, so the first version's
+`finditer` over the whole file matched at position 0 and nowhere else --
+a silently empty set, which would have made this feature inert while
+every assertion about the implementation still passed. It iterates lines
+now, as `_inc_guards` does beside it.
+
+And the scan is cached. A cached scan written before `cond_macros`
+existed returns nothing for it, which would disable the feature exactly
+where a tree had been built once before -- the guard-whose-failure-is-
+silence shape of §318 and §319. It does not, because the cache is keyed
+on `build_identity()` and not only on `CACHE_VER`: any change to fmake
+discards it. **Verified rather than read off the comment**, by building a
+tree with the previous fmake and then with this one over the same
+`.fmake`, which produced the define.
+
+The first attempt at that verification said the opposite, and the fault
+was the fixture: it staged into the tree, so the second build met two
+`rec.h` and stopped before writing a .pc -- the third time in one session
+that a prefix inside the tree has read as a finding about fmake.
+
+### The control was built in rather than retrofitted
+
+    computation skipped              the define missing, red
+    Cflags emitted without them      the define missing, red
+    cond_macros never populated      the define missing, red
+    every -D published               REC_LOGGING named, control red
+
+`REC_LOGGING` is declared beside `REC_EXTRA` and tested only in the `.c`,
+so the computation runs either way and has to choose. §321's control had
+to be rewritten because the code never reached it; this one is a second
+define in the same tree from the start, which is the lesson applied
+rather than restated.
+
+The last assertion is the one that would have caught the original fault:
+the consumer is built on the published flags and run, and it compares its
+own `sizeof(struct rec)` against the library's. Nothing else reports this.
