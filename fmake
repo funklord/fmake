@@ -5007,11 +5007,17 @@ wordexp.h
 
 
 class Project:
-	def __init__(self, root, srcs, hdrs, scans, owns=None):
+	def __init__(self, root, srcs, hdrs, scans, owns=None, excluded=None):
 		self.root  = root
 		# Whether the toolchain owns an include name. None means nobody
 		# asked the compiler, and STANDARD_HEADERS decides alone.
 		self.owns  = owns
+		# Whether a tree path is under [project] exclude. Used only to
+		# break a tie between two candidates for one basename; an excluded
+		# header that is the ONLY candidate still resolves, which is what
+		# keeps "include resolution may reach into an excluded directory"
+		# true.
+		self.is_excluded = excluded
 		self.srcs  = srcs
 		self.hdrs  = hdrs
 		self.scans = scans
@@ -5073,6 +5079,29 @@ class Project:
 		if kind == "<" and self.owns and self.owns(inc_name):
 			return None
 		matches = self.hdr_by_name.get(os.path.basename(inc_name), [])
+		# An excluded candidate loses to one that is not. `hdrs' is
+		# deliberately not filtered by [project] exclude, so that an
+		# include reaching into an excluded subtree still resolves -- but
+		# that intent was stated without its consequence: an excluded copy
+		# also COMPETES, so it can block a name that would otherwise be
+		# unique and the build stops with neither candidate chosen.
+		#
+		# Measured, and it is how a person meets this: `fmake --install
+		# --prefix ./stage' publishes a header, the tree then holds two
+		# api.h, the next build refuses the include, and excluding the
+		# staging directory -- fmake's own printed advice -- did not help,
+		# because the exclude reached the include path and not the index.
+		#
+		# So the exclude decides only where a non-excluded answer exists.
+		# One candidate and excluded still resolves, which is the case the
+		# comment beside `gen_hdrs' is about.
+		# No guard on the result being non-empty, and the absence is
+		# checked rather than assumed: every candidate excluded leaves an
+		# empty list, which fails the `len(matches) == 1' below exactly as
+		# the unfiltered list of two or more would. Written with the guard
+		# first, and no assertion could tell the two apart.
+		if len(matches) > 1 and self.is_excluded:
+			matches = [m for m in matches if not self.is_excluded(m)]
 		if len(matches) == 1:
 			self.incdirs.add(self.incdir_for(matches[0], inc_name))
 			return matches[0]
@@ -10504,7 +10533,8 @@ def build(args, _bootstrapping=False):
 		scan_all(srcs)
 
 	proj = Project(root, srcs, hdrs, scans,
-	               owns=lambda n: toolchain_owns_header(cfg, n))
+	               owns=lambda n: toolchain_owns_header(cfg, n),
+	               excluded=exclude_pattern)
 	# A predicate that cannot answer says so, because its silence is the
 	# permissive direction: with no search path every name reads as the
 	# tree's, which is the guess STANDARD_HEADERS exists to refuse.
@@ -17687,6 +17717,37 @@ def do_install(targets, closures, root, outdir, conf, args, proj):
 		     f"{by[0]} stops on `{os.path.basename(header)}: No such file "
 		     f"or directory'. Publish it too -- @headers {header} -- or "
 		     f"move the include out of the published header")
+
+	# An install that lands a header inside the source tree leaves a second
+	# copy of it there, and the NEXT build cannot resolve the name against
+	# two candidates: `#include "api.h"' with inc/api.h and
+	# stage/include/api.h both in the tree stops with neither chosen.
+	#
+	# fmake already says that well when it happens -- it names both
+	# candidates and an include-dirs remedy for each -- but one of those
+	# remedies is to put your own staging directory on the include path,
+	# which is never the answer, and nothing connects the failure to the
+	# install that caused it. This is the moment both facts exist at once:
+	# the prefix is known here and the duplication has not happened yet.
+	#
+	# Warned rather than refused. Staging into the tree to look at what
+	# would be installed is a real thing to do, and `[project] exclude'
+	# makes it work, an exclude reaching the include path.
+	# Measured cost of not saying it: three times in one session
+	# a session's own staging directory read as a finding about fmake.
+	here = os.path.join(os.path.realpath(root), "")
+	shadowing = sorted({dst for _src, dst, _mode in planned
+	                    if os.path.splitext(dst)[1] in HDR_EXTS
+	                    and os.path.realpath(dst).startswith(here)})
+	if shadowing and not args.dry_run:
+		rel = os.path.relpath(os.path.commonpath(
+		    [os.path.dirname(d) for d in shadowing]), root)
+		warn(f"this installs {len(shadowing)} header(s) into the tree it "
+		     f"is building, under {rel}{os.sep}: each one will then exist "
+		     f"twice here, and the next build cannot resolve an include "
+		     f"against two candidates. Install outside the tree, or keep "
+		     f"the copy out of the way with "
+		     f"[project] exclude = [{rel!r}]")
 
 	if not planned:
 		info("nothing to install")

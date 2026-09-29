@@ -7068,6 +7068,138 @@ def a_library_resolves_its_own_includes_like_a_program(t):
 
 
 @case
+def installing_a_header_into_the_tree_is_said_before_it_happens(t):
+	"""An install whose prefix is inside the source tree leaves a second
+	copy of every published header there, and the NEXT build cannot resolve
+	an include against two candidates.
+
+	fmake says that well when it happens -- it names both files and an
+	include-dirs remedy for each -- but nothing connects the failure to the
+	install that caused it, and one of those remedies is to put your own
+	staging directory on the include path, which is never the answer. This
+	is the moment both facts exist at once: the prefix is known and the
+	duplication has not happened yet.
+
+	Measured cost of not saying it: three times in one session a session's
+	own staging directory read as a finding about fmake -- twice as a
+	regression that was not one, once as a stale-cache hazard that does not
+	exist.
+
+	Warned rather than refused, because staging into the tree to look at
+	what would be installed is a real thing to do. Two controls, and both
+	are reached: a prefix outside the tree says nothing, and an install
+	that puts no header in the tree says nothing either -- only a header
+	can be resolved by basename, so only a header can collide.
+	"""
+	t.write("inc/api.h", "#pragma once\nint api_n(void);\n")
+	t.write("api.c", "/*! @target apilib\n    @kind static\n"
+	                 "    @version 1.0\n    @headers inc/api.h */\n"
+	                 '#include "api.h"\n'
+	                 "int api_n(void){ return 1; }\n")
+	outside = os.path.join(os.path.dirname(t.dir),
+	                       os.path.basename(t.dir) + "-stage")
+	try:
+		r = t.fmake("--install", "--prefix", os.path.join(t.dir, "stage"))
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the install still succeeds: {out}")
+		check("into the tree it is building" in out and "stage" in out,
+		      f"installing a header into the tree must be said: {out}")
+
+		# The remedy has to work, or it is worse than none. This is the
+		# assertion that matters: the warning names an exclude, and with
+		# it the next build resolves the include against the tree's own
+		# copy rather than stopping between two.
+		t.write("fmake.toml", '[project]\nexclude = ["stage/include"]\n')
+		r = t.fmake()
+		check(r.returncode == 0,
+		      f"and the exclude it names must fix the next build: "
+		      f"{r.stdout}{r.stderr}")
+
+		# Control: outside the tree, nothing to say.
+		r = t.fmake("--install", "--prefix", outside)
+		check("into the tree it is building" not in r.stdout + r.stderr,
+		      f"a prefix outside the tree is silent: {r.stdout}{r.stderr}")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
+
+	# Control: a program installed into the tree collides with nothing,
+	# because nothing resolves an include to a binary.
+	u = Tree("exe-into-tree")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		r = u.fmake("--install", "--prefix", os.path.join(u.dir, "stage"))
+		check(r.returncode == 0, f"a program installs: {r.stdout}{r.stderr}")
+		check("into the tree it is building" not in r.stdout + r.stderr,
+		      f"and says nothing, having published no header: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
+def an_excluded_header_loses_a_basename_tie_to_one_that_is_not(t):
+	"""`hdrs` is deliberately not filtered by [project] exclude, so that an
+	include reaching into an excluded subtree still resolves. That intent
+	was stated in a comment beside `gen_hdrs` without its consequence: an
+	excluded copy also COMPETES, so it can block a name that would
+	otherwise be unique.
+
+	How a person meets it: `fmake --install --prefix ./stage` publishes a
+	header, the tree then holds two `api.h`, the next build refuses the
+	include -- and excluding the staging directory, which is what fmake's
+	own advice amounts to, did not help, because the exclude reached the
+	include path and not the index. Measured, and it is why the remedy in
+	the sibling case above is now a tested line.
+
+	So the exclude decides only where a non-excluded answer exists. One
+	candidate and excluded still resolves, which is the case the comment is
+	about -- and that path is untouched here, which a control below pins.
+	"""
+	t.write("inc/api.h", "#pragma once\n#define API_ONE 1\n")
+	t.write("other/api.h", "#pragma once\n#define API_ONE 2\n")
+	t.write("main.c", '#include "api.h"\nint main(void){ return API_ONE - 1; }\n')
+
+	# Both candidates live: ambiguous, and fmake says so rather than
+	# picking. This is the control for the tie-break, and it is reached --
+	# without it a fix that simply preferred the first candidate would
+	# pass the assertion below.
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "could be it" in out,
+	      f"two live candidates must stay ambiguous: {out}")
+
+	# Exclude one, and the other wins.
+	t.write("fmake.toml", '[project]\nexclude = ["other/**"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"excluding one candidate must leave the other: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "and it must be the one that was not excluded")
+
+	# Control: the sole candidate, excluded, still resolves -- the header
+	# is found and named, and what the exclude withholds is its include
+	# directory, which fmake reports with the override to type. Asserted
+	# here so the tie-break cannot quietly start dropping it.
+	u = Tree("only-excluded")
+	try:
+		u.write("vendor/inc/vend.h", "#pragma once\nint v_n(void);\n")
+		u.write("fmake.toml", '[project]\nexclude = ["vendor/**"]\n')
+		u.write("main.c", '#include "vend.h"\n'
+		        "int v_n(void){ return 1; }\n"
+		        "int main(void){ return v_n() - 1; }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check("include-dirs = ['vendor/inc']" in said
+		      and "is under [project] exclude" in said,
+		      f"a sole excluded candidate is still resolved and named, "
+		      f"with the exclude given as the reason its directory is "
+		      f"not on the path: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_pc_publishes_a_define_a_published_header_tests(t):
 	"""The quietest of the three .pc faults, and the only one with no
 	error at all.

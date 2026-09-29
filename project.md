@@ -372,7 +372,8 @@ that had been green about nothing for five commits ·
 [319. The list of headers the toolchain owns, replaced by asking it](#319-the-list-of-headers-the-toolchain-owns-replaced-by-asking-it) ·
 [320. An installed includedir that could not be compiled](#320-an-installed-includedir-that-could-not-be-compiled) ·
 [321. The .pc said how to link and not how to compile](#321-the-pc-said-how-to-link-and-not-how-to-compile) ·
-[322. The define that changed a struct and was not published](#322-the-define-that-changed-a-struct-and-was-not-published)
+[322. The define that changed a struct and was not published](#322-the-define-that-changed-a-struct-and-was-not-published) ·
+[323. The staging directory that read as three bugs](#323-the-staging-directory-that-read-as-three-bugs)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2541,7 +2542,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **572** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **574** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24961,7 +24962,8 @@ tree with the previous fmake and then with this one over the same
 The first attempt at that verification said the opposite, and the fault
 was the fixture: it staged into the tree, so the second build met two
 `rec.h` and stopped before writing a .pc -- the third time in one session
-that a prefix inside the tree has read as a finding about fmake.
+that a prefix inside the tree read as a finding about fmake, which is what
+§323 is about and what it fixes.
 
 ### The control was built in rather than retrofitted
 
@@ -24979,3 +24981,74 @@ rather than restated.
 The last assertion is the one that would have caught the original fault:
 the consumer is built on the published flags and run, and it compares its
 own `sizeof(struct rec)` against the library's. Nothing else reports this.
+
+---
+
+## 323. The staging directory that read as three bugs
+
+A `--prefix` inside the source tree leaves a second copy of every
+published header in it, and the next build cannot resolve an include
+against two candidates. fmake says that well when it happens:
+
+    api.h is on no include path here
+    2 files in this tree could be it, which is why it was not resolved:
+        inc/api.h             [project] include-dirs = ['inc']
+        stage/include/api.h   [project] include-dirs = ['stage/include']
+
+Both files named, a remedy for each. What it does not say is that one of
+them is something fmake installed a moment ago -- and the remedy offered
+for that one, putting a staging directory on the include path, is never
+the answer.
+
+**The cost is measured and it was paid by this session, three times.** A
+library that had built a minute earlier stopped building and read as a
+regression; the same shape read as a second regression; and then a
+stale-cache hazard was reported as real -- the `cond_macros` cache
+question of §322 -- when the reading was a staging directory and the
+hazard does not exist. Each cost a comparison against the previous fmake
+to clear. `evidence.md` names this exactly: an artifact of your own copy
+reads exactly like a finding.
+
+### Said at the one moment both facts exist
+
+The install knows the prefix and the duplication has not happened yet, so
+that is where it goes. Warned rather than refused: staging into the tree
+to look at what would be installed is a real thing to do.
+
+Only headers count, and the control says why -- nothing resolves an
+include to a binary, so a program installed into the tree collides with
+nothing.
+
+### The remedy did not work, which is why the case asserts it
+
+The first version of the warning named `[project] exclude` and shipped
+untested. **It did not fix the next build.** `hdrs` is deliberately not
+filtered by `exclude`, with the reason in a comment beside `gen_hdrs` --
+an include reaching into an excluded subtree should still resolve -- and
+that intent was stated without its consequence: **an excluded copy also
+competes**, so it can block a name that would otherwise be unique. The
+exclude reached the include path and not the index.
+
+Neither branch was right. Filtering `hdrs` would break the case the
+comment is about; leaving it alone leaves the remedy false. The third
+answer is a tie-break: **an excluded candidate loses to one that is not,
+and a sole excluded candidate still resolves.** Both halves are pinned,
+the second by a control that checks fmake still names the header and
+gives the exclude as the reason its directory is off the path.
+
+So the warning's remedy is now a tested line rather than a claim -- which
+is the assertion that catches the tie-break being removed, and is how a
+remedy should have been shipped the first time.
+
+### And a second redundant guard, removed for the same reason as the first
+
+`if plain:` guarded the tie-break against filtering everything away. With
+every candidate excluded the list is empty, which fails the
+`len(matches) == 1` test exactly as the unfiltered list of two or more
+would -- so no assertion could tell the two apart. Removed, like §321's
+directory filter, and for the same reason: a line nothing can see fail is
+a line the next reader will believe in.
+
+Twice in two sections now, which is worth naming as a habit rather than
+two incidents: **a defensive clause added while writing a filter is worth
+sabotaging before it is kept.**
