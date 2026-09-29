@@ -818,8 +818,59 @@ RE_MODULE_IFACE = re.compile(
 RE_MODULE_HEADER_UNIT = re.compile(
     r'^[ \t]*(?:export[ \t]+)?import[ \t]*[<"]([^>"]+)[>"][ \t]*;', re.M)
 RE_MODULE_IMPORT = re.compile(
-    r'^[ \t]*(?:export[ \t]+)?import[ \t]+([A-Za-z_][A-Za-z0-9_.:]*)[ \t]*;',
+    r'^[ \t]*(?:export[ \t]+)?import[ \t]+(:?[A-Za-z_][A-Za-z0-9_.:]*)[ \t]*;',
     re.M)
+# The declaration a file belongs to, `export' or not. Two things need it and
+# neither could be had from RE_MODULE_IFACE, which only sees interfaces:
+#
+#   module m;          an implementation unit, which reads m's BMI and so
+#                      must be compiled after it -- measured deterministically
+#                      red at -j4, the implementation unit landing in the same
+#                      level as its own interface
+#   import :part;      a partition import, whose name is the CURRENT module's
+#                      `m:part' and not `:part' -- so the primary name here is
+#                      what resolves it
+#
+# The `;' is required, which is what keeps `module;' -- the global module
+# fragment -- and `module :private;' out: neither names a module.
+RE_MODULE_DECL = re.compile(
+    r'^[ \t]*(export[ \t]+)?module[ \t]+'
+    r'([A-Za-z_][A-Za-z0-9_.]*(?::[A-Za-z_][A-Za-z0-9_.]*)?)[ \t]*;', re.M)
+
+def _module_imports(code):
+	"""Module names this translation unit needs a BMI for, resolved.
+
+    Two resolutions, each measured against g++ 14 rather than read off the
+    standard:
+
+      * a partition import is spelled `import :part;' and names the CURRENT
+        module's partition, so it resolves to `m:part'. Unresolved it is
+        `:part', which matches no `export module' and therefore produced no
+        edge at all: the partition interface was never chosen to compile,
+        and a four-file tree compiled two of its files.
+      * an implementation unit -- `module m;', no `export' -- reads its own
+        interface's BMI, so it depends on it as surely as an importer does.
+        Without that it lands in the same level as the interface and, at
+        -j4, is compiled beside it: deterministically red, six runs of six,
+        on `failed to read compiled module'.
+
+    A partition import in a file with no module declaration is ill-formed
+    and is dropped rather than guessed at; there is no current module for it
+    to be a partition of.
+    """
+	decl = RE_MODULE_DECL.search(code)
+	own = decl.group(2) if decl else None
+	primary = own.split(":")[0] if own else None
+	out = set()
+	for name in RE_MODULE_IMPORT.findall(code):
+		if not name.startswith(":"):
+			out.add(name)
+		elif primary:
+			out.add(primary + name)
+	if own and not decl.group(1):
+		out.add(own)
+	return sorted(out)
+
 
 # What may stand between the parameter list and the brace. The pattern
 # read `main(...)' and then demanded `{' immediately, so three legal
@@ -1232,7 +1283,7 @@ def scan_source(path):
 		# in a comment or a string is not a declaration.
 	    "qobject":  bool(RE_QOBJECT.search(code)),
 	    "modiface": sorted(set(RE_MODULE_IFACE.findall(code))),
-	    "modimp":   sorted(set(RE_MODULE_IMPORT.findall(code))),
+	    "modimp":   _module_imports(code),
 	    "modhdr":   sorted(set(RE_MODULE_HEADER_UNIT.findall(code))),
 	    "qrc":      sorted(set(RE_QRC_PATH.findall(code))),
 	    "qrc_init": sorted(set(RE_QRC_INIT.findall(code))),

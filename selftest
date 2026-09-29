@@ -16834,6 +16834,128 @@ int main(){ Widget w; Gadget g; printf("%d\\n", w.value() + g.n); return 0; }
 
 
 @case
+def a_module_implementation_unit_is_built_after_its_interface(t):
+	"""`module m;` -- no `export` -- is an implementation unit, and it reads
+	its own interface's BMI as surely as an importer does. Nothing said so:
+	the graph was read from `export module X` and `import X`, and a
+	declaration with neither keyword matched neither regex.
+
+	So the implementation unit landed in the same level as its own
+	interface. **Deterministically red at -j4, six runs of six**, on
+
+	    m: error: failed to read compiled module: No such file or directory
+
+	and green at -j1 by the accident of list order, which is the worst
+	shape a fault can have -- the same command failing and then passing
+	was how this was found.
+
+	The `--widen-all` run is the one that matters and is not a
+	convenience. Without it the implementation unit is not a candidate at
+	all: nothing includes it and its exports have module linkage, so it
+	arrives only in the second pass by symbol closure, which is *after*
+	the BMI exists. The bug is invisible to a default build of this tree
+	and certain in the first pass, so the case has to put it there."""
+	t.write("m.cppm", "export module m;\nexport int m_val();\n")
+	t.write("m_impl.cpp", "module m;\nint m_val() { return 7; }\n")
+	t.write("main.cpp", "import m;\nint main() { return m_val() - 7; }\n")
+
+	r = t.fmake("--widen-all", "-j4")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"an implementation unit must be ordered after its interface: "
+	      f"{out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the built program did not run correctly")
+	order = [l.split("] ", 1)[1] for l in out.splitlines()
+	         if l.startswith("[") and "] " in l]
+	iface = [i for i, l in enumerate(order) if "m.cppm" in l]
+	impl = [i for i, l in enumerate(order) if "m_impl.cpp" in l]
+	check(iface and impl and iface[0] < impl[0],
+	      f"the interface must be compiled first: {order}")
+
+	# A global module fragment is not a declaration of anything, and must
+	# not be read as an implementation unit of a module called nothing.
+	u = Tree("mod-gmf")
+	try:
+		# The fragment's include is the interface's own and does not
+		# reach the implementation unit -- which is the language's rule
+		# and not fmake's, and cost this fixture a run to remember.
+		u.write("g.cppm", "module;\n#include <stddef.h>\n"
+		        "export module g;\nexport int g_val();\n")
+		u.write("g_impl.cpp", "module g;\nint g_val() { return 3; }\n")
+		u.write("main.cpp", "import g;\n"
+		        "int main() { return g_val() == 3 ? 0 : 1; }\n")
+		r = u.fmake("--widen-all", "-j4")
+		check(r.returncode == 0,
+		      f"a global module fragment must not confuse the graph: "
+		      f"{r.stdout}{r.stderr}")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "the global-module-fragment program did not run correctly")
+	finally:
+		u.cleanup()
+
+
+@case
+def a_module_partition_is_found_and_built_before_the_primary(t):
+	"""`export import :part;` names the CURRENT module's partition, so the
+	name it depends on is `m:part` and not `:part`.
+
+	`RE_MODULE_IMPORT` required a leading letter, so a partition import
+	matched nothing at all -- no edge, so the partition interface was never
+	chosen to compile. Measured: a three-file tree compiled two of its
+	files and stopped on `failed to read compiled module`, naming `m:part`,
+	a module the reader never wrote an import for.
+
+	The order was established against g++ 14 by hand before it was
+	implemented rather than read off the standard: compiling the primary
+	first fails on `m:part`, and the partition first succeeds.
+
+	Checked under clang as well as gcc where clang is installed, because
+	clang needs each BMI named on the importer's line and a partition name
+	carries a colon -- `-fmodule-file=m:part=...`, which is the part a
+	gcc-only fixture cannot show."""
+	t.write("part.cppm",
+	        "export module m:part;\nexport int part_val() { return 5; }\n")
+	t.write("m.cppm", "export module m;\nexport import :part;\n")
+	t.write("main.cpp", "import m;\nint main() { return part_val() - 5; }\n")
+
+	r = t.fmake("-j4")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"a partition tree should build: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the built program did not run correctly")
+	order = [l.split("] ", 1)[1] for l in out.splitlines()
+	         if l.startswith("[") and "] " in l]
+	check(len(order) == 3,
+	      f"all three files must be compiled, not just the two the graph "
+	      f"could see: {order}")
+	part = [i for i, l in enumerate(order) if "part.cppm" in l]
+	prim = [i for i, l in enumerate(order) if l.strip().endswith("m.cppm")]
+	check(part and prim and part[0] < prim[0],
+	      f"the partition must precede the primary interface: {order}")
+
+	if not shutil.which("clang++"):
+		raise Skip("clang++ not installed, so only gcc was measured")
+	u = Tree("mod-part-clang")
+	try:
+		for name in ("part.cppm", "m.cppm", "main.cpp"):
+			with open(os.path.join(t.dir, name)) as fh:
+				u.write(name, fh.read())
+		r = u.fmake("-j4", env={"CXX": "clang++"})
+		check(r.returncode == 0,
+		      f"clang must build the partition tree too: "
+		      f"{r.stdout}{r.stderr}")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "the clang-built partition program did not run correctly")
+		said = u.fmake("--explain", env={"CXX": "clang++"}).stdout
+		check("-fmodule-file=m:part=" in said,
+		      f"the partition's BMI must be named to its importer, colon "
+		      f"and all: {[l for l in said.splitlines() if 'fmodule' in l]}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_module_interface_is_built_before_what_imports_it(t):
 	"""§15 said modules defeat the build. They needed an order.
 

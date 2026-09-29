@@ -374,7 +374,8 @@ that had been green about nothing for five commits ·
 [321. The .pc said how to link and not how to compile](#321-the-pc-said-how-to-link-and-not-how-to-compile) ·
 [322. The define that changed a struct and was not published](#322-the-define-that-changed-a-struct-and-was-not-published) ·
 [323. The staging directory that read as three bugs](#323-the-staging-directory-that-read-as-three-bugs) ·
-[324. The byte comparison that compared none of the interesting bytes](#324-the-byte-comparison-that-compared-none-of-the-interesting-bytes)
+[324. The byte comparison that compared none of the interesting bytes](#324-the-byte-comparison-that-compared-none-of-the-interesting-bytes) ·
+[325. Two module shapes the graph could not see](#325-two-module-shapes-the-graph-could-not-see)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2543,7 +2544,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **574** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **576** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25101,3 +25102,89 @@ way to know that. The general move: after threading a new value through
 several call sites, sabotage ONE of them and find out which test speaks.
 If none does, the test that should is the one whose fixture excludes the
 new field.
+
+---
+
+## 325. Two module shapes the graph could not see
+
+§317 gave modules an order and an import edge. It read the graph from two
+things a file says about itself, `export module X` and `import X`, and two
+ordinary shapes say neither.
+
+### An implementation unit, deterministically red at -j4
+
+    m.cppm       export module m;   export int m_val();
+    m_impl.cpp   module m;          int m_val() { return 7; }
+
+`module m;` -- no `export` -- is an implementation unit, and it reads its
+own interface's BMI as surely as an importer does. It matched neither
+regex, so it declared no dependency and landed in the same level as the
+interface. At -j4 the two are compiled together:
+
+    m: error: failed to read compiled module: No such file or directory
+
+**Six runs of six.** And green at -j1 by the accident of list order, which
+is the worst shape a fault can have -- the same command failing and then
+passing is how it was found, and `running-code.md` is explicit that
+non-reproduction is not evidence against an intermittent fault.
+
+**A default build of that tree cannot see it**, which is why the case
+passes `--widen-all`. Nothing includes the implementation unit and its
+definitions have module linkage, so it is not a candidate: it arrives in
+the second pass by symbol closure, which is after the BMI exists. The bug
+is invisible in pass two and certain in pass one, so the case has to put
+it there.
+
+### A partition, which was never compiled at all
+
+    part.cppm  export module m:part;  export int part_val() { return 5; }
+    m.cppm     export module m;       export import :part;
+
+`RE_MODULE_IMPORT` required a leading letter, so `import :part;` matched
+nothing -- no edge, and the partition interface was never chosen. A
+three-file tree compiled two of its files and stopped on `failed to read
+compiled module` naming `m:part`, **a module the reader never wrote an
+import for.**
+
+A partition import names the *current* module's partition, so it resolves
+to `m:part`. The primary name is the file's own declaration, which is why
+both fixes needed the same new fact.
+
+### One new regex, and the order established before it was written
+
+`RE_MODULE_DECL` reads the declaration a file belongs to, `export` or not.
+The `;` is required, which is what keeps out the two spellings that name
+no module:
+
+    module;             the global module fragment      -> None
+    module :private;    the private module fragment     -> None
+    export module m;                                    -> export m
+    module m;                                           -> m
+    export module m:part;                               -> export m:part
+    module m:part;                                      -> m:part
+    modulefoo;                                          -> None
+
+The required order was measured against g++ 14 by hand before anything was
+implemented -- compiling the primary first fails on `m:part`, the partition
+first succeeds -- rather than read off the standard. §317's own rule, that
+the graph is read from the source and not from the compiler's wording,
+is unchanged; what is measured is the *dependency*, not the diagnostic.
+
+Both shapes were then checked under clang 19 as well as g++ 14. clang needs
+each BMI named on the importer's line and a partition name carries a colon,
+so `-fmodule-file=m:part=...` is the part a gcc-only fixture cannot show,
+and the case asserts it.
+
+### Three sabotages, one per resolution
+
+    implicit self-import dropped     the implementation unit, red
+    partition name unresolved        2 of 3 files compiled, red
+    leading colon out of the regex   the same, red
+
+The second reproduces the original symptom exactly, which is the check
+that the case is about the fault and not about the fix.
+
+One fixture cost a run and the reason is the language's: a global module
+fragment's `#include` belongs to the interface and does not reach the
+implementation unit, so `size_t` there is an error. Fixed in the fixture,
+not in fmake.
