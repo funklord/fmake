@@ -382,7 +382,8 @@ that had been green about nothing for five commits ·
 [329. Editing a module interface did not rebuild what imports it](#329-editing-a-module-interface-did-not-rebuild-what-imports-it) ·
 [330. The same staleness, in the emitted build](#330-the-same-staleness-in-the-emitted-build) ·
 [331. A file fmake left in the tree it was run in](#331-a-file-fmake-left-in-the-tree-it-was-run-in) ·
-[332. A source that needed a target's define, compiled without it](#332-a-source-that-needed-a-targets-define-compiled-without-it)
+[332. A source that needed a target's define, compiled without it](#332-a-source-that-needed-a-targets-define-compiled-without-it) ·
+[333. The database an editor reads, disagreeing with the build](#333-the-database-an-editor-reads-disagreeing-with-the-build)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -25638,3 +25639,48 @@ closes over another's root.
 So the fix is also the removal of a fact §316 derived twice, which is what
 made the third attempt fail: two spellings of "the unit this target roots",
 one of them not knowing about the pools the feature had added.
+
+---
+
+## 333. The database an editor reads, disagreeing with the build
+
+`compile_commands.json` is what clangd and every C/C++ editor read, and
+§72's case says the point of generating it is that "the database an editor
+reads cannot disagree with the build". For a tree with per-target `cflags`
+it did.
+
+    the build makes    7 objects, 4 of them .fancy.o with -DFEATURE=1
+    the database had   4 entries, one per source, none with the define
+
+So an editor analysed the flagged target's sources without the flag that
+shapes them -- the body inside `#ifdef FEATURE` simply is not there as far
+as the editor is concerned, on a tree that builds correctly. Silent, in the
+one place a person looks all day.
+
+`write_compile_commands` was handed `all_units`, which is the plain units
+keyed by path. Variants live in the target pools and were never in it.
+
+**And §332 made it sharper**: once a flagged root stopped being compiled
+plainly, the database listed `fancy.c -> fancy.c.o`, an object nothing
+builds.
+
+### One name for the compile set
+
+The set is already computed where `compile_units` is called. It is named
+there now and the database is built from it -- the same move as §327's
+`Closure.modules` and §328's `module_lang_flag`: the fault was two
+derivations of one fact, and the fix is to stop having two.
+
+### The assertion is a set equality
+
+    every object built appears in the database
+    every database entry names an object built
+
+A relationship rather than a count, so it cannot go stale as features add
+objects -- which is exactly how this went wrong, a feature adding a second
+object per source to a database keyed by path. §324 taught that lesson
+with a byte comparison that spanned none of the interesting bytes; this is
+the same shape, caught earlier because the lesson was already written down.
+
+The variant defines are asserted separately, because a database could name
+the right objects with the wrong flags on them.

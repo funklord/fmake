@@ -11998,10 +11998,17 @@ def build(args, _bootstrapping=False):
 		                           if t.name in tpools}])
 		# Compiled with the pool and closed over without it, which is the
 		# whole of what makes a variant work.
-		compile_units(pool + [variants[k] for k in sorted(variants)]
-		              + [tpools[n][r] for n in sorted(tpools)
-		                 for r in sorted(tpools[n])
-		                 if tpools[n][r].variant],
+		# Named once, because two things want it and they disagreed. The
+		# compile set is this; `compile_commands.json' was built from
+		# `all_units' instead, which is the plain units keyed by path --
+		# so a flagged target's variants were missing from the database an
+		# editor reads, and after flagged roots stopped being compiled
+		# plainly it named an object nothing builds.
+		built_units = (pool + [variants[k] for k in sorted(variants)]
+		               + [tpools[n][r] for n in sorted(tpools)
+		                  for r in sorted(tpools[n])
+		                  if tpools[n][r].variant])
+		compile_units(built_units,
 		              cfg, cache, root, incflags, jobs, args.dry_run,
 		              broken, tree_headers=hdrs, quiet=args.quiet,
 		              origins=generated_from, vendored=vendored,
@@ -12882,7 +12889,11 @@ def build(args, _bootstrapping=False):
 		dbpath = (args.compile_commands if os.path.isabs(args.compile_commands)
 		          else os.path.join(root, args.compile_commands))
 		cache.save()
-		return write_compile_commands(dbpath, all_units, cfg, incflags, root)
+		# The units actually compiled, variants and all: an editor reading
+		# a database that disagrees with the build is being told the wrong
+		# flags for the file in front of it, which is silent.
+		return write_compile_commands(dbpath, built_units, cfg, incflags,
+		                              root)
 	if args.explain:
 		for t in wanted:
 			explain(t, closures[t], cfg, incflags, outdir, all_units, root,

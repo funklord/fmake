@@ -10637,6 +10637,43 @@ def a_compilation_database_lists_what_fmake_compiles(t):
 	      f"the database's own command did not compile the file: "
 	      f"{run.stdout}{run.stderr}")
 
+	# The set the database names and the set the build produced are the
+	# same set. A relationship rather than a count, so it cannot go stale
+	# as features add objects -- which is exactly how it went wrong: a
+	# per-target `cflags' compiles a second object per source, and the
+	# database was built from the plain units keyed by path, so every
+	# variant was missing and an editor read the flagged target's sources
+	# without the flags that define them. Then, once a flagged root stopped
+	# being compiled plainly, the database named an object nothing builds.
+	u = Tree("cdb-variants")
+	try:
+		u.write("shared.c", "int shared(void);\nint shared(void){ return MODE; }\n")
+		u.write("one.c", "/*! @target one */\nint shared(void);\n"
+		        "int main(void){ return shared() - 1; }\n")
+		u.write("two.c", "/*! @target two */\nint shared(void);\n"
+		        "int main(void){ return shared() - 2; }\n")
+		u.write("fmake.toml", '[target.one]\ncflags = ["-DMODE=1"]\n\n'
+		        '[target.two]\ncflags = ["-DMODE=2"]\n')
+		r = u.fmake("--compile-commands")
+		check(r.returncode == 0, f"--compile-commands failed: {r.stdout}{r.stderr}")
+		with open(os.path.join(u.dir, "compile_commands.json")) as fh:
+			entries = json.load(fh)
+		built = {os.path.basename(o) for o in
+		         glob.glob(os.path.join(u.dir, ".fmake", "**", "*.o"),
+		                   recursive=True)}
+		named = {os.path.basename(x["output"]) for x in entries}
+		check(built and named == built,
+		      f"the database and the build name different objects: "
+		      f"only built {sorted(built - named)}, only named "
+		      f"{sorted(named - built)}")
+		# And the flags that make a variant a variant are on its entry.
+		for want in ("-DMODE=1", "-DMODE=2"):
+			check(any(want in x["arguments"] for x in entries),
+			      f"no entry carries {want}, so an editor reads that "
+			      f"target's sources without the define that shapes them")
+	finally:
+		u.cleanup()
+
 	# A named path, and the header is still not an entry there either.
 	r = t.fmake("--compile-commands", "build/cdb.json")
 	check(r.returncode == 0 and os.path.isfile(os.path.join(t.dir, "build", "cdb.json")),
