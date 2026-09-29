@@ -380,7 +380,9 @@ that had been green about nothing for five commits ·
 [327. The module interface the ejected build did not compile](#327-the-module-interface-the-ejected-build-did-not-compile) ·
 [328. The ejected clang module build wrote no BMI, under somebody else's path](#328-the-ejected-clang-module-build-wrote-no-bmi-under-somebody-elses-path) ·
 [329. Editing a module interface did not rebuild what imports it](#329-editing-a-module-interface-did-not-rebuild-what-imports-it) ·
-[330. The same staleness, in the emitted build](#330-the-same-staleness-in-the-emitted-build)
+[330. The same staleness, in the emitted build](#330-the-same-staleness-in-the-emitted-build) ·
+[331. A file fmake left in the tree it was run in](#331-a-file-fmake-left-in-the-tree-it-was-run-in) ·
+[332. A source that needed a target's define, compiled without it](#332-a-source-that-needed-a-targets-define-compiled-without-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2549,7 +2551,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **581** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **582** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25554,3 +25556,85 @@ rather than the punctuation, so the next change of form does not have to
 come back to it. **Changed deliberately and recorded, not made to pass** --
 the suite disagreeing with a change is the moment to look hardest, and what
 it had caught was a real narrowing in the old assertion.
+
+---
+
+## 331. A file fmake left in the tree it was run in
+
+§330's probe asks gcc whether it takes `-fdeps-format=p1689r5`. The format
+writes a **second** file -- a P1689 `.ddi` named after the primary output,
+in the working directory -- and the probe reads from stdin, so gcc calls
+the output `a--` and leaves `a--.ddi` wherever fmake was run from. The
+emitted build left one beside every object too.
+
+Shipped in §330 and found one commit later, as an untracked file in
+fmake's own repository. `git status --porcelain` before the commit is what
+surfaced it, which is the rule in `CLAUDE.md` earning its place: the file
+was not staged, because staging is by name, and it was seen because the
+porcelain was read.
+
+`-fdeps-file=/dev/null` beside the format takes both, and the depfile stays
+exactly as clean -- headers and `gcm.cache/m.gcm`, no `CXX_IMPORTS`.
+
+### The assertion went in the wrong case first
+
+Checked against the tree directory, where it passed: the litter lands in
+the **invoking** directory, not the tree. Then moved to the clang case,
+where it still passed -- clang *refuses* the flag, so nothing is ever
+written and the assertion could not fire. It lives in the g++ case now,
+and the sabotage reddens it.
+
+Two placements that could not fail, in a check written for a fault already
+in hand. `evidence.md` says a check is untested until it has been seen to
+fail; this is the cheaper version of that lesson -- the check was
+*written*, twice, before anyone asked whether it could speak.
+
+---
+
+## 332. A source that needed a target's define, compiled without it
+
+§316 gave a flagged target its own copy of the tree. The shared copy was
+still compiled, and for a source that needs the target's define to compile
+at all that is a compile which cannot work:
+
+    shared.c    returns MODE
+    [target.a] cflags = ["-DMODE=1"]
+    [target.b] cflags = ["-DMODE=2"]
+
+fmake built `a` and `b` correctly and **exited 1 on every build, including
+the first**, with a compiler error and "1 file(s) did not compile" for a
+file no target wanted plainly. A broken file is retried every build, so it
+recompiled for ever as well: §8's promise gone in a tree that was right.
+The same fault reaches a flagged target's *own root* in a tree that also
+holds a library.
+
+**§316's own case cannot see it, two ways over.** Its sources are
+`#ifdef`-guarded so each compiles with or without the flag, and one of its
+two targets has no flags, so the shared pool succeeds. Third fixture this
+session to exclude the input its feature was about -- after §324's `.pc`
+fields and §328's missing module interface.
+
+### Four attempts, three of them wrong
+
+    skip the shared pool when every target is flagged
+        crashed: plain units' symbols answer the main() check
+    compile only the roots from it
+        the library shape still failed: a flagged target's OWN ROOT is the
+        file that needs the define
+    point the main() check at `root_unit`
+        still crashed -- `root_unit` there is
+        `variants.get(t.name) or units.get(t.rel)`, which does not consult
+        tpools, while `_root_unit` a hundred lines below does exactly that
+    drop flagged roots from the compile list, leave them in the pool
+        `close_over_symbols` got a unit whose symbols are None: a crash,
+        not a wrong answer
+
+What works: drop from the **pool itself** both the flagged targets' roots
+and, where every target is flagged, the whole shared pool -- and give the
+`main()` check the one tpool-aware derivation. A flagged target's root is
+never wanted plainly, because that target links its own copy and no target
+closes over another's root.
+
+So the fix is also the removal of a fact §316 derived twice, which is what
+made the third attempt fail: two spellings of "the unit this target roots",
+one of them not knowing about the pools the feature had added.

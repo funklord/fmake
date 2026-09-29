@@ -6235,7 +6235,15 @@ def ninja_deps_flag(cfg):
 	cc = cfg.driver(True)
 	if cc in _DEPS_FORMAT:
 		return _DEPS_FORMAT[cc]
-	flag = "-fdeps-format=p1689r5"
+	# `-fdeps-file' with it, because the format writes a SECOND file --
+	# a P1689 `.ddi' named after the primary output, in the working
+	# directory. Shipped without it for one commit: the probe reads from
+	# stdin, so gcc called the output `a--' and left `a--.ddi' in the root
+	# of whatever tree fmake was run in, and the emitted build left one
+	# beside every object. fmake writing an uninvited file into somebody's
+	# tree is the part that matters; /dev/null takes both, and the depfile
+	# stays exactly as clean.
+	flag = ["-fdeps-format=p1689r5", "-fdeps-file=" + os.devnull]
 	# With the depfile flags, because gcc refuses the format on its own:
 	# `to generate dependencies you must specify either -M or -MM'. Probed
 	# without them first, and the probe said no for every compiler -- a
@@ -6245,14 +6253,14 @@ def ninja_deps_flag(cfg):
 	# is already one ninja can read.
 	ok = False
 	try:
-		r = subprocess.run([cc, flag, "-MD", "-MF", os.devnull,
+		r = subprocess.run([cc, *flag, "-MD", "-MF", os.devnull,
 		                    "-x", "c++", "-fsyntax-only", "-"],
 		                   input="int main(){return 0;}\n",
 		                   capture_output=True, text=True, errors="replace")
 		ok = r.returncode == 0
 	except OSError:
 		ok = False
-	_DEPS_FORMAT[cc] = [flag] if ok else []
+	_DEPS_FORMAT[cc] = list(flag) if ok else []
 	return _DEPS_FORMAT[cc]
 
 
@@ -11927,7 +11935,7 @@ def build(args, _bootstrapping=False):
 		cfg._libdirs = None         # recomputed with the new directories
 
 	while True:
-		pool = [units[r] for r in sorted(units)]
+		pool = None   # built below, once the flagged targets are known
 		# A target whose stanza carries `cflags' gets its own copy of the
 		# whole tree, not only of its root. Rebuilt each time round
 		# because widening adds units, and a pool that was a copy of the
@@ -11971,6 +11979,23 @@ def build(args, _bootstrapping=False):
 				v.own = list(u.own) + tflags
 				tp[rel] = v
 			tpools[t.name] = tp
+		# The shared pool, minus what only a flagged target could want. A
+		# flagged target's ROOT is never wanted plainly: that target links
+		# its own copy, and no target closes over somebody else's root.
+		# Compiling it plainly is how a source needing the target's own
+		# define came to fail on every build while the program it belongs
+		# to was correct -- and a broken file is retried, so it recompiled
+		# for ever too. Where EVERY target is flagged the shared pool is
+		# wanted by nobody at all.
+		#
+		# Dropped from the POOL and not from the compile list: leaving a
+		# unit in the pool uncompiled hands `close_over_symbols' a unit
+		# whose symbols are None, which is a crash rather than a wrong
+		# answer. Measured on the way here.
+		pool = ([] if targets and all(t.name in tpools for t in targets)
+		        else [units[r] for r in sorted(units)
+		              if r not in {t.rel for t in targets
+		                           if t.name in tpools}])
 		# Compiled with the pool and closed over without it, which is the
 		# whole of what makes a variant work.
 		compile_units(pool + [variants[k] for k in sorted(variants)]
@@ -12041,6 +12066,19 @@ def build(args, _bootstrapping=False):
 			archives, prebuilt = keep_a, keep_p
 		pool = pool + archives + prebuilt
 
+		def _root_unit(t):
+			"""The root this target closes from, in its own flavour.
+
+            A flagged target's root has to come out of that target's pool
+            or the closure starts from an object the program will not
+            link -- and then the first symbol it needs is answered by the
+            shared copy, quietly, and the flags reach nothing below the
+            root.
+            """
+			if t.name in tpools and t.rel in tpools[t.name]:
+				return tpools[t.name][t.rel]
+			return variants.get(t.name) or units[t.rel]
+
 		# confirm main() against the symbol tables now that objects exist
 		if not args.dry_run:
 			for t in list(wanted):
@@ -12051,7 +12089,7 @@ def build(args, _bootstrapping=False):
 				# compile" of a file that had compiled perfectly, which is
 				# advice pointing at the wrong thing as well as a program
 				# lost for no reason.
-				root_unit = variants.get(t.name) or units.get(t.rel)
+				root_unit = _root_unit(t)
 				if root_unit is not None and root_unit.key in broken:
 					why = (f"{t.rel} did not compile" if not root_unit.variant
 					       else f"{t.rel} did not compile with this "
@@ -12064,8 +12102,13 @@ def build(args, _bootstrapping=False):
 				# the thing that decides whether main() is there. It says
 				# so loudly -- `main function not found in crate' -- and
 				# that arrives from the link step below.
-				if (t.kind == "exe" and not units[t.rel].crate_exe
-				        and "main" not in units[t.rel].strong):
+				# `_root_unit', not `units[t.rel]': the same fact was
+				# derived twice here, and only one of the two consulted
+				# the target's own pool. With a flagged root no longer
+				# compiled plainly, the weaker derivation asked an
+				# uncompiled unit and crashed on None.
+				if (t.kind == "exe" and not root_unit.crate_exe
+				        and "main" not in root_unit.strong):
 					warn(f"{t.rel} looked like it defined main() but the "
 					     f"object does not export it; skipping")
 					# Remembered against the file and the configuration, so
@@ -12177,18 +12220,6 @@ def build(args, _bootstrapping=False):
 					if u is None or not u.compiled or (u.strong & libc_syms):
 						module_material.add(rel)
 
-		def _root_unit(t):
-			"""The root this target closes from, in its own flavour.
-
-            A flagged target's root has to come out of that target's pool
-            or the closure starts from an object the program will not
-            link -- and then the first symbol it needs is answered by the
-            shared copy, quietly, and the flags reach nothing below the
-            root.
-            """
-			if t.name in tpools and t.rel in tpools[t.name]:
-				return tpools[t.name][t.rel]
-			return variants.get(t.name) or units[t.rel]
 
 		def schema_pool(t):
 			"""`pool` without what this program must not link: the schemas

@@ -17131,8 +17131,25 @@ def an_ejected_build_rebuilds_an_importer_when_the_interface_changes(t):
 				u.write("main.cpp", "#include <stdio.h>\nimport m;\n"
 				        "int main(){ printf(\"%d\\n\", m_k); "
 				        "return m_touch(); }\n")
+				# The INVOKING directory, not the tree. gcc writes the
+				# P1689 file beside the primary output and the
+				# deps-format probe reads stdin, so the name is
+				# `a--.ddi' and it lands wherever fmake was run from.
+				# Shipped that way for one commit and found as an
+				# untracked file in fmake's own repository -- which is
+				# exactly where this catches it, the suite running from
+				# there. It has to be here and not in the clang case:
+				# clang refuses the flag, so nothing is ever written and
+				# the assertion could not fire.
+				before = set(glob.glob("*.ddi"))
 				r = u.fmake("--widen-all", "--eject", kind, env=env)
 				check(r.returncode == 0, f"{cc}/{kind}: eject failed: {r.stderr}")
+				strays = set(glob.glob("*.ddi")) - before
+				for stray in strays:
+					os.unlink(stray)
+				check(not strays,
+				      f"{cc}/{kind}: fmake wrote {sorted(strays)} into the "
+				      f"directory it was run in")
 				u.write(name, r.stdout)
 				shutil.rmtree(os.path.join(u.dir, ".fmake"),
 				              ignore_errors=True)
@@ -26548,6 +26565,82 @@ def defines_on_a_library_target_are_refused(t):
 	out = r.stdout + r.stderr
 	check("root translation unit" in out and "static" in out,
 	      f"the refusal does not say why it does not apply: {out}")
+
+
+@case
+def a_source_needing_a_target_define_is_not_compiled_without_it(t):
+	"""§316 gave a target its own copy of the tree. The shared copy was
+	still compiled, and for a source that needs the target's define to
+	compile at all that is a compile that cannot work:
+
+	    shared.c    returns MODE
+	    [target.a] cflags = ["-DMODE=1"]
+	    [target.b] cflags = ["-DMODE=2"]
+
+	fmake built `a` and `b` correctly and **exited 1 on every build,
+	including the first**, printing a compiler error and "1 file(s) did not
+	compile" for a file no target wanted plainly. A broken file is retried
+	every build, so it recompiled for ever too -- §8's promise gone in a
+	tree that was right.
+
+	**§316's own case cannot see it, two ways over.** Its sources are
+	`#ifdef`-guarded so each compiles with or without the flag, and one of
+	its two targets has no flags, so the shared pool succeeds. That is the
+	third fixture this session to exclude the input its feature was about.
+
+	A flagged target's root is never wanted plainly -- that target links its
+	own copy, and no target closes over another's root -- and where every
+	target is flagged the shared pool is wanted by nobody. Both are dropped
+	from the pool itself rather than from the compile list: leaving a unit
+	in the pool and not compiling it gives `close_over_symbols` a unit whose
+	symbols are None, which is a crash rather than a wrong answer, and was
+	measured on the way here.
+
+	The same change unifies a fact §316 derived twice. `_root_unit`
+	consults the target's own pool; the `main()` check a hundred lines above
+	it read `variants.get(t.name) or units.get(t.rel)`, which does not --
+	so with the plain root gone it asked an uncompiled unit. One derivation
+	now, used by both."""
+	t.write("shared.c", "int shared(void);\nint shared(void){ return MODE; }\n")
+	t.write("a.c", "/*! @target a */\n#include <stdio.h>\nint shared(void);\n"
+	        "int main(void){ printf(\"a=%d\\n\", shared()); return 0; }\n")
+	t.write("b.c", "/*! @target b */\n#include <stdio.h>\nint shared(void);\n"
+	        "int main(void){ printf(\"b=%d\\n\", shared()); return 0; }\n")
+	t.write("fmake.toml", '[target.a]\ncflags = ["-DMODE=1"]\n\n'
+	        '[target.b]\ncflags = ["-DMODE=2"]\n')
+
+	r = t.fmake("-j4")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a tree whose every target carries its own defines must not "
+	      f"report a failure for the copy nobody wanted: {out}")
+	check("did not compile" not in out, f"and must not say one: {out}")
+	check(t.run("a").stdout.strip() == "a=1", f"a is wrong: {t.run('a').stdout}")
+	check(t.run("b").stdout.strip() == "b=2", f"b is wrong: {t.run('b').stdout}")
+	check(not compiled(t.fmake("-j4")),
+	      "and a settled tree must compile nothing -- a file retried every "
+	      "build is what the failure above turned into")
+
+	# The flagged target's own ROOT needing the define, beside a library so
+	# that the shared pool is still built for somebody. The pool-wide skip
+	# cannot cover this one; dropping flagged roots is what does.
+	u = Tree("flagged-root")
+	try:
+		u.write("lib.c", "/*! @kind static\n    @target lib1 */\n"
+		        "int libf(void){ return 3; }\n")
+		u.write("app.c", "/*! @target app */\n#include <stdio.h>\n"
+		        "int libf(void);\n"
+		        "int main(void){ printf(\"%d\\n\", libf() + EXTRA); return 0; }\n")
+		u.write("fmake.toml", '[target.app]\ncflags = ["-DEXTRA=4"]\n')
+		r = u.fmake("-j4")
+		check(r.returncode == 0,
+		      f"a flagged target's own root must not be compiled without "
+		      f"its defines: {r.stdout}{r.stderr}")
+		check(u.run("app").stdout.strip() == "7",
+		      f"the flagged root got the wrong flags: {u.run('app').stdout}")
+		check(not compiled(u.fmake("-j4")), "and that tree must settle too")
+	finally:
+		u.cleanup()
 
 
 @case
