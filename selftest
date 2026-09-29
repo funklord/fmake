@@ -16834,6 +16834,84 @@ int main(){ Widget w; Gadget g; printf("%d\\n", w.value() + g.n); return 0; }
 
 
 @case
+def an_ejected_clang_module_build_writes_its_own_bmi(t):
+	"""Two facts about a clang module build were derived twice and the
+	emitted copies were wrong.
+
+	`-x' for a module interface is `-x c++' for gcc and `-x c++-module' for
+	clang, and given the gcc spelling clang compiles the file as an ordinary
+	translation unit: it then IGNORES `-fmodule-output', with a warning
+	about an unused argument, and writes no BMI. `compile_cmd' had that
+	right and both ejected builds said `-x c++' unconditionally.
+
+	And the BMI path was absolute into `.fmake/obj/<key>/' -- right for
+	fmake's own build and wrong in an emitted one three ways: a fresh clone
+	has no such directory, `fmake --clean' removes it, and the path names
+	the machine that ejected. Measured: the ejected build wrote its BMI, or
+	failed to, under the scratch directory of the tree it came from.
+
+	The two had to be fixed together. Correcting the language flag alone
+	turns a build that silently wrote no BMI into one that fails trying to
+	write under somebody else's path -- which is worse, because the first
+	at least linked.
+
+	The rewrite goes through a placeholder because `_eject_flags' escapes
+	what it returns and both escapes double a `$': the first attempt put
+	`$(BUILD_DIR)' in and clang was handed that literal text. The `-I'
+	rewrite beside it had never met the problem, a relative directory
+	carrying no variable reference.
+
+	Asserted on the artifact rather than the flags alone -- the BMI has to
+	land under the emitted build's own directory, and the program has to
+	run -- because the flags being right is what the previous version also
+	looked like."""
+	if not shutil.which("clang++"):
+		raise Skip("clang++ not installed")
+	t.write("m.cppm", "export module m;\nexport int m_val() { return 7; }\n")
+	t.write("main.cpp", "import m;\nint main() { return m_val() - 7; }\n")
+
+	for kind, name, cmd in (("make", "Makefile", ["make", "-s"]),
+	                        ("ninja", "build.ninja",
+	                         ["ninja", "-f", "build.ninja"])):
+		if not shutil.which(cmd[0]):
+			continue
+		u = Tree("clang-eject-" + kind)
+		try:
+			for f in ("m.cppm", "main.cpp"):
+				with open(os.path.join(t.dir, f)) as fh:
+					u.write(f, fh.read())
+			r = u.fmake("--eject", kind, env={"CXX": "clang++"})
+			check(r.returncode == 0, f"eject {kind} failed: {r.stderr}")
+			u.write(name, r.stdout)
+			check("-x c++-module" in r.stdout,
+			      f"clang needs the module spelling of -x, or it writes no "
+			      f"BMI at all: {[l for l in r.stdout.splitlines() if '-x ' in l]}")
+			check(".fmake" not in r.stdout.split("fmodule-output=")[1]
+			      .split()[0],
+			      f"the BMI must not be written into fmake's state "
+			      f"directory: {r.stdout.split('fmodule-output=')[1].split()[0]}")
+
+			# A clean tree: no .fmake, nothing of fmake's left to lean on.
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			run = _run_in(u.dir, *cmd, env={"CXX": "clang++"})
+			check(run.returncode == 0,
+			      f"the ejected clang {kind} build must work from clean: "
+			      f"{run.stdout}{run.stderr}")
+			# The artifact, not the flag: a BMI under the emitted build's
+			# own directory, and a program that runs.
+			found = glob.glob(os.path.join(u.dir, "**", "*.pcm"),
+			                  recursive=True)
+			check(found and all(os.path.relpath(f, u.dir).split(os.sep)[0]
+			                    != ".fmake" for f in found),
+			      f"the BMI must land under the emitted build's own "
+			      f"directory: {[os.path.relpath(f, u.dir) for f in found]}")
+			check(u.run(os.path.basename(u.dir)).returncode == 0,
+			      f"and the program the ejected {kind} built must run")
+		finally:
+			u.cleanup()
+
+
+@case
 def an_ejected_build_compiles_a_module_interface_nothing_links(t):
 	"""§3 decides the link set by symbols, and that is right for a module
 	interface too: one that defines nothing reachable is correctly left out.

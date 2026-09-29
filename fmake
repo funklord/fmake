@@ -6201,13 +6201,33 @@ def compile_cmd(u, cfg, incflags):
 	# an ordinary TU and the importer finds no BMI. Both must precede the
 	# source, which is why this is here rather than in `u.own' -- an `-x'
 	# after the file it describes governs nothing.
-	lang_flag = []
-	if u.lang.module_iface:
-		lang_flag = ["-x", "c++-module" if "clang" in os.path.basename(cc)
-		             else "c++"]
+	lang_flag = module_lang_flag(u, cc)
 	return ([cc, "-c"] + lang_flag + [u.abs, "-o", u.obj]
 	        + u.lang.dep_flags(u.dep)
 	        + incflags + cfg.cflags + u.own + cfg.override)
+
+
+def module_lang_flag(u, cc):
+	"""`-x' for a module interface, which is not the same word per compiler.
+
+    gcc wants `-x c++' -- it does not know `.cppm' or `.ixx' and would call
+    one a linker input. clang wants `-x c++-module', and given plain `-x
+    c++' it compiles the file as an ordinary translation unit: it then
+    IGNORES `-fmodule-output', with a warning about an unused argument,
+    writes no BMI, and the importer finds none.
+
+    One function because there were three derivations of this and the two in
+    the ejected builds said `-x c++' unconditionally. So `--eject' produced
+    a clang build that wrote no BMI while fmake's own build of the same tree
+    wrote one -- the shape of section 327 in a third place, and found by
+    reading the emitted Makefile beside `--explain'.
+
+    The compiler is the one that ejected, as every other flag in an emitted
+    build is: the flags are a snapshot, which section 15 already records.
+    """
+	if not u.lang.module_iface:
+		return []
+	return ["-x", "c++-module" if "clang" in os.path.basename(cc) else "c++"]
 
 
 def write_compile_commands(dbpath, units, cfg, incflags, root):
@@ -13447,7 +13467,42 @@ def _obj_of(u):
 	return _eject_obj(u.rel, u.variant)
 
 
-def _eject_flags(flags, root, esc=None):
+# Where a rewritten BMI path says "the emitted build's own object
+# directory". A placeholder rather than the variable itself, because
+# `_eject_flags' escapes what it returns and both escapes double a `$' --
+# so `$(BUILD_DIR)' reached the compiler as the literal text `$(BUILD_DIR)'
+# and clang could not open it. The `-I' rewrite beside it never met this:
+# a relative directory carries no variable reference. Substituted at the
+# emission site, which is the only place that knows the backend's spelling.
+BMI_DIR = "@FMAKE_BMI_DIR@"
+
+
+def _eject_module_flag(f, objdir):
+	"""A BMI path moved from fmake's state directory to the emitted build's.
+
+    `-fmodule-output=' and `-fmodule-file=NAME=' carry an absolute path
+    under `.fmake/obj/<key>/', which is right for fmake's own build and
+    wrong in an emitted one three ways: a fresh clone has no such
+    directory, `fmake --clean' removes it, and the path names the machine
+    that ejected. Measured -- an ejected clang build wrote its BMI, or
+    failed to, under the scratch directory of the tree it came from.
+
+    Anything not under the object directory is left alone, so a
+    `-fmodule-file' a project wrote itself is passed through.
+    """
+	for key in ("-fmodule-output=", "-fmodule-file="):
+		if not f.startswith(key):
+			continue
+		name, sep, path = f[len(key):].rpartition("=")
+		if not objdir or not path.startswith(os.path.join(objdir, "")):
+			return f
+		moved = (BMI_DIR + "/"
+		         + os.path.relpath(path, objdir).replace(os.sep, "/"))
+		return key + (name + sep if sep else "") + moved
+	return f
+
+
+def _eject_flags(flags, root, esc=None, objdir=None):
 	"""Make in-tree paths relative so the emitted build is portable.
 
     `esc` is the emitting backend's escape for one flag, applied last so
@@ -13457,6 +13512,7 @@ def _eject_flags(flags, root, esc=None):
     """
 	out = []
 	for f in flags:
+		f = _eject_module_flag(f, objdir)
 		for prefix in ("-I", "-L"):
 			if f.startswith(prefix) and os.path.isabs(f[2:]):
 				rel = _rel(f[2:], root)
@@ -13886,6 +13942,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
     an unrelated-looking reason. CC, CXX and AR stay unprefixed and become
     conditional, because those the parent *should* control.
     """
+	# fmake's own object directory, derived rather than passed: `root' and
+	# `cfg' are here already and this is the one fact the BMI rewrite needs.
+	# Self-checking, too -- a wrong derivation matches no flag prefix, so
+	# the path comes through absolute and the case that builds from a
+	# clean tree fails rather than passing on a guess.
+	objdir = os.path.join(root, STATE_DIR, "obj", cfg.key)
 	# Both ejected forms run their tests from the tree root, so $bin(NAME)
 	# resolves to the same relative path the recipe below invokes.
 	eject_bins = {x.name: "./" + x.filename for x in targets}
@@ -14046,7 +14108,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# with two sets of flags -- a target variant with its own -D -- is
 	# two objects, and keying on the path handed the second's flags to
 	# both. The suite's "keep both objects" case is what said so.
-	own_flags = {_obj_of(u): _defer(_eject_flags(u.own, root, _mk_cmd_flag),
+	own_flags = {_obj_of(u): _defer([x.replace(BMI_DIR, f"$({P}BUILD_DIR)")
+	                                 for x in _eject_flags(
+	                                     u.own, root, _mk_cmd_flag, objdir)],
 	                                "CFLAGS")
 	             for t in targets
 	             for u in list(closures[t].link) + list(closures[t].modules)
@@ -14477,7 +14541,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# The driver knows neither `.cppm' nor `.ixx' and would treat one
 		# as a linker input, so it is told the language here exactly as
 		# `compile_cmd' tells it.
-		xflag = "-x c++ " if u.lang.module_iface else ""
+		xf = module_lang_flag(u, cfg.driver(u.cxx))
+		xflag = (" ".join(xf) + " ") if xf else ""
 		a(f"\t$({var}) $({P}{flags}){' ' + own if own else ''} $({P}CFLAGS_LAST) "
 		  f"-c {xflag}$< -o $@ {dep}")
 		a("")
@@ -14823,6 +14888,13 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
                 gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
                 prefix=None, outdir=None):
 	"""A standalone build.ninja."""
+	# fmake's own object directory, derived rather than passed: `root' and
+	# `cfg' are here already and this is the one fact the BMI rewrite needs.
+	# Self-checking, too -- a wrong derivation matches no flag prefix, so
+	# the path comes through absolute and the case that builds from a
+	# clean tree fails rather than passing on a guess.
+	objdir = os.path.join(root, STATE_DIR, "obj", cfg.key)
+
 	# Both ejected forms run their tests from the tree root, so $bin(NAME)
 	# resolves to the same relative path the recipe below invokes.
 	eject_bins = {x.name: "./" + x.filename for x in targets}
@@ -15221,11 +15293,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# `-x c++' for a module interface, for the reason compile_cmd
 		# gives: the driver does not know the extension and would call
 		# it a linker input.
-		own = list(u.own)
-		if u.lang.module_iface:
-			own = ["-x", "c++"] + own
+		own = module_lang_flag(u, cfg.driver(u.cxx)) + list(u.own)
 		if own:
-			a(f"  extra = {' '.join(_eject_flags(own, root, _nj_flag))}")
+			shown = [x.replace(BMI_DIR, "$build_dir")
+			         for x in _eject_flags(own, root, _nj_flag, objdir)]
+			a(f"  extra = {' '.join(shown)}")
 	# One edge per crate, with the members as implicit inputs. The depfile
 	# ninja reads afterwards is rustc's own and names the real module
 	# graph, so a member the `mod' scan missed still forces a rebuild.

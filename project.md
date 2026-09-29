@@ -377,7 +377,8 @@ that had been green about nothing for five commits ·
 [324. The byte comparison that compared none of the interesting bytes](#324-the-byte-comparison-that-compared-none-of-the-interesting-bytes) ·
 [325. Two module shapes the graph could not see](#325-two-module-shapes-the-graph-could-not-see) ·
 [326. A module error answered with three remedies, none of which help](#326-a-module-error-answered-with-three-remedies-none-of-which-help) ·
-[327. The module interface the ejected build did not compile](#327-the-module-interface-the-ejected-build-did-not-compile)
+[327. The module interface the ejected build did not compile](#327-the-module-interface-the-ejected-build-did-not-compile) ·
+[328. The ejected clang module build wrote no BMI, under somebody else's path](#328-the-ejected-clang-module-build-wrote-no-bmi-under-somebody-elses-path)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2546,7 +2547,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **578** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **579** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25324,3 +25325,71 @@ next person to touch either reading has two ways to hear about it.
 **No refusal was added, and the reason changed.** It was going to be
 declined because a condition nobody had characterised is not one to refuse
 on. It is characterised now and there is nothing left to refuse.
+
+---
+
+## 328. The ejected clang module build wrote no BMI, under somebody else's path
+
+Two facts about a clang module build were derived twice, and the emitted
+copies were wrong. Found by reading `--eject make` beside `--explain` for
+the same tree, which is the comparison §324 exists for and the one that
+keeps paying.
+
+### `-x c++` is not clang's word for it
+
+    fmake     clang++ -c -x c++-module m.cppm ... -fmodule-output=...
+    ejected   clang++ ... -c -x c++ m.cppm ... -fmodule-output=...
+
+`compile_cmd` had it right; both ejected builds said `-x c++`
+unconditionally. Given the gcc spelling clang compiles the file as an
+ordinary translation unit and then **ignores** `-fmodule-output`:
+
+    warning: argument unused during compilation: '-fmodule-output=...'
+
+No BMI, no error, and the build linked anyway -- so the ejected build
+produced a program by a route neither fmake nor the reader intended. There
+is one derivation now, `module_lang_flag`, and three callers.
+
+### The BMI path named the machine that ejected
+
+`-fmodule-output=` and `-fmodule-file=NAME=` carried an absolute path under
+`.fmake/obj/<key>/`. That is right for fmake's own build and wrong in an
+emitted one three ways: a fresh clone has no such directory, `fmake
+--clean` removes it, and the path names somebody's scratch tree. `_eject_flags`
+rewrites `-I` and `-L` and had nothing to say about these.
+
+**The two had to be fixed together.** Correcting the language flag alone
+turns a build that silently wrote no BMI into one that fails trying to
+write under another tree's path, which is worse -- the first at least
+linked.
+
+### The placeholder, and why the -I rewrite never needed one
+
+The first rewrite put `$(BUILD_DIR)` straight into the flag, and clang was
+handed that as literal text:
+
+    error: unable to open output file '$(BUILD_DIR)/m.cppm.pcm'
+
+`_eject_flags` escapes what it returns and both backends' escapes double a
+`$`. The `-I` rewrite beside it had never met this, because a relative
+directory carries no variable reference. So the rewrite emits
+`@FMAKE_BMI_DIR@` and each emission site substitutes its own spelling --
+`$(FM_BUILD_DIR)` or `$build_dir` -- after escaping.
+
+`objdir` is derived inside each eject function from `root` and `cfg` rather
+than threaded through as an argument, and the derivation is self-checking:
+a wrong one matches no flag prefix, so the path stays absolute and the
+case that builds from a clean tree fails rather than passing on a guess.
+
+### Asserted on the artifact
+
+The flags being right is what the previous version also looked like, so the
+case checks that a `.pcm` lands outside `.fmake` and that the program runs,
+for make and for ninja, from a tree with no `.fmake` in it at all.
+
+    gcc spelling of -x        red
+    no path rewrite           red on the state directory
+    placeholder removed       red on the clean build
+
+gcc's two shapes from §327 were re-run through both ejected forms
+afterwards: unchanged.
