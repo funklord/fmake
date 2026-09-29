@@ -16834,6 +16834,55 @@ int main(){ Widget w; Gadget g; printf("%d\\n", w.value() + g.n); return 0; }
 
 
 @case
+def a_module_error_is_not_answered_with_include_path_advice(t):
+	"""g++ says, for a BMI that is not there,
+
+	    m: error: failed to read compiled module: No such file or directory
+
+	and the missing-header pattern reads that as a header called `failed to
+	read compiled module`. So a module fault was answered with three
+	remedies, none of which can help: that it is on no include path here,
+	that a package might supply it and `@pkg` would name it, and that `@os`
+	would keep the file out of the build. Measured; the reader is sent to
+	look for a `-I`, then for a package, for a question about a module.
+
+	The guard is on the shape of the NAME, not on the compiler's wording --
+	the rule section 317 already set for module detection, since the wording
+	differs between vendors and releases and what an include spelling may
+	contain does not. An include spelling has no whitespace in it.
+
+	Declining costs only the advice. The compiler's own line is printed
+	either way and says exactly what happened, which the second assertion
+	pins so that a future guard cannot go quiet instead of going narrow."""
+	t.write("m.cppm",
+	        "export module m;\nexport int m_val() { return notdefined; }\n")
+	t.write("main.cpp", "import m;\nint main() { return m_val(); }\n")
+
+	r = t.fmake("-j4")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a broken interface must fail the build: {out}")
+	check("failed to read compiled module" in out,
+	      f"the compiler's own line has to survive the guard: {out}")
+	for wrong in ("is on no include path here", "@pkg", "@os NAME"):
+		check(wrong not in out,
+		      f"a module error must not be answered with {wrong!r}: {out}")
+
+	# The advice itself is not disabled: a genuinely missing header still
+	# gets it. Without this the guard could swallow every case and the
+	# assertions above would all pass.
+	u = Tree("still-advises")
+	try:
+		u.write("main.c", '#include "fmake_no_such_header.h"\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check("fmake_no_such_header.h is on no include path here" in said,
+		      f"a real missing header must still be advised on: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

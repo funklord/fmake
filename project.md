@@ -375,7 +375,8 @@ that had been green about nothing for five commits ·
 [322. The define that changed a struct and was not published](#322-the-define-that-changed-a-struct-and-was-not-published) ·
 [323. The staging directory that read as three bugs](#323-the-staging-directory-that-read-as-three-bugs) ·
 [324. The byte comparison that compared none of the interesting bytes](#324-the-byte-comparison-that-compared-none-of-the-interesting-bytes) ·
-[325. Two module shapes the graph could not see](#325-two-module-shapes-the-graph-could-not-see)
+[325. Two module shapes the graph could not see](#325-two-module-shapes-the-graph-could-not-see) ·
+[326. A module error answered with three remedies, none of which help](#326-a-module-error-answered-with-three-remedies-none-of-which-help)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2544,7 +2545,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **576** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **577** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25188,3 +25189,52 @@ One fixture cost a run and the reason is the language's: a global module
 fragment's `#include` belongs to the interface and does not reach the
 implementation unit, so `size_t` there is an error. Fixed in the fixture,
 not in fmake.
+
+---
+
+## 326. A module error answered with three remedies, none of which help
+
+g++ reports a BMI that is not there as
+
+    m: error: failed to read compiled module: No such file or directory
+
+and `RE_NO_HEADER` reads that as a header called *failed to read compiled
+module*. So fmake answered a module fault with:
+
+    failed to read compiled module is on no include path here
+    if it comes from a package, install it or name it with @pkg
+    if main.cpp belongs to another platform, @os NAME or @arch NAME
+        keeps it out of this build
+
+Three remedies, and not one of them can help. The reader is sent to look
+for a `-I`, then for a package to install, on a question about a module --
+which is worse than saying nothing, because a wrong mechanism costs the
+next person the wrong look and arrives with the authority of a diagnosis.
+
+Found while fixing §325: the sabotage that reproduces the partition fault
+prints this, and it had been printing it for every module ordering failure
+since §317.
+
+### Keyed on the name's shape, not on the compiler's wording
+
+**An include spelling has no whitespace in it**, and a compiler's other
+not-found messages do. That is the whole guard.
+
+Deliberately not a match against `failed to read compiled module`, which
+is §317's own rule applied here: the wording is the compiler's and differs
+between vendors and releases -- only g++ 14 and clang 19 have been
+measured on this machine -- while what an include spelling may contain
+does not. clang's phrasings for the same fault, `module 'm' not found` and
+`module file '...pcm' not found`, do not match the pattern at all, so this
+is a g++ shape being declined by a rule that is not about g++.
+
+### Declining costs only the advice
+
+The compiler's own line is printed either way and says exactly what
+happened. The case pins that too, so a future guard cannot go quiet
+instead of going narrow -- and pins that a genuinely missing header is
+still advised on, without which a guard that swallowed everything would
+satisfy every other assertion in the case.
+
+    guard removed        the three remedies come back, red
+    guard always on      a real missing header loses its advice, red

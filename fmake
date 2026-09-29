@@ -6342,7 +6342,25 @@ def _missing_header(msg):
 	m = RE_NO_HEADER.match(msg.strip())
 	if not m:
 		return None
-	return m.group(1).strip().strip("'\"")
+	name = m.group(1).strip().strip("'\"")
+	# An include spelling has no whitespace in it, and a compiler's other
+	# not-found messages do. g++ says
+	#
+	#     m: error: failed to read compiled module: No such file or directory
+	#
+	# for a BMI that is not there, and the pattern above happily reads that
+	# as a header called `failed to read compiled module' -- so a module
+	# ordering fault was answered with "it is on no include path here", "if
+	# it comes from a package, install it or name it with @pkg", and an
+	# offer to keep the file out with @os. Three remedies, none of which
+	# could help, on a question about a module.
+	#
+	# Keyed on the shape of the NAME rather than on the compiler's wording,
+	# which is the rule section 317 already set for module detection: the
+	# wording differs between vendors and releases, and what an include
+	# spelling can contain does not. Declining costs only the advice; the
+	# compiler's own line is printed either way, and it says what happened.
+	return None if not name or name.split() != [name] else name
 
 
 # gcc quotes an identifier with U+2018/U+2019 and clang with an
