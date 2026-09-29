@@ -20546,8 +20546,18 @@ both produce them; a tree built with fmake had no way to give clangd
 the flags, so an editor guessed and got the includes, the standard,
 and the `-D`s wrong.
 
-`--compile-commands` writes it and builds nothing, the shape
-`--explain` has. Every C or C++ unit fmake would compile gets an
+`--compile-commands` writes it and **links** nothing, the shape
+`--explain` has -- both compile, and neither links.
+
+**That sentence said "builds nothing" until 2026-09-29, and it was
+wrong.** Measured on a clean two-file tree: each mode compiles every unit
+and produces no binary. It has to compile, because the link set is decided
+from the symbols an object carries, so there is no version of this mode
+that reads the tree without compiling it. The case beside it had the same
+imprecision in a comment and asserted only that no *binary* appears --
+a sentence wider than its check, which is the pair that lets a wrong claim
+survive. It pins both halves now: nothing linked, and the objects that do
+exist, deliberately. Every C or C++ unit fmake would compile gets an
 entry, and its `arguments` are `compile_cmd` -- the same list the
 build hands the compiler, reused rather than rendered a second time,
 so the database and the build cannot drift the way two copies of a

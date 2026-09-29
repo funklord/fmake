@@ -10679,9 +10679,21 @@ def a_compilation_database_lists_what_fmake_compiles(t):
 	check(r.returncode == 0 and os.path.isfile(os.path.join(t.dir, "build", "cdb.json")),
 	      f"a named path was not written: {r.stdout}{r.stderr}")
 
-	# It builds nothing and installs nothing: a mode, like --explain.
+	# It LINKS nothing and installs nothing: a mode, like --explain. It
+	# does compile, and that is asserted rather than left implied --
+	# section 269 said "builds nothing" for a long time and this check,
+	# reading only for a binary, was narrower than the sentence. Objects
+	# have to exist: the link set is decided from the symbols an object
+	# carries, so a mode that skipped compiling could not write a database
+	# at all. Pinned so that nobody makes it skip them to satisfy the
+	# sentence.
 	check(not os.path.exists(os.path.join(t.dir, os.path.basename(t.dir))),
 	      "--compile-commands linked a program; it should only describe")
+	objs = glob.glob(os.path.join(t.dir, ".fmake", "**", "*.o"),
+	                 recursive=True)
+	check(objs,
+	      "--compile-commands compiled nothing, so its entries cannot have "
+	      "come from what the build would run")
 
 
 @case
