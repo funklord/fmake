@@ -6316,7 +6316,7 @@ _REL_CACHE = {}
 _DEP_HASH = {}
 
 
-def object_key(u, cfg, cache, root, incflags):
+def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None):
 	"""Cache key: source content, every prerequisite's content, and config.
 
     The include flags are part of the config: gaining an -I can change which
@@ -6332,7 +6332,44 @@ def object_key(u, cfg, cache, root, incflags):
 	if src_h is None:
 		return None
 	parts.append(src_h)
+	# What this unit imports, by the identity of the interface that exports
+	# it, transitively. Neither compiler makes this reachable any other way:
+	# g++ names the BMI in the depfile but relatively and as an artifact,
+	# and clang does not name it at all -- it is on the command line.
+	#
+	# Measured before it was written, on both: an exported
+	# `constexpr int m_k = 7' changed to 99 recompiled the interface alone
+	# and the program went on printing 7. The importer's key did not depend
+	# on the interface, so nothing invalidated it -- the layout fault
+	# `build-and-commit.md' calls load-bearing, arriving through a module
+	# rather than a header.
+	#
+	# The interface's own key, not merely its source hash, so a header IT
+	# includes counts too; recursive for a chain, with `_seen' because a
+	# cycle is refused elsewhere and this must not hang if one arrives.
+	if iface:
+		_seen = ({u.rel} if _seen is None else _seen | {u.rel})
+		for name in sorted(u.scan.get("modimp") or []):
+			v = iface.get(name)
+			if v is None or v.rel in _seen:
+				continue
+			vk = object_key(v, cfg, cache, root, incflags, iface, _seen)
+			if vk:
+				parts.append("mod:" + name + ":" + vk)
 	for dep in parse_depfile(u.dep):
+		# A relative entry is a BMI and belongs to nobody's key. g++ writes
+		# `gcm.cache/m.gcm' into an importer's depfile, relative because a
+		# module build compiles from the object directory -- and it is an
+		# artifact of THIS build, so hashing it would be one build late
+		# (every key here is computed before anything is compiled) and
+		# would never settle: the second build would see a file the first
+		# had written and recompile, for ever. Measured, both ways.
+		#
+		# What invalidates an importer is the interface's SOURCE, which the
+		# module graph above supplies. This entry is skipped rather than
+		# resolved so that nothing reintroduces it by making the path work.
+		if not os.path.isabs(dep):
+			continue
 		rel = _REL_CACHE.get((root, dep))
 		if rel is None:
 			rel = _REL_CACHE[(root, dep)] = os.path.relpath(dep, root)
@@ -6705,12 +6742,20 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	# where anything written since becomes visible again. Two passes cost
 	# two cold starts, which is 6,000 stats where the memo saves 90,000.
 	_DEP_HASH.clear()
+	# Which unit exports each module name, so a key can reach the interface
+	# it imports. Built from the units in hand rather than passed in: the
+	# same reading `module_prereqs' takes, and the only one that stays true
+	# when widening adds a unit mid-pass.
+	iface = {}
+	for u in units:
+		for _name in (u.scan.get("modiface") or []):
+			iface.setdefault(_name, u)
 	todo = []
 	for u in units:
 		if u.compiled:
 			continue
 		ent = cache.objects.get(u.key)
-		key = object_key(u, cfg, cache, root, incflags)
+		key = object_key(u, cfg, cache, root, incflags, iface)
 		if (ent and ent.get("key") == key and key is not None
 		        and _same_file(u.obj, ent.get("size"))):
 			u.undef  = set(ent["u"])
@@ -7093,7 +7138,10 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	read_symbols(made, cfg, jobs)
 	for u in made:
 		cache.objects[u.key] = {
-		    "key": object_key(u, cfg, cache, root, incflags),
+		    # The same key the staleness test computed, module graph and
+		    # all: written with a different one, every build would find a
+		    # mismatch and recompile everything.
+		    "key": object_key(u, cfg, cache, root, incflags, iface),
 		    "u": sorted(u.undef), "s": sorted(u.strong), "w": sorted(u.weak),
 		    "size": _file_size(u.obj),
 		}

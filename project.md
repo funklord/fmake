@@ -378,7 +378,8 @@ that had been green about nothing for five commits ·
 [325. Two module shapes the graph could not see](#325-two-module-shapes-the-graph-could-not-see) ·
 [326. A module error answered with three remedies, none of which help](#326-a-module-error-answered-with-three-remedies-none-of-which-help) ·
 [327. The module interface the ejected build did not compile](#327-the-module-interface-the-ejected-build-did-not-compile) ·
-[328. The ejected clang module build wrote no BMI, under somebody else's path](#328-the-ejected-clang-module-build-wrote-no-bmi-under-somebody-elses-path)
+[328. The ejected clang module build wrote no BMI, under somebody else's path](#328-the-ejected-clang-module-build-wrote-no-bmi-under-somebody-elses-path) ·
+[329. Editing a module interface did not rebuild what imports it](#329-editing-a-module-interface-did-not-rebuild-what-imports-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2547,7 +2548,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **579** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **580** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25393,3 +25394,73 @@ for make and for ninja, from a tree with no `.fmake` in it at all.
 
 gcc's two shapes from §327 were re-run through both ejected forms
 afterwards: unchanged.
+
+---
+
+## 329. Editing a module interface did not rebuild what imports it
+
+The load-bearing one, and its failure is a wrong program rather than a
+build error.
+
+    m.cppm     export constexpr int m_k = 7;
+    main.cpp   prints m_k
+
+Change the 7 to 99: only the interface recompiled, and the program went on
+printing **7**. On g++ 14 and clang 19 alike. This is
+`build-and-commit.md`'s rule about dependency tracking -- "a struct that
+gains a field ends up with one layout in the library and another in the
+test binary" -- arriving through a module instead of a header.
+
+Found by asking §8's question of the module work rather than by a report:
+build twice compiles nothing, so what happens when something changes?
+
+### Neither compiler makes the dependency reachable the ordinary way
+
+    g++     names the BMI in the importer's depfile, as gcm.cache/m.gcm --
+            RELATIVE, because a module build compiles from the object
+            directory
+    clang   does not name it at all; the BMI is on the command line, as
+            -fmodule-file=NAME=<path>
+
+So `object_key` resolved `gcm.cache/m.gcm` against the root, found nothing,
+`hash_of` returned None, and the prerequisite was **dropped without a
+word** -- a missing input contributing nothing rather than failing, which
+is the shape `evidence.md` calls a helper that is not there reporting
+success.
+
+### The obvious fix is wrong, and it is wrong in a way that hides
+
+Hash the BMI. It makes the key depend on an artifact of this build, and
+**every key in a pass is computed before anything compiles** -- so the
+second build still sees the old BMI and skips the importer, the third sees
+the new one and recompiles, and it never settles. Measured both ways: the
+edit still did not propagate, *and* a settled tree recompiled two files
+every time.
+
+So the key depends on the interface's **source** -- its own object key,
+recursively, so a header the interface includes counts too, and a chain
+`base <- mid <- main` invalidates end to end. The module graph already
+knows who exports what; `compile_units` builds that map from the units in
+hand, which is the reading that stays true when widening adds one
+mid-pass, and hands it to both places a key is computed. Writing the cache
+entry with a different key from the one the staleness test used would make
+every build recompile everything, so both call sites take it.
+
+A relative depfile entry is now skipped outright rather than resolved.
+That keeps the invalidation in one place -- the graph -- and stops a later
+reader from reintroducing the artifact dependency by making the path work.
+
+### What each sabotage proves
+
+    module graph dropped              stale constant, red
+    recursion dropped                 stale constant, red
+    the obvious fix instead of it     stale constant, red
+
+The third is the wrong fix this entry is about, run as a sabotage so the
+claim about it is pinned rather than asserted. Adding the artifact hash
+*on top of* the graph is harmless and settles -- which is why the sabotage
+has to remove the graph as well, and why the skip is kept.
+
+The case checks three things per compiler, and the third is the one the
+wrong fix fails: the output changes, the importer is actually recompiled
+rather than merely relinked, and a further build compiles nothing.
