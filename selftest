@@ -17440,6 +17440,95 @@ def a_module_partition_is_found_and_built_before_the_primary(t):
 
 
 @case
+def a_per_target_define_a_mocd_header_tests_is_reported(t):
+	"""moc runs once, with the project's flags. `moc_cflags' was written
+	before a target could carry its own defines, and a per-target one never
+	reaches it -- so a class declaration guarded by such a define is moc'd
+	WITHOUT it.
+
+	    thing.h    a slot behind `#ifdef FEATURE'
+	    [target.one] cflags = ["-DFEATURE=1"]
+
+	Measured: `moc_thing.cpp' names `basic' three times and `extra' not at
+	all, while target one's own objects have the slot. The build is clean
+	and the failure is a runtime `invokeMethod' that finds nothing -- the
+	worst shape, since nothing in the build says a word.
+
+	Reported, not refused, and the condition is exact rather than "this tree
+	has both". A macro matters only if a moc'd header actually tests it,
+	which section 322's `cond_macros' records, so a per-target -D that no
+	such header mentions says nothing -- the common case, and the first
+	control. What fmake cannot know is whether the guarded member reaches
+	the meta-object at all, which is why this reports where the BMI
+	collision beside it refuses.
+
+	The second control checks the remedy rather than the wording: a
+	project-level define DOES reach moc, and the generated file has the slot
+	in it. A remedy that does not work is worse than none, which this
+	project learned the hard way when an exclude was named for a problem it
+	did not fix."""
+	if not shutil.which("moc") and not glob.glob("/usr/lib/qt6/libexec/moc"):
+		raise Skip("no moc to run")
+	guarded = ("#pragma once\n#include <QObject>\n"
+	           "class Thing : public QObject {\n\tQ_OBJECT\n"
+	           "public:\n\tThing() {}\n"
+	           "public slots:\n#ifdef FEATURE\n\tvoid extra() {}\n#endif\n"
+	           "\tvoid basic() {}\n};\n")
+	t.write("thing.h", guarded)
+	t.write("one.cpp", "/*! @target one\n    @pkg Qt6Core */\n"
+	        '#include "thing.h"\nint main(){ Thing t; return 0; }\n')
+	t.write("fmake.toml", '[target.one]\ncflags = ["-DFEATURE=1"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	if "Qt6Core" in out and "not satisfied" in out:
+		raise Skip("Qt6Core is not installed here")
+	check(r.returncode == 0, f"the tree still builds: {out}")
+	check("thing.h" in out and "FEATURE" in out and "meta-object" in out,
+	      f"a per-target define that a moc'd header tests must be named, "
+	      f"with the class and the macro: {out}")
+
+	# Control: a per-target define no moc'd header tests says nothing.
+	u = Tree("moc-unrelated-define")
+	try:
+		u.write("thing.h", "#pragma once\n#include <QObject>\n"
+		        "class Thing : public QObject { Q_OBJECT\n"
+		        "public: Thing() {}\npublic slots: void basic() {}\n};\n")
+		u.write("one.cpp", "/*! @target one\n    @pkg Qt6Core */\n"
+		        '#include "thing.h"\n#ifdef FEATURE\nint extra(){ return 1; }\n'
+		        "#endif\nint main(){ Thing t; return 0; }\n")
+		u.write("fmake.toml", '[target.one]\ncflags = ["-DFEATURE=1"]\n')
+		r = u.fmake()
+		check("meta-object" not in r.stdout + r.stderr,
+		      f"a define no moc'd header tests must say nothing: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+	# Control: the remedy works. A project-level define reaches moc, and the
+	# generated file has the guarded slot in it.
+	v = Tree("moc-project-define")
+	try:
+		v.write("thing.h", guarded)
+		v.write("one.cpp", "/*! @target one\n    @pkg Qt6Core */\n"
+		        '#include "thing.h"\nint main(){ Thing t; return 0; }\n')
+		v.write("fmake.toml", '[project]\ndefines = ["FEATURE=1"]\n')
+		r = v.fmake()
+		check(r.returncode == 0, f"the project-level tree builds: "
+		      f"{r.stdout}{r.stderr}")
+		check("meta-object" not in r.stdout + r.stderr,
+		      f"and says nothing, the define having reached moc: "
+		      f"{r.stdout}{r.stderr}")
+		gen = glob.glob(os.path.join(v.dir, ".fmake", "moc", "**",
+		                             "moc_thing.cpp"), recursive=True)
+		check(gen and "extra" in open(gen[0]).read(),
+		      "the remedy has to work: a project-level define must put the "
+		      "guarded slot in the meta-object")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_module_interface_and_per_target_flags_are_refused_together(t):
 	"""Two features of this session, and together they built the wrong
 	program in silence.

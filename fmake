@@ -11989,6 +11989,39 @@ def build(args, _bootstrapping=False):
 			# compiles the interface without the define at all. That is a
 			# deliberate pass, and until it happens a message beats a
 			# wrong program.
+			# moc runs once, with the project's flags, and a per-target
+			# define never reaches it -- `moc_cflags' was written before
+			# a target could carry its own. So a class declaration guarded
+			# by such a define is moc'd WITHOUT it: the meta-object omits
+			# the member while this target's own compilation has it, and
+			# the failure is a runtime `invokeMethod' that finds nothing.
+			# Measured: a slot behind `#ifdef FEATURE' is absent from
+			# moc_thing.cpp while [target.one] defines FEATURE.
+			#
+			# Warned rather than refused, and the condition is exact
+			# rather than "this tree has both". A macro matters only if a
+			# moc'd header actually tests it, which is what section 322's
+			# `cond_macros' records -- so a per-target -D that no such
+			# header mentions says nothing, and that is the common case.
+			# What it cannot know is whether the guarded member reaches
+			# the meta-object at all, which is why this reports and the
+			# BMI case below refuses.
+			_mine = {f[2:].split("=", 1)[0] for f in tflags
+			         if f.startswith("-D")}
+			for _j in (moc_jobs or []):
+				_hdr = _j.get("src")
+				_tested = set((scans.get(_hdr) or {}).get("cond_macros")
+				              or ()) & _mine
+				if _tested:
+					warn(f"{_hdr} is moc'd once for the whole tree and "
+					     f"tests {', '.join(sorted(_tested))}, which "
+					     f"{tgt_section(t.name)} cflags defines: the "
+					     f"meta-object is generated without it, so a "
+					     f"member guarded by it is missing from the "
+					     f"meta-object while {t.name}'s own objects have "
+					     f"it -- a runtime lookup, not a build error. "
+					     f"Move the define to [project] defines, or stop "
+					     f"guarding the declaration with it")
 			_ifaces = sorted(rel for rel in units
 			                 if (scans.get(rel) or {}).get("modiface"))
 			if _ifaces:

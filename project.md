@@ -384,7 +384,8 @@ that had been green about nothing for five commits ·
 [331. A file fmake left in the tree it was run in](#331-a-file-fmake-left-in-the-tree-it-was-run-in) ·
 [332. A source that needed a target's define, compiled without it](#332-a-source-that-needed-a-targets-define-compiled-without-it) ·
 [333. The database an editor reads, disagreeing with the build](#333-the-database-an-editor-reads-disagreeing-with-the-build) ·
-[334. Two features of one session, colliding on the BMI](#334-two-features-of-one-session-colliding-on-the-bmi)
+[334. Two features of one session, colliding on the BMI](#334-two-features-of-one-session-colliding-on-the-bmi) ·
+[335. A per-target define moc never saw](#335-a-per-target-define-moc-never-saw)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2563,7 +2564,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **583** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **584** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25756,3 +25757,50 @@ that stops this growing into "modules and cflags are incompatible".
 
     refusal removed        red: nothing names the collision
     condition widened      red: a tree that should build is refused
+
+---
+
+## 335. A per-target define moc never saw
+
+§334 refused modules under per-target `cflags` because the two collide on
+one shared generated artifact. moc is the same shape and was already there:
+
+    thing.h        a slot behind `#ifdef FEATURE'
+    [target.one]   cflags = ["-DFEATURE=1"]
+
+`moc_thing.cpp` names `basic` three times and `extra` not at all, while
+target one's own objects have the slot. **moc runs once, with the project's
+flags.** `moc_cflags` was written before a target could carry its own
+defines -- its comment says a `-D` that changes what a class declaration
+means changes what moc should read of it too, and it passes the project's
+`-D`s for exactly that reason. The per-target ones arrived in §316 and
+never reached it.
+
+The build is clean and the failure is a runtime `invokeMethod` that finds
+nothing. Nothing in the build says a word, which is why this is worth a
+check at all.
+
+### Reported, where the BMI is refused, and the condition is exact
+
+A macro matters only if a moc'd header actually **tests** it. §322's
+`cond_macros` records that per file, so the condition is the intersection of
+one target's `-D` names with one header's tested macros -- not "this tree
+has both features". A per-target define no moc'd header mentions says
+nothing, which is the common case and the first control.
+
+What fmake cannot know is whether the guarded member reaches the
+meta-object: a macro might guard a private field that moc does not care
+about. So this reports where §334 refuses, which is §320's line -- refuse
+when certain, report when the evidence is a guess.
+
+### The remedy is asserted, not claimed
+
+The message says to move the define to `[project] defines`. The second
+control checks that this works: a project-level define reaches moc and the
+generated file has the guarded slot in it. §323 shipped a remedy that did
+not work -- an exclude named for a problem it did not fix -- and the lesson
+from it is that a remedy in a message is a claim like any other.
+
+    warning removed              red: nothing names the collision
+    condition widened to every
+    per-target -D                red: a tree that should be silent warns
