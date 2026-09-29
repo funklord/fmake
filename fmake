@@ -7279,7 +7279,7 @@ def read_symbols(units, cfg, jobs):
 # ---------------------------------------------------------------------------
 
 class Closure:
-	__slots__ = ("root", "link", "why", "external", "ambiguous")
+	__slots__ = ("root", "link", "why", "external", "ambiguous", "modules")
 
 	def __init__(self, root):
 		self.root      = root
@@ -7287,6 +7287,45 @@ class Closure:
 		self.why       = {}      # unit rel -> (symbol, needed-by rel)
 		self.external  = {}      # symbol -> [unit rels referencing it]
 		self.ambiguous = []      # (symbol, [providers])
+		# Module interfaces this target must COMPILE though nothing links
+		# them: compiled for a BMI rather than for an object. Filled after
+		# widening, when the link sets are final.
+		self.modules   = []
+
+
+def module_prereqs(link, units):
+	"""Units a link set must have compiled for their BMI, not their object.
+
+    §3 decides the link set by symbols, and that is right for a module
+    interface too: one that defines nothing reachable is correctly left
+    out. But it is still compiled, because the importer cannot be compiled
+    without the BMI -- and the ejected builds read the link set, so such a
+    file got no rule at all and the BMI it exists to produce was never
+    built.
+
+    Measured: a partition tree and an implementation-unit tree each ejected
+    a Makefile that failed on `failed to read compiled module', while
+    fmake's own build of the same tree was green. In-process the file is a
+    candidate and is compiled; only the emitted build could not see it.
+
+    Transitive, because a BMI can import a BMI.
+    """
+	exporter = {}
+	for u in units.values():
+		for name in (u.scan.get("modiface") or []):
+			exporter.setdefault(name, u)
+	if not exporter:
+		return []
+	out, seen, queue = [], {u.rel for u in link}, list(link)
+	while queue:
+		for name in (queue.pop().scan.get("modimp") or []):
+			u = exporter.get(name)
+			if u is None or u.rel in seen:
+				continue
+			seen.add(u.rel)
+			out.append(u)
+			queue.append(u)
+	return out
 
 
 def companions(members, reachable, moc_jobs, qrc_jobs):
@@ -12217,6 +12256,14 @@ def build(args, _bootstrapping=False):
 			u.own = own_flags(u)
 			units[u.rel] = u
 
+	# The link sets are final here, so this is where each one learns which
+	# module interfaces it needs compiled but not linked. Recorded on the
+	# closure rather than handed to the eject functions, which would mean a
+	# new argument at several call sites for a fact the closure already
+	# describes.
+	for _cl in closures.values():
+		_cl.modules = module_prereqs(_cl.link, units)
+
 	# ---- report ambiguity ---------------------------------------------
 	# Every affected target at once, not the first one and then exit. A tree
 	# of sibling programs that each define a `Window` produces the same
@@ -14001,7 +14048,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# both. The suite's "keep both objects" case is what said so.
 	own_flags = {_obj_of(u): _defer(_eject_flags(u.own, root, _mk_cmd_flag),
 	                                "CFLAGS")
-	             for t in targets for u in closures[t].link
+	             for t in targets
+	             for u in list(closures[t].link) + list(closures[t].modules)
 	             if not u.prebuilt and not u.crate}
 	link_flags = {t: _defer(_eject_flags(res["ldflags"], root, _mk_cmd_flag),
 	                        "LDIRS")
@@ -14219,7 +14267,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 	every, crate_libs, crate_deps = {}, {}, {}
 	for t in targets:
-		for u in closures[t].link:
+		# The module interfaces after the link set: each needs a compile
+		# rule and the ordering that goes with it, and their objects stay
+		# off the link line -- which they do, because that is built from
+		# `closures[t].link' and these are not in it.
+		for u in list(closures[t].link) + list(closures[t].modules):
 			if u.prebuilt:          # nothing fmake compiled, nothing to emit
 				continue
 			# A crate is not a translation unit and gets no object rule.
@@ -14873,8 +14925,16 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# From the closures rather than from `every', which this function
 	# does not build until further down. Same question, asked of what is
 	# in scope: any unit any target links that declares a module.
+	# Over the module prerequisites as well as the link set, for the same
+	# reason they exist: a tree whose ONLY module interface defines nothing
+	# reachable is a module tree, and this read the link set alone -- so it
+	# answered no, `deps = gcc' was emitted, and the build failed on the
+	# very first edge. It is why an implementation-unit tree would not
+	# build through ejected ninja while a partition tree would: the
+	# partition IS linked, so it answered yes.
 	_has_modules = any(u.scan.get("modiface")
-	                   for cl in closures.values() for u in cl.link)
+	                   for cl in closures.values()
+	                   for u in list(cl.link) + list(cl.modules))
 	if not _has_modules:
 		a("  deps = gcc")
 	a("  description = CXX $in")
@@ -14982,7 +15042,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 
 	every, ninja_crates = {}, {}
 	for t in targets:
-		for u in closures[t].link:
+		# The module interfaces after the link set: each needs a compile
+		# rule and the ordering that goes with it, and their objects stay
+		# off the link line -- which they do, because that is built from
+		# `closures[t].link' and these are not in it.
+		for u in list(closures[t].link) + list(closures[t].modules):
 			if u.prebuilt:          # nothing fmake compiled, nothing to emit
 				continue
 			if u.crate:

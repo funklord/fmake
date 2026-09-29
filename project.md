@@ -376,7 +376,8 @@ that had been green about nothing for five commits ·
 [323. The staging directory that read as three bugs](#323-the-staging-directory-that-read-as-three-bugs) ·
 [324. The byte comparison that compared none of the interesting bytes](#324-the-byte-comparison-that-compared-none-of-the-interesting-bytes) ·
 [325. Two module shapes the graph could not see](#325-two-module-shapes-the-graph-could-not-see) ·
-[326. A module error answered with three remedies, none of which help](#326-a-module-error-answered-with-three-remedies-none-of-which-help)
+[326. A module error answered with three remedies, none of which help](#326-a-module-error-answered-with-three-remedies-none-of-which-help) ·
+[327. The module interface the ejected build did not compile](#327-the-module-interface-the-ejected-build-did-not-compile)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2545,7 +2546,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **577** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **578** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25238,3 +25239,88 @@ satisfy every other assertion in the case.
 
     guard removed        the three remedies come back, red
     guard always on      a real missing header loses its advice, red
+
+---
+
+## 327. The module interface the ejected build did not compile
+
+§3 decides the link set by symbols, and that is right for a module
+interface too: one that defines nothing reachable is correctly left out.
+fmake says so in its own report --
+
+    compiled, not linked
+      m.cppm        defines nothing reachable
+
+-- and it is still compiled, because the importer cannot be compiled
+without its BMI.
+
+**The ejected builds read the link set, so such a file got no rule at
+all.** Not a wrong order: no compile rule, so the BMI it exists to produce
+was never built. Measured on two shapes, both of which leave the primary
+interface defining nothing:
+
+    a partition           m.cppm re-exports :part and holds no definitions
+    an implementation unit  m_impl.cpp holds them, m.cppm only declares
+
+Each ejected a Makefile that failed on `failed to read compiled module`
+while fmake's own build of the same tree was green -- because in-process
+the file is a candidate and is compiled, and only the emitted build could
+not see it.
+
+`Closure.modules` carries them, filled where the link sets become final.
+Recorded there rather than handed to the eject functions, which would have
+meant a new argument at several call sites for a fact the closure already
+describes -- §324's lesson, applied rather than restated. Their objects
+stay off the link line, which the case pins: putting them there would be a
+second definition of the module initializer.
+
+**The fix crashed the first time it ran**, loudly, which is the right way:
+`own_flags` is also built from the link set, so a unit in `every` with no
+entry there was a `KeyError` in the middle of writing a Makefile. Both are
+built from the same expression now.
+
+### The ninja half was the same fault in a second place
+
+Five of six combinations built after the fix above; the sixth -- an
+implementation unit through ejected ninja -- failed on the very first edge:
+
+    FAILED: build/m.cppm.o
+    c++ -Os -fmodules-ts -I. -x c++ -c m.cppm -o build/m.cppm.o -MD -MF ...
+    inputs may not also have inputs
+
+The same command succeeds by hand from a clean tree and through `sh -c`,
+so it was not the command. §317 had recorded `deps = gcc` as the line that
+changes what a `-fmodules-ts` compile does and said the mechanism was not
+established; deleting that one line from the generated file built the tree,
+which proved it causal.
+
+**The obvious mechanism was wrong, and testing it is what found the real
+one.** gcc's module depfile carries several rules and two outputs on its
+first line, including `gcm.cache/m.gcm:| build/m.cppm.o` -- an order-only
+prerequisite a depfile parser has no reason to understand. That looked
+sufficient. It is not: the partition tree's depfiles have the same shape,
+`:|` line and all, and that tree builds. Then the two m.cppm depfiles
+turned out to be byte-identical, and the two m.cppm edges in the manifests
+byte-identical too -- which left only the rest of the manifest, and one
+`diff` answered it.
+
+**fmake already suppresses `deps = gcc` for a module tree, and the test for
+one read the link set:**
+
+    _has_modules = any(u.scan.get("modiface")
+                       for cl in closures.values() for u in cl.link)
+
+So a tree whose only module interface defines nothing reachable answered
+*no*, `deps = gcc` was emitted, and the first edge failed. **That is why
+one shape worked and the other did not**: the partition tree's partition is
+linked, so it answered yes; the implementation-unit tree's interface is
+not. Not ninja's bug, and not gcc's -- the same link-set-only reading as
+the missing rule above, in a second place a few hundred lines away.
+
+Both shapes build through both ejected forms now, and the case asserts the
+absence of `deps = gcc` from the C++ rule as well as the builds, so the
+next person to touch either reading has two ways to hear about it.
+
+**No refusal was added, and the reason changed.** It was going to be
+declined because a condition nobody had characterised is not one to refuse
+on. It is characterised now and there is nothing left to refuse.

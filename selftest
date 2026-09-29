@@ -16834,6 +16834,123 @@ int main(){ Widget w; Gadget g; printf("%d\\n", w.value() + g.n); return 0; }
 
 
 @case
+def an_ejected_build_compiles_a_module_interface_nothing_links(t):
+	"""§3 decides the link set by symbols, and that is right for a module
+	interface too: one that defines nothing reachable is correctly left out.
+	fmake's own report says so --
+
+	    compiled, not linked
+	      m.cppm        defines nothing reachable
+
+	-- and it is still compiled, because the importer cannot be compiled
+	without its BMI.
+
+	**The ejected builds read the link set, so such a file got no rule at
+	all.** Not a wrong order: no compile rule, so the BMI it exists to
+	produce was never built and the ejected Makefile failed on `failed to
+	read compiled module' while fmake's own build of the same tree was
+	green. Two shapes reach it -- a partition whose primary re-exports it,
+	and an implementation unit that carries the definitions -- and both were
+	measured before this was written.
+
+	The fix is recorded on the closure rather than handed to the eject
+	functions, which would have meant a new argument at several call sites
+	for a fact the closure already describes. Its objects stay off the link
+	line, which the last assertion pins: putting them there would be a
+	second definition of the module initializer."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("part.cppm",
+	        "export module m:part;\nexport int part_val() { return 5; }\n")
+	t.write("m.cppm", "export module m;\nexport import :part;\n")
+	t.write("main.cpp", "import m;\nint main() { return part_val() - 5; }\n")
+
+	r = t.fmake("--explain")
+	check("m.cppm" in r.stdout and "not linked" in r.stdout,
+	      f"the fixture needs an interface the link set excludes, or this "
+	      f"case is about nothing: {r.stdout}")
+
+	mk = t.fmake("--eject", "make")
+	check(mk.returncode == 0, f"eject make failed: {mk.stderr}")
+	t.write("Makefile", mk.stdout)
+	check("/m.cppm.o:" in mk.stdout,
+	      f"the interface needs a compile rule of its own: "
+	      f"{[l for l in mk.stdout.splitlines() if '.o:' in l]}")
+	link = [l for l in mk.stdout.splitlines() if "main.cpp.o" in l
+	        and ".o:" not in l]
+	check(link and not any("m.cppm.o" in l for l in link),
+	      f"and its object must stay off the link line: {link}")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	run = _run_in(t.dir, "make", "-s", "-j4")
+	check(run.returncode == 0,
+	      f"the ejected make must build a partition tree: "
+	      f"{run.stdout}{run.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "and what it built must run")
+
+	# The other shape, through the same path: an implementation unit holds
+	# the definitions, so the interface is again linked by nothing.
+	u = Tree("eject-mod-impl")
+	try:
+		u.write("m.cppm", "export module m;\nexport int m_val();\n")
+		u.write("m_impl.cpp", "module m;\nint m_val() { return 7; }\n")
+		u.write("main.cpp", "import m;\nint main() { return m_val() - 7; }\n")
+		mk = u.fmake("--eject", "make")
+		check(mk.returncode == 0, f"eject make failed: {mk.stderr}")
+		u.write("Makefile", mk.stdout)
+		shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+		run = _run_in(u.dir, "make", "-s", "-j4")
+		check(run.returncode == 0,
+		      f"the ejected make must build an implementation-unit tree: "
+		      f"{run.stdout}{run.stderr}")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "and what it built must run")
+	finally:
+		u.cleanup()
+
+	# And through ninja, for BOTH shapes. The implementation-unit one used
+	# to fail here and the cause was fmake's own: `deps = gcc' is
+	# suppressed for a module tree, and the test for one read the link set,
+	# so a tree whose only interface is unlinked answered no. The partition
+	# tree escaped because its partition IS linked -- which is why one
+	# shape worked and the other did not, and why both are asserted now.
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed, so only make was measured")
+	for shape, files in (
+	        ("partition", {"part.cppm": None, "m.cppm": None,
+	                       "main.cpp": None}),
+	        ("impl-unit", {
+	            "m.cppm": "export module m;\nexport int m_val();\n",
+	            "m_impl.cpp": "module m;\nint m_val() { return 7; }\n",
+	            "main.cpp": "import m;\nint main() { return m_val() - 7; }\n",
+	        })):
+		v = Tree("eject-ninja-" + shape)
+		try:
+			for name, body in files.items():
+				if body is None:
+					with open(os.path.join(t.dir, name)) as fh:
+						body = fh.read()
+				v.write(name, body)
+			nj = v.fmake("--eject", "ninja")
+			check(nj.returncode == 0, f"eject ninja failed: {nj.stderr}")
+			check("deps = gcc" not in nj.stdout.split("rule as")[0]
+			      .split("rule cxx")[-1],
+			      f"a module tree must not get `deps = gcc' on its C++ "
+			      f"rule, whichever unit carries the interface: {shape}")
+			v.write("build.ninja", nj.stdout)
+			shutil.rmtree(os.path.join(v.dir, ".fmake"), ignore_errors=True)
+			run = _run_in(v.dir, "ninja", "-f", "build.ninja")
+			check(run.returncode == 0,
+			      f"the ejected ninja must build the {shape} tree: "
+			      f"{run.stdout}{run.stderr}")
+			check(v.run(os.path.basename(v.dir)).returncode == 0,
+			      f"and what it built must run ({shape})")
+		finally:
+			v.cleanup()
+
+
+@case
 def a_module_error_is_not_answered_with_include_path_advice(t):
 	"""g++ says, for a BMI that is not there,
 
