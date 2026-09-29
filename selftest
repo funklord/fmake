@@ -17428,6 +17428,89 @@ def a_module_partition_is_found_and_built_before_the_primary(t):
 
 
 @case
+def a_module_interface_and_per_target_flags_are_refused_together(t):
+	"""Two features of this session, and together they built the wrong
+	program in silence.
+
+	    m.cppm     export constexpr int m_k = MODE;
+	    [target.one] cflags = ["-DMODE=11"]
+	    [target.two] cflags = ["-DMODE=22"]
+
+	    g++    one=22  two=22
+	    clang  one=11  two=11
+
+	Each target compiles its own copy of every source, so there are two
+	interface objects -- `m.cppm.one.o` and `m.cppm.two.o` -- and **one
+	BMI**. gcc writes `gcm.cache/m.gcm` relative to the compile directory,
+	which both variants share; clang writes `<objdir>/m.cppm.pcm`, keyed by
+	the source path. Last writer wins and both programs read it.
+
+	That is §316's own recorded mistake one field over. Its comment on
+	`own_flags` says: keyed by the object, not the source, because one
+	source compiled twice with two sets of flags is two objects and keying
+	on the path handed the second's flags to both. The BMI is keyed on the
+	path.
+
+	Refused rather than half-fixed. Doing it properly means a BMI per pool:
+	clang's module flags are attached before the target pools exist, so that
+	block has to become per-pool, gcc needs a compile directory per variant,
+	and both ejected builds need to express it -- they do not today, and a
+	tree like this ejects a Makefile that compiles the interface without the
+	define at all. A refusal turns a wrong program into a message; the
+	alternative was leaving it silent.
+
+	Both controls are here because the refusal has to be narrow: a module
+	tree with no per-target flags still builds, and a per-target-flags tree
+	with no module still builds."""
+	t.write("m.cppm", "export module m;\nexport constexpr int m_k = MODE;\n")
+	t.write("one.cpp", "/*! @target one */\nimport m;\n"
+	        "int main(){ return m_k - 11; }\n")
+	t.write("two.cpp", "/*! @target two */\nimport m;\n"
+	        "int main(){ return m_k - 22; }\n")
+	t.write("fmake.toml", '[target.one]\ncflags = ["-DMODE=11"]\n\n'
+	        '[target.two]\ncflags = ["-DMODE=22"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a module interface under per-target cflags must be refused, not "
+	      f"built with one BMI for two targets: {out}")
+	check("m.cppm" in out and "cflags" in out,
+	      f"the refusal must name the interface and the directive: {out}")
+	check("BMI" in out or "module" in out,
+	      f"and say what the collision is: {out}")
+
+	# Control: modules with no per-target flags.
+	u = Tree("mod-no-flags")
+	try:
+		u.write("m.cppm", "export module m;\nexport constexpr int m_k = 5;\n")
+		u.write("main.cpp", "import m;\nint main(){ return m_k - 5; }\n")
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"a module tree with no per-target flags must still build: "
+		      f"{r.stdout}{r.stderr}")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "and run")
+	finally:
+		u.cleanup()
+
+	# Control: per-target flags with no module.
+	v = Tree("flags-no-mod")
+	try:
+		v.write("shared.c", "int shared(void){ return MODE; }\n")
+		v.write("one.c", "/*! @target one */\nint shared(void);\n"
+		        "int main(void){ return shared() - 1; }\n")
+		v.write("fmake.toml", '[target.one]\ncflags = ["-DMODE=1"]\n')
+		r = v.fmake()
+		check(r.returncode == 0,
+		      f"per-target flags with no module must still build: "
+		      f"{r.stdout}{r.stderr}")
+		check(v.run("one").returncode == 0, "and run")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_module_interface_is_built_before_what_imports_it(t):
 	"""§15 said modules defeat the build. They needed an order.
 

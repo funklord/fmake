@@ -383,7 +383,8 @@ that had been green about nothing for five commits ·
 [330. The same staleness, in the emitted build](#330-the-same-staleness-in-the-emitted-build) ·
 [331. A file fmake left in the tree it was run in](#331-a-file-fmake-left-in-the-tree-it-was-run-in) ·
 [332. A source that needed a target's define, compiled without it](#332-a-source-that-needed-a-targets-define-compiled-without-it) ·
-[333. The database an editor reads, disagreeing with the build](#333-the-database-an-editor-reads-disagreeing-with-the-build)
+[333. The database an editor reads, disagreeing with the build](#333-the-database-an-editor-reads-disagreeing-with-the-build) ·
+[334. Two features of one session, colliding on the BMI](#334-two-features-of-one-session-colliding-on-the-bmi)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1907,6 +1908,16 @@ rather than code, and one lesson about testing.
   binary, turns out to be the *best* case rather than the worst: 201 sources,
   two compiled. Guarded by a case, since a change loosening the filter to
   mentions would pass every other test here.
+- **A library exporting a module publishes nothing importable, and says
+  so nowhere.** A `@kind static` target whose interface is a module builds
+  and installs its archive and its `.pc`; a consumer then has no way to
+  `import` it. The remedy exists and works -- `@headers m.cppm` publishes
+  the interface source, which is what the ecosystem does, a BMI being
+  compiler- and flag-specific -- so nothing is missing but the sentence.
+  Measured 2026-09-29: the install is silent about it, which is §320's
+  class one step over. Whether fmake should say it is the holder's, since
+  it means fmake having an opinion about how a module library is consumed.
+
 - **The widening filter cannot see header definitions.** It looks for a
   definition in a `.c`/`.cpp`, so a symbol whose definition lives in a header
   is invisible to it. Such files are found only if something else pulls them
@@ -2552,7 +2563,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **582** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **583** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25684,3 +25695,54 @@ the same shape, caught earlier because the lesson was already written down.
 
 The variant defines are asserted separately, because a database could name
 the right objects with the wrong flags on them.
+
+---
+
+## 334. Two features of one session, colliding on the BMI
+
+Modules (§317, §325) and per-target `cflags` (§316) were both added this
+session and had never been in one tree. Together they build the wrong
+program in silence.
+
+    m.cppm     export constexpr int m_k = MODE;
+    [target.one] cflags = ["-DMODE=11"]
+    [target.two] cflags = ["-DMODE=22"]
+
+    g++    one=22  two=22
+    clang  one=11  two=11
+
+A flagged target compiles its own copy of every source, so there are two
+interface objects -- `m.cppm.one.o` and `m.cppm.two.o` -- and **one BMI**.
+g++ writes `gcm.cache/m.gcm` relative to the compile directory, which the
+variants share; clang writes `<objdir>/<rel>.pcm`, keyed by the source
+path. Last writer wins and both programs read it.
+
+**It is §316's own recorded mistake one field over.** That section keys
+`own_flags` by the object and not the source, and its comment says why:
+one source compiled twice with two sets of flags is two objects, and
+keying on the path handed the second's flags to both. The BMI is keyed on
+the path.
+
+### Refused, and why not fixed
+
+A BMI per pool means clang's module flags -- attached to `u.own` above,
+before any pool exists -- becoming per-pool; a compile directory per
+variant for g++, since `gcm.cache` is relative to the cwd and nothing moves
+it; and both ejected builds expressing that, which they do not. Such a
+tree ejects a Makefile that compiles the interface without the define at
+all, so the exit is already broken for it, loudly.
+
+That is a deliberate pass across three emission paths, not a bug fix. Until
+it happens a message beats a wrong program, and §317 already refuses two
+other module cases by name.
+
+### The controls are what keep it narrow
+
+A refusal is a capability withdrawn, so the case pins both sides: a module
+tree with no per-target flags still builds and runs, and a per-target-flags
+tree with no module still builds and runs. The sabotage that widens the
+condition to every flagged tree reddens the second, which is the assertion
+that stops this growing into "modules and cflags are incompatible".
+
+    refusal removed        red: nothing names the collision
+    condition widened      red: a tree that should build is refused

@@ -11965,6 +11965,43 @@ def build(args, _bootstrapping=False):
 				    f"is a program's question: {t.name} is {t.kind}. "
 				    f"[project] cflags reaches every target, and @cflags "
 				    f"in a file reaches that file.")
+			# Refused, because the two features collide on the BMI and
+			# the collision is silent. A flagged target compiles its own
+			# copy of every source, so there are two interface objects --
+			# and one BMI: g++ writes `gcm.cache/m.gcm' relative to the
+			# compile directory, which the variants share, and clang
+			# writes `<objdir>/<rel>.pcm', keyed by the source path. Last
+			# writer wins and both programs read it. Measured on a
+			# two-target tree whose interface exports
+			# `constexpr int m_k = MODE': g++ gave both programs 22 and
+			# clang gave both 11.
+			#
+			# That is this feature's own recorded mistake one field over.
+			# `own_flags' is keyed by the object and not the source for
+			# exactly this reason, and its comment says so; the BMI is
+			# keyed on the source.
+			#
+			# Refused rather than half-fixed. A BMI per pool means
+			# clang's module flags -- attached above, before any pool
+			# exists -- becoming per-pool, a compile directory per
+			# variant for g++, and both ejected builds expressing it,
+			# which they do not: such a tree ejects a Makefile that
+			# compiles the interface without the define at all. That is a
+			# deliberate pass, and until it happens a message beats a
+			# wrong program.
+			_ifaces = sorted(rel for rel in units
+			                 if (scans.get(rel) or {}).get("modiface"))
+			if _ifaces:
+				die(f"{CONF_FILE}: {tgt_section(t.name)} cflags cannot be "
+				    f"combined with a C++ module interface in this tree "
+				    f"({_ifaces[0]}).\n"
+				    f"    A flagged target compiles its own copy of every "
+				    f"source, and fmake keys a module's BMI by the source "
+				    f"path -- so {t.name} and any other flagged target "
+				    f"would share one BMI, and the last one compiled wins "
+				    f"for both.\n"
+				    f"    Drop the per-target cflags, or move what depends "
+				    f"on them out of the module interface.")
 			ident = _mk_ident(t.name)
 			tp = {}
 			for rel, u in units.items():
