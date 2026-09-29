@@ -17774,8 +17774,56 @@ the case the fix removes.
   unannotated tree, and the two cases say the present answer was chosen
   rather than defaulted into.
 
-The patch and its case are kept in this session's scratch rather than the
-tree; they apply cleanly to `84cc288` if the answer is yes.
+**The patch is not kept, and this sentence used to say it was.** It said
+the patch and its case lived in that session's scratch and applied cleanly
+to `84cc288`; the session ended, the scratch went with it, and the tree is
+five hundred commits past that base. Re-measured 2026-09-29: no such patch
+exists anywhere, so a reader told the work was ready would have gone
+looking for nothing.
+
+What survives is the description, which is enough to redo it: give every
+unit the include directories its own includes resolve to, about eleven
+lines, costing nothing measurable. The two cases that encode the present
+answer as intent are `a_header_the_tree_already_holds_is_named` and
+`every_include_directory_the_tree_could_supply_is_named_at_once`, both
+still in the suite. It would be rewritten against the current tree rather
+than applied.
+
+A promise to keep a patch outside version control is a promise with a
+shelf life shorter than the question it was made about. Where the answer
+has not arrived, the description belongs in the document and the code
+belongs in a commit or nowhere.
+
+### Three behaviours, not two, measured 2026-09-29
+
+Checking whether a tree header including a PACKAGE header is a separate
+bug turned up a distinction this section did not draw. All three shapes
+were run:
+
+    a tree header reached through another tree header    resolves
+    a package header reached through a tree header       fails, and says
+                                                        `name it with @pkg'
+    a unit joining by symbol, its own includes           this section
+
+The first works because the candidate walk follows tree headers
+transitively and collects their directories. The second fails because the
+package proposal reads a unit's OWN includes only -- put the same
+`#include <QtCore/QString>` on each unit's line and the tree builds. The
+third is the question above.
+
+So the second is a gap in an inference fmake otherwise makes, with a
+remedy it prints correctly. **It is not fixed here and the reason is the
+same one this section gives**: proposing packages from headers reached
+through other headers widens the surface for §176's fault, where one `.pc`
+naming the multiarch directory owned every system header under it. That is
+a change to what fmake infers from an unannotated tree, which is the
+holder's to weigh, and weighing it needs the number §176 measured rather
+than the shape of this fixture.
+
+Recorded as a sibling rather than folded in, because the two differ in
+what they would cost: the first changes which directories a unit gets from
+headers fmake already resolved, the second changes which PACKAGES a tree
+is judged to need.
 
 ## 217. The script that could not be called what scripts are called
 
