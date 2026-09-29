@@ -17078,6 +17078,88 @@ def a_module_error_is_not_answered_with_include_path_advice(t):
 
 
 @case
+def an_ejected_build_rebuilds_an_importer_when_the_interface_changes(t):
+	"""§329 in the emitted build, which has its own staleness logic and did
+	not inherit the fix.
+
+	Three faults, one per cell of a four-cell matrix:
+
+	    ejected make, clang    the interface's object was an ORDER-ONLY
+	                           prerequisite, which sequences without dating,
+	                           and clang names no BMI in the depfile -- so
+	                           nothing connected the two and the importer
+	                           kept a stale constant
+	    ejected ninja, clang   the same, `||' instead of `|'
+	    ejected ninja, g++     ninja REFUSED the depfile: a gcc module
+	                           compile writes `CXX_IMPORTS += m.c++m' into
+	                           it, which ninja reads as an output nothing
+	                           declared. First build fine, every build after
+	                           it dead -- and that predates this work; with
+	                           the fmake of a few commits ago the first build
+	                           failed too.
+
+	g++ through make was the one that worked, because its depfile names
+	`gcm.cache/m.gcm' and an emitted build compiles from the root, where
+	that really is.
+
+	The prerequisites date the rule now -- a normal prerequisite in make,
+	safe because the recipe uses `$<' and not `$^'; an implicit input in
+	ninja, `|' rather than `||', because ninja puts explicit inputs in
+	`$in'. And a gcc module build is given `-fdeps-format=p1689r5', which
+	drops the make-isms and leaves the headers and the BMI as ordinary
+	prerequisites.
+
+	That flag is asked of the compiler rather than read off a version, and
+	the probe needs `-MD -MF` beside it or gcc refuses the format outright.
+	Probed without them first, which said no for every compiler -- a control
+	that could not fire, caught only because this case still failed."""
+	compilers = [c for c in ("g++", "clang++") if shutil.which(c)]
+	if not compilers:
+		raise Skip("no C++ compiler")
+	for cc in compilers:
+		for kind, name, cmd in (("make", "Makefile", ["make", "-s", "-j4"]),
+		                        ("ninja", "build.ninja",
+		                         ["ninja", "-f", "build.ninja"])):
+			if not shutil.which(cmd[0]):
+				continue
+			u = Tree(f"ejdep-{cc.replace('+', 'p')}-{kind}")
+			try:
+				env = {"CXX": cc}
+				u.write("m.cppm", "export module m;\nexport constexpr int "
+				        "m_k = 7;\nexport int m_touch();\n")
+				u.write("impl.cpp", "module m;\nint m_touch(){ return 0; }\n")
+				u.write("main.cpp", "#include <stdio.h>\nimport m;\n"
+				        "int main(){ printf(\"%d\\n\", m_k); "
+				        "return m_touch(); }\n")
+				r = u.fmake("--widen-all", "--eject", kind, env=env)
+				check(r.returncode == 0, f"{cc}/{kind}: eject failed: {r.stderr}")
+				u.write(name, r.stdout)
+				shutil.rmtree(os.path.join(u.dir, ".fmake"),
+				              ignore_errors=True)
+				first = _run_in(u.dir, *cmd, env=env)
+				check(first.returncode == 0,
+				      f"{cc}/{kind}: first build failed: "
+				      f"{first.stdout}{first.stderr}")
+				prog = os.path.basename(u.dir)
+				check(u.run(prog).stdout.strip() == "7",
+				      f"{cc}/{kind}: the fixture must print 7 first")
+
+				u.write("m.cppm", "export module m;\nexport constexpr int "
+				        "m_k = 99;\nexport int m_touch();\n")
+				again = _run_in(u.dir, *cmd, env=env)
+				# Named apart from the staleness check, because a refused
+				# depfile is a failed build and reads as staleness if only
+				# the output is looked at.
+				check(again.returncode == 0,
+				      f"{cc}/{kind}: the second build must succeed, not "
+				      f"refuse the depfile: {again.stdout}{again.stderr}")
+				check(u.run(prog).stdout.strip() == "99",
+				      f"{cc}/{kind}: the importer kept a stale constant")
+			finally:
+				u.cleanup()
+
+
+@case
 def editing_a_module_interface_rebuilds_what_imports_it(t):
 	"""The load-bearing one, and its failure is a wrong program rather
 	than a build error.
@@ -17376,14 +17458,28 @@ int main(){ return twice(21) == 42 ? 0 : 1; }
 
 		# The exit has to work too, or a module tree is one nobody can
 		# leave -- which is principle 5, not a nicety. The ejected make
-		# build carries the ordering as order-only prerequisites and the
-		# `-x c++' the driver needs, and is run here rather than read.
+		# build names the interface's object on the importer's rule and
+		# passes the `-x' the driver needs, and is run here rather than
+		# read.
+		#
+		# The prerequisite, not its punctuation. This asserted `|' --
+		# order-only -- until section 330 found that order-only sequences
+		# without DATING: editing an interface left an importer with a
+		# stale constant, because nothing connected the two for clang and
+		# order-only says only "after", never "again". It is a normal
+		# prerequisite now. What the case is about is that the importer's
+		# rule names it at all, so the check reads the rule rather than
+		# the spelling, and a later change of form does not have to come
+		# back here.
 		if shutil.which("make"):
 			mk = u.fmake("--eject").stdout
-			check("| $(BUILD_DIR)/base.cppm.o" in mk
-			      or "| $(BUILD_DIR)/mid.cppm.o" in mk,
-			      f"the ejected build has no ordering, so make is free to "
-			      f"compile an importer first: {mk}")
+			rules = [l for l in mk.splitlines()
+			         if l.startswith("$(BUILD_DIR)/main.cpp.o:")]
+			check(rules and any("$(BUILD_DIR)/mid.cppm.o" in l
+			                    for l in rules),
+			      f"the importer's rule does not name the interface it "
+			      f"imports, so make is free to compile it first: "
+			      f"{rules or mk}")
 			u.write("Makefile.gen", mk)
 			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
 			for junk in (os.path.basename(u.dir), "build", "gcm.cache"):

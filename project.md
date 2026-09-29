@@ -379,7 +379,8 @@ that had been green about nothing for five commits ·
 [326. A module error answered with three remedies, none of which help](#326-a-module-error-answered-with-three-remedies-none-of-which-help) ·
 [327. The module interface the ejected build did not compile](#327-the-module-interface-the-ejected-build-did-not-compile) ·
 [328. The ejected clang module build wrote no BMI, under somebody else's path](#328-the-ejected-clang-module-build-wrote-no-bmi-under-somebody-elses-path) ·
-[329. Editing a module interface did not rebuild what imports it](#329-editing-a-module-interface-did-not-rebuild-what-imports-it)
+[329. Editing a module interface did not rebuild what imports it](#329-editing-a-module-interface-did-not-rebuild-what-imports-it) ·
+[330. The same staleness, in the emitted build](#330-the-same-staleness-in-the-emitted-build)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2548,7 +2549,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **580** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **581** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -25464,3 +25465,92 @@ has to remove the graph as well, and why the skip is kept.
 The case checks three things per compiler, and the third is the one the
 wrong fix fails: the output changes, the importer is actually recompiled
 rather than merely relinked, and a further build compiles nothing.
+
+---
+
+## 330. The same staleness, in the emitted build
+
+§329 fixed fmake's cache. The emitted builds have their own staleness logic
+and did not inherit it. Asking the same question of all four cells found a
+fault in three:
+
+    ejected make, g++      worked
+    ejected make, clang    stale constant
+    ejected ninja, clang   stale constant
+    ejected ninja, g++     ninja REFUSED the depfile
+
+g++ through make was the one that worked, and by luck rather than design:
+its depfile names `gcm.cache/m.gcm`, and an emitted build compiles from the
+tree root, where that really is.
+
+### Order-only sequences without dating
+
+The interface's object was an order-only prerequisite -- `|` in make, `||`
+in ninja -- which is the right shape for "this must merely have happened"
+and the wrong one for "this decides whether I am stale". clang names no BMI
+in the importer's depfile, so nothing else connected the two.
+
+It dates the rule now: a normal prerequisite in make, safe because the
+recipe uses `$<` and not `$^`, which is the hazard the order-only form was
+avoiding; and an implicit input in ninja, `|` rather than `||`, because
+ninja puts explicit inputs in `$in`, which is the same hazard by another
+name. The genuinely order-only entries -- generated sources, the submodule
+fetch -- stay where they were.
+
+### ninja could not read a gcc module depfile at all
+
+    ninja: error: build/main.cpp.o.d: depfile mentions 'CXX_IMPORTS' as an
+    output, but no such output was declared
+
+A gcc module compile writes `CXX_IMPORTS += m.c++m` into the depfile, and
+ninja reads `CXX_IMPORTS` as a declared output it has never heard of. **The
+first build works and every build after it is dead**, because the first has
+no depfile to read yet -- which is why §327's testing, always from clean,
+never saw it. It predates this session: with the fmake of a few commits ago
+the first build failed too.
+
+`-fdeps-format=p1689r5` is the answer. It leaves the headers and
+`gcm.cache/m.gcm` as ordinary prerequisites and drops the make-isms, so
+ninja parses it and gets both dependencies.
+
+### The probe could not fire, and only the end-to-end test said so
+
+The flag is asked of the compiler rather than read off a version, because a
+version table is a claim about somebody else's releases. The first probe
+ran the flag with `-fsyntax-only` alone, and gcc refuses the format without
+`-M` or `-MM`:
+
+    cc1plus: error: to generate dependencies you must specify either
+    '-M' or '-MM'
+
+So the probe said **no for every compiler** -- a control that could not
+fire, exactly `evidence.md`'s shape, and invisible in the probe's own
+terms. It was caught because the four-cell test still failed. The probe
+carries `-MD -MF /dev/null` now, and clang refusing the flag is its
+negative control -- clang needs nothing, its depfile being readable
+already.
+
+### Three sabotages, each through its own assertion
+
+    make prerequisite back to order-only     red
+    ninja implicit back to order-only        red on the stale constant
+    deps-format flag removed                 red on the refused depfile
+
+The last reddens an assertion kept deliberately apart from the staleness
+one: a refused depfile is a **failed build**, and reads as staleness if
+only the program's output is looked at. That is how the first run of this
+matrix misreported it.
+
+### And the suite refused it once, correctly
+
+`a_module_interface_is_built_before_what_imports_it` asserted the string
+`| $(BUILD_DIR)/base.cppm.o` -- the order-only punctuation, not the
+prerequisite. Moving to a dating prerequisite broke it, and the full run
+said so before any of this was committed.
+
+The assertion was pinning a spelling where the case is about a property:
+that the importer's rule names the interface at all. It reads the rule now
+rather than the punctuation, so the next change of form does not have to
+come back to it. **Changed deliberately and recorded, not made to pass** --
+the suite disagreeing with a change is the moment to look hardest, and what
+it had caught was a real narrowing in the old assertion.

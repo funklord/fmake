@@ -6207,6 +6207,55 @@ def compile_cmd(u, cfg, incflags):
 	        + incflags + cfg.cflags + u.own + cfg.override)
 
 
+_DEPS_FORMAT = {}
+
+
+def ninja_deps_flag(cfg):
+	"""`-fdeps-format=p1689r5' where the compiler takes it, else nothing.
+
+    Only the ninja backend needs it, and only g++ produces the problem. A
+    gcc module compile writes make-isms into its depfile --
+
+        CXX_IMPORTS += m.c++m
+
+    -- and ninja reads `CXX_IMPORTS' as a declared output it has never
+    heard of, so it refuses the depfile and the build stops. Measured: an
+    ejected ninja build of a gcc module tree succeeds once, when no depfile
+    exists yet, and fails on every build after. With this flag the depfile
+    holds the headers and `gcm.cache/m.gcm' as ordinary prerequisites and
+    nothing else, which ninja parses.
+
+    Asked of the compiler rather than decided from its version, because a
+    version table is a claim about somebody else's releases and this is one
+    question with a yes or no. Asked once, at eject time, and a compiler
+    that refuses leaves the emitted file exactly as it was before this
+    existed -- the first build working and later ones failing, which is a
+    limit to report rather than a regression to introduce.
+    """
+	cc = cfg.driver(True)
+	if cc in _DEPS_FORMAT:
+		return _DEPS_FORMAT[cc]
+	flag = "-fdeps-format=p1689r5"
+	# With the depfile flags, because gcc refuses the format on its own:
+	# `to generate dependencies you must specify either -M or -MM'. Probed
+	# without them first, and the probe said no for every compiler -- a
+	# control that could not fire, caught only because the end-to-end test
+	# still failed. clang refuses the flag either way, which is the negative
+	# control this needed and does not need the flag regardless: its depfile
+	# is already one ninja can read.
+	ok = False
+	try:
+		r = subprocess.run([cc, flag, "-MD", "-MF", os.devnull,
+		                    "-x", "c++", "-fsyntax-only", "-"],
+		                   input="int main(){return 0;}\n",
+		                   capture_output=True, text=True, errors="replace")
+		ok = r.returncode == 0
+	except OSError:
+		ok = False
+	_DEPS_FORMAT[cc] = [flag] if ok else []
+	return _DEPS_FORMAT[cc]
+
+
 def module_lang_flag(u, cc):
 	"""`-x' for a module interface, which is not the same word per compiler.
 
@@ -14574,11 +14623,23 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		after = ([] if u.rel in tool_units else
 		         ([f"$({P}GENERATED)"] if gen_outs else [])
 		         + ([f"$({P}GENHDRS)"] if genhdrs else [])) \
-		        + [f"{sub}/.git" for sub in subs] \
-		        + sorted({_mod_obj[m] for m in (u.scan.get("modimp") or [])
-		                  if m in _mod_obj and _mod_obj[m] != obj})
+		        + [f"{sub}/.git" for sub in subs]
+		# A module interface's object DATES this rule; it is not merely
+		# something that must have happened. Order-only was the first
+		# answer and it is wrong for clang: clang names no BMI in the
+		# importer's depfile, so nothing else connects the two and editing
+		# the interface left the importer with a stale constant -- section
+		# 329, in the emitted build rather than the cache. g++ escapes it
+		# because its depfile names `gcm.cache/m.gcm', which in an emitted
+		# build is relative to the root where it really is.
+		#
+		# Safe as a normal prerequisite because this recipe uses `$<' and
+		# not `$^', which is the hazard the order-only form was avoiding.
+		dating = sorted({_mod_obj[m] for m in (u.scan.get("modimp") or [])
+		                 if m in _mod_obj and _mod_obj[m] != obj})
 		order_only = (" | " + " ".join(after)) if after else ""
-		a(f"{obj}: {_eject_src(rel)}{order_only}")
+		a(f"{obj}: {_eject_src(rel)}"
+		  f"{(' ' + ' '.join(dating)) if dating else ''}{order_only}")
 		a("\t@mkdir -p $(@D)")
 		# -MP as well as -MD: it emits a phony target for every header, so
 		# deleting one leaves `No rule to make target` behind instead of a
@@ -15333,15 +15394,25 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		mods = sorted({_mod_obj[m] for m in (u.scan.get("modimp") or [])
 		               if m in _mod_obj and _mod_obj[m] != mine})
 		tail = tool_after if u.rel in tool_units else after
+		# `|' and not `||': an implicit input dates the edge, an order-only
+		# one only sequences it. Order-only was the first answer and left an
+		# ejected clang build compiling against a stale BMI. Implicit rather
+		# than explicit because ninja puts explicit inputs in `$in', which
+		# is the same hazard `$^' is on the make side.
 		if mods:
-			tail = (tail + " " + " ".join(mods)) if tail \
-			       else (" || " + " ".join(mods))
+			tail = " | " + " ".join(mods) + tail
 		a(f"build {mine}: "
 		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}{tail}")
 		# `-x c++' for a module interface, for the reason compile_cmd
 		# gives: the driver does not know the extension and would call
 		# it a linker input.
+		# The deps-format flag only where a module build makes gcc write
+		# a depfile ninja cannot read. `_has_modules' decides the tree, the
+		# unit's own language decides the file: a C source in the same tree
+		# gets nothing.
 		own = module_lang_flag(u, cfg.driver(u.cxx)) + list(u.own)
+		if _has_modules and u.cxx:
+			own = ninja_deps_flag(cfg) + own
 		if own:
 			shown = [x.replace(BMI_DIR, "$build_dir")
 			         for x in _eject_flags(own, root, _nj_flag, objdir)]
