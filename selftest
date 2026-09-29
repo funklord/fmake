@@ -7068,6 +7068,126 @@ def a_library_resolves_its_own_includes_like_a_program(t):
 
 
 @case
+def a_pc_says_which_packages_a_consumer_needs_to_compile(t):
+	"""`Libs.private` was measured missing and fixed; the compile half was
+	not. A library whose PUBLISHED header includes another package's header
+	installs that header, publishes the package's `-l`, and publishes
+	nothing about where the package's headers are -- so a consumer using
+	exactly the flags the .pc provides stops on
+
+	    api.h:2:10: fatal error: fakelib/thing.h: No such file or directory
+
+	Measured against a staged install, first with Qt and then with the
+	packages this case builds.
+
+	Module NAMES, not flags, which is the one place this differs from
+	`Libs.private`, and the difference is measured rather than tidy:
+	`-lQt6Core` is the same string on every machine, while Qt's include
+	path is /usr/include/x86_64-linux-gnu/qt6 -- one machine and one
+	architecture, which is why `deferred_modules` keeps that class of flag
+	out of an ejected build. `Requires:` hands the question to the
+	consumer's own pkg-config, the only thing that can answer it there.
+
+	Two packages, because ONE cannot test the discrimination. The first
+	version of this case had a public package and a control tree using it
+	privately -- and the control was unreachable: with no foreign include
+	in the published header the computation is skipped entirely, so a
+	sabotage that named every module the target touched passed both halves.
+	`evidence.md`'s control-has-to-be-reached, met in a case written to
+	demonstrate a control. With `fakelib` public and `privlib` private in
+	ONE tree, the block runs and has to choose, which is the thing being
+	asserted.
+	"""
+	def package(where, name, header):
+		os.makedirs(os.path.join(where, "include", name), exist_ok=True)
+		os.makedirs(os.path.join(where, "pc"), exist_ok=True)
+		with open(os.path.join(where, "include", name, header), "w") as fh:
+			fh.write(f"#pragma once\n#define {name.upper()}_ONE 1\n")
+		with open(os.path.join(where, "pc", name + ".pc"), "w") as fh:
+			fh.write(f"prefix={where}\n"
+			         "includedir=${prefix}/include\n\n"
+			         f"Name: {name}\n"
+			         f"Description: a package whose headers are elsewhere\n"
+			         "Version: 2.0\n"
+			         "Cflags: -I${includedir}\n")
+
+	# Outside the tree, or they are not packages: fmake resolves
+	# <fakelib/thing.h> against a copy in the tree by basename, adds
+	# -Ipkg/include, and compiles fine -- correct behaviour, and a fixture
+	# that tests nothing. The first version put them inside and did that.
+	pkgdir = os.path.join(os.path.dirname(t.dir),
+	                      os.path.basename(t.dir) + "-pkg")
+	stage = os.path.join(os.path.dirname(t.dir),
+	                     os.path.basename(t.dir) + "-stage")
+	try:
+		# A root each. Two unrelated packages with non-default include
+		# directories do not share one, and sharing is what made the
+		# first control lie: both -I roots held the other's header, so
+		# every module resolved every foreign name.
+		package(os.path.join(pkgdir, "a"), "fakelib", "thing.h")
+		package(os.path.join(pkgdir, "b"), "privlib", "other.h")
+		# privlib's root also holds a file named like a standard header,
+		# which is thorvg's vendored stdint.h one layer out (section 319). The
+		# published header below includes <stdio.h>, so without the
+		# toolchain filter that name is foreign, privlib's root resolves
+		# it, and the .pc names a package because the header uses the C
+		# library. This is what makes that filter a tested line rather
+		# than a careful one.
+		with open(os.path.join(pkgdir, "b", "include", "stdio.h"), "w") as fh:
+			fh.write("#pragma once\n")
+		env = {"PKG_CONFIG_PATH": os.pathsep.join(
+		    [os.path.join(pkgdir, "a", "pc"),
+		     os.path.join(pkgdir, "b", "pc")])}
+
+		# fakelib is reached by the PUBLISHED header; privlib only by the
+		# implementation. Same tree, same target, same directives.
+		t.write("inc/api.h",
+		        "#pragma once\n#include <stdio.h>\n"
+		        "#include <fakelib/thing.h>\nint api_n(void);\n")
+		t.write("api.c", "/*! @target apilib\n    @kind static\n"
+		                 "    @version 1.0\n    @pkg fakelib\n"
+		                 "    @pkg privlib\n    @headers inc/api.h */\n"
+		                 '#include "api.h"\n'
+		                 "#include <privlib/other.h>\n"
+		                 "int api_n(void){ return FAKELIB_ONE + PRIVLIB_ONE - 1; }\n")
+		r = t.fmake("--install", "--prefix", stage, env=env)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the library builds and installs: {out}")
+		text = open(os.path.join(stage, "lib", "pkgconfig",
+		                         "apilib.pc")).read()
+		check("Requires:" in text and "fakelib" in text.split("Requires:")[1]
+		      .split("\n")[0],
+		      f"a package the published header reaches belongs in Requires: "
+		      f"{text}")
+		check("privlib" not in text.split("Requires:")[1].split("\n")[0],
+		      f"and one only the implementation reaches does not -- a "
+		      f"consumer needs nothing from it: {text}")
+
+		# The property the line stands for: a consumer compiling with
+		# nothing but what pkg-config answers for this library.
+		t.write("use.c",
+		        "#include <api.h>\nint main(void){ return api_n() - 1; }\n")
+		path = os.pathsep.join([os.path.join(stage, "lib", "pkgconfig"),
+		                        os.path.join(pkgdir, "a", "pc"),
+		                        os.path.join(pkgdir, "b", "pc")])
+		flags = subprocess.run(["pkg-config", "--cflags", "apilib"],
+		                       capture_output=True, text=True,
+		                       env=dict(os.environ, PKG_CONFIG_PATH=path))
+		if flags.returncode != 0:
+			raise Skip("pkg-config cannot read the staged .pc here")
+		c = subprocess.run([os.environ.get("CC") or "cc", "-c",
+		                    *shlex.split(flags.stdout),
+		                    os.path.join(t.dir, "use.c"),
+		                    "-o", os.path.join(t.dir, "use.o")],
+		                   capture_output=True, text=True, errors="replace")
+		check(c.returncode == 0,
+		      f"and a consumer compiles on those flags alone: {c.stderr}")
+	finally:
+		shutil.rmtree(stage, ignore_errors=True)
+		shutil.rmtree(pkgdir, ignore_errors=True)
+
+
+@case
 def a_published_header_whose_own_include_is_not_published_is_reported(t):
 	"""An install whose `includedir` cannot be compiled, and nothing said so.
 

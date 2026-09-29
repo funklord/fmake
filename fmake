@@ -5068,6 +5068,29 @@ class Project:
 					queue.append(h)
 		return seen
 
+	def foreign_includes(self, rels):
+		"""Include names reachable from these files that are nobody's here.
+
+        The names a consumer's compiler will have to resolve for itself.
+        Walks through tree headers the way `reachable_headers' does and
+        collects what does NOT resolve, which is the complement of that
+        method over the same walk.
+        """
+		seen, foreign, queue = set(), set(), list(rels)
+		while queue:
+			cur = queue.pop()
+			scan = self.scans.get(cur)
+			if not scan:
+				continue
+			for kind, name, _line in scan["incs"]:
+				h = self.resolve_header(name, cur, kind)
+				if h is None:
+					foreign.add(name)
+				elif h not in seen:
+					seen.add(h)
+					queue.append(h)
+		return foreign
+
 	def sibling_source(self, hdr_rel):
 		"""The source that probably implements a header.
 
@@ -8842,6 +8865,66 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 		for f in u.ann.items("ldflags"):
 			if f not in extra_ld:
 				extra_ld.append(f)
+
+	# What a consumer needs in order to COMPILE against the headers this
+	# target publishes, which is the other half of the fact `Libs.private'
+	# already carries and was measured missing the same way. A library
+	# whose public header includes <QtCore/QString> installs that header,
+	# publishes `Libs.private: -lQt6Core', and publishes nothing at all
+	# about the include path -- so a consumer using exactly the flags the
+	# .pc provides stops on
+	#
+	#     wrap.h:2:10: fatal error: QtCore/QString: No such file or
+	#         directory
+	#
+	# Module NAMES rather than flags here, unlike Libs.private, and the
+	# difference is measured rather than a preference: `-lQt6Core' is the
+	# same string everywhere, while Qt's include path is
+	# /usr/include/x86_64-linux-gnu/qt6 -- a fact about this machine and
+	# this architecture, which `deferred_modules' exists to keep out of an
+	# ejected build for exactly that reason. `Requires:' hands the question
+	# to the consumer's own pkg-config, which is the only thing that can
+	# answer it there.
+	#
+	# Public means the module supplies a header that a PUBLISHED header
+	# reaches. A module used only inside the implementation is nobody
+	# else's business and stays out, which is what keeps this from becoming
+	# "every package this target touched".
+	res["public_pkgs"] = []
+	if proj is not None:
+		# What the published headers ask the consumer's compiler to find,
+		# minus the names it will find by itself. Without that subtraction
+		# a public header including <stdio.h> makes `stdio.h' foreign, and
+		# then every candidate module answering -I/usr/include claims it:
+		# the .pc would name a package because the header uses the C
+		# library. Section 319's predicate is the same question, and it
+		# answers this one too.
+		foreign = {n for n in proj.foreign_includes(published_headers(t, cl))
+		           if not toolchain_owns_header(cfg, n)}
+		if foreign:
+			candidates = {v[0] for v in proposed.values()}
+			for u in cl.link:
+				for group in u.ann.groups("pkg"):
+					candidates.add(group[0])
+			for spec in t.conf.get("pkg", []):
+				candidates.add(spec.split()[0])
+			# No second filter on the module's own directories, and the
+			# absence is deliberate. Dropping /usr/include from each
+			# module's -I list -- so that one .pc naming the multiarch
+			# directory does not answer for every header under it, section 176's
+			# finding -- was written here and then removed: the filter
+			# above reads the SAME directory list, so a name any system
+			# directory can resolve has already gone. Measured by removing
+			# it, which no assertion could distinguish. One test over
+			# names subsumes a test over directories, and a line nothing
+			# can see fail is a line the next reader will believe in.
+			for module in sorted(candidates):
+				got = pkg.flags(module)
+				dirs = [f[2:] for f in (got[0] if got else ())
+				        if f.startswith("-I")]
+				if any(os.path.isfile(os.path.join(d, name))
+				       for d in dirs for name in foreign):
+					res["public_pkgs"].append(module)
 
 	res["declared"] = [d for d in declared if d not in res["chosen"]]
 	res["wrap"] = wrap_flags(cl)
@@ -12749,7 +12832,9 @@ def build(args, _bootstrapping=False):
 		for t in wanted:
 			text = pc_text(t, conf, install_paths(conf, args)["prefix"],
 			               (resolutions.get(t) or {}).get("ldflags") or (),
-			               root)
+			               root,
+			               (resolutions.get(t) or {}).get("public_pkgs")
+			               or ())
 			if text is None:
 				continue
 			path = os.path.join(outdir, t.name + ".pc")
@@ -14347,7 +14432,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# file nothing produces fails on the one machine that matters.
 		pcs = [(t, pc_text(t, conf, prefix,
 		                   (resolutions.get(t) or {}).get("ldflags") or (),
-		                   root)) for t in targets]
+		                   root,
+		                   (resolutions.get(t) or {}).get("public_pkgs")
+		                   or ())) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
 		for t, text in pcs:
 			# Regenerated every time rather than when missing: its
@@ -15098,7 +15185,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# ninja's escape rather than Make's.
 		pcs = [(t, pc_text(t, conf, prefix,
 		                   (resolutions.get(t) or {}).get("ldflags") or (),
-		                   root)) for t in targets]
+		                   root,
+		                   (resolutions.get(t) or {}).get("public_pkgs")
+		                   or ())) for t in targets]
 		pcs = [(t, text) for t, text in pcs if text]
 		# The prefix line reads the same PREFIX the install steps above
 		# do, rather than the one this tree named when it was ejected:
@@ -15309,7 +15398,7 @@ def install_rows_for(plan):
 	return rows
 
 
-def pc_text(t, conf, prefix=None, ldflags=(), root=None):
+def pc_text(t, conf, prefix=None, ldflags=(), root=None, public=()):
 	"""The pkg-config file for a library, or None if none was asked for.
 
     fmake resolves libraries *through* pkg-config -- a header proposes a
@@ -15355,6 +15444,12 @@ def pc_text(t, conf, prefix=None, ldflags=(), root=None):
 	    "Version: " + t.version,
 	    "Libs: -L${libdir} -l" + t.name,
 	]
+	# Before Libs, as a hand-written .pc puts it: what a consumer needs in
+	# order to COMPILE against the headers this publishes. See
+	# `public_pkgs' in resolve_libraries for why these are module names
+	# where Libs.private is flags.
+	if public:
+		lines.insert(-1, "Requires: " + ", ".join(public))
 	# What a consumer needs in ADDITION to -l<name>, which for a static
 	# library is not optional: measured, a consumer linking liblib.a with
 	# exactly the flags this file provided failed with `undefined
@@ -15634,6 +15729,22 @@ def furniture_landing(kind, rel, root):
 	raise AssertionError(kind)
 
 
+def published_headers(t, cl):
+	"""The headers this target publishes, in the order they were named.
+
+    One statement of it, because two things ask: the install plan, which
+    copies them, and the .pc, which has to say what a consumer needs in
+    order to compile against them. A second copy of this list would be a
+    second thing to be wrong, and the two would disagree quietly -- the
+    install would publish a header the .pc had not accounted for.
+    """
+	heads = list(t.conf.get("headers", []))
+	if t.kind != "exe":
+		for u in cl.link:
+			heads += u.ann.items("headers")
+	return list(dict.fromkeys(heads))
+
+
 def install_plan(targets, closures, root):
 	"""What this project installs, and into which of the three directories.
 
@@ -15698,11 +15809,7 @@ def install_plan(targets, closures, root):
 		# otherwise install the same header twice under two owners.
 		# An explicit list in fmake.toml is honoured for any kind, since
 		# naming it outright is a decision rather than an inference.
-		heads = list(t.conf.get("headers", []))
-		if t.kind != "exe":
-			for u in closures[t].link:
-				heads += u.ann.items("headers")
-		for h in dict.fromkeys(heads):
+		for h in published_headers(t, closures[t]):
 			if not os.path.isfile(os.path.join(root, h)):
 				die(f"@headers {h!r} does not exist (named for {t.name})")
 			planned.append(("tree", h, "includedir",

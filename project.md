@@ -370,7 +370,8 @@ that had been green about nothing for five commits ·
 [317. Modules needed an order, and an edge nobody had named](#317-modules-needed-an-order-and-an-edge-nobody-had-named) ·
 [318. The architecture check was off for four architectures](#318-the-architecture-check-was-off-for-four-architectures) ·
 [319. The list of headers the toolchain owns, replaced by asking it](#319-the-list-of-headers-the-toolchain-owns-replaced-by-asking-it) ·
-[320. An installed includedir that could not be compiled](#320-an-installed-includedir-that-could-not-be-compiled)
+[320. An installed includedir that could not be compiled](#320-an-installed-includedir-that-could-not-be-compiled) ·
+[321. The .pc said how to link and not how to compile](#321-the-pc-said-how-to-link-and-not-how-to-compile)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2539,7 +2540,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases and ~3 minutes at 173, and there are **570** now
+It was ~50s at 79 cases and ~3 minutes at 173, and there are **571** now
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
 compiles, ejecting a build and running `make` or `ninja` over it, and the
@@ -24785,3 +24786,110 @@ first as `proj=None`, which would make the check silently absent for any
 caller added later -- a guard whose failure is silence, which is the fault
 §318 and §319 were both about. It is positional now, and both call sites
 pass it.
+
+---
+
+## 321. The .pc said how to link and not how to compile
+
+§7's `.pc` carries `Libs.private` because a consumer linking a static
+library needs the whole chain, and that was measured: a consumer linking
+`liblib.a` with exactly the flags the file provided failed on `undefined
+reference to zlibVersion`, and fmake had the answer and published neither
+half. The compile side was never asked the same question.
+
+    inc/wrap.h     @headers, and includes <QtCore/QString>
+    wrap.cpp       @pkg Qt6Core
+
+    Name: wrap
+    Libs: -L${libdir} -lwrap
+    Libs.private: -lQt6Core
+    Cflags: -I${includedir}
+
+A consumer compiling on `pkg-config --cflags wrap` alone:
+
+    stage/include/wrap.h:2:10: fatal error: QtCore/QString:
+        No such file or directory
+
+Same shape as §320 and the same reason it survived: fmake knew. `@pkg
+Qt6Core` is in the tree, its cflags are what fmake compiled the library
+with, and the published header is the one thing a consumer will read.
+
+### Names, not flags, and the difference is measured
+
+`Libs.private` carries raw flags, on the recorded grounds that turning
+them back into package names is a mapping fmake does not keep. That
+argument does not transfer, and the asymmetry is real rather than a
+preference: `-lQt6Core` is the same string on every machine, while Qt's
+include path is `/usr/include/x86_64-linux-gnu/qt6` -- one machine and one
+architecture. That is precisely the class `deferred_modules` exists to
+keep out of an ejected build (§227), so baking it into a published `.pc`
+would be the same mistake with a longer life.
+
+`Requires:` hands the question to the consumer's pkg-config, which is the
+only thing that can answer it where the file ends up.
+
+### Public means reached from a published header
+
+A module used only inside the implementation is nobody else's business and
+stays out. The set is computed where the attribution already lives, in
+`resolve_libraries`: the modules the target declared or a header proposed,
+intersected with those whose include directories resolve a name the
+published headers ask for and the tree does not supply.
+
+`Project.foreign_includes` is that last part -- the complement of
+`reachable_headers` over the same walk, the names a consumer's compiler
+will have to find for itself.
+
+### Two filters, one kept, and the removal is the finding
+
+The names a published header asks for include `<stdio.h>`. Unfiltered,
+that makes `stdio.h` foreign, and then any candidate module answering
+`-I/usr/include` resolves it -- so the `.pc` would name a package because
+the header uses the C library. §319's predicate is the same question and
+drops it.
+
+A second filter was written beside it, dropping `/usr/include` from each
+module's own `-I` list, on §176's finding that one `.pc` naming the
+multiarch directory answered for every system header under it. **It was
+then removed, because it is redundant**: the first filter reads the *same*
+directory list, so a name any system directory can resolve has already
+gone. Verified by deleting it and finding no assertion that could tell --
+which is the argument for removing it rather than keeping it as
+belt-and-braces. A line nothing can see fail is a line the next reader
+will believe in.
+
+### The control was unreachable, in a case written to demonstrate a control
+
+The first version had `fakelib` public in one tree and a second tree using
+it privately. The second tree's published header has no foreign include at
+all, so the computation is skipped before it can choose -- and a sabotage
+that named **every** module the target touched passed both halves.
+
+`evidence.md`'s *a control has to be reached, not only able to fire*, met
+in the act of writing one. The fix is one tree with two packages,
+`fakelib` reached by the published header and `privlib` only by the
+implementation, so the block runs and has to discriminate.
+
+The first attempt at *that* lied too, for a different reason: both fake
+packages shared an include root, so each module's `-I` held the other's
+header and every module resolved every name. They get a root each now,
+which is the shape two unrelated packages with non-default include
+directories actually have.
+
+    check never computes            Requires missing, red
+    Requires line not emitted       Requires missing, red
+    every candidate listed          privlib named, control red
+    toolchain filter dropped        privlib named, control red
+
+The last needed the fixture to earn it: `privlib`'s include root also holds
+a file named `stdio.h` -- thorvg's vendored `stdint.h` one layer out --
+which is what makes that filter a tested line rather than a careful one.
+
+### And the fixture that taught two lessons
+
+A `--prefix` inside the tree leaves a second copy of every published header
+in it, and the next build cannot resolve the name against two candidates.
+That is not a bug: fmake names both files and the remedy for each, which is
+how it was recognised rather than debugged. But it is a trap for a fixture,
+and it is why these cases stage outside the tree. The §320 case escaped it
+only by removing the staging directory between its two installs.
