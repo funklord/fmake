@@ -18038,6 +18038,124 @@ def a_discarded_cache_says_why_it_was_discarded(t):
 
 
 @case
+def a_tree_whose_only_main_is_a_mirage_still_builds(t):
+	"""It built nothing at all, for ever, and recompiled the tree to do it.
+
+	`RE_MAIN` is deliberately loose -- the scan proposes and the object
+	settles -- so a C++ class with a method called `main`, or a `main` in a
+	namespace, looks like an entry point. fmake catches that correctly and
+	says so. What it then did was `die("no target could be built")`, which
+	was wrong three ways over:
+
+	  - the tree is an ordinary library tree and built no library;
+	  - the `nomain` memo set one line above, whose comment says its whole
+	    purpose is that "the next build does not propose it, compile it,
+	    link nothing and say this again", was lost -- `die` runs before the
+	    cache is saved, so every build repeated the whole thing;
+	  - every object compiled on the way was lost with it.
+
+	Measured before the fix on this exact tree: three builds, rc=1 each,
+	nothing produced, `useful.cpp` never once compiled, and no cache file
+	on disk afterwards.
+
+	The remedy re-enters the plan once rather than duplicating the
+	whole-tree-library decision, which is made before anything is compiled
+	and so cannot be reached from where a mirage is found. The memo makes
+	the second pass skip the file by the path that already worked.
+	"""
+	t.write("useful.cpp", "int useful(void){ return 1; }\n")
+	t.write("runner.cpp", "struct runner {\n\tint main(void) { return 0; }\n};\n"
+	        "int spawn(void){ runner r; return r.main(); }\n")
+	name = os.path.basename(t.dir)
+	lib = os.path.join(t.dir, "lib%s.a" % name)
+
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the tree should build as a library: {said}")
+	check("does not export it" in said,
+	      f"and should still say the main() was a mirage: {said}")
+	check(os.path.exists(lib), f"no archive was built: {said}")
+
+	syms = subprocess.run(["nm", "--format=posix", lib],
+	                      capture_output=True, text=True).stdout
+	# The other file must be IN it. Before the fix it was never compiled,
+	# which is the part a "did it exit 0" check would have missed.
+	check(re.search(r"^_?Z?\w*useful\w* [TT]", syms, re.M),
+	      f"useful.cpp is missing from the archive: {syms}")
+	# And the mirage file is library material, not a program.
+	check(not re.search(r"^main [TT]", syms, re.M),
+	      f"the archive must not carry an entry point: {syms}")
+
+	# It must settle, and the memo must have survived -- before the fix
+	# there was no cache file at all after the failure.
+	again = t.fmake("-j4")
+	check(again.returncode == 0 and not compiled(again),
+	      f"the second build must be a no-op: {again.stdout}{again.stderr}")
+	check(os.path.exists(os.path.join(t.dir, ".fmake", "cache.json")),
+	      "the cache must have been written, or the memo is lost and every "
+	      "build repeats the compile-and-discard")
+
+
+@case
+def an_eject_agrees_with_the_build_about_a_mirage(t):
+	"""A fix to one half must not leave the halves disagreeing.
+
+	Once the build falls back to a library for a tree whose only apparent
+	main() is a mirage, the eject of that same tree must not fail: the
+	fragment's own `FM_TARGETS` names the archive, so nothing is missing
+	from it. Measured while making that fallback work -- build 0, eject 1,
+	with a correct fragment on stdout -- which is fmake disagreeing with the
+	build it emits, and the reason it matters beyond tidiness is that a
+	consumer guards on the status: hydra's `tool/objsets.py` reads this
+	exact mode and discards the output when it is non-zero.
+
+	**The status condition was checked rather than assumed.** "left out of
+	this fragment" is a claim about the fragment, and the list of mirages is
+	not that claim -- a mirage swept into the tree's library is in the
+	fragment. It is computed from the emitted link sets now.
+
+	The other direction is section 177 and is asserted here too, because a
+	narrowed condition is the easy way to lose it: a mirage that really is
+	omitted must fail EVERY eject, not just the first. That was the original
+	fault -- the answer is remembered against the file's hash, so the
+	warning printed once and every eject afterwards omitted the program and
+	exited 0.
+	"""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("useful.cpp", "int useful(void){ return 1; }\n")
+	t.write("runner.cpp", "struct runner {\n\tint main(void) { return 0; }\n};\n"
+	        "int spawn(void){ runner r; return r.main(); }\n")
+	name = os.path.basename(t.dir)
+
+	b = t.fmake("-j4")
+	check(b.returncode == 0, f"the build should produce a library: "
+	      f"{b.stdout}{b.stderr}")
+	e = t.fmake("--eject", "make-fragment")
+	check(e.returncode == 0,
+	      f"the eject must agree with the build: {e.stdout[-300:]}{e.stderr}")
+	check(("FM_TARGETS = lib%s.a" % name) in e.stdout,
+	      f"and the fragment must name the archive: {e.stdout[:400]}")
+
+	# Section 177's direction: a mirage that really is left out. A real
+	# program means no whole-tree library, so nothing carries runner.cpp.
+	v = Tree("eject-mirage-omitted")
+	try:
+		v.write("main.c", "int main(void){ return 0; }\n")
+		v.write("runner.cpp", "struct runner {\n\tint main(void) { return 0; }\n};\n")
+		for n in (1, 2, 3):
+			r = v.fmake("--eject", "make-fragment")
+			said = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"eject {n}: an omitted mirage must fail: {said[-300:]}")
+			check("left out of this fragment" in said,
+			      f"eject {n}: and must say so every time, not only the "
+			      f"first: {said[-300:]}")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

@@ -393,7 +393,8 @@ that had been green about nothing for five commits ·
 [340. A database run that reported success over a compile error](#340-a-database-run-that-reported-success-over-a-compile-error) ·
 [341. The one mode that called a compile error success](#341-the-one-mode-that-called-a-compile-error-success) ·
 [342. A fixture built to be unkillable](#342-a-fixture-built-to-be-unkillable) ·
-[343. The explanation nobody could see](#343-the-explanation-nobody-could-see)
+[343. The explanation nobody could see](#343-the-explanation-nobody-could-see) ·
+[344. The tree that built nothing, for ever](#344-the-tree-that-built-nothing-for-ever)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2572,7 +2573,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 594
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 596
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26545,3 +26546,87 @@ making it unconditional fails on the notice repeating; removing the discard
 message and mislabelling its shape reason each fail on their own assertion.
 The second one matters most: without it the case would pass against "print
 always", which is the other wrong answer and the tempting one.
+
+## 344. The tree that built nothing, for ever
+
+`RE_MAIN` is deliberately loose, because the scan proposes and the object
+settles. Asked which spellings it accepts, it finds all twelve legal ones
+tried -- and it also matches two things that are not entry points at all: a
+C++ class with a method called `main`, and a `main` inside a namespace.
+
+That is by design and fmake catches both, saying so plainly: *looked like it
+defined main() but the object does not export it; skipping*. What happened
+next was not by design.
+
+    build 1: rc=1  !!! no target could be built
+    build 2: rc=1  !!! no target could be built
+    build 3: rc=1  !!! no target could be built
+
+On a two-file tree whose other file is a genuine library source, nothing was
+produced, **that other file was never once compiled**, and there was no
+cache file on disk afterwards. The control settles what it cost: delete the
+class with the `main` method and the same tree builds a library, rc=0.
+
+Three faults compounding:
+
+- the mirage removed the only target and fmake died, where the tree is an
+  ordinary library tree;
+- the `nomain` memo set one line above -- whose comment says its whole
+  purpose is that "the next build does not propose it, compile it, link
+  nothing and say this again" -- was lost, because `die` runs before the
+  cache is saved. **The memo written to stop the repeat was destroyed by the
+  failure it was meant to stop repeating.**
+- every object compiled on the way went with it, so the tree recompiled
+  from scratch each time.
+
+### Two fixes were measured, and the cheaper one is the worse shape
+
+Saving the cache before dying is one line and makes build 1 fail, build 2
+build the library. That is a large improvement and it is the shape §339
+records as a fault in its own right -- a failure that heals on the second
+run, where nothing tells you the first was avoidable.
+
+Saving and **re-entering the plan once** does it in a single invocation: the
+warning prints once, the library builds, both symbols in it, rc=0.
+`whole_tree_library` is decided from the target list before anything is
+compiled and a mirage is only discovered after, so its answer cannot be
+reached from where the mirage is found -- and rather than duplicate that
+decision, the memo makes the second pass skip the file by the route that
+already worked. Guarded to one retry, because a second pass that still
+finds no target has a real answer to give.
+
+Sabotage B is the one worth keeping: re-entering *without* saving fails the
+same assertion, because the re-entry builds a fresh `Cache` that reads from
+disk. The save is load-bearing rather than tidy.
+
+### The fix left the two halves disagreeing, which is the part worth reading
+
+Before it, the build and the eject of such a tree both exited 1 --
+consistent, if unhelpful. After it the build exited 0 and the eject still
+exited 1, **with a correct fragment on stdout**: its own `FM_TARGETS` named
+the archive. So fmake had started disagreeing with the build it emits,
+which is what §8 exists to prevent, and the disagreement was mine.
+
+It matters beyond tidiness because a consumer guards on that status.
+hydra's `tool/objsets.py` reads `--eject make-fragment` and its one check is
+`returncode != 0`, so a correct fragment would have been discarded.
+
+The cause is a claim taken on trust. "left out of this fragment" is a claim
+*about the fragment*, and the list of mirages is not that claim: a mirage
+that stopped rooting a program and was then swept into the tree's library is
+**in** the fragment. It is computed from the emitted link sets now, and the
+warning names only what is genuinely absent.
+
+**And narrowing a condition is the easy way to lose what it was widened
+for.** That condition is §177: a mirage that really is omitted must fail
+*every* eject, because the answer is remembered against the file's hash and
+the original fault was the warning printing once while every eject
+afterwards omitted the program and exited 0. Asserted here at three
+consecutive ejects, and the sabotage that drops the refusal fails on it.
+
+### Attribution, because I nearly reported this as pre-existing
+
+The measurement that settled it was running the committed fmake beside the
+patched one on the same tree: build 1 / eject 1 before, build 0 / eject 1
+after. Without that the honest options were "this was always inconsistent"
+and "I did this", and only one of them is true.

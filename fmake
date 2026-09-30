@@ -10291,7 +10291,7 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 # Build
 # ---------------------------------------------------------------------------
 
-def build(args, _bootstrapping=False):
+def build(args, _bootstrapping=False, _after_mirage=False):
 	root = os.path.abspath(args.directory)
 	if not os.path.isdir(root):
 		die(f"no such directory: {args.directory}")
@@ -12362,6 +12362,55 @@ def build(args, _bootstrapping=False):
 					mirage.append(t.rel)
 					wanted.remove(t)
 			if not wanted:
+				# Only where a mirage caused the emptiness, and only where
+				# the next pass could do better. Two ways this was wrong
+				# when first written, both found by the full suite rather
+				# than by the cases for it:
+				#
+				# A tree where every file fails to compile also arrives
+				# here with nothing wanted -- the guard above removes each
+				# target saying it did not compile -- and re-entering then
+				# rebuilt the whole tree and printed every diagnostic a
+				# second time. Two cases about grouping repeated errors
+				# caught it, which is what a suite is for.
+				#
+				# And a mirage carrying an explicit `@kind exe' cannot be
+				# helped by another pass: the early skip requires the
+				# annotation to be absent, so the file claims to be a
+				# program again and the second pass ends where the first
+				# did, one wasted compile later and with the warning
+				# printed twice.
+				retryable = [r for r in set(mirage)
+				             if Ann(scans[r].get("dirs")).scalar("kind")
+				             is None]
+				if not _after_mirage and retryable and not broken:
+				# three ways over. A tree whose apparent main() is a C++
+				# class with a method called `main', or a `main' in a
+				# namespace, is an ordinary library tree -- and it built
+				# nothing at all, exited 1, and did it again on every
+				# build: the `nomain' memo set just above, whose whole
+				# purpose is that "the next build does not propose it,
+				# compile it, link nothing and say this again", was lost
+				# because `die' runs before the cache is saved. So was
+				# every object compiled on the way. Measured on a two-file
+				# tree whose other file is a genuine library source: three
+				# builds, nothing produced, that file never once compiled,
+				# and no cache file on disk afterwards.
+				#
+				# `whole_tree_library' is decided from the target list
+				# before anything is compiled, and a mirage is only
+				# discovered after -- so its answer cannot be reached from
+				# here. Rather than duplicate that decision, save what was
+				# learned and re-enter once: the memo makes the early path
+				# skip the file, no target is claimed, and the library
+				# forms by the route that already works. Measured on the
+				# same tree: one invocation, the warning once, the library
+				# built, both symbols in it.
+				#
+				# Once, and guarded, because a second pass that still finds
+				# no target has a real answer to give.
+					cache.save()
+					return build(args, _bootstrapping, True)
 				die("no target could be built")
 
 		forced = [units[f] for f in forced_rels if f in units]
@@ -13137,12 +13186,25 @@ def build(args, _bootstrapping=False):
 		# exits 0. hydra's generator met exactly that -- five test drivers
 		# with no link set, a well-formed fragment, and nothing in the
 		# status to refuse it -- and is section 177.
-		if mirage:
+		#
+		# "left out" is the claim, so it has to be checked rather than
+		# assumed from the list. A mirage that stopped rooting a program
+		# and was then swept into the tree's library is IN this fragment,
+		# and nothing is missing from it -- the build of such a tree now
+		# produces that library rather than dying, and an eject that
+		# failed beside it would be fmake disagreeing with the build it
+		# emits, which is what section 8 exists to prevent. Measured: the
+		# fragment's own `FM_TARGETS' names the archive, and the status
+		# said otherwise.
+		absent = sorted({r for r in set(mirage)
+		                 if not any(u.rel == r for t in wanted
+		                            for u in closures[t].link)})
+		if absent:
 			warn("left out of this fragment, and its object exports no "
-			     "main(): " + ", ".join(sorted(set(mirage)))
+			     "main(): " + ", ".join(absent)
 			     + "\n@kind or [target.*] settles what such a file is; "
 			       "until then a program is missing from the file below")
-		return 1 if broken or mirage else 0
+		return 1 if broken or absent else 0
 
 	all_units = [units[r] for r in sorted(units)]
 	if args.compile_commands:
@@ -13247,7 +13309,6 @@ def build(args, _bootstrapping=False):
 		if ok and not args.dry_run and t.kind == "module":
 			module_wants_the_tree(t, closures[t], out, cfg, units,
 			                      linked_by, res, module_libc)
-
 	cache.save()
 	if args.dry_run and not (args.install or args.uninstall):
 		if not args.no_libs:
