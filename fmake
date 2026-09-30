@@ -802,6 +802,43 @@ RE_DATA_DEF_LIST = re.compile(
     r'(?:[ \t]*,[ \t]*\*?[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*'
     r'(?:\[[^\]{}()]*\])*(?:[ \t]*=[^,;{}()]*)?)+)[ \t]*;', re.M)
 
+# A file-scope function pointer OBJECT, which neither pattern above reaches:
+# `int (*handler)(int) = deflt;' has a declarator wrapping the name in
+# parentheses, so `RE_DATA_DEF' -- which expects the name straight after the
+# type -- sees nothing, and `RE_FUNC_PTR_DEF' is for a function DEFINITION
+# whose signature contains parentheses and needs a `{'.
+#
+# It matters for a dispatch table, which is where this shape lives. A file
+# whose only external definition is one, reached by nothing in the include
+# graph, is never proposed by widening -- and the link then fails saying
+# "nothing in this tree appears to define them either", offering --ldflags,
+# @pkg and an unrun generator, while the definition sits in the next file.
+# Wrong advice rather than merely absent advice, which is section 147.
+#
+# Measured over 30,632 C and C++ files in this workspace before being
+# added: 62 new names across 31 files, and all 62 read one by one --
+# `iniparser_error_callback', libwebp's `WebPDispatchAlpha', OpenSSL's
+# `felem_mul_p' and `default_trust', glew's `regalGetProcAddress'. Every one
+# a real function-pointer object; no false positive anywhere in the corpus.
+# The alignment-specifier form, `_Alignas(16) const int t[4] = {...}', is
+# missed by the same patterns and is NOT added: the same sweep finds zero
+# occurrences of it, so the gap is real and nothing hits it.
+#
+# The keyword exclusion is not decoration. Without it `if (*p)(x);' at
+# column 0 matches -- type `if', declarator `(*p)', parameter list `(x)' --
+# and a statement becomes a definition. fmake's convention indents
+# statements and leaves file scope unindented, which is what makes the
+# anchor usable at all, but a macro body or an unindented label puts one
+# here.
+RE_FUNC_PTR_OBJ = re.compile(
+    r'^(?!(?:if|while|for|return|switch|else|do|case|goto|sizeof|typedef)\b)'
+    r'(?:(?:static|const|volatile)[ \t]+)*'
+    r'(?:(?:struct|union|enum|unsigned|signed|long|short)[ \t]+)*'
+    r'[A-Za-z_][A-Za-z0-9_]*[ \t]*[\*&]*[ \t]*'
+    r'\([ \t]*\*+[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*'
+    r'(?:\[[^\]]*\])*[ \t]*\)'
+    r'[ \t]*\([^;{}]*\)[ \t]*(?:\[[^\]]*\])*[ \t]*[=;]', re.M)
+
 # One declarator out of such a list, applied to what the pattern captured.
 RE_DECLARATOR = re.compile(r'(?:^|,)[ \t]*\*?[ \t]*([A-Za-z_][A-Za-z0-9_]*)')
 
@@ -1230,6 +1267,7 @@ def scan_source(path):
 			if owner:
 				defs.add(owner)
 		defs |= set(RE_FUNC_PTR_DEF.findall(code))
+		defs |= set(RE_FUNC_PTR_OBJ.findall(code))
 		for group in RE_DATA_DEF_LIST.findall(code):
 			defs |= set(RE_DECLARATOR.findall(group))
 		defs |= set(RE_MEMBER_DEF.findall(code))

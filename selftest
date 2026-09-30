@@ -18372,6 +18372,68 @@ def clean_leaves_a_file_no_rule_declares_any_more(t):
 
 
 @case
+def a_function_pointer_object_is_a_definition(t):
+	"""A dispatch table was invisible, and the advice pointed elsewhere.
+
+	`int (*handler)(int) = deflt;` wraps the name in parentheses, so
+	`RE_DATA_DEF` -- which expects the name straight after the type -- sees
+	nothing, and `RE_FUNC_PTR_DEF` is for a function DEFINITION whose
+	signature contains parentheses and needs a `{`. So a file whose only
+	external definition is one, reached by nothing in the include graph, was
+	never proposed by widening, and the link failed with
+
+	    no x86_64/64le library exports: handler
+	    no library here exports them, and nothing in this tree appears to
+	    define them either
+
+	while the definition sat in the next file. That is wrong advice rather
+	than absent advice -- it sends the reader after a library or an unrun
+	generator -- which is section 147.
+
+	Measured over 30,632 C and C++ files before the pattern was added: 62
+	new names across 31 files, all 62 read one by one and all real
+	function-pointer objects, no false positive in the corpus.
+
+	The negative arms matter as much. Without a keyword exclusion,
+	`if (*p)(x);` at column 0 matches -- type `if`, declarator `(*p)`,
+	parameter list `(x)` -- and a statement becomes a definition.
+	"""
+	mod = fmake_in_process()
+	must = ["int (*handler)(int) = 0;",
+	        "static int (*handler)(int, char) = deflt;",
+	        "int (*handler)(void);",
+	        "int (*table[4])(void) = { 0 };",
+	        "const struct op *(*get)(int) = 0;",
+	        "int (**pp)(void) = 0;"]
+	never = ["int f(int (*cb)(void)) { return cb(); }",
+	         "extern int (*handler)(int);",
+	         "void (*signal(int, void (*)(int)))(int);",
+	         "if (*p)(x);", "while (*p)(x);", "return (*fp)(x);",
+	         "\t(*fp)(x);", "typedef int (*cb_t)(void);"]
+	for code in must:
+		check(mod.RE_FUNC_PTR_OBJ.search(code) is not None,
+		      f"should be a definition: {code!r}")
+	for code in never:
+		check(mod.RE_FUNC_PTR_OBJ.search(code) is None,
+		      f"must not be a definition: {code!r}")
+
+	# And end to end, which is what the pattern is for: the file joins by
+	# symbol closure, having no header for the include graph to reach it by.
+	t.write("main.c", "extern int (*handler)(int);\n"
+	        "int main(void){ return handler ? handler(0) : 0; }\n")
+	t.write("table.c", "static int deflt(int x){ return x; }\n"
+	        "int (*handler)(int) = deflt;\n")
+	name = os.path.basename(t.dir)
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the tree should link: {said}")
+	check("table.c" in said,
+	      f"and table.c must have been compiled, not merely tolerated: "
+	      f"{said}")
+	check(t.run(name).returncode == 0, "and the program must run")
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

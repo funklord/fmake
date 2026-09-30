@@ -396,7 +396,8 @@ that had been green about nothing for five commits ·
 [343. The explanation nobody could see](#343-the-explanation-nobody-could-see) ·
 [344. The tree that built nothing, for ever](#344-the-tree-that-built-nothing-for-ever) ·
 [345. A main() the scanner cannot see](#345-a-main-the-scanner-cannot-see) ·
-[346. The record that outlived its rule](#346-the-record-that-outlived-its-rule)
+[346. The record that outlived its rule](#346-the-record-that-outlived-its-rule) ·
+[347. The dispatch table nothing proposed](#347-the-dispatch-table-nothing-proposed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2575,7 +2576,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 599
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 600
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26784,3 +26785,65 @@ Removing the declaration check fails on the deletion; never removing
 anything fails on the declared arm; keeping it silently fails on the
 naming. The third matters because the quiet version passes the first two
 and leaves the user with a file they were not told about.
+
+## 347. The dispatch table nothing proposed
+
+Asking what the scanner records as a definition, rather than what it
+records as `main()`, found a shape it misses:
+
+    int (*handler)(int) = deflt;
+
+The declarator wraps the name in parentheses, so `RE_DATA_DEF` -- which
+expects the name straight after the type -- sees nothing, and
+`RE_FUNC_PTR_DEF` is for a function *definition* whose signature contains
+parentheses and needs a `{`. I read its name and assumed otherwise for a
+minute, which is worth recording: the two are one word apart and one is
+about objects while the other is about functions.
+
+A file whose only external definition is one, with no header for the
+include graph to reach it by, is therefore never proposed by widening. The
+link fails, and the message is wrong:
+
+    no x86_64/64le library exports: handler
+    no library here exports them, and nothing in this tree appears to
+    define them either
+    so either a library this build has not been told about -- --ldflags,
+    or @pkg on the file that needs it -- or something that was never
+    generated
+
+The definition is in the next file. That is wrong advice rather than absent
+advice, which is §147, and it sends a reader after a library or an unrun
+generator.
+
+### The measurement is the whole of the argument
+
+`RE_DATA_DEF_LIST`'s comment sets the standard: a general splitter was
+tried first, "added 5,179 names across 507 real files -- almost all of them
+class and struct names", and was replaced by a narrow form adding ten. So a
+new definition pattern is a claim about a corpus, not about a fixture.
+
+Swept over 30,632 C and C++ files in this workspace: **62 new names across
+31 files**, and all 62 read one by one. Every one a real function-pointer
+object -- `iniparser_error_callback`, libwebp's `WebPDispatchAlpha` and
+`VP8TransformWHT`, OpenSSL's `felem_mul_p` and `default_trust`, glew's
+`regalGetProcAddress`. No false positive anywhere in the corpus.
+
+**And the miss beside it is deliberately left alone.**
+`_Alignas(16) const int t[4] = {...}` is invisible to the same patterns and
+breaks a widening-only build the same way -- and the same sweep finds
+**zero** occurrences in those 30,632 files. It is a real gap that nothing
+hits, so the change would be unmotivated; the number is worth more than the
+code, so nobody re-derives it.
+
+### The keyword exclusion is not decoration
+
+Without it, `if (*p)(x);` at column 0 matches: type `if`, declarator
+`(*p)`, parameter list `(x)`, terminator `;`. A statement becomes a
+definition. fmake's convention indents statements and leaves file scope
+unindented, which is what makes the `^` anchor usable at all -- but a macro
+body or an unindented label puts one there, and the sabotage that removes
+the exclusion fails on exactly that line.
+
+The other negatives are the ones that separate an object from a function:
+`int f(int (*cb)(void)) {`, `extern int (*handler)(int);`,
+`void (*signal(int, void (*)(int)))(int);` and a `typedef`.
