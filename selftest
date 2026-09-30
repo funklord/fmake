@@ -17876,6 +17876,119 @@ def every_mode_that_compiles_fails_on_a_compile_error(t):
 
 
 @case
+def a_file_nothing_reaches_is_reported_when_it_appears(t):
+	"""The explanation existed and was invisible in the one situation it was
+	written for.
+
+	`X not compiled: nothing reaches it` was gated on `changed`, with the
+	comment "on a no-op build it is the same notice every time". That answers
+	a question nobody had. Adding a file nothing reaches does not change the
+	build, so the single moment the notice is news was the moment it was
+	suppressed: a warm tree, `helper.c` added, and fmake said "up to date"
+	and never mentioned it -- while the same tree built cold says exactly
+	what is wrong.
+
+	Which is the most likely confusion there is about a build system that
+	decides membership by symbols: somebody adds a file and wonders why it
+	is not compiled.
+
+	The gate is news now rather than activity -- the set is remembered and
+	the notices print when it grows -- so a settled tree stays quiet, which
+	is what `changed` was protecting, and a tree that legitimately holds
+	unreachable sources does not report them for ever.
+	"""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	name = os.path.basename(t.dir)
+
+	check(t.fmake("-j4").returncode == 0, "the first build failed")
+	settled = t.fmake("-j4")
+	said = settled.stdout + settled.stderr
+	check("nothing reaches it" not in said,
+	      f"a settled tree with nothing unreachable must say nothing: {said}")
+
+	t.write("helper.c", "int helper(void){ return 7; }\n")
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check("helper.c not compiled: nothing reaches it" in said,
+	      f"adding a file nothing reaches must be reported: {said}")
+	# The half that says it is news-gating rather than "always print".
+	check(not compiled(r),
+	      f"and it must not have rebuilt anything to say so: {said}")
+
+	again = t.fmake("-j4")
+	check("nothing reaches it" not in (again.stdout + again.stderr),
+	      f"and must not repeat on the next build: {again.stdout}{again.stderr}")
+
+	# A second file is news again, so the gate is about the SET and not a
+	# once-ever flag.
+	t.write("second.c", "int second(void){ return 8; }\n")
+	two = t.fmake("-j4")
+	said = two.stdout + two.stderr
+	check("second.c not compiled" in said,
+	      f"a second unreachable file is news too: {said}")
+
+	# A quiet run must not consume the news, or -q silently costs the next
+	# build its explanation.
+	t.write("third.c", "int third(void){ return 9; }\n")
+	q = t.fmake("-j4", "--quiet")
+	check("nothing reaches it" not in (q.stdout + q.stderr),
+	      "--quiet must stay quiet")
+	after = t.fmake("-j4")
+	check("third.c not compiled" in (after.stdout + after.stderr),
+	      f"a quiet run must not consume the news: {after.stdout}{after.stderr}")
+	check(os.path.exists(os.path.join(t.dir, name)),
+	      "and the program is still there throughout")
+
+
+@case
+def a_discarded_cache_says_which_of_the_three_reasons(t):
+	"""A discarded cache recompiles the tree and used to say nothing.
+
+	Three things invalidate it and they want different responses: a format
+	change and an fmake change are ordinary, and a section of the wrong type
+	means something wrote it wrongly. That last one is not hypothetical --
+	adding a new section as a list, where `_well_shaped` requires a dict of
+	everything but `units`, silently turned the whole build cache off while
+	this project was being worked on. It presented as an unrelated notice
+	printing on every run, because nothing said the cache had gone.
+
+	`_well_shaped` was doing its job: the cache WAS malformed. What was
+	missing is that a correct refusal was silent, so the symptom pointed
+	anywhere but at it.
+	"""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+	check(t.fmake("-j4").returncode == 0, "the first build failed")
+
+	def bend(key, value):
+		t.fmake("-j4")                      # settle, so the cache is current
+		with open(cache) as fh:
+			d = json.load(fh)
+		d[key] = value
+		with open(cache, "w") as fh:
+			json.dump(d, fh)
+		r = t.fmake("-j4", "-v")
+		return r.stdout + r.stderr
+
+	said = bend("version", "not-a-version")
+	check("cache discarded" in said and "format" in said,
+	      f"a format mismatch should name the format: {said}")
+	said = bend("fmake", "0000deadbeef")
+	check("cache discarded" in said and "another fmake" in said,
+	      f"an identity mismatch should say so: {said}")
+	# The one that cost time: a section of the wrong type.
+	said = bend("nomain", [])
+	check("cache discarded" in said and "wrong type" in said,
+	      f"a mistyped section should name the shape: {said}")
+
+	# And a healthy cache says none of it, or the message is noise.
+	t.fmake("-j4")
+	ok = t.fmake("-j4", "-v")
+	check("cache discarded" not in (ok.stdout + ok.stderr),
+	      f"a healthy cache must not report a discard: {ok.stdout}{ok.stderr}")
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

@@ -392,7 +392,8 @@ that had been green about nothing for five commits ·
 [339. The unit that joined after the decisions](#339-the-unit-that-joined-after-the-decisions) ·
 [340. A database run that reported success over a compile error](#340-a-database-run-that-reported-success-over-a-compile-error) ·
 [341. The one mode that called a compile error success](#341-the-one-mode-that-called-a-compile-error-success) ·
-[342. A fixture built to be unkillable](#342-a-fixture-built-to-be-unkillable)
+[342. A fixture built to be unkillable](#342-a-fixture-built-to-be-unkillable) ·
+[343. The explanation nobody could see](#343-the-explanation-nobody-could-see)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2571,7 +2572,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 592
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 594
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26424,3 +26425,94 @@ difference is where you look afterwards.**
 Which is `evidence.md`'s vacuous pass with the polarity flipped. There a
 green result had inspected nothing; here a correct instrument produced no
 result at all, and the absence of output read exactly like a clean sweep.
+
+## 343. The explanation nobody could see
+
+Building a real tree twice and diffing the diagnostics turned up a line
+present on the cold build and gone on the warm one, with the tree
+unchanged between them. Following it found the most likely confusion there
+is about a build system that decides membership by symbols.
+
+    warm tree, `helper.c' added      * orphan up to date
+    the same tree built cold         helper.c not compiled: nothing
+                                     reaches it (--force-link if it is
+                                     needed anyway)
+
+Somebody adds a file, fmake does not compile it, and the one line that
+would say why is suppressed. Every notice in that block is the same shape
+-- a source nothing reaches, a source an archive already provides, a crate
+source no root declares, a resource nothing names, a schema nothing
+includes -- and all of them were gated on `changed`.
+
+**The guard's own comment is what makes this worth recording.** It read
+"Only worth saying when something was actually rebuilt; on a no-op build it
+is the same notice every time", which answers a question nobody had. Adding
+a file that nothing reaches does not change the build, so the single moment
+the notice is news is the moment it was suppressed.
+
+### Already learned once, with a wrong reason for stopping there
+
+The line immediately after that block moves one message *outside* the
+guard, and its comment says why in terms that generalise: "under the guard
+it printed once and never again, which is exactly how a binary saying
+'unknown' gets shipped by somebody who saw the warning a week ago."
+
+It then justified leaving the rest behind: "Those report what THIS build
+decided." They do not. A source nothing reaches is a fact about the tree,
+as true on a no-op run as on a cold one. That sentence was the reason
+nobody looked again, and it is the `evidence.md` shape exactly -- a claim
+that was never re-derived because it arrived already reasoned.
+
+### News rather than activity, and why not simply always
+
+The set is remembered and the notices print when it grows. A settled tree
+stays quiet, which is what `changed` was protecting and worth keeping: the
+comment on the situ notice says a tree of unused schemas is normal -- "a
+library a program takes two from" -- and ossacli's whole `src/lib` is
+unreachable by design once its archive is linked. Printing those on every
+build would be a wall.
+
+So the two halves are split by **severity rather than by whether the fact
+persists**, which is the distinction the old comment got wrong: the shipped
+binary's own claim about itself repeats unconditionally, and "this file is
+not being built" is reported when it becomes true.
+
+A quiet run prints nothing and records nothing, so `-q` cannot cost the
+next build its explanation.
+
+### Two bugs of my own on the way, and the cache one is the instructive one
+
+**A new cache section as a list silently turned the whole build cache
+off.** `_well_shaped` requires every section to be a dict but `units`, so
+`not_built` as a list made the cache invalid on load -- discarded, every
+object recompiled, every run. It presented as *the new notice printing on
+every build*, which reads as the notice being wrong rather than as the
+cache being gone, and I spent two rounds looking at the store and the save
+order before reading the shape check.
+
+`_well_shaped` was working perfectly: the cache genuinely was malformed.
+What was missing is that a correct refusal was **silent**, so the symptom
+pointed anywhere but at it. It says which of the three reasons now, under
+`-v`:
+
+    format '0', wanted 9
+    written by another fmake
+    a section has the wrong type
+
+The third is the one that cost the time, and it is the one a tool can only
+ever be told about by the thing that wrote the bad section.
+
+**And the message nearly cost something worse than it saved.** Written as
+a sibling `elif`, it shadowed the branch that preserves `generated_outputs`
+across a discard -- the only record `--clean` has of what a generator
+wrote, so generated sources would have been left behind in somebody's tree
+on every fmake change. Caught by reading the result rather than by any
+test, which is the argument for reading the result.
+
+### What the sabotages establish
+
+Reverting the gate to `changed` fails on the file not being reported;
+making it unconditional fails on the notice repeating; removing the discard
+message and mislabelling its shape reason each fail on their own assertion.
+The second one matters most: without it the case would pass against "print
+always", which is the other wrong answer and the tempting one.

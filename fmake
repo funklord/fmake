@@ -5898,8 +5898,26 @@ class Cache:
 			        and _well_shaped(d)):
 				self.data = d
 				self.data.setdefault("units", [])
-			elif isinstance(d, dict) and isinstance(
-			        d.get("generated_outputs"), dict):
+			elif isinstance(d, dict):
+				# Which of the three reasons, under -v. A discarded cache
+				# recompiles the tree and says nothing about why, and the
+				# three causes want different responses: a version or
+				# identity mismatch is ordinary after an fmake changes, and
+				# a shape failure means something wrote a section of the
+				# wrong type -- which is a bug in whatever wrote it, and
+				# was one here. Finding that took a while precisely because
+				# the discard was silent.
+				why = ("format %r, wanted %r" % (d.get("version"), CACHE_VER)
+				       if d.get("version") != CACHE_VER
+				       else "written by another fmake"
+				       if d.get("fmake") != build_identity()
+				       else "a section has the wrong type")
+				vinfo(f"cache discarded and the tree will rebuild: {why}")
+				# Nested rather than a sibling `elif'. Written as one it
+				# shadowed this branch completely, and what that costs is
+				# not a missing message: generated sources would be left
+				# behind in somebody's tree on every fmake change.
+				#
 				# The one thing a discarded cache still knows for certain:
 				# which files its generators wrote. That is a record of
 				# what happened rather than a reading of the tree, those
@@ -5907,9 +5925,10 @@ class Cache:
 				# that list and by nothing else -- so dropping it would
 				# leave generated sources behind in somebody's tree every
 				# time fmake changed.
-				self.data["generated_outputs"] = {
-				    k: v for k, v in d["generated_outputs"].items()
-				    if isinstance(v, list)}
+				if isinstance(d.get("generated_outputs"), dict):
+					self.data["generated_outputs"] = {
+					    k: v for k, v in d["generated_outputs"].items()
+					    if isinstance(v, list)}
 		except (OSError, ValueError):
 			pass
 		self.files   = self.data["files"]
@@ -13241,8 +13260,50 @@ def build(args, _bootstrapping=False):
 	if args.dry_run and args.uninstall:
 		return do_uninstall(wanted, closures, root, conf, args)
 
+	# Not a generated file widening declined: it was named already, with the
+	# reason that applies. Saying "nothing reaches it" as well would offer
+	# --force-link for a file fmake has just finished explaining it does not
+	# want -- section 147's shape, a second message naming a cause nothing
+	# tested.
+	ignored = sorted(set(srcs) - set(units)
+	                 - {t.rel for t in held}
+	                 - crate_members
+	                 - set(situ_outs)
+	                 - set(crate_orphans)
+	                 - declined_generated)
+	# Everything below is a fact about the TREE rather than about this build:
+	# a source nothing reaches, a schema nothing includes, a crate source no
+	# root declares. `changed' was the wrong gate for those, and the comment
+	# it carried -- "on a no-op build it is the same notice every time" --
+	# answered a question nobody had while leaving the one that mattered
+	# unasked. Adding such a file changes nothing, so the single moment the
+	# notice is news is the moment it was suppressed.
+	#
+	# Measured: a warm tree, `helper.c' added, and fmake said "up to date"
+	# and never mentioned it -- while the same tree built cold says
+	# "helper.c not compiled: nothing reaches it (--force-link if it is
+	# needed anyway)". The explanation existed and was invisible in exactly
+	# the situation it was written for, which is somebody wondering why
+	# their new file is not being built.
+	#
+	# So the gate is news rather than activity: the set is remembered and
+	# the notices print when it grows. A no-op build over an unchanged tree
+	# stays quiet, which is what `changed' was protecting, and a tree that
+	# legitimately holds unused schemas -- a library a program takes two
+	# from -- does not report them for ever.
+	# A dict rather than a list, because `_well_shaped' requires every
+	# section to be one except `units' -- and a section of the wrong type
+	# does not fail loudly, it makes the whole cache invalid, so the first
+	# draft of this stored a list and silently turned the build cache off.
+	# It presented as this notice printing on every run, which reads as the
+	# notice being wrong rather than as every object being recompiled.
+	not_built = {r: True for r in
+	             sorted(set(ignored) | set(crate_orphans) | set(qrc_unused)
+	                    | set(situ_unused))}
+	_said_before = cache.data.get("not_built") or {}
+	news = [r for r in not_built if r not in _said_before]
 	if not args.quiet:
-		if changed:
+		if changed or news:
 			# Only worth saying when something was actually rebuilt; on a
 			# no-op build it is the same notice every time.
 			# A held-back test is not unreachable, it was not asked
@@ -13261,18 +13322,6 @@ def build(args, _bootstrapping=False):
 			# files in a tree with eleven schemas, each offering
 			# --force-link for something nobody wrote and nobody
 			# wants linked. --explain still lists them.
-			# Not a generated file widening declined: it was named
-			# already, with the reason that applies. Saying "nothing
-			# reaches it" as well would offer --force-link for a file
-			# fmake has just finished explaining it does not want --
-			# section 147's shape, a second message naming a cause
-			# nothing tested.
-			ignored = sorted(set(srcs) - set(units)
-			                 - {t.rel for t in held}
-			                 - crate_members
-			                 - set(situ_outs)
-			                 - set(crate_orphans)
-			                 - declined_generated)
 			# "Nothing reaches it" is the wrong sentence for a source
 			# whose symbols an archive in this tree already provides.
 			# Measured on ossacli: `make' leaves `libossa.a' at the root,
@@ -13376,14 +13425,35 @@ def build(args, _bootstrapping=False):
 				     f"\"{stem}.h\", which is what it would write")
 			if _srest:
 				note(f"... and {_srest} more schema(s) (-v for all)")
-		# Outside `if changed', unlike everything above it. Those report
-		# what THIS build decided, and repeating them on a no-op run is
-		# the noise that guard exists to stop. This reports what the
-		# ARTIFACT says, which does not stop being true because nothing
-		# was rebuilt -- and under the guard it printed once and never
-		# again, which is exactly how a binary saying "unknown" gets
-		# shipped by somebody who saw the warning a week ago. Measured:
-		# three runs, one message.
+			# Recorded only where it was reported, so "said before" means
+			# said. A quiet run prints nothing and stores nothing, which
+			# leaves the next ordinary build to say it.
+			#
+			# Saved again here, because the cache was already written
+			# further up -- the report happens after the build has
+			# finished tidying, so an assignment alone never reached disk
+			# and every run then saw an empty store. Measured before this
+			# line existed: the notice printed on every build, which looks
+			# like the fix working and is the fix not working. The second
+			# save costs nothing when nothing else moved, since `save'
+			# compares what it is about to write.
+			cache.data["not_built"] = not_built
+			cache.save()
+		# Outside the gate above, and for a sharper reason than those have.
+		# Everything up there is news-gated: it persists, so it is reported
+		# when it appears and not on every run afterwards. This one repeats
+		# unconditionally, because what it reports is what a SHIPPED binary
+		# says about itself -- and under a guard it printed once and never
+		# again, which is exactly how a binary saying "unknown" gets shipped
+		# by somebody who saw the warning a week ago. Measured: three runs,
+		# one message.
+		#
+		# The earlier version of this comment said the notices above report
+		# "what THIS build decided". They do not, and that sentence was the
+		# justification for leaving them under `changed': a source nothing
+		# reaches is a fact about the tree, true whether or not anything was
+		# rebuilt. Correcting the gate is what made the difference between
+		# the two honest: severity, not whether the fact persists.
 		# "this binary" is a claim about a binary, so the file has to be
 		# in one. The scan reaches every header in the tree, vendored
 		# subtrees included, and eleven of fuzzypickles' were in code that
