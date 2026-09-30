@@ -17749,6 +17749,111 @@ def a_database_run_fails_when_a_widened_file_did_not_compile(t):
 
 
 @case
+def explain_fails_when_a_file_did_not_compile(t):
+	"""`--explain` printed the compiler's error and then reported success.
+
+	It compiles -- section 3 cannot decide a link set without symbols -- so a
+	file that will not compile is a real failure. Measured over a tree with
+	one, `--explain` was the only mode that called it success: the plain
+	build, all four ejects, `--compile-commands` and `--install` all exit 1,
+	and `--dry-run` exits 0 because it compiles nothing and so has nothing to
+	report.
+
+	Not merely inconsistent. A unit that did not compile has no symbol table,
+	so the link set printed for it is not the one a working build would have.
+
+	The output is still printed, and the case pins both halves: somebody
+	running this over a tree that will not compile is asking why.
+	"""
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ this is not C; }\n")
+
+	plain = t.fmake("-j4")
+	check(plain.returncode != 0,
+	      "a plain build of a tree that cannot compile must fail, or there is "
+	      "no baseline to compare against")
+
+	r = t.fmake("-j4", "--explain")
+	said = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"--explain reported success over a compile error: {said}")
+	check("link set" in said or "explained" in said,
+	      f"and it must still explain what it could: {said}")
+
+	# --dry-run compiles nothing, so it has nothing to report and must stay
+	# at 0. Without this the fix could have been "any unbuilt tree fails".
+	n = t.fmake("-j4", "--dry-run")
+	check(n.returncode == 0,
+	      f"--dry-run compiles nothing and must not fail: {n.stdout}{n.stderr}")
+
+
+@case
+def every_mode_that_compiles_fails_on_a_compile_error(t):
+	"""One mode called a compile error success, so this asserts the whole
+	population rather than that mode.
+
+	`--explain` exited 0 while printing the compiler's error, and
+	`--compile-commands` did the same for a widened file. Both are fixed and
+	both have a case of their own; this one exists because fixing them one at
+	a time is how a third gets found by a user. Measured over a tree with one
+	file that will not compile:
+
+	    plain build, --explain, --compile-commands, --install   exit 1
+	    --eject make, make-fragment, ninja, deb, ebuild, apk    exit 1
+	    --dry-run                                               exit 0
+
+	`--dry-run` is the one honest zero -- it compiles nothing, so there is no
+	failure to report -- and asserting it here is what stops the fix becoming
+	"any tree that did not build fails".
+
+	**The eject forms are asked of fmake rather than listed here.** Giving it
+	a form that does not exist makes argparse name the ones that do, so a
+	seventh is covered the day it is added rather than the day somebody
+	remembers this case. That is the point of asserting a population: the cell
+	that is empty today is where a later change lands.
+
+	`--eject make-fragment` is named because it has a consumer. hydra's
+	`tool/objsets.py` guards exactly one thing about that call -- `if
+	fragment.returncode != 0` -- and writes link sets from its output
+	otherwise. Reported from there: if that mode ever exits 0 over a compile
+	error, hydra records link sets from a partial build and its own identity
+	guard cannot see it, because that guard compares which fmake ran and not
+	whether it succeeded.
+	"""
+	# Asked of the program, not read off its source: an invalid choice makes
+	# argparse list the valid ones. Quoting differs between Python releases,
+	# so the names are taken loosely and the count is asserted.
+	bad = t.fmake("--eject", "there-is-no-such-form")
+	m = re.search(r"choose from (.+?)\)", bad.stdout + bad.stderr, re.S)
+	check(m is not None,
+	      f"fmake did not name its eject forms: {bad.stdout}{bad.stderr}")
+	forms = re.findall(r"[a-z][a-z-]+", m.group(1))
+	check(len(forms) >= 6,
+	      f"expected at least the six known eject forms, found {forms}")
+
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ this is not C; }\n")
+
+	must_fail = [("<plain build>", ()),
+	             ("--explain", ("--explain",)),
+	             ("--compile-commands", ("--compile-commands", "cc.json")),
+	             ("--install", ("--install", "--prefix",
+	                            os.path.join(t.dir, "root")))]
+	must_fail += [("--eject " + f, ("--eject", f)) for f in forms]
+
+	for label, args in must_fail:
+		r = t.fmake("-j4", *args)
+		check(r.returncode != 0,
+		      f"{label} reported success over a compile error: "
+		      f"{r.stdout[-400:]}{r.stderr[-400:]}")
+
+	n = t.fmake("-j4", "--dry-run")
+	check(n.returncode == 0,
+	      f"--dry-run compiles nothing and must not fail: "
+	      f"{n.stdout[-300:]}{n.stderr[-300:]}")
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

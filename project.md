@@ -390,7 +390,8 @@ that had been green about nothing for five commits ·
 [337. A key computed once per path](#337-a-key-computed-once-per-path) ·
 [338. A no-op build that wrote 286KB](#338-a-no-op-build-that-wrote-286kb) ·
 [339. The unit that joined after the decisions](#339-the-unit-that-joined-after-the-decisions) ·
-[340. A database run that reported success over a compile error](#340-a-database-run-that-reported-success-over-a-compile-error)
+[340. A database run that reported success over a compile error](#340-a-database-run-that-reported-success-over-a-compile-error) ·
+[341. The one mode that called a compile error success](#341-the-one-mode-that-called-a-compile-error-success)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2569,7 +2570,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 590
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 592
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26270,3 +26271,72 @@ past, and the tool agreed it had succeeded.
 does not build is the one somebody has open, so it is the last one to
 withhold flags for. What was wrong is the exit status, not the artifact,
 and the fix says so by writing first and failing second.
+
+## 341. The one mode that called a compile error success
+
+§340 fixed `--compile-commands`; the same question put to every other mode
+found one more. Over a tree with one file that cannot compile:
+
+    plain build             exit 1
+    --explain               exit 0
+    --eject make            exit 1
+    --eject ninja           exit 1
+    --eject deb             exit 1
+    --eject make-fragment   exit 1
+    --compile-commands      exit 1
+    --install               exit 1
+    --dry-run               exit 0
+
+`--dry-run` is right at 0 -- it compiles nothing, so there is no failure to
+report. `--explain` compiles, because §3 cannot decide a link set without
+symbols, and it printed the compiler's error and then `explained 1
+target(s)` and succeeded.
+
+**It is not only inconsistency.** A unit that did not compile has no symbol
+table, so the link set printed for it is not the one a working build would
+have. The explanation is wrong as well as incomplete, which is worse for a
+mode whose whole purpose is to be believed about link sets.
+
+### The consumer settled it rather than the argument
+
+ossacli's `make test` already runs
+
+    fmake --explain > $(BUILD_DIR)/fmake-explain.txt 2>&1 \
+        || { echo "fmake --explain failed:"; cat ...; exit 1; }
+
+and then counts link-set blocks in that file, refusing anything but three.
+So non-zero is the signal that consumer was written for, and reading its
+recipe answered in one look what reasoning about "is --explain diagnostic or
+not" would have left open. Checked against that tree: it still exits 0 and
+still prints exactly three blocks.
+
+The output is still printed, for the same reason §340's database is still
+written.
+
+### The population, and a consumer that named itself
+
+Fixing two modes one at a time is how a third gets found by a user, so
+`every_mode_that_compiles_fails_on_a_compile_error` asserts all eleven at
+once. It asks fmake for the eject forms rather than listing them -- an
+invalid form makes argparse name the valid ones -- so a seventh is covered
+the day it is added rather than the day somebody remembers the case. Two of
+the six had never been measured here until this was written: `ebuild` and
+`apk` were assumed from the four that had.
+
+`--dry-run`'s zero is asserted in the same case deliberately. Without it the
+remedy degenerates into "any tree that did not build fails", and the boundary
+is then held by whoever is being careful rather than by the suite.
+
+**The eject half of that table was already deliberate, and its comment says
+why.** `return 1 if broken or mirage else 0` is there because "one project's
+generated object-set file was regenerated from a tree in this state and was
+wrong for a week" -- which is hydra, and they wrote to say the same thing
+from their side while this section was being written: `tool/objsets.py`
+guards exactly one property of that call, `returncode != 0`, and their own
+identity guard cannot cover it because it compares *which* fmake ran and not
+whether it succeeded.
+
+So the contract was designed; what it lacked was a test. A property held by
+one `return` expression and relied on by another tree's generator is worth
+asserting, and the sabotage confirms the case sees it: forcing that return to
+0 fails on `--eject make` by name.

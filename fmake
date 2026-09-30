@@ -13154,6 +13154,30 @@ def build(args, _bootstrapping=False):
 		# breakage from fmake's answer.
 		info(f"explained {len(wanted)} target(s)")
 		cache.save()
+		# `--explain' compiles -- section 3 cannot decide a link set without
+		# symbols -- so a file that would not compile is a real failure and
+		# this printed the compiler's error and then exited 0. Measured over
+		# a tree with one such file, it was the only mode that did: the plain
+		# build, all four ejects, --compile-commands and --install all exit
+		# 1, and --dry-run exits 0 because it compiles nothing and so has
+		# nothing to report.
+		#
+		# It is not only inconsistency. A unit that did not compile has no
+		# symbol table, so the link set printed for it is not the one a
+		# working build would have -- the explanation is wrong as well as
+		# incomplete.
+		#
+		# The output is still printed, for the same reason the database above
+		# is still written: somebody running this over a tree that will not
+		# compile is asking why, and the answer is most of what they need.
+		# ossacli's `make test' already wraps it in
+		# `|| { echo "fmake --explain failed"; exit 1; }' before counting
+		# blocks, so non-zero is the signal that consumer was written for,
+		# and a healthy tree still exits 0 and its count is unchanged.
+		if broken:
+			say()
+			warn(f"{len(broken)} file(s) did not compile")
+			return 1
 		return 0
 
 	# Targets are discovered, not requested, so one of them failing must not
