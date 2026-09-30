@@ -18097,6 +18097,131 @@ def a_tree_whose_only_main_is_a_mirage_still_builds(t):
 
 
 @case
+def an_archive_that_carries_an_entry_point_is_reported(t):
+	"""It built `libX.a` with a `main` in it, exited 0, and said nothing.
+
+	`RE_MACRO_MAIN` knows Qt's three spellings and nothing else, so a main()
+	any other framework's macro writes -- or one an included header defines
+	-- is absent from the file's own text and present in its object. The
+	file therefore roots nothing, is swept into the library as ordinary
+	material, and the archive ships with an entry point in it. `nm` shows
+	`T main`; fmake showed nothing.
+
+	That is the symptom the comment on `RE_MAIN` calls the worst shape a
+	miss can take -- "the tree did not fail, it built a *library*, exited 0,
+	and said nothing" -- reached by a different route, and
+	`a_vendored_main_stays_out_of_a_library` already asserts the property
+	for the route that is guarded. `close_over_library` keeps every known
+	program root out of an archive; the scanner's misses are exactly the
+	roots it does not know about.
+
+	The scan cannot see it and does not need to: by link time the members
+	are compiled and their symbol tables read, which is the witness the
+	mirage check consults in the other direction.
+
+	**The case asserts the remedy works, not only that the warning
+	appears.** The first draft of this named two remedies and neither did:
+	`@kind exe` was refused outright and a `[target.*] root` with
+	`kind = "exe"` was ignored, so the message pointed at nothing. Advice
+	nobody ran is worse than none -- see the case below.
+	"""
+	t.write("tinytest.h",
+	        "#pragma once\n#ifdef TINYTEST_WITH_MAIN\n"
+	        "int run_all(void);\nint main(void) { return run_all(); }\n"
+	        "#endif\n")
+	t.write("runner.c", "#define TINYTEST_WITH_MAIN\n#include \"tinytest.h\"\n"
+	        "int run_all(void) { return 0; }\n")
+	name = os.path.basename(t.dir)
+	lib = os.path.join(t.dir, "lib%s.a" % name)
+
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build itself should succeed: {said}")
+	check(os.path.exists(lib), f"no archive was built: {said}")
+	# The control: the archive really does carry the entry point, so the
+	# warning is about something rather than merely present.
+	syms = subprocess.run(["nm", "--format=posix", lib],
+	                      capture_output=True, text=True).stdout
+	check(re.search(r"^main [TT]", syms, re.M),
+	      f"this fixture is meant to put main() in the archive: {syms}")
+	# The warning LINE, not the whole output: `runner.c' appears in the
+	# compile line too, so `"runner.c" in said' passed with the filename
+	# removed from the message -- a vacuous assertion caught by sabotaging
+	# the thing it was meant to guard.
+	warned = [l for l in said.splitlines() if "carries an entry point" in l]
+	check(warned, f"fmake must say the archive carries one: {said}")
+	check("runner.c" in warned[0],
+	      f"and the warning itself must name the file: {warned[0]}")
+	check("@kind exe" in said and "root =" in said,
+	      f"and must name a remedy that works: {said}")
+
+
+@case
+def an_explicit_exe_kind_is_believed_over_the_scan(t):
+	"""The scan is a guess and an annotation is not.
+
+	`@kind exe` on a file whose main() a macro or an included header writes
+	died with "@kind exe needs a main()", and a `[target.*] root` with
+	`kind = "exe"` was ignored -- so a tree in that shape had no lever at
+	all, and the file went into the library instead. Both spellings build
+	and run the program now.
+
+	Nothing is lost on the mistake the refusal was for: `@kind exe` on a
+	file that really has no main() reaches the mirage check after compiling,
+	which names the file with the object as its witness rather than a regex.
+	That arm is asserted here too, because a fix that believes everything
+	would pass the first two checks.
+	"""
+	t.write("tinytest.h",
+	        "#pragma once\n#ifdef TINYTEST_WITH_MAIN\n"
+	        "int run_all(void);\nint main(void) { return run_all(); }\n"
+	        "#endif\n")
+	t.write("runner.c", "/*! @file\n *  @kind exe\n */\n"
+	        "#define TINYTEST_WITH_MAIN\n#include \"tinytest.h\"\n"
+	        "int run_all(void) { return 0; }\n")
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"@kind exe should be believed: {said}")
+	check("taken at its word" in said,
+	      f"and should say it is taking the annotation on trust: {said}")
+	prog = os.path.join(t.dir, "runner")
+	check(os.path.exists(prog), f"no program was built: {said}")
+	check(t.run("runner").returncode == 0, "and it must run")
+
+	# The same thing said in fmake.toml rather than in the file.
+	v = Tree("exe-kind-by-root")
+	try:
+		v.write("tinytest.h",
+		        "#pragma once\n#ifdef TINYTEST_WITH_MAIN\n"
+		        "int run_all(void);\nint main(void) { return run_all(); }\n"
+		        "#endif\n")
+		v.write("runner.c", "#define TINYTEST_WITH_MAIN\n"
+		        "#include \"tinytest.h\"\nint run_all(void) { return 0; }\n")
+		v.write("fmake.toml", "[target.tinytest]\nroot = 'runner.c'\n"
+		        "kind = 'exe'\n")
+		r = v.fmake("-j4")
+		check(r.returncode == 0, f"the config spelling failed: {r.stdout}{r.stderr}")
+		check(os.path.exists(os.path.join(v.dir, "tinytest")),
+		      f"the config spelling built no program: {r.stdout}{r.stderr}")
+		check(v.run("tinytest").returncode == 0, "and it must run")
+	finally:
+		v.cleanup()
+
+	# And a file that really has no main() must still be caught -- one
+	# compile later than the refusal, by the object rather than a regex.
+	w = Tree("exe-kind-with-no-main")
+	try:
+		w.write("lib.c", "/*! @file\n *  @kind exe\n */\n"
+		        "int helper(void){ return 1; }\n")
+		r = w.fmake("-j4")
+		said = r.stdout + r.stderr
+		check("does not export it" in said,
+		      f"a file with no main() at all must still be named: {said}")
+	finally:
+		w.cleanup()
+
+
+@case
 def an_eject_agrees_with_the_build_about_a_mirage(t):
 	"""A fix to one half must not leave the halves disagreeing.
 

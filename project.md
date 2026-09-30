@@ -394,7 +394,8 @@ that had been green about nothing for five commits ·
 [341. The one mode that called a compile error success](#341-the-one-mode-that-called-a-compile-error-success) ·
 [342. A fixture built to be unkillable](#342-a-fixture-built-to-be-unkillable) ·
 [343. The explanation nobody could see](#343-the-explanation-nobody-could-see) ·
-[344. The tree that built nothing, for ever](#344-the-tree-that-built-nothing-for-ever)
+[344. The tree that built nothing, for ever](#344-the-tree-that-built-nothing-for-ever) ·
+[345. A main() the scanner cannot see](#345-a-main-the-scanner-cannot-see)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2573,7 +2574,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 596
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 598
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26630,3 +26631,93 @@ The measurement that settled it was running the committed fmake beside the
 patched one on the same tree: build 1 / eject 1 before, build 0 / eject 1
 after. Without that the honest options were "this was always inconsistent"
 and "I did this", and only one of them is true.
+
+## 345. A main() the scanner cannot see
+
+`RE_MACRO_MAIN` knows `QTEST_MAIN` and its two siblings and nothing else. So
+a main() any other framework's macro writes -- or, more simply, one an
+included header defines -- is absent from a file's own text and present in
+its object. Measured with a single-header framework guarded by `#ifdef`:
+
+    [1/1] CC  test_thing.c
+    AR  libhdrmain.a
+    * built libhdrmain.a          rc=0, and nm shows `T main'
+
+The user wanted a test program and got an archive with an entry point in it,
+silently. That is the symptom the comment on `RE_MAIN` calls the worst shape
+a miss can take -- "the tree did not fail, it built a *library*, exited 0,
+and said nothing" -- arriving by a different route.
+
+**The property was already established and already tested for the other
+route.** `close_over_library` says an archive with two main()s in it is
+useful to nobody and excludes every known program root;
+`a_vendored_main_stays_out_of_a_library` asserts it. The scanner's misses
+are precisely the roots it does not know about, so the guarded route is
+guarded and this one was silent.
+
+The scan cannot see it and does not have to: by link time the members are
+compiled and their symbol tables read, which is the witness the mirage check
+consults in the other direction. The warning names the file and the remedy.
+
+### The remedy did not work, and finding that out is the point
+
+The first draft named two remedies and **neither existed**. `@kind exe` died
+with *"@kind exe needs a main()"*, because that check consults the scan; and
+a `[target.*] root` with `kind = "exe"` was ignored outright. So the tree
+had no lever at all, and the message pointed at nothing -- §147's shape,
+*"a second message naming a cause nothing tested"*, written by the session
+that had just quoted that rule about somebody else's code.
+
+What fixes it is one line of judgement rather than machinery: **the scan is
+a guess and an annotation is not**, so `@kind exe` is believed. Both
+spellings then build and run the program, measured. Nothing is lost on the
+honest mistake the refusal was for -- a `@kind exe` on a file that really
+has no main() reaches the mirage check after compiling, which names the file
+with the object as its witness rather than a regex, one compile later than
+the refusal.
+
+### The retry was wrong twice, and the suite found both
+
+My four cases passed and three existing ones broke, which is the whole
+argument for running the suite rather than the cases written for the change.
+
+**`repeated_compiler_errors_are_grouped`** and
+**`diagnostics_are_grouped_in_a_language_fmake_does_not_know`** failed with
+doubled output. A tree where every file fails to compile also arrives at
+"nothing wanted" -- the guard above removes each target saying it did not
+compile -- so the retry re-entered, rebuilt everything and printed every
+diagnostic a second time. Two cases about *grouping* caught a bug about
+*re-entry*, which no case I would have thought to write was pointed at.
+
+**`kind_exe_requires_a_main`** failed because it asserts the refusal names
+`main()`, and my change had replaced a specific refusal with
+"no target could be built". That case was right to fail: believing the
+annotation is only an improvement if the later refusal says more than the
+earlier one, not less. It now reads
+
+    !!! no target could be built: lib.c looks like a program and its
+        object exports no main()
+        a program needs a main() the compiler emits; @kind static, or
+        nothing at all, makes such a file library material
+
+which is the claim the regex could not make, with the object as witness.
+
+So the retry now fires only where a mirage caused the emptiness *and*
+nothing failed to compile *and* at least one mirage has no explicit
+`@kind` -- because the early skip requires the annotation to be absent, so
+a `@kind exe` mirage cannot be helped by another pass and was costing a
+wasted compile and a doubled warning.
+
+Both halves are covered by cases that already existed, and I have not added
+new ones for them: the grouping pair and `kind_exe_requires_a_main` are
+exactly the right tests and were already there.
+
+### A vacuous assertion of my own, caught by sabotage
+
+The case checked `"runner.c" in said` to assert the warning names the file.
+It passes with the filename removed from the message, because `runner.c`
+appears in the compile line above it. Sabotaging the thing the assertion
+guarded is what surfaced it; it reads the warning line now. Four sabotages
+in total, each firing its own assertion: the warning dropped, the warning
+not naming the file, `@kind exe` refused again, and the no-main check
+removed so that everything is believed.

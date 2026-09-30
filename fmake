@@ -11014,7 +11014,29 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				die(f"{rel}: kind {t.kind!r} is not one of "
 				    f"{', '.join(KINDS)}")
 			if t.kind == "exe" and not scans[rel]["has_main"]:
-				die(f"{rel}:{ann.line('kind')}: @kind exe needs a main()")
+				# Believed rather than refused, because the scan is a guess
+				# and this is not. `RE_MACRO_MAIN' knows Qt's three
+				# spellings and nothing else, so a main() any other
+				# framework's macro writes -- or one an included header
+				# defines -- is absent from the file's text and present in
+				# its object. Refusing here left such a tree with no lever
+				# at all: `@kind exe' died, a `[target.*] root' with
+				# `kind = "exe"' was ignored, and the file was swept into
+				# the library instead, which is the warning at the link
+				# below. Measured on a single-header framework guarded by
+				# `#ifdef': with this a warning, both spellings build and
+				# run the program.
+				#
+				# Nothing is lost on the honest mistake this refusal was
+				# for. A `@kind exe' on a file that really has no main()
+				# reaches the mirage check after compiling, which says the
+				# object exports none and names the file -- one compile
+				# later than the refusal, and with the object as the
+				# witness rather than a regex.
+				warn(f"{rel}:{ann.line('kind')}: no main() in the text, so "
+				     f"@kind exe is taken at its word; if it comes from a "
+				     f"macro or an included header that is right, and the "
+				     f"object is checked after compiling either way")
 			targets.append(t)
 		elif ann.scalar("target"):
 			warn(f"{rel}:{ann.line('target')}: @target on a file that defines "
@@ -12411,6 +12433,22 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				# no target has a real answer to give.
 					cache.save()
 					return build(args, _bootstrapping, True)
+				if mirage:
+					# Named, and with the object as the witness. `@kind exe'
+					# on a file with no main() is refused here rather than
+					# before compiling, which is the whole point of
+					# believing the annotation -- and the refusal has to
+					# say what it found or it is worse advice than the
+					# regex it replaced.
+					_m = sorted(set(mirage))
+					die("no target could be built: " + ", ".join(_m)
+					    + (" looks like a program and its object exports "
+					       "no main()" if len(_m) == 1 else
+					       " look like programs and their objects export "
+					       "no main()")
+					    + "\n    a program needs a main() the compiler "
+					      "emits; @kind static, or nothing at all, makes "
+					      "such a file library material")
 				die("no target could be built")
 
 		forced = [units[f] for f in forced_rels if f in units]
@@ -13309,6 +13347,48 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		if ok and not args.dry_run and t.kind == "module":
 			module_wants_the_tree(t, closures[t], out, cfg, units,
 			                      linked_by, res, module_libc)
+		# An archive or shared object carrying an entry point, which is the
+		# same claim-about-the-artifact and so sits outside `if did' too.
+		#
+		# `close_over_library' already keeps every program ROOT out of a
+		# library -- its docstring says an archive with two main()s in it
+		# is useful to nobody -- and the scanner's misses are exactly the
+		# roots it does not know about. A main() a macro writes, or one an
+		# included header defines, is absent from the file's own text and
+		# present in its object, so the file roots nothing, is swept into
+		# the library as ordinary material, and the archive ships with an
+		# entry point in it.
+		#
+		# Measured: a single-header framework guarded by `#ifdef', a test
+		# file defining the macro and including it. fmake compiled it,
+		# wrote `libX.a', exited 0 and said nothing, and `nm' shows `T
+		# main'. That is the symptom the comment on RE_MAIN calls the
+		# worst shape a miss can take -- "the tree did not fail, it built
+		# a library, exited 0, and said nothing" -- reached by a different
+		# route, and `a_vendored_main_stays_out_of_a_library' already
+		# asserts the property for the route that is guarded.
+		#
+		# The scan cannot see it and does not have to: by here the members
+		# are compiled and their symbol tables are read, which is the same
+		# witness the mirage check consults in the other direction.
+		if ok and not args.dry_run and t.kind in ("static", "shared"):
+			carry = sorted(u.rel for u in closures[t].link
+			               if "main" in (u.strong or ()))
+			_chead, _crest = capped(carry, 3)
+			if _chead:
+				warn(f"{t.filename} carries an entry point: "
+				     f"{', '.join(_chead)} "
+				     f"{'defines' if len(_chead) == 1 else 'define'} "
+				     f"main(), which nothing in "
+				     f"{'its' if len(_chead) == 1 else 'their'} own text "
+				     f"says -- a macro or an included header wrote it. The "
+				     f"next program to link this gets a duplicate symbol."
+				     + (f"\n    ... and {_crest} more." if _crest else "")
+				     + f"\n    @kind exe on {_chead[0]}, or [target.*] "
+				       f"root = '{_chead[0]}', makes it the program it "
+				       f"looks like; moving the main() out keeps it "
+				       f"library material.")
+
 	cache.save()
 	if args.dry_run and not (args.install or args.uninstall):
 		if not args.no_libs:
