@@ -1167,8 +1167,11 @@ def a_hanging_test_is_stopped_and_the_suite_continues(t):
 	finding, worded as one: not "failed", which is what a test that returned
 	1 did."""
 	t.write("main.c", "int main(void){ return 0; }\n")
+	# Bounded from inside for the same reason as the stubborn fixture: an
+	# abandoned copy reaps itself rather than waiting for somebody's sweep.
 	t.write("tests/hang_test.c",
-	        "#include <unistd.h>\nint main(void){ for(;;) sleep(60); }\n")
+	        "#include <unistd.h>\n"
+	        "int main(void){ alarm(120); for(;;) sleep(60); }\n")
 	t.write("tests/quick_test.c",
 	        '#include <stdio.h>\nint main(void){ puts("quick"); return 0; }\n')
 	t.write("fmake.toml", "[project]\ntest-timeout = 1\n")
@@ -1192,7 +1195,8 @@ def a_test_deadline_reaches_what_the_test_started(t):
 	t.write("main.c", "int main(void){ return 0; }\n")
 	t.write("tests/fork_test.c",
 	        "#include <unistd.h>\n"
-	        "int main(void){ if (fork() == 0) { for(;;) sleep(60); }\n"
+	        "int main(void){ alarm(120);\n"
+	        "\tif (fork() == 0) { alarm(120); for(;;) sleep(60); }\n"
 	        "\tfor(;;) sleep(60); }\n")
 	t.write("fmake.toml", "[project]\ntest-timeout = 1\n")
 
@@ -1215,11 +1219,29 @@ def a_stubborn_test_leaves_nothing_behind(t):
 	so it goes too; killing only the process fmake launched would leave it
 	holding whatever it holds."""
 	t.write("main.c", "int main(void){ return 0; }\n")
+	# `alarm' in the child as well as the parent, and that is not
+	# redundant: fork clears a pending alarm in the child, so the one set
+	# before the fork protects only the parent. Measured on the same
+	# pattern -- both processes ignore SIGTERM, both die when their own
+	# alarm fires, neither dies without one.
+	#
+	# They need it because they ignore SIGTERM on purpose and so survive
+	# being abandoned. Measured: killing the suite mid-case left
+	# this pair reparented to init, holding a deleted binary and a deleted
+	# cwd, for 19 minutes until another session noticed them. The bound has
+	# to be inside the program -- the suite has no handler for its own
+	# termination and could not have one that helps, a task-kill being a
+	# SIGKILL nothing catches. 120s against this tree's 1s test-timeout, so
+	# it cannot pre-empt the deadline under load, and `check("timed out")'
+	# below is the control: if the alarm fired first, fmake would report a
+	# failed test rather than a timeout.
 	t.write("tests/stubborn_test.c",
 	        "#include <signal.h>\n#include <unistd.h>\n"
 	        "int main(void){\n"
+	        "\talarm(120);\n"
 	        "\tsignal(SIGTERM, SIG_IGN);\n"
-	        "\tif (fork() == 0) { signal(SIGTERM, SIG_IGN); for (;;) pause(); }\n"
+	        "\tif (fork() == 0) { alarm(120); signal(SIGTERM, SIG_IGN);\n"
+	        "\t\tfor (;;) pause(); }\n"
 	        "\tfor (;;) pause(); }\n")
 	t.write("fmake.toml", "[project]\ntest-timeout = 1\n")
 

@@ -391,7 +391,8 @@ that had been green about nothing for five commits ·
 [338. A no-op build that wrote 286KB](#338-a-no-op-build-that-wrote-286kb) ·
 [339. The unit that joined after the decisions](#339-the-unit-that-joined-after-the-decisions) ·
 [340. A database run that reported success over a compile error](#340-a-database-run-that-reported-success-over-a-compile-error) ·
-[341. The one mode that called a compile error success](#341-the-one-mode-that-called-a-compile-error-success)
+[341. The one mode that called a compile error success](#341-the-one-mode-that-called-a-compile-error-success) ·
+[342. A fixture built to be unkillable](#342-a-fixture-built-to-be-unkillable)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -25958,6 +25959,26 @@ they measured otherwise. And I reached the first wrong reading by piping
 is this project's own rule about reducing a check's output, broken while
 answering somebody else's question.
 
+### What the reporter measured afterwards
+
+hydra regenerated against the fixed fmake and reports the closure
+byte-identical: 90 programs, 5260 objects, and the only changed line in
+their generated file the one naming which fmake answered. Four builds now
+across two days, with all three of the `@pkg_optional` commits ancestors of
+the last.
+
+They scoped it themselves, and the scoping is the useful part: it says the
+fix moved no link set in that tree, which is the interesting direction,
+because hydra was never an instance of the bug and a fix that *had* moved
+its closures would have been the surprise. It does not say the fix works --
+the fixture here says that, and theirs cannot, because the shape it repairs
+is the one that tree does not have.
+
+They also withdrew a claim from their first message -- that the leaked
+fixture directory was still present -- saying their own `ls` of that path
+had printed nothing and they had read an empty result as truncated output.
+See section 342, which is the other half of that exchange.
+
 ## 337. A key computed once per path
 
 A no-op build of a module tree got slower than a full build of a bigger
@@ -26340,3 +26361,66 @@ So the contract was designed; what it lacked was a test. A property held by
 one `return` expression and relied on by another tree's generator is worth
 asserting, and the sabotage confirms the case sees it: forcing that return to
 0 fails on `--eject make` by name.
+
+## 342. A fixture built to be unkillable
+
+Reported from hydra, who swept `--ppid 1` after a build of their own and
+found one process in the list: `stubborn_test`, from the fixture named
+`a_stubborn_test_leaves_nothing_behind`, reparented to init and 18 minutes
+old.
+
+It was real. Two processes rather than one -- a session leader and its
+forked child -- both holding a deleted binary and a deleted cwd, which
+`lsof -p` showed as `txt` and `cwd` both `(deleted)`. SIGTERM is ignored by
+both on purpose, so SIGKILL to the group.
+
+**The fixture was not at fault, and its assertion is already the right
+shape.** It greps `ps -eo stat,args` for its own tree path, requires the
+list empty, and separately requires none of them be a zombie -- a leak
+count rather than a claim that a cleanup ran, which is the remedy the
+reporter recommended from two cases of their own that day, arrived at
+independently here.
+
+What leaked it was **killing the suite mid-case**. That fixture exists to be
+SIGTERM-immune: it is testing that fmake's own test deadline escalates to
+SIGKILL and waits. The suite has no handler for its own termination and
+cannot usefully have one, a task-kill being a SIGKILL nothing catches. So
+`kill -TERM` on the suite leaves exactly this process behind by
+construction.
+
+### The bound goes in the program, and the child needs its own
+
+Three fixtures write `for(;;)` or `pause()`, and all three now call
+`alarm(120)` -- 120 against a 1s `test-timeout`, so it cannot pre-empt the
+deadline under load, and each case's existing `check("timed out" in ...)` is
+the control against it passing for the wrong reason: if the alarm fired
+first, fmake would report a failed test rather than a timeout.
+
+**The two forking fixtures set it in the child as well, and that is not
+redundant** -- fork clears a pending alarm in the child, so the one set
+before the fork protects only the parent. Measured rather than read off the
+standard: with the alarm in the parent only, the parent dies on schedule and
+the child is still there afterwards.
+
+**No assertion covers the bound, and that is worth stating rather than
+implying.** What the suite can check is that the alarm does no harm -- each
+case's `check("timed out" in ...)` fails if the alarm ever pre-empted the
+deadline. What it cannot check is that the bound helps, because the
+condition it guards is the suite being killed, and a case cannot kill the
+suite it is running in and then assert about the aftermath. So what stands
+behind it is two measurements outside the suite: the pattern self-reaps
+where both processes ignore SIGTERM, and the child survives when only the
+parent carries the alarm. A reader who wants to break this should know it
+is measurement rather than a gate.
+
+### The part worth keeping is about the sweep, not the fixture
+
+The `--ppid 1` check that would have caught this was run after the first
+suite I killed today and not after the second, which is the one that leaked.
+The reporter put it better than I would have: **a check that is right and
+not run is the same outcome as a check that is wrong, and the only
+difference is where you look afterwards.**
+
+Which is `evidence.md`'s vacuous pass with the polarity flipped. There a
+green result had inspected nothing; here a correct instrument produced no
+result at all, and the absence of output read exactly like a clean sweep.
