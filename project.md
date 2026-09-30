@@ -389,7 +389,8 @@ that had been green about nothing for five commits ·
 [336. Half a fix, eight weeks apart](#336-half-a-fix-eight-weeks-apart) ·
 [337. A key computed once per path](#337-a-key-computed-once-per-path) ·
 [338. A no-op build that wrote 286KB](#338-a-no-op-build-that-wrote-286kb) ·
-[339. The unit that joined after the decisions](#339-the-unit-that-joined-after-the-decisions)
+[339. The unit that joined after the decisions](#339-the-unit-that-joined-after-the-decisions) ·
+[340. A database run that reported success over a compile error](#340-a-database-run-that-reported-success-over-a-compile-error)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2568,7 +2569,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 589
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 590
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26247,3 +26248,25 @@ since `f8ec178` on 2026-08-04; the clang module flags were written in
 `7c25a53` on 2026-09-22, seven weeks later, eleven lines away from the
 answer, and did not follow it. The pattern was not missing when the module
 support was written -- it was visible from the same screen.
+
+## 340. A database run that reported success over a compile error
+
+Found while reproducing §339, because the repro kept exiting 0.
+
+`--compile-commands` writes the database and returns, which is before the
+report that names the files that did not compile -- so it returned the
+database writer's status and nothing else. Measured on one tree:
+
+    widened file fails, plain build       exit 1
+    widened file fails, --compile-commands exit 0
+    root file fails, --compile-commands    exit 1
+
+The root case was right by accident: that path never reaches the early
+return. So only a widened failure was wrong, which is the harder one to
+notice -- the database had been written, the compiler's error had scrolled
+past, and the tool agreed it had succeeded.
+
+**The database is still written, and the case pins that.** The file that
+does not build is the one somebody has open, so it is the last one to
+withhold flags for. What was wrong is the exit status, not the artifact,
+and the fix says so by writing first and failing second.

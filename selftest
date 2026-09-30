@@ -17711,6 +17711,44 @@ def a_module_interface_only_a_widened_unit_imports_is_compiled(t):
 
 
 @case
+def a_database_run_fails_when_a_widened_file_did_not_compile(t):
+	"""`--compile-commands` reported success over a compile error.
+
+	The mode writes the database and returns, which is before the report
+	that names the files that did not compile -- so it returned the
+	database writer's status and nothing else. A plain build of the same
+	tree exits 1. A failing ROOT exits 1 under the flag too, that path
+	never reaching the early return, so only a widened file was wrong: the
+	harder one to notice, the database having been written and the tool
+	having said nothing.
+
+	The database is still written, and the case pins that. The file that
+	does not build is the one somebody has open, so it is the last one to
+	withhold flags for -- the fix is the exit status, not the artifact.
+	"""
+	t.write("main.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ this is not C; }\n")
+	db = os.path.join(t.dir, "cc.json")
+
+	plain = t.fmake("-j4")
+	check(plain.returncode != 0,
+	      "a plain build of a tree that cannot compile must fail, or this "
+	      "case has no baseline to compare against")
+
+	r = t.fmake("-j4", "--compile-commands", "cc.json")
+	said = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"--compile-commands reported success over a compile error: {said}")
+	check(os.path.exists(db),
+	      f"the database must still be written: {said}")
+	with open(db) as fh:
+		entries = json.load(fh)
+	check(any(e["file"].endswith("helper.c") for e in entries),
+	      "the file that did not compile is the one an editor most needs "
+	      "flags for, so it belongs in the database")
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

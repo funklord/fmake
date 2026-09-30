@@ -13118,8 +13118,22 @@ def build(args, _bootstrapping=False):
 		# The units actually compiled, variants and all: an editor reading
 		# a database that disagrees with the build is being told the wrong
 		# flags for the file in front of it, which is silent.
-		return write_compile_commands(dbpath, built_units, cfg, incflags,
-		                              root)
+		rc = write_compile_commands(dbpath, built_units, cfg, incflags,
+		                            root)
+		# Written even when something failed to compile -- the file that
+		# does not build is the one somebody is most likely looking at, so
+		# it is the last one to withhold flags for. But the mode must not
+		# report success for a build that had a compile error, and it did:
+		# measured as exit 0 while a widened unit failed, where a plain
+		# build of the same tree exits 1. A failing ROOT exits 1 either
+		# way, never reaching here, so only the widened case was wrong --
+		# which is the harder one to notice, the database having been
+		# written and the tool having said nothing.
+		if rc == 0 and broken:
+			say()
+			warn(f"{len(broken)} file(s) did not compile")
+			return 1
+		return rc
 	if args.explain:
 		for t in wanted:
 			explain(t, closures[t], cfg, incflags, outdir, all_units, root,
