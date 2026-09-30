@@ -11823,31 +11823,61 @@ def build(args, _bootstrapping=False):
 	# resolves to nothing falls through -- and the compile then fails
 	# with fmake's own "no file in this tree exports it" rather than a
 	# missing-BMI message.
-	if _module_flags is not None:
-		def _pcm(rel):
-			return os.path.join(objdir, rel + ".pcm")
-		for rel, u in units.items():
-			sc = scans.get(rel) or {}
-			if sc.get("modiface"):
-				os.makedirs(os.path.dirname(_pcm(rel)), exist_ok=True)
-				u.own = list(u.own) + ["-fmodule-output=" + _pcm(rel)]
-			# Transitively, not just what this file names. clang loads a
-			# BMI and then needs the BMIs that one refers to, so a file
-			# importing `mid' which imports `base' must be handed both
-			# -- measured: with direct imports only, `base' and `mid'
-			# compile and `main' fails with "module 'base' not found",
-			# naming a module it does not import. gcc needs none of this
-			# because its cache answers by name.
-			want, seen = list(sc.get("modimp") or []), set()
-			while want:
-				m = want.pop()
-				if m in seen or m not in _module_flags:
-					continue
-				seen.add(m)
-				want += (scans.get(_module_flags[m], {}).get("modimp") or [])
-			for m in sorted(seen):
-				u.own = list(u.own) + [
-				    f"-fmodule-file={m}={_pcm(_module_flags[m])}"]
+	def _pcm(rel):
+		return os.path.join(objdir, rel + ".pcm")
+
+	def module_own(rel):
+		"""clang's per-unit module flags for one file, or nothing.
+
+        A function rather than a loop, because a unit can join the build
+        after the loop has run. Symbol closure widens the link set, and a
+        module implementation unit is always admitted that way: nothing
+        includes it, and what it defines was declared by an `export' in
+        its interface rather than in a header -- so the proposal machinery,
+        which reads headers, never offers it and only widening finds it.
+        Applied in one place it therefore reached every unit except the
+        one kind that cannot be built without it, and clang refused the
+        implementation unit with "module 'greet' not found".
+
+        `--widen-all` was an accidental workaround, which is the second
+        witness that the initial candidate set is the cause rather than
+        anything about implementation units: it makes every source a
+        candidate, so the flags reached this one too. Measured, same tree,
+        same compiler -- exit 1 plain and exit 0 with the flag.
+        """
+		if _module_flags is None:
+			return []
+		sc = scans.get(rel) or {}
+		out = []
+		if sc.get("modiface"):
+			os.makedirs(os.path.dirname(_pcm(rel)), exist_ok=True)
+			out.append("-fmodule-output=" + _pcm(rel))
+		# Transitively, not just what this file names. clang loads a BMI
+		# and then needs the BMIs that one refers to, so a file importing
+		# `mid' which imports `base' must be handed both -- measured: with
+		# direct imports only, `base' and `mid' compile and `main' fails
+		# with "module 'base' not found", naming a module it does not
+		# import. gcc needs none of this because its cache answers by name.
+		want, seen = list(sc.get("modimp") or []), set()
+		while want:
+			m = want.pop()
+			if m in seen or m not in _module_flags:
+				continue
+			seen.add(m)
+			want += (scans.get(_module_flags[m], {}).get("modimp") or [])
+		return out + [f"-fmodule-file={m}={_pcm(_module_flags[m])}"
+		              for m in sorted(seen)]
+
+	for rel, u in units.items():
+		u.own = list(u.own) + module_own(rel)
+
+	# Which file exports each module name, over the whole tree rather than
+	# over `units': widening admits units after this point, and the
+	# interface one of them imports may not be in the build yet. Separate
+	# from `_module_flags' above, which exists only for clang -- this
+	# question is about what gets compiled and both compilers ask it.
+	module_exporter = {m: rel for rel in srcs if rel in scans
+	                   for m in (scans[rel].get("modiface") or [])}
 
 	# A target whose stanza carries defines gets its own object for its root
 	# translation unit: same source, same everything else, one -D more. The
@@ -12581,8 +12611,31 @@ def build(args, _bootstrapping=False):
 		vinfo(f"widening: {len(extra)} more file(s) may define "
 		      f"{len(fresh)} unresolved symbol(s)")
 		for u in extra:
-			u.own = own_flags(u)
+			# `module_own' as well as `own_flags', because these units did
+			# not exist when the module flags were handed out and a unit
+			# that joins by symbol is exactly the one that needs them.
+			u.own = own_flags(u) + module_own(u.rel)
 			units[u.rel] = u
+
+		# An import is not a symbol, so nothing above admits the interface
+		# a newly widened unit imports. Measured on a tree whose only
+		# importer of a module is itself reached by widening: the interface
+		# was never compiled at all and the importer failed on `failed to
+		# read compiled module' under gcc and "module file not found"
+		# under clang. Transitive, because an interface imports interfaces.
+		want = [m for u in extra for m in (u.scan.get("modimp") or [])]
+		while want:
+			m = want.pop()
+			mrel = module_exporter.get(m)
+			if mrel is None or mrel in units:
+				continue
+			v = Unit(mrel, root, objdir, scans[mrel],
+			         members=crates.get(mrel, [])[1:])
+			v.own = own_flags(v) + module_own(mrel)
+			units[mrel] = v
+			vinfo(f"widening: {mrel} exports {m!r}, which a file just "
+			      f"admitted imports")
+			want += (scans.get(mrel, {}).get("modimp") or [])
 
 	# The link sets are final here, so this is where each one learns which
 	# module interfaces it needs compiled but not linked. Recorded on the

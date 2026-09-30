@@ -17630,6 +17630,87 @@ def a_build_that_compiles_nothing_writes_nothing(t):
 
 
 @case
+def a_module_unit_that_joins_by_symbol_is_given_its_flags(t):
+	"""clang's module flags were handed out once, over the units the include
+	graph had found -- and a module implementation unit is never one of
+	them.
+
+	`module greet;` defines what `export module greet;` declared, so nothing
+	includes it and the proposal machinery, which matches headers, never
+	offers it. It joins the build the only way it can, by symbol closure,
+	and that happens after the flags were assigned. So it was compiled with
+	no `-fmodule-file=` at all and clang refused it:
+
+	    greet_impl.cpp:1:8: fatal error: module 'greet' not found
+
+	Under gcc the same tree builds, its cache answering by name with no
+	per-unit flag to miss -- so this was invisible on the compiler the suite
+	uses for everything else, and fmake could not build a module
+	implementation unit under clang unless `--widen-all` was passed. That
+	flag makes every source an initial candidate, so the flags reached this
+	one after all -- which is the second witness that the candidate set is
+	the cause rather than anything peculiar to implementation units.
+
+	It does not heal on a second build either. A unit that failed is left
+	out of the cache's remembered unit list, so it never becomes an initial
+	candidate, and the tree fails identically for ever: measured three
+	builds running.
+	"""
+	if not shutil.which("clang++"):
+		raise Skip("clang++ not installed")
+	t.write("greet.cppm", "export module greet;\nexport int greeting();\n")
+	t.write("greet_impl.cpp", "module greet;\nint greeting(){ return 7; }\n")
+	t.write("main.cpp", "import greet;\n"
+	        "int main(){ return greeting() == 7 ? 0 : 1; }\n")
+	name = os.path.basename(t.dir)
+	r = t.fmake("-j4", env={"CXX": "clang++"})
+	said = r.stdout + r.stderr
+	check("module 'greet' not found" not in said,
+	      f"the implementation unit was compiled without its BMI flag: "
+	      f"{said}")
+	check(r.returncode == 0, f"the clang module build failed: {said}")
+	check(t.run(name).returncode == 0,
+	      "the program must run: the implementation unit defines what the "
+	      "interface declared")
+
+
+@case
+def a_module_interface_only_a_widened_unit_imports_is_compiled(t):
+	"""An import is not a symbol, so nothing admitted the interface.
+
+	main.cpp calls `helper()` and imports nothing. helper.cpp imports
+	`greet` and is reached only by symbol closure, so at the moment the
+	build decided what to compile, no unit imported `greet` and the
+	interface was left out entirely -- not a flag missing but the file
+	never compiled, `greet.cppm not compiled: nothing reaches it`, and the
+	importer then failing on
+
+	    gcc    failed to read compiled module: No such file or directory
+	    clang  module file '...greet.cppm.pcm' not found
+
+	Both compilers, unlike the case above, because this is about what gets
+	compiled rather than about a flag one of them needs. Checked here under
+	the default compiler for that reason; the clang half is the case above.
+
+	The interface is admitted transitively when a widened unit imports it,
+	because an interface imports interfaces.
+	"""
+	t.write("greet.cppm", "export module greet;\nexport int greeting();\n")
+	t.write("greet_impl.cpp", "module greet;\nint greeting(){ return 7; }\n")
+	t.write("helper.cpp", "import greet;\nint helper(){ return greeting(); }\n")
+	t.write("main.cpp", "int helper();\n"
+	        "int main(){ return helper() == 7 ? 0 : 1; }\n")
+	name = os.path.basename(t.dir)
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check("nothing reaches it" not in said,
+	      f"the interface a widened unit imports was not compiled: {said}")
+	check(r.returncode == 0, f"the build failed: {said}")
+	check(t.run(name).returncode == 0,
+	      "the program must run, the module chain being complete")
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

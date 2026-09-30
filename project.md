@@ -388,7 +388,8 @@ that had been green about nothing for five commits ·
 [335. A per-target define moc never saw](#335-a-per-target-define-moc-never-saw) ·
 [336. Half a fix, eight weeks apart](#336-half-a-fix-eight-weeks-apart) ·
 [337. A key computed once per path](#337-a-key-computed-once-per-path) ·
-[338. A no-op build that wrote 286KB](#338-a-no-op-build-that-wrote-286kb)
+[338. A no-op build that wrote 286KB](#338-a-no-op-build-that-wrote-286kb) ·
+[339. The unit that joined after the decisions](#339-the-unit-that-joined-after-the-decisions)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2567,7 +2568,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 587
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 589
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26138,3 +26139,111 @@ outcome, because every `save` call site returns immediately afterwards --
 `save` runs exactly once per process, so that assignment is for a second
 caller that does not exist yet. The suite cannot reach it and the
 assertion about settling is, for now, carried by the assertion above it.
+
+## 339. The unit that joined after the decisions
+
+Asking what the compilation database says about a module interface turned
+up two bugs with one root, and the second was hidden behind the first.
+
+§3's whole claim is that membership is decided by symbols and the include
+graph is only a first guess. The module setup did not believe it. Both the
+clang flags and the decision to compile an interface were worked out once,
+over the units the include graph had already found -- and then symbol
+closure widens the build, which is the mechanism §3 exists for.
+
+### A module implementation unit could not be built under clang at all
+
+`module greet;` defines what `export module greet;` declared. Nothing
+includes it, and the proposal machinery matches headers, so it is never
+proposed: it joins by symbol closure or not at all. That happens after the
+flags were handed out, so it was compiled with no `-fmodule-file=` and
+clang refused it:
+
+    greet_impl.cpp:1:8: fatal error: module 'greet' not found
+
+Under gcc the same tree builds, its cache answering by name with no
+per-unit flag to miss. So the one construct that can only ever arrive late
+was the one construct the flags never reached, on the compiler the suite
+does not use by default.
+
+**It never heals.** A unit that failed is left out of the cache's
+remembered unit list, so it never becomes an initial candidate on the next
+build either -- measured, three builds running, identical failure.
+
+**`--widen-all` was an accidental workaround**, and finding that out is
+what turned a plausible mechanism into a measured one. It makes every
+source an initial candidate, so the flags reached the implementation unit
+after all: the same tree under the same compiler is exit 1 plain and exit 0
+with the flag, on the fmake that has the bug. That is a second witness for
+the cause being the candidate set rather than anything peculiar to
+implementation units -- and it is the kind of corroboration worth going
+and getting, because the first account of a bug is the one nothing has
+disagreed with yet.
+
+The flags are computed by a function now rather than applied in a loop, and
+the widening site calls it beside `own_flags`, which it was already calling
+for exactly the same reason.
+
+### And the interface itself was never compiled
+
+Fixing the flag changed the error rather than removing it, which is how the
+second one surfaced. Where the only importer of a module is *itself* reached
+by widening, no unit imported anything at the moment the build decided what
+to compile, so the interface was left out entirely -- not a flag missing,
+the file never compiled:
+
+    greet.cppm not compiled: nothing reaches it
+    gcc    failed to read compiled module: No such file or directory
+    clang  module file '...greet.cppm.pcm' not found
+
+**An import is not a symbol**, which is why nothing else admitted it: the
+widening loop looks for files that define an unresolved symbol, and an
+interface is wanted for its BMI rather than for anything it defines.
+`module_prereqs` already knows how to compute this and runs too late to
+affect what gets compiled -- it records the answer on the closure for the
+ejected builds, which is §327's job and not this one.
+
+So the widening site now admits, transitively, the interface exporting any
+module a newly admitted unit imports. Transitively because an interface
+imports interfaces.
+
+This half is compiler-independent, and that is the useful distinction
+between the two: the first is a flag one compiler needs, the second is
+which files get compiled at all. Both compilers failed the second and only
+clang failed the first.
+
+### What the shape was, and where else to look
+
+Not a wrong answer either time. Two correct computations placed where the
+input was still incomplete -- and the input's growing is not an edge case
+here, it is the design. The lens this hands the next sweep is narrow and
+mechanical: **anything computed once over `units` before the widening loop
+is a candidate**, and the question to ask of each is whether a unit that
+arrives later needs it.
+
+**Swept, and it comes out empty beyond this fix.** Twelve passes over
+`units` sit between its construction and the widening loop. Eight are
+*inside* the `while True:` at 12070 and re-run every iteration, so they see
+a late arrival on the next pass -- measured rather than assumed on two of
+them: §334's BMI refusal does fire for an interface that widening admitted,
+and a widened source does get each flagged target's own variant, both
+programs returning their own define. Four are outside the loop: `own_flags`,
+answered since August; the module flags, answered here; and two that ask
+about a *target root*, which is an initial candidate by construction because
+`proj.candidates(t.rel)` walks the include graph from it.
+
+Being inside that loop is what makes the difference, and nothing says so at
+either site -- which is worth knowing before the next thing is added near
+them.
+
+**And the fix carries into the emitted builds without anything further**,
+because they read `u.own` and the closure's module list, both of which are
+finished after widening. Checked end to end: the tree whose interface only a
+widened unit imports ejects a Makefile and a `build.ninja` that each build
+and run correctly, under gcc and clang alike.
+
+The dates say it plainly. `own_flags` has been called at the widening site
+since `f8ec178` on 2026-08-04; the clang module flags were written in
+`7c25a53` on 2026-09-22, seven weeks later, eleven lines away from the
+answer, and did not follow it. The pattern was not missing when the module
+support was written -- it was visible from the same screen.
