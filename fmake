@@ -2697,9 +2697,13 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	# regenerates once to record its own.
 	gen_deps = cache.data.setdefault("generated_deps", {})
 	# What each rule actually wrote, so `--clean' can remove those files by
-	# name later. Declared outputs would do as well and would need the
-	# whole tree scanned to find the rules in source comments; this is a
-	# record of what happened, which is what a clean should act on.
+	# name later. A record of what happened rather than of what was asked
+	# for, which is what a clean should act on -- but not on its own: see
+	# `do_clean', which intersects this with what a rule still declares,
+	# because a record outliving its rule is a file somebody now maintains
+	# by hand. The reason given here for preferring the record, that the
+	# declared outputs would need the tree scanned for rules in source
+	# comments, was wrong: there is no source-level generate directive.
 	gen_wrote = cache.data.setdefault("generated_outputs", {})
 	produced = []
 
@@ -19291,10 +19295,29 @@ def do_clean(root):
 	# Generated sources, named one by one, for the reason `--uninstall' and
 	# the ejected clean rule name theirs: this is removing files from
 	# somebody's source tree, so it must not be able to take one it did not
-	# write. The list is what the generators actually produced, read out of
-	# the cache before the cache goes -- not a pattern, and not the declared
-	# outputs, which would mean scanning the tree to find the rules that
-	# live in source comments.
+	# write.
+	#
+	# Two lists, and it needs both. The RECORD is what the generators
+	# actually wrote, read out of the cache before the cache goes; that is
+	# the right list for a cache that was discarded, because the rules are
+	# unchanged there. The DECLARATION is what a rule still says it
+	# produces, and without it the record outlives the rule: a tree whose
+	# `[generate.*]' was dropped after its author started maintaining the
+	# output by hand lost that file to `--clean' -- measured, with the
+	# build having just used the hand-written version to produce a working
+	# program.
+	#
+	# The comment this replaces said the declared outputs "would mean
+	# scanning the tree to find the rules that live in source comments".
+	# There is no source-level generate directive: `[generate.*]' is read
+	# from fmake.toml and nowhere else, and its `outputs' are used
+	# literally with no expansion. So the declared set costs one config
+	# read, no scan, and compares exactly.
+	#
+	# What a rule no longer declares is left alone and named, because a
+	# file fmake can no longer produce is somebody else's now -- and a
+	# clean that declines to remove something should say so as plainly as
+	# one that removes it.
 	#
 	# The ejected Makefile has removed these since it first had a clean
 	# rule. fmake not doing it was an inconsistency between the two, in the
@@ -19302,20 +19325,34 @@ def do_clean(root):
 	# have.
 	wrote = Cache(os.path.join(state, CACHE_FILE)).data.get(
 	    "generated_outputs", {})
-	removed = []
+	declared = {o for r in (load_conf(root).get("generate") or {}).values()
+	            if isinstance(r, dict)
+	            for o in (r.get("outputs") or [])}
+	removed, disowned = [], []
 	for rel in sorted({o for outs in wrote.values() for o in outs}):
 		# Inside the tree, and a file. A rule could name anything; this is
 		# the one place that matters, because nothing else here deletes.
 		full = os.path.normpath(os.path.join(root, rel))
 		if not full.startswith(os.path.join(root, "")) or os.path.islink(full):
 			continue
-		if os.path.isfile(full):
-			os.remove(full)
-			removed.append(rel)
+		if not os.path.isfile(full):
+			continue
+		if rel not in declared:
+			disowned.append(rel)
+			continue
+		os.remove(full)
+		removed.append(rel)
 	if removed:
 		info(f"removed {len(removed)} generated file(s): "
 		     + ", ".join(removed[:4])
 		     + (f", and {len(removed) - 4} more" if len(removed) > 4 else ""))
+	if disowned:
+		info(f"kept {len(disowned)} file(s) a generator once wrote and no "
+		     f"rule declares now: " + ", ".join(disowned[:4])
+		     + (f", and {len(disowned) - 4} more"
+		        if len(disowned) > 4 else "")
+		     + "\n    no [generate.*] produces these any more, so they are "
+		       "yours rather than fmake's to remove")
 	count, bytes_ = 0, 0
 	for base, _sub, files in os.walk(state):
 		for f in files:

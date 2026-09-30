@@ -395,7 +395,8 @@ that had been green about nothing for five commits ·
 [342. A fixture built to be unkillable](#342-a-fixture-built-to-be-unkillable) ·
 [343. The explanation nobody could see](#343-the-explanation-nobody-could-see) ·
 [344. The tree that built nothing, for ever](#344-the-tree-that-built-nothing-for-ever) ·
-[345. A main() the scanner cannot see](#345-a-main-the-scanner-cannot-see)
+[345. A main() the scanner cannot see](#345-a-main-the-scanner-cannot-see) ·
+[346. The record that outlived its rule](#346-the-record-that-outlived-its-rule)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2574,7 +2575,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 598
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 599
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26721,3 +26722,65 @@ guarded is what surfaced it; it reads the warning line now. Four sabotages
 in total, each firing its own assertion: the warning dropped, the warning
 not naming the file, `@kind exe` refused again, and the no-main check
 removed so that everything is believed.
+
+## 346. The record that outlived its rule
+
+`--clean` deleted a hand-maintained source file.
+
+The shape is ordinary. A tree generates `gen/msg.c` from a `[generate.*]`
+rule; later its author decides to maintain that file by hand and commit it,
+and drops the rule. The build is fine -- it compiles the hand-written
+version and the program prints it. Then:
+
+    * removed 1 generated file(s): gen/msg.c
+
+The cache still listed the path as something a generator wrote, and
+`--clean` removes exactly that list.
+
+### The reason recorded for that was wrong
+
+Both the comment in `do_clean` and the docstring of
+`clean_removes_generated_sources_by_name` justified deleting by the RECORD
+rather than the DECLARATION on the same grounds: the declared outputs
+"would mean scanning the tree to find the rules that live in source
+comments".
+
+There is no source-level generate directive. `[generate.*]` is read from
+`fmake.toml` and nowhere else -- 0 mentions of `@generate` in fmake or the
+README -- and its `outputs` are used literally,
+`os.path.join(root, o)`, with no expansion anywhere. So the declared set
+costs one config read, no scan, and compares exactly.
+
+Which is §343's shape a third time: a design resting on a claim nobody
+re-derived. The claim was load-bearing here rather than decorative -- it is
+the whole argument for deleting from a list that can go stale.
+
+### Both lists, because it needs both
+
+The record is right for the case it exists for, and that case is not
+hypothetical: `generated_outputs` is deliberately preserved across a
+discarded cache, because "dropping it would leave generated sources behind
+in somebody's tree every time fmake changed". The rules are unchanged
+there, so everything recorded is still declared and still removed -- and
+the case asserts that arm by bending the cache's identity field, so a fix
+keyed on the declaration cannot quietly cost it.
+
+The declaration is what stops the record outliving its rule. What is no
+longer declared is kept and **named**:
+
+    * kept 1 file(s) a generator once wrote and no rule declares now:
+      gen/msg.c
+        no [generate.*] produces these any more, so they are yours rather
+        than fmake's to remove
+
+because a clean that declines to remove something should say so as plainly
+as one that removes it. The cost is a file fmake can no longer produce
+lingering after its rule's output path is renamed; that is litter, and the
+alternative was deleting somebody's source.
+
+### Three arms, three sabotages
+
+Removing the declaration check fails on the deletion; never removing
+anything fails on the declared arm; keeping it silently fails on the
+naming. The third matters because the quiet version passes the first two
+and leaves the user with a file they were not told about.

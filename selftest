@@ -13774,8 +13774,14 @@ def clean_removes_generated_sources_by_name(t):
 	Named one by one, for the reason `--uninstall` names its files: this is
 	deleting from somebody's source tree. The list is what the generators
 	actually wrote, recorded in the cache and read out of it before the
-	cache goes -- not a pattern, and not the declared outputs, which would
-	mean scanning the tree to find rules living in source comments."""
+	cache goes -- not a pattern.
+
+	It is intersected with what a rule still declares, which this docstring
+	used to say was impractical: "the declared outputs, which would mean
+	scanning the tree to find rules living in source comments". There is no
+	source-level generate directive, so that costs one config read and no
+	scan. See `clean_leaves_a_file_no_rule_declares_any_more`, which is the
+	file this deleted once the rule was gone."""
 	t.write("seed.txt", "in\n")
 	t.write("main.c", "int v(void);\nint main(void){ return v() - 1; }\n")
 	t.write("fmake.toml", """
@@ -18278,6 +18284,91 @@ def an_eject_agrees_with_the_build_about_a_mirage(t):
 			      f"first: {said[-300:]}")
 	finally:
 		v.cleanup()
+
+
+@case
+def clean_leaves_a_file_no_rule_declares_any_more(t):
+	"""`--clean` deleted a hand-maintained source.
+
+	The cache records what the generators wrote, and `--clean` removed
+	exactly that list. Once a `[generate.*]` rule is dropped -- because its
+	author started maintaining the output by hand and committed it -- the
+	record outlives the rule, and the file is then somebody's source.
+	Measured: the build used the hand-written version and produced a
+	working program, and `--clean` deleted it.
+
+	**The reason recorded for deleting by the record was wrong.** Both the
+	comment and the case beside it said reading the declared outputs "would
+	mean scanning the tree to find the rules that live in source comments".
+	There is no source-level generate directive -- `[generate.*]` is read
+	from fmake.toml and nowhere else, and its `outputs` are used literally
+	with no expansion -- so the declared set costs one config read, no scan,
+	and compares exactly.
+
+	Three arms, and the third is the one the record exists for:
+
+	  - a rule still declaring its output: removed, as before;
+	  - a rule dropped: kept, and named, because a clean that declines to
+	    remove something should say so as plainly as one that removes it;
+	  - a cache discarded by another fmake: still removed. That is what
+	    `generated_outputs` survives a discard for, the rules being
+	    unchanged in that case, and a fix keyed on the declaration must not
+	    quietly cost it.
+	"""
+	def tree(v, rule=True):
+		v.write("msg.in", 'const char *msg(void){ return "generated"; }\n')
+		v.write("msg.h", "const char *msg(void);\n")
+		v.write("main.c", '#include "msg.h"\n#include <stdio.h>\n'
+		        "int main(void){ puts(msg()); return 0; }\n")
+		v.write("fmake.toml",
+		        '[generate.msg]\ncommand = "mkdir -p gen && cp msg.in '
+		        'gen/msg.c"\ninputs  = ["msg.in"]\n'
+		        'outputs = ["gen/msg.c"]\n' if rule else
+		        "# no rule any more\n")
+	made = os.path.join(t.dir, "gen", "msg.c")
+
+	# 1. the rule still declares it.
+	tree(t)
+	check(t.fmake().returncode == 0, "the first build failed")
+	check(os.path.exists(made), "the generator did not run")
+	r = t.fmake("--clean")
+	check(not os.path.exists(made),
+	      f"a declared output must still be removed: {r.stdout}{r.stderr}")
+
+	# 2. the rule is gone and the file is maintained by hand.
+	tree(t)
+	check(t.fmake().returncode == 0, "the rebuild failed")
+	with open(made, "w") as fh:
+		fh.write('const char *msg(void){ return "by hand"; }\n')
+	tree(t, rule=False)
+	b = t.fmake()
+	check(b.returncode == 0, f"the hand-written version must build: "
+	      f"{b.stdout}{b.stderr}")
+	r = t.fmake("--clean")
+	said = r.stdout + r.stderr
+	check(os.path.exists(made),
+	      f"--clean deleted a file no rule declares any more: {said}")
+	check("gen/msg.c" in said,
+	      f"and it must say what it kept, by name: {said}")
+	with open(made) as fh:
+		check("by hand" in fh.read(), "and must not have rewritten it")
+	os.remove(made)
+
+	# 3. the record's own reason: a cache another fmake wrote is discarded,
+	# and the rules are unchanged, so the output is still removed.
+	tree(t)
+	check(t.fmake().returncode == 0, "the third build failed")
+	check(os.path.exists(made), "the generator did not run")
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+	with open(cache) as fh:
+		d = json.load(fh)
+	d["fmake"] = "0000deadbeef"
+	with open(cache, "w") as fh:
+		json.dump(d, fh)
+	r = t.fmake("--clean")
+	check(not os.path.exists(made),
+	      f"a discarded cache still knows what its generators wrote, and "
+	      f"the rule still declares it: {r.stdout}{r.stderr}")
 
 
 @case
