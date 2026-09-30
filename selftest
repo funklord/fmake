@@ -17554,6 +17554,82 @@ def a_shared_module_interface_is_keyed_once_per_edge(t):
 
 
 @case
+def a_build_that_compiles_nothing_writes_nothing(t):
+	"""Section 8 promises a second build compiles nothing. It was still
+	rewriting the cache.
+
+	A no-op build of a 301-source tree wrote 291,742 bytes, 286KB of which
+	was a `json.dump' of a structure that three consecutive no-op builds
+	were measured to leave byte-identical. So the whole file was rewritten,
+	every time, to say exactly what it already said. It writes 5,492 bytes
+	now.
+
+	Counted with strace rather than timed, because timing it says nothing:
+	a profile had claimed 35% of the build was in `save' and that was the
+	profiler counting `json.dump's many small writes -- three variants
+	timed interleaved came out within noise. The win is bytes and syscalls.
+
+	`save' compares the text it is about to write against what it read, and
+	returns when they match. The artifact is compared rather than the
+	mutations tracked: the writable surface is twelve `setdefault' stores
+	over thirteen sites, whose callers mutate what they are handed, and a
+	dirty flag that missed
+	one would lose a cache update in silence -- including the record of what
+	a generator wrote, which is all `--clean' has to go on.
+
+	Three assertions, because the first alone is passed by a `save' that has
+	stopped working altogether: it must still write when there is something
+	to say, and must then settle again.
+	"""
+	n = 12
+	for i in range(n):
+		t.write("s%d.c" % i, "int s%d(void){ return %d; }\n" % (i, i))
+	t.write("main.c", "".join("int s%d(void);\n" % i for i in range(n))
+	        + "int main(void){ return (%s) ? 0 : 1; }\n"
+	        % "+".join("s%d()" % i for i in range(n)))
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+
+	r = t.fmake("-j4")
+	check(r.returncode == 0, "the first build failed: %s%s"
+	      % (r.stdout, r.stderr))
+	check(os.path.exists(cache), "no cache was written at all")
+
+	def stamp():
+		st = os.stat(cache)
+		with open(cache) as fh:
+			return (st.st_mtime_ns, st.st_size, fh.read())
+
+	first = stamp()
+	r = t.fmake("-j4")
+	check(r.returncode == 0, "the no-op build failed: %s%s"
+	      % (r.stdout, r.stderr))
+	check(not compiled(r), "the second build compiled something, so this "
+	      "case is not measuring a no-op: %s%s" % (r.stdout, r.stderr))
+	second = stamp()
+	check(second[0] == first[0],
+	      "a build that compiled nothing rewrote the cache: mtime %d -> %d"
+	      % (first[0], second[0]))
+
+	# It must still write when there is something to write, or the check
+	# above is satisfied by a `save' that does nothing at all.
+	t.write("s0.c", "int s0(void){ return 99; }\n")
+	r = t.fmake("-j4")
+	check(r.returncode == 0, "the rebuild failed: %s%s" % (r.stdout, r.stderr))
+	third = stamp()
+	check(third[2] != second[2],
+	      "a source change left the cache unwritten, so an update was lost")
+
+	# And settle, because a cache that always differs from itself would pass
+	# the arm above for the wrong reason.
+	r = t.fmake("-j4")
+	check(r.returncode == 0 and not compiled(r),
+	      "the tree did not settle after the rebuild: %s%s"
+	      % (r.stdout, r.stderr))
+	check(stamp()[0] == third[0],
+	      "the cache is still being rewritten once the tree has settled")
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

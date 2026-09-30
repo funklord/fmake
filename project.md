@@ -387,7 +387,8 @@ that had been green about nothing for five commits ·
 [334. Two features of one session, colliding on the BMI](#334-two-features-of-one-session-colliding-on-the-bmi) ·
 [335. A per-target define moc never saw](#335-a-per-target-define-moc-never-saw) ·
 [336. Half a fix, eight weeks apart](#336-half-a-fix-eight-weeks-apart) ·
-[337. A key computed once per path](#337-a-key-computed-once-per-path)
+[337. A key computed once per path](#337-a-key-computed-once-per-path) ·
+[338. A no-op build that wrote 286KB](#338-a-no-op-build-that-wrote-286kb)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2566,7 +2567,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 586
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 587
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26049,3 +26050,91 @@ with no memo, written when the module graph was two files deep in a
 fixture and every measurement of it was taken on a tree too small for
 the exponent to show. §8's guarantee is about compiling, and it was met
 while the work moved into the part of the build nobody had timed.
+
+## 338. A no-op build that wrote 286KB
+
+Profiling the no-op build of §337 for anything else expensive put 35% of
+it in `Cache.save` -- a `json.dump` of the whole cache. Three consecutive
+no-op builds of a 301-source tree were measured to leave that file
+byte-identical, so the whole 286KB was being rewritten every time to say
+exactly what it already said.
+
+`save` now serialises to a string, compares it against what it read at
+load, and returns when they match. Counted with strace over a no-op
+build:
+
+    version                        write calls   bytes written
+    json.dump streaming            62            291,742
+    json.dumps, always writing     28            291,742
+    json.dumps, skipping           27              5,492
+
+Two separate gains. `json.dump` writes per encoded fragment, so the cache
+alone was 35 write calls where one would do; and the skip removes
+the write altogether, taking a no-op build from 291,742 bytes to 5,492.
+§8 promises a second build compiles nothing, and it now writes nothing
+either.
+
+### The 35% was the profiler, and it nearly went into the record
+
+It is not a speedup. Three variants timed interleaved on one tree -- the
+streaming one, the single-write one, and the skipping one, each with its
+own cache because `build_identity` differs -- came out at 0.5s within
+noise of each other, five rounds each. The 35% was cProfile charging
+per-call overhead to thousands of small `write` calls, which is exactly
+the shape that inflates under a profiler and costs nothing against a warm
+page cache.
+
+**A profiler's proportion is not a wall-clock cost**, and the first draft
+of this section, of the comment in `save` and of the case's docstring all
+said it was. What makes it embarrassing rather than merely wrong is that
+§337 had just been found by measuring wall clock and scaling it -- the
+right instrument, one section earlier -- and this one reached for the
+profile's percentage because it was already on screen.
+
+The measurement that survives is the one that does not depend on the
+machine's mood: bytes and syscalls, counted with strace. Timing was tried
+first and could not separate the variants at all, which is the honest
+reason the table above counts instead of timing.
+
+### What it is worth, then
+
+Not seconds on this machine. 286KB of writes per no-op build that need
+not happen, which is what a slow disk, a network filesystem or a tree
+with a much larger cache pays for -- and a file whose mtime stops moving
+when nothing about it changed. Worth having and worth not overselling.
+
+### Why a dirty flag was the wrong shape
+
+Comparing the serialised text still pays for serialising it. A flag set
+on mutation would skip that too, and it is not worth the risk here: the
+writable surface is twelve `cache.data.setdefault(...)` stores over
+thirteen call sites, whose callers mutate what they are handed, so the
+flag would have to be set in thirteen places outside the class, and one
+missed site loses a cache update in silence. One of those stores is `generated_outputs`, which is the only
+record `--clean` has of what a generator wrote -- losing it leaves
+generated sources in somebody's tree.
+
+So the artifact is compared rather than the mutations tracked, which is
+this project's habit anyway and needs nothing remembered by anybody.
+
+### The case, and the sabotage that missed
+
+`a_build_that_compiles_nothing_writes_nothing` asserts three things: the
+no-op build does not rewrite the file, a source change does, and the tree
+settles afterwards. The second exists because the first alone is passed
+by a `save` that has stopped working entirely.
+
+Four sabotages, and the interesting one is the pair that did not land
+where it was aimed. Disabling the skip fired the first assertion, as
+intended. Making `save` return unconditionally fired an *earlier* check
+-- "no cache was written at all" -- so the second assertion was never
+reached, and a third sabotage had to be built to reach it: a comparison
+that reports equal once any file exists. That is the difference between
+sabotaging the thing and reading *which* check failed.
+
+The fourth sabotage landed nowhere, and said something useful in doing
+so. Corrupting `self._on_disk` after a successful write changed no
+outcome, because every `save` call site returns immediately afterwards --
+`save` runs exactly once per process, so that assignment is for a second
+caller that does not exist yet. The suite cannot reach it and the
+assertion about settling is, for now, carried by the assertion above it.

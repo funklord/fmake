@@ -5867,11 +5867,15 @@ class Cache:
 		# have been inspecting, from the one mode that says it does not
 		# build. `--explain' keeps writing, and should: it compiles.
 		self.read_only = False
+		# What the file held when it was read, so `save' can tell whether
+		# this run changed anything. None when there was no readable file.
+		self._on_disk = None
 		self.data = {"version": CACHE_VER, "fmake": build_identity(),
 		             "files": {}, "objects": {}, "units": []}
 		try:
 			with open(path) as fh:
-				d = json.load(fh)
+				self._on_disk = fh.read()
+			d = json.loads(self._on_disk)
 			# The shape as well as the version. A cache that cannot be read
 			# is discarded and rebuilt -- that is what the `except' below
 			# says for a truncated or unparsable file, and what the version
@@ -5914,11 +5918,43 @@ class Cache:
 	def save(self):
 		if self.read_only:
 			return
+		# One string and one write, rather than `json.dump' streaming to the
+		# file object, which issues a write per encoded fragment. Counted
+		# with strace over a no-op build of a 301-source tree: 62 write
+		# calls become 28, the cache going from 35 of them to one.
+		# The string is also what makes the comparison below free.
+		text = json.dumps(self.data)
+		# A build that compiles nothing leaves the cache byte-identical --
+		# measured over three consecutive no-op builds of that tree -- so
+		# writing it again rewrites the whole file to say what it already
+		# said. Section 8's promise that building twice compiles nothing
+		# ought to extend to writing nothing: 291,742 bytes written become
+		# 5,492.
+		#
+		# Wall clock is unchanged, and that is worth saying so nobody
+		# rediscovers it as a regression. A profile of the same build put
+		# 35% of it in this method, which was the profiler counting those
+		# small writes rather than a cost anybody was paying -- three
+		# variants timed interleaved on one tree came out within noise of
+		# each other. What the change buys is bytes and syscalls, not
+		# seconds.
+		#
+		# The artifact is compared rather than the mutations tracked. A
+		# dirty flag would be cheaper still and is the wrong shape for this
+		# class: the writable surface is twelve `setdefault' stores, over
+		# thirteen sites, whose callers mutate what they are handed -- so the
+		# flag would have to be set in thirteen places outside the class,
+		# and one missed site loses
+		# a cache update silently -- including `generated_outputs', which is
+		# the only record `--clean' has of what a generator wrote.
+		if text == self._on_disk:
+			return
 		os.makedirs(os.path.dirname(self.path), exist_ok=True)
 		tmp = self.path + ".tmp"
 		with open(tmp, "w") as fh:
-			json.dump(self.data, fh)
+			fh.write(text)
 		os.replace(tmp, self.path)
+		self._on_disk = text
 
 	def hash_of(self, abspath, rel):
 		"""Content hash, avoiding the read when size+mtime are unchanged.
