@@ -38,6 +38,7 @@ import ast
 import concurrent.futures
 import glob
 import hashlib
+import itertools
 import json
 import os
 import platform
@@ -53,6 +54,7 @@ import threading
 import traceback
 import time
 import tomllib
+import types
 
 FMAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fmake")
 
@@ -554,6 +556,35 @@ int main(void){ printf("%lu\\n", counter); return 0; }
 	      "the linked program must read the counter")
 
 
+_IN_PROCESS = itertools.count()
+
+
+def fmake_in_process():
+	"""`fmake` imported as a module, for a case that tests one function.
+
+    An explicit loader, because `fmake` has no .py suffix and
+    spec_from_file_location returns None when it cannot infer one -- the
+    failure then surfaces as AttributeError on NoneType, which reads like
+    anything but a missing extension. And registered in sys.modules before
+    exec, because @dataclass resolves cls.__module__ through it.
+
+    A fresh instance under a fresh name per call, deliberately, rather than
+    one cached and shared. Cases run in threads under `-j', and a case that
+    rebinds something on the module -- which is how the cost of a function
+    gets counted -- would otherwise be rebinding it underneath whatever
+    else is running. Two execs under one name race the same way, `@dataclass'
+    resolving `cls.__module__' through sys.modules as it goes.
+    """
+	import importlib.util, importlib.machinery
+	name = "fmake_under_test_%d" % next(_IN_PROCESS)
+	loader = importlib.machinery.SourceFileLoader(name, FMAKE)
+	spec = importlib.util.spec_from_loader(name, loader)
+	mod = importlib.util.module_from_spec(spec)
+	sys.modules[name] = mod
+	loader.exec_module(mod)
+	return mod
+
+
 @case
 def a_struct_definition_is_not_a_data_definition(t):
 	"""The loosening must not turn a type into a provider.
@@ -563,17 +594,7 @@ def a_struct_definition_is_not_a_data_definition(t):
 	the file holding either would widen the candidate set for a symbol it
 	does not have.
 	"""
-	import importlib.util, importlib.machinery, sys as _sys
-	# An explicit loader, because `fmake` has no .py suffix and
-	# spec_from_file_location returns None when it cannot infer one -- the
-	# failure then surfaces as AttributeError on NoneType, which reads like
-	# anything but a missing extension. And registered in sys.modules
-	# before exec, because @dataclass resolves cls.__module__ through it.
-	loader = importlib.machinery.SourceFileLoader("fmake_under_test", FMAKE)
-	spec = importlib.util.spec_from_loader("fmake_under_test", loader)
-	mod = importlib.util.module_from_spec(spec)
-	_sys.modules["fmake_under_test"] = mod
-	loader.exec_module(mod)
+	mod = fmake_in_process()
 	for line in ("struct row { int a; };", "long foo(void);",
 	             "int main(void) {", "extern const struct row table[3];",
 	             "	int local = 1;"):
@@ -17411,6 +17432,125 @@ def editing_a_module_interface_rebuilds_what_imports_it(t):
 		check(not compiled(v.fmake("-j4")), "and the chain must then settle")
 	finally:
 		v.cleanup()
+
+
+@case
+def a_shared_module_interface_is_keyed_once_per_edge(t):
+	"""An interface reachable by many import paths is keyed once, not once
+	per path.
+
+	`object_key' recurses into the key of every interface a unit imports,
+	because that is the only thing that invalidates an importer when an
+	interface's source changes -- the case above is why. Unmemoised, a unit
+	reachable by N paths has its key computed N times, and a fan-in graph
+	has exponentially many paths: each interface importing every earlier
+	one, a no-op build's cost over the 0.34s floor went 6 modules 0.01s,
+	9 0.06s, 12 0.49s, 14 2.04s. Quadrupling per two files added, in the
+	one part of a build that is supposed to be free.
+
+	Asserted in process and on call counts rather than on a clock, because
+	a wall-clock ceiling is a property of the machine and this is a property
+	of the code. Three assertions, and they guard different things:
+
+	  - the memoised key EQUALS the unmemoised one. The memo must change
+	    how often a key is computed and never the key itself: a key that
+	    moved would recompile the tree once and, worse, a key that stopped
+	    depending on a nested interface would recompile it never, which is
+	    the fault the case above exists for.
+	  - the call count is linear in EDGES. Measured here, 14 interfaces:
+	    93 calls memoised against 8193 unmemoised, the same key from both.
+	  - the unmemoised reference is the dearer one. Without this the case
+	    passes against the unmemoised code as well, the keys agreeing
+	    either way and only the count separating them.
+
+	The unmemoised reference is the real function with a fresh memo forced
+	in at every level, so it is this code taking the paths it used to rather
+	than a reimplementation of it -- a stand-in would only reproduce the
+	half of the recursion this case's author had in mind.
+	"""
+	mod = fmake_in_process()
+	n = 14
+
+	class Unit:
+		def __init__(self, rel, imports, exports):
+			self.rel = rel
+			self.abs = "/nonexistent/" + rel
+			self.dep = "/nonexistent/" + rel + ".d"
+			self.own = []
+			self.lang = types.SimpleNamespace(unit="object")
+			self.scan = {"modimp": list(imports), "modiface": list(exports)}
+
+	class Cache:
+		def hash_of(self, path, rel):
+			return mod.sha(rel)
+
+	# m<i> imports every earlier interface, so the paths from `main.cpp'
+	# down to m0 multiply while the edges only grow quadratically.
+	mods = [Unit("m%d.cppm" % i, ["m%d" % j for j in range(i)], ["m%d" % i])
+	        for i in range(n)]
+	top = Unit("main.cpp", ["m%d" % (n - 1)], [])
+	iface = {"m%d" % i: mods[i] for i in range(n)}
+	edges = sum(len(u.scan["modimp"]) for u in mods + [top])
+	cfg = types.SimpleNamespace(key="cfgkey")
+	cache, root, incflags = Cache(), "/nonexistent", ["-I."]
+
+	real = mod.object_key
+	calls = []
+	try:
+		def counted(*a, **kw):
+			calls.append(a[0].rel)
+			return real(*a, **kw)
+		mod.object_key = counted
+		memo_key = counted(top, cfg, cache, root, incflags, iface)
+		memo_calls = len(calls)
+
+		# The same function with a fresh memo at every level, which is the
+		# recursion this change replaced.
+		calls.clear()
+
+		def unmemoised(*a, **kw):
+			a = list(a) + [None] * (8 - len(a))
+			a[7] = {}
+			calls.append(a[0].rel)
+			return real(*a, **kw)
+		mod.object_key = unmemoised
+		plain_key = unmemoised(top, cfg, cache, root, incflags, iface)
+		plain_calls = len(calls)
+	finally:
+		mod.object_key = real
+
+	check(memo_key is not None and memo_key == plain_key,
+	      "the memo must not change the key: memoised %s, unmemoised %s"
+	      % (memo_key, plain_key))
+	check(memo_calls <= 2 * edges,
+	      "%d interfaces have %d import edges, so the keying must cost O(E) "
+	      "-- it took %d calls" % (n, edges, memo_calls))
+	# Without this the case would pass against the unmemoised code too: the
+	# keys agree either way, and only the count separates them.
+	check(plain_calls > 8 * memo_calls,
+	      "the unmemoised reference must be the expensive one, or this case "
+	      "is not measuring the memo: %d against %d"
+	      % (plain_calls, memo_calls))
+
+	# `_seen' is what stops a cyclic graph recursing for ever, and a cycle
+	# is not refused until `_module_levels' runs -- which is after every
+	# key here has been computed. So the memo must not displace it. Under a
+	# thread, because the failure is a hang and a hang in a suite that runs
+	# cases in parallel is a suite nobody can read.
+	a = Unit("a.cppm", ["b"], ["a"])
+	b = Unit("b.cppm", ["a"], ["b"])
+	cyc = {"a": a, "b": b}
+	done = []
+
+	def walk():
+		done.append(mod.object_key(a, cfg, cache, root, incflags, cyc))
+
+	th = threading.Thread(target=walk, daemon=True)
+	th.start()
+	th.join(30)
+	check(not th.is_alive() and done and done[0],
+	      "a module cycle must still terminate with a key, not recurse for "
+	      "ever")
 
 
 @case

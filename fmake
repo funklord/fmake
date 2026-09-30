@@ -6373,13 +6373,33 @@ _REL_CACHE = {}
 _DEP_HASH = {}
 
 
-def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None):
+def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None,
+               _memo=None):
 	"""Cache key: source content, every prerequisite's content, and config.
 
     The include flags are part of the config: gaining an -I can change which
     header a name resolves to, so an object built without it is not reusable.
     So are the TU's own flags, since @define changes what the file means.
     """
+	# A memo over the module recursion below, which without one is
+	# exponential in the number of interfaces: a unit reachable by N import
+	# paths has its key rebuilt once per path, and a fan-in graph has 2^N
+	# of them. Measured on a tree where each interface imports every
+	# earlier one, a no-op build's cost over the 0.34s floor: 6 modules
+	# 0.01s, 9 0.06s, 12 0.49s, 14 2.04s -- quadrupling per two files
+	# added. Only a module build pays for the memo, which is why it hangs
+	# off `iface'.
+	#
+	# Sound because for one `cfg', `incflags' and cache state this is a
+	# pure function of the unit -- with the single exception below, where
+	# `_seen' prunes a cycle and the answer becomes a property of the path
+	# that reached it.
+	if iface:
+		if _memo is None:
+			_memo = {}
+		got = _memo.get(u.rel)
+		if got is not None:
+			return got
 	# Include flags are not part of a crate's identity: rustc never sees
 	# them, so keying on them would rebuild a 50MB staticlib every time a
 	# -I moved somewhere else in the tree.
@@ -6404,15 +6424,32 @@ def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None):
 	# The interface's own key, not merely its source hash, so a header IT
 	# includes counts too; recursive for a chain, with `_seen' because a
 	# cycle is refused elsewhere and this must not hang if one arrives.
+	clean = True
 	if iface:
 		_seen = ({u.rel} if _seen is None else _seen | {u.rel})
 		for name in sorted(u.scan.get("modimp") or []):
 			v = iface.get(name)
-			if v is None or v.rel in _seen:
+			if v is None:
 				continue
-			vk = object_key(v, cfg, cache, root, incflags, iface, _seen)
+			# The exception the memo cannot hold. A cycle is refused, but
+			# not until `_module_levels' runs, which is after every key
+			# here has been computed -- so this guard is what stops a
+			# cyclic tree hanging, and the key it yields depends on which
+			# path reached this unit first. Neither that key nor any key
+			# above it is memoised, which leaves the cyclic case costing
+			# exactly what it cost before and the acyclic case, where
+			# nothing ever prunes, fully memoised.
+			if v.rel in _seen:
+				clean = False
+				continue
+			vk = object_key(v, cfg, cache, root, incflags, iface, _seen,
+			                _memo)
 			if vk:
 				parts.append("mod:" + name + ":" + vk)
+			# Absent from the memo means the subtree declined to be
+			# cached, for a cycle or a source that would not hash.
+			if v.rel not in _memo:
+				clean = False
 	for dep in parse_depfile(u.dep):
 		# A relative entry is a BMI and belongs to nobody's key. g++ writes
 		# `gcm.cache/m.gcm' into an importer's depfile, relative because a
@@ -6439,7 +6476,10 @@ def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None):
 				_DEP_HASH[dep] = dh
 		if dh:
 			parts.append(rel + ":" + dh)
-	return sha("|".join(parts))
+	key = sha("|".join(parts))
+	if iface and clean:
+		_memo[u.rel] = key
+	return key
 
 
 RE_NO_HEADER = re.compile(
@@ -6807,12 +6847,18 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	for u in units:
 		for _name in (u.scan.get("modiface") or []):
 			iface.setdefault(_name, u)
+	# One memo for the whole sweep, not one per unit: the exponent above is
+	# within a single unit's tree, and this is the other half -- a shared
+	# interface is otherwise re-keyed once per unit that imports it. Fresh
+	# per loop rather than held across the compile below, because the
+	# second sweep reads depfiles the compiler has since rewritten.
+	kmemo = {}
 	todo = []
 	for u in units:
 		if u.compiled:
 			continue
 		ent = cache.objects.get(u.key)
-		key = object_key(u, cfg, cache, root, incflags, iface)
+		key = object_key(u, cfg, cache, root, incflags, iface, None, kmemo)
 		if (ent and ent.get("key") == key and key is not None
 		        and _same_file(u.obj, ent.get("size"))):
 			u.undef  = set(ent["u"])
@@ -7193,12 +7239,14 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	# needs to see.
 	made = [u for u in todo if u.key not in broken]
 	read_symbols(made, cfg, jobs)
+	kmemo = {}
 	for u in made:
 		cache.objects[u.key] = {
 		    # The same key the staleness test computed, module graph and
 		    # all: written with a different one, every build would find a
 		    # mismatch and recompile everything.
-		    "key": object_key(u, cfg, cache, root, incflags, iface),
+		    "key": object_key(u, cfg, cache, root, incflags, iface, None,
+		                      kmemo),
 		    "u": sorted(u.undef), "s": sorted(u.strong), "w": sorted(u.weak),
 		    "size": _file_size(u.obj),
 		}

@@ -386,7 +386,8 @@ that had been green about nothing for five commits ·
 [333. The database an editor reads, disagreeing with the build](#333-the-database-an-editor-reads-disagreeing-with-the-build) ·
 [334. Two features of one session, colliding on the BMI](#334-two-features-of-one-session-colliding-on-the-bmi) ·
 [335. A per-target define moc never saw](#335-a-per-target-define-moc-never-saw) ·
-[336. Half a fix, eight weeks apart](#336-half-a-fix-eight-weeks-apart)
+[336. Half a fix, eight weeks apart](#336-half-a-fix-eight-weeks-apart) ·
+[337. A key computed once per path](#337-a-key-computed-once-per-path)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2565,7 +2566,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 585
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 586
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -25952,3 +25953,99 @@ they measured otherwise. And I reached the first wrong reading by piping
 `--explain` through a `sed` that stripped every `-I` before I read it, which
 is this project's own rule about reducing a check's output, broken while
 answering somebody else's question.
+
+## 337. A key computed once per path
+
+A no-op build of a module tree got slower than a full build of a bigger
+one. Measured, on a tree where each interface imports every earlier one,
+the cost of a build that compiles nothing over the 0.34s floor a
+one-file tree pays:
+
+    interfaces   6      9      12     14
+    no-op cost   0.01s  0.06s  0.49s  2.04s
+
+Quadrupling per two files added. §8's promise is that building twice
+compiles nothing, and it holds -- nothing was compiled. What was
+exponential is the *deciding*.
+
+`object_key` recurses into the key of every interface a unit imports,
+which §330 put there and is load-bearing: neither compiler makes an
+importer's dependency on its interface reachable any other way, so
+without that recursion an exported constant changes and the importer is
+never rebuilt. The recursion had no memo. A unit reachable by N import
+paths therefore had its key computed N times, and a fan-in graph has
+exponentially many paths -- 14 interfaces are 8193 calls where 93 would
+do.
+
+Memoised per sweep, and the cost is now flat: 0.32s at 14 interfaces
+and 0.32s at 18. Unmemoised, 18 was never measured -- extrapolating the
+quadrupling above puts it near half a minute, which is a projection and
+not a reading.
+
+### The memo's one exception, and why it is guarded rather than argued
+
+For one `cfg`, one set of include flags and one cache state, the key is
+a pure function of the unit -- so a memo over it is sound, with a single
+exception. The recursion carries a `_seen` set to stop a cyclic import
+graph recursing for ever, and when that set prunes, the key becomes a
+property of which path arrived first rather than of the unit. Such a key
+must not be cached, or a later lookup returns an answer computed for a
+different caller.
+
+So a subtree that pruned is not memoised, and neither is anything above
+it. The acyclic case, where nothing ever prunes, memoises completely;
+the cyclic case costs exactly what it cost before.
+
+**That guard has no reachable failure today, and saying so is the
+point.** A cycle is refused -- but by `_module_levels`, which runs
+*after* every key here has been computed, which is why `_seen` exists at
+all. Working out whether a cyclic graph can ever have a key of its own
+believed: it cannot. To be cached it must have built once, which the
+refusal prevents; and introducing a cycle into a built tree changes both
+sources, so both units are back in the set being keyed and the refusal
+fires again. Removing the guard entirely and running the 31
+module-related cases separated nothing.
+
+It stays because it encodes the precondition at the place a future
+reader could break it -- moving the cycle check, or adding a third
+caller ahead of it -- and because it costs one boolean. What it does not
+have is a test that has been seen to fail, and this paragraph is that
+admission rather than a claim of coverage.
+
+### Asserting a cost without asserting a clock
+
+`a_shared_module_interface_is_keyed_once_per_edge` counts calls in
+process rather than timing a build, because a wall-clock ceiling is a
+property of the machine and this is a property of the code. It builds a
+fan-in graph of stub units, calls `object_key` through a counting
+wrapper, and then calls it again with a fresh memo forced in at every
+level -- the real function taking the paths it used to, not a
+reimplementation of it, so it cannot reproduce only the half of the
+recursion its author had in mind.
+
+Three assertions, guarding different things:
+
+    the keys are equal          the memo changed no key
+    calls are O(edges)          93 against 92 edges, not 8193
+    the reference is dearer     or the case is not measuring the memo
+
+The third exists because the first two would pass against the
+unmemoised code: the keys agree either way, and only the count
+separates them.
+
+Both sabotages were caught through the assertion intended -- disabling
+the memo hit the count, keying it on the wrong attribute hit the
+equality. And the change carries the proof a mechanical one owes
+separately from the suite: a module tree built with the committed fmake,
+then keyed by the memoised one, reported all nine units cached with
+every key byte-identical. A key that moved would recompile a tree once;
+a key that stopped depending on a nested interface would recompile it
+never, which is the §330 fault.
+
+### What the shape was
+
+Not a wrong answer -- the keys were always right. A correct recursion
+with no memo, written when the module graph was two files deep in a
+fixture and every measurement of it was taken on a tree too small for
+the exponent to show. §8's guarantee is about compiling, and it was met
+while the work moved into the part of the build nobody had timed.
