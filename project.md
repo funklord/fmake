@@ -397,7 +397,8 @@ that had been green about nothing for five commits ·
 [344. The tree that built nothing, for ever](#344-the-tree-that-built-nothing-for-ever) ·
 [345. A main() the scanner cannot see](#345-a-main-the-scanner-cannot-see) ·
 [346. The record that outlived its rule](#346-the-record-that-outlived-its-rule) ·
-[347. The dispatch table nothing proposed](#347-the-dispatch-table-nothing-proposed)
+[347. The dispatch table nothing proposed](#347-the-dispatch-table-nothing-proposed) ·
+[348. Uninstall removes what it did not install](#348-uninstall-removes-what-it-did-not-install)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -7158,10 +7159,23 @@ ninja in something else. **That reasoning was wrong and §89 has it**: ninja
 passes the environment through to a command, which is all a `DESTDIR` needs,
 and the rule exists now.
 
-Uninstall, a manifest, generated `.pc` files and the shared-library symlink
-chain are all still missing from both callers, and they are one item in §15
-rather than four: `--install` is minimal, and the ejected rule is now
-exactly as minimal, which is the right relationship between them.
+~~Uninstall, a manifest, generated `.pc` files and the shared-library
+symlink chain are all still missing from both callers~~ -- **three of the
+four have since been done, and this sentence had outlived them.**
+Re-measured 2026-10-01 by installing a versioned library and reading the
+ejected Makefile:
+
+    uninstall               both: `fmake --uninstall', an `uninstall:' rule
+    generated .pc files     both: squish.pc installed, 6 mentions in the
+                            ejected rules
+    shared-library symlinks both: libsquish.so -> .so.2 -> .so.2.3, and
+                            two `ln -s' in the ejected rules
+    a manifest              neither -- still open, and see §348
+
+They remain one item in §15 rather than four, and the relationship the
+sentence describes is unchanged: `--install` and the ejected rule move
+together. What was wrong is only the count of what is missing, which is the
+countable present-tense claim `evidence.md` says rots.
 
 ---
 
@@ -26847,3 +26861,72 @@ the exclusion fails on exactly that line.
 The other negatives are the ones that separate an object from a function:
 `int f(int (*cb)(void)) {`, `extern int (*handler)(int);`,
 `void (*signal(int, void (*)(int)))(int);` and a `typedef`.
+
+## 348. Uninstall removes what it did not install
+
+**Not fixed. The measurement is here and the fix is a decision, for the
+reason at the end.**
+
+`--uninstall` computes its list from `install_plan` against the tree as it
+is now, and removes what it finds. Two consequences, measured on 2026-10-01:
+
+**It leaves behind what the tree has stopped declaring.** Install a library
+publishing `one.h` and `two.h`; drop `two.h` from `@headers`; rebuild;
+uninstall. `one.h`, the archive, the `.so` chain and the `.pc` go, and
+`/usr/include/two.h` stays. Litter, and the mild half.
+
+**It removes a file fmake never installed.** Put another package's
+`shared.h` in a prefix, in a tree whose own `@headers shared.h` names that
+same path, and uninstall without ever having installed:
+
+    rm .../root/usr/include/shared.h
+    * removed 1 file(s) from .../root/usr, 5 already gone
+
+"5 already gone" is fmake saying it had never installed there, in the same
+breath as deleting somebody else's header. That is the rule in `CLAUDE.md`
+-- delete with a name, not a pattern -- and it is the phrase `do_clean`'s
+own comment uses about itself: it "must not be able to take one it did not
+write."
+
+### The existing case states the property broadly and tests it narrowly
+
+`uninstall_removes_exactly_what_install_placed` plants an intruder and
+asserts it survives, so this looks covered. The intruder is
+`usr/local/bin/not-ours` -- a *differently named* file in a directory fmake
+installs into, which survives because its name is not in the plan. The
+same-path collision is the one the plan cannot tell from its own work, and
+it is the realistic one: two packages shipping a header of one name, or a
+`--prefix` typed wrong.
+
+Its docstring is where the design is written down, and it is worth quoting
+because it is the reason this is not a patch: "There is no manifest and no
+wildcard: the list comes from install_plan, the same one --install, the
+ejected Makefile and the ejected ninja read."
+
+### Whose decision, and why it is not mine
+
+A manifest is the obvious fix and it is fmake-only: make and ninja have no
+memory, so their uninstall rules would go on computing paths. §15 tracks a
+manifest as **one item across both callers** precisely so the two do not
+drift, and the sentence above says why -- `--install` and the ejected rule
+are deliberately as minimal as each other.
+
+So the fix trades a deletion hazard against the parity between fmake and
+the build it emits. This session broke that parity once already, in §344,
+and found out only because the suite was run; choosing to break it on
+purpose is a different kind of act. The options, with costs:
+
+- **A manifest fmake writes and reads**, authoritative, refusing to delete
+  what it has no record of. Closes the hazard completely. Costs parity:
+  the ejected rules keep today's behaviour, so the same tree uninstalls
+  differently depending on which build ran.
+- **A manifest both write**, the install rule emitting a file list the
+  uninstall rule reads. Keeps parity and closes the hazard in both. Costs
+  a new artifact in the prefix or the tree, and more emitted make.
+- **Neither, and say so**: name the hazard in `--uninstall`'s own output
+  when the plan names a path whose content fmake cannot account for.
+  Cheap, keeps parity, and does not close anything.
+
+Whose: the copyright holder's. It changes what fmake promises about
+deletion, and the first two change the relationship between fmake and its
+emitted builds, which is §8's territory rather than a bug's.
