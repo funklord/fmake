@@ -5929,8 +5929,23 @@ class Cache:
 					self.data["generated_outputs"] = {
 					    k: v for k, v in d["generated_outputs"].items()
 					    if isinstance(v, list)}
-		except (OSError, ValueError):
+		except FileNotFoundError:
+			# The ordinary case: no cache yet. Nothing to say about it.
 			pass
+		except OSError as e:
+			# There IS one and it could not be read, which is a different
+			# thing from there not being one and wants saying: a mode or
+			# ownership that stops fmake reading its own cache recompiles
+			# the tree every single time and looks like fmake being slow.
+			vinfo(f"cache unreadable and the tree will rebuild: "
+			      f"{e.strerror or e}")
+		except ValueError:
+			# Truncated or not JSON. The same silence as the three reasons
+			# above it, and left behind when those were given a message --
+			# a fourth branch of one refusal, which is how an exception
+			# handler keeps a gap the `if' beside it has closed.
+			vinfo("cache unparsable and the tree will rebuild: not valid "
+			      "JSON, which is what a half-written file looks like")
 		self.files   = self.data["files"]
 		self.objects = self.data["objects"]
 

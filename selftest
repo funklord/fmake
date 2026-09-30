@@ -17941,20 +17941,34 @@ def a_file_nothing_reaches_is_reported_when_it_appears(t):
 
 
 @case
-def a_discarded_cache_says_which_of_the_three_reasons(t):
+def a_discarded_cache_says_why_it_was_discarded(t):
 	"""A discarded cache recompiles the tree and used to say nothing.
 
-	Three things invalidate it and they want different responses: a format
-	change and an fmake change are ordinary, and a section of the wrong type
-	means something wrote it wrongly. That last one is not hypothetical --
-	adding a new section as a list, where `_well_shaped` requires a dict of
-	everything but `units`, silently turned the whole build cache off while
-	this project was being worked on. It presented as an unrelated notice
-	printing on every run, because nothing said the cache had gone.
+	Five things invalidate it and they want different responses:
 
-	`_well_shaped` was doing its job: the cache WAS malformed. What was
-	missing is that a correct refusal was silent, so the symptom pointed
-	anywhere but at it.
+	    the format moved            ordinary after an fmake release
+	    another fmake wrote it      ordinary after a scanner change
+	    a section has a wrong type  something wrote it wrongly
+	    it will not parse           a half-written file looks like this
+	    it will not open            a mode or owner fmake cannot read
+
+	and a sixth, no cache at all, is the ordinary first build and says
+	nothing. The case asserts that one too, or the message becomes noise on
+	every fresh tree.
+
+	The wrong-type reason is not hypothetical. Adding a new section as a
+	list, where `_well_shaped` requires a dict of everything but `units`,
+	silently turned the whole build cache off while this project was being
+	worked on -- and presented as an unrelated notice printing on every run,
+	because nothing said the cache had gone. `_well_shaped` was doing its
+	job: the cache WAS malformed. What was missing is that a correct refusal
+	was silent, so the symptom pointed anywhere but at it.
+
+	The last two were found by sweeping for exception handlers that swallow
+	without a word -- 47 of them, 46 legitimate, because a stat that fails
+	IS the answer. These were the fourth and fifth branches of one refusal,
+	left behind when the first three were given a message: an `except` keeps
+	a gap the `if` beside it has closed.
 	"""
 	t.write("main.c", "int main(void){ return 0; }\n")
 	cache = os.path.join(t.dir, ".fmake", "cache.json")
@@ -17981,11 +17995,46 @@ def a_discarded_cache_says_which_of_the_three_reasons(t):
 	check("cache discarded" in said and "wrong type" in said,
 	      f"a mistyped section should name the shape: {said}")
 
+	# Truncated, which is what an interrupted write leaves.
+	t.fmake("-j4")
+	with open(cache) as fh:
+		head = fh.read(200)
+	with open(cache, "w") as fh:
+		fh.write(head)
+	r = t.fmake("-j4", "-v")
+	said = r.stdout + r.stderr
+	check("cache unparsable" in said,
+	      f"a truncated cache should say it will not parse: {said}")
+
+	# Present and unreadable, which is a different thing from absent and
+	# the one that looks like fmake simply being slow.
+	t.fmake("-j4")
+	os.chmod(cache, 0)
+	try:
+		r = t.fmake("-j4", "-v")
+		said = r.stdout + r.stderr
+	finally:
+		os.chmod(cache, 0o644)
+	check("cache unreadable" in said,
+	      f"an unreadable cache should say so: {said}")
+
 	# And a healthy cache says none of it, or the message is noise.
 	t.fmake("-j4")
 	ok = t.fmake("-j4", "-v")
-	check("cache discarded" not in (ok.stdout + ok.stderr),
-	      f"a healthy cache must not report a discard: {ok.stdout}{ok.stderr}")
+	said = ok.stdout + ok.stderr
+	for word in ("cache discarded", "cache unparsable", "cache unreadable"):
+		check(word not in said,
+		      f"a healthy cache must not report {word!r}: {said}")
+
+	# No cache at all is the ordinary first build, and must be silent or
+	# every fresh tree carries the message.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	first = t.fmake("-j4", "-v")
+	said = first.stdout + first.stderr
+	for word in ("cache discarded", "cache unparsable", "cache unreadable"):
+		check(word not in said,
+		      f"a first build has no cache to discard, so it must not say "
+		      f"{word!r}: {said}")
 
 
 @case

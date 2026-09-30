@@ -26492,15 +26492,44 @@ order before reading the shape check.
 
 `_well_shaped` was working perfectly: the cache genuinely was malformed.
 What was missing is that a correct refusal was **silent**, so the symptom
-pointed anywhere but at it. It says which of the three reasons now, under
-`-v`:
+pointed anywhere but at it. It says which reason now, under `-v`:
 
-    format '0', wanted 9
-    written by another fmake
-    a section has the wrong type
+    format '0', wanted 9                  ordinary after a release
+    written by another fmake              ordinary after a scanner change
+    a section has the wrong type          something wrote it wrongly
+    not valid JSON                        a half-written file
+    unreadable: Permission denied         a mode or owner fmake cannot read
 
 The third is the one that cost the time, and it is the one a tool can only
 ever be told about by the thing that wrote the bad section.
+
+**The last two were the same gap one branch over, and I left them there.**
+Three reasons live in an `if`/`elif` and got the message; the fourth and
+fifth live in the `except` below it, `except (OSError, ValueError): pass`,
+and stayed silent -- so a truncated cache, a cache that is not JSON, and a
+cache whose mode fmake cannot read each rebuilt the whole tree saying
+nothing. **An `except` keeps a gap the `if` beside it has closed**, which is
+worth holding as a shape: the two are one refusal wearing two syntaxes, and
+fixing the readable half reads as fixing the refusal.
+
+Found by sweeping for exception handlers whose whole body is `pass`,
+`continue` or a bare `return`: 47 of them. **Nine catch something beyond a
+plain `OSError`** -- a parse error, a timeout, a subprocess failure, a
+`ValueError` -- and those nine were read, because an `OSError` on a `stat`
+usually *is* the answer the caller wanted. Seven are deliberate fallbacks
+that say so in their own comments (`git_ignored`: "an empty answer is the
+safe one and every failure returns it ... Nothing is skipped on a guess"),
+one is a correct SIGTERM-then-SIGKILL escalation, and one was this.
+
+**The other 38 were not read, and the first draft of this paragraph said
+"46 legitimate" as though they had been** -- a count inferred from the
+exception types and written as a measurement. What the sweep licenses is
+the nine.
+
+**And the sixth case is asserted silent.** No cache at all is the ordinary
+first build, so it says nothing, and the case checks that too: without it
+the remedy becomes a line on every fresh tree, and a message that prints
+when nothing is wrong is the next thing somebody stops reading.
 
 **And the message nearly cost something worse than it saved.** Written as
 a sibling `elif`, it shadowed the branch that preserves `generated_outputs`
