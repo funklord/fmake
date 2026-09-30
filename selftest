@@ -18434,6 +18434,78 @@ def a_function_pointer_object_is_a_definition(t):
 
 
 @case
+def a_program_this_invocation_left_is_not_called_unreachable(t):
+	"""`fmake test` called the tree's own program root an unreachable file.
+
+	It builds the tests and leaves the programs, and `main.c` was then
+	reported as
+
+	    main.c not compiled: nothing reaches it (--force-link if it is
+	    needed anyway)
+
+	which names a cause that is not the cause. Taking the advice links a
+	second main() into every test: fmake refuses that with a message of its
+	own -- "a program's own file was pulled into another program ... Both
+	define main(), so this cannot link" -- so the cost is a wasted build
+	rather than a broken binary, and it is still section 147.
+
+	The inverse already had its line: a plain build says "test programs not
+	built by default ... `fmake test` builds and runs them". This is that
+	line pointing the other way, and the asymmetry is what made the gap easy
+	to miss.
+
+	**The line is said only where the selection was implicit**, which is the
+	half worth testing. `fmake test` picks the tests and a reader may not
+	notice the programs were left; `fmake alpha` picked one on purpose, and
+	the first version told them the other three were not built. The
+	exclusion is unconditional either way -- whether or not the line prints,
+	a root this invocation did not ask for must not be reported as a file
+	nothing reaches.
+	"""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("tests/pass_test.c",
+	        "#include <stdio.h>\nint main(void){ puts(\"ok\"); return 0; }\n")
+
+	r = t.fmake("test", "-j4")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the test run failed: {said}")
+	check("nothing reaches it" not in said,
+	      f"a program root must not be called unreachable: {said}")
+	# The line itself, and that it names the program. Written first as
+	# `"not asked for" in said and "main" in said or "not asked for" in
+	# said', which is `(A and B) or A' -- so the naming half was dead and
+	# the check was only that the line existed.
+	left = [l for l in said.splitlines() if "not asked for" in l]
+	check(left, f"the programs left alone should be reported: {said}")
+	check(os.path.basename(t.dir) in left[0],
+	      f"and the line must name the program: {left[0]}")
+
+	# A plain build keeps its own half of the pair.
+	plain = t.fmake("-j4")
+	said = plain.stdout + plain.stderr
+	check("not built by default" in said,
+	      f"a plain build should still hold the test back and say so: {said}")
+	check("not asked for" not in said,
+	      f"and must not report programs it did build: {said}")
+
+	# Naming a target on purpose says neither thing.
+	v = Tree("asked-by-name")
+	try:
+		for n in ("alpha", "beta", "gamma"):
+			v.write(n + ".c", "/*! @file\n *  @target %s\n */\n"
+			        "int main(void){ return 0; }\n" % n)
+		check(v.fmake("-j4").returncode == 0, "the first build failed")
+		r = v.fmake("alpha", "-j4")
+		said = r.stdout + r.stderr
+		check("not asked for" not in said,
+		      f"naming a target is not a question about the others: {said}")
+		check("nothing reaches it" not in said,
+		      f"and the others' roots are not unreachable either: {said}")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

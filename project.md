@@ -398,7 +398,8 @@ that had been green about nothing for five commits ·
 [345. A main() the scanner cannot see](#345-a-main-the-scanner-cannot-see) ·
 [346. The record that outlived its rule](#346-the-record-that-outlived-its-rule) ·
 [347. The dispatch table nothing proposed](#347-the-dispatch-table-nothing-proposed) ·
-[348. Uninstall removes what it did not install](#348-uninstall-removes-what-it-did-not-install)
+[348. Uninstall removes what it did not install](#348-uninstall-removes-what-it-did-not-install) ·
+[349. The program a test run left behind](#349-the-program-a-test-run-left-behind)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2577,7 +2578,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 600
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 601
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26930,3 +26931,65 @@ purpose is a different kind of act. The options, with costs:
 Whose: the copyright holder's. It changes what fmake promises about
 deletion, and the first two change the relationship between fmake and its
 emitted builds, which is §8's territory rather than a bug's.
+
+## 349. The program a test run left behind
+
+`fmake test` builds the tests and leaves the programs. The tree's own
+`main.c` was then reported as
+
+    main.c not compiled: nothing reaches it (--force-link if it is needed
+    anyway)
+
+which names a cause that is not the cause. `main.c` roots a program; what
+happened is that this invocation did not ask for it.
+
+**Taking the advice is worse than ignoring it.** `--force-link main.c` in
+test mode links it into every test, and fmake refuses with a message of its
+own:
+
+    !!! a program's own file was pulled into another program:
+        crash_test links main.c, which roots testrun
+    Both define main(), so this cannot link.
+
+So the §28 guard holds and the cost is a wasted build rather than a broken
+binary. It is still §147: a message naming a cause nothing tested, and this
+one had become more visible because §343 made these notices fire when the
+set grows rather than only on a build that compiled something.
+
+### The inverse already had a line, which is what made the gap easy to miss
+
+A plain build says *"4 test programs not built by default (crash_test,
+...); `fmake test` builds and runs them"* -- specific, correct, and
+pointing at the remedy. Nothing said the same thing in the other direction,
+so `ignored` subtracted the held tests' roots and not the roots of targets
+this invocation simply had not asked for.
+
+Both now hold: a root fmake left alone is kept out of `ignored`, and the
+programs are named.
+
+### Said only where the selection was implicit
+
+`fmake test` picks the tests and a reader may not notice the programs were
+left. `fmake alpha` picked one on purpose, and the first version of this
+told them the other three were not built -- measured on a four-program
+tree, "3 programs not asked for (beta, delta, gamma)" printed to somebody
+who had just named the fourth. That is the noise §343 is about: a line that
+prints when nothing is wrong is the next one somebody stops reading.
+
+The exclusion is unconditional either way, and the case says so: whether or
+not the line prints, a root this invocation did not ask for must not be
+reported as a file nothing reaches. The two sabotages separate exactly
+those halves -- remove the exclusion and the false note returns; remove the
+gate and naming a target is noisy again.
+
+### And an assertion of mine that reduced to nothing
+
+The case checked
+
+    "not asked for" in said and "main" in said or "not asked for" in said
+
+which is `(A and B) or A`, so the naming half was dead and the check was
+only that the line existed. It reads the line and asserts the name is in it
+now. Two vacuous assertions of my own in two sittings, both in the half of
+a case that checks a message *names* something -- worth knowing as a habit
+rather than as two accidents.

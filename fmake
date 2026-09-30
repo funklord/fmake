@@ -11467,6 +11467,30 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		     f"default ({', '.join(sorted(t.name for t in held)[:3])}"
 		     f"{', ...' if n > 3 else ''}); {how} builds and runs them")
 
+	# The programs this invocation left alone, named for the same reason the
+	# held tests are: so that the report below does not call their roots
+	# unreachable. Held tests are excluded because they have a line of their
+	# own, and an eject wants every target so it has none of these.
+	unasked = [t for t in targets
+	           if t not in wanted and not t.test and not args.eject]
+	# Said only where the selection was implicit. `fmake test' picks the
+	# tests and a reader may not notice the programs were left; `fmake
+	# alpha' picked one on purpose, and telling them the other three were
+	# not built is the noise section 343 is about -- a line that prints when
+	# nothing is wrong is the next one somebody stops reading. Measured on a
+	# four-program tree: the first version said "3 programs not asked for"
+	# to somebody who had just named the fourth.
+	#
+	# The exclusion above is unconditional either way: whether or not this
+	# line prints, a root this invocation did not ask for must not be
+	# reported as a file nothing reaches.
+	if unasked and (run_groups or asked_phony):
+		n = len(unasked)
+		info(f"{n} program{'' if n == 1 else 's'} not asked for "
+		     f"({', '.join(sorted(t.name for t in unasked)[:3])}"
+		     f"{', ...' if n > 3 else ''}); plain `fmake` builds "
+		     + ("it" if n == 1 else "them"))
+
 	# ---- candidate set from the include graph -------------------------
 	units = {}
 
@@ -13463,8 +13487,21 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# --force-link for a file fmake has just finished explaining it does not
 	# want -- section 147's shape, a second message naming a cause nothing
 	# tested.
+	# A target this invocation did not ask for is not an unreachable file.
+	# `fmake test' builds the tests and leaves the programs, and the tree's
+	# own `main.c' was then reported as "nothing reaches it (--force-link if
+	# it is needed anyway)" -- a cause that is not the cause, and advice
+	# that links a second main() into every test. fmake refuses that with a
+	# good message, so the cost is a wasted build rather than a broken
+	# binary, but it is still section 147: a message naming a cause nothing
+	# tested.
+	#
+	# The inverse already has its own line -- a test held back says so and
+	# names `fmake test' -- and `unasked' is that line pointing the other
+	# way, reported where `held' is.
 	ignored = sorted(set(srcs) - set(units)
 	                 - {t.rel for t in held}
+	                 - {t.rel for t in unasked}
 	                 - crate_members
 	                 - set(situ_outs)
 	                 - set(crate_orphans)
