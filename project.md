@@ -403,7 +403,8 @@ that had been green about nothing for five commits ·
 [350. Two of three loops were believed](#350-two-of-three-loops-were-believed) ·
 [351. Clean was exempt from the lock](#351-clean-was-exempt-from-the-lock) ·
 [352. A binary built from code the tree does not have](#352-a-binary-built-from-code-the-tree-does-not-have) ·
-[353. Four families swept, and what that licenses](#353-four-families-swept-and-what-that-licenses)
+[353. Four families swept, and what that licenses](#353-four-families-swept-and-what-that-licenses) ·
+[354. A warning that ruled out the failure beneath it](#354-a-warning-that-ruled-out-the-failure-beneath-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27345,3 +27346,98 @@ with dependencies, or a generator whose depfile is malformed -- and the
 first three of those are where these projects actually live. What the sweep
 licenses is narrower than it looks: these shapes work, so a fault in them
 is not the next thing to suspect.
+
+## 354. A warning that ruled out the failure beneath it
+
+§335 added a warning for a per-target define that a moc'd header tests.
+moc runs once with the project's flags, so a declaration guarded by such a
+define is moc'd *without* it, and the meta-object then describes a
+different class than that target's own objects do. The warning was right
+to exist, and it said one thing too many.
+
+    thing.h       #if MODE == 1 / one() / #else / two() / #endif
+    [target.one]  cflags = ["-DMODE=1"]
+    [target.two]  cflags = ["-DMODE=2"]
+
+    * thing.h is moc'd once ... -- a runtime lookup, not a build error
+    [1/6] CXX .fmake/moc/moc_thing.cpp (one)
+    * 'class Thing' has no member named 'two'
+    * 1 file(s) did not compile
+      .fmake/moc/moc_thing.cpp (one)
+
+moc takes the `#else` branch, so `moc_thing.cpp` calls `_t->two()` -- which
+target one does not declare, MODE being 1 there. **The generated file fails
+to compile and the build stops, a few lines below a sentence saying this is
+not a build error.**
+
+Both directions are real and the message named one. A member the
+meta-object OMITS is the runtime `invokeMethod` §335 measured; a member it
+NAMES that this target does not declare is a compile error in the generated
+file. fmake cannot know which of them a tree has -- that is exactly why
+this condition warns rather than refusing, as §335 says -- so the message
+now names both outcomes and rules out neither.
+
+The cost of the old wording was not incompleteness. A reader looking at a
+failed build was told by fmake's own diagnosis that their failure is
+something else, which sends them hunting a runtime fault they do not have.
+`evidence.md` asks for a diagnostic's *message* to be pinned rather than
+the fact that it raised, and this is the shape that argument is about: the
+condition was detected perfectly and described wrongly.
+
+### Said once, not once per widening pass
+
+The same run printed each warning twice. It sat inside the widening loop,
+and neither `moc_jobs` nor a target's `cflags` changes as widening admits
+units -- so how many times a reader saw it was a property of how many
+passes the tree happened to need. Hoisted above the loop.
+
+The BMI refusal beside it stays inside, and the difference is the point:
+that one reads `units`, which widening grows, so a module interface
+admitted late is only visible to a later pass. Loop-invariant and not are
+the question, not tidiness.
+
+A target the loop below refuses is skipped here too, so a library carrying
+`cflags` is answered by that refusal alone rather than by a warning about
+moc above it.
+
+### The case takes one cold run, and the control says why
+
+`a_mocd_define_warning_is_said_once_and_denies_nothing` asserts the
+relationship rather than the wording: in the very run where the generated
+file failed to compile, the message must not deny that it can.
+
+The count needs more care than it looks. The candidate set is seeded from
+whatever widening found last time, so on a second run `report.cpp` is a
+candidate already and the tree widens not at all -- **the count is then 1
+whether the fix is in or not.** The first draft of the case took the
+widening proof from a `-v` run after a plain one and failed on its own
+control, which is the control working. Everything now comes out of one cold
+`-v` run: it asserts `widening:` appears, and only then believes the count.
+
+Both halves were sabotaged separately and each failed through its own
+check -- "said 2 times" for the hoist, and the "not a build error" line for
+the wording. Restored from a copy rather than with `git checkout`, the
+working tree holding uncommitted work.
+
+### How it was found, and one thing left alone
+
+Not by reading the warning. The lens was §344's parity question -- does an
+ejected build agree with fmake's own -- and the tree was built to exercise
+the most recently added features at once, on the theory that a feature
+added last is the one least likely to have reached every consumer. It never
+got as far as ejecting: fmake's own build already said something false.
+
+What the lens did find on the way, and what is deliberately not changed:
+the widening pool builds its units as `Unit(rel, root, objdir, scans[rel])`
+with no `members=`, while the admission 48 lines below it in the same
+block -- the one that pulls in a module interface a widened unit imports
+-- passes `members=crates.get(mrel, [])[1:]`, as the factory at the top of
+the pass does. A crate root admitted from that pool
+would lose its member list, and `crate_sources` would then report only the
+root until a depfile existed. **It is unreachable today**, because a
+crate's `defs` is deliberately empty and `widen_candidates` filters on
+`defs`, so no crate is ever proposed. It is recorded rather than guarded
+because the guard would be a change no test can reach -- and the condition
+that makes it live is named in the comment that keeps `defs` empty, which
+contemplates scanning `#[no_mangle]`. Whoever does that should come here
+first.

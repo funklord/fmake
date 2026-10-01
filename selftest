@@ -18936,6 +18936,99 @@ def a_per_target_define_a_mocd_header_tests_is_reported(t):
 
 
 @case
+def a_mocd_define_warning_is_said_once_and_denies_nothing(t):
+	"""The same condition in the other direction, where it IS a build error.
+
+	The case above covers a member the meta-object OMITS: `#ifdef FEATURE`
+	guards `extra`, moc runs without it, the slot is missing from the
+	meta-object and present in the target's own objects, and the failure is
+	a runtime `invokeMethod` that finds nothing. The message said exactly
+	that -- "a runtime lookup, not a build error".
+
+	    thing.h       #if MODE == 1 / one() / #else / two() / #endif
+	    [target.one]  cflags = ["-DMODE=1"]
+	    [target.two]  cflags = ["-DMODE=2"]
+
+	Measured: moc takes the `#else` branch, so `moc_thing.cpp` calls
+	`_t->two()` -- which target one does not declare, MODE being 1 there.
+	The generated file fails to compile and the build stops, directly below
+	a line saying this was not a build error. A diagnostic that rules out
+	the failure the reader is looking at is worse than one that says less,
+	because it sends them hunting a runtime fault they do not have. So the
+	assertion is the relationship rather than the wording: in the very run
+	where the generated file failed to compile, the message must not deny
+	that it can.
+
+	The count is the second finding, and the fixture is built for it.
+	`report()` is defined in a file nothing includes, so symbol closure is
+	what admits it and the widening loop runs more than once -- the warning
+	sat inside that loop and was said once per pass. Widening is asserted
+	from `-v` before the count is believed: on a tree that does not widen,
+	the count is 1 whether the fix is in or not, and the case would pass
+	for the wrong reason."""
+	if not shutil.which("moc") and not glob.glob("/usr/lib/qt6/libexec/moc"):
+		raise Skip("no moc to run")
+	t.write("thing.h", "#pragma once\n#include <QObject>\n\n"
+	        "class Thing : public QObject {\n\tQ_OBJECT\npublic:\n"
+	        "#if MODE == 1\n\tQ_INVOKABLE int one() { return 1; }\n"
+	        "#else\n\tQ_INVOKABLE int two() { return 2; }\n#endif\n};\n")
+	t.write("report.cpp", '#include "thing.h"\n#include <QMetaMethod>\n'
+	        "#include <cstdio>\n\nvoid report(void)\n{\n"
+	        "\tconst QMetaObject *m = &Thing::staticMetaObject;\n"
+	        "\tfor (int i = m->methodOffset(); i < m->methodCount(); ++i)\n"
+	        '\t\tprintf("%s\\n", m->method(i).name().constData());\n}\n')
+	t.write("one.cpp", "void report(void);\n"
+	        "int main(void){ report(); return 0; }\n")
+	t.write("two.cpp", "void report(void);\n"
+	        "int main(void){ report(); return 0; }\n")
+	t.write("fmake.toml", '[target.one]\ncflags = ["-DMODE=1"]\n\n'
+	        '[target.two]\ncflags = ["-DMODE=2"]\n')
+
+	# One COLD run with `-v', and everything is read out of it. The
+	# candidate set is seeded from what widening found last time, so a
+	# second run has `report.cpp' as a candidate already and widens not at
+	# all -- the count would then be 1 whether the fix is in or not. Taking
+	# the proof and the count from two runs would also be two snapshots of
+	# a tree that changes between them, which is the thing `evidence.md'
+	# says not to do.
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	if "Qt6Core" in out and "not satisfied" in out:
+		raise Skip("Qt6Core is not installed here")
+	check("meta-object" in out and "MODE" in out,
+	      f"a per-target define a moc'd header tests must be named: {out}")
+
+	# The fixture's own control, in the same run as the count: `report()'
+	# is reached by symbol closure, so this tree widens, so the loop the
+	# warning used to sit in runs more than once.
+	check("widening:" in out,
+	      f"this fixture has to widen for the count to mean anything, and "
+	      f"-v does not say it did: {out}")
+
+	for name in ("one", "two"):
+		n = out.count(f"[target.{name}] cflags defines")
+		check(n == 1,
+		      f"the moc define warning is one fact about the tree and has "
+		      f"to be said once for {name}, not once per widening pass; "
+		      f"said {n} times")
+
+	# The relationship: this run DID fail to compile the generated file, so
+	# nothing in the message may rule a compile error out.
+	check(r.returncode != 0,
+	      f"moc's #else branch calls a member target one lacks, so the "
+	      f"generated file cannot compile and the build must fail: {out}")
+	check("moc_thing.cpp" in out and "did not compile" in out,
+	      f"the failure has to be reported against the generated file: "
+	      f"{out}")
+	check("not a build error" not in out,
+	      f"the build stopped on the generated file, and the warning above "
+	      f"it must not say this is not a build error: {out}")
+	check("fails to compile" in out and "invokeMethod" in out,
+	      f"the warning has to name both outcomes, since fmake cannot know "
+	      f"which of them this tree has: {out}")
+
+
+@case
 def a_module_interface_and_per_target_flags_are_refused_together(t):
 	"""Two features of this session, and together they built the wrong
 	program in silence.
