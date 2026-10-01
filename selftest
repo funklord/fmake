@@ -5179,6 +5179,83 @@ def a_path_with_a_pipe_is_refused_by_both_backends(t):
 
 
 @case
+def a_path_with_an_equals_is_refused_by_make_and_built_by_ninja(t):
+	"""The whitelist's own safety argument, disproved by one character.
+
+    MAKE_SAFE replaced a blacklist that had been built by testing Make's
+    parser and never the recipe's shell. The comment above it then said:
+    "A whitelist cannot be wrong in that direction. It can only be too
+    strict". Both halves were false, in the mirror image of the error
+    they described -- the whitelist was built by asking the shell, and
+    `=' is a question for Make's parser.
+
+    `w=ird.c' was admitted, and the rule line it ejects is read as an
+    assignment because the `=' precedes the colon:
+
+        $(BUILD_DIR)/w=ird.c.o: w=ird.c
+        ^Itab line, now belonging to no target
+
+        Makefile:76: *** recipe commences before first target.
+
+    Exit 0 from --eject, and a Makefile that cannot build -- the same
+    silent failure the blacklist had produced, out of the same function,
+    from the opposite direction.
+
+    The assertion is the INVARIANT and not the refusal: fmake must never
+    write a Makefile that cannot build. Put that way round, admitting `='
+    to MAKE_SAFE again fails here with make's own error, which tells a
+    reader what went wrong; asserting "it should have refused" would only
+    say that a list changed.
+
+    The ninja arm is the other half, because the Makefile refusal names
+    `--eject ninja' as the remedy and a remedy that does not work is
+    worse than none. Measured: ninja builds `=' and the program runs."""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 7; }\n")
+	t.write("w=ird.c", "int helper(void){ return 7; }\n")
+	check(t.fmake().returncode == 0, "fmake itself should cope")
+
+	r = t.fmake("--eject", "make")
+	out = r.stdout + r.stderr
+	if r.returncode == 0:
+		t.write("Makefile", r.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		b = subprocess.run(["make", "-C", t.dir], capture_output=True,
+		                   text=True)
+		check(b.returncode == 0,
+		      f"--eject make exited 0 for a path containing `=' and make "
+		      f"cannot build what it wrote: "
+		      f"{(b.stderr or b.stdout).strip()[-200:]}")
+	else:
+		check("assignment" in out,
+		      f"the refusal has to say why `=' is the problem, since the "
+		      f"reader's next move is to rename the file: {out}")
+
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	nj = t.fmake("--eject", "ninja")
+	check(nj.returncode == 0,
+	      f"the Makefile refusal names --eject ninja as the remedy, so "
+	      f"ninja has to express `=': {nj.stdout}{nj.stderr}")
+	t.write("build.ninja", nj.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	b = subprocess.run(["ninja", "-C", t.dir], capture_output=True,
+	                   text=True)
+	check(b.returncode == 0,
+	      f"the ejected ninja build failed on a path with `=': "
+	      f"{b.stdout}{b.stderr}")
+	exe = [f for f in os.listdir(t.dir)
+	       if os.path.isfile(os.path.join(t.dir, f))
+	       and os.access(os.path.join(t.dir, f), os.X_OK)
+	       and not f.endswith((".c", ".ninja")) and f != "Makefile"]
+	check(exe, f"ninja produced no program: {sorted(os.listdir(t.dir))}")
+	check(t.run(exe[0]).returncode == 0,
+	      "the program ninja built from a path with `=' did not run")
+
+
+@case
 def a_description_with_a_newline_is_refused(t):
 	"""A description is one line of a build file, and ninja reads the
 	next one as a statement of its own.

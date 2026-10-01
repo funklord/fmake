@@ -405,7 +405,8 @@ that had been green about nothing for five commits ·
 [352. A binary built from code the tree does not have](#352-a-binary-built-from-code-the-tree-does-not-have) ·
 [353. Four families swept, and what that licenses](#353-four-families-swept-and-what-that-licenses) ·
 [354. A warning that ruled out the failure beneath it](#354-a-warning-that-ruled-out-the-failure-beneath-it) ·
-[355. The remedy that named a backend which could not do it either](#355-the-remedy-that-named-a-backend-which-could-not-do-it-either)
+[355. The remedy that named a backend which could not do it either](#355-the-remedy-that-named-a-backend-which-could-not-do-it-either) ·
+[356. The whitelist that could only be too strict](#356-the-whitelist-that-could-only-be-too-strict)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27610,3 +27611,77 @@ three regexes reject.
 
 The remedy works in all three. Recorded because an empty result is a
 measurement only if its method is written down.
+
+## 356. The whitelist that could only be too strict
+
+§355 asked whether ninja can build the characters make refuses, because
+the Makefile refusal names ninja as the remedy. The opposite question --
+whether make can build the characters it *allows* -- was never asked, and
+the comment above `MAKE_SAFE` said it did not need to be:
+
+    A whitelist cannot be wrong in that direction. It can only be too
+    strict, which costs a refusal naming a file somebody can rename
+
+Both halves are false, and false in the mirror image of the error that
+paragraph was written about. The blacklist it replaced had been built by
+testing Make's **parser** and never the recipe's shell. The whitelist was
+built by asking the **shell** -- and `=` is a question for the parser.
+
+    character   ejected Makefile          ejected build.ninja
+    =           *** recipe commences      builds, program exit 0
+                before first target
+    @ , + ~ -   build, program exit 0     --
+    non-ASCII   builds (re-measured)      --
+
+`w=ird.c` passed every check, and the rule line it ejects is read as an
+assignment because the `=` comes before the colon:
+
+    $(BUILD_DIR)/w=ird.c.o: w=ird.c      <- assigns to $(BUILD_DIR)/w
+    <tab>@mkdir -p $(@D)                 <- a recipe belonging to nothing
+
+    Makefile:76: *** recipe commences before first target.  Stop.
+
+Exit 0 from `--eject make`, and a Makefile that cannot build: the same
+silent failure, out of the same function, arriving from the direction the
+comment said was closed.
+
+**A whitelist is safe only about what it excludes.** Every character it
+admits is a claim, and the admitted set had never been built. `=` is in
+`MAKE_CANNOT` now with its own reason, and the other five -- `@`, `,`,
+`+`, and `~` and `-` away from the start -- were built through an ejected
+Makefile before the comment was allowed to say so.
+
+### The case asserts the invariant, not the refusal
+
+`a_path_with_an_equals_is_refused_by_make_and_built_by_ninja` does not
+assert that fmake refuses. It asserts that **fmake never writes a
+Makefile that cannot build**: if `--eject make` exits 0, the Makefile is
+written out and make is run, and make must succeed.
+
+Put that way round, re-admitting `=` to `MAKE_SAFE` fails with make's own
+words --
+
+    --eject make exited 0 for a path containing `=' and make cannot
+    build what it wrote: Makefile:76: *** recipe commences before
+    first target.  Stop.
+
+-- which tells a reader what broke. Asserting "it should have refused"
+would have said only that a list changed, and would have gone green
+again the moment somebody added a different character.
+
+The ninja arm is the other half, on the same grounds as §355: the
+Makefile refusal names `--eject ninja`, so that has to work, and it does.
+
+### A claim of my own that §355 falsified and left standing
+
+The same comment ended "and `--eject ninja' was measured to build every
+one of these". §355 made that false in the act of refusing `|`, and did
+not correct it -- the finding was in `_unninjaable` and the stale
+sentence was two screens away in a comment about `MAKE_SAFE`. It now
+reads: ninja builds every character this excludes, `=` included, except
+`|` and a newline, which `_unninjaable` refuses on both sides.
+
+Worth recording as its own paragraph rather than folded into the fix,
+because it is `working-practice.md`'s rule about where a correction has
+to go, met from the inside: the copy in front of me was the predicate,
+and the copy a reader would next look at was the comment.

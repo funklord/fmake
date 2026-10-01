@@ -14521,7 +14521,8 @@ def _ninja(path):
 MAKE_CANNOT = {"$": "$ starts a variable reference",
                "#": "# starts a comment",
                ":": ": separates a target from its prerequisites",
-               ";": "; ends the target line and starts a recipe"}
+               ";": "; ends the target line and starts a recipe",
+               "=": "= before the colon makes the line a variable assignment"}
 
 # What may appear in a path an ejected Makefile names, as a whitelist.
 #
@@ -14533,15 +14534,32 @@ MAKE_CANNOT = {"$": "$ starts a variable reference",
 # build -- the same silent failure, out of the same function, one layer
 # further down.
 #
-# A whitelist cannot be wrong in that direction. It can only be too strict,
-# which costs a refusal naming a file somebody can rename, and `--eject
-# ninja' was measured to build every one of these.
+# This comment then said, of the whitelist that replaced it:
+# "A whitelist cannot be wrong in that direction. It can only be too strict".
+# Both halves were false, and false in the mirror image of the blacklist's
+# own error: the whitelist was built by asking the SHELL, and `=' is a
+# question for Make's PARSER. `w=ird.c' passed every check here, and the
+# rule line it ejects -- `$(BUILD_DIR)/w=ird.c.o: w=ird.c' -- is read as
+# an assignment to `$(BUILD_DIR)/w', the `=' coming before the colon. The
+# tab line below it then belongs to no target: "*** recipe commences
+# before first target". Exit 0 from --eject, and a Makefile that cannot
+# build.
+#
+# So a whitelist is safe only about what it EXCLUDES. Every character it
+# ADMITS is a claim, and each of these has now been built through an
+# ejected Makefile: `@', `,', `+', and `~' and `-' away from the start.
+# `=' is in MAKE_CANNOT because it could not be.
+#
+# A refusal here costs a rename, and `--eject ninja' builds every
+# character this excludes -- `=' included, measured -- except `|' and a
+# newline, which `_unninjaable' refuses on both sides.
 #
 # `\w' rather than [A-Za-z0-9_] because it is Unicode-aware. A source
 # file whose name carries a non-ASCII letter -- `caf\303\251.c' as git
 # prints it -- was measured to build through an ejected Makefile, and
-# refusing it would be a regression wearing the clothes of caution.
-MAKE_SAFE = re.compile(r"[\w.+=@,~/-]\Z")
+# re-measured when `=' was found. Refusing it would be a regression
+# wearing the clothes of caution.
+MAKE_SAFE = re.compile(r"[\w.+@,~/-]\Z")
 
 
 def _unmakeable(path):
