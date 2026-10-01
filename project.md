@@ -18466,11 +18466,43 @@ debhelper's default -- enable and start on install -- is exactly what
 that package must not do, and it took a session to notice the generated
 snippet contradicting the hand-written header in the same file.
 
-What is missing from fmake's model today is the class of thing these
+~~What is missing from fmake's model today is the class of thing these
 trees keep under `packaging/`: systemd units, sysvinit and OpenRC scripts,
 a procd script, `.desktop` files, icons, metainfo, man pages, sysusers,
 D-Bus policy, an APKBUILD. `install_plan` knows four directories --
-`bindir`, `libdir`, `includedir`, `pkgconfigdir` -- and none of those.
+`bindir`, `libdir`, `includedir`, `pkgconfigdir` -- and none of those.~~
+
+**Every item on that list exists now, and the sentence had outlived all of
+them.** It is kept because the plan below is written against it, and struck
+because a reader meeting it would think fmake cannot install a man page.
+
+Re-measured 2026-10-01 by installing one program declaring every class at
+once, to a staging prefix, and comparing against the ejected Makefile's
+install:
+
+    usr/bin/tool
+    etc/init.d/tool                                   (mode 755)
+    usr/lib/udev/rules.d/99-tool.rules
+    usr/share/applications/tool.desktop
+    usr/share/dbus-1/system.d/tool.conf
+    usr/share/icons/hicolor/scalable/apps/tool.svg
+    usr/share/man/man1/tool.1
+    usr/share/metainfo/tool.metainfo.xml
+    usr/share/polkit-1/actions/org.x.tool.policy
+    usr/share/tool/share/table.dat
+
+Ten places rather than four, and the detail worth reading is not the count.
+The icon lands at the freedesktop path for an SVG. The init script is named
+after the SERVICE rather than after the file, which is what `rc-service`
+is told, and it is 755 where a unit is 644. The unit itself was *not*
+placed, correctly: this machine has `/run/openrc`, so `detect_init` says
+openrc and the systemd glue is not this machine's to install -- declaring
+`openrc` as well is what produced `etc/init.d/tool`. And the ejected
+`make install` places the same ten files with the same modes.
+
+`[package]` exists too, carrying `maintainer`, `homepage`, `description`,
+`section`, `copyright` and sysusers, and `[install]` carries a directory
+for each class above.
 
 ### The shape
 
@@ -27289,6 +27321,21 @@ A header with `Q_OBJECT`, against Qt 6.8.2:
 Querying the meta-object is the point. A case that checked the moc output
 existed would pass against a stale one; asking Qt whether the slot is there
 cannot.
+
+### A fifth, found by reading a claim rather than picking a feature
+
+The install model, measured because §227 said it was missing. One program
+declaring `@man`, `@desktop`, `@icons`, `@metainfo`, `@dbus`, `@udev`,
+`@polkit` and `@data`, with a `[service.*]` for the init glue: ten files,
+each in its conventional place, identical between `fmake --install` and the
+ejected `make install` down to the modes. §227 carries the table and the
+correction.
+
+The useful part is how it was found. Not by choosing a feature to probe but
+by reading a sentence that asserted an absence -- which is `evidence.md`'s
+*claim that outlived its subject*, and the second one this session after
+§85's. Both were countable present-tense claims about the tree's own shape,
+which is exactly the kind that rots.
 
 ### What it does not license
 
