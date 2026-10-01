@@ -19388,6 +19388,32 @@ def do_clean(root):
 		info("nothing to clean")
 		return 0
 
+	# Serialised against a build, which it was not. `TreeLock' existed for
+	# exactly this -- "one can be reading the objects another is replacing"
+	# -- and `--clean' was dispatched straight from the argument handling,
+	# so it removed `.fmake/' from under a running compile. What that looks
+	# like is the reason it matters rather than the race itself:
+	#
+	#     /usr/bin/nm: '.../s0.c.o': No such file
+	#     Set [toolchain] nm in fmake.toml, or $NM, to one that
+	#     understands unknown objects.
+	#
+	# A concurrency accident reported as a broken `nm', with advice to
+	# reconfigure the toolchain. Measured on an 80-file tree with a clean
+	# fired once six objects existed: the build exits 1, no binary, and
+	# every line of the diagnosis points somewhere else.
+	#
+	# Waiting is what the lock's own docstring argues for, and clean is the
+	# most destructive thing here, so it is the last operation that should
+	# have been exempt. `_undo' does nothing for this caller -- it returns
+	# unless the lock created the state directory -- so holding it costs
+	# nothing beyond the wait.
+	with TreeLock(state):
+		return _do_clean_locked(root, state)
+
+
+def _do_clean_locked(root, state):
+	"""`--clean' proper, with the tree lock held. See `do_clean'."""
 	# Generated sources, named one by one, for the reason `--uninstall' and
 	# the ejected clean rule name theirs: this is removing files from
 	# somebody's source tree, so it must not be able to take one it did not

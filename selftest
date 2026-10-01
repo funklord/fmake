@@ -18571,6 +18571,81 @@ def an_excluded_provider_is_not_answered_with_a_library(t):
 
 
 @case
+def clean_waits_for_a_build_rather_than_deleting_under_it(t):
+	"""`--clean` was the one operation exempt from the tree lock.
+
+	`TreeLock` exists because "one can be reading the objects another is
+	replacing", and `--clean` was dispatched straight from the argument
+	handling without it -- so it removed `.fmake/` from under a running
+	compile. What that looks like is why it matters more than the race does:
+
+	    /usr/bin/nm: '.../s0.c.o': No such file
+	    Set [toolchain] nm in fmake.toml, or $NM, to one that understands
+	    unknown objects.
+
+	A concurrency accident reported as a broken `nm`, with advice to
+	reconfigure the toolchain. Measured on an 80-file tree with a clean fired
+	once six objects existed: the build exits 1, no binary, and every line of
+	the diagnosis points somewhere else.
+
+	Checked the way `a_build_waits_for_a_lock_it_cannot_take` checks the
+	other direction: this takes the lock itself and waits for clean to
+	*reach* it, by watching its open descriptors, rather than giving it a
+	number of seconds. A case that fails when the machine is busy is a case
+	that will be re-run rather than read.
+	"""
+	try:
+		import fcntl
+	except ImportError:
+		raise Skip("no fcntl on this platform")
+
+	t.write("main.c", "int main(void){ return 0; }\n")
+	check(t.fmake().returncode == 0, "first build failed")
+	lock = os.path.join(t.dir, ".fmake", "lock")
+	check(os.path.exists(lock), "no lock file was created")
+
+	held = open(lock, "w")
+	fcntl.flock(held, fcntl.LOCK_EX)
+	try:
+		proc = subprocess.Popen([FMAKE, "-C", t.dir, "--clean"],
+		                        stdout=subprocess.PIPE,
+		                        stderr=subprocess.STDOUT, text=True)
+		fds = f"/proc/{proc.pid}/fd"
+		deadline = time.time() + 120
+		while True:
+			if proc.poll() is not None:
+				raise Failure("clean ran while another fmake held the lock")
+			try:
+				at_lock = any(
+				    os.path.realpath(os.path.join(fds, f)) == lock
+				    for f in os.listdir(fds))
+			except OSError:
+				at_lock = False       # it exited between poll and listdir
+			if at_lock:
+				break
+			if time.time() > deadline:
+				raise Failure("clean never opened the lock file in two "
+				              "minutes, so this case tested nothing")
+			time.sleep(0.05)
+		time.sleep(0.3)
+		check(proc.poll() is None,
+		      "clean did not block on a lock another process holds")
+		# And the state it was told not to touch is still there.
+		check(os.path.isdir(os.path.join(t.dir, ".fmake")),
+		      "clean removed the state directory while blocked")
+	finally:
+		fcntl.flock(held, fcntl.LOCK_UN)
+		held.close()
+
+	out, _ = proc.communicate(timeout=120)
+	check(proc.returncode == 0, f"the waiting clean failed: {out}")
+	check("waiting for another fmake" in out,
+	      f"it should say why it paused: {out}")
+	check(not os.path.isdir(os.path.join(t.dir, ".fmake")),
+	      f"and it should clean once the lock is free: {out}")
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

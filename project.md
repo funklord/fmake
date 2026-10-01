@@ -400,7 +400,8 @@ that had been green about nothing for five commits ·
 [347. The dispatch table nothing proposed](#347-the-dispatch-table-nothing-proposed) ·
 [348. Uninstall removes what it did not install](#348-uninstall-removes-what-it-did-not-install) ·
 [349. The program a test run left behind](#349-the-program-a-test-run-left-behind) ·
-[350. Two of three loops were believed](#350-two-of-three-loops-were-believed)
+[350. Two of three loops were believed](#350-two-of-three-loops-were-believed) ·
+[351. Clean was exempt from the lock](#351-clean-was-exempt-from-the-lock)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2579,7 +2580,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 602
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 603
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26795,6 +26796,20 @@ as one that removes it. The cost is a file fmake can no longer produce
 lingering after its rule's output path is renamed; that is litter, and the
 alternative was deleting somebody's source.
 
+### The ejected clean was already right, so this restored parity
+
+Checked afterwards, because §344 is a standing reminder to ask: the ejected
+Makefile's clean rule is generated from the *current* plan, so its
+`GENERATED` list is the declared set and it cannot carry a stale record at
+all. Measured on the same tree -- with the rule dropped, `Makefile2` has no
+`GENERATED` variable, `gen/msg.c` appears only as an ordinary source, and
+`make clean` leaves the hand-written file.
+
+So fmake was the one out of step, and this brought it into line with the
+build it emits rather than introducing a difference. That is the opposite
+direction from §344, where a fix of mine made fmake disagree with its own
+output, and it is the same question asked in time.
+
 ### Three arms, three sabotages
 
 Removing the declaration check fails on the deletion; never removing
@@ -27065,3 +27080,82 @@ which is the population assertion §341 used for exit statuses, pointed at
 diagnostics. Not written: the causes are not enumerable the way the modes
 were, and a population assertion over a set nobody can enumerate is the
 thing `evidence.md` warns against rather than the remedy for it.
+
+## 351. Clean was exempt from the lock
+
+`TreeLock` appears in exactly one place in fmake: inside `_locked_build`.
+`--clean` is dispatched straight from the argument handling and took no
+lock, so it removed `.fmake/` from under a running compile.
+
+The race is the smaller half. **What it looks like is the finding:**
+
+    /usr/bin/nm: '.../s0.c.o': No such file
+    Set [toolchain] nm in fmake.toml, or $NM, to one that understands
+    unknown objects.
+
+A concurrency accident reported as a broken `nm`, with advice to
+reconfigure the toolchain. Measured on an 80-file tree with a clean fired
+once six objects existed: the build exits 1, no binary, and every line of
+the diagnosis points somewhere else. `running-code.md` records this exact
+shape from a different direction -- "a concurrent make from another session
+can delete a test binary underneath a running invocation, and the
+inconsistent state that produces looks exactly like a memory bug" -- and
+here fmake was the concurrent writer.
+
+The lock's own docstring had already made the argument: *"one can be reading
+the objects another is replacing. Waiting is friendlier than either, and a
+build is long enough that the wait is not the expensive part."* Clean is the
+most destructive thing in the tool, so it is the last operation that should
+have been exempt. It waits now:
+
+    * waiting for another fmake in this tree
+    * removed .fmake/ (164 file(s), 325.4K)
+
+and the build it waited for finishes with no nm complaints and a working
+program.
+
+### Why it cost nothing to hold
+
+Two details made this a two-line change rather than a question. The early
+`nothing to clean` return happens before the lock, so a tree with no state
+is not given one just to take it away again. And `_undo` -- which removes
+the state directory when a run never used it -- returns unless the lock
+*created* that directory, which for this caller it never does. So holding
+the lock adds the wait and nothing else.
+
+The lock file lives inside the directory clean removes, and that is fine:
+flock is on the inode, the fd stays open, and `__exit__` unlocks and closes
+a file that is already gone without complaint.
+
+### `--run` does not hold it, and the reason is not in the code
+
+Worth measuring rather than assuming, because the shape invites a bug:
+`--run` builds and then `os.execv`s the program, and the exec happens
+*inside* the `with TreeLock(...)`. A lock held on an inherited descriptor
+survives exec, so the user's program would hold the tree lock for its whole
+life and the next fmake in that tree would block on it.
+
+It does not. Measured both ways: another fmake in the tree during a
+six-second run took the lock with no wait, and the exec'd program's own
+`/proc/<pid>/fd` holds `/dev/null` and its log and no lock file.
+
+The reason is PEP 446 -- Python's `open()` sets `O_CLOEXEC` by default, so
+the lock descriptor closes at exec and the flock goes with it. Nothing in
+fmake says so, which is why this is written down: an `os.set_inheritable`,
+or a lock opened through `os.open` without `O_CLOEXEC`, would hand a
+long-running program the tree lock and nothing would fail until two people
+used the tree at once.
+
+### The case checks the mechanism, not a stopwatch
+
+`a_build_waits_for_a_lock_it_cannot_take` had already paid for the right
+idiom, and its docstring says why: it "said no timing assumption and had
+one", gave fmake three seconds to reach the lock, and failed on a busy
+machine for want of startup time. So this case takes the lock itself and
+waits for clean to *reach* it -- the lock file appearing among its open
+descriptors -- with a cap that means something has gone wrong rather than a
+deadline the machine can miss.
+
+It also asserts the state directory survives while clean is blocked, which
+is the thing the lock is for, and that clean completes once the lock is
+free, so a fix that simply refused would not pass.
