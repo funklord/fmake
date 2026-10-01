@@ -14641,23 +14641,49 @@ def _unninjaable(path):
 	"""Why ninja cannot express this path, or None.
 
     `_ninja' escapes a space, a colon and a dollar, which is every
-    character ninja gives an escape for. A newline has none: measured, a
-    source called `we<newline>ird.c' ejected a build.ninja that ninja
-    refused to parse -- "expected \':\', got newline" -- after --eject
-    exited 0.
+    character ninja gives an escape for. Two characters have none.
 
-    It matters more than one rare filename, because the Makefile refusal
-    sends people here: "use --eject ninja, which can express all of
-    them". For a newline that sentence was false, and this is what makes
-    it true again by refusing on both sides.
+    A newline: measured, a source called `we<newline>ird.c' ejected a
+    build.ninja that ninja refused to parse -- "expected \':\', got
+    newline" -- after --eject exited 0.
+
+    A pipe: `|' separates a build line's implicit dependencies, and
+    ninja offers no escape -- `$|' is refused outright, "bad $-escape
+    (literal $ must be written as $$)". Measured on `w|ird.c':
+    --eject ninja exited 0, and ninja then said "'w', needed by
+    'build/w', missing and no known rule to make it", having read the
+    path as a target and the rest of it as dependencies.
+
+    It matters more than two rare filenames, because the Makefile
+    refusal sends people here: "use --eject ninja, which can express
+    all of them". For both of these that sentence was false, and this
+    is what makes it true again by refusing on both sides.
+
+    Found by enumerating every character MAKE_SAFE excludes rather than
+    by reasoning about ninja's grammar. Of the 24 printable ones, 23
+    build and `|' does not; tab, vertical tab, form feed, DEL, bell and
+    escape all build as well, so a plain space is the only whitespace
+    ninja needs told about. The first guess, read off ninja's own error
+    text, was `#' -- which works.
     """
 	if "\n" in path or "\r" in path:
 		return "no build file can name a path containing a newline"
+	if "|" in path:
+		return ("ninja has no escape for `|', which separates a build "
+		        "line's implicit dependencies")
 	return None
 
 
-def _refuse_newlines(targets, closures, root, extra=()):
-	"""The one thing neither backend can express."""
+def _refuse_unnameable(targets, closures, root, extra=()):
+	"""What neither backend can express, whatever the reason.
+
+    Named for the question rather than for the character,
+    because the answer grew: a newline, and then a pipe.
+    `_unninjaable' holds the reasons and this only reports them,
+    so a third one needs no change here -- and the old name,
+    `_refuse_newlines', would have sent a reader looking for the
+    pipe refusal somewhere else.
+    """
 	bad = {}
 	for path in _eject_paths(targets, closures, root, extra):
 		why = _unninjaable(path)
@@ -14669,8 +14695,8 @@ def _refuse_newlines(targets, closures, root, extra=()):
 		    + "\n    ".join(f"{p!r}  ({bad[p]})" for p in shown)
 		    + (f"\n    ... and {_brest} more (-v for all)"
 		       if _brest else "")
-		    + "\nRename them: ninja has no escape for a newline and Make "
-		      "splits on it.")
+		    + "\nRename them. Neither backend can name these, so "
+		      "`--eject ninja' is not an answer either.")
 
 
 def _refuse_whitespace(targets, closures, root, extra=()):
@@ -14681,6 +14707,13 @@ def _refuse_whitespace(targets, closures, root, extra=()):
     something that looks like a build file and silently means something
     else is worse than saying so -- and ninja can express all of these, so
     there is somewhere to send people.
+
+    That last clause is true only because `_refuse_unnameable'
+    has already run and taken the newline and the pipe out:
+    neither reaches this function in any configuration, so the
+    remedy below cannot name a backend that would refuse as
+    well. Worth stating, because the sentence has been false
+    twice.
     """
 	bad = {}
 	for path in _eject_paths(targets, closures, root, extra):
@@ -14742,7 +14775,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	            # directory in two and built `out' and `dir/prog'.
 	            + ([outdir] if outdir else []))
 	_refuse_leading_dash(targets, closures, root, gen_srcs)
-	_refuse_newlines(targets, closures, root, gen_srcs)
+	_refuse_unnameable(targets, closures, root, gen_srcs)
 	_refuse_whitespace(targets, closures, root, gen_srcs)
 	any_crate = any(u.crate for t in targets for u in closures[t].link)
 	common = _eject_flags(cfg.base_cflags() + incflags, root, _mk_flag)
@@ -15693,7 +15726,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	nj_extra = (_tool_paths(moc, uic, rcc, gen_rules)
 	            + list(declared_submodules(root)))
 	_refuse_leading_dash(targets, closures, root, nj_extra)
-	_refuse_newlines(targets, closures, root,
+	_refuse_unnameable(targets, closures, root,
 	                 nj_extra + ([outdir] if outdir else []))
 	common = " ".join(_eject_flags(cfg.cflags + incflags, root, _nj_flag))
 	override = " ".join(_eject_flags(cfg.override, root, _nj_flag))

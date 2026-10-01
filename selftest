@@ -5091,6 +5091,94 @@ def a_path_with_a_newline_is_refused_by_both_backends(t):
 
 
 @case
+def a_path_with_a_pipe_is_refused_by_both_backends(t):
+	"""The same false promise, one character further on.
+
+    The case above fixed the newline half by refusing on both sides. A
+    pipe is the other one, and nothing had asked: `|' separates a build
+    line's implicit dependencies and ninja offers no escape for it --
+    `$|' is refused outright, "bad $-escape (literal $ must be written
+    as $$)".
+
+    Measured before the fix, on `w|ird.c': `--eject ninja' exited 0 and
+    ninja then said "'w', needed by 'build/w', missing and no known
+    rule to make it", having read the path as a target and the rest of
+    it as dependencies. `--eject make' refused it and sent the reader
+    to ninja, which could not express it either.
+
+    Found by enumerating every character MAKE_SAFE excludes rather than
+    by reasoning about ninja's grammar: of the 24 printable ones, 23
+    build and `|' does not, and tab, vertical tab, form feed, DEL, bell
+    and escape all build too. The first guess off ninja's error text
+    was `#', which works.
+
+    The control is the second half and is the point of the case: a
+    SPACE must still be refused by make and still built by ninja, with
+    the "use --eject ninja" remedy still offered. Refusing the pipe is
+    only correct if it did not take the family with it."""
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 7; }\n")
+	t.write("w|ird.c", "int helper(void){ return 7; }\n")
+	check(t.fmake().returncode == 0,
+	      "fmake itself should cope: it passes absolute paths and goes "
+	      "through neither a shell nor a build file")
+
+	# ninja first: it is the arm that used to exit 0 and write a file that
+	# could not build, which is the worse of the two failures, so it is the
+	# one a sabotage should report.
+	for backend in ("ninja", "make"):
+		r = t.fmake("--eject", backend)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"--eject {backend} emitted a build file for a path with a "
+		      f"pipe: {out[:300]}")
+		check("|" in out and "implicit dependencies" in out,
+		      f"the refusal does not say what is wrong: {out}")
+		check("can express all of them" not in out,
+		      f"--eject {backend} sent the reader to ninja for a path "
+		      f"ninja cannot name either: {out}")
+
+	# The control. A space is make-unsafe and ninja CAN name it, so the
+	# remedy is honest there and must survive the refusal above.
+	u = Tree("eject-space-control")
+	try:
+		if not shutil.which("make"):
+			raise Skip("make not installed")
+		u.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper() - 7; }\n")
+		u.write("we ird.c", "int helper(void){ return 7; }\n")
+		r = u.fmake("--eject", "make")
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "can express all of them" in out,
+		      f"a space must still be refused by make, with ninja named "
+		      f"as the remedy: {out}")
+		nj = u.fmake("--eject", "ninja")
+		check(nj.returncode == 0,
+		      f"ninja must still express a space: {nj.stdout}{nj.stderr}")
+		u.write("build.ninja", nj.stdout)
+		shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+		b = subprocess.run(["ninja", "-C", u.dir], capture_output=True,
+		                   text=True)
+		check(b.returncode == 0,
+		      f"the ejected ninja build failed on a space: "
+		      f"{b.stdout}{b.stderr}")
+		name = os.path.basename(u.dir).split("-")[0] or "a"
+		exe = [f for f in os.listdir(u.dir)
+		       if os.path.isfile(os.path.join(u.dir, f))
+		       and os.access(os.path.join(u.dir, f), os.X_OK)
+		       and not f.endswith((".c", ".ninja"))]
+		check(exe, f"the ninja build produced no program: "
+		           f"{sorted(os.listdir(u.dir))}")
+		check(u.run(exe[0]).returncode == 0,
+		      "the program ninja built from a path with a space did not "
+		      "run correctly")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_description_with_a_newline_is_refused(t):
 	"""A description is one line of a build file, and ninja reads the
 	next one as a statement of its own.

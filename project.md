@@ -404,7 +404,8 @@ that had been green about nothing for five commits ·
 [351. Clean was exempt from the lock](#351-clean-was-exempt-from-the-lock) ·
 [352. A binary built from code the tree does not have](#352-a-binary-built-from-code-the-tree-does-not-have) ·
 [353. Four families swept, and what that licenses](#353-four-families-swept-and-what-that-licenses) ·
-[354. A warning that ruled out the failure beneath it](#354-a-warning-that-ruled-out-the-failure-beneath-it)
+[354. A warning that ruled out the failure beneath it](#354-a-warning-that-ruled-out-the-failure-beneath-it) ·
+[355. The remedy that named a backend which could not do it either](#355-the-remedy-that-named-a-backend-which-could-not-do-it-either)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27479,3 +27480,133 @@ generated sources and objects under `BUILD_DIR`, not under `.fmake`. An
 ejected build needs no fmake to run, so it has no business writing into
 fmake's state directory -- this looked like a missing file for a minute,
 which is recorded here so the next reader spends no time on it.
+
+## 355. The remedy that named a backend which could not do it either
+
+`_refuse_whitespace` refuses a path an ejected Makefile cannot name and
+ends: **"Use `--eject ninja`, which can express all of them."** That
+sentence had already been false once. `_unninjaable`'s own docstring
+records it -- a newline has no ninja escape, so `--eject ninja` exited 0
+and wrote a file ninja would not parse -- and the fix was to refuse the
+newline on both sides, which made the sentence true again.
+
+Nobody had asked whether it was true for the rest. It is not.
+
+### One character, found by enumeration
+
+`MAKE_SAFE` is a whitelist, `[\w.+=@,~/-]`, so make refuses every other
+character and the reader is sent to ninja for all of them. One file per
+character, ejected and built:
+
+    24 printable characters MAKE_SAFE excludes
+      23 eject and build under ninja
+       1 does not: `|`
+
+    tab, vertical tab, form feed, DEL, bell, escape
+       all 6 eject and build
+
+So a plain space is the only whitespace ninja needs told about, and `|`
+is the whole population. Before the fix, on `w|ird.c`:
+
+    $ fmake --eject ninja > build.ninja    # exit 0
+    $ ninja
+    ninja: error: 'w', needed by 'build/w', missing and no known rule
+                  to make it
+
+`|` separates a build line's implicit dependencies, so ninja read the
+path as a target and the rest of it as dependencies. There is no escape:
+`$|` is refused outright -- *bad $-escape (literal $ must be written as
+$$)* -- which is why this is a refusal rather than an escaping fix.
+
+### The fix is one branch, and the ordering is what makes it work
+
+`_unninjaable` gains the pipe. `_refuse_newlines` consults it and is
+renamed `_refuse_unnameable`, because it is no longer about one
+character and the old name would have sent a reader looking for the
+pipe refusal somewhere else. In `eject_make` that refusal runs *before*
+`_refuse_whitespace`, so a pipe path now dies naming the pipe, and the
+"use ninja" sentence is never reached for it. `_refuse_whitespace`'s
+docstring says so, since the clause depends on an ordering two
+functions away.
+
+### The control is the point
+
+Refusing the pipe is only correct if it did not take the family with
+it. Measured, after the fix:
+
+    'we ird.c'   --eject make   refused, and still names --eject ninja
+                 --eject ninja  exit 0, ninja builds, program exit 0
+    'w|ird.c'    --eject ninja  refused, naming the pipe
+                 --eject make   refused, and does NOT name ninja
+
+fmake's own build takes both without comment, as it does every name in
+this family: it passes absolute paths and goes through neither a shell
+nor a build file.
+
+`a_path_with_a_pipe_is_refused_by_both_backends` carries both halves.
+Its backends are tried ninja-first on purpose: that is the arm that used
+to exit 0 over a broken file, so it is the arm a sabotage should report,
+and with the branch removed it does -- *"--eject ninja emitted a build
+file for a path with a pipe"*.
+
+### Two wrong guesses on the way, both corrected by measuring
+
+Worth recording because the first one was confident and the second was
+an omission of exactly the kind the enumeration existed to prevent.
+
+- **`#`, read off ninja's own error text.** `'w', needed by 'build/w'`
+  looks precisely like a comment swallowing the rest of the line, and
+  `#` is unescaped in the emitted file. It builds fine. The error was
+  the same shape for a different reason, and only testing each
+  character separately told them apart.
+- **The first sweep tested a space and no other whitespace.** Tab is
+  make-unsafe too and ninja might have split on it; it does not. Closed
+  by a second pass over tab, vertical tab, form feed, DEL, bell and
+  escape, all of which build.
+
+### How it was found: a coverage measurement, and its own correction
+
+Not by reading the message. Every `die`/`warn`/`note`/`info`/`vinfo`
+call in fmake was matched against selftest, asking which messages no
+case quotes -- because a message's *wording* is unchecked even when its
+*condition* is asserted, which is exactly what section 354 had just
+been about.
+
+The first probe demanded that a diagnostic's whole longest literal run
+appear in selftest and reported **286 of 302 unasserted.** That number
+is wrong and reading the findings is what killed it: `no C, C++,
+assembly or Rust source files found here` was on the list, and it *is*
+asserted -- by a shorter prefix. Re-aimed to ask whether any 24-character
+stretch appears, with a sentence known to be asserted as the control:
+
+    diagnostics with a quotable sentence   302
+    no case quotes any 24-char stretch     168   (108 die, 21 note,
+                                                  16 warn, 13 info,
+                                                  10 vinfo)
+
+168 is a list of candidates and not a defect count -- most are config
+refusals whose wording restates the condition. Filtering it to messages
+that name a **remedy** is what reached this one, on the project's own
+grounds that a remedy which does not work is worse than none.
+
+The probe has a known flaw, recorded rather than fixed: it joins literal
+runs across interpolations, so a sentence whose subject is an
+interpolated value can look like one starting lowercase. That is why the
+32 hits for *a lowercase word after a full stop* are not acted on here,
+beyond one read and confirmed by eye -- the shadowed-generated warning
+at the moc plan, whose second and third sentences do start lowercase
+against the house convention. Cosmetic, recorded, not swept.
+
+### One sweep that came back empty, with its method
+
+The same remedy filter named the three parallel package-name refusals --
+deb, ebuild and apk -- each ending `set [project] name`. Three emitters
+answering one question is the shape that has paid out repeatedly here,
+so it was measured: a tree in a directory called `Foo_Bar`, which all
+three regexes reject.
+
+    without [project] name    all three refuse, each in its own words
+    with    [project] name    all three get past the name check
+
+The remedy works in all three. Recorded because an empty result is a
+measurement only if its method is written down.
