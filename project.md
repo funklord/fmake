@@ -402,7 +402,8 @@ that had been green about nothing for five commits ·
 [349. The program a test run left behind](#349-the-program-a-test-run-left-behind) ·
 [350. Two of three loops were believed](#350-two-of-three-loops-were-believed) ·
 [351. Clean was exempt from the lock](#351-clean-was-exempt-from-the-lock) ·
-[352. A binary built from code the tree does not have](#352-a-binary-built-from-code-the-tree-does-not-have)
+[352. A binary built from code the tree does not have](#352-a-binary-built-from-code-the-tree-does-not-have) ·
+[353. Four families swept, and what that licenses](#353-four-families-swept-and-what-that-licenses)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27209,3 +27210,91 @@ The sabotage that matters is not deleting the warning, which fails on build
 1 and only proves the warning exists. It is re-gating it on `changed or
 news`, which warns on build 1 and goes quiet on build 2 -- and the case
 fails on build 2, which is exactly the behaviour being changed.
+
+## 353. Four families swept, and what that licenses
+
+Four features this session had not touched, each probed to an artifact
+rather than to an exit code, and **nothing found in any of them.** Recorded
+because an empty result is a measurement only if its method is written
+down, and because what it says is not what the finds say: these families
+have been swept, so the next fault here needs a new lens rather than
+another pass with this one.
+
+Every arm below has a witness that is not "it built", and the ones with a
+control say what the control separates.
+
+### A generator's depfile
+
+A rule whose command reads a file its `inputs` do not name, declaring
+`depfile`:
+
+    with a depfile       change the undeclared file -> regenerates, the
+                         program prints the new value
+    without one          change it -> stale, prints the old value
+
+The second is the control: it is what a correct fmake must do, since
+nothing tells it the file matters, and it is what makes the first arm a
+measurement rather than a coincidence. Both emitted builds honour it too --
+`make` and `ninja` each re-run the generator and reach the new value -- so
+this is parity as well as correctness, which is the question §344 made
+standing.
+
+### A cross build
+
+`[toolchain] cc = 'aarch64-linux-gnu-gcc'` with `arch = 'aarch64'`, which
+this machine can actually do:
+
+    objects      ELF 64-bit LSB relocatable, ARM aarch64
+    binary       ELF 64-bit pie executable, ARM aarch64, interpreter
+                 /lib/ld-linux-aarch64.so.1
+    a widened    compiled with the cross compiler, not the host one
+    file
+
+And `@arch` is tested against the target rather than the host, which is the
+property worth a witness: two implementations of one function, `@arch
+x86_64` returning 64 and `@arch aarch64` returning 99. The host build
+prints 64; the cross build compiles only the aarch64 file, and its
+disassembly carries `mov w0, #0x63`. Reading the number out of the
+instruction is what separates "the right file was compiled" from "a file
+was compiled". Both emitted builds carry the toolchain and the filtering:
+aarch64 binaries, `#0x63` in each.
+
+### Rust
+
+`main.rs` with `mod helper;`, one rustc call:
+
+    build        runs, prints 7
+    rebuild      up to date
+    change the   rebuilds and prints 42 -- so the depfile rustc writes is
+    MODULE       being read, which is the load-bearing half
+    settle       up to date again
+    an orphan    "src/orphan.rs is reached by no crate root: nothing
+    .rs          declares it with `mod', and only lib.rs or main.rs roots
+                 a crate"
+
+Changing the module rather than the root is the arm that matters: the root
+is what rustc is handed, so a tool that keyed on it alone would pass every
+other arm.
+
+### Qt moc
+
+A header with `Q_OBJECT`, against Qt 6.8.2:
+
+    build        MOC widget.h, compiles .fmake/moc/moc_widget.cpp, links
+    the witness  the program prints `Thing' from metaObject()->className(),
+                 so the meta-object is real rather than merely compiled
+    add a slot   re-mocs, and indexOfSlot("poke()") finds it
+    settle       up to date
+
+Querying the meta-object is the point. A case that checked the moc output
+existed would pass against a stale one; asking Qt whether the slot is there
+cannot.
+
+### What it does not license
+
+Four families, one configuration of each, on one machine. No arm here says
+anything about a second Qt version, a cross target without a libc, a crate
+with dependencies, or a generator whose depfile is malformed -- and the
+first three of those are where these projects actually live. What the sweep
+licenses is narrower than it looks: these shapes work, so a fault in them
+is not the next thing to suspect.
