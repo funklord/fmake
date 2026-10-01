@@ -27441,3 +27441,41 @@ because the guard would be a change no test can reach -- and the condition
 that makes it live is named in the comment that keeps `defs` empty, which
 contemplates scanning `#[no_mangle]`. Whoever does that should come here
 first.
+
+### And then the parity question, asked properly
+
+The lens was finished rather than abandoned, because the thing it was
+pointed at had still not been measured. With the warning fixed, a tree
+carrying a per-target define *and* a moc'd class -- the header testing
+nothing, so the condition above does not arise -- was built three ways:
+
+    fmake        one -> mode=1 always=1    two -> mode=2 always=1
+    make         one -> mode=1 always=1    two -> mode=2 always=1
+    ninja        one -> mode=1 always=1    two -> mode=2 always=1
+
+All three agree, from clean, with `.fmake` and `build/` removed before
+each ejected build so that moc has to run again rather than inheriting
+output. The emitted rules say it directly, which is the better witness
+than the program's output alone:
+
+    build/moc/moc_thing.cpp.one.o:  ... -DMODE=1 ...
+    build/moc/moc_thing.cpp.two.o:  ... -DMODE=2 ...
+
+A flagged target compiles its own copy of every source, and one of those
+sources is generated -- so the generated one needs the variant's define
+exactly as a hand-written one does, and both emitters give it.
+
+Pinned as `the_ejected_builds_flag_a_generated_source_per_variant`. The
+sibling case beside it covers the hand-written half with `defines`; this
+combination was uncovered, and it is where both of this session's
+diagnostic faults lived. The sabotage is narrow on purpose -- the
+emitted rule loses its flags *only* for a source under the moc
+directory -- because dropping them everywhere is caught by three other
+cases, and a control that fires through somebody else's check has not
+been shown to work.
+
+One thing the ejected build does differently and correctly: it writes
+generated sources and objects under `BUILD_DIR`, not under `.fmake`. An
+ejected build needs no fmake to run, so it has no business writing into
+fmake's state directory -- this looked like a missing file for a minute,
+which is recorded here so the next reader spends no time on it.

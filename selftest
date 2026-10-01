@@ -28468,6 +28468,96 @@ def the_ejected_builds_keep_both_objects(t):
 	      "the ejected ninja build produced the wrong pair")
 
 
+@case
+def the_ejected_builds_flag_a_generated_source_per_variant(t):
+	"""A per-target define and a moc'd class in one tree, which is where
+	both of this session's diagnostic bugs lived -- sections 335 and 354.
+
+	A flagged target compiles its own copy of every source, and one of
+	those sources is GENERATED: moc writes `moc_thing.cpp`, and it has to
+	be compiled once per variant with that variant's define, exactly as a
+	hand-written source is. The case above covers the hand-written half
+	with `defines`; this is the generated half with `cflags`, and the
+	emitted rules are where a divergence would show:
+
+	    build/moc/moc_thing.cpp.one.o:  ... -DMODE=1 ...
+	    build/moc/moc_thing.cpp.two.o:  ... -DMODE=2 ...
+
+	The header deliberately does NOT test MODE. A header that tests it is
+	section 354's tree, where moc cannot see the define and fmake warns;
+	here the define reaches only the compile, which is the case that must
+	simply work. Measured clean when written -- this pins it rather than
+	reporting it.
+
+	`indexOfMethod` rather than `methodCount`, because the count includes
+	QObject's own and that is a Qt version's business rather than this
+	tree's. The literal is checked once, against fmake's own build, so
+	that three builds agreeing on nothing cannot pass; the ejected arms
+	then assert agreement with it."""
+	for tool in ("make", "ninja"):
+		if not shutil.which(tool):
+			raise Skip(f"{tool} not installed")
+	if not shutil.which("moc") and not glob.glob("/usr/lib/qt6/libexec/moc"):
+		raise Skip("no moc to run")
+	t.write("thing.h", "#pragma once\n#include <QObject>\n\n"
+	        "class Thing : public QObject {\n\tQ_OBJECT\npublic:\n"
+	        "\tQ_INVOKABLE int always() { return 7; }\n};\n")
+	t.write("report.cpp", '#include "thing.h"\n#include <cstdio>\n\n'
+	        "void report(void)\n{\n\tThing t;\n"
+	        '\tprintf("mode=%d always=%d\\n", MODE,\n'
+	        '\t       t.metaObject()->indexOfMethod("always()") >= 0);\n}\n')
+	t.write("one.cpp", "void report(void);\n"
+	        "int main(void){ report(); return 0; }\n")
+	t.write("two.cpp", "void report(void);\n"
+	        "int main(void){ report(); return 0; }\n")
+	t.write("fmake.toml", '[target.one]\ncflags = ["-DMODE=1"]\n\n'
+	        '[target.two]\ncflags = ["-DMODE=2"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	if "Qt6Core" in out and "not satisfied" in out:
+		raise Skip("Qt6Core is not installed here")
+	check(r.returncode == 0, f"fmake's own build failed: {out}")
+	check("meta-object" not in out,
+	      f"this header does not test MODE, so nothing should be said "
+	      f"about the meta-object: {out}")
+	live = (t.run("one").stdout, t.run("two").stdout)
+	check(live == ("mode=1 always=1\n", "mode=2 always=1\n"),
+	      f"the per-target define has to reach both the hand-written and "
+	      f"the generated source: {live}")
+
+	mk = t.fmake("--eject").stdout
+	for name, mode in (("one", "1"), ("two", "2")):
+		rule = [l for l in mk.splitlines()
+		        if f"moc_thing.cpp.{name}.o:" in l]
+		check(len(rule) == 1,
+		      f"the generated source needs one object rule per variant, "
+		      f"and {name} has {len(rule)}")
+		body = mk.split(rule[0], 1)[1].split("\n\n", 1)[0]
+		check(f"-DMODE={mode}" in body,
+		      f"the rule for {name}'s copy of the generated source does "
+		      f"not carry its define: {body}")
+
+	for tool, filename, argv in (("make", "Makefile", ["make", "-C"]),
+	                             ("ninja", "build.ninja", ["ninja", "-C"])):
+		t.write(filename, mk if tool == "make"
+		        else t.fmake("--eject", "ninja").stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		for name in ("one", "two"):
+			if os.path.exists(os.path.join(t.dir, name)):
+				os.unlink(os.path.join(t.dir, name))
+		r = subprocess.run(argv + [t.dir], capture_output=True, text=True)
+		check(r.returncode == 0,
+		      f"the ejected {tool} build failed from clean: "
+		      f"{r.stdout}{r.stderr}")
+		got = (t.run("one").stdout, t.run("two").stdout)
+		check(got == live,
+		      f"the ejected {tool} build disagrees with fmake's own about "
+		      f"a generated source compiled per variant: {got} against "
+		      f"{live}")
+
+
 # ---------------------------------------------------------------------------
 # What a refusal leaves behind
 # ---------------------------------------------------------------------------
