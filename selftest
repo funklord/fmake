@@ -12664,6 +12664,67 @@ def a_flag_a_shell_would_split_survives_ejection(t):
 
 
 @case
+def a_flag_the_build_files_own_parser_would_eat_survives_ejection(t):
+	"""The case above is about the SHELL splitting a flag. This one is
+	about make's and ninja's own parsers, which is a different layer and
+	the one that produced sections 355 and 356.
+
+	    `#'   starts a comment in a Makefile
+	    `$'   starts a variable reference in both
+	    `:'   separates a target from its prerequisites
+
+	A flag carrying one of these reaches the build file as the text of a
+	variable and a command line, not as a target or a prerequisite, so it
+	goes through `_mk_flag' and `_nj_flag' rather than through the path
+	escapes -- which is why paths were wrong twice and flags were not.
+	Measured clean when written; this pins the asymmetry rather than
+	reporting a break.
+
+	The program asserts the VALUE, so a flag that arrives mangled and
+	still compiles cannot pass. That is the whole point: `-DTAG="a#b"'
+	truncated to `-DTAG="a' is a compile error, but `-DTAG="a$b"' with
+	`$b' expanded away compiles perfectly and is wrong."""
+	for label, value in (("hash", "a#b"), ("dollar", "a$b"),
+	                     ("colon", "a:b")):
+		u = Tree("flag-parser-" + label)
+		try:
+			u.write("fmake.toml",
+			        '[project]\ncflags = [\'-DTAG="%s"\']\n' % value)
+			u.write("main.c", '#include <string.h>\n'
+			        'int main(void){ return strcmp(TAG, "%s") == 0 '
+			        '? 0 : 1; }\n' % value)
+			name = os.path.basename(u.dir)
+			r = u.fmake()
+			check(r.returncode == 0,
+			      f"the live build failed for {value!r}: "
+			      f"{r.stdout}{r.stderr}")
+			check(u.run(name).returncode == 0,
+			      f"the live program has the wrong TAG for {value!r}")
+
+			for backend, out, tool in (("make", "Makefile", "make"),
+			                           ("ninja", "build.ninja", "ninja")):
+				if not shutil.which(tool):
+					continue
+				e = u.fmake("--eject", backend)
+				check(e.returncode == 0,
+				      f"--eject {backend} failed for {value!r}: {e.stderr}")
+				u.write(out, e.stdout)
+				shutil.rmtree(os.path.join(u.dir, ".fmake"),
+				              ignore_errors=True)
+				os.remove(os.path.join(u.dir, name))
+				b = _run_in(u.dir, tool)
+				check(b.returncode == 0,
+				      f"the ejected {backend} build failed for {value!r}: "
+				      f"{b.stdout}{b.stderr}")
+				check(u.run(name).returncode == 0,
+				      f"the ejected {backend} build produced a program "
+				      f"whose TAG is not {value!r}, so {backend}'s parser "
+				      f"ate part of the flag")
+		finally:
+			u.cleanup()
+
+
+@case
 def a_dry_run_leaves_the_tree_as_it_found_it(t):
 	"""`-n' prints the commands and runs none of them.
 

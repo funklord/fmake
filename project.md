@@ -406,7 +406,8 @@ that had been green about nothing for five commits ·
 [353. Four families swept, and what that licenses](#353-four-families-swept-and-what-that-licenses) ·
 [354. A warning that ruled out the failure beneath it](#354-a-warning-that-ruled-out-the-failure-beneath-it) ·
 [355. The remedy that named a backend which could not do it either](#355-the-remedy-that-named-a-backend-which-could-not-do-it-either) ·
-[356. The whitelist that could only be too strict](#356-the-whitelist-that-could-only-be-too-strict)
+[356. The whitelist that could only be too strict](#356-the-whitelist-that-could-only-be-too-strict) ·
+[357. The other half of the same lens, which came back clean](#357-the-other-half-of-the-same-lens-which-came-back-clean)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27685,3 +27686,78 @@ Worth recording as its own paragraph rather than folded into the fix,
 because it is `working-practice.md`'s rule about where a correction has
 to go, met from the inside: the copy in front of me was the predicate,
 and the copy a reader would next look at was the comment.
+
+## 357. The other half of the same lens, which came back clean
+
+§355 and §356 both found a path fmake wrote into a build file that the
+build file's own parser read as something else. Paths are not the only
+text fmake writes there, so the lens was finished rather than left at two
+finds: a flag whose *value* carries one of those characters.
+
+    flag value      live    ejected make    ejected ninja
+    -DTAG="a#b"     ok      ok              ok
+    -DTAG="a$b"     ok      ok              ok
+    -DTAG="a b"     ok      ok              ok
+    -DTAG="a:b"     ok      ok              ok
+    -DTAG="a|b"     ok      ok              ok
+    -DTAG="a;b"     ok      ok              ok
+    -DTAG="a'b"     ok      ok              ok
+    -DTAG="a`b"     ok      ok              ok
+
+Nothing. The programs assert the value rather than merely compiling, so a
+flag arriving mangled cannot pass -- which matters most for `$`, since
+`-DTAG="a$b"` with `$b` expanded away compiles perfectly and is wrong,
+where `#` truncating the flag is a loud compile error.
+
+### Why the two halves differ, which is the useful part
+
+It is not that flags were written more carefully. **The two land in
+different grammars.** A path goes into the target and prerequisite
+position of a `build` or rule line, which make and ninja parse
+themselves, and the escapes there are per backend and incomplete -- `|`
+has none in ninja at all, and `=` before a colon is an assignment to
+make. A flag goes into a variable's value and a command line, which both
+backends treat as text, so it passes through `_mk_flag` and `_nj_flag`:
+`shlex.quote` for the recipe's shell, then the doubling and backslash for
+make's own expansion.
+
+So the finds were not random. They were in the half where fmake is
+writing somebody else's syntax, and the clean half is the one where it is
+writing text.
+
+### Pinned, with a control that proves the aim
+
+`a_flag_the_build_files_own_parser_would_eat_survives_ejection` covers
+`#`, `$` and `:` -- the parser-level characters. The case beside it,
+`a_flag_a_shell_would_split_survives_ejection`, covers a space, which is
+a *shell* question; naming the layers separately is what §355 and §356
+were about.
+
+The sabotage drops the make-level escape and keeps the shell one. Then:
+
+    a_flag_a_shell_would_split_survives_ejection          still green
+    a_flag_the_build_files_own_parser_would_eat_...        fails
+
+        the ejected make build failed for 'a#b':
+        cc -Os '-DTAG="a  -c main.c ...
+        /bin/sh: 1: Syntax error: Unterminated quoted string
+
+A space survives `shlex.quote` alone, so the neighbour cannot intercept
+the failure -- which is what makes this a control that reached the check
+under test rather than one that merely went red.
+
+### A fixture artifact caught before it was recorded
+
+The first run of the sweep reported the single-quote row as wrong in the
+**live** build, which would have been a far worse finding than anything
+above. It was the fixture: the value went into a TOML single-quoted
+string that already contained a single quote, so the config was invalid
+and fmake said so --
+
+    !!! fmake.toml: Unclosed array (at line 2, column 21)
+
+-- correctly, and the row was my error rather than a measurement. Redone
+with a TOML double-quoted string, it passes in all three columns. Noted
+because `evidence.md` is right that an artifact of one's own scratch tree
+reads exactly like a finding, and this one was a single character away
+from being written down.
