@@ -12846,6 +12846,12 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	unprovided = set()
 	# Files whose architecture is why a symbol is missing.
 	blamed_arch = set()
+	# Files a `[project] exclude', an `@os'/`@arch' or an unreadable file
+	# kept out, where one of them defines what is missing. The third of
+	# three loops that report a provider set aside, and the only one that
+	# set nothing -- so its remedy fell through to `--ldflags', which is
+	# advice about a library for a symbol whose definition is in this tree.
+	blamed_excluded = set()
 	# Generated files that were declined and that define what is missing.
 	blamed_generated = set()
 
@@ -13927,6 +13933,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 					note(f"{rel} is excluded ({why}) and appears to define "
 					     f"one of them")
 					named = True
+					blamed_excluded.add(rel)
 			# And the plainest reason there is, which nothing said: the
 			# file that defines it is right here and did not compile.
 			# fmake names it two lines above, under "did not compile", and
@@ -14026,6 +14033,20 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     "build with [project] exclude -- what defines the symbol "
 			     "is in this tree and is for another machine, so no library "
 			     "will supply it")
+		elif blamed_excluded:
+			# The reason is on the line above, with the file, so this does
+			# not repeat it and must not guess: `excluded' holds three
+			# kinds -- a `[project] exclude' pattern, a platform `@os' or
+			# `@arch', and a file that could not be read -- and a single
+			# remedy naming one of them would be wrong for the other two.
+			#
+			# What is certain is the part that makes `--ldflags' wrong:
+			# the definition is in this tree, so no library has it. Said
+			# that way rather than as a guess about which exclusion.
+			note("what defines them is in this tree and this build set it "
+			     "aside for the reason above, so no library will supply it: "
+			     "make that file part of the build, or define the symbol in "
+			     "one that is")
 		elif unprovided:
 			# Both explanations, because fmake has ruled out neither and
 			# saying only the first is what sent one project looking for a

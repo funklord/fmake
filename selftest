@@ -18506,6 +18506,71 @@ def a_program_this_invocation_left_is_not_called_unreachable(t):
 
 
 @case
+def an_excluded_provider_is_not_answered_with_a_library(t):
+	"""Three loops report a provider set aside; only two were believed.
+
+	`arch_declined` sets `blamed_arch`, `declined_generated` sets
+	`blamed_generated`, and the loop for `[project] exclude`, `@os`/`@arch`
+	and an unreadable file named the file and set nothing -- so its remedy
+	fell through to the generic tail:
+
+	    win_impl.c is excluded (@os windows (building for linux)) and
+	    appears to define one of them
+	    name the missing libraries with --ldflags, or build only the
+	    targets you want
+
+	The cause above is exact and the remedy below fits neither situation.
+	`--ldflags` is advice about a library, and what defines the symbol is in
+	the tree. Section 147 again, and the words to say instead already existed
+	one branch away in `blamed_arch`; that branch was simply never selected.
+
+	**The remedy must not name a cause, and that is why it is worded as it
+	is.** `excluded` holds three kinds -- a config pattern, a platform
+	annotation, and a file that could not be read -- so a single line naming
+	one of them is wrong for the other two. The first draft said "provide
+	the symbol another way for this platform", which is nonsense for
+	`[project] exclude`. It points at the reason already printed and asserts
+	only what is certain: the definition is here, so no library has it.
+
+	All three reasons are checked, because a remedy true of one and offered
+	for three is the fault being fixed.
+	"""
+	def tree(v, how):
+		v.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper(); }\n")
+		if how == "exclude":
+			v.write("skipme.c", "int helper(void){ return 0; }\n")
+			v.write("fmake.toml", "[project]\nexclude = ['skipme.c']\n")
+		else:
+			v.write("impl.c", "/*! @file\n *  @%s %s\n */\n"
+			        "int helper(void){ return 0; }\n" % tuple(how.split()))
+
+	for how in ("os windows", "arch riscv64", "exclude"):
+		v = Tree("excluded-provider-" + how.replace(" ", "-"))
+		try:
+			tree(v, how)
+			r = v.fmake("-j4")
+			said = r.stdout + r.stderr
+			check(r.returncode != 0, f"{how}: it cannot link, so it must "
+			      f"fail: {said}")
+			check("is excluded (" in said,
+			      f"{how}: the excluded provider must be named: {said}")
+			check("no library will supply it" in said,
+			      f"{how}: and the remedy must not be a library: {said}")
+			check("name the missing libraries with --ldflags, or build only"
+			      not in said,
+			      f"{how}: the generic tail must not be what it ends on: "
+			      f"{said}")
+			# It must not claim a cause it cannot know, which is what the
+			# first draft did for the config case.
+			check("for this platform" not in said,
+			      f"{how}: the remedy must not assume a platform reason: "
+			      f"{said}")
+		finally:
+			v.cleanup()
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

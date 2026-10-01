@@ -399,7 +399,8 @@ that had been green about nothing for five commits ·
 [346. The record that outlived its rule](#346-the-record-that-outlived-its-rule) ·
 [347. The dispatch table nothing proposed](#347-the-dispatch-table-nothing-proposed) ·
 [348. Uninstall removes what it did not install](#348-uninstall-removes-what-it-did-not-install) ·
-[349. The program a test run left behind](#349-the-program-a-test-run-left-behind)
+[349. The program a test run left behind](#349-the-program-a-test-run-left-behind) ·
+[350. Two of three loops were believed](#350-two-of-three-loops-were-believed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2578,7 +2579,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 601
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 602
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -26982,6 +26983,19 @@ reported as a file nothing reaches. The two sabotages separate exactly
 those halves -- remove the exclusion and the false note returns; remove the
 gate and naming a target is noisy again.
 
+### The commit carrying this has the wrong subject
+
+`09e8f46` is this section's change, and its subject reads *"core: do not
+offer a library for a file this build set aside"* -- which describes §350
+rather than this. The body is right; only the line `git log --oneline` shows
+is wrong, and it was pushed before I noticed.
+
+It is left as it is. Rewriting published history is the one thing
+`working-practice.md` puts above a merge bubble, and a remote several
+machines fetch is not the place to test that. So the correction lives here,
+where somebody tracing this section looks, and §350 carries the subject that
+sentence was actually describing.
+
 ### And an assertion of mine that reduced to nothing
 
 The case checked
@@ -26993,3 +27007,61 @@ only that the line existed. It reads the line and asserts the name is in it
 now. Two vacuous assertions of my own in two sittings, both in the half of
 a case that checks a message *names* something -- worth knowing as a habit
 rather than as two accidents.
+
+## 350. Two of three loops were believed
+
+Three loops in a row report a file that would have provided a missing
+symbol and was set aside. They are eight lines apart:
+
+    arch_declined        names the file   sets blamed_arch
+    declined_generated   names the file   sets blamed_generated
+    excluded             names the file   sets nothing
+
+So the third fell through to the generic tail, and a tree with a
+Windows-only implementation and no Linux one read:
+
+    win_impl.c is excluded (@os windows (building for linux)) and appears
+    to define one of them
+    name the missing libraries with --ldflags, or build only the targets
+    you want
+
+The cause above it is exact. The remedy below it is advice about a library
+for a symbol whose definition is in the tree. Measured for `@os`, for
+`@arch` and for a `[project] exclude`: all three named the file and all
+three ended on `--ldflags`.
+
+**The words to say instead already existed one branch away.** `blamed_arch`
+offers "build it for this architecture, or keep it out of this build with
+`[project] exclude` -- what defines the symbol is in this tree and is for
+another machine, so no library will supply it". That branch was never
+selected for these, because selecting it is what the missing line did.
+
+### The remedy must not name a cause, and the first draft did
+
+`excluded` holds three kinds: a `[project] exclude` pattern, a platform
+`@os`/`@arch`, and a file that could not be read. A single remedy naming
+one of them is wrong for the other two -- and the first draft ended "provide
+the symbol another way for this platform", which is nonsense for a config
+pattern. It points at the reason already printed and asserts only what is
+certain: the definition is here, so no library has it.
+
+All three reasons are in the case, because a remedy true of one and offered
+for three is the fault being fixed. The sabotages are the flag and the
+wording: without the flag the generic tail returns, and with the platform
+wording back the case fails on the assumption rather than on the absence.
+
+### Why this keeps happening in this file
+
+Three of today's findings are one shape -- §345's two remedies that did not
+exist, §347's link advice pointing at a library, and this -- and the shape
+is not carelessness about messages. It is that a *cause* and a *remedy* are
+computed in different places, so a new cause can be added where the causes
+are without the remedy that belongs to it, and nothing connects them. Here
+the two places are eight lines and forty lines apart in one function.
+
+What would catch the class rather than the instance is a test that the
+remedy printed is one of the tailored ones whenever a cause was named --
+which is the population assertion §341 used for exit statuses, pointed at
+diagnostics. Not written: the causes are not enumerable the way the modes
+were, and a population assertion over a set nobody can enumerate is the
+thing `evidence.md` warns against rather than the remedy for it.
