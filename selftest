@@ -18646,6 +18646,85 @@ def clean_waits_for_a_build_rather_than_deleting_under_it(t):
 
 
 @case
+def a_stale_archive_is_reported_on_every_build(t):
+	"""The binary was built from code that is not in the tree, once.
+
+	An archive left in a tree provides what a source defines, so fmake links
+	the archive and leaves the source out -- correctly, and it says so:
+	*"editing src/impl.c changes nothing. Remove it, or name it in [project]
+	exclude, to build from source."* Measured with `libstale.a` returning 1
+	and the source returning 2: the program prints 1.
+
+	**It said that once.** Section 343 sorted that block of notices by
+	severity and put all of it on the news side, as facts about the tree.
+	This member is not one: an archive in the link set providing what a
+	source defines means the binary holds code the tree does not, which is a
+	claim about the ARTIFACT -- the same class as the version fallback beside
+	it, and the warning's own words say so.
+
+	The symptom a person meets is "my edit had no effect", and it recurs
+	every time they edit, so the line has to be there every time they build.
+
+	Four arms. The warning on a repeat build is the one the fix is for; the
+	program's output is the control, since a warning about a stale archive
+	means nothing unless the archive is really what ran; removing the
+	archive must both silence it and change the answer, which is the remedy
+	working rather than the warning merely stopping; and a tree with no
+	archive must never say it.
+	"""
+	t.write("src/impl.c", "int version(void){ return 1; }\n")
+	t.write("main.c", "#include <stdio.h>\nint version(void);\n"
+	        "int main(void){ printf(\"%d\\n\", version()); return 0; }\n")
+	src = os.path.join(t.dir, "src")
+	r = subprocess.run(["cc", "-c", "impl.c", "-o", "impl.o"], cwd=src,
+	                   capture_output=True, text=True)
+	check(r.returncode == 0, f"could not build the fixture object: {r.stderr}")
+	r = subprocess.run(["ar", "rcs", os.path.join(t.dir, "libstale.a"),
+	                    "impl.o"], cwd=src, capture_output=True, text=True)
+	check(r.returncode == 0, f"could not build the fixture archive: {r.stderr}")
+	os.unlink(os.path.join(src, "impl.o"))
+	# The source moves on; the archive does not.
+	t.write("src/impl.c", "int version(void){ return 2; }\n")
+	name = os.path.basename(t.dir)
+
+	said = []
+	for _ in range(3):
+		r = t.fmake("-j4")
+		check(r.returncode == 0, f"the build failed: {r.stdout}{r.stderr}")
+		said.append(r.stdout + r.stderr)
+	for i, out in enumerate(said):
+		check("already provides what it defines" in out,
+		      f"build {i + 1} did not report the stale archive, and the "
+		      f"binary holds code the tree does not: {out}")
+	# The control: the archive really is what ran, so the warning is about
+	# something rather than merely present.
+	check(t.run(name).stdout.strip() == "1",
+	      "this fixture is meant to link the stale archive, and did not")
+
+	# The remedy, which must change the answer and not only the output.
+	os.unlink(os.path.join(t.dir, "libstale.a"))
+	r = t.fmake("-j4")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the rebuild failed: {out}")
+	check("already provides what it defines" not in out,
+	      f"with the archive gone there is nothing to report: {out}")
+	check(t.run(name).stdout.strip() == "2",
+	      "and the program must now be built from the source")
+
+	# And a tree with no archive never says it, on any build.
+	v = Tree("no-archive-here")
+	try:
+		v.write("main.c", "int main(void){ return 0; }\n")
+		for _ in range(2):
+			r = v.fmake("-j4")
+			check("already provides what it defines" not in
+			      (r.stdout + r.stderr),
+			      f"a tree with no archive must stay quiet: {r.stdout}")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_module_implementation_unit_is_built_after_its_interface(t):
 	"""`module m;` -- no `export` -- is an implementation unit, and it reads
 	its own interface's BMI as surely as an importer does. Nothing said so:

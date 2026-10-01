@@ -401,7 +401,8 @@ that had been green about nothing for five commits ·
 [348. Uninstall removes what it did not install](#348-uninstall-removes-what-it-did-not-install) ·
 [349. The program a test run left behind](#349-the-program-a-test-run-left-behind) ·
 [350. Two of three loops were believed](#350-two-of-three-loops-were-believed) ·
-[351. Clean was exempt from the lock](#351-clean-was-exempt-from-the-lock)
+[351. Clean was exempt from the lock](#351-clean-was-exempt-from-the-lock) ·
+[352. A binary built from code the tree does not have](#352-a-binary-built-from-code-the-tree-does-not-have)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2580,7 +2581,7 @@ immediately on existing code that had been reading every directive as a list.
 ./selftest -j1 -k     # serially, keeping the scratch trees
 ```
 
-It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 603
+It was ~50s at 79 cases, ~3 minutes at 173, and about 27 minutes at 604
 on this machine at `-j4`
 (`grep -c '^@case' selftest`, which is how to re-derive it rather than
 trusting this line) — the cases added since are the expensive kind: cross
@@ -27159,3 +27160,52 @@ deadline the machine can miss.
 It also asserts the state directory survives while clean is blocked, which
 is the thing the lock is for, and that clean completes once the lock is
 free, so a fix that simply refused would not pass.
+
+## 352. A binary built from code the tree does not have
+
+An archive left in a tree provides what a source defines, so fmake links
+the archive and leaves the source out. That is right, and the warning is
+exact:
+
+    src/impl.c is not compiled, and libstale.a already provides what it
+    defines: if that archive is output from another build of this tree it
+    is stale, and editing src/impl.c changes nothing. Remove it, or name
+    it in [project] exclude, to build from source.
+
+Measured with `libstale.a` returning 1 and the source returning 2: the
+program prints 1. **It said that once.**
+
+### This is a correction to §343's own classification
+
+§343 split those notices by severity -- the right axis, and the one the old
+comment got wrong -- and then applied the split to the whole block at once,
+as facts about the TREE. This member is not one. An archive in the link set
+providing what a source defines means the binary holds code the tree does
+not, which is a claim about the ARTIFACT: the same class as the version
+fallback sitting beside it, whose comment says a guard there is "how a
+binary saying 'unknown' gets shipped by somebody who saw the warning a week
+ago."
+
+The symptom a person meets is **"my edit had no effect"**, and it recurs
+every time they edit. So the line has to be there every time they build.
+
+It is worth being clear that my change did not cause the silence. Measured
+on both: before §343 the warning was gated on `changed`, so it also went
+quiet after a rebuild. Both versions are silent in steady state by
+different routes, and what §343 added was the chance to notice -- the gate
+it introduced is per-notice, so one notice could be moved without moving
+the rest, which is what this does.
+
+### Four arms, and the control is the one worth copying
+
+The warning on a repeat build is what the fix is for. The program's output
+is the control: a warning about a stale archive means nothing unless the
+archive is really what ran, so the case asserts the binary prints 1.
+Removing the archive must both silence the warning and change the answer to
+2 -- the remedy working rather than the warning merely stopping. And a tree
+with no archive must never say it, on any build.
+
+The sabotage that matters is not deleting the warning, which fails on build
+1 and only proves the warning exists. It is re-gating it on `changed or
+news`, which warns on build 1 and goes quiet on build 2 -- and the case
+fails on build 2, which is exactly the behaviour being changed.

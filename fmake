@@ -13538,6 +13538,30 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# draft of this stored a list and silently turned the build cache off.
 	# It presented as this notice printing on every run, which reads as the
 	# notice being wrong rather than as every object being recompiled.
+	# A source standing behind an archive in this tree, computed here
+	# because it is wanted on both sides of the gate below: the note about
+	# files nothing reaches excludes these, and the warning about them is
+	# not news-gated.
+	#
+	# Not a vendored archive. A subtree that is somebody else's project --
+	# named in .gitmodules, or carrying its own .git -- may ship a prebuilt
+	# archive beside its sources on purpose, and using it is the point
+	# rather than a mistake. The signal is the one fmake already uses to
+	# decide that a main() in there is not this tree's program.
+	arc_tokens = {}
+	for t in wanted:
+		for u in closures[t].link:
+			if u.archive and not vendor_of(u.rel, vendored):
+				toks = arc_tokens.setdefault(u.rel, set())
+				for sym in (u.strong or ()):
+					toks |= symbol_tokens(sym)
+	displaced = {}
+	for rel in ignored:
+		defs = set(scans.get(rel, {}).get("defs") or [])
+		for arc in sorted(arc_tokens):
+			if defs & arc_tokens[arc]:
+				displaced[rel] = arc
+				break
 	not_built = {r: True for r in
 	             sorted(set(ignored) | set(crate_orphans) | set(qrc_unused)
 	                    | set(situ_unused))}
@@ -13579,30 +13603,6 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# and using it is the point rather than a mistake. The signal
 			# is the one fmake already uses to decide that a main() in
 			# there is not this tree's program.
-			arc_tokens = {}
-			for t in wanted:
-				for u in closures[t].link:
-					if u.archive and not vendor_of(u.rel, vendored):
-						toks = arc_tokens.setdefault(u.rel, set())
-						for sym in u.strong:
-							toks |= symbol_tokens(sym)
-			displaced = {}
-			for rel in ignored:
-				defs = set(scans.get(rel, {}).get("defs") or [])
-				for arc in sorted(arc_tokens):
-					if defs & arc_tokens[arc]:
-						displaced[rel] = arc
-						break
-			_dhead, _drest = capped(sorted(displaced))
-			for rel in _dhead:
-				warn(f"{rel} is not compiled, and {displaced[rel]} already "
-				     f"provides what it defines: if that archive is output "
-				     f"from another build of this tree it is stale, and "
-				     f"editing {rel} changes nothing. Remove it, or name it "
-				     f"in [project] exclude, to build from source.")
-			if _drest:
-				warn(f"... and {_drest} more source file(s) standing "
-				     f"behind an archive in this tree (-v for all)")
 			rest = [r for r in ignored if r not in displaced]
 			_head, _rest = capped(rest)
 			for rel in _head:
@@ -13680,6 +13680,30 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# compares what it is about to write.
 			cache.data["not_built"] = not_built
 			cache.save()
+		# Outside the gate, and this one was inside it until measured.
+		#
+		# Section 343 sorted these notices by severity and put the whole
+		# block on the news side, as facts about the TREE. This one is not:
+		# an archive in the link set that provides what a source defines
+		# means the binary was built from code that is not in the tree, and
+		# the warning says so outright -- "editing X changes nothing".
+		#
+		# Measured on a tree whose libstale.a says 1 and whose source says
+		# 2: the program prints 1, and after the first notice nothing said
+		# so again. The symptom a person meets is "my edit had no effect",
+		# and it recurs every time they edit, so the line has to be there
+		# every time they build. Same argument as the version fallback
+		# below: this is a claim about the artifact.
+		_dhead, _drest = capped(sorted(displaced))
+		for rel in _dhead:
+			warn(f"{rel} is not compiled, and {displaced[rel]} already "
+			     f"provides what it defines: if that archive is output "
+			     f"from another build of this tree it is stale, and "
+			     f"editing {rel} changes nothing. Remove it, or name it "
+			     f"in [project] exclude, to build from source.")
+		if _drest:
+			warn(f"... and {_drest} more source file(s) standing "
+			     f"behind an archive in this tree (-v for all)")
 		# Outside the gate above, and for a sharper reason than those have.
 		# Everything up there is news-gated: it persists, so it is reported
 		# when it appears and not on every run afterwards. This one repeats
