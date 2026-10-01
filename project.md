@@ -407,7 +407,8 @@ that had been green about nothing for five commits ·
 [354. A warning that ruled out the failure beneath it](#354-a-warning-that-ruled-out-the-failure-beneath-it) ·
 [355. The remedy that named a backend which could not do it either](#355-the-remedy-that-named-a-backend-which-could-not-do-it-either) ·
 [356. The whitelist that could only be too strict](#356-the-whitelist-that-could-only-be-too-strict) ·
-[357. The other half of the same lens, which came back clean](#357-the-other-half-of-the-same-lens-which-came-back-clean)
+[357. The other half of the same lens, which came back clean](#357-the-other-half-of-the-same-lens-which-came-back-clean) ·
+[358. An APKBUILD is a shell script, and the description was not quoted](#358-an-apkbuild-is-a-shell-script-and-the-description-was-not-quoted)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27761,3 +27762,105 @@ with a TOML double-quoted string, it passes in all three columns. Noted
 because `evidence.md` is right that an artifact of one's own scratch tree
 reads exactly like a finding, and this one was a single character away
 from being written down.
+
+## 358. An APKBUILD is a shell script, and the description was not quoted
+
+§355, §356 and §357 worked one lens: text fmake writes into a file some
+other tool parses. Paths were wrong twice, flags were clean, generator
+commands were clean. The packaging emitters are the same question again,
+and two of them write **shell scripts** -- abuild sources an APKBUILD and
+Portage sources an ebuild.
+
+    [package]
+    description = '''A tool `id` and $(id) and "quoted" and $HOME
+     An extended paragraph.'''
+
+    pkgdesc="A tool `id` and $(id) and "quoted" and $HOME  An extended..."
+    DESCRIPTION="A tool `id` and $(id) and "quoted" and $HOME  An exten..."
+
+Sourced, as the tooling does:
+
+    pkgdesc -> A tool uid=1001(claude) gid=1001(claude) groups=1001(...)
+               and uid=1001(claude) ... and quoted and /home/claude ...
+
+**`id` ran, twice.** `$HOME` became the builder's home directory. And the
+embedded quotes closed the string early, so `"quoted"` lost its quotes
+and the value was mangled as well.
+
+### What kind of bug this is
+
+A correctness bug first. The description is prose out of this tree's own
+`fmake.toml`, so nothing here is remote input and this is not a claim
+about privilege: a build file in a tree you do not control runs whatever
+it says, which is true of every build system. What is wrong is that
+`--eject apk` wrote a package whose synopsis is not the synopsis -- and
+on any machine, since `$HOME` and `id` differ per builder, the *same
+tree* produces a different package.
+
+That it also executes is what decided the **direction** of the fix. A
+mangled string could have been answered by refusing the characters, the
+way §355 and §356 refuse a path. Escaping is right here because each
+emitter has its own syntax and a description legal for `debian/control`
+-- deb822 needs no escaping at all -- must not be refused because a
+shell cannot take it. Per-backend escaping of text is also what §357
+found keeping the Makefile and the build.ninja honest about flags:
+`_mk_flag` and `_nj_flag` exist, and these two emitters never had the
+equivalent.
+
+### The line the fix does not cross
+
+`_sh_dq` escapes the four characters that matter inside double quotes --
+backslash first, then `"`, `$` and a backtick -- and it is applied to
+six sites:
+
+    APKBUILD   pkgdesc   url       depends
+    ebuild     DESCRIPTION  HOMEPAGE  IUSE
+
+It is deliberately **not** applied to `source`, `subpackages`,
+`builddir` or `SRC_URI`. Those carry `$pkgname`, `$pkgver` and `${PV}`
+**by contract** -- `[gentoo] src-uri` is documented to take `${PV}`, and
+the refusal when it is missing says so in as many words -- so escaping
+them would break the documented thing. The test is whether shell
+expansion is part of the field's meaning, and `--eject` is the wrong
+place to overrule a field whose answer is yes.
+
+The case asserts that too: `source="$pkgname-$pkgver.tar.gz"`,
+`builddir="$srcdir/$pkgname-$pkgver"` and the `${PV}` in `SRC_URI`
+must still arrive with their dollars intact. Without that half, a
+blanket escape would pass.
+
+### Asserted by execution, and all six sites shown to be live
+
+`a_description_the_shell_would_run_is_quoted_in_shell_packages` sources
+each emitted assignment and compares the value against what the config
+said. Not by reading the file for backslashes: that would pass a file
+which escaped the right characters the wrong way, and what matters is
+the value a shell arrives at.
+
+Six sites were changed, so six sabotages were run rather than two --
+a helper is only as wired as its least-used caller, and the first draft
+of the case tested the two prose fields and left four callers of a
+brand-new function unexercised. Each sabotage fails through its own
+named check:
+
+    pkgdesc      apk's pkgdesc is not what the config said ...
+    url          apk's url is not what the config said ...
+    depends      apk's depends is not what the config said ...
+    DESCRIPTION  ebuild's DESCRIPTION is not what the config said ...
+    HOMEPAGE     ebuild's HOMEPAGE is not what the config said ...
+    IUSE         ebuild's IUSE is not what the config said ...
+
+### Three fixture errors on the way, all caught by checking the live run
+
+Worth recording because they were all mine and all the same shape: an
+invalid fixture reads exactly like a finding.
+
+- A TOML single-quoted string holding a single quote -- `Unclosed
+  array`. Twice, in two different experiments.
+- A `[generate.*]` rule with no `inputs`, which fmake refuses because
+  staleness is a hash of what a rule reads.
+
+Each was caught because the experiment checked that the **live** build
+succeeded before comparing anything against it. A sweep that had gone
+straight to `--eject` would have recorded "refused" for all three and
+called it a finding about the emitters.

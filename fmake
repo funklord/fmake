@@ -18037,6 +18037,44 @@ def gentoo_license(short):
 	return f"{family}-{version}" + ("+" if grant in ("-or-later", "+") else "")
 
 
+def _sh_dq(text):
+	"""One value, safe inside a double-quoted shell string.
+
+    An APKBUILD and an ebuild ARE shell scripts, and these emitters had
+    been interpolating config text straight into `pkgdesc="..."' and
+    `DESCRIPTION="..."'. Measured on a `[package] description' reading
+    `A tool `id` and $(id) and "quoted" and $HOME':
+
+        pkgdesc="A tool `id` and $(id) and "quoted" and $HOME ..."
+
+    Sourced by a shell -- which is what abuild and Portage do -- `id'
+    RAN, twice, `$HOME' expanded to the builder's home directory, and
+    the embedded quotes closed the string early so the value was
+    mangled as well. A description is prose from `fmake.toml', so this
+    is a correctness bug before it is anything else; that it also
+    executes is what decides the direction of the fix.
+
+    Four characters matter inside double quotes and the backslash has
+    to go first, or the escapes get escaped.
+
+    Not applied to every field. `source', `subpackages', `SRC_URI' and
+    `builddir' carry `$pkgname', `$pkgver' and `${PV}' BY CONTRACT --
+    `[gentoo] src-uri' is documented to take `${PV}', and the refusal
+    when it is missing says so -- so escaping those would break the
+    documented thing. The line is whether shell expansion is part of
+    the field's meaning, and `--eject' is the wrong place to decide it
+    for a field whose answer is yes.
+
+    Section 357 is the reason this looks like `_mk_flag' and
+    `_nj_flag': what kept the ejected Makefile and build.ninja honest
+    about flags was a per-backend escape for text, and these two
+    emitters never had one.
+    """
+	for ch in ("\\", '"', "$", "`"):
+		text = text.replace(ch, "\\" + ch)
+	return text
+
+
 def gentoo_expression(expr):
 	"""`MIT or Apache-2.0' as Portage writes it: `|| ( MIT Apache-2.0 )'.
 
@@ -18169,14 +18207,14 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	     "",
 	     "inherit toolchain-funcs" + (" systemd" if services else ""),
 	     "",
-	     f'DESCRIPTION="{synopsis}"',
-	     f'HOMEPAGE="{conf.package.get("homepage", "")}"',
+	     f'DESCRIPTION="{_sh_dq(synopsis)}"',
+	     f'HOMEPAGE="{_sh_dq(conf.package.get("homepage", ""))}"',
 	     f'SRC_URI="{src_uri}"',
 	     "",
 	     f'LICENSE="{gentoo_expression(short)}"',
 	     'SLOT="0"',
 	     f'KEYWORDS="{" ".join(keywords)}"',
-	     f'IUSE="{" ".join(conf.gentoo.get("iuse", []))}"',
+	     f'IUSE="{" ".join(_sh_dq(u) for u in conf.gentoo.get("iuse", []))}"',
 	     "",
 	     'RDEPEND="' + "\n\t".join(rdepend) + '"'
 	     + ("" if not unmapped else
@@ -18382,11 +18420,13 @@ def eject_apkbuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	         f"pkgname={name}",
 	         f"pkgver={version}",
 	         "pkgrel=0",
-	         f'pkgdesc="{synopsis}"',
-	         f'url="{conf.package.get("homepage", "")}"',
+	         f'pkgdesc="{_sh_dq(synopsis)}"',
+	         f'url="{_sh_dq(conf.package.get("homepage", ""))}"',
 	         'arch="all"',
 	         f'license="{short}"',
-	         'depends="' + " ".join(conf.alpine.get("depends", [])) + '"',
+	         'depends="' + " ".join(_sh_dq(d) for d in
+	                                 conf.alpine.get("depends", []))
+	         + '"',
 	         'makedepends="' + " ".join(makedepends) + '"'
 	         + ("" if not unmapped else
 	            "\n# not derived here (no apk to ask): "

@@ -5289,6 +5289,106 @@ outputs = ["gen/x.c"]
 
 
 @case
+def a_description_the_shell_would_run_is_quoted_in_shell_packages(t):
+	"""An APKBUILD and an ebuild ARE shell scripts.
+
+    The synopsis went into `pkgdesc="..."' and `DESCRIPTION="..."'
+    unescaped:
+
+        [package] description = 'A tool `id` and $(id) and "quoted" and $HOME'
+
+    Measured before the fix, sourcing the emitted line as abuild and
+    Portage do: `id' RAN, twice, `$HOME' became the builder's home
+    directory, and the embedded quotes closed the string early so the
+    value was mangled as well. A description is prose out of fmake.toml,
+    so this is a correctness bug before it is anything else; that it also
+    executes is what decided the direction of the fix.
+
+    Asserted by EXECUTION and not by reading the file. Checking that the
+    emitted text contains backslashes would pass a file that escaped the
+    right characters the wrong way, and what matters is the value a shell
+    arrives at.
+
+    The control is the second half and is why the fix is not a blanket
+    escape. `source', `subpackages', `builddir' and `SRC_URI' carry
+    `$pkgname', `$pkgver' and `${PV}' BY CONTRACT -- `[gentoo] src-uri'
+    is documented to take `${PV}', and the refusal when it is missing
+    says so -- so escaping those would break the documented thing. The
+    case asserts they still arrive with their dollars intact."""
+	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
+		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
+	hostile = 'A tool `id` and $(id) and "quoted" and $HOME'
+	t.write("tool.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	t.write("VERSION", "1.0\n")
+	shutil.copy("/usr/share/common-licenses/GPL-3",
+	            os.path.join(t.dir, "LICENSE"))
+	t.write("fmake.toml",
+	        '[project]\nname = "pkgq"\n\n'
+	        '[package]\nmaintainer = "A Person <a@example.invalid>"\n'
+	        "homepage = '" + hostile + "'\n"
+	        "description = '''" + hostile + "\n"
+	        " An extended paragraph, which every one of these wants below "
+	        "the synopsis.'''\n\n"
+	        '[alpine]\ndepends = ["a$b", "c`d`e"]\n\n'
+	        '[gentoo]\ncategory = "app-misc"\n'
+	        'iuse = ["f$g"]\n'
+	        'src-uri = "https://example.invalid/pkgq-${PV}.tar.gz"\n')
+
+	eb_rel = os.path.join("gentoo", "app-misc", "pkgq", "pkgq-1.0.ebuild")
+	# Every field the escape was applied to, not only the two prose ones:
+	# six sites were changed and a helper is only as wired as its
+	# least-used caller.
+	fields = (("apk", os.path.join("alpine", "APKBUILD"),
+	           (("pkgdesc", hostile), ("url", hostile),
+	            ("depends", "a$b c`d`e"))),
+	          ("ebuild", eb_rel,
+	           (("DESCRIPTION", hostile), ("HOMEPAGE", hostile),
+	            ("IUSE", "f$g"))))
+	for backend, rel, wanted in fields:
+		r = t.fmake("--eject", backend)
+		check(r.returncode == 0,
+		      f"--eject {backend} failed: {r.stdout}{r.stderr}")
+		full = os.path.join(t.dir, rel)
+		check(os.path.exists(full), f"--eject {backend} wrote no {rel}")
+		text = open(full).read()
+		for var, expect in wanted:
+			lines = [l for l in text.splitlines()
+			         if l.startswith(var + "=")]
+			check(len(lines) == 1,
+			      f"{rel} carries {len(lines)} {var}= lines, not one")
+			frag = os.path.join(t.dir, f"{backend}-{var}.sh")
+			with open(frag, "w") as fh:
+				fh.write(lines[0] + "\n")
+			got = subprocess.run(["sh", "-c",
+			                      f'. "{frag}"; printf "%s" "${var}"'],
+			                     capture_output=True, text=True)
+			check(got.returncode == 0,
+			      f"the emitted {var}= line is not valid shell: "
+			      f"{got.stderr}")
+			check(got.stdout.startswith(expect),
+			      f"{backend}'s {var} is not what the config said, so "
+			      f"the shell ran or expanded part of it.\n"
+			      f"  config:  {expect!r}\n"
+			      f"  shell:   {got.stdout[:140]!r}")
+
+	# The control: the fields whose dollars are part of their contract must
+	# NOT have been escaped, or the fix broke the documented behaviour.
+	apk = open(os.path.join(t.dir, "alpine", "APKBUILD")).read()
+	eb = open(os.path.join(t.dir, eb_rel)).read()
+	check('source="$pkgname-$pkgver.tar.gz"' in apk,
+	      f"source= must keep its dollars: "
+	      f"{[l for l in apk.splitlines() if l.startswith('source=')]}")
+	check('builddir="$srcdir/$pkgname-$pkgver"' in apk,
+	      f"builddir= must keep its dollars: "
+	      f"{[l for l in apk.splitlines() if l.startswith('builddir=')]}")
+	check('SRC_URI="https://example.invalid/pkgq-${PV}.tar.gz"' in eb,
+	      f"[gentoo] src-uri is documented to take ${{PV}}, so SRC_URI "
+	      f"must not be escaped: "
+	      f"{[l for l in eb.splitlines() if l.startswith('SRC_URI=')]}")
+
+
+@case
 def a_dry_run_prints_commands_a_shell_can_run(t):
 	"""Four of this file's dry-run printers quote their command and three
 	did not.
