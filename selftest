@@ -5871,6 +5871,15 @@ def an_ordinary_mistake_is_a_message_and_not_a_traceback(t):
         --ldflags '\'           shlex: No escaped character
         -o main.c               makedirs: FileExistsError
         --install               PermissionError, in shutil
+        fmake.mk @cflags -DX="a shlex: No closing quotation
+
+    The last arrived later, and WHY it outlived the other three is the
+    part worth keeping: that fuzz walked argv and the environment, and
+    this one is in a FILE. `shell_split' was written for exactly this
+    class and its own docstring said the sites were covered; `parse_mk'
+    split an fmake.mk directive raw, so the text argv refuses cleanly
+    still produced a traceback. A sweep's blind spot is the shape of its
+    inputs, not the shape of the defect.
 
     The last is the one worth having: a prefix that belongs to root and a
     command that is not root is the most ordinary mistake there is, and
@@ -5894,6 +5903,61 @@ def an_ordinary_mistake_is_a_message_and_not_a_traceback(t):
 	refuses([], {"CFLAGS": "-DMSG='hello"}, ["$CFLAGS", "shell-quoted"])
 	refuses(["--ldflags", "\\"], None, ["--ldflags", "shell-quoted"])
 	refuses(["-o", "main.c"], None, ["-o", "is a file"])
+
+	# The fourth route, in a file rather than in argv.
+	u = Tree("mk-directive-quote")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("fmake.mk", '@cflags -DX="a\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check("Traceback" not in out,
+		      f"an fmake.mk directive crashed: {out[-300:]}")
+		check(r.returncode != 0,
+		      f"an unclosed quote in fmake.mk was not refused: {out[:200]}")
+		for want in ("fmake.mk:1", "@cflags", "shell-quoted"):
+			check(want in out,
+			      f"the refusal does not say {want!r}: {out}")
+	finally:
+		u.cleanup()
+
+	# The same directive in a source comment. Asserted beside it because
+	# parse_mk's whole argument is that the two spellings are ONE
+	# language, going through one parser -- if one refuses and the other
+	# crashes, they are not. The messages differ on purpose: the scanner
+	# can add that a trailing backslash is not a continuation.
+	v = Tree("comment-directive-quote")
+	try:
+		v.write("main.c", '/*! @cflags -DX="a */\n'
+		        "int main(void){ return 0; }\n")
+		r = v.fmake()
+		out = r.stdout + r.stderr
+		check("Traceback" not in out,
+		      f"a comment directive crashed: {out[-300:]}")
+		check(r.returncode != 0,
+		      f"an unclosed quote in a comment was not refused: {out[:200]}")
+		check("main.c:1" in out and "@cflags" in out,
+		      f"the refusal does not name the file and the directive: "
+		      f"{out}")
+	finally:
+		v.cleanup()
+
+	# The control for both: a well-formed directive still delivers its
+	# define, so the refusals above are about the quoting and not about
+	# fmake.mk having stopped working.
+	w = Tree("mk-directive-ok")
+	try:
+		w.write("main.c", "int main(void){ return XVAL; }\n")
+		w.write("fmake.mk", "@cflags -DXVAL=0\n")
+		r = w.fmake()
+		check(r.returncode == 0,
+		      f"a well-formed fmake.mk directive must still build: "
+		      f"{r.stdout}{r.stderr}")
+		check(w.run(os.path.basename(w.dir)).returncode == 0,
+		      "the define from a well-formed fmake.mk directive did not "
+		      "reach the compiler")
+	finally:
+		w.cleanup()
 
 	# The install, on a prefix nothing may write to. Skipped under root,
 	# which can write to it and would install for real.

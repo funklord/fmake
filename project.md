@@ -410,7 +410,8 @@ that had been green about nothing for five commits ·
 [357. The other half of the same lens, which came back clean](#357-the-other-half-of-the-same-lens-which-came-back-clean) ·
 [358. An APKBUILD is a shell script, and the description was not quoted](#358-an-apkbuild-is-a-shell-script-and-the-description-was-not-quoted) ·
 [359. The same question in three more formats, and two of them answered wrong](#359-the-same-question-in-three-more-formats-and-two-of-them-answered-wrong) ·
-[360. The suite's own filter could report a narrower run as a pass](#360-the-suites-own-filter-could-report-a-narrower-run-as-a-pass)
+[360. The suite's own filter could report a narrower run as a pass](#360-the-suites-own-filter-could-report-a-narrower-run-as-a-pass) ·
+[361. The mirror lens, and the one site a helper's own docstring had closed](#361-the-mirror-lens-and-the-one-site-a-helpers-own-docstring-had-closed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28020,3 +28021,64 @@ scrolled by. The useful part is what made it visible: the count was
 same line. A count that names its denominator is `evidence.md`'s whole
 remedy for the vacuous pass -- and here the denominator was absent, so
 the discrepancy had to be noticed by somebody rather than reported.
+
+## 361. The mirror lens, and the one site a helper's own docstring had closed
+
+§355 to §359 asked what happens to text fmake **writes** into somebody
+else's syntax. The mirror is text fmake **reads** out of it, and the
+answer there is mostly good: `shell_split` exists, it uses
+`shlex.split`, and it refuses with a `where' naming the file the text
+came from -- written after a `.pc` file whose Cflags held `-DX="a`
+crashed every build that resolved that module.
+
+Its docstring said the sites were covered. Grepping for the raw call
+rather than reading the paragraph found one that was not.
+
+    fmake.mk        @cflags -DX="a     ValueError: No closing quotation
+                                       ...and shlex's own traceback
+    a source comment, same text        main.c:1: @cflags '-DX="a' cannot
+                                       be read: No closing quotation
+
+One language, two spellings, and `parse_mk`'s own argument is that they
+go through one parser -- *"not because two parsers were kept in step,
+which is a thing that stops being true"*. One refused and one crashed.
+
+### Why this one outlived the other three
+
+The case that fixed the argv and environment sites,
+`an_ordinary_mistake_is_a_message_and_not_a_traceback`, records how it
+was found: **fuzzing the command line and the environment** -- 32
+argument sets, 11 environments, six tracebacks, three defects. This
+site is in a FILE, so no number of argument sets would ever have
+reached it.
+
+**A sweep's blind spot is the shape of its inputs, not the shape of the
+defect.** That is the transferable part: the defect here is identical to
+the three that were fixed, in the same function family, and it survived
+because the instrument only had two surfaces.
+
+### The count that read as finished
+
+The docstring carried *"fmake splits shell text from six places ...
+Four of the six sites had no handler"*, which invites the reading that
+the other two were fine and the four were fixed. It is now a rule --
+**nothing splits shell text raw** -- with the one deliberate exception
+named: the directive scanner catches its own `ValueError` so it can add
+that a trailing backslash is not a continuation. A better message, not
+a missing handler.
+
+This is `evidence.md`'s advice taken literally. A count of call sites is
+mechanically checkable, so it is not the worst kind of claim; but it had
+gone stale **in the direction that reads as complete**, which is the
+direction that stops somebody grepping.
+
+### Pinned where it belongs
+
+Extended that existing case rather than written as a new one: it is a
+fourth route to the one output that is never intended, and splitting it
+off would leave two cases about tracebacks and no reason to read both.
+It carries the comment-directive arm beside it, so that the two
+spellings being one language is asserted rather than asserted-about, and
+a control that a well-formed `fmake.mk` directive still delivers its
+define -- without which the refusal could be fmake.mk having stopped
+working.

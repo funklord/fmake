@@ -500,17 +500,31 @@ def die(m):
 def shell_split(text, where):
 	"""Split a shell-quoted string, or refuse and say whose it was.
 
-    fmake splits shell text from six places -- the command line, the
-    environment, fmake.toml, fmake.mk, a directive and pkg-config's own
-    output -- and shlex raises rather than guessing when the quoting does
-    not close. Four of the six sites had no handler, so an unbalanced
-    quote ended in a ValueError traceback naming shlex's line number and
-    nothing about where the text came from.
+    fmake splits shell text from the command line, the environment,
+    fmake.toml, fmake.mk, a directive and pkg-config's own output, and
+    shlex raises rather than guessing when the quoting does not close.
+    Most of those sites had no handler, so an unbalanced quote ended in a
+    ValueError traceback naming shlex's line number and nothing about
+    where the text came from.
 
     The worst of them is not the user's to fix: a `.pc` file whose Cflags
     hold `-DX="a` is installed by a package, and every build resolving
     that module crashed. `where' is what makes the message actionable,
-    since these six are edited in six different places.
+    since these are edited in as many different places.
+
+    **The rule is that nothing splits shell text raw**, rather than a
+    count of the places that do -- because a count is what this docstring
+    carried, and it had gone stale in the direction that reads as
+    finished. `parse_mk' split an fmake.mk directive raw, so
+    `@cflags -DX="a' there produced a traceback while the same directive
+    in a source comment was refused with its file, its line and the
+    reason. Found by grepping for the raw call rather than by reading
+    this paragraph, which said the sites were covered.
+
+    One site stays raw on purpose: the directive scanner catches its own
+    ValueError, because it can name the line and the directive and say
+    that a trailing backslash is not a continuation. A better message,
+    not a missing handler.
     """
 	try:
 		return shlex.split(text)
@@ -1891,8 +1905,13 @@ def parse_mk(path=None, text=None, origin=None, first_line=1,
 		if d and directives is not None:
 			dname = DIRECTIVE_ALIAS.get(d.group(1), d.group(1))
 			if dname in MK_PROJECT_DIRECTIVES:
+				# Through `shell_split', like the others: a raw
+				# shlex.split here ended an unbalanced quote in a
+				# Python traceback naming shlex's line number, while
+				# the SAME directive in a source comment was refused
+				# with the file, the line and the reason.
 				directives.setdefault(dname, []).extend(
-				    shlex.split(d.group(2)))
+				    shell_split(d.group(2), f"{where}:{n}: @{dname}"))
 				current = None
 				continue
 			if dname in DIRECTIVES:
