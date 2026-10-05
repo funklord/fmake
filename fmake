@@ -12453,6 +12453,59 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				return tpools[t.name][t.rel]
 			return variants.get(t.name) or units[t.rel]
 
+		# The third route to a silent nm, and the one section 223 left for
+		# its own round: exit 0, no plugin message, and no symbols at all.
+		# The two checks in `read_symbols' cannot see it -- there is
+		# nothing in the status and nothing in the output to see -- so
+		# every object reads as defining nothing and needing nothing, and
+		# the warning below then blames the SOURCE: "main.c looked like it
+		# defined main() but the object does not export it". Measured with
+		# an nm that is `#!/bin/sh` and `exit 0`: that sentence, and a tree
+		# of programs built as a library because nothing exported a main.
+		#
+		# Here rather than in `read_symbols', which was the first
+		# placement and was wrong: that function is called once per
+		# compile pass, and the mirage retry compiles ONE file per pass --
+		# so in exactly this scenario it never saw more than one object.
+		# Every compiled unit in the tree is visible here.
+		#
+		# The discriminator is EVERY object, not this one. A single object
+		# with no symbols is an ordinary scanner false positive: a
+		# definition inside `#if 0' compiles to exactly that, and the
+		# mirage warning is the right answer for it. All of them is not.
+		#
+		# A warning rather than a refusal, deliberately. On a cold build a
+		# silent nm leaves every object empty and this fires; on a warm
+		# build the objects that still have symbols are the ones nm is not
+		# asked about, so a couple of edited files that genuinely compile
+		# to nothing look the same as a tool that has just broken. That
+		# cannot be told apart from this signal, and a refusal would turn
+		# a build that works into one that does not.
+		_read = [u for u in units.values()
+		         if u.compiled and u.obj
+		         and not u.prebuilt and not u.archive]
+		if len(_read) > 1 and not any(u.undef or u.strong or u.weak
+		                              for u in _read):
+			warn_once(
+			    f"{cfg.nm} read no symbols from any of the {len(_read)} "
+			    f"object(s) this build compiled, and exited 0 for each.\n"
+			    f"    fmake decides the link set from symbol tables, so an "
+			    f"object with none defines nothing and needs nothing: a "
+			    f"whole tree of them links nothing. Anything this "
+			    f"build says about a source defining or not defining "
+			    f"something is a consequence of this rather than a fact "
+			    f"about the tree -- including the line above, which is "
+			    f"decided in the first compile pass when one object is "
+			    f"all there is to compare.\n"
+			    f"    One object with no symbols is ordinary -- a "
+			    f"definition inside `#if 0' compiles to exactly that. All "
+			    f"of them is not.\n"
+			    f"    Set [toolchain] nm in {CONF_FILE}, or $NM, to one "
+			    f"that reads "
+			    f"{describe_identity(elf_identity(_read[0].obj))} objects, "
+			    f"and check it is not a wrapper that exits 0 having "
+			    f"printed nothing.")
+
 		# confirm main() against the symbol tables now that objects exist
 		if not args.dry_run:
 			for t in list(wanted):

@@ -24354,6 +24354,125 @@ int main(void){ return shared_thing() == 5 ? 0 : 1; }
 	check(t.run(os.path.basename(t.dir)).returncode == 0, "program failed")
 
 
+@case
+def a_silent_nm_is_named_rather_than_the_source(t):
+	"""Section 223 left this half, with the discriminator worked out.
+
+    nm exiting non-zero is diagnosed, and so is a BFD plugin that claims
+    an object and prints a failure. The third route has nothing to see in
+    either channel: **exit 0 and no output at all.** Every object then
+    reads as defining nothing and needing nothing, and fmake blames the
+    source.
+
+    Measured with an nm that is `#!/bin/sh` and `exit 0`:
+
+        [1/1] CC  main.c
+        * main.c looked like it defined main() but the object does not
+          export it; skipping
+        [1/1] CC  helper.c
+        AR  libsilent.a
+
+    A tree of two programs' worth of code, built as a library, because
+    nothing exported a main -- and the only sentence about it names
+    main.c.
+
+    The discriminator is EVERY object rather than this one, and the third
+    arm is that: a single source whose definition sits inside `#if 0`
+    compiles to an object with no symbols, the mirage warning is the
+    right answer for it, and this must stay quiet. Without that arm the
+    guard could be "any empty object" and would fire on the case section
+    223 measured as correct.
+
+    A warning and not a refusal: on a warm build the objects that still
+    have symbols are the ones nm is not asked about, so a couple of
+    edited files that genuinely compile to nothing look the same as a
+    tool that has just broken."""
+	def silent_nm(tree):
+		path = os.path.join(tree.dir, "nm-silent")
+		with open(path, "w") as fh:
+			fh.write("#!/bin/sh\nexit 0\n")
+		os.chmod(path, 0o755)
+		return path
+
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 7; }\n")
+	t.write("helper.c", "int helper(void){ return 7; }\n")
+	nm = silent_nm(t)
+
+	r = t.fmake(env={"NM": nm})
+	out = r.stdout + r.stderr
+	check("read no symbols from any of the" in out,
+	      f"a silent nm has to be named, since every object reading as "
+	      f"empty is a fact about the tool: {out}")
+	check(nm in out and "exited 0" in out,
+	      f"the warning must name the tool and say it exited 0, which is "
+	      f"why neither other check saw it: {out}")
+	check("$NM" in out or "[toolchain] nm" in out,
+	      f"the warning must say where to set a different nm: {out}")
+
+	# Control: the real nm, same tree, says nothing and builds.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	for junk in (os.path.basename(t.dir), "lib" + os.path.basename(t.dir)
+	             + ".a"):
+		q = os.path.join(t.dir, junk)
+		if os.path.exists(q):
+			os.remove(q)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the tree builds with a working nm: {out}")
+	check("read no symbols" not in out,
+	      f"a working nm must say nothing: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program built with a working nm is wrong")
+
+	# A unit empty BY DESIGN is not a unit nm failed to read. A crate
+	# carrying a main() has no object at all -- Unit marks it compiled
+	# with empty tables "so that nothing tries to build it or ask nm
+	# about it" -- so counting it made two library crates look like a
+	# broken tool. That was a real regression in the first draft of this
+	# guard, and the suite caught it through a case about crate NAMES,
+	# which reported a traceback rather than the cause. Named here.
+	v = Tree("crates-with-main")
+	try:
+		env = _rust(v)
+		for crate in ("alpha", "beta"):
+			v.write(f"crates/{crate}/src/lib.rs",
+			        'pub fn main() { println!("%s"); }\n' % crate)
+		r = v.fmake(env=env)
+		out = r.stdout + r.stderr
+		check("Traceback" not in out,
+		      f"counting a crate here crashed on its obj being None, "
+		      f"which is how this regression presented: {out[-400:]}")
+		check(r.returncode == 0,
+		      f"two library crates each exporting a main() must build: "
+		      f"{out[-400:]}")
+		check("read no symbols" not in out,
+		      f"a crate carrying a main() has no object and is empty by "
+		      f"construction, so it must not read as a tool that failed: "
+		      f"{out}")
+	except Skip:
+		pass
+	finally:
+		v.cleanup()
+
+	# The discriminator: ONE object with no symbols is ordinary, and the
+	# mirage warning is the right answer for it.
+	u = Tree("one-dead-object")
+	try:
+		u.write("main.c", "#if 0\nint main(void){ return 0; }\n#endif\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check("looked like it defined main" in out,
+		      f"a definition inside `#if 0' is the scanner false positive "
+		      f"section 223 measured as correct, and it has to still be "
+		      f"reported: {out}")
+		check("read no symbols" not in out,
+		      f"one empty object must not read as a broken nm -- that is "
+		      f"the whole discriminator: {out}")
+	finally:
+		u.cleanup()
+
+
 MIRAGE_TOOL = """
 #ifdef WANT_TOOL
 #include <stdio.h>

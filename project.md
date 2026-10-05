@@ -413,7 +413,8 @@ that had been green about nothing for five commits ·
 [360. The suite's own filter could report a narrower run as a pass](#360-the-suites-own-filter-could-report-a-narrower-run-as-a-pass) ·
 [361. The mirror lens, and the one site a helper's own docstring had closed](#361-the-mirror-lens-and-the-one-site-a-helpers-own-docstring-had-closed) ·
 [362. Fuzzing the files, because the last sweep only had two surfaces](#362-fuzzing-the-files-because-the-last-sweep-only-had-two-surfaces) ·
-[363. A remedy naming a backend that cannot produce what was asked for](#363-a-remedy-naming-a-backend-that-cannot-produce-what-was-asked-for)
+[363. A remedy naming a backend that cannot produce what was asked for](#363-a-remedy-naming-a-backend-that-cannot-produce-what-was-asked-for) ·
+[364. The silent nm, and a placement the measurement corrected](#364-the-silent-nm-and-a-placement-the-measurement-corrected)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18237,7 +18238,7 @@ needed, so the version can be asked for once, on the first crate, and by
 no tree without one. Left for its own round rather than folded into this
 one.
 
-### The half that is not fixed
+### The half that was not fixed, and now is
 
 An nm that exits **0** and prints nothing still has fmake blame the
 source: `main.c looked like it defined main() but the object does not
@@ -18251,7 +18252,8 @@ The discriminator is **every** compiled object coming back with no
 symbols at all, not this one: a single object with none is an ordinary
 scanner false positive, measured with a definition inside `#if 0` --
 fmake compiles that file, reads no symbols, and reports the link error,
-which is the right answer for it. Left for its own round.
+which is the right answer for it. **Closed in §364,
+which implements exactly that discriminator.**
 
 ## 224. The cache that did not say which fmake wrote it
 
@@ -28226,3 +28228,115 @@ can only make a previously-accepted `fmake.toml` fail.
 What is NOT left open is the harm: a name that would break anything is
 already refused, by the path guard, so this is about the message a
 reader gets and not about what gets built.
+
+## 364. The silent nm, and a placement the measurement corrected
+
+§223 diagnosed two of the three ways nm can fail and left the third with
+its discriminator worked out: *"left for its own round"*. This is that
+round.
+
+nm exiting non-zero is diagnosed, and so is a BFD plugin that claims an
+object and prints a failure. The third has nothing in either channel --
+**exit 0 and no output at all** -- so every object reads as defining
+nothing and needing nothing. Measured with an nm that is `#!/bin/sh` and
+`exit 0`:
+
+    [1/1] CC  main.c
+    * main.c looked like it defined main() but the object does not
+      export it; skipping
+    [1/1] CC  helper.c
+    AR  libsilent.a
+
+Two programs' worth of code built as a **library**, because nothing
+exported a main, and the only sentence about it names `main.c`. A
+sentence about the tree, produced by a tool failure.
+
+### The placement was wrong, and running it is what said so
+
+The check went into `read_symbols` first, which is where nm is run and
+looks like the obvious home. It did not fire.
+
+`read_symbols` is called **once per compile pass**, and the mirage retry
+compiles one file per pass -- `[1/1] CC main.c`, then `[1/1] CC
+helper.c`. So in exactly the scenario the guard exists for, it never saw
+more than one object, and a discriminator reading "every object" can
+never be true of one. It lives where every compiled unit in the tree is
+visible instead.
+
+**Worth recording because reading the code would not have found it.**
+The call site is a loop over `made`, and `made` being one unit is a
+consequence of the mirage retry two hundred lines away. The measurement
+was one fake nm and one two-file tree.
+
+### And the fix carried §354's fault for a few minutes
+
+The first wording said *"anything said **below** about a source is a
+consequence of this"*. The mirage warning prints **above** it, because
+it is decided in the first compile pass when one object is all there is
+to compare. A diagnostic making a false claim about its own output, in
+the commit fixing a diagnostic that made a false claim about its own
+failure mode. It is position-neutral now and names the line above
+explicitly.
+
+### A warning, not a refusal
+
+Deliberate, and the reason is the warm build. A silent nm leaves every
+object empty on a **cold** build and this fires; on a warm one the
+objects that still have symbols are precisely the ones nm is not asked
+about, so two edited files that genuinely compile to nothing are
+indistinguishable from a tool that has just broken. That cannot be told
+apart from this signal, and a refusal would turn a build that works into
+one that does not -- where a warning costs a paragraph and explains the
+lines around it.
+
+### Controlled on the discriminator, not on the warning
+
+`a_silent_nm_is_named_rather_than_the_source` has three arms, and the
+third is the one that matters: a single source whose definition sits
+inside `#if 0` compiles to an object with no symbols, and the mirage
+warning is the right answer for it. Sabotaged both ways:
+
+    guard removed             a silent nm has to be named ...
+    fires on ANY empty object one empty object must not read as a broken
+                              nm -- that is the whole discriminator
+
+Without the third arm the guard could have been "any empty object" and
+would have fired on the case §223 measured as correct. A one-sided
+sabotage would not have caught that.
+
+### Empty by design is not empty by failure
+
+The first draft counted the wrong population, and the suite found it:
+**`two_library_crates_are_not_both_called_lib` went red.**
+
+A crate carrying a `main()` has no object at all. `Unit` says why in as
+many words -- *"marked compiled with empty tables so that nothing tries
+to build it or ask nm about it"* -- because what such a crate needs is
+settled by rustc from metadata a symbol table does not carry. So its
+emptiness is a design decision, and counting it made two library crates
+each exporting a `pub fn main` look exactly like a broken tool. Then
+`elf_identity(None)` raised a `TypeError`, because that function catches
+`OSError` and a None path is not one.
+
+The population is therefore **the objects nm was actually asked about** --
+`u.obj` being set is the discriminator and not a tidiness check. The
+comment saying so was already in the file, thirty lines from the field
+being read, and reading it would have been cheaper than the suite run.
+
+### The arm written for that regression was vacuous, and the sabotage said so
+
+A fourth arm was added, asserting that two crates with mains produce no
+such warning. It passed. **It also passed with the fix reverted**, which
+is the only reason it was looked at again.
+
+Reverting makes `elf_identity(None)` raise *while the message is being
+built*, so the warning never prints -- and an assertion that the warning
+is **absent** is satisfied by the crash that would have produced it. The
+arm now asserts the build succeeded and that nothing tracebacked, which
+is what the regression actually did, and the sabotage fails on exactly
+that line.
+
+An assertion of the form "X is not in the output" is satisfied by
+anything that stops the output happening, which is worth holding on to:
+**a negative assertion needs a positive one beside it**, naming the
+state the run was supposed to reach.
