@@ -414,7 +414,8 @@ that had been green about nothing for five commits ·
 [361. The mirror lens, and the one site a helper's own docstring had closed](#361-the-mirror-lens-and-the-one-site-a-helpers-own-docstring-had-closed) ·
 [362. Fuzzing the files, because the last sweep only had two surfaces](#362-fuzzing-the-files-because-the-last-sweep-only-had-two-surfaces) ·
 [363. A remedy naming a backend that cannot produce what was asked for](#363-a-remedy-naming-a-backend-that-cannot-produce-what-was-asked-for) ·
-[364. The silent nm, and a placement the measurement corrected](#364-the-silent-nm-and-a-placement-the-measurement-corrected)
+[364. The silent nm, and a placement the measurement corrected](#364-the-silent-nm-and-a-placement-the-measurement-corrected) ·
+[365. The rustc nobody could tell apart from the last one](#365-the-rustc-nobody-could-tell-apart-from-the-last-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -18235,8 +18236,8 @@ C-only tree on a machine that happens to have rustc installed. The shape
 that works is lazy and narrow: `object_key` already treats a crate unit
 differently from an object, and that is the one place the answer is
 needed, so the version can be asked for once, on the first crate, and by
-no tree without one. Left for its own round rather than folded into this
-one.
+no tree without one. **Closed in §365, which is exactly that shape --
+and the C-only tree never asking is one of its assertions.**
 
 ### The half that was not fixed, and now is
 
@@ -28340,3 +28341,67 @@ An assertion of the form "X is not in the output" is satisfied by
 anything that stops the output happening, which is worth holding on to:
 **a negative assertion needs a positive one beside it**, naming the
 state the run was supposed to reach.
+
+## 365. The rustc nobody could tell apart from the last one
+
+§223's other open half, and the shape was already decided there: a
+version in the key, asked lazily, in the one branch that needs it.
+
+`refresh_key` carries `cc --version` and `c++ --version`, so a compiler
+upgraded in place changes the configuration identity and the tree
+rebuilds. **rustc was in that key by name only** -- the path, with no
+version. Measured against the unfixed binary, with a shim that forwards
+to the real rustc and reports whatever version it is told to:
+
+    first build                 [1/1] RS  src/lib.rs
+    version 1.0 -> version 3.0  * crate-ctl up to date
+
+The stale archive is kept, silently. And a crate archive is the artifact
+most likely to change across such an upgrade, because it carries rustc's
+own std objects as well as the project's code.
+
+### Why not in the configuration key, which is where the others are
+
+Cost, measured in §223 and not re-litigated here:
+
+    rustc --version    0.23  0.18  0.29 s
+    cc --version       0.01  0.00  0.01 s
+
+Twenty times. `refresh_key` runs for every build of every tree, so the
+obvious edit puts a fifth of a second on every C-only build on a machine
+that merely has rustc installed. `object_key` already treats a crate
+differently from an object -- include flags are left out of a crate's
+identity, because rustc never sees them -- and that branch is the one
+place the answer is wanted.
+
+So it is asked there, memoised per path, and **a tree with no crate never
+asks at all.** Measured: a C-only build with an instrumented shim records
+zero `--version` calls.
+
+### The cost is an assertion, not a comment
+
+That last measurement is the third arm of the case, and it is the arm
+worth having. If the call drifted back into the configuration key, every
+C-only build would get slower and **nothing else in the suite would
+notice** -- no result would change, no output would differ, and the only
+symptom is a fifth of a second nobody attributes to anything.
+
+Sabotaged both ways:
+
+    version dropped from the key   a rustc replaced in place must
+                                   rebuild the crate ...
+    asked unconditionally          a C-only tree must not ask rustc its
+                                   version ...
+
+A performance constraint that is only written down is a constraint until
+somebody tidies it; one with a test is a property. This is the same
+argument `evidence.md` makes for moving a quoted count into a target,
+applied to a measurement about time rather than about size.
+
+### The control that keeps the middle arm honest
+
+Between the first build and the version change there is a rebuild with
+nothing changed, asserting the crate is **not** rebuilt. Without it the
+version arm would pass against an fmake that rebuilt the crate on every
+run -- which is the failure a nervous fix produces, and it looks like
+success from the one measurement that matters.

@@ -5353,6 +5353,42 @@ def tool_version(exe):
 		return "?"
 
 
+# `rustc --version', asked once per path and only where the answer is used.
+_RUSTC_VERSION = {}
+
+
+def rustc_version(exe):
+	"""The identity of the rustc that wrote a crate archive.
+
+    `refresh_key' carries `cc --version' and `c++ --version', so a
+    compiler upgraded in place changes the configuration identity and
+    everything rebuilds. **rustc was in that key by name only** -- the
+    path, with no version -- so a rustc replaced at the same path left
+    every crate archive looking current. A crate archive is the artifact
+    most likely to change across such an upgrade, since it carries
+    rustc's own std objects as well as the project's code.
+
+    Not folded into `refresh_key', and the reason is cost rather than
+    taste. Measured, three runs each under load:
+
+        rustc --version    0.23  0.18  0.29 s
+        cc --version       0.01  0.00  0.01 s
+
+    so asking unconditionally puts a fifth of a second on every build of
+    every C-only tree on a machine that merely has rustc installed.
+    `object_key' already treats a crate differently from an object, and
+    that is the one place the answer is needed -- so it is asked on the
+    first crate, and in a tree without one it is never asked at all.
+
+    Memoised per path rather than globally: two rustc names in one run is
+    unlikely and a dict costs nothing, where a single slot would answer
+    for the wrong compiler if it ever happened.
+    """
+	if exe not in _RUSTC_VERSION:
+		_RUSTC_VERSION[exe] = tool_version(exe)
+	return _RUSTC_VERSION[exe]
+
+
 RE_TOOL_PREFIX = re.compile(r"^(.*-)(?:gcc|g\+\+|cc|c\+\+|clang(?:\+\+)?)"
                             r"(?:-\d+(?:\.\d+)*)?$")
 
@@ -6536,6 +6572,11 @@ def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None,
 	# -I moved somewhere else in the tree.
 	inc = [] if u.lang.unit == "crate" else incflags
 	parts = [cfg.key, sha("\0".join(inc)), sha("\0".join(u.own))]
+	# The rustc that wrote it, by version and not only by path. Here and
+	# not in `cfg.key' because the call is a fifth of a second and this is
+	# the one branch that needs it; a C-only tree never reaches this line.
+	if u.lang.unit == "crate":
+		parts.append(rustc_version(cfg.rustc))
 	src_h = cache.hash_of(u.abs, u.rel)
 	if src_h is None:
 		return None

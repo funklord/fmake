@@ -27895,6 +27895,103 @@ def _rust(t):
 
 
 @case
+def a_rustc_replaced_in_place_rebuilds_the_crate(t):
+	"""Section 223 left this half too, with the shape already decided.
+
+    `refresh_key` carries `cc --version` and `c++ --version`, so a
+    compiler upgraded in place changes the configuration identity and
+    everything rebuilds. **rustc was in that key by name only** -- the
+    path, with no version -- so a rustc replaced at the same path left
+    every crate archive looking current. That archive carries rustc's own
+    std objects as well as the project's code, so it is the artifact most
+    likely to change across such an upgrade.
+
+    Measured against the unfixed binary, with a shim that forwards to the
+    real rustc and reports whatever version it is told to:
+
+        first build            RS src/lib.rs
+        version 1 -> version 3  * crate-ctl up to date
+
+    The stale archive is kept, silently.
+
+    The third arm is the design constraint and not a nicety. Asking
+    unconditionally in `refresh_key` was rejected on a measurement --
+    `rustc --version` is about 0.2s against `cc --version`'s 0.01s -- so
+    it is asked in `object_key`'s crate branch, which a C-only tree never
+    reaches. If that regressed, every C-only build on a machine that
+    merely has rustc installed would pay a fifth of a second, and nothing
+    else in the suite would notice."""
+	env = dict(_rust(t))
+	real = shutil.which("rustc")
+	calls = os.path.join(t.dir, "rustc-calls.log")
+	verfile = os.path.join(t.dir, "rustc-version.txt")
+	shim = os.path.join(t.dir, "rustc-shim")
+	with open(verfile, "w") as fh:
+		fh.write("rustc 1.0.0-fake\n")
+	with open(shim, "w") as fh:
+		fh.write('#!/bin/sh\necho "$@" >> %s\n'
+		         'if [ "$1" = "--version" ]; then cat %s; exit 0; fi\n'
+		         'exec %s "$@"\n' % (calls, verfile, real))
+	os.chmod(shim, 0o755)
+	env["RUSTC"] = shim
+
+	t.write("src/lib.rs",
+	        '#[no_mangle]\npub extern "C" fn seven() -> i32 { 7 }\n')
+	t.write("main.c", "int seven(void);\n"
+	        "int main(void){ return seven() - 7; }\n")
+
+	r = t.fmake(env=env)
+	check(r.returncode == 0, f"the crate tree must build: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program linking the crate is wrong")
+
+	# Control: nothing changed, so nothing rebuilds. Without this the arm
+	# below would pass against an fmake that rebuilt the crate every time.
+	again = t.fmake(env=env)
+	check("RS " not in again.stdout + again.stderr,
+	      f"an unchanged tree must not rebuild the crate: "
+	      f"{again.stdout}{again.stderr}")
+
+	# The same rustc at the same path, reporting a new version.
+	with open(verfile, "w") as fh:
+		fh.write("rustc 2.0.0-fake\n")
+	after = t.fmake(env=env)
+	out = after.stdout + after.stderr
+	check(after.returncode == 0, f"the rebuild must succeed: {out}")
+	check("RS " in out,
+	      f"a rustc replaced in place must rebuild the crate: the archive "
+	      f"carries that compiler's std objects, and the path alone cannot "
+	      f"tell two of them apart: {out}")
+
+	# The design constraint: a C-only tree never asks, because the call is
+	# twenty times `cc --version` and object_key's crate branch is the one
+	# place the answer is wanted.
+	u = Tree("rustc-not-asked")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		ulog = os.path.join(u.dir, "rustc-calls.log")
+		ushim = os.path.join(u.dir, "rustc-shim")
+		with open(ushim, "w") as fh:
+			fh.write('#!/bin/sh\necho "$@" >> %s\n'
+			         'if [ "$1" = "--version" ]; then echo "rustc 1.0"; '
+			         'exit 0; fi\nexec %s "$@"\n' % (ulog, real))
+		os.chmod(ushim, 0o755)
+		r = u.fmake(env={"RUSTC": ushim})
+		check(r.returncode == 0, f"the C-only tree must build: {r.stdout}")
+		asked = []
+		if os.path.exists(ulog):
+			asked = [l for l in open(ulog).read().splitlines()
+			         if "--version" in l]
+		check(not asked,
+		      f"a C-only tree must not ask rustc its version: that call is "
+		      f"about twenty times `cc --version` and is why this lives in "
+		      f"object_key rather than in the configuration key; asked "
+		      f"{len(asked)} time(s)")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_c_program_links_a_rust_crate_with_no_build_file(t):
 	"""Section 127 called this the case worth building toward, because no
 	other build system arrives at it by looking at symbols.
