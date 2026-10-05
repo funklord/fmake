@@ -5179,6 +5179,58 @@ def a_path_with_a_pipe_is_refused_by_both_backends(t):
 
 
 @case
+def a_package_eject_does_not_offer_ninja_as_the_remedy(t):
+	"""The remedy named a backend that cannot produce what was asked for.
+
+    `_refuse_whitespace` ends "Use `--eject ninja`, which can express all
+    of them", and that is true when a build file is what the reader
+    wanted. Every packaging backend builds with the same emitted
+    Makefile, so the refusal reaches them too -- and **ninja does not
+    produce a Debian package.**
+
+    Measured on `--eject deb` over a tree whose service name held a
+    space: the one sentence offering a way forward named a backend that
+    cannot do the job. Section 355's class one layer up -- there the
+    named backend could not express the path, here it cannot produce the
+    artifact.
+
+    A space in a source name is the fixture rather than a service name,
+    because it reaches the same refusal from all five backends with
+    nothing else in the way, and the control needs that: `make` and
+    `make-fragment` must still offer ninja, or this would be a message
+    removed rather than a message corrected."""
+	_pkg_min_tree(t, "spacesrc")
+	# tool.c has to CALL it, or the space-named file is in no link set and
+	# the refusal is never reached.
+	t.write("tool.c", "#include <stdio.h>\nint helper(void);\n"
+	        'int main(void){ printf("%d\\n", helper()); return 0; }\n')
+	t.write("we ird.c", "int helper(void){ return 7; }\n")
+
+	for backend, offers in (("make", True), ("make-fragment", True),
+	                        ("deb", False), ("apk", False),
+	                        ("ebuild", False)):
+		for junk in (".fmake", "debian", "alpine", "gentoo"):
+			shutil.rmtree(os.path.join(t.dir, junk), ignore_errors=True)
+		r = t.fmake("--eject", backend)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"--eject {backend} accepted a path make cannot name: "
+		      f"{out[:300]}")
+		check("cannot eject a Makefile for these paths" in out,
+		      f"--eject {backend} did not reach the refusal under test, "
+		      f"so this arm measures nothing: {out[:300]}")
+		named = "Use `--eject ninja`" in out
+		check(named == offers,
+		      f"--eject {backend} {'must' if offers else 'must not'} offer "
+		      f"ninja as the remedy: {out[-300:]}")
+		if not offers:
+			check(f"`--eject {backend}`" in out,
+			      f"the remedy has to name what was actually asked for, "
+			      f"since the reader has to know the backend is not the "
+			      f"thing to change: {out[-300:]}")
+
+
+@case
 def a_path_with_an_equals_is_refused_by_make_and_built_by_ninja(t):
 	"""The whitelist's own safety argument, disproved by one character.
 

@@ -412,7 +412,8 @@ that had been green about nothing for five commits ·
 [359. The same question in three more formats, and two of them answered wrong](#359-the-same-question-in-three-more-formats-and-two-of-them-answered-wrong) ·
 [360. The suite's own filter could report a narrower run as a pass](#360-the-suites-own-filter-could-report-a-narrower-run-as-a-pass) ·
 [361. The mirror lens, and the one site a helper's own docstring had closed](#361-the-mirror-lens-and-the-one-site-a-helpers-own-docstring-had-closed) ·
-[362. Fuzzing the files, because the last sweep only had two surfaces](#362-fuzzing-the-files-because-the-last-sweep-only-had-two-surfaces)
+[362. Fuzzing the files, because the last sweep only had two surfaces](#362-fuzzing-the-files-because-the-last-sweep-only-had-two-surfaces) ·
+[363. A remedy naming a backend that cannot produce what was asked for](#363-a-remedy-naming-a-backend-that-cannot-produce-what-was-asked-for)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28137,3 +28138,91 @@ sees it; two is what reaches the splitter. The fixture now writes
 rather than buried in an escape -- and the arm failing is what taught
 it, which is the fixture being wrong in the direction that reads as the
 tool being right.
+
+## 363. A remedy naming a backend that cannot produce what was asked for
+
+Found while checking whether anything else writes config text into a
+generated shell script -- the lens from §361, pointed at the other
+helpers. The generated `debian/postinst` interpolates group and user
+names into `getent`/`adduser` lines, and `debian/rules` interpolates a
+package and a service name into `dh_installsystemd --name=`. Both turned
+out safe, and the second one safe by accident.
+
+    [package] groups = ["a; id > /tmp/marker"]
+        refused: 'a; id > /tmp/marker' is not an account name
+        marker not created
+
+`package_accounts` checks every name against `^[a-z_][a-z0-9_-]*$`, so
+no metacharacter reaches that shell. **Safe by validation rather than by
+escaping, which is the right answer for a value with a defined format** --
+and the guard was confirmed reached rather than assumed, from the deb
+path, with the marker file as the witness.
+
+### The accident, and the diagnostic it exposed
+
+A service name is **not** validated. `[service."a; id > /tmp/marker"]`
+is refused -- but by `_refuse_whitespace`, because the name is written
+into a filename (`debian/<pkg>.<svc>.service`) and that path is one an
+ejected Makefile has to name. §356's machinery caught a hole somewhere
+else entirely.
+
+Nothing bad is produced, so this is a diagnostic fault rather than a
+correctness one. But the diagnostic was wrong in a way worth fixing:
+
+    $ fmake --eject deb
+    !!! cannot eject a Makefile for these paths:
+        a; id > /tmp/fmake-svc-ran  (Make splits prerequisites on whitespace)
+    Use `--eject ninja`, which can express all of them.
+
+**ninja does not produce a Debian package.** Every packaging backend
+builds with the same emitted Makefile, so the refusal reaches all of
+them, and the one sentence offering a way forward named a backend that
+cannot do the job. §355's class one layer up: there the named backend
+could not express the path, here it cannot produce the artifact.
+
+So the refusal learns what was asked for:
+
+    --eject make, make-fragment   Use `--eject ninja`, which can express
+                                  all of them.
+    --eject deb, apk, ebuild      `--eject deb` builds with this Makefile,
+                                  and ninja cannot produce that -- so the
+                                  name has to change rather than the
+                                  backend. A path here can come from
+                                  fmake.toml as well as from the tree: a
+                                  service or target name is written into a
+                                  filename.
+
+The second half of that sentence is the §363-specific part: the reader
+whose *service name* was refused is told a path can come from the config,
+because otherwise they go looking for a file they never created.
+
+### Controlled in both directions
+
+`a_package_eject_does_not_offer_ninja_as_the_remedy` walks all five
+backends and asserts the refusal was **reached** before reading its
+wording, since an arm that never got there measures nothing.
+
+Sabotaged both ways, which is what makes it a distinction rather than a
+branch:
+
+    always offer ninja    --eject deb must not offer ninja as the remedy
+    never offer ninja     --eject make must offer ninja as the remedy
+
+A one-sided sabotage would have passed a change that simply deleted the
+sentence.
+
+### Left alone: the service name itself
+
+A service name has no format check, where a package name, an account
+name and a target name all do. It should probably have one -- but the
+charset is a decision about fmake's config contract rather than a bug
+to close in passing: systemd allows `@` for template units and a good
+deal besides, OpenRC and `dh_installsystemd --name=` want less, and
+picking the intersection settles what a service may be called. The
+option, its cost and whose it is: refuse non-token service names, one
+regex and a message, and it is the copyright holder's call because it
+can only make a previously-accepted `fmake.toml` fail.
+
+What is NOT left open is the harm: a name that would break anything is
+already refused, by the path guard, so this is about the message a
+reader gets and not about what gets built.

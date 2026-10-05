@@ -13282,6 +13282,10 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		done = set(moc_outs)
 		extra = ({"fragment": True} if args.eject == "make-fragment" else {})
 		if emit is eject_make:
+			# What the reader asked for, so a refusal can offer a
+			# remedy that exists: ninja is an alternative to a
+			# Makefile and not to a package.
+			extra["asked"] = args.eject
 			# The Makefile is what a source package builds with, on a
 			# machine that may not be this one. ninja is not deferred:
 			# it has no parse-time shell, so a deferred module would be
@@ -14736,7 +14740,8 @@ def _refuse_unnameable(targets, closures, root, extra=()):
 		      "`--eject ninja' is not an answer either.")
 
 
-def _refuse_whitespace(targets, closures, root, extra=()):
+def _refuse_whitespace(targets, closures, root, extra=(),
+                       asked="make"):
 	"""Make cannot express some of the names a filesystem allows.
 
     Not a limitation worth working around: what escaping exists differs by
@@ -14759,16 +14764,34 @@ def _refuse_whitespace(targets, closures, root, extra=()):
 			bad[path] = why
 	if bad:
 		shown, _brest = capped(sorted(bad))
+		# The remedy depends on what was asked for, because ninja is an
+		# alternative only when a build file is what the reader wanted.
+		# Measured: `--eject deb' on a tree whose service name holds a
+		# space refused with "Use `--eject ninja', which can express all
+		# of them" -- and ninja does not produce a Debian package, so the
+		# one sentence offering a way forward named a backend that cannot
+		# do the job. Section 355's class one layer up: there the named
+		# backend could not express the path, here it cannot produce the
+		# artifact.
+		if asked in ("make", "make-fragment"):
+			remedy = "Use `--eject ninja`, which can express all of them."
+		else:
+			remedy = (f"`--eject {asked}` builds with this Makefile, and "
+			          f"ninja cannot produce that -- so the name has to "
+			          f"change rather than the backend. A path here can "
+			          f"come from {CONF_FILE} as well as from the tree: a "
+			          f"service or target name is written into a filename.")
 		die("cannot eject a Makefile for these paths:\n    "
 		    + "\n    ".join(f"{p}  ({bad[p]})" for p in shown)
 		    + (f"\n    ... and {_brest} more (-v for all)"
 		       if _brest else "")
-		    + "\nUse `--eject ninja`, which can express all of them.")
+		    + "\n" + remedy)
 
 
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
                gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
-               fragment=False, prefix=None, outdir=None, deferred=None):
+               fragment=False, prefix=None, outdir=None,
+               deferred=None, asked="make"):
 	"""A standalone Makefile, or a fragment for an existing one to include.
 
     The fragment exists because replacing a build system is not the only way
@@ -14813,7 +14836,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	            + ([outdir] if outdir else []))
 	_refuse_leading_dash(targets, closures, root, gen_srcs)
 	_refuse_unnameable(targets, closures, root, gen_srcs)
-	_refuse_whitespace(targets, closures, root, gen_srcs)
+	_refuse_whitespace(targets, closures, root, gen_srcs,
+	                   asked=asked)
 	any_crate = any(u.crate for t in targets for u in closures[t].link)
 	common = _eject_flags(cfg.base_cflags() + incflags, root, _mk_flag)
 	override = _eject_flags(cfg.override, root, _mk_flag)
