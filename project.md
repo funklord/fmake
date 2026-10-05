@@ -409,7 +409,8 @@ that had been green about nothing for five commits ·
 [356. The whitelist that could only be too strict](#356-the-whitelist-that-could-only-be-too-strict) ·
 [357. The other half of the same lens, which came back clean](#357-the-other-half-of-the-same-lens-which-came-back-clean) ·
 [358. An APKBUILD is a shell script, and the description was not quoted](#358-an-apkbuild-is-a-shell-script-and-the-description-was-not-quoted) ·
-[359. The same question in three more formats, and two of them answered wrong](#359-the-same-question-in-three-more-formats-and-two-of-them-answered-wrong)
+[359. The same question in three more formats, and two of them answered wrong](#359-the-same-question-in-three-more-formats-and-two-of-them-answered-wrong) ·
+[360. The suite's own filter could report a narrower run as a pass](#360-the-suites-own-filter-could-report-a-narrower-run-as-a-pass)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27966,3 +27967,56 @@ takes its values **verbatim**, quoting included, which looks careless and
 is the point: these cases are about what a hostile value does to a
 generated file, and a helper that quoted for them would be quoting the
 thing under test.
+
+## 360. The suite's own filter could report a narrower run as a pass
+
+Noticed while running three case names at once, two of which did not
+exist yet: the suite printed **`all 1 passed`** and said nothing about
+the two that matched nothing.
+
+The guard was there and was aggregate. It asked whether the SELECTION was
+empty -- which catches a run that selected nothing, and cannot see a run
+that selected *less than it was asked for*. That second shape is the one
+its own comment describes: *a script naming a case that has since been
+renamed*, which is how five of apt-emerge's tests skipped for twenty-seven
+commits with nobody reading the word "skipped".
+
+Per pattern now, and the message has to tell the two apart because they
+want different fixes:
+
+    real + typo    refuse, name the typo, say the run was narrowed
+    typo + typo    refuse, name both, and say nothing about narrowing
+    real alone     run it
+
+It subsumes the old check -- when every pattern misses, `missed` is all of
+them and the refusal is the same sentence it always was.
+
+### Testing the runner from inside the runner
+
+`a_pattern_matching_nothing_is_refused_beside_one_that_matches` runs
+`selftest` as a subprocess, which is a first here and is safe for one
+reason worth stating: **the refusal happens before any case executes**, so
+the inner run parses its arguments and exits. The third arm does run one
+case -- the cheapest in the suite, which reads `project.md` -- because
+without it the guard could be refusing everything and the first two arms
+would prove nothing.
+
+The sabotage restores the aggregate form, and the failure carries the
+inner run's own output:
+
+    a pattern matching nothing must refuse even when another pattern
+    matches ...
+    ok   the_contents_index_lists_every_section
+    all 1 passed
+
+which is the defect printing itself inside the message that reports it.
+
+### Found by reading an output nobody had asked a question about
+
+This was not on any lens. Three case names were passed to the suite as a
+convenience, two of them for cases not yet written, and `all 1 passed`
+scrolled by. The useful part is what made it visible: the count was
+**1** where three names had been given, and the two numbers were on the
+same line. A count that names its denominator is `evidence.md`'s whole
+remedy for the vacuous pass -- and here the denominator was absent, so
+the discrepancy had to be noticed by somebody rather than reported.

@@ -26059,6 +26059,69 @@ def the_readme_documents_every_option(t):
 
 
 @case
+def a_pattern_matching_nothing_is_refused_beside_one_that_matches(t):
+	"""The suite's own filter, which could report a narrower run as a pass.
+
+    `./selftest NAME ...` selects by substring, and the guard asked
+    whether the SELECTION was empty. That catches a run which selected
+    nothing and cannot see a run which selected less than it was asked
+    for -- which is the case the guard's own comment describes: a script
+    naming three cases where one has since been renamed runs two of them
+    and reports success, with the renamed one silently gone.
+
+    Measured before the change: two patterns, one real and one a typo,
+    ran the real one and printed "all 1 passed".
+
+    The refusal happens before any case executes, so running the suite
+    from inside the suite here costs nothing and cannot recurse. Three
+    arms, because the message has to tell the two situations apart:
+
+        real + typo    refuse, name the typo, say the run was narrowed
+        typo + typo    refuse, name both, and say nothing about narrowing
+        real alone     run it
+    """
+	sel = os.path.join(REPO, "selftest")
+	real = "the_contents_index_lists_every_section"
+	bogus = "no_such_case_anywhere_in_this_suite"
+
+	r = subprocess.run([sys.executable, sel, real, bogus],
+	                   capture_output=True, text=True)
+	out = r.stdout + r.stderr
+	check(r.returncode == 2,
+	      f"a pattern matching nothing must refuse even when another "
+	      f"pattern matches, or the run is narrower than it was asked for "
+	      f"and still green: rc={r.returncode}\n{out[:400]}")
+	check(bogus in out,
+	      f"the refusal must name the pattern that matched nothing: "
+	      f"{out[:300]}")
+	check("narrower" in out,
+	      f"the reader has to be told this was a narrowing rather than an "
+	      f"empty run, since the two want different fixes: {out[:300]}")
+
+	# Every pattern missing: still refused, and the narrowing sentence
+	# would be false there, so it must not appear.
+	r = subprocess.run([sys.executable, sel, bogus, bogus + "_two"],
+	                   capture_output=True, text=True)
+	out = r.stdout + r.stderr
+	check(r.returncode == 2, f"an entirely empty selection must refuse: "
+	                         f"rc={r.returncode}\n{out[:300]}")
+	check("narrower" not in out,
+	      f"nothing was narrowed when every pattern missed, and saying so "
+	      f"would send the reader looking for a pattern that worked: "
+	      f"{out[:300]}")
+
+	# The control: a pattern that does match still runs, or the guard is
+	# refusing everything and the two arms above mean nothing.
+	r = subprocess.run([sys.executable, sel, real],
+	                   capture_output=True, text=True)
+	check(r.returncode == 0,
+	      f"a pattern that matches must still run: rc={r.returncode}\n"
+	      f"{(r.stdout + r.stderr)[-400:]}")
+	check(real in r.stdout and "passed" in r.stdout,
+	      f"the matching case did not run: {r.stdout[-300:]}")
+
+
+@case
 def the_contents_index_lists_every_section(t):
 	"""project.md's index is a fourth hand-kept list, and it had stopped.
 
@@ -29667,18 +29730,34 @@ def main(argv):
 
 	cases = [c for c in CASES
 	         if not pats or any(p in c.__name__ for p in pats)]
-	# A filter that matches nothing is not a suite that passed. Reported
-	# from a sweep for gates that report success having checked nothing,
-	# and `make test' passes no arguments so CI never met it -- the victim
-	# is somebody narrowing to one case, or a script naming a case that has
-	# since been renamed, which is how five of apt-emerge's tests skipped
-	# for twenty-seven commits with nobody reading the word "skipped".
+	# Per PATTERN, not over their union. The first version of this asked
+	# whether the selection was empty, which catches a run that selected
+	# nothing and cannot see a run that selected LESS than it was asked
+	# for -- and that is the case its own reasoning describes: a script
+	# naming three cases where one has since been renamed runs two of
+	# them and reports success, with the renamed one silently gone.
+	#
+	# Reported from a sweep for gates that report success having checked
+	# nothing, and `make test' passes no arguments so CI never meets
+	# either shape -- the victim is somebody narrowing to one case, or a
+	# script naming a case that has been renamed, which is how five of
+	# apt-emerge's tests skipped for twenty-seven commits with nobody
+	# reading the word "skipped".
 	#
 	# tool/style_gate.py refuses the same shape in the same words: a clean
 	# tree and a collapsed file list are indistinguishable from the exit
 	# code, so the tool has to tell them apart itself.
-	if pats and not cases:
-		print(f"{RED}no case matches {' '.join(pats)}{OFF}")
+	#
+	# This subsumes the empty-selection check: when every pattern misses,
+	# `missed' is all of them and the refusal is the same.
+	missed = [p for p in pats
+	          if not any(p in c.__name__ for c in CASES)]
+	if missed:
+		print(f"{RED}no case matches {' '.join(missed)}{OFF}")
+		if len(missed) < len(pats):
+			print(f"       the other {len(pats) - len(missed)} pattern(s) "
+			      f"would have run, so this is a narrower suite reporting "
+			      f"success")
 		print("       this reads as a clean run and is an empty one; "
 		      "`./selftest' with no arguments runs all of them")
 		return 2
