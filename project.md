@@ -411,7 +411,8 @@ that had been green about nothing for five commits ·
 [358. An APKBUILD is a shell script, and the description was not quoted](#358-an-apkbuild-is-a-shell-script-and-the-description-was-not-quoted) ·
 [359. The same question in three more formats, and two of them answered wrong](#359-the-same-question-in-three-more-formats-and-two-of-them-answered-wrong) ·
 [360. The suite's own filter could report a narrower run as a pass](#360-the-suites-own-filter-could-report-a-narrower-run-as-a-pass) ·
-[361. The mirror lens, and the one site a helper's own docstring had closed](#361-the-mirror-lens-and-the-one-site-a-helpers-own-docstring-had-closed)
+[361. The mirror lens, and the one site a helper's own docstring had closed](#361-the-mirror-lens-and-the-one-site-a-helpers-own-docstring-had-closed) ·
+[362. Fuzzing the files, because the last sweep only had two surfaces](#362-fuzzing-the-files-because-the-last-sweep-only-had-two-surfaces)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28082,3 +28083,57 @@ spellings being one language is asserted rather than asserted-about, and
 a control that a well-formed `fmake.mk` directive still delivers its
 define -- without which the refusal could be fmake.mk having stopped
 working.
+
+## 362. Fuzzing the files, because the last sweep only had two surfaces
+
+§361's lesson was that a sweep's blind spot is the shape of its inputs:
+the fuzz that found three traceback sites walked argv and the
+environment, so a site reading a FILE survived it. So the files were
+walked -- 32 `fmake.toml` bodies and 21 `fmake.mk` bodies, looking only
+for the one output that is never intended.
+
+    inputs tried   32 toml, 21 mk
+    tracebacks     0
+
+Wrong types in every section, unknown keys and sections, an empty target
+name, a target name with a space and a slash, a 5000-character project
+name, inline tables, an array of tables where a table is wanted, a
+negative job count; and on the make side a recipe before any rule, a
+bare colon, a bare equals, a missing `include`, a 3000-flag line, an
+unterminated `$(`, a double-colon rule, CRLF endings, and an empty file.
+Nothing crashed.
+
+### The control, and what asking for it exposed
+
+**An empty sweep is worth nothing until the probe has been seen to
+fire**, so the same inputs were run against the binary from before
+§361's fix:
+
+    against the fixed binary      0 tracebacks
+    against the pre-fix binary    3 tracebacks
+                                    mk  unclosed quote      No closing quotation
+                                    mk  unclosed squote     No closing quotation
+                                    mk  trailing backslash  No escaped character
+
+Which is the probe demonstrably finding the defect it was pointed at,
+and -- the part that was not known before -- evidence that §361's
+one-line change covers **all three** shapes shlex raises on, not just
+the one it was found with.
+
+**And asking for the control is what exposed the sweep's own hole.** The
+first input list had no unbalanced quote in it at all, in either file.
+It would have returned zero against the unfixed binary just as happily,
+and been written down as a clean result. A sweep that cannot find the
+bug its own section is about is not a measurement; it is 47 runs of
+something.
+
+### Two backslashes, not one
+
+The case was extended to all three shapes, and the trailing-backslash
+arm built instead of being refused on the first attempt. One trailing
+backslash is a **Make line continuation**, consumed before shlex ever
+sees it; two is what reaches the splitter. The fixture now writes
+`"\\" * 2` rather than a literal, so the significant count is visible
+rather than buried in an escape -- and the arm failing is what taught
+it, which is the fixture being wrong in the direction that reads as the
+tool being right.

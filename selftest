@@ -5904,22 +5904,29 @@ def an_ordinary_mistake_is_a_message_and_not_a_traceback(t):
 	refuses(["--ldflags", "\\"], None, ["--ldflags", "shell-quoted"])
 	refuses(["-o", "main.c"], None, ["-o", "is a file"])
 
-	# The fourth route, in a file rather than in argv.
-	u = Tree("mk-directive-quote")
-	try:
-		u.write("main.c", "int main(void){ return 0; }\n")
-		u.write("fmake.mk", '@cflags -DX="a\n')
-		r = u.fmake()
-		out = r.stdout + r.stderr
-		check("Traceback" not in out,
-		      f"an fmake.mk directive crashed: {out[-300:]}")
-		check(r.returncode != 0,
-		      f"an unclosed quote in fmake.mk was not refused: {out[:200]}")
-		for want in ("fmake.mk:1", "@cflags", "shell-quoted"):
-			check(want in out,
-			      f"the refusal does not say {want!r}: {out}")
-	finally:
-		u.cleanup()
+	# The fourth route, in a file rather than in argv. All three shapes
+	# shlex raises on, because a config fuzz found all three against the
+	# unfixed binary and one arm would have pinned a third of the fix.
+	for label, text in (("double quote", '@cflags -DX="a\n'),
+	                    ("single quote", "@cflags -DX='a\n"),
+	                    ("trailing backslash",
+	                     "@cflags -DX=a" + "\\" * 2 + "\n")):
+		u = Tree("mk-directive-" + label.replace(" ", "-"))
+		try:
+			u.write("main.c", "int main(void){ return 0; }\n")
+			u.write("fmake.mk", text)
+			r = u.fmake()
+			out = r.stdout + r.stderr
+			check("Traceback" not in out,
+			      f"an fmake.mk directive with a {label} crashed: "
+			      f"{out[-300:]}")
+			check(r.returncode != 0,
+			      f"a {label} in fmake.mk was not refused: {out[:200]}")
+			for want in ("fmake.mk:1", "@cflags", "shell-quoted"):
+				check(want in out,
+				      f"the {label} refusal does not say {want!r}: {out}")
+		finally:
+			u.cleanup()
 
 	# The same directive in a source comment. Asserted beside it because
 	# parse_mk's whole argument is that the two spellings are ONE
