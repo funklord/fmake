@@ -5288,6 +5288,130 @@ outputs = ["gen/x.c"]
 		      f"{what} does not say what is wrong: {out}")
 
 
+def _pkg_min_tree(t, name, extra="", **fields):
+	"""The smallest tree the three packaging emitters will all accept.
+
+    Values go into fmake.toml verbatim, so a caller brings its own
+    quoting. That is deliberate: these cases are about what a hostile
+    value does to a generated file, and a helper that quoted for them
+    would be quoting the thing under test.
+    """
+	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
+		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
+	t.write("tool.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("hi\\n"); return 0; }\n')
+	t.write("VERSION", "1.0\n")
+	shutil.copy("/usr/share/common-licenses/GPL-3",
+	            os.path.join(t.dir, "LICENSE"))
+	pkg = {"maintainer": '"A Person <a@example.invalid>"',
+	       "homepage": '"https://example.invalid/"',
+	       "description": '"""A tool.\n An extended paragraph."""'}
+	pkg.update(fields)
+	body = "".join(f"{k} = {v}\n" for k, v in pkg.items())
+	t.write("fmake.toml",
+	        f'[project]\nname = "{name}"\n\n[package]\n{body}\n'
+	        + (extra or '[gentoo]\ncategory = "app-misc"\n'
+	                    f'src-uri = "https://example.invalid/{name}'
+	                    '-${PV}.tar.gz"\n'))
+
+
+@case
+def a_package_field_with_a_newline_is_refused_by_every_packager(t):
+	"""A newline in a one-line field is an injection, not bad formatting.
+
+    Three `[package]` fields are written as a single line in something
+    fmake generates. Measured with `--eject deb`, before the guard: a
+    homepage of "https://example.invalid/\nPackage: injected" put
+
+        Homepage: https://example.invalid/
+        Package: injected
+
+    into debian/control as a field of its own, and into debian/copyright
+    as well. maintainer and section did the same.
+
+    The APKBUILD is what makes this a refusal rather than a fold.
+    `maintainer` goes into `# Contributor:` and `# Maintainer:` comments,
+    so the line after a newline is not a comment at all: a maintainer of
+    "A Person <a@x.invalid>\nid > /tmp/marker" wrote an APKBUILD whose
+    second line was `id > /tmp/marker`, and sourcing it -- which is what
+    abuild does -- CREATED THE FILE. The shell escape beside this cannot
+    help, because it escapes what matters inside double quotes and a
+    comment is not quoted.
+
+    The control is the last arm: the same tree with the newline taken out
+    must eject cleanly from all three, or the refusals prove nothing about
+    newlines in particular."""
+	for field in ("maintainer", "homepage", "section"):
+		for backend in ("deb", "apk", "ebuild"):
+			u = Tree(f"pkgnl-{field}-{backend}")
+			try:
+				base = ('"A Person <a@x.invalid>"' if field == "maintainer"
+				        else '"https://example.invalid/"'
+				        if field == "homepage" else '"misc"')
+				hostile = base[:-1] + '\\nPackage: injected"'
+				_pkg_min_tree(u, "pkgnl", **{field: hostile})
+				r = u.fmake("--eject", backend)
+				out = r.stdout + r.stderr
+				check(r.returncode != 0,
+				      f"--eject {backend} accepted a newline in "
+				      f"[package] {field}: {out[:300]}")
+				check(field in out and "newline" in out,
+				      f"the refusal must name the field and the newline, "
+				      f"since the reader has to find it in their config: "
+				      f"{out[:300]}")
+			finally:
+				u.cleanup()
+
+	# The control. Without the newline every backend must be happy, or the
+	# refusals above could have been about anything at all.
+	for backend in ("deb", "apk", "ebuild"):
+		u = Tree(f"pkgnl-ok-{backend}")
+		try:
+			_pkg_min_tree(u, "pkgnl", section='"misc"')
+			r = u.fmake("--eject", backend)
+			check(r.returncode == 0,
+			      f"--eject {backend} must accept the same tree with the "
+			      f"newline removed: {r.stdout}{r.stderr}")
+		finally:
+			u.cleanup()
+
+
+@case
+def an_ampersand_in_the_maintainer_survives_metadata_xml(t):
+	"""gentoo's metadata.xml is XML, and the maintainer went in raw.
+
+    `[package] maintainer` is split into a name and an address and written
+    as `<name>` and `<email>` element text. Measured before the fix, with
+    a maintainer of "Ampersand & Angle <a@example.invalid>":
+
+        <name>Ampersand & Angle</name>
+        not well-formed (invalid token): line 6, column 19
+
+    Portage reads this file, so a malformed one is not cosmetic.
+
+    Asserted by parsing and round-tripping rather than by looking for
+    `&amp;`: what matters is that the value comes back out as the config
+    wrote it, and a check for the entity would pass a file that escaped
+    the ampersand and mangled something else on the way."""
+	_pkg_min_tree(t, "ampx",
+	              maintainer='"Ampersand & Angle <a@example.invalid>"')
+	r = t.fmake("--eject", "ebuild")
+	check(r.returncode == 0, f"--eject ebuild failed: {r.stdout}{r.stderr}")
+	mx = os.path.join(t.dir, "gentoo", "app-misc", "ampx", "metadata.xml")
+	check(os.path.exists(mx), "no metadata.xml was written")
+	import xml.etree.ElementTree as ET
+	try:
+		root = ET.parse(mx).getroot()
+	except ET.ParseError as e:
+		check(False, f"metadata.xml is not well-formed XML, and Portage "
+		             f"reads it: {e}\n{open(mx).read()}")
+		return
+	name = root.find(".//name")
+	check(name is not None and name.text == "Ampersand & Angle",
+	      f"the maintainer name does not round-trip through the XML: "
+	      f"{None if name is None else name.text!r}")
+
+
 @case
 def a_description_the_shell_would_run_is_quoted_in_shell_packages(t):
 	"""An APKBUILD and an ebuild ARE shell scripts.
@@ -5315,25 +5439,16 @@ def a_description_the_shell_would_run_is_quoted_in_shell_packages(t):
     is documented to take `${PV}', and the refusal when it is missing
     says so -- so escaping those would break the documented thing. The
     case asserts they still arrive with their dollars intact."""
-	if not os.path.isfile("/usr/share/common-licenses/GPL-3"):
-		raise Skip("no /usr/share/common-licenses/GPL-3 to identify against")
 	hostile = 'A tool `id` and $(id) and "quoted" and $HOME'
-	t.write("tool.c", "#include <stdio.h>\n"
-	        'int main(void){ printf("hi\\n"); return 0; }\n')
-	t.write("VERSION", "1.0\n")
-	shutil.copy("/usr/share/common-licenses/GPL-3",
-	            os.path.join(t.dir, "LICENSE"))
-	t.write("fmake.toml",
-	        '[project]\nname = "pkgq"\n\n'
-	        '[package]\nmaintainer = "A Person <a@example.invalid>"\n'
-	        "homepage = '" + hostile + "'\n"
-	        "description = '''" + hostile + "\n"
-	        " An extended paragraph, which every one of these wants below "
-	        "the synopsis.'''\n\n"
-	        '[alpine]\ndepends = ["a$b", "c`d`e"]\n\n'
-	        '[gentoo]\ncategory = "app-misc"\n'
-	        'iuse = ["f$g"]\n'
-	        'src-uri = "https://example.invalid/pkgq-${PV}.tar.gz"\n')
+	_pkg_min_tree(t, "pkgq", homepage="'" + hostile + "'",
+	              description="'''" + hostile + "\n An extended "
+	              "paragraph, which every one of these wants below the "
+	              "synopsis.'''",
+	              extra='[alpine]\ndepends = ["a$b", "c`d`e"]\n\n'
+	                    '[gentoo]\ncategory = "app-misc"\n'
+	                    'iuse = ["f$g"]\n'
+	                    'src-uri = '
+	                    '"https://example.invalid/pkgq-${PV}.tar.gz"\n')
 
 	eb_rel = os.path.join("gentoo", "app-misc", "pkgq", "pkgq-1.0.ebuild")
 	# Every field the escape was applied to, not only the two prose ones:

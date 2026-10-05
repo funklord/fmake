@@ -17617,6 +17617,7 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	if not RE_DEB_NAME.match(src_name):
 		die(f"{src_name!r} is not a source package name Debian accepts; "
 		    f"set [project] name")
+	_refuse_field_newlines(conf)
 	version = read_root_version(root)
 	if not version:
 		die("no VERSION file at the root. A package has a version, and "
@@ -18037,6 +18038,44 @@ def gentoo_license(short):
 	return f"{family}-{version}" + ("+" if grant in ("-or-later", "+") else "")
 
 
+# [package] fields that become ONE line in something fmake generates, so a
+# newline in one is not a formatting problem but an injection.
+#
+# Measured, all three, with `--eject deb': a homepage reading
+# "https://example.invalid/\nPackage: injected" put `Package: injected' into
+# debian/control as a field of its own, and into debian/copyright as well.
+# maintainer and section did the same.
+#
+# The APKBUILD is worse, and is what makes this a refusal rather than a
+# fold. `maintainer' goes into `# Contributor:' and `# Maintainer:'
+# comments, so the line after a newline is not a comment at all: a
+# maintainer of "A Person <a@x.invalid>\nid > /tmp/marker" wrote an
+# APKBUILD whose second line is `id > /tmp/marker', and sourcing it -- what
+# abuild does -- CREATED THE FILE. `_sh_dq' cannot help there, because it
+# escapes what matters inside double quotes and a comment is not quoted.
+#
+# Refused rather than escaped, which is the opposite of the choice made for
+# the description one function below. deb822 can fold a value onto a
+# continuation line and a comment could be re-prefixed per line, but a URL,
+# an address or a section name with a newline in it is not a value anybody
+# meant -- so the honest answer is to say so, as `_refuse_unnameable' does
+# for a path no backend can name. A description is different: its newlines
+# are the synopsis-and-body split, and they are folded deliberately.
+_ONE_LINE_FIELDS = ("maintainer", "homepage", "section")
+
+
+def _refuse_field_newlines(conf):
+	"""Refuse a [package] field that cannot survive being one line."""
+	for field in _ONE_LINE_FIELDS:
+		value = conf.package.get(field)
+		if value and ("\n" in value or "\r" in value):
+			die(f"{CONF_FILE}: [package] {field} contains a newline, and "
+			    f"every package fmake writes puts it on a single line -- a "
+			    f"deb822 field, and a comment in an APKBUILD.\n"
+			    f"    What follows the newline becomes a field of its own, "
+			    f"or a line of shell. Put it on one line.")
+
+
 def _sh_dq(text):
 	"""One value, safe inside a double-quoted shell string.
 
@@ -18144,6 +18183,7 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 		die(f"{CONF_FILE}: [gentoo] category = \"app-misc\" (or another of "
 		    f"the tree's categories) is needed: an ebuild lives under one, "
 		    f"and which is a choice fmake will not make.")
+	_refuse_field_newlines(conf)
 	src_uri = conf.gentoo.get("src-uri")
 	if not src_uri:
 		die(f"{CONF_FILE}: [gentoo] src-uri is needed, with ${{PV}} for the "
@@ -18259,9 +18299,16 @@ def eject_ebuild(targets, closures, resolutions, root, conf, cfg, pkg,
 	            '<!DOCTYPE pkgmetadata SYSTEM '
 	            '"https://www.gentoo.org/dtd/metadata.dtd">\n'
 	            '<pkgmetadata>\n'
+	            # XML element text wants exactly the three `_html'
+	            # already escapes, so this reuses it rather than
+	            # keeping a second copy to drift: a maintainer of
+	            # "Ampersand & Angle <a@x>" wrote a metadata.xml
+	            # that is not well-formed -- "not well-formed
+	            # (invalid token): line 6, column 19" -- and
+	            # Portage reads this file.
 	            + (f'\t<maintainer type="person">\n'
-	               f'\t\t<email>{m.group(2)}</email>\n'
-	               f'\t\t<name>{m.group(1)}</name>\n'
+	               f'\t\t<email>{_html(m.group(2))}</email>\n'
+	               f'\t\t<name>{_html(m.group(1))}</name>\n'
 	               f'\t</maintainer>\n' if m else "")
 	            + '</pkgmetadata>\n')
 	pkgdir = os.path.join("gentoo", category, name)
@@ -18376,6 +18423,7 @@ def eject_apkbuild(targets, closures, resolutions, root, conf, cfg, pkg,
 		die(f"{CONF_FILE}: [package] description is needed: its first "
 		    f"sentence is the pkgdesc an APKBUILD requires, and fmake "
 		    f"will not invent one.")
+	_refuse_field_newlines(conf)
 	maint = conf.package.get("maintainer", "")
 	if not maint:
 		die(f"{CONF_FILE}: [package] maintainer = \"Name <address>\" is "

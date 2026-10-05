@@ -408,7 +408,8 @@ that had been green about nothing for five commits ·
 [355. The remedy that named a backend which could not do it either](#355-the-remedy-that-named-a-backend-which-could-not-do-it-either) ·
 [356. The whitelist that could only be too strict](#356-the-whitelist-that-could-only-be-too-strict) ·
 [357. The other half of the same lens, which came back clean](#357-the-other-half-of-the-same-lens-which-came-back-clean) ·
-[358. An APKBUILD is a shell script, and the description was not quoted](#358-an-apkbuild-is-a-shell-script-and-the-description-was-not-quoted)
+[358. An APKBUILD is a shell script, and the description was not quoted](#358-an-apkbuild-is-a-shell-script-and-the-description-was-not-quoted) ·
+[359. The same question in three more formats, and two of them answered wrong](#359-the-same-question-in-three-more-formats-and-two-of-them-answered-wrong)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27864,3 +27865,104 @@ Each was caught because the experiment checked that the **live** build
 succeeded before comparing anything against it. A sweep that had gone
 straight to `--eject` would have recorded "refused" for all three and
 called it a finding about the emitters.
+
+## 359. The same question in three more formats, and two of them answered wrong
+
+§358 fixed the shell half of the packaging emitters. The emitters write
+three *other* structured formats, and the lens is the same one: a config
+value fmake writes into a file some other tool parses.
+
+    format     file                      verdict
+    deb822     debian/control,           INJECTS a field
+               debian/copyright
+    shell       alpine/APKBUILD           INJECTS a statement, and it RAN
+               (comment lines)
+    XML        gentoo/.../metadata.xml   MALFORMED
+    HTML       release/index.html        clean -- `_html' already there
+
+### A newline is a field, and then it is a command
+
+Three `[package]` fields are written as one line. A homepage of
+`https://example.invalid/\nPackage: injected` produced, in
+`debian/control`:
+
+    Homepage: https://example.invalid/
+    Package: injected
+
+a field of its own, in the source stanza -- and the same in
+`debian/copyright`. `maintainer` and `section` did it too: **nine of
+nine** field-and-backend combinations accepted it.
+
+The APKBUILD is worse, and is what decided the fix. `maintainer` goes
+into `# Contributor:` and `# Maintainer:` comments, so the line after a
+newline is **not a comment**:
+
+    # Contributor: A Person <a@x.invalid>
+    id > /tmp/fmake-apk-comment-ran
+    # Maintainer: A Person <a@x.invalid>
+    id > /tmp/fmake-apk-comment-ran
+
+Sourced, which is what abuild does, **the marker file was created.**
+§358's `_sh_dq` cannot reach this: it escapes what matters inside double
+quotes, and a comment is not quoted.
+
+So newlines are **refused**, by `_refuse_field_newlines`, from all three
+packaging emitters. Refused and not folded, which is the opposite of the
+choice one function away for the description -- because deb822 *can*
+fold onto a continuation line and a comment *could* be re-prefixed, but a
+URL, an address or a section name with a newline in it is not a value
+anybody meant. A description is different: its newlines are the
+synopsis-and-body split and are folded deliberately.
+
+### An ampersand is not XML
+
+`metadata.xml` carries the maintainer split into `<name>` and `<email>`
+element text, raw. A maintainer of `Ampersand & Angle <a@example.invalid>`
+wrote
+
+    <name>Ampersand & Angle</name>
+    not well-formed (invalid token): line 6, column 19
+
+and Portage reads that file. Escaped now by reusing `_html`, which
+already escapes exactly the characters XML element text needs: a second
+copy of three replacements is the thing that drifts, and this workspace
+has said so before about a fourth copy of a luminance.
+
+**The HTML surface was already right**, which is the useful negative:
+`do_release` has had `_html` since before this sweep. So the gaps were
+the two formats with no escape function, not the two with one -- the same
+shape §357 found, where flags were clean because `_mk_flag` and
+`_nj_flag` existed and paths were not because the path escapes were
+per-backend and incomplete.
+
+### Asserted, controlled, and every call site shown live
+
+`a_package_field_with_a_newline_is_refused_by_every_packager` walks three
+fields across three backends, and its last arm is the control: the same
+tree with the newline removed must eject cleanly from all three, or the
+nine refusals prove nothing about newlines in particular.
+
+`an_ampersand_in_the_maintainer_survives_metadata_xml` parses the file
+and round-trips the name, rather than looking for `&amp;` -- a check for
+the entity would pass a file that escaped the ampersand and mangled
+something else.
+
+Four sabotages, each failing through its own named check:
+
+    guard removed from deb      --eject deb accepted a newline in ...
+    guard removed from ebuild   --eject ebuild accepted a newline in ...
+    guard removed from apk      --eject apk accepted a newline in ...
+    _html removed from the XML  metadata.xml is not well-formed XML,
+                                and Portage reads it
+
+Three call sites, three sabotages, for §358's reason: a guard is only as
+wired as its least-used caller, and that lesson was a commit old.
+
+### A third copy of the fixture, avoided
+
+These made three cases wanting the same minimal packaging tree, so it is
+`_pkg_min_tree` now and §358's case was rewritten onto it. The helper
+takes its values **verbatim**, quoting included, which looks careless and
+is the point: these cases are about what a hostile value does to a
+generated file, and a helper that quoted for them would be quoting the
+thing under test.
