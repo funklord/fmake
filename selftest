@@ -10308,6 +10308,105 @@ def a_rebuilt_situc_recompiles_the_schemas_it_compiled(t):
 
 
 @case
+def a_header_the_mocd_one_includes_is_an_input_to_moc(t):
+	"""The moc key held its input's hash and nothing about what that
+	input INCLUDES.
+
+	    flags.h   #define EXTRA 1
+	    thing.h   #include "flags.h", a slot behind #ifdef EXTRA
+
+	Measured both directions before the fix, and they fail differently.
+
+	**Removing** the define leaves a generated file calling a member that
+	no longer exists, so the build fails on `class Thing has no member
+	named extra' -- in `.fmake/moc/moc_thing.cpp', reported as "generated
+	from thing.h". Neither of those is the file that was edited, nothing
+	in the output names flags.h, and it stays broken on every later build
+	because thing.h's hash has not moved. Only a content edit to thing.h
+	or `--clean' gets out.
+
+	**Adding** it is worse, and is why this is a correctness fix rather
+	than a diagnostic one: exit 0, moc never runs, and the program reports
+	the slot as absent for ever. A green build whose meta-object describes
+	a different class than the one the compiler sees -- the failure the
+	per-target-define warning calls "a runtime lookup that finds nothing",
+	arriving with nothing said at all.
+
+	Fixed with the mechanism rcc already uses for the files a .qrc lists:
+	the job carries its tree-reachable headers and the key hashes them.
+
+	The third arm is the control that keeps over-keying honest. Re-running
+	moc when a reachable header moves is the safe direction and is cheap
+	-- an unchanged output recompiles nothing, objects being keyed on
+	content -- but a key that changed every build would pass the first two
+	arms and re-moc the world."""
+	if not shutil.which("moc") and not glob.glob("/usr/lib/qt6/libexec/moc"):
+		raise Skip("no moc to run")
+
+	def tree(u, define):
+		u.write("flags.h", "#pragma once\n"
+		        + ("#define EXTRA 1\n" if define else ""))
+		u.write("thing.h",
+		        '#pragma once\n#include <QObject>\n#include "flags.h"\n\n'
+		        "class Thing : public QObject {\n\tQ_OBJECT\npublic:\n"
+		        "#ifdef EXTRA\n\tQ_INVOKABLE int extra() { return 1; }\n"
+		        "#endif\n\tQ_INVOKABLE int always() { return 0; }\n};\n")
+		u.write("main.cpp", '#include "thing.h"\n#include <cstdio>\n'
+		        "int main(void){\n\tThing t;\n"
+		        '\tprintf("extra=%d\\n",\n'
+		        '\t       t.metaObject()->indexOfMethod("extra()") >= 0);'
+		        "\n\treturn 0;\n}\n")
+
+	# The silent direction: the define appears in the other header.
+	tree(t, False)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	if "Qt6Core" in out and "not satisfied" in out:
+		raise Skip("Qt6Core is not installed here")
+	check(r.returncode == 0, f"the first build must succeed: {out}")
+	name = os.path.basename(t.dir)
+	check(t.run(name).stdout.strip() == "extra=0",
+	      f"without the define the slot is absent: "
+	      f"{t.run(name).stdout.strip()!r}")
+
+	t.write("flags.h", "#pragma once\n#define EXTRA 1\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the rebuild must succeed: {out}")
+	check(t.run(name).stdout.strip() == "extra=1",
+	      f"a define in a header the moc'd one includes changes the "
+	      f"meta-object, so moc has to run again -- this is the silent "
+	      f"half, where the build is green and the program is wrong: "
+	      f"{t.run(name).stdout.strip()!r}")
+
+	# The loud direction, which never recovered on its own.
+	u = Tree("moc-dep-removed")
+	try:
+		tree(u, True)
+		check(u.fmake().returncode == 0, "the first build must succeed")
+		uname = os.path.basename(u.dir)
+		check(u.run(uname).stdout.strip() == "extra=1", "setup is wrong")
+		u.write("flags.h", "#pragma once\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0,
+		      f"removing the define must leave a tree that builds, not one "
+		      f"stuck on a stale generated file: {out}")
+		check(u.run(uname).stdout.strip() == "extra=0",
+		      f"the slot is gone, so the meta-object must not name it: "
+		      f"{u.run(uname).stdout.strip()!r}")
+
+		# The control: nothing changed, so moc must not run.
+		again = u.fmake()
+		check("MOC" not in again.stdout + again.stderr,
+		      f"an unchanged tree must not re-run moc, or the key is "
+		      f"moving every build and the arms above pass for that "
+		      f"reason: {again.stdout}{again.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_rewritten_moc_re_mocs_what_it_wrote(t):
 	"""Section 245's gap, closed: the moc key is wired, not only situc's.
 

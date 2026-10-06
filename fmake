@@ -3663,8 +3663,16 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
 	for job in jobs:
 		src, out = job["src"], job["out"]
 		abs_out = os.path.join(root, out)
-		key = sha("|".join([moc_is, "\0".join(flags), src,
-		                    cache.hash_of(os.path.join(root, src), src) or "?"]))
+		# `deps' is what the input INCLUDES from this tree, hashed the
+		# way rcc hashes the files a .qrc lists: a define moved in
+		# another header changes what moc's preprocessor sees, and
+		# keying on the input alone left the output stale.
+		parts = [moc_is, "\0".join(flags), src]
+		for dep in job.get("deps", ()):
+			parts.append(dep + ":" + (cache.hash_of(os.path.join(root, dep),
+			                                        dep) or "?"))
+		key = sha("|".join(
+		    parts + [cache.hash_of(os.path.join(root, src), src) or "?"]))
 		stamp = store.get(out)
 		if stamp == key and os.path.isfile(abs_out):
 			produced.append(out)
@@ -10933,16 +10941,52 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	                                                     scans):
 		warn(f'{rel}:{line} includes "{spell}", and {sib} exists beside '
 		     f'it -- so that file is what the compiler reads.\n'
-		     f'    a quoted include is resolved in the including file\'s '
+		     f'    A quoted include is resolved in the including file\'s '
 		     f'own directory before any -I, so the {job["out"]} fmake '
 		     f'generates from {job["src"]} is never opened.\n'
-		     f'    while the two agree this builds and runs correctly. '
-		     f'where the copy has drifted the meta-object describes the '
+		     f'    While the two agree this builds and runs correctly. '
+		     f'Where the copy has drifted the meta-object describes the '
 		     f'older class, and the program fails at run time with '
 		     f'"No such method".\n'
-		     f'    removing {sib} is the fix: excluding it, or having git '
+		     f'    Removing {sib} is the fix: excluding it, or having git '
 		     f'ignore it, changes nothing, because the include is resolved '
 		     f'by the compiler and not by fmake')
+	# What moc's output depends on besides its input. The key held the
+	# input's own content hash and nothing about the headers that input
+	# INCLUDES, so a define moved in another file did not re-run moc:
+	#
+	#     flags.h   #define EXTRA 1   -> removed
+	#     thing.h   #include "flags.h", a slot behind #ifdef EXTRA
+	#
+	# measured both directions. Removing the define leaves a generated
+	# file calling a member that no longer exists, and the build fails on
+	# `class Thing has no member named extra' IN A GENERATED FILE, naming
+	# thing.h -- neither of them the file that was edited, and it stays
+	# broken on every later build because thing.h's hash has not moved.
+	# ADDING it is worse: exit 0, moc never runs, and the program reports
+	# the slot as absent for ever. A green build with a meta-object that
+	# describes a different class.
+	#
+	# The same mechanism rcc already uses for the files a .qrc lists, and
+	# for the same reason stated there: an input is an input.
+	#
+	# A second Project for the walk, because `proj' cannot exist yet --
+	# its `src_set' has to contain what moc is about to write. This
+	# question is which TREE headers a moc input reaches, and a moc input
+	# never includes a moc output; uic and situc have already run, so
+	# `hdrs' holds what they wrote. `toolchain_owns_header' memoises on
+	# `cfg', so the second instance asks the toolchain nothing twice.
+	#
+	# Over-keying is the safe direction and is cheap: a header moving
+	# re-runs moc, and if the output is unchanged the object does not
+	# recompile, objects being keyed on content.
+	if moc_jobs:
+		_hdr_graph = Project(root, srcs, hdrs, scans,
+		                     owns=lambda n: toolchain_owns_header(cfg, n),
+		                     excluded=exclude_pattern)
+		for job in moc_jobs:
+			job["deps"] = sorted(
+			    _hdr_graph.reachable_headers([job["src"]]))
 	for job in moc_jobs:
 		generated_from[job["out"]] = job["src"]
 	# Swept before the guard, not inside it: a tree that stops using Qt

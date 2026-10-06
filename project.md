@@ -415,7 +415,8 @@ that had been green about nothing for five commits ·
 [362. Fuzzing the files, because the last sweep only had two surfaces](#362-fuzzing-the-files-because-the-last-sweep-only-had-two-surfaces) ·
 [363. A remedy naming a backend that cannot produce what was asked for](#363-a-remedy-naming-a-backend-that-cannot-produce-what-was-asked-for) ·
 [364. The silent nm, and a placement the measurement corrected](#364-the-silent-nm-and-a-placement-the-measurement-corrected) ·
-[365. The rustc nobody could tell apart from the last one](#365-the-rustc-nobody-could-tell-apart-from-the-last-one)
+[365. The rustc nobody could tell apart from the last one](#365-the-rustc-nobody-could-tell-apart-from-the-last-one) ·
+[366. The header moc was never told about](#366-the-header-moc-was-never-told-about)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28405,3 +28406,81 @@ nothing changed, asserting the crate is **not** rebuilt. Without it the
 version arm would pass against an fmake that rebuilt the crate on every
 run -- which is the failure a nervous fix produces, and it looks like
 success from the one measurement that matters.
+
+## 366. The header moc was never told about
+
+Derived from §365's shape -- an input to a decision that is not in the
+key -- pointed at the generators rather than the compilers. moc's key
+held its input's content hash, the tool's identity, and the flags. **Not
+the headers that input includes.**
+
+    flags.h   #define EXTRA 1
+    thing.h   #include "flags.h", a slot behind #ifdef EXTRA
+
+Both directions were measured, and they fail differently enough that
+only one of them would ever get reported.
+
+**Removing** the define leaves a generated file calling a member that no
+longer exists:
+
+    [1/1] CXX .fmake/moc/moc_thing.cpp
+    * 'class Thing' has no member named 'extra'
+      in .fmake/moc/moc_thing.cpp
+      generated from thing.h
+
+Neither file named is the one that was edited, nothing in the output
+mentions `flags.h`, and **it stays broken on every later build** --
+`thing.h`'s hash has not moved, so moc still does not run. An mtime
+touch does not help either, fmake keying on content; only a real edit to
+`thing.h` or `--clean` gets out.
+
+**Adding** it is worse and is why this is a correctness fix rather than a
+diagnostic one:
+
+    rc=0    moc re-ran: False    program says extra=0
+
+Exit zero, nothing said, and the meta-object describes a different class
+than the one the compiler sees -- for ever. That is the failure §335's
+warning calls *"a runtime lookup that finds nothing"*, arriving with no
+warning at all.
+
+### The mechanism was already in the file
+
+rcc has keyed on the files a `.qrc` lists for the reason its own
+comment gives: a changed icon has to re-run it just as a changed
+`.qrc` does. The job carries them and the key hashes
+them. moc's jobs now carry `deps` the same way, and `run_moc` hashes them
+the same way.
+
+Finding the include graph is the only new part. `proj` cannot exist yet --
+its `src_set` has to contain what moc is about to write -- so the walk
+uses a second `Project` built over the pre-moc tree. That is sound for
+this one question: it asks which TREE headers a moc input reaches, a moc
+input never includes a moc output, and uic and situc have already run so
+`hdrs` holds what they wrote. `toolchain_owns_header` memoises on `cfg`,
+so the second instance asks the toolchain nothing twice.
+
+### Over-keying is the safe direction, and the control says it stayed cheap
+
+A reachable header moving re-runs moc, which is more than strictly
+necessary -- moc only cares about what its preprocessor sees. That is the
+right way to be wrong: a re-run whose output is unchanged recompiles
+nothing, because objects are keyed on content.
+
+The third arm of the case is what keeps that honest. A key that moved
+every build would pass both correctness arms and re-moc the world, so the
+case asserts an unchanged rebuild does **not** run moc. Sabotaged:
+
+    deps dropped from the key    a define in a header the moc'd one
+                                 includes ... moc has to run again
+    a key that moves every run   an unchanged tree must not re-run moc,
+                                 or the key is moving every build and the
+                                 arms above pass for that reason
+
+### And the sentences in the warning beside it
+
+§355 recorded, unfixed, that the shadowed-generated warning starts four
+sentences in lowercase -- two of them mid-line after a full stop, which
+is wrong under any convention, and the other two against the house form
+of a capital after a `\n    ` continuation. Fixed here rather than left,
+the warning being in the function this entry already changes.
