@@ -28639,3 +28639,35 @@ sabotage satisfied the assertion by preventing the thing from happening
 at all. A negative assertion needs the positive one beside it, and
 "nothing happened" is the weakest possible positive -- what was needed
 here was a count of the work that should not have been done.
+
+### The rest of the family, swept
+
+§365, §366 and §368 are three finds from one question -- an input to a
+staleness decision that is not in the key. The remaining decisions were
+walked, and the question is now closed:
+
+    ldflags change            relinks; removing one relinks and drops it;
+                             unchanged does not relink
+    a vendored .a rebuilt     relinks, new members take effect, unchanged
+                             does not relink
+    a [generate.*] `uses`     the tool rebuilds and the rule re-runs;
+    tool rebuilt              unchanged does not re-run
+    moc, uic, rcc, situc      `tool_identity' stamps size and mtime, so a
+    replaced in place         tool rewritten at its path is caught
+    situ, uic includes        no include mechanism to miss
+
+Each of the first three was measured in all the directions that can fail,
+removal included, because a staleness fix that over-fires looks exactly
+like one that works.
+
+**And three of them were already asserted**, which is the part worth the
+paragraph: `relinking_follows_the_command_not_just_mtimes`,
+`a_changed_vendored_archive_relinks`, and the case recording that a
+generator's tool *was* relinked on every build. The vendored-archive one
+was nearly written a second time -- the search that said it was missing
+was `grep ... | head -6`, and the hit sat below the cut. `evidence.md`
+calls that "the view", and what refused the duplicate was the
+mechanical proof on the edit: a count that had to be one and was two.
+
+So the three finds are the whole of this family, and a fourth is not
+waiting in the part that was not looked at.
