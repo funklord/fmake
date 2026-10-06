@@ -28596,6 +28596,36 @@ It is `tool_identity`'s own motivating case, one layer out: *"a
 consumer's [toolchain] situc names a binary its holder reinstalls at the
 same path"*.
 
+### The argument was already in the file, one layer over
+
+**This entry first read as though the directory-versus-file reasoning
+had been derived here. It had not.** `libdir_signature`, which stamps the
+linkable libraries for the provider cache, says it already:
+
+    Directory mtimes are not enough. A directory's mtime moves when an
+    entry is added, removed or renamed -- so a package manager that
+    installs by rename is caught -- but not when a file is rewritten in
+    place, which is what `install` and a plain redirect both do.
+
+    Stat-ing every candidate instead costs about 3ms for ~900 libraries,
+    which is less than one compiler invocation.
+
+Same reasoning, same remedy, and a cost argument of the same shape --
+3 ms for 900 libraries against the 1.2 ms for 452 `.pc` files measured
+below, which is about 3 microseconds a file either way.
+
+So this was not a new decision but **an inconsistency between two layers
+of the same program**: the library resolution had the file-level stamp
+and the package resolution had the directory-level one, and nothing
+connected them. `working-practice.md` is right that a working sibling
+explaining itself is a cheaper source of a project's decisions than the
+document -- and the sibling was thirty lines from the code being read.
+
+Found only after the fix was committed, by walking the remaining cache
+sections to check their keys. Recorded rather than quietly tidied,
+because an entry that reads as a derivation when it was a convergence
+tells the next person the wrong thing about where to look.
+
 ### The blunt fix, because the measurement said it was free
 
 The files are stamped as well as the directories. Measured here:
