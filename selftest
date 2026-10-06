@@ -7439,6 +7439,100 @@ def a_tool_that_exits_zero_and_writes_nothing_is_refused(t):
 
 
 @case
+def a_pc_file_rewritten_in_place_is_noticed(t):
+	"""The signature stamped directories, which miss a rewrite.
+
+    A directory's mtime moves when an entry is added or taken away, so an
+    install and a removal were caught. A `.pc` **rewritten in place** does
+    not move it -- and that is how a locally built library is reinstalled:
+    `install -m644 foo.pc` truncates the file that is there. dpkg renames,
+    which does move the directory, so a distribution upgrade was already
+    caught and the case that was not is the sibling project rebuilt and
+    reinstalled.
+
+    Measured before the fix: a `.pc` rewritten from `-DFOO=1` to
+    `-DFOO=2` left fmake saying `up to date`, nothing recompiled, and the
+    program still carrying FOO=1.
+
+    Three arms. The first asserts the directory mtime really did not move,
+    because without it this fixture could be testing the add-and-remove
+    path that already worked. The second is the fix. The third is the
+    control that keeps the stamp cheap: `os.listdir` has no order to rely
+    on, so an unsorted stamp changes every run and would rebuild the tree
+    for ever while passing the second arm -- which is the fault `gen_key`
+    records in this same file."""
+	pc = os.path.join(t.dir, "pc")
+	os.makedirs(pc, exist_ok=True)
+	path = os.path.join(pc, "foo.pc")
+
+	def write_pc(val):
+		# Truncating an existing file moves ITS mtime and not the
+		# directory's, which is the whole point of the fixture.
+		with open(path, "w") as fh:
+			fh.write("Name: foo\nDescription: a fixture\nVersion: 1.0\n"
+			         "Cflags: -DFOO=%d\nLibs:\n" % val)
+
+	write_pc(1)
+	t.write("main.c", "/*! @pkg foo */\nint main(void){ return FOO - 1; }\n")
+	env = {"PKG_CONFIG_PATH": pc}
+	name = os.path.basename(t.dir)
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the first build must succeed: {out}")
+	check(t.run(name).returncode == 0,
+	      "the program should see FOO as 1 on the first build")
+
+	before = os.stat(pc).st_mtime_ns
+	time.sleep(0.01)
+	write_pc(2)
+	check(os.stat(pc).st_mtime_ns == before,
+	      "this fixture has to rewrite the .pc without moving the "
+	      "directory's mtime, or it tests the install-and-remove path "
+	      "that already worked")
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the rebuild must succeed: {out}")
+	check(t.run(name).returncode == 1,
+	      f"a .pc rewritten in place changes the flags the tree is built "
+	      f"with, so the resolution cannot be reused: the program still "
+	      f"carries the old FOO\n{out}")
+
+	# The control, and the first version of it was vacuous. It asserted
+	# that nothing RECOMPILES, and a stamp moving every run passed that --
+	# the re-query returns the same flags, so no object key moves. What a
+	# moving stamp actually costs is the QUERY, so count the queries: a
+	# shim that logs and forwards, named through [toolchain] pkg-config.
+	real = shutil.which("pkg-config") or shutil.which("pkgconf")
+	if not real:
+		raise Skip("no pkg-config to shim")
+	log = os.path.join(t.dir, "pc-calls.log")
+	shim = os.path.join(t.dir, "pc-shim")
+	with open(shim, "w") as fh:
+		fh.write('#!/bin/sh\necho "$@" >> %s\nexec %s "$@"\n' % (log, real))
+	os.chmod(shim, 0o755)
+	t.write("fmake.toml", '[toolchain]\npkg-config = "%s"\n' % shim)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+
+	t.fmake(env=env)                      # cold, with the shim in place
+	with open(log, "w"):
+		pass                              # only the next run is counted
+	again = t.fmake(env=env)
+	asked = [l for l in open(log).read().splitlines()
+	         if "--cflags" in l or "--libs" in l]
+	check(not asked,
+	      f"an unchanged tree must not ask pkg-config for foo's flags "
+	      f"again: that answer is cached under the stamp, and a stamp "
+	      f"moving every run re-queries for ever while every arm above "
+	      f"still passes. `--exists' is not this -- the @pkg constraint is "
+	      f"checked every build on purpose. Asked {len(asked)} time(s): "
+	      f"{asked[:3]}")
+	check("CC" not in again.stdout + again.stderr,
+	      f"and nothing recompiles either: {again.stdout}{again.stderr}")
+
+
+@case
 def a_pkgconfig_file_names_what_else_the_library_needs(t):
 	"""fmake installed a static library and a .pc that cannot link it.
 

@@ -417,7 +417,8 @@ that had been green about nothing for five commits ·
 [364. The silent nm, and a placement the measurement corrected](#364-the-silent-nm-and-a-placement-the-measurement-corrected) ·
 [365. The rustc nobody could tell apart from the last one](#365-the-rustc-nobody-could-tell-apart-from-the-last-one) ·
 [366. The header moc was never told about](#366-the-header-moc-was-never-told-about) ·
-[367. The `uses` example this document gives, which fmake refuses](#367-the-uses-example-this-document-gives-which-fmake-refuses)
+[367. The `uses` example this document gives, which fmake refuses](#367-the-uses-example-this-document-gives-which-fmake-refuses) ·
+[368. The package that was upgraded without moving a directory](#368-the-package-that-was-upgraded-without-moving-a-directory)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28567,3 +28568,74 @@ the others:
 
 So the family is closed, and §366 is the whole of it rather than the
 first of several.
+
+## 368. The package that was upgraded without moving a directory
+
+§366's lens once more -- an input to a staleness decision that is not in
+the key -- pointed at the pkg-config layer.
+
+`Pkg.signature()` stamped the **mtimes of the search directories**, and
+its docstring said what that buys: *"Stamp that changes when a package is
+installed or removed."* Both of those add or take away an entry, so the
+directory moves. A `.pc` **rewritten in place** does not move it.
+
+    .pc rewritten -DFOO=1 -> -DFOO=2, in place
+    pkgconfig dir mtime changed:  False
+    fmake:                        * pcstale up to date
+    program:                      still FOO=1
+
+**Which upgrades do this is the whole question, and the answer is not
+"none".** dpkg unpacks and renames, so the directory moves and a
+distribution upgrade was already caught. `install -m644 foo.pc` truncates
+the file that is there -- so a **locally built library, reinstalled at
+the same prefix**, is invisible. That is the configuration this workspace
+has: fmake itself writes a `.pc` for a library that opts in with
+`@version`, and a tree consuming a sibling's library meets exactly this.
+
+It is `tool_identity`'s own motivating case, one layer out: *"a
+consumer's [toolchain] situc names a binary its holder reinstalls at the
+same path"*.
+
+### The blunt fix, because the measurement said it was free
+
+The files are stamped as well as the directories. Measured here:
+
+    452 .pc files across 4 directories      1.2 ms a build
+    one module's .pc across those 4 dirs    16 us a module
+
+So the narrower answer -- stamp only the modules this tree names -- was
+declined. It saves a millisecond and would miss a `.pc` for a module
+**proposed by a header** rather than named by `@pkg`, which is fmake's
+own main route to a package.
+
+Two details the fix needs and neither is decoration. **Sorted**, because
+`os.listdir` has no order to rely on and a stamp that depends on it moves
+every run -- the fault `gen_key` records, where an unsorted list made a
+rule regenerate for ever. And **memoised**, because the calls are in
+loops: nothing installs a package mid-build, and the surrounding code
+already computed this once and passed it down.
+
+### The control was vacuous, for the second time this session
+
+The third arm first asserted that an unchanged rebuild does not
+**recompile**. The sabotage passed it: a stamp moving every run
+re-queries pkg-config, gets the same flags back, and no object key moves.
+Nothing recompiles, and the arm was satisfied by a build doing exactly
+what it was written to forbid.
+
+What a moving stamp costs is the **query**, so the queries are counted --
+a shim named through `[toolchain] pkg-config` that logs and forwards.
+With that, the sabotage fails.
+
+And the first version of the counting was wrong too: it counted every
+call mentioning the module and fired on `--exists foo`, which is the
+`@pkg` constraint and is checked every build **on purpose**, up front
+rather than at the compiler's "no such file". Narrowed to `--cflags` and
+`--libs`, which is what the stamp actually caches.
+
+**The pattern is worth more than either instance.** §364's crate arm and
+this one both asserted the absence of something, and in both cases the
+sabotage satisfied the assertion by preventing the thing from happening
+at all. A negative assertion needs the positive one beside it, and
+"nothing happened" is the weakest possible positive -- what was needed
+here was a count of the work that should not have been done.

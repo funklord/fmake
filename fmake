@@ -8646,6 +8646,7 @@ class PkgConfig:
 		self.libdirs = []
 		self._dirs = {}
 		self._by_incdir = None
+		self._sig = None
 		# Which Qt to answer for when more than one can. Newest first, the
 		# same order and for the same reason find_qt_tool takes the tool in
 		# -- set here so a header resolved before anything has looked at the
@@ -8812,14 +8813,56 @@ class PkgConfig:
 		return extra + (dirs or ["/usr/lib/pkgconfig", "/usr/share/pkgconfig"])
 
 	def signature(self):
-		"""Stamp that changes when a package is installed or removed."""
+		"""Stamp that changes when a package is installed, removed or CHANGED.
+
+        A directory's mtime catches an install and a removal, both of
+        which add or take away an entry. It does not catch a `.pc`
+        REWRITTEN IN PLACE -- and that is how a locally built library is
+        reinstalled: `install -m644 foo.pc` truncates the file that is
+        there rather than replacing it, so the directory never moves.
+        dpkg renames, which does move it, so a distribution upgrade was
+        already caught; the case that was not is the sibling project
+        rebuilt and reinstalled, which is the configuration this
+        workspace actually has.
+
+        Measured: a `.pc` rewritten from `-DFOO=1` to `-DFOO=2` left
+        fmake saying `up to date` and the program still carrying FOO=1.
+
+        So the files are stamped as well. Measured on this machine, 452
+        `.pc` files across four directories, 1.2 ms a build -- and taken
+        over stamping only the modules this tree names, which costs 16 us
+        a module and would miss a `.pc` for one proposed by a header
+        rather than named by `@pkg`. A millisecond is not worth the
+        narrower answer.
+
+        **Sorted**, because `os.listdir` has no order to rely on and a
+        stamp that depends on it changes every run -- which is the fault
+        `gen_key` records, where an unsorted list made a rule regenerate
+        for ever. And memoised, because the calls are in loops: nothing
+        installs a package mid-build, and the surrounding code already
+        computes this once and passes it down.
+        """
+		if self._sig is not None:
+			return self._sig
 		parts = []
 		for d in (self._search_path() if self.exe else []):
 			try:
 				parts.append(f"{d}:{os.stat(d).st_mtime_ns}")
 			except OSError:
-				pass
-		return sha("|".join(parts))
+				continue
+			try:
+				names = sorted(n for n in os.listdir(d)
+				               if n.endswith(".pc"))
+			except OSError:
+				continue
+			for n in names:
+				try:
+					st = os.stat(os.path.join(d, n))
+				except OSError:
+					continue
+				parts.append(f"{n}:{st.st_size}:{st.st_mtime_ns}")
+		self._sig = sha("|".join(parts))
+		return self._sig
 
 	def for_module(self, module, store, sig):
 		"""(module, cflags, libs) for a module named outright by @pkg."""
