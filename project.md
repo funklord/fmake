@@ -416,7 +416,8 @@ that had been green about nothing for five commits ·
 [363. A remedy naming a backend that cannot produce what was asked for](#363-a-remedy-naming-a-backend-that-cannot-produce-what-was-asked-for) ·
 [364. The silent nm, and a placement the measurement corrected](#364-the-silent-nm-and-a-placement-the-measurement-corrected) ·
 [365. The rustc nobody could tell apart from the last one](#365-the-rustc-nobody-could-tell-apart-from-the-last-one) ·
-[366. The header moc was never told about](#366-the-header-moc-was-never-told-about)
+[366. The header moc was never told about](#366-the-header-moc-was-never-told-about) ·
+[367. The `uses` example this document gives, which fmake refuses](#367-the-uses-example-this-document-gives-which-fmake-refuses)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28484,3 +28485,85 @@ sentences in lowercase -- two of them mid-line after a full stop, which
 is wrong under any convention, and the other two against the house form
 of a capital after a `\n    ` continuation. Fixed here rather than left,
 the warning being in the function this entry already changes.
+
+## 367. The `uses` example this document gives, which fmake refuses
+
+**A discrepancy between this document and the code, flagged rather than
+resolved.** `working-practice.md` is explicit that which side is wrong is
+a real question whose answer belongs to whoever knows it, and not to
+whoever noticed.
+
+The `uses` section above gives this, as the shape for a tool a project
+compiles and then runs -- NetHack's `makedefs`, sqlite's `lemon`:
+
+    [generate.names]
+    uses    = "makedefs"        # a target in this tree
+    command = "$tool -o $out"
+    outputs = ["include/onames.h"]
+
+fmake refuses it:
+
+    !!! [generate.names] needs inputs
+        freshness is a hash of what a rule reads, so one that reads
+        nothing can never be known to be stale.
+
+Every `[generate.*]` must declare both `inputs` and `outputs`, and there
+is no exemption for a rule that declares `uses`.
+
+### What the measurement says, which is not what either side says
+
+With a dummy `inputs` added to get past the refusal, the feature works
+**and works correctly**:
+
+    tool/mk.c writes "#define VALUE 1"   -> gen/val.h says 1
+    edit it to write 2                   -> TOOL mk, GEN val, says 2
+    rebuild with nothing changed         -> GEN did not re-run
+
+So a `uses` rule's freshness does **not** depend on `inputs` at all.
+fmake rebuilds the tool, notices it changed, and re-runs the rule -- and
+leaves it alone when nothing moved. The refusal's stated reason, *"a rule
+that reads nothing has nothing to be stale against"*, is false for this
+one shape: it reads the tool, and fmake already tracks that.
+
+Which means the `inputs` a reader has to invent is **a dummy**. There is
+nothing for it to name in the motivating case: `makedefs` reads its own
+sources, which are the tool target's business, and the rule reads only
+the tool.
+
+### Three ways out, and whose decision it is
+
+- **Exempt a `uses` rule from the `inputs` requirement.** Matches the
+  document, matches what the measurement shows is already true, and the
+  refusal's own reason does not apply. Costs: a condition, and a config
+  that is refused today starts being accepted -- which is the safe
+  direction for a change but is still a change to what fmake takes.
+- **Give the document an `inputs` line.** Smallest edit, and it makes
+  every reader of the NetHack case invent a file for the rule to read.
+- **Keep both and say so in the refusal**: name `uses` in the message so
+  a reader who hit it knows an input is wanted even though the tool is
+  the real one.
+
+It is the copyright holder's, because `project.md` wins over the code and
+the first option changes what fmake accepts. Recorded here rather than
+asked from inside the work, so the question is in the place a deliberate
+pass reads.
+
+### One line of noise noticed beside it, not acted on
+
+`TOOL mk` prints on every build, including one where the nested build has
+nothing to do -- the line above `* usestool2, mk up to date`. A progress
+line for work that did not happen. Not chased: it is cosmetic, and it is
+in the same mechanism the question above might move.
+
+### And the sibling generators, swept empty
+
+§366 keyed moc on the headers its input includes. The same question for
+the others:
+
+    rcc     already keys the files a .qrc lists
+    uic     a .ui declares a custom widget's header and never reads it
+    situc   no include mechanism: `situc` carries no import/include
+            keyword, and every subcommand takes one schema
+
+So the family is closed, and §366 is the whole of it rather than the
+first of several.
