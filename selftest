@@ -24373,6 +24373,95 @@ def the_cause_of_an_ambiguity_reaches_the_ones_it_cannot_guess(t):
 
 
 @case
+def an_unguessable_ambiguity_offers_a_remedy_that_works(t):
+	"""section 375: the arms where NOTHING is guessable said less.
+
+	Section 372 gave the mixed arrangement a cause and a fallback. The
+	arms where no target can be guessed were left as they were, and two
+	of the four were short -- so the tree with *less* information was
+	told *less*, which is backwards:
+
+	    @os present   "One of them has @os; the others may need one
+	                  too."  -- and nothing else, so a reader for whom
+	                  @os is not the answer has nowhere to go
+	    plain pair    @os/@arch, or name the sources -- never [project]
+	                  exclude, which is the remedy that fits a duplicate
+	                  copy of a file, vendored twice or committed as a
+	                  backup
+
+	The other two were already complete: the four-provider arm offers
+	per-target stanzas or exclude, and the prebuilt-archive arm offers
+	exclude alone, correctly, since an archive cannot carry a directive.
+
+	Both halves here are checked by TAKING the remedy rather than by
+	finding it in the text -- section 355's question, asked of advice
+	this tree is adding rather than of advice it inherited. A sentence
+	naming a remedy that does not resolve the refusal is worse than a
+	refusal with no advice, because it spends the reader's time before
+	failing."""
+	# The directive has to name THIS host or the file is dropped and
+	# there is no ambiguity left to report. Same mapping as `host_os'.
+	host = next((n for p, n in (("linux", "linux"), ("darwin", "darwin"),
+	                            ("freebsd", "freebsd"),
+	                            ("openbsd", "openbsd"),
+	                            ("netbsd", "netbsd"), ("win", "windows"),
+	                            ("cygwin", "windows"),
+	                            ("sunos", "solaris"))
+	             if sys.platform.startswith(p)), sys.platform)
+	# No headers anywhere: both roots declare the symbol themselves, so
+	# the include graph can distinguish nothing and every target is
+	# unguessable. That is what puts this on the arms under test rather
+	# than on the mixed one.
+	t.write("impl_a.c", "//! @os %s\nint shared(void){ return 1; }\n" % host)
+	t.write("impl_b.c", "int shared(void){ return 2; }\n")
+	t.write("proga.c", "int shared(void);\n"
+	        "int main(void){ return shared() - 1; }\n")
+	t.write("progb.c", "int shared(void);\n"
+	        "int main(void){ return shared() - 2; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two providers should not build: {out}")
+	check("has @os" in out,
+	      f"one provider carries @os, so the message has to say so: {out}")
+	check("sources of each target" in out,
+	      f"and has to offer a way out for a reader @os does not help, "
+	      f"which the mixed arrangement already gets: {out}")
+
+	# Taken. Naming the sources per target has to resolve it.
+	t.write("fmake.toml", '[target.proga]\n'
+	        'sources = ["proga.c", "impl_a.c"]\n'
+	        '[target.progb]\n'
+	        'sources = ["progb.c", "impl_b.c"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the remedy the message names did not work: {r.stdout}{r.stderr}")
+
+	# The plain pair: no directive on either provider, so no cause to
+	# name and all three remedies are live.
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("impl_a.c", "int shared(void){ return 1; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"still two providers: {out}")
+	check("has @os" not in out,
+	      f"neither provider carries @os now, so that cause must not be "
+	      f"claimed: {out}")
+	check("exclude" in out,
+	      f"a duplicated file is what this branch usually is, and exclude "
+	      f"is the remedy that fits it: {out}")
+
+	# Taken, the other way.
+	t.write("fmake.toml", '[project]\nexclude = ["impl_b.c"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"excluding the duplicate did not resolve it: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run("proga").returncode == 0,
+	      "the surviving provider was not the one kept")
+
+
+@case
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 

@@ -424,7 +424,8 @@ that had been green about nothing for five commits ·
 [371. The remedy that addressed four of the five targets it named](#371-the-remedy-that-addressed-four-of-the-five-targets-it-named) ·
 [372. The hint that only spoke when nothing could be guessed](#372-the-hint-that-only-spoke-when-nothing-could-be-guessed) ·
 [373. A warm cache that under-linked three programs](#373-a-warm-cache-that-under-linked-three-programs) ·
-[374. The tool line that announced a build on every run](#374-the-tool-line-that-announced-a-build-on-every-run)
+[374. The tool line that announced a build on every run](#374-the-tool-line-that-announced-a-build-on-every-run) ·
+[375. The arms where nothing is guessable said less than the mixed one](#375-the-arms-where-nothing-is-guessable-said-less-than-the-mixed-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29315,7 +29316,12 @@ comparison and not the other. Stale against current is 42 programs differing,
 not three: 41 of them gain `scriptlets.o`, a source absent from the stale
 file entirely and present in 43 programs of the current one, and a 89th
 program appears. That is later work, landed after the regeneration. The
-`5426` cannot be recovered from either file. **`objsets.mk` in a working
+`5426` is recoverable once the later work is subtracted, and the
+arithmetic closes to the object: the current file carries 5469 references
+and 43 of its programs carry `scriptlets.o`, so 5469 - 43 = 5426, and
+5426 - 5417 = 9, which is three programs times three objects. hydra
+reported 5426 before any of this was measured here, so their figure is
+confirmed rather than relayed. **`objsets.mk` in a working
 tree is not an artifact, it is a generated file that keeps moving** --
 the frozen copy under `tmp/` is the trustworthy half, and a comparison
 against a live file dates from whenever it was last written rather than
@@ -29440,3 +29446,55 @@ unconditionally again fails on *nothing was built, so nothing should
 claim to have been*, and deleting the print fails on *a cold build has
 certain work and says so up front*.
 
+## 375. The arms where nothing is guessable said less than the mixed one
+
+§372 gave the mixed arrangement a cause and a fallback. It did not look
+at the arms it was taking the cause *from*, and two of those four were
+short -- so after that commit **the tree with less information was being
+told less**, which is backwards. The four arms, by what they offer:
+
+    @os on one provider   the cause, and nothing else
+    a plain pair          @os/@arch, or name the sources
+    more than three       per-target stanzas, or exclude
+    prebuilt archives     exclude alone
+
+The last two are complete. An archive cannot carry a directive, so
+exclude alone is right there and the ambiguous-archive case already
+asserts that `@os` is *not* offered. The first two were not.
+
+**The `@os` arm offered no way out at all.** A reader whose second
+provider is not a platform variant -- the directive is on the first file
+for some other reason, or was left there -- had the cause and no action.
+§372's mixed arrangement had just been given exactly that fallback,
+which is what makes this an asymmetry rather than an omission: the fix
+improved the better-informed path and left the worse one behind.
+
+**The plain pair never offered `exclude`.** That branch is where a
+duplicated file lands -- vendored twice, or a backup committed beside
+the original -- and for that one `exclude` is the answer. The
+`ignored` hint above it covers only a duplicate git is already ignoring,
+so a *tracked* duplicate was told about `@os` and about naming sources
+and never about the remedy that fits it.
+
+### Both remedies were taken, not just printed
+
+§355's question asked of advice this tree is adding rather than of
+advice it inherited. Each new sentence was followed in a fixture and the
+build checked:
+
+    name the sources of each target   two stanzas, builds both programs
+    keep the duplicate out           [project] exclude, builds both
+
+The case does the same rather than grepping for the words, because a
+sentence naming a remedy that does not resolve the refusal is worse than
+a refusal with no advice at all: it spends the reader's time before
+failing, and it reads as though somebody checked.
+
+### What did not move
+
+Measured on six fixtures with the object directory removed before each
+run, old tool against new: the four-provider arm, the prebuilt-archive
+arm and **both mixed arms are byte-identical**, and only the two
+incomplete arms changed. The mixed arms matter most there -- they are
+§372's own output, and a change to the shared `cause` string would have
+moved them silently.

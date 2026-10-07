@@ -13279,7 +13279,13 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		elif any(scans.get(p, {}).get("dirs", {}).get("os")
 		         for p in first_providers):
 			cause = "One of them has @os; the others may need one too."
-			whole = cause
+			# The cause alone was the whole message here, so a tree where
+			# NOTHING is guessable got no way out if @os was not the
+			# answer -- while section 372 had just given the mixed
+			# arrangement exactly that fallback. The tree with less
+			# information was being told less, which is backwards.
+			whole = (f"{cause}\nName the sources of each target in "
+			         f"{CONF_FILE} if that is not it.")
 		elif all(p.endswith(".a") for p in first_providers):
 			# A directive cannot be written on an archive: there is no
 			# source to put it in. Section 101's shape, in the same
@@ -13292,8 +13298,17 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			         f"out with [project] exclude in {CONF_FILE}.")
 		else:
 			cause = ""
-			whole = ("@os or @arch on the platform-specific one will settle "
-			         f"it, or name the sources of each target in {CONF_FILE}.")
+			# No cause to name, so all three remedies are live and the
+			# third was missing. This branch is where a duplicated copy
+			# of a file lands -- vendored twice, or a backup committed --
+			# and for that one [project] exclude is the answer, while the
+			# `ignored' hint above only covers a duplicate git is already
+			# ignoring. A tracked duplicate was told about @os and about
+			# naming sources, and never about the remedy that fits it.
+			whole = ("@os or @arch on the platform-specific one will "
+			         f"settle it. Otherwise name the sources of each "
+			         f"target in {CONF_FILE}, or keep the duplicate out "
+			         f"with [project] exclude.")
 		if advice:
 			lines += ["",
 			          "The include graph reaches exactly one of them from "
