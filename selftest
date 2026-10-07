@@ -24590,6 +24590,81 @@ def a_target_the_config_asks_for_is_not_silently_dropped(t):
 
 
 @case
+def a_named_sources_list_that_went_stale_says_so(t):
+	"""section 378: the predictable cost of fmake's own advice.
+
+	Sections 371, 372 and 375 print a `sources' stanza for the reader to
+	paste. A stanza is a snapshot -- right when pasted, wrong as soon as
+	anybody adds a file -- and when it goes stale the link fails. What
+	fmake said about that was
+
+	    no x86_64/64le library exports: helper
+	    name the missing libraries with --ldflags, or build only the
+	    targets you want
+
+	for a function defined in `helper.c`, which fmake had compiled in
+	the same run. The reader is sent to install a package for a file in
+	the directory next door.
+
+	The ending chain had branches for a file this build set aside, one
+	that failed to compile, and a symbol nothing in the tree defines. It
+	had none for one that compiled and is simply not a member -- which
+	can only happen where the membership was NAMED, because a closure
+	fmake computes adds whatever a symbol needs.
+
+	The control is the last assertion: a target with no sources list and
+	a genuinely undefined symbol must still get the library advice, or
+	this has replaced a correct ending rather than adding a missing
+	one."""
+	t.write("a.c", "int helper(void);\nint main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+	t.write("fmake.toml", '[target.prog]\nsources = ["a.c"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a stale sources list cannot link: {out}")
+	check("helper.c defines one of them" in out,
+	      f"the file that has the definition has to be named: {out}")
+	check("not in this target's sources" in out,
+	      f"and the reason has to be the named membership: {out}")
+	check("--ldflags" not in out,
+	      f"what is undefined is in this tree, so a library is the wrong "
+	      f"road and must not be offered: {out}")
+
+	# Both remedies, because the message names two.
+	t.write("fmake.toml", '[target.prog]\nsources = ["a.c", "helper.c"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"adding the file did not work: {r.stdout}{r.stderr}")
+
+	# Dropping the LIST, not the section: the target keeps its name and
+	# the closure decides what is in it.
+	t.write("fmake.toml", '[target.prog]\nroot = "a.c"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"dropping the list did not work: {out}")
+	check("prog" in out,
+	      f"and the target has to survive dropping its sources: {out}")
+
+	# The control. No sources list anywhere, and a symbol nothing here
+	# defines: the library ending is correct and has to remain.
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("a.c", "int nowhere_at_all(void);\n"
+	        "int main(void){ return nowhere_at_all(); }\n")
+	os.remove(os.path.join(t.dir, "helper.c"))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"an undefined symbol cannot link: {out}")
+	check("nothing in this tree appears to define them" in out
+	      or "--ldflags" in out,
+	      f"a genuinely missing definition still gets the library "
+	      f"explanation -- this must add an ending, not replace one: "
+	      f"{out}")
+	check("not in this target's sources" not in out,
+	      f"and must not claim a sources list where there is none: {out}")
+
+
+@case
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 

@@ -13260,6 +13260,19 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	blamed_excluded = set()
 	# Generated files that were declined and that define what is missing.
 	blamed_generated = set()
+	# Files that compiled, define what is missing, and are not in the
+	# target's link set -- which can only happen where the membership was
+	# NAMED, since a closure fmake computes adds whatever a symbol needs.
+	# A `sources' list is the whole membership, so one that has gone stale
+	# fails exactly here, and the ending fell through to `--ldflags':
+	# advice about a library for a function in the file next door.
+	#
+	# This is the predictable cost of the remedy sections 371, 372 and 375
+	# hand out. fmake prints a `sources' stanza for the reader to paste,
+	# and the stanza is a snapshot -- correct when pasted and wrong as soon
+	# as anybody adds a file. The advice is still right; it just has a
+	# failure mode that fmake owed an explanation for.
+	blamed_unlisted = set()
 
 	trouble = [(t, sym, providers) for t, cl in closures.items()
 	           for sym, providers in cl.ambiguous]
@@ -14472,6 +14485,28 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 					     f"one of them")
 					blamed_broken.add(rel)
 					named = True
+			# A membership the config named, which the closure may not
+			# add to. Only asked when nothing above has explained the
+			# symbol, and only for a target whose `sources' is written
+			# down: where fmake chose the membership itself this cannot
+			# arise, and claiming it could would send the reader to edit
+			# a list that does not exist.
+			tgt = next((x for x in targets if x.name == name), None)
+			if (missing and not named and tgt is not None
+			        and tgt.conf.get("sources")):
+				inset = {u.rel for u in cl.link}
+				for rel in sorted(srcs):
+					if rel in inset:
+						continue
+					if not toks.intersection(
+					        scans.get(rel, {}).get("defs") or []):
+						continue
+					note(f"{rel} defines one of them, compiled, and is "
+					     f"not in this target's sources -- a named "
+					     f"sources list is the whole membership, so the "
+					     f"closure could not add it")
+					blamed_unlisted.add(rel)
+					named = True
 			# And whether anything here looks like it defines them at all.
 			# Section 138 left this message alone because fmake cannot tell
 			# "a symbol a library defines" from "a symbol a generator was
@@ -14590,6 +14625,16 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     "defined in this tree, by a file that did not compile, "
 			     "and no library has it; if that is not it, name the "
 			     "missing libraries with --ldflags")
+		elif blamed_unlisted:
+			# `--ldflags' is wrong here for the same reason it is wrong
+			# for an excluded file: the definition is in this tree. What
+			# differs is the remedy, because nothing was set aside -- the
+			# membership was written down and has gone stale.
+			note(f"add the file(s) above to that target's sources in "
+			     f"{CONF_FILE}, or drop the sources list and let the "
+			     f"symbol closure decide the membership: what is "
+			     f"undefined is defined in this tree, so no library will "
+			     f"supply it")
 		else:
 			note("name the missing libraries with --ldflags, or build only "
 			     "the targets you want")

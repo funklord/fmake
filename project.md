@@ -427,7 +427,8 @@ that had been green about nothing for five commits ·
 [374. The tool line that announced a build on every run](#374-the-tool-line-that-announced-a-build-on-every-run) ·
 [375. The arms where nothing is guessable said less than the mixed one](#375-the-arms-where-nothing-is-guessable-said-less-than-the-mixed-one) ·
 [376. One refusal for four causes, naming no remedy](#376-one-refusal-for-four-causes-naming-no-remedy) ·
-[377. A guess withdrawn, and an assertion dropped](#377-a-guess-withdrawn-and-an-assertion-dropped)
+[377. A guess withdrawn, and an assertion dropped](#377-a-guess-withdrawn-and-an-assertion-dropped) ·
+[378. The predictable cost of fmake's own advice](#378-the-predictable-cost-of-fmakes-own-advice)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29641,3 +29642,69 @@ only the new refusal would not notice. Measured: a `main()` behind an
 `#ifdef` nobody defines still warns and still exits 0, while the
 configured root exits 1. The remedy is taken too: `kind = "static"`
 builds `libprog.a`.
+
+## 378. The predictable cost of fmake's own advice
+
+§371, §372 and §375 all end by telling a reader to write a `sources`
+stanza, and §371 prints one ready to paste. **A stanza is a snapshot:
+right when pasted, wrong as soon as anybody adds a file.** What fmake
+said when one went stale:
+
+    * prog did not link
+      no x86_64/64le library exports: helper
+      name the missing libraries with --ldflags, or build only the
+      targets you want
+
+`helper` is defined in `helper.c`, which fmake had **compiled in the
+same run** -- the line `[1/1] CC helper.c` is four lines above. The
+reader is sent to install a package for a function in the directory next
+door.
+
+The ending chain had branches for three real causes: a file this build
+set aside, one that failed to compile, and a symbol nothing in the tree
+defines. It had none for one that compiled and is simply **not a
+member** -- which can only happen where the membership was *named*,
+because a closure fmake computes adds whatever a symbol needs. So the
+one state a `sources` list can get into was the one state with no
+explanation.
+
+Now:
+
+    helper.c defines one of them, compiled, and is not in this target's
+    sources -- a named sources list is the whole membership, so the
+    closure could not add it
+    add the file(s) above to that target's sources in fmake.toml, or
+    drop the sources list and let the symbol closure decide the
+    membership: what is undefined is defined in this tree, so no library
+    will supply it
+
+Asked only of a target whose `sources` is written down. Where fmake
+chose the membership itself this cannot arise, and claiming it could
+would send a reader to edit a list that does not exist -- §377's
+discriminator, reused.
+
+### Both remedies, and both readings of the second
+
+    sources = ["a.c", "helper.c"]     builds prog
+    root = "a.c", no sources list     builds prog, closure adds helper.o
+    the whole section removed         builds the inferred program
+
+The middle row is the honest reading of "drop the sources list" and it
+was checked, because the wording says the list rather than the section
+-- a reader who drops only the list keeps the target's name, and that
+has to work or the sentence is wrong.
+
+### The control is the ending that must survive
+
+A target with no `sources` and a symbol nothing defines still gets the
+library explanation. Without that assertion this change could have
+*replaced* a correct ending instead of adding a missing one.
+
+**And the first attempt at that sabotage proved nothing**, which is
+worth more than the fix. Putting `True or` on the new `elif` left the
+case passing -- not because the control is weak but because an `elif`
+cannot swallow a branch that precedes it, and `unprovided` is tested
+first. The sabotage that tests the real failure moves the new ending
+*above* `unprovided`, and the control catches that immediately.
+`evidence.md` asks for confirmation that a sabotage landed; here the
+first one had not, and it would have read as a passing control.
