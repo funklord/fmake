@@ -431,7 +431,8 @@ that had been green about nothing for five commits ·
 [378. The predictable cost of fmake's own advice](#378-the-predictable-cost-of-fmakes-own-advice) ·
 [379. The caveat that excused a typo, in the other spelling](#379-the-caveat-that-excused-a-typo-in-the-other-spelling) ·
 [380. Two config keys that validated and did nothing](#380-two-config-keys-that-validated-and-did-nothing) ·
-[381. A data file's destination is its path, so its path can climb](#381-a-data-files-destination-is-its-path-so-its-path-can-climb)
+[381. A data file's destination is its path, so its path can climb](#381-a-data-files-destination-is-its-path-so-its-path-can-climb) ·
+[382. The second kind in two days, so the guard moved](#382-the-second-kind-in-two-days-so-the-guard-moved)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29894,7 +29895,9 @@ because `relpath` of anything outside the root begins with `..` anyway.
 That is `evidence.md`'s rule about checking the artifact rather than a
 fresh measurement of where it came from.
 
-### Only `data`, and the control is the point
+### Only `data` among the furniture kinds, and the control is the point
+
+**Too wide as first written, and §382 is the counterexample**: `@headers` does not go through `furniture_landing`, and its path can climb by another route.
 
 `furniture_landing` returns a **basename** for `man`, `desktop`, `icons`,
 `metainfo`, `dbus`, `udev` and `polkit`, so `../x.1` installs as `x.1`
@@ -29910,3 +29913,71 @@ it to be allowed. Sabotaging the fix into "refuse any outside source for
 every kind" fails on that assertion; sabotaging the check away fails on
 the other. Neither sabotage passes, which is what makes the pair worth
 having.
+
+## 382. The second kind in two days, so the guard moved
+
+§381 refused a climbing `@data` path and said **only `data`** could do
+this, on the grounds that `furniture_landing` returns a basename for the
+seven other furniture kinds. That was true of those seven and the heading
+was wrong: `@headers` does not go through `furniture_landing` at all.
+
+`install_subpath` strips the include root and keeps what follows -- the
+feature that makes `include/pkg/api.h` install at `$includedir/pkg/api.h`
+rather than flat. So a path that begins with the root and then climbs
+keeps the climb. Measured:
+
+    headers = ["include/../../climbed.h"]
+    install -m 644 .../include/../../climbed.h /usr/local/include/../../climbed.h
+
+`$includedir/../../climbed.h` is two levels above `includedir`, and out of
+a DESTDIR staging root with it.
+
+**Why §381's measurement did not find it.** It tested
+`headers = ["../outside.h"]`, which installed as `outside.h` -- safely,
+because that path does not start with an include root, so `install_subpath`
+fell through to the basename. The control was reached and the result was
+correct; the conclusion drawn from it was one step too wide. The escape
+needs the path to *begin* with a root, which that fixture had no way to
+produce: in it, `include/` was not a root at all, which the flat landing
+of the control said plainly and nobody read.
+
+### The guard moved to where every destination passes
+
+A per-kind check is a check per kind somebody remembers, and this was the
+second kind in two days. `install_plan` already ends with a loop over every
+planned entry -- the dedupe that refuses two files landing on one name --
+so the shape is refused there, for every kind including the ones nobody has
+written yet:
+
+    <file> would install as $INCLUDEDIR/../../climbed.h, which leaves
+    $INCLUDEDIR.
+
+§381's message stays where it is, because it can say *why* -- a data file
+installs at its own path, so a climbing path climbs -- and a backstop
+cannot. Two checks for one property is usually two places to be wrong;
+here one explains and one cannot be bypassed, and the second exists
+precisely because the first was written per kind.
+
+### Every backend inherits it, which was the thing worth checking
+
+`an_ejected_clean_does_not_delete_outside_the_tree` exists because fmake
+once refused something and the Makefile it writes did not, so the same
+question goes to the backends: all five -- `make`, `ninja`, `deb`,
+`ebuild` and `apk` -- refuse the climbing header, because each builds its
+install rules from `install_plan` and the guard is inside it. One check
+rather than five, and a backend added later gets it without being told.
+
+### What the backstop's `normpath` is for, and that it has no case
+
+The destination is built by joining strings, so the first component is not
+the whole story: `proj/../../x` begins with `proj` and normalises to
+`../x`. `normpath` is what sees that.
+
+**It is not reachable through any kind fmake has today**, and this says so
+rather than implying coverage. `data` is the only kind whose destination is
+`<name>/<user path>`, and §381 refuses a climbing path before it reaches
+here; `install_subpath` yields a leading `..` directly, which either
+spelling of the test would catch. So `normpath` guards the next kind that
+joins a user path onto a prefix, and the sabotage that drops it leaves
+every case green -- which is the honest state of it, found by running that
+sabotage rather than by assuming the pair was covered.

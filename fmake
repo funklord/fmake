@@ -17720,6 +17720,36 @@ def install_plan(targets, closures, root):
 	# the same ambiguity and gets the same answer.
 	seen, unique = {}, []
 	for item in planned:
+		# Every destination this function plans passes through here, which
+		# is why the guard is here and not beside each kind that computes
+		# one. Section 381 refused a climbing `@data' path where it is
+		# read, because that kind can say WHY -- a data file installs at
+		# its own path, so a climbing path climbs. It then claimed only
+		# `data' could do this, and `@headers' could: `install_subpath'
+		# strips the include root and keeps what follows, so
+		# `headers = ["include/../../x.h"]' planned
+		# `$includedir/../../x.h', which is two levels above includedir
+		# and out of a DESTDIR staging root with it.
+		#
+		# A per-kind check is a check per kind somebody remembers, and
+		# this is the second kind in two days. So the specific message
+		# stays where it can be specific and this refuses the shape for
+		# every kind, including the ones nobody has written yet.
+		#
+		# `normpath' first, because a destination is built by joining
+		# strings: `a/../../b' escapes and its first component does not
+		# say so. Absolute too -- it would leave the prefix entirely.
+		landing = os.path.normpath(item[3]) if item[3] else ""
+		if (os.path.isabs(landing) or landing == os.pardir
+		        or landing.startswith(os.pardir + os.sep)):
+			where = "$" + install_var(item[2])
+			die(f"{item[1]} would install as {where}/{item[3]}, which "
+			    f"leaves {where}.\n"
+			    f"    an installed path is a place under the prefix, not "
+			    f"a path back out of one -- with DESTDIR set this lands "
+			    f"outside the staging root, and nothing packages what is "
+			    f"not in it\n"
+			    f"    name a file whose path stays inside the tree")
 		lands = (item[2], item[3])
 		prior = seen.get(lands)
 		if prior is None:

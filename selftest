@@ -8215,6 +8215,43 @@ def a_published_header_keeps_the_path_it_is_included_by(t):
 			      f"satisfied: {sorted(_all_files(two))}")
 		finally:
 			u.cleanup()
+
+		# section 382: the subpath above is what lets a header path
+		# climb. `install_subpath' strips the include root and keeps
+		# what follows, so a path that starts with the root and then
+		# goes up keeps the `..' -- measured,
+		# `headers = ["include/../../x.h"]' planned
+		# `$includedir/../../x.h', two levels above includedir and out
+		# of a DESTDIR staging root with it.
+		#
+		# The control is the assertion above this block: the ordinary
+		# subpath has to keep working, since refusing every `..' in a
+		# header path would also refuse the feature.
+		u = Tree("header-climbs")
+		try:
+			u.write("include/pkg/api.h", "#pragma once\nint pkg_val(void);\n")
+			u.write("lib.c", "/*! @kind static\n *  @version 1.0\n */\n"
+			        "#include <pkg/api.h>\nint pkg_val(void){ return 1; }\n")
+			u.write("fmake.toml", '[target.lib]\n'
+			        'headers = ["include/../../climbed.h"]\n')
+			with open(os.path.join(os.path.dirname(u.dir),
+			                       "climbed.h"), "w") as fh:
+				fh.write("#pragma once\n")
+			climbed = os.path.join(os.path.dirname(u.dir), "climbed.h")
+			try:
+				r = u.fmake("--install", "-n", "--destdir",
+				            os.path.join(u.dir, "s"))
+				said = r.stdout + r.stderr
+				check(r.returncode != 0,
+				      f"a header path that climbs out of includedir has "
+				      f"to be refused: {said}")
+				check("leaves $INCLUDEDIR" in said,
+				      f"and the reason has to be where it lands: {said}")
+			finally:
+				if os.path.exists(climbed):
+					os.remove(climbed)
+		finally:
+			u.cleanup()
 	finally:
 		shutil.rmtree(outside, ignore_errors=True)
 
