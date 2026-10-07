@@ -28962,3 +28962,43 @@ separable. It goes to the copyright holder. What they did close was a
 claim in their own `project.md` that no longer matched their file --
 rewritten rather than appended, because the stale one read as the more
 careful of the two.
+
+### And then both of us were wrong about the gate, in the same direction
+
+A second round, and it corrected my signal rather than fmake. I had
+written into their tree that relaxing the exclude "authorises the thing
+`make test`'s fmake arm exists to detect", and they had agreed and said
+the same back. **Measured, it is false.**
+
+That arm has three checks and only the last greps for fmake's warning.
+The live one runs `fmake --explain`, asserts exactly three link sets as
+its own liveness guard, then awks any file under `src/shim/` or
+`example/` out of the link-set blocks and fails if it found one. Their
+measurement, against the installed `5af02348` with the annotation still
+present and `src/shim` taken out of the exclude: three link sets, and
+three lines naming `sgshim.c`. **The arm fails.**
+
+So the protection reads what fmake says it will BUILD rather than what
+fmake complains about, and no annotation silences that. Relaxing the
+exclude is caught today. What the annotation costs is narrower again --
+on this repository's fmake it turns the wider warning, which knows any
+interposed symbol rather than four names, into a note their grep cannot
+see, while the specific case stays covered.
+
+Read the arm here before accepting it: the checks run in that order, and
+its own comment names the inert one in eight words two lines above the
+grep -- *"the arm sleeps there, and the two above do not."* Neither of us
+read down to it.
+
+**Which is the transferable part, and it is theirs:** a gate with three
+checks invites being summarised by one, and the one it gets summarised by
+is the most interesting rather than the most load-bearing. Mine had the
+same shape from the other side -- I described their arm by its annotation
+story, because the annotation was what I had come to look at.
+
+My sentence in their tree is struck rather than rewritten (`84a51a1`),
+because their measurement quotes it and a rewrite would leave that
+quoting something absent. Struck rather than left, because an
+uncorrected claim sitting above its own correction is exactly the case
+`evidence.md` names: the reader believes whichever sounds more careful,
+and the stale one always does.
