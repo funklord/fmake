@@ -29303,7 +29303,14 @@ demanding them but `settings_dialog.o`'s. That is the whole shape of the
 fault in one sentence.
 
 **Two of hydra's corrected numbers do not come from these files**, and
-the reason generalises. Stale against current is 42 programs differing,
+the reason generalises -- but they were right when hydra took them.
+Reported by hydra after reading this entry: that comparison was made
+against the file as it stood immediately after the cold regeneration, and
+stopped being reproducible when they regenerated for later work. The
+measurement did not drift; the file did, and the cold-run version is not
+recoverable either. So `objsets.pre6` plus the derivation below is the
+whole of the evidence, and what went wrong was freezing one side of a
+comparison and not the other. Stale against current is 42 programs differing,
 not three: 41 of them gain `scriptlets.o`, a source absent from the stale
 file entirely and present in 43 programs of the current one, and a 89th
 program appears. That is later work, landed after the regeneration. The
