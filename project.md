@@ -429,7 +429,8 @@ that had been green about nothing for five commits ·
 [376. One refusal for four causes, naming no remedy](#376-one-refusal-for-four-causes-naming-no-remedy) ·
 [377. A guess withdrawn, and an assertion dropped](#377-a-guess-withdrawn-and-an-assertion-dropped) ·
 [378. The predictable cost of fmake's own advice](#378-the-predictable-cost-of-fmakes-own-advice) ·
-[379. The caveat that excused a typo, in the other spelling](#379-the-caveat-that-excused-a-typo-in-the-other-spelling)
+[379. The caveat that excused a typo, in the other spelling](#379-the-caveat-that-excused-a-typo-in-the-other-spelling) ·
+[380. Two config keys that validated and did nothing](#380-two-config-keys-that-validated-and-did-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29776,3 +29777,72 @@ reverted because a case named
 the question deliberately. **One grep of the suite costs a second and
 would have saved that whole attempt**, and here it found a real fault
 rather than a decided one.
+
+## 380. Two config keys that validated and did nothing
+
+The lens is §379's: **two spellings of one instruction that disagree.**
+Walked across the pairs, `kind` agrees exactly and `std` agrees once the
+fixture is built so the file carrying the directive is actually compiled
+-- the first `@std` probe put it on a file nothing reached, which is a
+control that was never run rather than a finding. `libs` and `pkg` do not
+agree, and the reason is that one spelling does nothing at all.
+
+    [target.x] libs = ["m"]    the link line gains -lm
+    [project]  libs = ["m"]    nothing, anywhere
+
+Both are in the schema. The unknown-key refusal **lists them among the
+fourteen keys `[project]` accepts**, so a reader is told the key is valid
+and gets silence -- which is worse than a refusal, and is the shape §376
+and §379 were about, one layer up: not a message that misleads, a key
+that does not exist in any sense that matters.
+
+Reading settles it: `Conf.cflags`, `ldflags` and `rustflags` read
+`self.project`, and `Conf.target(name)` returns the per-target section
+alone. Nothing merges `[project]` into a target, and `libs` and `pkg`
+are read only from `t.conf`.
+
+### Why this is a wiring gap rather than a design question
+
+Five sibling keys in that same table are project-wide and reach every
+target: `cflags`, `ldflags`, `define`, `defines`, `std`. That settles
+what `[project] libs` means without this inventing it -- which is
+`working-practice.md`'s warning about deferring something the project has
+already decided somewhere else under a different name, where **a
+wrongly-deferred question is caught by nothing.**
+
+`pkg` needed one check before it counted as the same case: `@pkg`
+supports alternative groups (`u.ann.groups`) while the config form is a
+flat list of specs handled one at a time. The project-level list is the
+config spelling, so it matches `[target.*] pkg` exactly and no group
+semantics arise.
+
+### Kept off `conf`, and the case says why
+
+The obvious implementation merges the project lists into each target's
+`conf`. **That silences `-i`.** `bool(t.conf)` is what decides whether
+the interactive pass offers a stanza for a target or says *already has a
+section ... leaving it alone*, on the reasoning that a target with any
+section at all is one somebody has written about. Merge a project-wide
+key into `conf` and every target in any tree that sets one looks written
+about.
+
+So the target carries `declared_libs` and `declared_pkgs`, filled from
+its own section and then from `[project]`, and the four sites that read
+`t.conf.get("libs"/"pkg")` read those instead. The case drives `-i`
+through a pty with `[project] libs` set and requires the offer to still
+appear; sabotaging the implementation into the `conf` merge fails on
+exactly that assertion.
+
+### One asymmetry measured and deliberately left
+
+    @pkg nosuchpkg          refuses: "is not satisfied"
+    [target.*] pkg = [...]  builds
+    [project]  pkg = [...]  builds
+
+So the directive is strict and both config spellings are not. This
+change makes the project form behave exactly like the per-target form,
+which is the consistency it owed; the directive's extra strictness is a
+separate pre-existing question. It is left alone because the directive
+has `@pkg_optional` as an escape hatch and the config has no equivalent
+key, so making the config refuse would leave no way to say "use it if it
+is there".

@@ -9144,7 +9144,7 @@ def deferred_modules(pkg, hdr_store, units, targets):
 		for group in u.ann.groups("pkg"):
 			named.add(group[0])
 	for t in targets:
-		for spec in t.conf.get("pkg", []):
+		for spec in t.declared_pkgs:
 			named.add(spec.split()[0])
 	out = {}
 	for module in sorted(named):
@@ -9402,10 +9402,10 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 	# happens to require it. @ldflags propagates for the same reason @cflags
 	# does not: it is a property of whatever the TU ends up inside.
 	declared, extra_ld = [], []
-	for lib in t.conf.get("libs", []):
+	for lib in t.declared_libs:
 		if lib not in declared:
 			declared.append(lib)
-	for spec in t.conf.get("pkg", []):
+	for spec in t.declared_pkgs:
 		got = pkg.for_module(spec.split()[0], hdr_store, pkg.signature())
 		for l in (got[2] if got else []):
 			if l[2:] not in declared:
@@ -9464,7 +9464,7 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			for u in cl.link:
 				for group in u.ann.groups("pkg"):
 					candidates.add(group[0])
-			for spec in t.conf.get("pkg", []):
+			for spec in t.declared_pkgs:
 				candidates.add(spec.split()[0])
 			# No second filter on the module's own directories, and the
 			# absence is deliberate. Dropping /usr/include from each
@@ -9764,7 +9764,8 @@ class Target:
 	__slots__ = ("rel", "name", "kind", "ann", "conf", "members",
 	             "test_group", "test_why", "version", "description",
 	             "stem", "publishes_pc", "version_script",
-	             "installed", "install_why", "install_guess")
+	             "installed", "install_why", "install_guess",
+	             "declared_libs", "declared_pkgs")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
@@ -9790,6 +9791,15 @@ class Target:
 		self.stem = None
 		self.publishes_pc = True
 		self.conf = {}
+		# What this target declares it links, from its own section AND
+		# from [project]. Kept here rather than merged into `conf'
+		# because `bool(conf)' decides whether -i writes a stanza for a
+		# target or leaves it alone -- "a target with any section at all
+		# is one somebody has already written about" -- so merging a
+		# project-wide key into it would silence that for every target in
+		# any tree that set one.
+		self.declared_libs = []
+		self.declared_pkgs = []
 		# Explicit membership, when fmake.toml gives it. This is the answer
 		# to two libraries built from one overlapping tree: the closure
 		# cannot separate them, because nothing in the source says which
@@ -9837,6 +9847,8 @@ class Target:
 		if not section:
 			return
 		self.conf = section
+		self.declared_libs = list(section.get("libs", []))
+		self.declared_pkgs = list(section.get("pkg", []))
 		self.kind = section.get("kind", self.kind)
 		self.name = section.get("target", section.get("name", self.name))
 		if "test" in section:
@@ -11393,6 +11405,26 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		targets.append(t)
 
 	targets = expand_libraries(targets)
+	# [project] libs and pkg apply to every target, as [project] cflags,
+	# ldflags, define and std already do. They were accepted by the schema
+	# -- the unknown-key refusal lists them among the fourteen it allows --
+	# and read by nothing: measured, `[project] libs = ["m"]` put no -lm on
+	# any link line while the same key in a [target.*] put one there. So a
+	# reader was told the key was valid, and got silence.
+	#
+	# Five sibling keys in that same table are project-wide and reach
+	# every target, which is what settles the meaning rather than this
+	# inventing one. Applied after expand_libraries so a library's
+	# generated twin gets them too.
+	_plibs = conf.project.get("libs", [])
+	_ppkgs = conf.project.get("pkg", [])
+	for t in targets:
+		for lib in _plibs:
+			if lib not in t.declared_libs:
+				t.declared_libs.append(lib)
+		for spec in _ppkgs:
+			if spec not in t.declared_pkgs:
+				t.declared_pkgs.append(spec)
 
 	# Said once per subtree rather than once per file: libvterm contributes
 	# four and miniz ten, and a list of ten is noise where the directory is

@@ -29801,6 +29801,73 @@ def declining_i_leaves_the_build_stuck_and_the_config_alone(t):
 
 
 @case
+def project_wide_libs_and_pkg_reach_every_target(t):
+	"""section 380: two schema keys that validated and did nothing.
+
+	`[project] libs` and `[project] pkg` were accepted -- the unknown-key
+	refusal lists them among the fourteen it allows -- and read by
+	nothing. Measured: `[project] libs = ["m"]` put no `-lm` on any link
+	line, while the same key inside a `[target.*]` put one there. A
+	reader was told the key was valid and got silence.
+
+	Five sibling keys in that same table are project-wide and reach every
+	target -- cflags, ldflags, define, defines, std -- which is what
+	settles the meaning rather than this case inventing one.
+
+	The last assertion is why the two lists live on the Target rather
+	than being merged into its `conf': `bool(conf)' is what decides
+	whether -i writes a stanza for a target or leaves it alone, so a
+	project-wide key merged into `conf' would make every target look
+	like one somebody had already written about, and -i would go quiet
+	in any tree that set one."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	def linkline(conf):
+		t.write("fmake.toml", conf)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake("--eject", "make-fragment")
+		check(r.returncode == 0, f"eject failed: {r.stdout}{r.stderr}")
+		got = [l for l in r.stdout.splitlines() if "$(CC) -o" in l]
+		check(got, f"no link line in the fragment: {r.stdout}")
+		return got[0]
+
+	name = os.path.basename(t.dir)
+	line = linkline('[project]\nlibs = ["m"]\n')
+	check("-lm" in line,
+	      f"[project] libs has to reach the link, as [project] ldflags "
+	      f"does: {line}")
+
+	# The control: the per-target spelling, which already worked and must
+	# keep working, so this adds a path rather than moving one.
+	line = linkline(f'[target.{name}]\nroot = "main.c"\nlibs = ["m"]\n')
+	check("-lm" in line, f"the per-target spelling regressed: {line}")
+
+	# Both, which must not say it twice.
+	line = linkline('[project]\nlibs = ["m"]\n'
+	                f'[target.{name}]\nroot = "main.c"\nlibs = ["m"]\n')
+	check(line.count("-lm") == 1,
+	      f"naming a library in both places linked it twice: {line}")
+
+	if _have_pkg("zlib"):
+		line = linkline('[project]\npkg = ["zlib"]\n')
+		check("-lz" in line,
+		      f"[project] pkg has to reach the link too: {line}")
+
+	# And -i still offers a stanza for a target the config has not
+	# written about, with a project-wide key set.
+	for f in ("main.c",):
+		os.remove(os.path.join(t.dir, f))
+	_ambiguous(t)
+	t.write("fmake.toml", '[project]\nlibs = ["m"]\n')
+	out = _pty_fmake(t, "n\nn\n")
+	check("already has a section" not in out,
+	      f"a project-wide key made every target look configured, so -i "
+	      f"stopped offering: {out[-500:]}")
+	check("cannot be linked until this is settled" in out,
+	      f"-i has to still put the question: {out[-500:]}")
+
+
+@case
 def i_leaves_an_answer_that_is_already_there_alone(t):
 	"""Appending is what makes writing into a hand-written config safe, and
 	appending a table that already exists is a parse error rather than a
