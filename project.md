@@ -423,7 +423,8 @@ that had been green about nothing for five commits ·
 [370. Today's changes against ten real trees, and what the method could not reach](#370-todays-changes-against-ten-real-trees-and-what-the-method-could-not-reach) ·
 [371. The remedy that addressed four of the five targets it named](#371-the-remedy-that-addressed-four-of-the-five-targets-it-named) ·
 [372. The hint that only spoke when nothing could be guessed](#372-the-hint-that-only-spoke-when-nothing-could-be-guessed) ·
-[373. A warm cache that under-linked three programs](#373-a-warm-cache-that-under-linked-three-programs)
+[373. A warm cache that under-linked three programs](#373-a-warm-cache-that-under-linked-three-programs) ·
+[374. The tool line that announced a build on every run](#374-the-tool-line-that-announced-a-build-on-every-run)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29367,3 +29368,75 @@ can fail to demand an object that `settings_dialog.o`'s undefined symbols
 require, in a run where that object was rebuilt from a source containing
 the calls. Six fixtures say the ordinary paths do not do it, so the next
 lens is scale or cache history, not the mechanism.
+
+## 374. The tool line that announced a build on every run
+
+Noticed in §370's sweep and left unacted on, which is the right order --
+it was a line of output against a correctness report. Measured since, on
+a tree with one `[generate.*] uses` rule:
+
+    $ fmake                      # warm, nothing changed
+    TOOL mkvals
+    * toolnoise, mkvals up to date
+
+**fmake claiming a build directly above its own report that nothing was
+built.** `build_tool` printed the line before calling the nested build,
+unconditionally, so it printed whether or not that build had anything to
+do.
+
+It matters more than a stray line because of what it contradicts. §8's
+promise is that building twice compiles nothing and that fmake says so;
+this is the one place the output denied it, in the voice fmake uses for
+work it performed. Output a reader learns to discount is worse than no
+output.
+
+### Printed where it is earned
+
+Where there is no artifact yet the work is certain, so the line goes up
+front as before and a cold tool build still explains its pause.
+Otherwise the nested build runs first and the line follows it only if the
+artifact actually moved. Nothing is lost by moving it: a non-verbose
+nested build is quiet, so this line is the whole of what a reader sees
+either way.
+
+    cold                 TOOL mkvals, before the build
+    warm, nothing to do  silent; `* up to date' stands alone
+    warm, tool changed   TOOL mkvals, after the build
+    any of those, -v     TOOL mkvals, because `-v' promises to say
+                         "what a sub-make is doing"
+
+### The verbose half was the suite's correction, not a refinement
+
+The first version dropped the line unconditionally on a no-op, and the
+full suite refused it -- not from a case about this message but from
+`two_artifacts_of_one_name_do_not_share_a_cache_entry`, whose **control**
+is this line. That case proves a tool is not relinked when nothing about
+it changed, and it needs evidence that the nested build which would have
+relinked it ran at all; without the marker, "no LD mkvals" holds for the
+wrong reason. So an output line a reader does not need was a suite's only
+witness that work had happened.
+
+Keeping it under `-v` satisfies both, and it is what `-v` already
+promises rather than a special case invented to pass a test. Both halves
+are pinned here now as well, so the rule is not held by one case about
+something else.
+
+The candidate names -- the program, then `lib<name>.so`, then
+`lib<name>.a` -- are one tuple now, used both to decide whether the line
+is due and to find the artifact afterwards. Two lists would be two things
+to be wrong about which file this tool is.
+
+### The control is the third state
+
+A case asserting only that the line is absent on a warm run **passes
+against the line being deleted outright**, which is the degenerate fix
+and is worse than the fault: a cold build would then compile a tool in
+silence. So the case asserts all three states, and the warm run also has
+to report the tree up to date -- an absent line and a crashed build look
+identical otherwise.
+
+Both sabotages fail through their own assertion: printing
+unconditionally again fails on *nothing was built, so nothing should
+claim to have been*, and deleting the print fails on *a cold build has
+certain work and says so up front*.
+

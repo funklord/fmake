@@ -10562,11 +10562,54 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# a tool it cannot execute.
 		sub.use_build_toolchain = True
 		sub.cflags, sub.ldflags = [], []
-		say(f"{YELLOW('TOOL')} {name}")
+		# One list, used to look for the artifact afterwards and to decide
+		# whether this line is worth printing. Two would be two things to
+		# be wrong.
+		cands = (name, f"lib{name}.so", f"lib{name}.a")
+
+		def built_ident():
+			"""What is on disk for this tool now, or None."""
+			for c in cands:
+				try:
+					st = os.stat(os.path.join(tooldir, c))
+				except OSError:
+					continue
+				return c, st.st_size, st.st_mtime_ns
+			return None
+
+		# `TOOL <name>' used to print on every build, including the runs
+		# where the nested build had nothing to do -- so a warm build said
+		#
+		#     TOOL mkvals
+		#     * toolnoise, mkvals up to date
+		#
+		# which is fmake claiming a build directly above its own report
+		# that nothing was built. Section 8's promise is that building
+		# twice compiles nothing, and the output has to be able to say so.
+		#
+		# Printed up front only where there is certainly work -- no
+		# artifact yet -- so a cold tool build still says why it is
+		# pausing. Otherwise the nested build runs and the line follows it
+		# only if the artifact actually moved. Nothing is lost by moving
+		# it: a non-verbose nested build is quiet, so this line is the
+		# whole of what a reader sees either way.
+		# VERBOSE prints it either way. `-v' promises to say "what a
+		# sub-make is doing", so a reader who asked for detail is told
+		# the nested build ran even when it had nothing to do -- and the
+		# suite's own control for that nested build is this line, which
+		# is how removing it unconditionally was caught: a case proving
+		# the tool is NOT relinked needs evidence the build that would
+		# have relinked it ran at all, or it holds for the wrong reason.
+		before = built_ident()
+		said = before is None or VERBOSE
+		if said:
+			say(f"{YELLOW('TOOL')} {name}")
 		bootstrapped.append(name)
 		if build(sub, _bootstrapping=True) != 0:
 			die(f"could not build {name!r}, which a generator needs")
-		for cand in (name, f"lib{name}.so", f"lib{name}.a"):
+		if not said and built_ident() != before:
+			say(f"{YELLOW('TOOL')} {name}")
+		for cand in cands:
 			path = os.path.join(tooldir, cand)
 			if not os.path.exists(path):
 				continue

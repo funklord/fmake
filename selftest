@@ -10367,6 +10367,93 @@ def a_generator_reruns_when_the_tool_it_uses_changes(t):
 
 
 @case
+def the_tool_line_says_nothing_when_no_tool_was_built(t):
+	"""`TOOL mk' printed on every build, including the no-op ones.
+
+	Measured: a warm build of a tree with one `uses' rule printed
+
+	    TOOL mkvals
+	    * toolnoise, mkvals up to date
+
+	which is fmake claiming a build immediately above its own report
+	that nothing was built. Section 8's promise is that a second build
+	compiles nothing, and output that contradicts it in the same breath
+	is the kind of thing a reader learns to stop believing.
+
+	Three states, and the third is the one that matters: a case
+	asserting only that the line is gone on a warm run would pass just
+	as well if the line were deleted outright. So the line has to come
+	back when the tool really is rebuilt."""
+	t.write("tool/mkvals.c",
+	        "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){\n"
+	        "    FILE *f = fopen(argv[1], \"w\");\n"
+	        "    fprintf(f, \"int made(void){ return 11; }\\n\");\n"
+	        "    fclose(f); return argc < 2;\n}\n")
+	t.write("main.c", "#include <stdio.h>\nint made(void);\n"
+	        'int main(void){ printf("%d\\n", made()); return 0; }\n')
+	t.write("seed.txt", "seed\n")
+	t.write("fmake.toml", """
+[generate.vals]
+uses    = "mkvals"
+command = "$tool gen/vals.c"
+inputs  = ["seed.txt"]
+outputs = ["gen/vals.c"]
+""")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the cold build failed: {out}")
+	check("TOOL mkvals" in out,
+	      f"a cold build has certain work and says so up front, so the "
+	      f"pause is explained: {out}")
+
+	# The positive half of the assertion below: the run has to have
+	# happened and reported the tree current. Without it, "TOOL is
+	# absent" is also what a crashed or skipped build looks like.
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the warm build failed: {out}")
+	check("up to date" in out,
+	      f"the warm run has to report the tree current, or the absence "
+	      f"below is measuring the wrong thing: {out}")
+	check("TOOL mkvals" not in out,
+	      f"nothing was built, so nothing should claim to have been: "
+	      f"{out}")
+
+	# The other half of the rule, pinned here rather than left to be
+	# caught elsewhere by accident. `-v' promises to say what a sub-make
+	# is doing, and the suite's control for the nested tool build being
+	# alive at all is this line -- which is how the first version of
+	# this fix, dropping it unconditionally, was caught by a case about
+	# cache entries rather than by this one.
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the verbose warm build failed: {out}")
+	check("TOOL mkvals" in out,
+	      f"a reader who asked for detail is told the nested build ran, "
+	      f"even with nothing to do: {out}")
+
+	# The control. Change the tool itself and the line is due again.
+	t.write("tool/mkvals.c",
+	        "#include <stdio.h>\n"
+	        "int main(int argc, char **argv){\n"
+	        "    FILE *f = fopen(argv[1], \"w\");\n"
+	        "    fprintf(f, \"int made(void){ return 12; }\\n\");\n"
+	        "    fclose(f); return argc < 2;\n}\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the rebuild failed: {out}")
+	check("TOOL mkvals" in out,
+	      f"the tool was rebuilt, so the line has to come back -- "
+	      f"otherwise this case passes against the line being deleted: "
+	      f"{out}")
+	check(t.run(os.path.basename(t.dir)).stdout == "12\n",
+	      f"and the rebuilt tool's output has to reach the program: "
+	      f"{out}")
+
+
+@case
 def a_rebuilt_situc_recompiles_the_schemas_it_compiled(t):
 	"""Section 226's shape, for the tool fmake does not build.
 
