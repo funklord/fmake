@@ -24462,6 +24462,78 @@ def an_unguessable_ambiguity_offers_a_remedy_that_works(t):
 
 
 @case
+def a_misnamed_root_says_which_way_it_is_wrong(t):
+	"""section 376: four causes, one sentence, no remedy.
+
+	`[target.x] root = P` where P is not a source produced
+
+	    root = 'src/main.c' is not a source file in this tree
+
+	for every reason it can be wrong, and named no action. Measured on
+	four arrangements that each fix differently: a path that is not
+	there, a source held out by [project] exclude, one held out by @os,
+	and a header.
+
+	The exclude cases are the ones worth the branch. The file is on disk
+	and the reader can see it, so "is not a source file in this tree"
+	reads as fmake being unable to see what is plainly present -- when
+	what removed it is their own config, a few lines above in the same
+	file. The reason is read from the map the rest of the build already
+	keeps, so this cannot drift from what the build says about the same
+	file elsewhere."""
+	host = next((n for p, n in (("linux", "linux"), ("darwin", "darwin"),
+	                            ("freebsd", "freebsd"),
+	                            ("openbsd", "openbsd"),
+	                            ("netbsd", "netbsd"), ("win", "windows"),
+	                            ("cygwin", "windows"),
+	                            ("sunos", "solaris"))
+	             if sys.platform.startswith(p)), sys.platform)
+	other = "windows" if host != "windows" else "linux"
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("thing.h", "int x(void);\n")
+	t.write("vendor/helper.c", "int helper(void){ return 1; }\n")
+	t.write("other_only.c",
+	        "//! @os %s\nint elsewhere(void){ return 1; }\n" % other)
+
+	# Each arrangement: what the config says, and what the message has to
+	# contain. The table is the population -- a fifth way for a root to
+	# be wrong wants a row here, and will not be covered by accident.
+	for conf, want, why in (
+	        ('[target.prog]\nroot = "src/main.c"\n',
+	         ["not in this tree", "main.c"],
+	         "a path that is not there has to say so, and name the file "
+	         "with that basename"),
+	        ('[project]\nexclude = ["vendor/**"]\n'
+	         '[target.prog]\nroot = "vendor/helper.c"\n',
+	         ["set it aside", "exclude", "vendor/**"],
+	         "an excluded source is in the tree, and the pattern that "
+	         "removed it is the remedy"),
+	        ('[target.prog]\nroot = "other_only.c"\n',
+	         ["set it aside", "@os"],
+	         "a platform-excluded source has to name the directive, not "
+	         "the exclude list"),
+	        ('[target.prog]\nroot = "thing.h"\n',
+	         ["is a header", "translation unit"],
+	         "a header cannot root a target and the reason is worth "
+	         "stating"),
+	):
+		t.write("fmake.toml", conf)
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"{why}: it built instead: {out}")
+		for frag in want:
+			check(frag in out,
+			      f"{why}: {frag!r} is missing from: {out}")
+
+	# And one remedy taken, because a message naming a remedy that does
+	# not work is worse than one naming none.
+	t.write("fmake.toml", '[target.prog]\nroot = "main.c"\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the suggested path did not build: {r.stdout}{r.stderr}")
+
+
+@case
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 

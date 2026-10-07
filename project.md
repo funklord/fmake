@@ -425,7 +425,8 @@ that had been green about nothing for five commits ·
 [372. The hint that only spoke when nothing could be guessed](#372-the-hint-that-only-spoke-when-nothing-could-be-guessed) ·
 [373. A warm cache that under-linked three programs](#373-a-warm-cache-that-under-linked-three-programs) ·
 [374. The tool line that announced a build on every run](#374-the-tool-line-that-announced-a-build-on-every-run) ·
-[375. The arms where nothing is guessable said less than the mixed one](#375-the-arms-where-nothing-is-guessable-said-less-than-the-mixed-one)
+[375. The arms where nothing is guessable said less than the mixed one](#375-the-arms-where-nothing-is-guessable-said-less-than-the-mixed-one) ·
+[376. One refusal for four causes, naming no remedy](#376-one-refusal-for-four-causes-naming-no-remedy)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29498,3 +29499,96 @@ arm and **both mixed arms are byte-identical**, and only the two
 incomplete arms changed. The mixed arms matter most there -- they are
 §372's own output, and a change to the shared `cause` string would have
 moved them silently.
+
+## 376. One refusal for four causes, naming no remedy
+
+The lens for this came from §371 through §375, which are all the same
+fault: **a refusal whose remedy is incomplete for some branch that
+reaches it.** Swept for other branching refusals -- a `die` with two or
+more `elif` arms within forty lines above it -- gives six. Five are
+complete: the Rust one offers an install and a `[toolchain]` key, the
+`kind` one names the valid set, the crate-root one explains what a crate
+root is. The sixth is this.
+
+`[target.x] root = P` where `P` is not a source said
+
+    root = 'src/main.c' is not a source file in this tree
+
+for every reason it can be wrong, and named no action. Four
+arrangements, each fixed differently:
+
+    root = "src/main.c"        the path is not there
+    root = "vendor/helper.c"   held out by [project] exclude
+    root = "other_only.c"      held out by @os
+    root = "thing.h"           a header
+
+**The two exclusion cases are what make this worth branching.** The file
+is on disk and the reader can see it, so "is not a source file in this
+tree" reads as fmake failing to see what is plainly present -- when what
+removed it is their own config, a few lines above in the same file.
+
+### Read the reason, do not re-derive it
+
+`excluded` is the map the rest of the build already keeps: a path to the
+sentence saying why it is out, covering an `exclude` pattern, an `@os` or
+`@arch`, and a file that could not be read. This reads that rather than
+asking the same question again, so the refusal cannot drift from what
+the build says about the same file elsewhere -- the hazard
+`evidence.md` names about a fact kept in two places.
+
+Now:
+
+    root = 'vendor/helper.c' is in this tree, and this build set it
+    aside: [project] exclude = 'vendor/**'.
+    Keep it in the build, or root this target at a file that is in it.
+
+    root = 'other_only.c' is in this tree, and this build set it aside:
+    @os windows (building for linux).
+
+    root = 'thing.h' is a header.
+    A root is the translation unit that gets compiled, so name the
+    source that includes it.
+
+    root = 'src/main.c' is not in this tree.
+    Did you mean 'main.c'?
+
+**The did-you-mean matches on basename first**, then on one edit. The
+common mistake is a wrong directory rather than a wrong name, and
+`src/main.c` for `main.c` is four edits and one obvious answer -- the
+edit test finds nothing there, which is why the cheaper check goes
+first.
+
+### The table in the case is the population
+
+Four rows, each naming the config and the fragments the message must
+carry. A fifth way for a root to be wrong wants a row, and will not be
+covered by accident -- which is the shape §372 needed and did not have.
+One remedy is also taken, because a sentence naming a remedy that does
+not resolve the refusal is worse than a refusal with no advice: it
+spends the reader's time and reads as though somebody checked.
+
+### The follow-on lens, swept and empty
+
+§377 is the shape *fmake produces less than it was asked for and exits
+0*, so the same question went to every other way a configured target
+could vanish. Recorded because an empty sweep is only a measurement if
+its method is written down, and because these families are now covered
+and the next fault needs a different lens:
+
+    sources naming only excluded files   refused, rc=1, and says
+                                         "excluded ones do not count"
+    sources = []                         refused, and the hint names
+                                         how a section is keyed
+    an unknown key in [target.*]         refused, listing all 29 keys
+    an unknown key in [project]          refused, listing all 14
+
+So a typo'd key cannot be silently ignored, and a target whose
+membership resolves to nothing cannot be silently empty. §377 was the
+only instance, and it was reachable only because a *root* and a *kind*
+can disagree while both are individually valid.
+
+One inconsistency seen and not acted on: the `sources` refusal says
+"(excluded ones do not count)" where §376's `root` refusal now names
+the pattern that did it. Naming the pattern would be better in both, and
+it is one message rather than a family, so it waits for a reason to touch
+that line.

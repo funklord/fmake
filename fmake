@@ -11298,8 +11298,63 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				    f"sources, so fmake cannot tell what is in it{hint}")
 			rel = None
 		elif rel not in proj.src_set:
-			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is not a "
-			    f"source file in this tree")
+			# Three causes reached one sentence, and it named no remedy
+			# for any of them. Measured: a path that is not there, a
+			# source this build set aside, and a header all produced
+			# `root = X is not a source file in this tree' and nothing
+			# else. Their fixes have nothing in common.
+			#
+			# The middle one is the worst and is why this is worth
+			# branching: the file is on disk, the reader can see it, and
+			# what removed it is their own `exclude' a few lines up in
+			# this same file -- so the sentence reads as fmake being
+			# unable to see a file that is plainly present.
+			#
+			# `excluded' is the map the rest of the build already keeps,
+			# holding the reason as a sentence -- an exclude pattern, an
+			# `@os' or `@arch', or a file that could not be read. Read
+			# rather than re-derived, so this cannot drift from what the
+			# build says about the same file somewhere else.
+			why = excluded.get(rel)
+			ext = os.path.splitext(rel)[1]
+			if ext in HDR_EXTS:
+				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+				    f"a header.\nA root is the translation unit that gets "
+				    f"compiled, so name the source that includes it.")
+			elif why:
+				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+				    f"in this tree, and this build set it aside: {why}.\n"
+				    f"Keep it in the build, or root this target at a file "
+				    f"that is in it.")
+			elif not os.path.exists(os.path.join(root, rel)):
+				# Same basename first: the usual mistake is a directory
+				# that is wrong rather than a name that is -- `src/main.c'
+				# for `main.c' is four edits and one obvious answer, where
+				# the edit test finds nothing.
+				near = sorted(r for r in proj.src_set
+				              if os.path.basename(r)
+				              == os.path.basename(rel))
+				if not near:
+					near = sorted(r for r in proj.src_set
+					              if _one_edit_apart(r, rel))
+				hint = ""
+				if near:
+					hint = ("\nDid you mean "
+					        + ", ".join(repr(r) for r in near[:3])
+					        + ("?" if len(near) <= 3 else
+					           f", or one of {len(near) - 3} more?"))
+				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+				    f"not in this tree.{hint}")
+			elif ext not in SRC_EXTS:
+				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+				    f"there, and {ext!r} is not an extension fmake "
+				    f"compiles.\nRoot the target at a source file.")
+			else:
+				# Exists, is a source extension, and this build did not
+				# set it aside -- so fmake does not know why, and says
+				# that rather than guessing one of the three above.
+				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+				    f"not a source file in this tree")
 		elif (os.path.splitext(rel)[1] in CRATE_EXTS
 		      and os.path.basename(rel) not in CRATE_ROOTS):
 			# Reachable by hand as well as by inference, and it arrives at
