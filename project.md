@@ -418,7 +418,8 @@ that had been green about nothing for five commits ·
 [365. The rustc nobody could tell apart from the last one](#365-the-rustc-nobody-could-tell-apart-from-the-last-one) ·
 [366. The header moc was never told about](#366-the-header-moc-was-never-told-about) ·
 [367. The `uses` example this document gives, which fmake refuses](#367-the-uses-example-this-document-gives-which-fmake-refuses) ·
-[368. The package that was upgraded without moving a directory](#368-the-package-that-was-upgraded-without-moving-a-directory)
+[368. The package that was upgraded without moving a directory](#368-the-package-that-was-upgraded-without-moving-a-directory) ·
+[369. The check that only watched the files that become targets](#369-the-check-that-only-watched-the-files-that-become-targets)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28701,3 +28702,125 @@ mechanical proof on the edit: a count that had to be one and was two.
 
 So the three finds are the whole of this family, and a fourth is not
 waiting in the part that was not looked at.
+
+## 369. The check that only watched the files that become targets
+
+Found by doing what `build-and-commit.md` asks -- testing fmake against
+a project actually in front of it. ossacli was copied out with `git
+archive` and built three ways: fmake's own build, `--eject make` under
+plain make, and `--eject ninja`. **All three produce three working
+programs with identical `--version` output**, on a real 151-file tree.
+That part is the feature working and is recorded because it was
+measured, not assumed.
+
+What the tree exposed was something else.
+
+### What ossacli already knew
+
+ossacli's `make test` carries a long comment about fmake, and it is a
+measured harm: fmake's symbol closure linked their LD_PRELOAD simulator
+into every shipped program, because `src/shim/sgshim.c` defines `close`,
+`ioctl`, `open` and `opendir` to interpose on libc. Reproduced here with
+their `src/shim` exclude relaxed:
+
+    ossacli list   slot 1  Smart Array P410  fw 6.64  2 LD, 4 PD
+    ossa-check     OSSA WARNING - 1 controller(s), 2 LD, 4 PD
+    ossa-metrics   ossa_scrape_success 1
+
+against `permission denied (need root)` and `OSSA UNKNOWN` from the
+correct build. A monitoring tool inventing hardware.
+
+**That is not an open fmake bug.** fmake detects it, and §306 settled the
+answers: a tree's own file defining a libc name is ordinary, a vendored
+one is refused, and the warning names four remedies -- `@kind module`,
+`tests/`, `[project] exclude`, and `@interpose` to say it is meant. The
+shim carries `@interpose`, which per that design means *"this is meant
+and silences this"*, and the exclude is what keeps it out. fmake did what
+the annotation told it.
+
+### The check that was not reaching most of the tree
+
+Trying `@kind module` on the shim -- the remedy fmake's own warning names
+for a loadable interposer -- is what found it. fmake refused the file:
+
+    src/shim/sgshim.c:2: @interpose -- this file replaces libc entry
+    points on purpose: takes one word.
+
+and the same annotation, unmoved, had been accepted on every previous
+build. The difference is not the line: a minimal fixture refuses it in
+either position. **The difference is that the check lives in the Target
+constructor**, so it runs only for a file that becomes a target.
+
+Its own comment says what it is for -- `@kind static @target chosen` set
+kind and swallowed the target, *"being wrong about it should not be
+quiet"* -- and it was quiet for every file that roots nothing, which is
+most of a tree. Measured:
+
+    @std c99 @cflags -DWANT=1  on a program root   refused
+    the same line              on a helper         builds, and the
+                                                   program returns 1
+                                                   because -DWANT never
+                                                   reached the compiler
+
+A flag the author asked for, dropped, with nothing said.
+
+### A warning, for §363's reason
+
+It can only make a tree that builds today stop building, which is the
+holder's call rather than something to settle while fixing the silence.
+And there is a live instance: ossacli's `@interpose -- prose`, whose
+trailing text is harmless because only that directive's **presence** is
+read. A refusal would stop that tree the moment it stopped excluding the
+file. Visible now; stricter later if that is wanted.
+
+### Two placements and a guard that was not one
+
+The first placement ran before the targets were built, so a root got the
+warning **and** the refusal about one line -- two problems where there is
+one. Moved past the Target constructor, a root never reaches it.
+
+A `_rel in roots` skip was written to do that job and then removed.
+Measured both ways, it changes nothing: the refusal dies before this
+runs. **A guard no sabotage can make fail is not a guard**, and keeping
+one "in case the order changes" would be a comment claiming a guarantee
+the ordering already gives.
+
+### And the loop variable that shadowed a function
+
+The first version of the loop was `for _rel in sorted(scans)`. **`_rel`
+is a module-level function in this file**, and binding it as a loop
+variable shadowed it for the rest of `build()` -- so
+`_rel(args.run, root)` three hundred lines later called a string, and
+three unrelated cases went red with `TypeError: 'str' object is not
+callable`:
+
+    a_file_the_build_did_not_write_is_not_overwritten
+    a_truncated_artifact_is_linked_again
+    run_says_a_file_is_not_a_program
+
+An underscore prefix does not make a name local; it only says the author
+meant it privately, and `code-style.md` is explicit that the marker
+follows VISIBILITY rather than intent. The names are what they are now --
+`scan_rel`, `dname`, `dline` -- and the comment beside them says why.
+
+**The suite found it and no reading would have.** Nothing in the loop or
+its neighbourhood mentions `_rel`; the collision is with a helper
+defined thousands of lines away and used three hundred lines below, in a
+branch only `--run` reaches.
+
+### Three assertion slips in one sitting, all mine
+
+Worth recording together because they are one habit. Every mechanical
+proof on these edits refused a write for the wrong reason:
+
+- a count of `"takes one word, and the "` that matched a **comment**
+  already in the file, so the post-edit total was two;
+- `"_roots" not in s`, which is false because `other_roots` contains it
+  -- the substring-anchor hazard `evidence.md` names, inside the proof
+  meant to catch it;
+- and earlier, a `grep ... | head -6` that hid an existing case and
+  nearly had a duplicate written.
+
+In all three the proof did its job and I had to be told. The remedy is
+the one `evidence.md` gives for anchors: assert a marker unique to the
+edit, not a phrase the file may share.

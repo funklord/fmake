@@ -11298,6 +11298,59 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		info(f"{owner} is a separate checkout; leaving its own "
 		     f"{n} program{'' if n == 1 else 's'} to it ({shown})")
 
+	# Two directives on one line, on a file that roots no target.
+	#
+	# The Target constructor refuses this -- "@kind static @target chosen
+	# set kind and swallowed the target, silently, producing an archive
+	# named after the file" -- and that check runs only for a file that
+	# BECOMES a target. Every other file in the tree, which is most of
+	# them, kept the silence the check was written to end.
+	#
+	# Measured: `@std c99 @cflags -DWANT=1' on a program's root is
+	# refused; the same line on a helper builds, and the program returns
+	# 1 rather than 0 because the -DWANT never reached the compiler. A
+	# flag the author asked for, dropped, with nothing said.
+	#
+	# Here rather than earlier, and the PLACEMENT is the whole of it: the
+	# first attempt ran before the targets were built, so a root got this
+	# warning and then the refusal, about one line, which reads as two
+	# problems. Past the Target constructor the refusal has already
+	# happened, so a root never reaches this.
+	#
+	# A `_rel in roots' skip was written here first and then taken out:
+	# measured both ways, it changes nothing, because the refusal dies
+	# before this runs. A guard no sabotage can make fail is not a guard,
+	# and keeping one "in case the order changes" would be a comment
+	# claiming a guarantee the ordering already gives.
+	#
+	# A warning and not a refusal, deliberately, for the reason section
+	# 363 gives about service names: it can only make a tree that builds
+	# today stop building, which is the holder's call rather than a thing
+	# to settle while fixing the silence. There is a live instance --
+	# ossacli's shim carries `@interpose -- this file replaces libc entry
+	# points on purpose:', whose trailing prose is harmless because only
+	# the directive's PRESENCE is read -- so a refusal would stop that
+	# tree the moment it stopped excluding the file.
+	# Not `_rel': that is a module-level function in this file, and a
+	# loop variable of the same name shadowed it for the rest of
+	# build() -- `_rel(args.run, root)' three hundred lines later
+	# called a string, and three cases went red with a TypeError. An
+	# underscore prefix does not make a name local.
+	for scan_rel in sorted(scans):
+		if exclude_pattern(scan_rel):
+			continue
+		scan_ann = Ann(scans[scan_rel].get("dirs"))
+		for dname in sorted(DIRECTIVE_SCALAR - {"test"}):
+			for dline, dwords in (scan_ann.raw.get(dname) or []):
+				if len(dwords) > 1:
+					warn_once(
+					    f"{scan_rel}:{dline}: @{dname} takes one word, so "
+					    f"{' '.join(dwords[1:])!r} is dropped and reaches "
+					    f"nothing.\n"
+					    f"    Put each directive on its own line. A file "
+					    f"that roots a target is refused outright for "
+					    f"this; one that does not was silent until now.")
+
 	# Explicit membership is resolved once, here, so a bad glob is reported
 	# before anything is compiled.
 	for t in targets:

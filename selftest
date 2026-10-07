@@ -10606,6 +10606,90 @@ def a_killed_fmake_is_reported_as_killed(t):
 
 
 @case
+def a_directive_sharing_a_line_is_named_on_any_file(t):
+	"""Two directives on one line, on a file that roots no target.
+
+    The Target constructor refuses this, and its comment says why: `@kind
+    static @target chosen` set kind and swallowed the target, silently,
+    producing an archive named after the file -- *"being wrong about it
+    should not be quiet"*. That check runs only for a file that BECOMES a
+    target, so every other file in the tree kept exactly the silence it
+    was written to end.
+
+    Found by building a real tree. ossacli's LD_PRELOAD shim carries
+    `@interpose -- this file replaces libc entry points on purpose:`, and
+    fmake accepted it without a word -- harmless there, because only that
+    directive's presence is read, but it is the same acceptance that
+    drops a `@cflags`.
+
+    The first arm asserts the HARM and not the warning: the dropped
+    `-DWANT=1` never reaches the compiler, so the program returns 1 where
+    it should return 0. A case that only looked for the message would
+    pass against an fmake that warned and still dropped the flag.
+
+    A warning rather than a refusal, so the second arm matters: a root is
+    still refused, and must NOT also be warned. The first placement of
+    this check said both about one line, which reads as two problems.
+
+    The third arm is the control. One directive per line says nothing and
+    both arrive -- without it the check could be firing on every file in
+    every tree."""
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper(); }\n")
+	t.write("helper.c", "/*! @std c99 @cflags -DWANT=1 */\n"
+	        "int helper(void){\n#ifdef WANT\n\treturn 0;\n"
+	        "#else\n\treturn 1;\n#endif\n}\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a dropped directive is a warning, not a refusal: {out}")
+	check("is dropped and reaches nothing" in out and "helper.c:1" in out
+	      and "@cflags -DWANT=1" in out,
+	      f"the warning has to name the file, the line and what was "
+	      f"dropped, since none of that is otherwise visible: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 1,
+	      "the harm is that the flag reaches nothing: the program should "
+	      "return 1, and if it returns 0 the flag arrived and there was "
+	      "nothing to warn about")
+
+	# A root is refused, and told once.
+	u = Tree("directive-on-a-root")
+	try:
+		u.write("main.c", "/*! @std c99 @cflags -DWANT=1 */\n"
+		        "int helper(void);\nint main(void){ return helper(); }\n")
+		u.write("helper.c", "int helper(void){ return 0; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a target root is still refused for this: {out}")
+		check(out.count("takes one word") == 1,
+		      f"one line, one complaint: a root got the warning and then "
+		      f"the refusal in the first version of this, which reads as "
+		      f"two problems: {out}")
+	finally:
+		u.cleanup()
+
+	# The control: one per line is correct and must say nothing.
+	v = Tree("directive-per-line")
+	try:
+		v.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper(); }\n")
+		v.write("helper.c", "/*! @std c99\n *  @cflags -DWANT=1 */\n"
+		        "int helper(void){\n#ifdef WANT\n\treturn 0;\n"
+		        "#else\n\treturn 1;\n#endif\n}\n")
+		r = v.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the correct form must build: {out}")
+		check("is dropped and reaches nothing" not in out,
+		      f"a directive on its own line must say nothing: {out}")
+		check(v.run(os.path.basename(v.dir)).returncode == 0,
+		      "and both directives have to arrive, or the control is "
+		      "passing because the flag was dropped quietly here too")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_directive_in_a_header_is_said_to_do_nothing(t):
 	"""Section 248's neighbour: the silence, not the population.
 
