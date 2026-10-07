@@ -419,7 +419,8 @@ that had been green about nothing for five commits ·
 [366. The header moc was never told about](#366-the-header-moc-was-never-told-about) ·
 [367. The `uses` example this document gives, which fmake refuses](#367-the-uses-example-this-document-gives-which-fmake-refuses) ·
 [368. The package that was upgraded without moving a directory](#368-the-package-that-was-upgraded-without-moving-a-directory) ·
-[369. The check that only watched the files that become targets](#369-the-check-that-only-watched-the-files-that-become-targets)
+[369. The check that only watched the files that become targets](#369-the-check-that-only-watched-the-files-that-become-targets) ·
+[370. Today's changes against ten real trees, and what the method could not reach](#370-todays-changes-against-ten-real-trees-and-what-the-method-could-not-reach)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -28730,6 +28731,13 @@ their `src/shim` exclude relaxed:
 against `permission denied (need root)` and `OSSA UNKNOWN` from the
 correct build. A monitoring tool inventing hardware.
 
+**Signalled to ossacli as that project's `project.md` commit `5e8ba49`,
+and told to the session running in that tree.** Named rather than
+asserted, because `harmonization.md` says a claim to have signalled
+something is the claim that turns out false -- of three such claims it
+measured, the two asserting an act were both wrong and the one naming an
+artifact was right.
+
 **That is not an open fmake bug.** fmake detects it, and §306 settled the
 answers: a tree's own file defining a libc name is ordinary, a vendored
 one is refused, and the warning names four remedies -- `@kind module`,
@@ -28772,6 +28780,12 @@ And there is a live instance: ossacli's `@interpose -- prose`, whose
 trailing text is harmless because only that directive's **presence** is
 read. A refusal would stop that tree the moment it stopped excluding the
 file. Visible now; stricter later if that is wanted.
+
+"Live" means *against this repository's fmake*. The one installed on this
+machine is an earlier commit and carries neither this warning nor the
+interposer one, so nothing fires there today whatever that annotation
+says -- see §370, which has the two binaries side by side. ossacli sent
+that back, and it narrows what the annotation costs.
 
 ### Two placements and a guard that was not one
 
@@ -28824,3 +28838,127 @@ proof on these edits refused a write for the wrong reason:
 In all three the proof did its job and I had to be told. The remedy is
 the one `evidence.md` gives for anchors: assert a marker unique to the
 edit, not a phrase the file may share.
+
+## 370. Today's changes against ten real trees, and what the method could not reach
+
+§369 found its gap by building one sibling. The changes of this session
+are broad enough to be worth asking the same question of every tree that
+uses fmake -- moc's key gained the headers its input includes, the
+pkg-config stamp gained the `.pc` files, a crate gained the rustc
+version, two eject refusals arrived, and a warning that had only ever
+watched target roots began watching every file.
+
+That last one is the risk, and it is the one worth a sweep: it is new
+output, and new output on somebody else's tree is noise until shown
+otherwise.
+
+Ten trees, each from `git archive HEAD` into scratch, built with
+**this repository's `fmake`** -- not the installed one, which matters and
+is the subject of the last part of this entry -- under a 1200-second
+ceiling and a disk guard, the copy removed once its verdict was read.
+**Nothing was written into any sibling.**
+
+    openmlx4      builds        no new warning
+    anti-avx      builds        no new warning
+    qtty          builds        no new warning
+    hembygd       builds        no new warning
+    ossacli       builds        no new warning
+
+    raidcfgd      not tested    git archive carries no submodules
+    beerssh       not tested         "
+    hydra         not tested         "
+    fuzzypickles  not tested         "
+    netcfgd       not tested         "
+
+### Half the sweep measured my method, not fmake
+
+The five failures all said the same thing, and fmake was right every
+time: *"Clone the repository, or build with --no-submodules"*.
+`git archive` reads the tree object, so it carries **no submodule
+contents** -- which `harmonization.md` already records, in the entry
+about a CI gate performing a patch-set proof for free.
+
+So those five rows are an artifact of how the trees were copied. Written
+down as such, because the shape is the one `evidence.md` names: a sweep
+reporting, as facts about four projects, an artifact of the scratch
+directory they had been unpacked into, *"visible in the output for an
+hour and read as data."* Five rows reading `rc=1` in a table about a
+day's changes is exactly that, one careless sentence away.
+
+What they do show is that the submodule refusal works on five real
+trees, which is not nothing.
+
+### The noise question, answered by asking fmake rather than grepping
+
+The five untested trees still had to be cleared of the new warning. A
+`git grep -E` for a scalar directive followed by extra words reported
+**three hits in raidcfgd**, all of the form ` * @target raidtray`, which
+has nothing after the name.
+
+Three tools on that one line:
+
+    GNU grep -E    0 matches
+    python re      0 matches
+    git grep -E    1 match
+
+`git grep`'s engine does not read `\b` the way the other two do, so the
+count was never a measurement. The discriminator was **fmake itself**:
+given raidcfgd's real annotation block in a minimal tree, it exits 0 and
+says nothing.
+
+So across all ten trees the new warning fires on exactly one file --
+ossacli's shim, which that project excludes -- and therefore on no tree
+as it is actually built. That is the result the sweep was for.
+
+**And the lesson is one this file keeps paying for.** A negative wants
+corroboration from something that is not another query, and here the
+something was the program under test. The regex was a proxy for "would
+fmake complain"; fmake answers that question directly and was one
+command away the whole time.
+
+### Which fmake, which is the refinement ossacli sent back
+
+They verified the semantics claim rather than taking it, and from a
+place I had not cited: fmake's own README, which says *"Without it, a
+file of your own that does is reported and linked"* -- the link happens
+either way and the annotation only removes the warning. They reproduced
+the load-bearing half too, in a `git archive` copy of their own tree:
+with `src/shim` out of the exclude and nothing else changed,
+`fmake --explain` shows sgshim.c reaching targets **19 times against 3**
+with the exclude in.
+
+Their refinement is about **which fmake the hazard needs**. They could
+not get the detector phrase to return in any arrangement, and their own
+Makefile says why beside that arm: *"the packaged fmake predates all of
+it and cannot emit either form."*
+
+Checked here, by running both binaries:
+
+    /usr/bin/fmake              1.0 (5af02348)   "in libc's place": 0
+    /home/funk/src/fmake/fmake  1.0 (f6bb5649)   "in libc's place": 5
+
+and the dropped-directive warning of §369 is in the second and not the
+first. So two things follow, and the second is about this entry rather
+than about ossacli.
+
+**Their `make test` fmake arm is a contract against a future fmake, not
+a working detector on this machine.** Relaxing their exclude today would
+link the shim with no warning at all, annotation or not -- which makes
+the annotation's cost narrower than my signal implied: it is the newer
+fmake's warning, downgraded to a note lacking the four words their arm
+greps for.
+
+**And the sweep above measured a binary nobody builds with yet.** Every
+row in it is this repository's `fmake`, which is the right question for a
+change about to be pushed and the wrong one for "what do the siblings
+currently do". They currently do whatever `5af02348` does. The version
+string carries the commit, which is what let this be checked at all --
+both call themselves 1.0.
+
+They left the annotation in place, and were right to: it reverses a
+measured decision another session in that tree took deliberately
+(`31d11d5`), I had said no action was needed, and I had framed removal as
+separable. It goes to the copyright holder. What they did close was a
+claim in their own `project.md` that no longer matched their file --
+rewritten rather than appended, because the stale one read as the more
+careful of the two.
