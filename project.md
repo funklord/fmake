@@ -426,7 +426,8 @@ that had been green about nothing for five commits ·
 [373. A warm cache that under-linked three programs](#373-a-warm-cache-that-under-linked-three-programs) ·
 [374. The tool line that announced a build on every run](#374-the-tool-line-that-announced-a-build-on-every-run) ·
 [375. The arms where nothing is guessable said less than the mixed one](#375-the-arms-where-nothing-is-guessable-said-less-than-the-mixed-one) ·
-[376. One refusal for four causes, naming no remedy](#376-one-refusal-for-four-causes-naming-no-remedy)
+[376. One refusal for four causes, naming no remedy](#376-one-refusal-for-four-causes-naming-no-remedy) ·
+[377. A guess withdrawn, and an assertion dropped](#377-a-guess-withdrawn-and-an-assertion-dropped)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29592,3 +29593,51 @@ One inconsistency seen and not acted on: the `sources` refusal says
 the pattern that did it. Naming the pattern would be better in both, and
 it is one message rather than a family, so it waits for a reason to touch
 that line.
+
+## 377. A guess withdrawn, and an assertion dropped
+
+Found by taking §376's remedy. Keeping an excluded root in the build
+leaves a file that defines no `main()` rooting a target, and that lands
+here:
+
+    $ fmake
+    * lib.c looked like it defined main() but the object does not
+      export it; skipping
+    LD  rootnomain
+    * built rootnomain                       # and exit 0
+
+**Two faults in one line.** The premise is false -- nothing about
+`lib.c` looked like anything, the config named it -- and **the target
+the config asked for by name is gone, with a zero exit.** A tree whose
+`fmake.toml` asks for four programs can build three and succeed.
+
+### A guess and an assertion get different answers
+
+Where the *scan* proposes a root and the object exports no `main()`,
+skipping is right: fmake offered a program, the object disagreed, and
+withdrawing an offer costs nobody anything. The wording is accurate
+there too, because the scan really did look like it.
+
+Where the *config* names the root, the user asserted the target exists.
+`build-and-commit.md` has the general form, about a build that quietly
+produces less than it was asked for: a build that silently builds less
+is worse than one that stops. So that case refuses:
+
+    fmake.toml roots the target 'prog' at 'lib.c', whose object defines
+    no main(), so it builds no program.
+    Give it a kind -- shared, static, library, module -- or root it at
+    the file that defines main().
+
+`conf.get("root")` is the discriminator, not whether the section exists.
+A section that only renames an *inferred* target must keep the warning,
+because there the scan did propose the root and the mirage wording is
+the true one.
+
+### The control is half the case
+
+An inferred mirage must still warn and still succeed, or the fix has
+turned a withdrawn guess into a hard failure -- and a case asserting
+only the new refusal would not notice. Measured: a `main()` behind an
+`#ifdef` nobody defines still warns and still exits 0, while the
+configured root exits 1. The remedy is taken too: `kind = "static"`
+builds `libprog.a`.

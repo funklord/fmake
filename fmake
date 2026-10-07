@@ -12815,6 +12815,38 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				# uncompiled unit and crashed on None.
 				if (t.kind == "exe" and not root_unit.crate_exe
 				        and "main" not in root_unit.strong):
+					# A guess and an assertion get different answers.
+					# Where the SCAN proposed this root, skipping is
+					# right: fmake offered a program, the object
+					# disagreed, and withdrawing the offer costs nobody
+					# anything. Where the CONFIG named it, the user said
+					# this target exists -- and dropping it left a note
+					# above `* built ...' and exit 0, so a tree whose
+					# fmake.toml asks for four programs could build three
+					# and succeed.
+					#
+					# Measured: `[target.prog] root = "lib.c"' with no
+					# main() in lib.c printed "lib.c looked like it
+					# defined main() but the object does not export it"
+					# and exited 0 having built only the inferred
+					# program. Two faults in one line -- the premise is
+					# false, since nothing about lib.c looked like
+					# anything, the config said so; and the target the
+					# config asked for by name was gone.
+					#
+					# `conf.get("root")` rather than `conf` being
+					# non-empty: a section that only renames an INFERRED
+					# target must keep the warning, because there the
+					# scan really did propose the root and the mirage
+					# wording is accurate.
+					asked = t.conf.get("root") or t.conf.get("sources")
+					if asked:
+						die(f"{CONF_FILE} roots the target {t.name!r} at "
+						    f"{t.rel!r}, whose object defines no main(), "
+						    f"so it builds no program.\nGive it a kind -- "
+						    f"{', '.join(k for k in KINDS if k != 'exe')} "
+						    f"-- or root it at the file that defines "
+						    f"main().")
 					warn(f"{t.rel} looked like it defined main() but the "
 					     f"object does not export it; skipping")
 					# Remembered against the file and the configuration, so

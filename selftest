@@ -24534,6 +24534,62 @@ def a_misnamed_root_says_which_way_it_is_wrong(t):
 
 
 @case
+def a_target_the_config_asks_for_is_not_silently_dropped(t):
+	"""section 377: a guess withdrawn and an assertion dropped.
+
+	Where the scan proposes a root and the object exports no main(),
+	skipping it is right -- fmake offered a program and the object
+	disagreed. Where fmake.toml NAMES the root, the user asserted the
+	target exists, and dropping it printed a note above `* built ...'
+	and exited 0. A tree whose config asks for four programs could
+	build three and succeed.
+
+	The wording was wrong too, and in a way that sends the reader to the
+	file: "lib.c looked like it defined main()" when nothing about lib.c
+	looked like anything -- the config said so.
+
+	The control is the second half: an inferred mirage must still warn
+	and still succeed, or this fix has turned a withdrawn guess into a
+	hard failure."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("lib.c", "int helper(void){ return 1; }\n")
+	t.write("fmake.toml", '[target.prog]\nroot = "lib.c"\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a target the config asks for cannot be dropped with a zero "
+	      f"exit: {out}")
+	check("defines no main" in out,
+	      f"and the reason has to be the object's, not the file looking "
+	      f"like something: {out}")
+	check("looked like it defined main" not in out,
+	      f"nothing about this file looked like anything -- the config "
+	      f"named it: {out}")
+	check("kind" in out,
+	      f"and a remedy has to be named: {out}")
+
+	# Taken: a kind makes it buildable as what it is.
+	t.write("fmake.toml", '[target.prog]\nroot = "lib.c"\nkind = "static"\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"giving it a kind did not work: {r.stdout}{r.stderr}")
+
+	# The control. A root the SCAN proposed, whose main() is compiled
+	# away, still warns and still builds the rest.
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("lib.c", "#ifdef ENABLED\nint main(void){ return 1; }\n#endif\n"
+	        "int helper(void){ return 2; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"an inferred mirage is a withdrawn guess, not a failure: {out}")
+	check("looked like it defined main" in out,
+	      f"and there the wording is right, because the scan did propose "
+	      f"it: {out}")
+
+
+@case
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 
