@@ -28870,6 +28870,15 @@ ceiling and a disk guard, the copy removed once its verdict was read.
     fuzzypickles  not tested         "
     netcfgd       not tested         "
 
+### Closed below: those five were reached on the third attempt
+
+The five rows reading "not tested" are a property of the method, and the
+method took three tries to stop measuring itself. **beerssh and hydra
+build clean** -- hydra being the largest Qt tree here -- and the other
+three stop at a configuration refusal rather than a fault. The
+dropped-directive warning is silent on all ten. See *Three method
+layers* at the end of this entry.
+
 ### Half the sweep measured my method, not fmake
 
 The five failures all said the same thing, and fmake was right every
@@ -28915,6 +28924,53 @@ corroboration from something that is not another query, and here the
 something was the program under test. The regex was a proxy for "would
 fmake complain"; fmake answers that question directly and was one
 command away the whole time.
+
+### Three method layers, and what was under them
+
+Getting the five submodule trees built took three attempts, and **each
+failure was mine rather than fmake's.** Worth the space because the
+shape repeated and each layer looked like a result:
+
+- **`git archive` carries no submodule contents.** Five rc=1 rows,
+  already recorded above.
+- **`git -C <submodule> archive <gitlink>`** -- four still failed, and
+  the gitlink commits all read as absent from their submodule
+  checkouts. I was one sentence from reporting that four superprojects
+  name submodule commits their checkouts do not have, which is a false
+  claim about four trees.
+- **The real cause was `fatal: detected dubious ownership`.** The trees
+  are owned by one user and this ran as another; the 37 `safe.directory`
+  entries cover the superprojects and not the submodule paths. `tar
+  --exclude=.git` needs no git and is not refused.
+
+The ownership error was **swallowed by my own instrument twice**: the
+sweep's liveness check asked `os.path.isfile(sub/.git)`, which is true
+of a repository git will refuse to touch, and the follow-up check ended
+`2>/dev/null || echo 'not a checkout'`, which turned git's own
+explanation into a phrase I had written. Git said exactly what was wrong
+and I had arranged not to hear it.
+
+**No `safe.directory` entry was added to make the test pass.** That is
+the holder's git configuration, and editing the environment so a
+measurement succeeds is the measurement reporting on the edit. The tar
+route sidesteps it and copies the submodule's checked-out state, which
+is what the siblings' own builds use.
+
+    beerssh       builds        no new warning
+    hydra         builds        no new warning
+    raidcfgd      refuses       ambiguous symbol, names `sources = [...]`
+    netcfgd       refuses       "4 of them are in qtty, another project's"
+    fuzzypickles  refuses       names `@os` or `@arch` for the
+                                platform-specific file
+
+The three refusals are fmake declining to guess, each naming what to
+declare, which is §3 working rather than a fault -- and whether those
+trees intend to be fmake-buildable at all is theirs to say. **What
+matters for this entry is the directive column: silent on all ten.**
+
+And the refusals are evidence the check was reached, not skipped: it
+runs during target resolution and those three stop later, in the
+closure.
 
 ### Which fmake, which is the refinement ossacli sent back
 
