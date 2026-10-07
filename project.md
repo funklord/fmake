@@ -420,7 +420,8 @@ that had been green about nothing for five commits ·
 [367. The `uses` example this document gives, which fmake refuses](#367-the-uses-example-this-document-gives-which-fmake-refuses) ·
 [368. The package that was upgraded without moving a directory](#368-the-package-that-was-upgraded-without-moving-a-directory) ·
 [369. The check that only watched the files that become targets](#369-the-check-that-only-watched-the-files-that-become-targets) ·
-[370. Today's changes against ten real trees, and what the method could not reach](#370-todays-changes-against-ten-real-trees-and-what-the-method-could-not-reach)
+[370. Today's changes against ten real trees, and what the method could not reach](#370-todays-changes-against-ten-real-trees-and-what-the-method-could-not-reach) ·
+[371. The remedy that addressed four of the five targets it named](#371-the-remedy-that-addressed-four-of-the-five-targets-it-named)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29058,3 +29059,73 @@ quoting something absent. Struck rather than left, because an
 uncorrected claim sitting above its own correction is exactly the case
 `evidence.md` names: the reader believes whichever sounds more careful,
 and the stale one always does.
+
+## 371. The remedy that addressed four of the five targets it named
+
+§370's sweep left three trees stopping at a configuration refusal rather
+than a fault, and I recorded that as fmake declining to guess -- which it
+is. Then §355's question got asked of them: **does the remedy work?**
+
+raidcfgd vendors fuzznet, so the tree holds two generated `situ.c`, both
+defining `situ_msg_init`. fmake refuses, correctly, and says:
+
+    fmake will not guess which one belongs in bridge_main,
+    fuzz_request, fuzz_wire, raidcfgd, raidtray.
+
+Five targets. Then an include-graph table for **four** of them, and four
+`[target.*] sources = [...]` stanzas for the same four. `bridge_main`
+appears in the complaint and nowhere else.
+
+Pasting fmake's own four stanzas back -- its text, extracted from the
+output rather than retyped -- and rebuilding:
+
+    !!! symbol 'situ_msg_init' is defined by more than one file:
+    fmake will not guess which one belongs in bridge_main.
+
+The same refusal, on the one target the remedy skipped, with nothing new
+to go on. **A reader who does exactly what fmake says is no further
+forward.**
+
+### Why the mixed case fell through
+
+The stanza loop asks whether the include graph reaches exactly one
+provider from a target's root, and `continue`s when it does not. That is
+right -- §20's whole argument is that a guess with nothing behind it is
+worse than the refusal. What was missing is that it says nothing about
+having skipped one.
+
+And the branches that would have explained it -- *"N files define it,
+which usually means separate programs"*, the `@os` hint, the prebuilt
+archive hint -- all sit under `elif`, so they run only when **no** target
+was guessable. The arrangement where some are and some are not had no
+path through the message at all.
+
+Affected targets with no stanza are now named, with a way out.
+
+### The invariant, not the name
+
+The case asserts that **every target the header names is either given a
+stanza or listed as one fmake cannot guess for.** Keyed on `bridge_main`,
+or on the fixture's `progb`, it would go stale the moment either changed;
+as an invariant it is the thing that was broken, and it cannot be
+satisfied by accident.
+
+The fixture is three programs over two duplicate definitions: one root
+reaching the first through its header, one reaching the second, one
+declaring the symbol itself and reaching neither. The third is the
+arrangement under test and the first two are what make it **mixed** --
+without them it is the case that already existed.
+
+### Both of this session's diagnostic gaps came from the same hole
+
+`an_ambiguity_the_graph_cannot_settle_offers_no_guess` is built so that
+*no* root can be distinguished, and its own comment records that every
+other ambiguity fixture is built so the graph *can*. Two populations,
+each covered, and the arrangement between them covered by neither --
+which is exactly where a tree actually lives.
+
+§369 is the same shape one layer over: a check that ran for files which
+become targets, with every file that does not left uncovered. **Both were
+found by real input and neither by reading**, because the fixtures that
+would have shown them are the ones nobody writes -- the case between the
+two clean cases.

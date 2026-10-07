@@ -24146,6 +24146,80 @@ def an_ambiguity_the_graph_cannot_settle_offers_no_guess(t):
 
 
 @case
+def an_ambiguity_addresses_every_target_it_names(t):
+	"""The MIXED case, which no fixture here had.
+
+	The case above is built so that *no* root can be distinguished, and
+	its own comment says every other ambiguity fixture is built so the
+	graph *can* distinguish. Between those two lies the arrangement that
+	actually happens in a tree: **some targets guessable and some not.**
+
+	Found on raidcfgd, which vendors fuzznet and so holds two generated
+	`situ.c` defining `situ_msg_init`. fmake named five affected targets,
+	printed four `sources` stanzas, and said nothing further about
+	`bridge_main`. Pasting all four verbatim -- fmake's own text, not a
+	paraphrase -- left:
+
+	    !!! symbol 'situ_msg_init' is defined by more than one file:
+	    fmake will not guess which one belongs in bridge_main.
+
+	and nothing new to go on. The stanza loop skips a target whose root
+	reaches none or both, and the fallback branches that would have
+	explained it only run when NO target was guessable.
+
+	The assertion is the invariant rather than the name: **every target
+	the header names is either given a stanza or listed as one fmake
+	cannot guess for.** Keyed on `bridge_main`, or on this fixture's
+	`progb`, it would go stale the moment the fixture changed; as an
+	invariant it is the thing that was broken and cannot be satisfied by
+	accident."""
+	for d, n in (("dup_a", 7), ("dup_b", 9)):
+		t.write(f"{d}/dup.h", "#pragma once\nint shared(void);\n")
+		t.write(f"{d}/dup.c",
+		        '#include "dup.h"\nint shared(void){ return %d; }\n' % n)
+	# One root reaches dup_a through its header, one reaches dup_b, and one
+	# declares the symbol itself and reaches neither. The third is the
+	# arrangement under test; the first two are what make the case MIXED
+	# rather than a second copy of the one above.
+	t.write("proga.c", '#include "dup_a/dup.h"\n'
+	        "int main(void){ return shared() - 7; }\n")
+	t.write("progc.c", '#include "dup_b/dup.h"\n'
+	        "int main(void){ return shared() - 9; }\n")
+	t.write("progb.c", "int shared(void);\n"
+	        "int main(void){ return shared() - 7; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two providers should not build: {out}")
+
+	m = re.search(r"will not guess which one belongs in ([^.\n]+)", out)
+	check(m, f"the refusal must name the affected targets: {out}")
+	named = {x.strip() for x in m.group(1).split(",")}
+	check(len(named) > 2,
+	      f"this fixture has to produce more than two affected targets or "
+	      f"it is not the mixed case: {sorted(named)}")
+
+	stanza = set(re.findall(r"\[target\.([^\]]+)\]", out))
+	check(stanza, f"the guessable ones must still get a stanza: {out}")
+	check(stanza < named,
+	      f"this fixture has to leave at least one target without a "
+	      f"stanza, or the gap under test is not reached: stanzas "
+	      f"{sorted(stanza)} against named {sorted(named)}")
+
+	# The invariant.
+	rest = named - stanza
+	for name in sorted(rest):
+		check(re.search(r"no guess for [^\n]*\n(?:.*\n)*?\s*" +
+		                re.escape(name) + r"\b", out),
+		      f"{name} is named as affected and gets no stanza, so it has "
+		      f"to appear in the list of targets fmake cannot guess for -- "
+		      f"otherwise pasting the whole remedy hits the same refusal "
+		      f"again with nothing new: {out}")
+	check("by hand" in out or "exclude" in out,
+	      f"and that list has to carry a way out, not only a name: {out}")
+
+
+@case
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 

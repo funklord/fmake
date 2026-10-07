@@ -13207,6 +13207,40 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			          "are that same guess and are worth checking:",
 			          ""]
 			lines += ["    " + s.replace("\n", "\n    ") for s in stanzas]
+			# Affected targets the include graph could not answer for.
+			# Named here because the header above lists EVERY affected
+			# target while the stanzas cover only those with exactly one
+			# provider in reach -- so a reader who pasted the whole
+			# remedy met the same refusal again, naming the leftover and
+			# offering nothing new.
+			#
+			# Measured on raidcfgd, which vendors fuzznet and so has two
+			# generated `situ.c' defining `situ_msg_init': five targets
+			# named, four stanzas printed, and `bridge_main' affected
+			# with no advice. Pasting all four verbatim left
+			# "fmake will not guess which one belongs in bridge_main."
+			# and nothing else to go on.
+			#
+			# Only in the mixed case. Where NO target is guessable the
+			# branches below explain the likely cause and the header has
+			# already named them all, so a second list would be noise.
+			unguessed = sorted({t.name for t, _s, _p in trouble}
+			                   - seen_stanza)
+			if unguessed:
+				many = len(unguessed) > 1
+				lines += [
+				    "",
+				    ("These are affected too, and fmake has no guess for "
+				     "them" if many else
+				     "This one is affected too, and fmake has no guess "
+				     "for it")
+				    + ": from its own root the include graph reaches "
+				      "either none of those files or more than one.",
+				    "    " + "\n    ".join(unguessed),
+				    "",
+				    f"Name {'their' if many else 'its'} sources in "
+				    f"{CONF_FILE} by hand, or keep the duplicate out "
+				    f"with [project] exclude."]
 		elif len(first_providers) > 3:
 			# Two very different causes, and the wrong hint sends people the
 			# wrong way. A handful of files is usually one implementation per
