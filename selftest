@@ -11870,6 +11870,53 @@ def data_files_install_under_the_programs_share_directory(t):
 	finally:
 		u.cleanup()
 
+	# section 381: a path that CLIMBS is refused, because @data is the one
+	# furniture kind whose destination is computed from the file's path --
+	# which is the feature above, and the reason this needed guarding.
+	# Measured before the guard: `data = ["../x.txt"]` planned
+	# `install -m 644 ../x.txt /usr/local/share/<name>/../x.txt`, and with
+	# enough of them out of a DESTDIR staging root, while the summary said
+	# the files would be installed under the prefix.
+	#
+	# The victim lives beside the fixture and is removed either way, the
+	# same shape an_ejected_clean_does_not_delete_outside_the_tree uses.
+	victim = os.path.join(os.path.dirname(t.dir),
+	                      f"victim-{os.path.basename(t.dir)}.1")
+	with open(victim, "w") as fh:
+		fh.write("PRECIOUS\n")
+	try:
+		up = os.path.relpath(victim, t.dir)
+		for spelling in (up, victim, "../victim-*.1"):
+			t.write("fmake.toml", f'[target.{name}]\n'
+			        f'root = "main.c"\ndata = ["{spelling}"]\n')
+			r = t.fmake("--install", "-n", "--destdir",
+			            os.path.join(t.dir, "s2"))
+			said = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"@data {spelling!r} resolves outside the tree and has "
+			      f"to be refused: {said}")
+			check("outside the tree" in said,
+			      f"and the reason has to be the path rather than a "
+			      f"missing file: {said}")
+
+		# The control, and it is the whole of why this refuses a shape
+		# rather than every source outside the tree: a kind whose
+		# destination is a BASENAME cannot climb, so naming one outside
+		# is the author's business and stays allowed.
+		t.write("fmake.toml", f'[target.{name}]\n'
+		        f'root = "main.c"\nman = ["{up}"]\n')
+		r = t.fmake("--install", "-n", "--destdir",
+		            os.path.join(t.dir, "s3"))
+		said = r.stdout + r.stderr
+		check(r.returncode == 0,
+		      f"@man naming a source outside the tree must not be "
+		      f"refused -- it lands as its basename: {said}")
+		check("man1/" + os.path.basename(victim) in said,
+		      f"and it has to land under man1 by basename: {said}")
+	finally:
+		if os.path.exists(victim):
+			os.remove(victim)
+
 
 @case
 def a_polkit_action_installs_where_polkitd_reads(t):

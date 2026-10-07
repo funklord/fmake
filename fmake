@@ -17609,6 +17609,44 @@ def install_plan(targets, closures, root):
 				die(f"@data {pat!r} matched no file (named for {t.name})")
 			for h in files:
 				rel = os.path.relpath(h, root)
+				# @data is the one furniture kind whose DESTINATION is
+				# computed from the file's path -- that is the feature,
+				# `std/crc.situ' landing at share/situc/std/crc.situ --
+				# so a path that climbs produces a destination that
+				# climbs. Measured: `data = ["../outside.txt"]' planned
+				# `install -m 644 ../outside.txt
+				# /usr/local/share/proj/../outside.txt', and with enough
+				# of them, out of a DESTDIR staging root entirely, while
+				# the summary said "2 file(s) would be installed under
+				# /usr/local".
+				#
+				# Which is `refuse_install_escapes' word for word -- an
+				# install directory is a place, not a path back out of
+				# one -- reaching the third path a config can name. That
+				# one covers [install] dirs and section 29 covers a target
+				# name; a data file's path was the half nobody had asked
+				# about.
+				#
+				# Checked on the RESOLVED relative path rather than on
+				# the pattern, so a glob that reaches up is caught too,
+				# and so is an absolute path: relpath of anything outside
+				# the root begins with `..' either way.
+				#
+				# The other furniture kinds cannot do this. furniture_landing
+				# returns a basename for man, desktop, icons, metainfo,
+				# dbus, udev and polkit, so `../x.1' installs as `x.1';
+				# naming a source outside the tree is the author's
+				# business, and it does not move where the file lands.
+				if rel.split(os.sep)[0] == os.pardir:
+					die(f"@data {pat!r} reaches {rel!r}, which is outside "
+					    f"the tree (named for {t.name}).\n"
+					    f"    a data file installs at its own path under "
+					    f"the share directory, so this one would land at "
+					    f"{t.name}/{rel} -- out of the package, and out "
+					    f"of a DESTDIR staging root with enough of them\n"
+					    f"    name a file inside the tree; a copy the "
+					    f"build makes there is a @rule, and it lands "
+					    f"where its own path says")
 				planned.append(("tree", rel, "datadir",
 				                f"{t.name}/{rel}", 0o644))
 

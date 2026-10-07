@@ -430,7 +430,8 @@ that had been green about nothing for five commits ·
 [377. A guess withdrawn, and an assertion dropped](#377-a-guess-withdrawn-and-an-assertion-dropped) ·
 [378. The predictable cost of fmake's own advice](#378-the-predictable-cost-of-fmakes-own-advice) ·
 [379. The caveat that excused a typo, in the other spelling](#379-the-caveat-that-excused-a-typo-in-the-other-spelling) ·
-[380. Two config keys that validated and did nothing](#380-two-config-keys-that-validated-and-did-nothing)
+[380. Two config keys that validated and did nothing](#380-two-config-keys-that-validated-and-did-nothing) ·
+[381. A data file's destination is its path, so its path can climb](#381-a-data-files-destination-is-its-path-so-its-path-can-climb)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29859,3 +29860,53 @@ separate pre-existing question. It is left alone because the directive
 has `@pkg_optional` as an escape hatch and the config has no equivalent
 key, so making the config refuse would leave no way to say "use it if it
 is there".
+
+## 381. A data file's destination is its path, so its path can climb
+
+`refuse_install_escapes` is the rule that an install directory is a place
+and not a path back out of one, and its own docstring says it is §29's
+rule about a target name "reaching the other half of the same question".
+**There is a third half.** `@data` is the one furniture kind whose
+destination is computed from the file's own path -- `std/crc.situ` landing
+at `share/situc/std/crc.situ`, which is the feature -- so a path that
+climbs produces a destination that climbs.
+
+Measured, planning only:
+
+    data = ["../outside.txt"]
+    install -m 644 .../proj/../outside.txt /usr/local/share/proj/../outside.txt
+    * 2 file(s) would be installed under /usr/local
+
+`/usr/local/share/proj/../outside.txt` is `/usr/local/share/outside.txt`,
+out of the package's own directory. With enough of them and `--destdir`
+set, the destination leaves the staging root entirely -- six `..` from
+`stage/usr/local/share/proj` climbs past `stage` -- **and the summary
+still says the files would be installed under the prefix.** That sentence
+is `refuse_install_escapes`' own incident, word for word, arriving by a
+path it does not cover.
+
+### Checked on the resolved path, which gets three spellings for free
+
+The guard reads `os.path.relpath(h, root)` -- the value the destination is
+built from -- rather than the pattern. So an explicit `../x`, a glob that
+reaches up, and an absolute path are all caught by one test, the last
+because `relpath` of anything outside the root begins with `..` anyway.
+That is `evidence.md`'s rule about checking the artifact rather than a
+fresh measurement of where it came from.
+
+### Only `data`, and the control is the point
+
+`furniture_landing` returns a **basename** for `man`, `desktop`, `icons`,
+`metainfo`, `dbus`, `udev` and `polkit`, so `../x.1` installs as `x.1`
+and nothing about where it lands moves. Naming a source outside the tree
+is then the author's business, exactly as a generate rule may name an
+output anywhere (§379-as-declined, where the project had already settled
+that building outside is the author's instruction while deleting is a
+different promise).
+
+So this refuses a **shape** rather than every outside source, and the
+case says so with a `@man` entry pointing at the same file and requiring
+it to be allowed. Sabotaging the fix into "refuse any outside source for
+every kind" fails on that assertion; sabotaging the check away fails on
+the other. Neither sabotage passes, which is what makes the pair worth
+having.
