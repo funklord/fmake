@@ -24220,6 +24220,72 @@ def an_ambiguity_addresses_every_target_it_names(t):
 
 
 @case
+def the_cause_of_an_ambiguity_reaches_the_ones_it_cannot_guess(t):
+	"""section 372: the hint that only spoke when nothing was guessable.
+
+	The case above stopped the mixed arrangement being silent about the
+	targets it cannot guess for. What it put there is generic advice --
+	name the sources by hand, or keep the duplicate out with [project]
+	exclude -- and for a platform split the second half is the wrong
+	move: it drops a file the other platform needs, where `@os' on the
+	sibling settles every affected target at once.
+
+	The three branches that explain WHY a tree holds two providers all
+	hung off the same chain as `elif', so a reader met one only when NO
+	target was guessable. Here one is, which is what makes this the
+	mixed arrangement rather than a second copy of the case that
+	already passes.
+
+	Asserted as a pair: the cause has to appear, and the leftover must
+	not go on being told to do the thing that would delete a platform's
+	implementation."""
+	# The directive has to name THIS host. A file marked for another
+	# platform is dropped from the build, and then there is no second
+	# provider, no ambiguity and nothing to read -- so a fixture written
+	# `@os linux' would exercise this on linux and quietly measure
+	# nothing anywhere else. Same mapping as fmake's own `host_os'.
+	host = next((n for p, n in (("linux", "linux"), ("darwin", "darwin"),
+	                            ("freebsd", "freebsd"),
+	                            ("openbsd", "openbsd"),
+	                            ("netbsd", "netbsd"), ("win", "windows"),
+	                            ("cygwin", "windows"),
+	                            ("sunos", "solaris"))
+	             if sys.platform.startswith(p)), sys.platform)
+	for d, n in (("plat", 1), ("other", 2)):
+		t.write(f"{d}/impl.h", "#pragma once\nint shared(void);\n")
+		t.write(f"{d}/impl.c",
+		        ("//! @os %s\n" % host if d == "plat" else "")
+		        + '#include "impl.h"\nint shared(void){ return %d; }\n' % n)
+	t.write("proga.c", '#include "plat/impl.h"\n'
+	        "int main(void){ return shared() - 1; }\n")
+	t.write("progc.c", '#include "other/impl.h"\n'
+	        "int main(void){ return shared() - 2; }\n")
+	t.write("progb.c", "int shared(void);\n"
+	        "int main(void){ return shared() - 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	# Reached, not merely able to fire. If the @os above did not match
+	# the host that file is dropped, the duplicate goes away, and this
+	# builds -- so the refusal is the control for everything below it.
+	check(r.returncode != 0, f"two providers should not build: {out}")
+	check("[target." in out,
+	      f"one target has to be guessable or this is not the mixed "
+	      f"arrangement: {out}")
+	i = out.find("no guess for")
+	check(i > 0, f"and one has to be unguessable: {out}")
+	tail = out[i:]
+	check("has @os" in tail,
+	      f"the leftover has to be told why the tree holds two providers: "
+	      f"@os on the other one settles every affected target at once, "
+	      f"where naming sources settles this one: {tail}")
+	check("exclude" not in tail,
+	      f"and must not be told to exclude the duplicate, which for a "
+	      f"platform split deletes the other platform's implementation: "
+	      f"{tail}")
+
+
+@case
 def an_ambiguous_symbol_suggests_the_owner(t):
 	"""A dead end should hand back the config that ends it.
 

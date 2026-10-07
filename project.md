@@ -421,7 +421,8 @@ that had been green about nothing for five commits ·
 [368. The package that was upgraded without moving a directory](#368-the-package-that-was-upgraded-without-moving-a-directory) ·
 [369. The check that only watched the files that become targets](#369-the-check-that-only-watched-the-files-that-become-targets) ·
 [370. Today's changes against ten real trees, and what the method could not reach](#370-todays-changes-against-ten-real-trees-and-what-the-method-could-not-reach) ·
-[371. The remedy that addressed four of the five targets it named](#371-the-remedy-that-addressed-four-of-the-five-targets-it-named)
+[371. The remedy that addressed four of the five targets it named](#371-the-remedy-that-addressed-four-of-the-five-targets-it-named) ·
+[372. The hint that only spoke when nothing could be guessed](#372-the-hint-that-only-spoke-when-nothing-could-be-guessed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29129,3 +29130,76 @@ become targets, with every file that does not left uncovered. **Both were
 found by real input and neither by reading**, because the fixtures that
 would have shown them are the ones nobody writes -- the case between the
 two clean cases.
+
+## 372. The hint that only spoke when nothing could be guessed
+
+§371 stopped the mixed arrangement being silent about the targets it
+could not guess for. Asking §355's question of **the fix itself** --
+does the remedy work? -- the leftover now gets a remedy, and for a
+platform split it is the wrong one.
+
+Three branches explain *why* a tree has two providers of one symbol:
+the `@os` hint, the "N files define it, which usually means separate
+programs" hint, and the prebuilt-archive hint. All three hung off the
+same `if advice` chain as `elif`, so a reader saw one **only when no
+target was guessable at all.** In the mixed arrangement the leftover
+got the generic sentence instead:
+
+    Name its sources in fmake.toml by hand, or keep the duplicate out
+    with [project] exclude.
+
+For a platform split that points the wrong way. `[project] exclude`
+drops a file the other platform needs; `@os` on its sibling settles
+every target at once, including the ones that already had a stanza.
+The chain's own comment says it: *the wrong hint sends people the wrong
+way.*
+
+### Measured, both arrangements
+
+Two providers, one carrying `@os` for the host, three programs -- one
+reaching each provider through its header and one declaring the symbol
+itself:
+
+    - Name its sources in fmake.toml by hand, or keep the duplicate out
+      with [project] exclude.
+    + One of them has @os; the others may need one too.
+    + Name its sources in fmake.toml by hand if that is not it.
+
+Four providers, three programs, same shape:
+
+    + 4 files define it, which usually means they are separate programs
+      sharing an entry point rather than one library.
+    + Name its sources in fmake.toml by hand if that is not it.
+
+The cause **replaces** the exclude suggestion rather than joining it: a
+message offering `@os` and "drop the duplicate" in one breath has not
+helped anybody choose. That trade is not free -- for a directory of
+sibling programs, excluding some of them is a real option, and the
+leftover paragraph no longer says so. The cause names the shape instead,
+which is what lets a reader see the option without being handed it beside
+its opposite.
+
+### What the proof had to cover
+
+The arms where nothing is guessable print what they always printed, and
+that is checked rather than intended: four fixtures -- the `@os` one, the
+four-provider one, two prebuilt archives, and a plain pair with neither
+-- each run with `.fmake` removed, under the old tool and the new one,
+**byte-identical in all four.** The two mixed fixtures are the only
+outputs that moved.
+
+The archive branch needs no leftovers wording, and that is a property of
+the code rather than a gap: `candidates` walks the scan graph, an archive
+has no scan at all (§18), so an archive is never in reach of a target's
+root and no target is guessable while every provider is one. The mixed
+arrangement cannot arise there.
+
+### The lesson is about the fix, not the tree
+
+§371 found a silence and removed it. What it put there was generic
+advice, which reads as complete -- and a suppressed hint is invisible,
+because nothing in the message says a better explanation existed and was
+not printed. **Asking "does the remedy work?" of the remedy you have
+just written is a different question from asking it of the one you
+found**, and the first is easier to skip, the fix being fresh and the
+message now looking finished.

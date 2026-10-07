@@ -13196,6 +13196,61 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			offers.append({"name": t.name, "root": t.rel, "sym": _sym,
 			               "providers": list(providers), "chosen": mine[0],
 			               "members": members, "configured": bool(t.conf)})
+		# Why the tree holds two providers at all, worked out before the
+		# arms below rather than inside the last of them. Section 372:
+		# these three explanations used to hang off the `if advice' chain,
+		# so a reader saw one only when NO target was guessable -- and in
+		# the mixed arrangement section 371 had just stopped being silent
+		# about, the leftover target got the generic remedy instead. For a
+		# platform split that remedy points the wrong way: [project]
+		# exclude drops a file the other platform needs, where @os on its
+		# sibling settles every target at once.
+		#
+		# `cause' is the explanation on its own, for the leftovers; `whole'
+		# is the explanation with the remedy that suits a tree where
+		# nothing could be guessed, which is what this printed before and
+		# still prints there, unchanged.
+		#
+		# The archive branch cannot arise in the mixed arrangement and so
+		# needs no leftovers wording: `candidates' walks the scan graph, an
+		# archive has no scan (section 18), so no archive is ever in reach
+		# of a target's root and no target is guessable while every
+		# provider is one.
+		if len(first_providers) > 3:
+			# Two very different causes, and the wrong hint sends people the
+			# wrong way. A handful of files is usually one implementation per
+			# platform; dozens is usually a directory of programs that each
+			# supply the same entry point, expecting to be linked separately.
+			cause = (f"{len(first_providers)} files define it, which "
+			         f"usually means they are separate programs sharing "
+			         f"an entry point rather than one library.")
+			whole = (f"{cause}\nGive each a [target.*] with its own sources "
+			         f"in {CONF_FILE}, or drop them with [project] exclude.")
+		# `scans.get`, not `scans[...]`: a provider can be a vendored archive,
+		# which has no scan because it was never a source -- section 18 gives
+		# those units an empty one and keeps them out of the scan map. Found
+		# by running beerssh, where two Android archives under deps/ define
+		# the same symbols and the ambiguity report tracebacked instead of
+		# printing. Section 32's class, in the code written to explain a
+		# failure rather than in the failure itself.
+		elif any(scans.get(p, {}).get("dirs", {}).get("os")
+		         for p in first_providers):
+			cause = "One of them has @os; the others may need one too."
+			whole = cause
+		elif all(p.endswith(".a") for p in first_providers):
+			# A directive cannot be written on an archive: there is no
+			# source to put it in. Section 101's shape, in the same
+			# message -- advice that cannot be followed is worse than
+			# none, and the remedy that does work is the one that names
+			# paths rather than files.
+			cause = ("These are prebuilt archives, so @os and @arch have "
+			         "nowhere to go.")
+			whole = (f"{cause} Keep the ones that are not for this build "
+			         f"out with [project] exclude in {CONF_FILE}.")
+		else:
+			cause = ""
+			whole = ("@os or @arch on the platform-specific one will settle "
+			         f"it, or name the sources of each target in {CONF_FILE}.")
 		if advice:
 			lines += ["",
 			          "The include graph reaches exactly one of them from "
@@ -13222,8 +13277,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# and nothing else to go on.
 			#
 			# Only in the mixed case. Where NO target is guessable the
-			# branches below explain the likely cause and the header has
-			# already named them all, so a second list would be noise.
+			# header has already named them all and the arm below prints
+			# the cause by itself, so a second list would be noise.
 			unguessed = sorted({t.name for t, _s, _p in trouble}
 			                   - seen_stanza)
 			if unguessed:
@@ -13241,40 +13296,23 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				    f"Name {'their' if many else 'its'} sources in "
 				    f"{CONF_FILE} by hand, or keep the duplicate out "
 				    f"with [project] exclude."]
-		elif len(first_providers) > 3:
-			# Two very different causes, and the wrong hint sends people the
-			# wrong way. A handful of files is usually one implementation per
-			# platform; dozens is usually a directory of programs that each
-			# supply the same entry point, expecting to be linked separately.
-			lines.append(f"\n{len(first_providers)} files define it, which "
-			             f"usually means they are separate programs sharing "
-			             f"an entry point rather than one library.\nGive each "
-			             f"a [target.*] with its own sources in {CONF_FILE}, "
-			             f"or drop them with [project] exclude.")
-		# `scans.get`, not `scans[...]`: a provider can be a vendored archive,
-		# which has no scan because it was never a source -- section 18 gives
-		# those units an empty one and keeps them out of the scan map. Found
-		# by running beerssh, where two Android archives under deps/ define
-		# the same symbols and the ambiguity report tracebacked instead of
-		# printing. Section 32's class, in the code written to explain a
-		# failure rather than in the failure itself.
-		elif any(scans.get(p, {}).get("dirs", {}).get("os")
-		         for p in first_providers):
-			lines.append("\nOne of them has @os; the others may need one too.")
-		elif all(p.endswith(".a") for p in first_providers):
-			# A directive cannot be written on an archive: there is no
-			# source to put it in. Section 101's shape, in the same
-			# message -- advice that cannot be followed is worse than
-			# none, and the remedy that does work is the one that names
-			# paths rather than files.
-			lines.append(f"\nThese are prebuilt archives, so @os and @arch "
-			             f"have nowhere to go. Keep the ones that are not "
-			             f"for this build out with [project] exclude in "
-			             f"{CONF_FILE}.")
+				if cause:
+					# The cause replaces the exclude suggestion
+					# rather than joining it. For a platform split,
+					# dropping the duplicate deletes the other
+					# platform's implementation, and a message that
+					# offers that and @os in one breath has not helped
+					# anybody choose. For a directory of sibling
+					# programs exclude is a real option and is lost
+					# here -- the trade is deliberate: the cause names
+					# the shape, which is what lets a reader see that
+					# option for themselves.
+					lines[-1] = cause
+					lines.append(
+					    f"Name {'their' if many else 'its'} sources in "
+					    f"{CONF_FILE} by hand if that is not it.")
 		else:
-			lines.append("\n@os or @arch on the platform-specific one will "
-			             "settle it, or name the sources of each target in "
-			             f"{CONF_FILE}.")
+			lines.append("\n" + whole)
 		# Said before the question, not instead of it: -i does not spare
 		# anybody the explanation, it spares them the transcription. The
 		# build still stops, because the answer is for the next one -- and
