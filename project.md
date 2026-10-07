@@ -422,7 +422,8 @@ that had been green about nothing for five commits ·
 [369. The check that only watched the files that become targets](#369-the-check-that-only-watched-the-files-that-become-targets) ·
 [370. Today's changes against ten real trees, and what the method could not reach](#370-todays-changes-against-ten-real-trees-and-what-the-method-could-not-reach) ·
 [371. The remedy that addressed four of the five targets it named](#371-the-remedy-that-addressed-four-of-the-five-targets-it-named) ·
-[372. The hint that only spoke when nothing could be guessed](#372-the-hint-that-only-spoke-when-nothing-could-be-guessed)
+[372. The hint that only spoke when nothing could be guessed](#372-the-hint-that-only-spoke-when-nothing-could-be-guessed) ·
+[373. A warm cache that under-linked three programs](#373-a-warm-cache-that-under-linked-three-programs)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29203,3 +29204,159 @@ not printed. **Asking "does the remedy work?" of the remedy you have
 just written is a different question from asking it of the one you
 found**, and the first is easier to skip, the fix being fresh and the
 message now looking finished.
+
+## 373. A warm cache that under-linked three programs
+
+**From hydra, with the reproduction; the reasons are fmake's.** Nothing in
+this tree was changed to write this -- the entry is the signal, per
+`harmonization.md`.
+
+What hydra did: added two new out-of-line symbols to an existing object.
+`src/settings_dialog.cpp` gained calls to
+`filter_subscription::mint_cache_name(const QString&, const QString&)` and
+`subscription_updater::update(bool, int)`, both in newly added source files.
+
+What `tool/objsets.py` produced (it runs `fmake -j6 --eject make-fragment`
+from the repository root):
+
+- the 39 programs reaching `settings_dialog.o` through `main_window.o` gained
+  the new objects;
+- the 3 that link `settings_dialog.o` **without** `main_window.o` did not.
+
+So `make test` stopped at the link step, in a suite that has nothing to do
+with the change:
+
+    settings_dialog.cpp:1839: undefined reference to
+        filter_subscription::mint_cache_name(QString const&, QString const&)
+    settings_dialog.cpp:1845: undefined reference to
+        subscription_updater::update(bool, int)
+
+**What hydra established is that a warm cache changed the link sets, not
+which cached thing did it** -- the first version of this entry said "a stale
+symbol table" and that is not established. Two warm regenerations in a row
+produced the same under-linked sets with no source change between them -- 91
+programs, 5417 objects, both times. Then `rm .fmake/cache.json` and one more
+regeneration added exactly the three objects to exactly those three programs,
+5426 objects.
+
+**The affected population is three programs, and hydra's first report of it
+was wrong.** That report's multiset check compared the commit *before* the
+change against the post-deletion file, so 39 of its 42 differences were the
+feature rather than the staleness. Stale against fixed gives:
+
+    programs: 88 -> 88,  objects: 5417 -> 5426
+    programs that differ: 3
+      test_probe_ui, test_settings, try_settings_ui
+      each missing filter_subscription.o, subscription_updater.o
+      and moc_subscription_updater.o
+
+Three programs times three objects is the nine. Nothing else moved, so the
+programs reaching the code through `main_window.o` were never short, and
+"links `settings_dialog.o` without `main_window.o`" is exactly the affected
+set. Only `test_probe_ui` failed the build, because `make test` stops at the
+first link error.
+
+The artifacts, readable and not in this tree:
+`/home/claude/.claude/jobs/cce122c1/tmp/objsets.pre6` is the stale generation
+and `/home/funk/src/hydra/test/objsets.mk` the fixed one.
+
+fmake identity: `fc0e89fc`, mtime 2026-10-07 14:44, at
+`/home/claude/src/fmake/fmake`. hydra's `fmake.toml` was unchanged throughout.
+
+**Why it may be worth the time despite failing loudly rather than silently:**
+it under-links, so the link step catches it -- but in a program the change
+never touched, so the first two suspects are the new code and the generator
+rather than the cache. It cost two full regenerations in hydra before the
+cache was suspected. hydra holds only the symptom; which invalidation rule
+actually applies is fmake's to decide.
+
+### What the artifacts say, derived here rather than relayed
+
+**Open.** hydra named two files and they settle the population without
+anybody re-running anything -- which is why they are worth more than the
+runs. Parsed into a per-program multiset of objects (`OBJS_<name>` lists,
+and a parse returning zero programs is an instrument failure rather than a
+finding, so it asserts):
+
+    stale   /home/claude/.claude/jobs/cce122c1/tmp/objsets.pre6
+    current /home/funk/src/hydra/test/objsets.mk
+
+                                    stale   current
+    programs                           88        89
+    object references                5417      5469
+    programs linking settings_dialog.o 41        41
+    ... and main_window.o as well      38        38
+    carrying filter_subscription.o     39        42
+
+**The discriminator holds, and this is the part that is now evidence
+rather than inference.** The programs linking `settings_dialog.o`
+*without* `main_window.o` are `test_probe_ui`, `test_settings` and
+`try_settings_ui`; the programs short of the new objects are
+`test_probe_ui`, `test_settings` and `try_settings_ui`. The two sets are
+identical, computed independently of each other from the stale file.
+
+**And `main_window.cpp` is why the other 38 were fine**: it references
+the new subscription symbols itself, five times, with four more in
+`main_window.h`. So those 38 had the new objects demanded by
+`main_window.o`'s own undefined symbols, and the three had nothing
+demanding them but `settings_dialog.o`'s. That is the whole shape of the
+fault in one sentence.
+
+**Two of hydra's corrected numbers do not come from these files**, and
+the reason generalises. Stale against current is 42 programs differing,
+not three: 41 of them gain `scriptlets.o`, a source absent from the stale
+file entirely and present in 43 programs of the current one, and a 89th
+program appears. That is later work, landed after the regeneration. The
+`5426` cannot be recovered from either file. **`objsets.mk` in a working
+tree is not an artifact, it is a generated file that keeps moving** --
+the frozen copy under `tmp/` is the trustworthy half, and a comparison
+against a live file dates from whenever it was last written rather than
+from the event.
+
+### Six shapes that do not reproduce it
+
+Each cold-built so the cache holds the changed object's symbols from
+before the change, then changed and run warm, checking the link set of a
+program that links the changed object with no intermediate:
+
+    C, plain build          both programs gain the new objects
+    C, --eject -j6          FM_DIRECT_OBJS gains both
+    C++, header-reached     new symbols are class methods in newly
+                            included headers; 3 direct + 4 indirect
+                            programs, all 7 gain both
+    header-only history     a protected-to-public move in the header
+                            with the .cpp untouched, then the real
+                            change -- hydra's actual sequence
+    Qt moc                  a new Q_OBJECT class, so staticMetaObject
+                            comes from a generated moc object; the
+                            direct program gains all three, moc included
+    two demanders           both an intermediate object and the changed
+                            object call the new symbol, with one program
+                            linking only the changed one -- the shape
+                            the artifact points at
+
+The last is the one the artifact argues for and it is as green as the
+others.
+
+### What reading rules out, and what is left
+
+`object_key` commits to the source's own content hash, every depfile
+entry's content hash, the module graph, the include flags and the TU's
+own flags. **So a `.cpp` that changed cannot reuse a cached object**: the
+key moves, the entry misses, the file compiles. That rules out the
+simplest form of "the symbol table was stale", and hydra's isolated run
+agrees -- `settings_dialog.cpp` compiled there, with no `cached` line for
+it among 165, and widening then named the right root and symbols.
+
+Which leaves the fault unexplained rather than attributed, and that is
+the honest state. **What would settle it is state nobody has**: the
+`cache.json` from the failing run, or `-v --explain` from a run that is
+failing. Both were destroyed by the experiment that found the fault --
+reasonable, and the lesson is cheap: **copy a cache aside before deleting
+it to test whether deleting it helps.**
+
+For whoever picks this up: the question is how three programs' closures
+can fail to demand an object that `settings_dialog.o`'s undefined symbols
+require, in a run where that object was rebuilt from a source containing
+the calls. Six fixtures say the ordinary paths do not do it, so the next
+lens is scale or cache history, not the mechanism.
