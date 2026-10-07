@@ -11629,6 +11629,19 @@ reading the dependencies, which is where it stops being fmake. Measured
 across netcfgd's nineteen crate roots the directory *is* that name in every
 one, so the exception would have bought a name that was already there.
 
+**Confirmed on that tree 2026-10-07, which closes §370's last row.** With
+`crates`, `backend` and `adapter` dropped from netcfgd's exclude list in a
+scratch copy, there is no collision: the targets are `netcfgd-cli` and
+`netcfgd-daemon`, the crates compile, and fmake stops one step further on,
+at *are separate crates, and fmake does not make one available to the
+other*. So §150's naming rule works on the tree that motivated it, and the
+thing that stops fmake there is the dependency graph rather than the names
+-- which is what this entry's last paragraph already said and nobody had
+measured. netcfgd's own `fmake.toml` still gave the collision as its second
+reason for excluding that half; that was signalled into their tree and
+committed there as `8ecad962`, since the previous signal from here sat
+uncommitted for a fortnight and their `a28ce529` said so.
+
 **What netcfgd did, and why it is not a workaround to copy.** It excluded
 the four directories holding `.rs` and kept fmake for the C and C++ half,
 which builds `netcfgd-gui` and returns 0. That is not fmake failing at
