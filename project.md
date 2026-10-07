@@ -428,7 +428,8 @@ that had been green about nothing for five commits ·
 [375. The arms where nothing is guessable said less than the mixed one](#375-the-arms-where-nothing-is-guessable-said-less-than-the-mixed-one) ·
 [376. One refusal for four causes, naming no remedy](#376-one-refusal-for-four-causes-naming-no-remedy) ·
 [377. A guess withdrawn, and an assertion dropped](#377-a-guess-withdrawn-and-an-assertion-dropped) ·
-[378. The predictable cost of fmake's own advice](#378-the-predictable-cost-of-fmakes-own-advice)
+[378. The predictable cost of fmake's own advice](#378-the-predictable-cost-of-fmakes-own-advice) ·
+[379. The caveat that excused a typo, in the other spelling](#379-the-caveat-that-excused-a-typo-in-the-other-spelling)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29461,6 +29462,19 @@ told less**, which is backwards. The four arms, by what they offer:
     more than three       per-target stanzas, or exclude
     prebuilt archives     exclude alone
 
+**Confirmed on a real tree afterwards.** fuzzypickles was the third of
+§370's configuration refusals and the one left untested. Unpacked with its
+eight submodules, fmake refuses: `crypto_verify32` is defined by
+`monocypher/src/monocypher.c` and `fuzznet/monocypher/src/monocypher.c` --
+that tree vendors monocypher directly *and* vendors fuzznet, which vendors
+it too. Five targets affected, no target guessable, and **neither copy is
+platform-specific**, so the `@os or @arch` clause is the wrong road while
+naming the sources of five programs in a tree of thousands of files is not
+a remedy anybody would take. `[project] exclude =
+["fuzznet/monocypher/**"]` -- the clause this section added -- resolves it,
+and fmake then builds all six of that tree's programs. **The one remedy
+that fits the real case was the one missing.**
+
 The last two are complete. An archive cannot carry a directive, so
 exclude alone is right there and the ambiguous-archive case already
 asserts that `@os` is *not* offered. The first two were not.
@@ -29708,3 +29722,57 @@ first. The sabotage that tests the real failure moves the new ending
 *above* `unprovided`, and the control catches that immediately.
 `evidence.md` asks for confirmation that a sabotage landed; here the
 first one had not, and it would have read as a passing control.
+
+## 379. The caveat that excused a typo, in the other spelling
+
+`@sources` and `[target.*] sources` are two spellings of one instruction,
+and `advice_distinguishes_an_excluded_file_from_a_typo` exists because the
+failure reads alike for opposite causes: a pattern that matched a file the
+platform rules took out, and a pattern that matched nothing at all. The
+directive form was taught the difference. **The config form was not, and
+it was worse than untaught.**
+
+Measured, before:
+
+    sources = ["net_win32.c"]   (the file is there, @os windows)
+      sources 'net_win32.c' matched no source file (excluded ones do not count)
+    sources = ["ghost.c"]       (no such file)
+      sources 'ghost.c' matched no source file (excluded ones do not count)
+
+The identical sentence, because the caveat was appended unconditionally.
+So **a genuine typo was excused as an exclusion every time** -- which is
+the trade that case's own docstring says it refuses: *adding the note to
+both cases would trade one misreading for another.* It had been doing
+exactly that in the other spelling since it was written.
+
+Now the glob's own knowledge decides, as it already did for the
+directive: `matched` is what is on disk, `rels` is what survived.
+
+    sources 'net_win32.c' matched no source file (net_win32.c matched
+        but is not in the build)
+    sources 'ghost.c' matched no source file
+
+Same wording as the directive's rather than nearly the same, so the
+comment beside that one -- *the `[target.*]` sibling of this message
+carries the same warning* -- is true now, which it was not.
+
+### A stale claim in a docstring, corrected with it
+
+That case said the `[target.*]` form "already carried a warning about it,
+so the two spellings of one situation disagreed". What it carried was the
+caveat that caused the misreading, so the disagreement ran the other way
+too. The docstring is rewritten and the case now covers both spellings:
+four assertions, two per form, pinning that the note appears when a file
+matched and does not appear when none did. Both sabotages fail through
+their own assertion.
+
+### How it was found, which is the part worth copying
+
+By grepping the suite for cases about the code path before changing it --
+`grep -n 'matched no source file' selftest`. That is the check skipped an
+hour earlier, when a change to generated-output paths was written and then
+reverted because a case named
+`an_ejected_clean_does_not_delete_outside_the_tree` had already settled
+the question deliberately. **One grep of the suite costs a second and
+would have saved that whole attempt**, and here it found a real fault
+rather than a decided one.

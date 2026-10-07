@@ -14487,12 +14487,19 @@ def advice_distinguishes_an_excluded_file_from_a_typo(t):
 	`@sources 'net_win32.c' matched no source file` about a file sitting
 	right there is read as a typo, and the reader goes looking for a
 	misspelling that is not there. The glob already knows the difference --
-	what is on disk against what survived the platform rules -- and the
-	`[target.*]` form of the same message already carried a warning about
-	it, so the two spellings of one situation disagreed.
+	what is on disk against what survived the platform rules.
 
 	The half that matters is that a genuine typo must stay a typo: adding
-	the note to both cases would trade one misreading for another."""
+	the note to both cases would trade one misreading for another.
+
+	**Both spellings, which is section 379.** This case covered `@sources`
+	only, and said the `[target.*]` form "already carried a warning". It
+	carried `(excluded ones do not count)` appended to BOTH causes, which
+	is the trade this case exists to refuse: the typo was excused as an
+	exclusion every time. Measured -- a missing file and a
+	platform-excluded one produced the identical sentence. The config form
+	now says what the directive form says, so the two agree rather than
+	nearly agreeing."""
 	t.write("main.c", "/*! @file\n *  @sources net_win32.c\n */\n"
 	        "int main(void){ return 0; }\n")
 	t.write("net_win32.c", "int helper(void){ return 1; }\n")
@@ -14510,6 +14517,31 @@ def advice_distinguishes_an_excluded_file_from_a_typo(t):
 	said = r.stdout + r.stderr
 	check("matched but is not in the build" not in said,
 	      f"a real typo was excused as an exclusion: {said}")
+
+	# The same pair through [target.*] sources, which is the spelling
+	# somebody writes after pasting a stanza fmake printed.
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", '[target.prog]\n'
+	        'sources = ["main.c", "net_win32.c"]\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a sources list naming nothing buildable "
+	      f"should fail: {said}")
+	check("net_win32.c matched but is not in the build" in said,
+	      f"the config form has to name the file that matched, as the "
+	      f"directive form does: {said}")
+
+	t.write("fmake.toml", '[target.prog]\n'
+	        'sources = ["main.c", "ghost.c"]\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a typo in a sources list should fail: {said}")
+	check("matched but is not in the build" not in said,
+	      f"and a real typo must stay a typo here too -- this is the "
+	      f"misreading the unconditional parenthetical caused: {said}")
+	check("excluded ones do not count" not in said,
+	      f"the unconditional caveat is what excused the typo, and it has "
+	      f"to be gone: {said}")
 
 
 @case

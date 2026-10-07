@@ -9549,16 +9549,32 @@ def _expand_sources(patterns, root, proj, who):
 	out = []
 	for pat in patterns:
 		hits = sorted(glob.glob(os.path.join(root, pat), recursive=True))
-		rels = [os.path.relpath(h, root) for h in hits]
+		matched = [os.path.relpath(h, root) for h in hits]
 		# A prebuilt object is not a source and never will be in
 		# `src_set', but naming one is the supported way to link a
 		# vendored blob -- see prebuilt_units.
-		rels = [r for r in rels
+		rels = [r for r in matched
 		        if r in proj.src_set
 		        or (r.endswith(".o") and os.path.isfile(os.path.join(root, r)))]
 		if not rels:
-			die(f"{CONF_FILE}: {tgt_section(who)} sources {pat!r} matched no "
-			    f"source file (excluded ones do not count)")
+			# `(excluded ones do not count)' used to be appended to BOTH
+			# causes, and they are opposite: a pattern that matched a file
+			# the platform rules or an exclude took out, and a pattern that
+			# matched nothing at all. So a genuine typo was excused as an
+			# exclusion -- which is the misreading
+			# `advice_distinguishes_an_excluded_file_from_a_typo' was
+			# written to prevent, for `@sources', while this spelling of
+			# the same situation went on causing it.
+			#
+			# The glob already knows the difference: `matched' is what is
+			# on disk, `rels' is what survived. Same wording as the
+			# directive's, so the two agree rather than nearly agreeing --
+			# the comment there says this sibling carries the same warning,
+			# and now it does.
+			die(f"{CONF_FILE}: {tgt_section(who)} sources {pat!r} matched "
+			    f"no source file"
+			    + (f" ({', '.join(matched[:3])} matched but is not in the "
+			       f"build)" if matched else ""))
 		out += [r for r in rels if r not in out]
 	return out
 
