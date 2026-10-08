@@ -30945,6 +30945,90 @@ int main(void){ printf("%d\\n", beta_check() + common_check()); return 0; }
 
 
 @case
+def a_schema_is_recompiled_when_what_it_imports_changes(t):
+	"""section 384: situ splices an import in, and the key did not see it.
+
+	A schema may `import "other.situ";`, and situ replaces the directive
+	with that file's declarations -- so the generated code depends on the
+	imported file as surely as on the importer. fmake's key hashed the
+	schema's own content, the tool and the flags, and nothing else.
+
+	Measured against the INSTALLED situc, which is where the semantics
+	come from: a schema importing one whose `str` carries `[max = 255]`
+	generated `SITU_STR_LEN_VALUE_MAX 255u`; changing the imported file
+	to `[max = 7]` left fmake saying `up to date` and the header still
+	saying 255. Transitively too, and through a subdirectory, and for a
+	sibling import resolved against the importing file's own directory --
+	which is situ's rule, read from `situc/imports.py` rather than
+	guessed.
+
+	What this case pins is **fmake's half**: that the import reaches the
+	freshness key. The stand-in compiler does not read schemas at all, so
+	the assertion is that fmake RE-RUNS it -- which is fmake's own output
+	and the thing that was wrong -- rather than anything about what a
+	compiler emits. `evidence.md`'s rule about a stand-in reproducing the
+	half of a tool somebody has seen was reported from this project, and
+	the way to honour it here is to not ask the stand-in a question only
+	the real tool can answer."""
+	_situc(t)
+	t.write("schema/types.situ", "// imported by msg.situ\n")
+	t.write("schema/msg.situ", 'import "types.situ";\n// the importer\n')
+	t.write("main.c", '#include "msg.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", msg_check()); return 0; }\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the first build failed: {out}")
+	check("SITU" in out, f"the schema was never compiled: {out}")
+
+	# Not vacuous: a second run with nothing changed must be quiet, or
+	# "it ran again" below would hold for a tree that always regenerates.
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("SITU" not in out,
+	      f"the schema recompiles on every build, so re-running proves "
+	      f"nothing: {out}")
+
+	# The import changes, and nothing else does.
+	t.write("schema/types.situ", "// imported by msg.situ, edited\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the rebuild failed: {out}")
+	check("SITU" in out,
+	      f"a schema was not recompiled when the schema it imports "
+	      f"changed, so the generated code is stale and the build says "
+	      f"it is up to date: {out}")
+
+	# And it settles: the key must not make every run stale.
+	r = t.fmake()
+	check("SITU" not in (r.stdout + r.stderr),
+	      f"the key never settles, so every build regenerates: "
+	      f"{r.stdout}{r.stderr}")
+
+	# A `std' import names situc's own library directory -- outside the
+	# tree, like a depfile's /usr/include entries -- so a file in THIS
+	# tree that merely shares the name is not a dependency. Asserted by
+	# changing such a file and requiring no recompile: an earlier version
+	# of this check used a std import naming nothing, which both a
+	# correct fmake and one chasing std paths tree-relative satisfy, so
+	# it could not fail.
+	t.write("schema/sidecar.situ", "// named by a std import only\n")
+	t.write("schema/msg.situ",
+	        'import "types.situ";\nimport std "sidecar.situ";\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a std import must not make the scan fail: {r.stdout}{r.stderr}")
+	r = t.fmake()
+	check("SITU" not in (r.stdout + r.stderr), "settle first")
+	t.write("schema/sidecar.situ", "// edited, and still only std-named\n")
+	r = t.fmake()
+	check("SITU" not in (r.stdout + r.stderr),
+	      f"a tree file that only a `std' import names was treated as a "
+	      f"dependency, so situc reads one file and fmake watches "
+	      f"another: {r.stdout}{r.stderr}")
+
+
+@case
 def two_schemas_of_one_name_are_refused(t):
 	"""The output directory is flat, so this is an ambiguity in the C.
 

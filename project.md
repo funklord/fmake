@@ -433,7 +433,8 @@ that had been green about nothing for five commits ·
 [380. Two config keys that validated and did nothing](#380-two-config-keys-that-validated-and-did-nothing) ·
 [381. A data file's destination is its path, so its path can climb](#381-a-data-files-destination-is-its-path-so-its-path-can-climb) ·
 [382. The second kind in two days, so the guard moved](#382-the-second-kind-in-two-days-so-the-guard-moved) ·
-[383. The ejected builds did not know what §366 taught fmake](#383-the-ejected-builds-did-not-know-what-366-taught-fmake)
+[383. The ejected builds did not know what §366 taught fmake](#383-the-ejected-builds-did-not-know-what-366-taught-fmake) ·
+[384. A schema's imports were not in its freshness key](#384-a-schemas-imports-were-not-in-its-freshness-key)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30033,3 +30034,81 @@ prerequisite safe to add.
 
 `uic` carries no deps -- a `.ui` file includes nothing -- so it is
 untouched, and the only jobs with a `deps` key are moc's and rcc's.
+
+## 384. A schema's imports were not in its freshness key
+
+A situ schema may `import "other.situ";`, and situ **splices that file's
+declarations into the importer** -- so the generated code depends on the
+imported file as surely as on the importer's own text. fmake's key held
+the tool's identity, the command set, the flags, the schema's path and the
+schema's own hash. Nothing else.
+
+Measured against the installed `situc 1.0`:
+
+    shared.situ   struct str { u16 len [max = 255]; u8 v[len]; }
+    record.situ   import "shared.situ"; struct record { ... str name; }
+
+    first build         SITU record.situ
+    generated header    #define SITU_STR_LEN_VALUE_MAX 255u
+    edit shared.situ    max = 255  ->  max = 7
+    second build        * situimp up to date
+    generated header    #define SITU_STR_LEN_VALUE_MAX 255u
+
+**The program keeps a constant from a schema that no longer says it, and
+the build reports success.** That is §366's shape -- a header the moc'd
+header includes -- in a generator, except what goes stale is the output
+rather than the diagnostic.
+
+### The rules are situ's, and were read rather than guessed
+
+`situc build` has no dependency-output option, so fmake cannot ask the
+tool and has to read the imports itself. What it must implement came out
+of `situc/imports.py`:
+
+- `import "x"` resolves against **the importing file's own directory**,
+  not the tree root;
+- `import std "x"` resolves against situc's library directory,
+  `/usr/share/situc` here, which is outside the tree;
+- expansion is **transitive**, and cycles are refused by situc.
+
+So the walk is transitive with a seen-set -- the set is there so a cycle
+cannot hang fmake before situc gets its chance to refuse it -- and `std`
+imports and anything resolving outside the tree are skipped, for the
+reason the `[generate.*]` depfile already skips `/usr/include`: a file
+outside the tree changing is not this rule going stale.
+
+Three shapes verified end to end against the real compiler: flat, a
+transitive import two levels down through a subdirectory, and a sibling
+import resolved against the importing file's directory. All three now
+recompile, and a no-op build still says `up to date` -- a key that never
+settles would be the other failure.
+
+### The case tests fmake's half, deliberately
+
+The suite's situc is a stand-in that does not read schemas at all, and
+`evidence.md`'s rule about a stand-in reproducing only the half of a tool
+somebody has seen **was reported from this project**. The way to honour it
+here is not to teach the stand-in situ's import language: it is to assert
+the thing that was actually wrong, which is whether **fmake re-runs the
+compiler**. That is fmake's own output and needs no cooperation from any
+tool. The real semantics are what the measurements above establish.
+
+### A control that could not fail, then one that could
+
+The first version of the `std` assertion used an import naming a file that
+does not exist, and checked only that the build still succeeded -- which a
+correct fmake and one chasing `std` paths tree-relative both satisfy. The
+sabotage proved it: dropping the `std` skip left the case green.
+
+It now writes a file in the tree whose name a `std` import mentions, and
+requires that changing it does **not** recompile -- because `situc` reads
+the library copy and fmake must not watch the tree one. That sabotage
+fails on it: *situc reads one file and fmake watches another.*
+
+### Asked of situ
+
+A `--deps` on `situc build` would let fmake stop parsing another
+project's language, which is the principle `[generate.*]`'s `depfile` key
+already rests on: the tool that did the reading is the only thing that
+knows. Signalled to situ with the reproduction; fmake's own fix does not
+wait on it.

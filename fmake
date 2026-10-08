@@ -3815,6 +3815,60 @@ SITU_EXT = ".situ"
 # is taken as the path.
 RE_SITU_WROTE = re.compile(r"^situc: wrote (.+?)(?: \(.*\))?$")
 
+# `import "x.situ";' and `import std "x.situ";'. The second reads from
+# situc's own library directory -- `situc --print-std-dir', /usr/share/situc
+# here -- which is outside the tree, so it is skipped for the same reason
+# a [generate.*] depfile's /usr/include entries are: a system file changing
+# is not this schema going stale.
+RE_SITU_IMPORT = re.compile(r'^[ \t]*import[ \t]+(std[ \t]+)?"([^"]+)"'
+                            r'[ \t]*;', re.M)
+
+
+def situ_imports(root, rel, cache, seen=None):
+	"""Schema files `rel' imports, transitively, inside the tree.
+
+    situ splices an imported schema's declarations into the importer, so
+    the generated code depends on the imported file's contents as surely
+    as on the importer's own. fmake's key hashed only the importer, which
+    left the output stale with a green build: measured, changing a
+    `[max = 255]' in an imported schema to 7 left the generated header
+    saying 255 and the build saying `up to date'.
+
+    The resolution rules are situ's, read from `situc/imports.py' rather
+    than guessed -- a plain import resolves against THE IMPORTING FILE'S
+    directory, a `std' one against the library directory, and expansion is
+    transitive. Cycles are refused by situc; `seen' is here so a cycle
+    cannot hang this walk before situc gets the chance to say so.
+    """
+	seen = set() if seen is None else seen
+	out = []
+	if rel in seen:
+		return out
+	seen.add(rel)
+	try:
+		with open(os.path.join(root, rel), encoding="utf-8",
+		          errors="replace") as fh:
+			text = fh.read()
+	except OSError:
+		# Unreadable is situc's to report, with the line and the file. A
+		# key that cannot see an import is the fault being fixed here, so
+		# this contributes nothing rather than pretending to.
+		return out
+	for library, named in RE_SITU_IMPORT.findall(text):
+		if library:
+			continue
+		target = os.path.normpath(os.path.join(os.path.dirname(rel), named))
+		if target.split(os.sep)[0] == os.pardir:
+			continue        # outside the tree, like a std import
+		if not os.path.isfile(os.path.join(root, target)):
+			continue        # situc names the missing file, and better
+		if target not in out:
+			out.append(target)
+		for deeper in situ_imports(root, target, cache, seen):
+			if deeper not in out:
+				out.append(deeper)
+	return sorted(out)
+
 
 def situ_plan(root, hdrs, scans):
 	"""Which .situ schemas this tree's sources actually ask for.
@@ -3966,9 +4020,17 @@ def run_situc(root, jobs, situc, flags, cache, dry_run=False):
 		# only `build' regenerates once rather than staying fresh on a key
 		# that never covered the second half. Same move [generate] makes
 		# for `depfile:'.
+		# What the schema imports, transitively, hashed like the schema
+		# itself: situ splices those declarations in, so the output
+		# depends on them. Without this a change to an imported schema
+		# left the generated code stale and the build said `up to date'.
+		imported = situ_imports(root, src, cache)
 		key = sha("|".join([situc_is, "build+gen-derived", " ".join(flags), src,
 		                    cache.hash_of(os.path.join(root, src), src)
-		                    or "?"]))
+		                    or "?"]
+		                   + [i + ":" + (cache.hash_of(
+		                       os.path.join(root, i), i) or "?")
+		                      for i in imported]))
 		was = store.get(src)
 		if (was and was.get("key") == key
 		        and all(os.path.isfile(os.path.join(root, o))
