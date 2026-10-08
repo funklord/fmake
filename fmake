@@ -7821,6 +7821,31 @@ def companions(members, reachable, moc_jobs, qrc_jobs):
 	return owned
 
 
+def _same_bytes(rels, root):
+	"""Whether every one of these paths holds identical bytes.
+
+    At least two, all readable, all equal. Any unreadable one answers no
+    rather than raising: this runs while fmake is explaining a refusal,
+    and a message that tracebacks is worse than one that is vague -- the
+    shape section 32 records, in the code written to explain a failure
+    rather than in the failure.
+    """
+	if len(rels) < 2:
+		return False
+	first = None
+	for rel in rels:
+		try:
+			with open(os.path.join(root, rel), "rb") as fh:
+				data = fh.read()
+		except OSError:
+			return False
+		if first is None:
+			first = data
+		elif data != first:
+			return False
+	return True
+
+
 def close_over_library(units, root_unit):
 	"""A library is everything the tree defines, not a closure.
 
@@ -13627,15 +13652,42 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			         "nowhere to go.")
 			whole = (f"{cause} Keep the ones that are not for this build "
 			         f"out with [project] exclude in {CONF_FILE}.")
+		elif _same_bytes(first_providers, root):
+			# The duplicated-copy case, said rather than left for the
+			# reader to work out. The comment on the arm below has always
+			# named this as what lands there -- "vendored twice, or a
+			# backup committed" -- and it still offered all three remedies
+			# and let the reader pick. When the files are byte-identical
+			# there is nothing to pick: @os cannot distinguish two copies
+			# of one file, and naming sources per target is a long way
+			# round to say which copy to drop.
+			#
+			# Checkable, so checked. Found by running plain fmake on a
+			# pristine fuzzypickles, which vendors monocypher AND vendors
+			# fuzznet, which vendors monocypher -- so a recursive checkout
+			# holds two copies at the same 4.0.3, identical by sha256, and
+			# `crypto_verify32' is defined twice. Their own fmake.toml
+			# already disambiguates the HEADERS for that exact reason, so
+			# the tree knew and the message still did not say.
+			#
+			# Read on the error path only: this costs a file read per
+			# provider in a run that is about to stop.
+			cause = ("These are the same file byte for byte, so one is a "
+			         "duplicated copy -- vendored twice, or a backup "
+			         "committed.")
+			whole = (f"{cause}\nKeep one of them out with [project] "
+			         f"exclude in {CONF_FILE}; @os cannot tell two copies "
+			         f"of one file apart.")
 		else:
 			cause = ""
 			# No cause to name, so all three remedies are live and the
 			# third was missing. This branch is where a duplicated copy
-			# of a file lands -- vendored twice, or a backup committed --
-			# and for that one [project] exclude is the answer, while the
-			# `ignored' hint above only covers a duplicate git is already
-			# ignoring. A tracked duplicate was told about @os and about
-			# naming sources, and never about the remedy that fits it.
+			# of a file lands when it is NOT byte-identical -- an edited
+			# fork of one -- and for that one [project] exclude is still
+			# the answer, while the `ignored' hint above only covers a
+			# duplicate git is already ignoring. A tracked duplicate was
+			# told about @os and about naming sources, and never about
+			# the remedy that fits it.
 			whole = ("@os or @arch on the platform-specific one will "
 			         f"settle it. Otherwise name the sources of each "
 			         f"target in {CONF_FILE}, or keep the duplicate out "

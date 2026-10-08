@@ -448,7 +448,8 @@ that had been green about nothing for five commits ·
 [395. The entry-point warning blamed a macro for a main() in plain text](#395-the-entry-point-warning-blamed-a-macro-for-a-main-in-plain-text) ·
 [396. The same fault one function along, found by a sweep derived from it](#396-the-same-fault-one-function-along-found-by-a-sweep-derived-from-it) ·
 [397. A diagnostic disabled by its own recommendation](#397-a-diagnostic-disabled-by-its-own-recommendation) ·
-[398. The guess named a file that defines another symbol](#398-the-guess-named-a-file-that-defines-another-symbol)
+[398. The guess named a file that defines another symbol](#398-the-guess-named-a-file-that-defines-another-symbol) ·
+[399. Two identical copies are named as copies](#399-two-identical-copies-are-named-as-copies)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30968,3 +30969,61 @@ Their `fmake.toml` also carries a comment quoting a refusal fmake no longer
 makes -- *"two targets are both called 'lib'"*, from before §150 named a
 crate root after its enclosing directory. Signalled to them rather than
 corrected here.
+## 399. Two identical copies are named as copies
+
+The arm that handles an ambiguity with no distinguishing feature has
+always carried a comment saying what lands there -- *"vendored twice, or a
+backup committed"* -- and the message still offered all three remedies and
+let the reader choose. Where the files are identical there is nothing to
+choose: `@os` cannot tell two copies of one file apart, and naming sources
+per target is a long way round to say which copy to drop.
+
+**Checkable, so checked.** `_same_bytes` reads the providers and compares
+them, on the error path only, where a run is about to stop anyway.
+
+    These are the same file byte for byte, so one is a duplicated copy --
+    vendored twice, or a backup committed.
+    Keep one of them out with [project] exclude in fmake.toml; @os cannot
+    tell two copies of one file apart.
+
+**Found by running plain fmake on a pristine fuzzypickles**, which vendors
+monocypher *and* vendors fuzznet, which vendors monocypher. A recursive
+checkout therefore holds two, at the same 4.0.3 and identical by sha256
+(`f1f838cdd483bdeb...`, both), so `crypto_verify32` is defined twice and
+the build stops after 341 compiles. That tree's own `fmake.toml` already
+disambiguates the **headers** for exactly this reason -- *"a fetched
+grandchild put two `monocypher.h` in one tree"* -- so the tree knew about
+the duplicate and the message still did not say it.
+
+**The control is the half that makes it a finding rather than a branch
+that fires on everything**: two files defining one symbol that are *not*
+identical keep the old three-remedy wording, because there `@os` genuinely
+might be the answer. Both sabotages fail, in opposite directions -- never
+firing breaks the main claim, always firing breaks the control.
+
+### What else that tree measured, which is fuzzypickles' and not fmake's
+
+With one `"fuzznet/monocypher"` added to their exclude, in my copy, fmake
+built `fzp`, `fzpd`, `fzptui` and `tab_strip_demo` from 337 compiles. Their
+README claims `fzp, fzpd, fzptui, fzp-gui`, and `fzp-gui` does not link
+because `gui/src/main_window.cpp` does not compile:
+
+    error: expected ')' before 'FZP_VERSION'
+
+**That claim was true when written and broke hours before I ran it.**
+`FZP_VERSION` entered `main_window.cpp` and `gui/gui.pro` together today,
+in their `3f3331d`; their `fmake.toml` dates from 2026-09-02 and has never
+mentioned it -- `git log -S` on that file returns nothing. So a qmake-only
+define arrived and the fmake config did not gain it.
+
+Nothing for fmake to do about that: the define lives in `gui/gui.pro`, and
+reading another build system's files is the exception §150 declined to buy
+for a far better reason than this one. The remedy is one line in their own
+config, the same shape as the `THORVG_VERSION_STRING` entry already there.
+Signalled, not edited.
+
+**It is the raidcfgd pattern again**, and that is now three trees: a README
+sentence about fmake, true on the day, falsified by a later commit nobody
+connected to it, and nothing in either project re-checking. The
+countermeasure that has actually worked is this one -- somebody running it
+on a pristine copy -- rather than anything either tree could have gated.

@@ -25201,6 +25201,57 @@ def an_unguessable_ambiguity_offers_a_remedy_that_works(t):
 
 
 @case
+def two_identical_copies_are_named_as_copies(t):
+	"""Section 399: the duplicated-copy case was left for the reader.
+
+    The comment on that arm has always said what lands there -- "vendored
+    twice, or a backup committed" -- and the message still offered all
+    three remedies and let the reader pick. When the files are identical
+    there is nothing to pick: @os cannot distinguish two copies of one
+    file, and naming sources per target is a long way round to say which
+    copy to drop.
+
+    Found by running plain fmake on a pristine fuzzypickles, which vendors
+    monocypher AND vendors fuzznet, which vendors monocypher. A recursive
+    checkout therefore holds two copies at the same 4.0.3 -- identical by
+    sha256, measured -- and `crypto_verify32' is defined twice. That tree's
+    own fmake.toml already disambiguates the HEADERS for exactly this
+    reason, so the tree knew and the message still did not say.
+
+    The control is the other half: two files that define one symbol and
+    are NOT identical must keep the old three-remedy wording, because
+    there @os genuinely might be the answer. Without it this case passes
+    for a branch that fires on everything."""
+	same = "int dup_sym(void){ return 7; }\n"
+	t.write("a/dup.c", same)
+	t.write("b/dup.c", same)
+	t.write("main.c", "int dup_sym(void);\n"
+	        "int main(void){ return dup_sym(); }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two definitions must be refused: {out}")
+	check("the same file byte for byte" in out,
+	      f"identical copies are not named as copies: {out}")
+	check("exclude" in out,
+	      f"and the remedy that fits is not offered: {out}")
+	check("@os or @arch on the platform-specific one" not in out,
+	      f"@os is offered for two copies of one file, which it cannot "
+	      f"tell apart: {out}")
+
+	# The control: not identical, so the old wording stands.
+	t.write("b/dup.c", "int dup_sym(void){ return 9; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two definitions must still be refused: {out}")
+	check("the same file byte for byte" not in out,
+	      f"two different files were called copies of one: {out}")
+	check("@os or @arch on the platform-specific one" in out,
+	      f"the three-remedy wording is gone for a case that needs it: "
+	      f"{out}")
+
+
+@case
 def the_guess_names_the_symbol_it_is_a_guess_about(t):
 	"""Section 398: the advice named a file that defines another symbol.
 
