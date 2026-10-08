@@ -17633,6 +17633,30 @@ def named_elsewhere(root, path, dirs, what):
 	        f"file that names it")
 
 
+def pattern_elsewhere(root, pat, dirs, what):
+	"""`named_elsewhere' for a glob rather than a path.
+
+    `@data' takes patterns, so its failure is *matched no file* rather
+    than *does not exist*, and the same mistake produces it: a pattern
+    written beside the files it names, in a source under `src/', while the
+    pattern is read from the tree root. Re-globbed from each directory
+    that could have named it, and the corrected pattern is what the
+    message gives -- that being the thing to write rather than a list of
+    files the reader would have to turn back into one.
+    """
+	for here in dirs:
+		if not here:
+			continue
+		cand = os.path.normpath(os.path.join(here, pat))
+		hits = [h for h in glob.glob(os.path.join(root, cand), recursive=True)
+		        if os.path.isfile(h)]
+		if hits:
+			return (f"\n    {cand!r} matches {len(hits)} file(s); {what} is "
+			        f"read from the tree root rather than from the file "
+			        f"that names it")
+	return ""
+
+
 def install_plan(targets, closures, root):
 	"""What this project installs, and into which of the three directories.
 
@@ -17766,7 +17790,13 @@ def install_plan(targets, closures, root):
 					    f"{t.name}); name the files, `{pat}/**', so a file "
 					    f"added later is a change to the build and not a "
 					    f"silent addition to the package")
-				die(f"@data {pat!r} matched no file (named for {t.name})")
+				die(f"@data {pat!r} matched no file (named for "
+				    f"{t.name})"
+				    + pattern_elsewhere(
+				        root, pat,
+				        [os.path.dirname(u.rel) for u in units
+				         if u is not None],
+				        "a @data pattern"))
 			for h in files:
 				rel = os.path.relpath(h, root)
 				# @data is the one furniture kind whose DESTINATION is

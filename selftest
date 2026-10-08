@@ -12040,6 +12040,50 @@ def data_files_install_under_the_programs_share_directory(t):
 	finally:
 		u.cleanup()
 
+	# section 388: @data is section 387's class with a glob, so its
+	# failure is "matched no file" rather than "does not exist" and the
+	# same mistake produces it -- a pattern written beside the files it
+	# names, in a source under src/, while the pattern is read from the
+	# tree root. The hint gives the corrected PATTERN rather than a list
+	# of files, that being the thing to write.
+	u = Tree("data-pattern-elsewhere")
+	try:
+		u.write("src/assets/one.txt", "x\n")
+		u.write("src/main.c", '/*! @data assets/** */\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake("--install", "-n", "--destdir",
+		            os.path.join(u.dir, "s"))
+		said = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a pattern matching nothing at the root is still refused: "
+		      f"{said}")
+		check("'src/assets/**'" in said,
+		      f"the refusal has to name the corrected pattern: {said}")
+		check("matches 1 file(s)" in said,
+		      f"and say it matches something, so the reader knows it is "
+		      f"the same files: {said}")
+
+		# Taking it works.
+		u.write("src/main.c", '/*! @data src/assets/** */\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake("--install", "-n", "--destdir",
+		            os.path.join(u.dir, "s"))
+		check(r.returncode == 0,
+		      f"the corrected pattern did not work: {r.stdout}{r.stderr}")
+
+		# The control: a pattern that matches nowhere gains no hint.
+		u.write("src/main.c", '/*! @data ghosts/** */\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake("--install", "-n", "--destdir",
+		            os.path.join(u.dir, "s"))
+		said = r.stdout + r.stderr
+		check(r.returncode != 0, f"still refused: {said}")
+		check("matches" not in said,
+		      f"a pattern that matches nothing anywhere must not be "
+		      f"reported as matching something: {said}")
+	finally:
+		u.cleanup()
+
 	# section 381: a path that CLIMBS is refused, because @data is the one
 	# furniture kind whose destination is computed from the file's path --
 	# which is the feature above, and the reason this needed guarding.

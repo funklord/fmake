@@ -437,7 +437,8 @@ that had been green about nothing for five commits ·
 [384. A schema's imports were not in its freshness key](#384-a-schemas-imports-were-not-in-its-freshness-key) ·
 [385. A flagged root is compiled twice, and one object is linked by nothing](#385-a-flagged-root-is-compiled-twice-and-one-object-is-linked-by-nothing) ·
 [386. The suite's own invocation hid a lost dependency](#386-the-suites-own-invocation-hid-a-lost-dependency) ·
-[387. Two per-file directives, two resolution rules, one misleading refusal](#387-two-per-file-directives-two-resolution-rules-one-misleading-refusal)
+[387. Two per-file directives, two resolution rules, one misleading refusal](#387-two-per-file-directives-two-resolution-rules-one-misleading-refusal) ·
+[388. The same mistake with a glob, and the config sites that are not it](#388-the-same-mistake-with-a-glob-and-the-config-sites-that-are-not-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30356,3 +30357,44 @@ sabotage that drops the existence check -- naming a candidate path
 whether or not it is there -- fails on that assertion, and the sabotage
 that empties the hint fails on the other. A typo stays a typo, which is
 the same pair that entry argued for in a different message.
+
+## 388. The same mistake with a glob, and the config sites that are not it
+
+§387 gave four path-reading directives a hint. `@data` is the fifth and
+its failure reads differently, because it takes **patterns**:
+
+    src/assets/one.txt
+    src/main.c          /*! @data assets/** */
+
+    !!! @data 'assets/**' matched no file (named for datares)
+        'src/assets/**' matches 1 file(s); a @data pattern is read from
+        the tree root rather than from the file that names it
+
+The hint gives the **corrected pattern** rather than the files it found,
+because the pattern is what the reader has to write. Re-globbed from each
+directory that could have named it, and silent when nothing matches
+anywhere -- the control §379 argues for, and the sabotage that drops the
+match test fails on it.
+
+### Why `[service.*]` is not the same case, having looked
+
+    !!! fmake.toml: [service.svcd] systemd = 'svcd.service' does not exist
+
+with the unit sitting at `packaging/svcd.service`. It looks identical and
+it is a different thing, which is worth writing down so the next pass does
+not "finish" §387 by adding it.
+
+**A directive invites the wrong reading; a config key does not.**
+`@sources` resolves against the naming file's own directory, so a person
+writing `@man tool.1` in `src/main.c` is following a convention this tool
+really has -- the refusal was answering a reasonable belief with *does not
+exist*. A `[service.*]` path has no competing base: the config file is at
+the root, nothing in fmake reads a config path any other way, and the
+message names exactly what was looked for. There is no second convention
+to be confused with, so there is nothing to disambiguate.
+
+The mechanical halves point the same way. `service_glue` holds only `conf`
+and `root`, so a basename hint there would mean a tree walk this function
+does not have and a service file is not a source, so `src_set` -- which is
+what §376's did-you-mean for a configured `root` had in hand -- would not
+contain it. Both the reason and the cost say leave it.
