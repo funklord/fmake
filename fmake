@@ -11794,13 +11794,40 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	clash = {}
 	for t in targets:
 		clash.setdefault(t.filename, []).append(t.rel or f"{tgt_section(t.name)}")
-	for fn, rels in sorted(clash.items()):
-		if len(rels) > 1:
-			die(f"two targets are both called {fn!r}:\n    "
-			    + "\n    ".join(rels) + "\n"
-			    f"give one of them a different @target, or in {CONF_FILE} "
-			    f"a section that names its root:\n"
-			    f"    [target.NEW_NAME]\n    root = {rels[0]!r}")
+	# Every repeated name, not just the first, and the count read off the
+	# list rather than written into the sentence.
+	#
+	# Found by building a pristine fuzznet, which is what harmonization.md
+	# says surfaces this tool's gaps. The old wording hard-coded the count
+	# as "two" and printed it above a list of THREE files, a number
+	# contradicted by the list directly beneath it. Three-way collisions
+	# are real: that tree has `provision_test' in node/, provision/ and
+	# sim/, among 222 programs.
+	#
+	# The remedy was wrong for more than two as well. Telling the reader to
+	# rename ONE of them leaves a three-way clash still clashing, so a
+	# reader who did exactly as told met the same refusal on the next run.
+	# "all but one of each" is correct at every count, including two.
+	#
+	# And dying on the first clash made the fix serial: a tree with
+	# per-module test directories has one per repeated name, so the reader
+	# renamed one, re-ran, and met the next. The remedy is identical in
+	# shape for all of them, so serialising it buys nothing.
+	clashes = [(fn, rels) for fn, rels in sorted(clash.items())
+	           if len(rels) > 1]
+	if clashes:
+		shown, rest = capped(clashes, 6)
+		lines = []
+		for fn, rels in shown:
+			lines.append(f"{len(rels)} targets are called {fn!r}:")
+			lines += [f"    {r}" for r in rels]
+		if rest:
+			lines.append(f"... and {rest} more repeated name(s) "
+			             f"(-v for all)")
+		die("\n".join(lines) + "\n"
+		    f"rename all but one of each: @target on the file, or a section "
+		    f"in {CONF_FILE} that names its root:\n"
+		    f"    [target.NEW_NAME]\n    root = {shown[0][1][0]!r}")
 	refuse_ident_collisions("targets", [t.name for t in targets])
 	for t in targets:
 		if os.path.isdir(os.path.join(outdir, t.filename)):

@@ -11294,6 +11294,75 @@ def a_header_behind_a_platform_guard_is_not_a_lost_feature(t):
 
 
 @case
+def every_repeated_target_name_is_named_with_its_real_count(t):
+	"""Section 394: the count was hard-coded and the remedy was wrong.
+
+    No case asserted this message, which is why it carried both faults for
+    as long as it did. Found by building a pristine fuzznet -- the thing
+    harmonization.md says surfaces fmake's gaps -- where 222 programs
+    include `messages_test' twice and `provision_test' three times.
+
+    It printed "two targets are both called 'provision_test'" above a list
+    of three files, so the sentence was contradicted by the list directly
+    beneath it. And it said to give ONE of them a different @target, which
+    for a three-way clash leaves two still clashing: a reader who did
+    exactly as told met the same refusal on the next run.
+
+    It also died on the first repeated name, so a tree with per-module test
+    directories was fixed one name per run. fuzznet needed two runs to
+    learn about two collisions.
+
+    The remedy is asserted by applying it, not by reading it -- a message
+    that offers a stanza is only as good as the stanza, which is section
+    375's rule. Three roots are used for the count, because two cannot tell
+    a hard-coded "two" from a correct one."""
+	for d in ("a", "b", "c"):
+		t.write(f"{d}/test/same_test.c",
+		        '#include <stdio.h>\n'
+		        f'int main(void){{ puts("{d}"); return 0; }}\n')
+	t.write("d/test/other_test.c", "int main(void){ return 0; }\n")
+	t.write("e/test/other_test.c", "int main(void){ return 0; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"repeated target names must refuse: {out}")
+	check("3 targets are called 'same_test'" in out,
+	      f"the count is hard-coded rather than read off the list: {out}")
+	check("2 targets are called 'other_test'" in out,
+	      f"the second repeated name was not reported in the same run, so "
+	      f"the tree is fixed one name per run: {out}")
+	check("all but one" in out,
+	      f"the remedy still tells the reader to rename one of three: "
+	      f"{out}")
+
+	# The stanza it offers has to work, or the message is advice nobody can
+	# follow. Two of the three same_test roots and one of the two
+	# other_test roots get named, which is "all but one of each".
+	t.write("fmake.toml", """
+[target.same_b]
+root = "b/test/same_test.c"
+
+[target.same_c]
+root = "c/test/same_test.c"
+
+[target.other_e]
+root = "e/test/other_test.c"
+""")
+	# Through `test', because these are test programs and a plain build
+	# does not build them -- which is the convention, and is also how the
+	# first version of this case failed for the wrong reason.
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the remedy the message offers does not build: {out}")
+	for name in ("same_b", "same_c", "other_e"):
+		check(name in out,
+		      f"the renamed target {name} was not built or run: {out}")
+	check("are called" not in out,
+	      f"the remedy was applied and the clash is still reported: {out}")
+
+
+@case
 def a_stanza_naming_a_root_renames_the_target_on_it(t):
 	"""fuzznet keeps three provision_test.c in three module directories.
 

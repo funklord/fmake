@@ -443,7 +443,8 @@ that had been green about nothing for five commits ·
 [390. A dry run planned links the build refuses, and exited 0](#390-a-dry-run-planned-links-the-build-refuses-and-exited-0) ·
 [391. Five lenses from the two above, and what they did not find](#391-five-lenses-from-the-two-above-and-what-they-did-not-find) ·
 [392. fmake asks for no session bus, and runs code that might](#392-fmake-asks-for-no-session-bus-and-runs-code-that-might) ·
-[393. The root-only defines scope can split a binary, and a detector for it would fire on the one real user](#393-the-root-only-defines-scope-can-split-a-binary-and-a-detector-for-it-would-fire-on-the-one-real-user)
+[393. The root-only defines scope can split a binary, and a detector for it would fire on the one real user](#393-the-root-only-defines-scope-can-split-a-binary-and-a-detector-for-it-would-fire-on-the-one-real-user) ·
+[394. A repeated target name was counted as two, however many there were](#394-a-repeated-target-name-was-counted-as-two-however-many-there-were)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30673,3 +30674,48 @@ lacked and had to construct. The cheap half, if it is ever wanted, is to
 narrow the question to guarded `struct`, `union`, `enum` and non-`static`
 definitions rather than to macro names, since those are what can differ
 between two objects in one link.
+## 394. A repeated target name was counted as two, however many there were
+
+**Found by building a pristine fuzznet**, which is what `harmonization.md`
+says surfaces this tool's gaps -- and the first thing it did was refuse,
+correctly, on a name collision. The refusal had two faults and no case
+asserted any part of it, which is why they lasted.
+
+Among 222 programs that tree has `messages_test` twice and
+`provision_test` three times -- in `node/`, `provision/` and `sim/` --
+which is the ordinary shape of per-module test directories.
+
+**The count was in the sentence rather than read off the list.**
+
+    !!! two targets are both called 'same_test':
+        a/test/same_test.c
+        b/test/same_test.c
+        c/test/same_test.c
+
+A number contradicted by the list directly beneath it. Two roots cannot
+tell a hard-coded *two* from a correct one, which is why the case uses
+three.
+
+**The remedy was wrong for more than two.** *"give one of them a different
+@target"* leaves a three-way clash still clashing, so a reader who did
+exactly as told met the same refusal on the next run. *"rename all but one
+of each"* is correct at every count, two included.
+
+**And it died on the first repeated name**, so the tree was fixed one name
+per run: fuzznet needed two runs to be told about two collisions. Every
+repeated name is reported together now, capped at six with `(-v for all)`
+-- which `capped` makes a true claim rather than a decorative one, since it
+returns everything when `VERBOSE`.
+
+The case asserts the offered stanza by **applying it** and building, per
+§375: a message that hands the reader a stanza is only as good as the
+stanza. It runs through `fmake test`, because these are test programs and a
+plain build does not build them -- which is the convention and is also how
+the first version of the case failed, for the wrong reason.
+
+### What fmake got right on that tree, worth recording
+
+It identified all four of fuzznet's submodules as separate checkouts and
+left their programs to them -- *"monocypher is a separate checkout; leaving
+its own 28 programs to it"* -- so the collision it reported was between the
+tree's own files and not an artifact of vendoring.
