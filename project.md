@@ -29864,6 +29864,23 @@ has `@pkg_optional` as an escape hatch and the config has no equivalent
 key, so making the config refuse would leave no way to say "use it if it
 is there".
 
+**And the missing key is a position rather than an oversight**, which is
+worth recording because the obvious next move is to add it. Re-measured
+2026-10-08, asking which directives have no config spelling at all: two,
+`@interpose` and `@pkg_optional` -- the rest either have one or are
+per-file by nature, `@os` and `@arch` being filters on a translation unit
+and `@rule`'s config spelling being the `[generate.*]` table rather than
+a key. `CONF_TARGET_DIRECTIVES` is **derived from the schema**, so fmake
+already knows `@pkg_optional` has no `[target.*]` key and shortens a
+diagnostic for it rather than offering a remedy that would be rejected.
+
+So adding the key is a design question and not a wiring gap, and the
+question is a real one: `@pkg_optional` adds the package's cflags *to the
+unit that includes its headers* while the macro it defines is a tree
+flag, so a `[target.*]` or `[project]` twin has to decide which units get
+those cflags. That is the holder's to answer, and it is what the
+strictness question above waits on.
+
 ## 381. A data file's destination is its path, so its path can climb
 
 `refuse_install_escapes` is the rule that an install directory is a place
