@@ -441,7 +441,8 @@ that had been green about nothing for five commits ·
 [388. The same mistake with a glob, and the config sites that are not it](#388-the-same-mistake-with-a-glob-and-the-config-sites-that-are-not-it) ·
 [389. A nested tool build dropped the exclude with the flags](#389-a-nested-tool-build-dropped-the-exclude-with-the-flags) ·
 [390. A dry run planned links the build refuses, and exited 0](#390-a-dry-run-planned-links-the-build-refuses-and-exited-0) ·
-[391. Five lenses from the two above, and what they did not find](#391-five-lenses-from-the-two-above-and-what-they-did-not-find)
+[391. Five lenses from the two above, and what they did not find](#391-five-lenses-from-the-two-above-and-what-they-did-not-find) ·
+[392. fmake asks for no session bus, and runs code that might](#392-fmake-asks-for-no-session-bus-and-runs-code-that-might)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30563,3 +30564,55 @@ lens is not a sixth variant of this one. Both real findings were about a
 *derived* configuration -- one rebuilt for another machine, one never
 computed at all -- and neither was about running or reporting, which is
 where these five looked.
+## 392. fmake asks for no session bus, and runs code that might
+
+Recorded so that the next session hunting a leaked `dbus-daemon` in this
+tree stops at the first paragraph instead of reading the whole tool.
+
+**What arrived.** claude-guidelines reported that
+`QDBusConnection::sessionBus()` autolaunches a private
+`dbus-daemon --session` when `DBUS_SESSION_BUS_ADDRESS` is unset, that
+nothing reaps it, and that their record attributed 31 of a 571-process
+population to this tree -- a dated count, attributed through
+`/proc/<pid>/environ` because a daemonising bus chdirs to `/` and its
+`cwd` is useless. They name beerssh's `4e19aff` as the fix for a real
+call site: gate on the address being non-empty and abstain when it is not.
+
+**fmake has no such call site.** It is one Python file and links no Qt, so
+it cannot call `sessionBus()` at all. All 19 occurrences of the string are
+accounted for: install-category config keys (`"dbus"` as *D-Bus system bus
+policy*, `"dbusdir"`) and the comments about hydra's `theme.h` declaring a
+stand-in `class QDBusVariant {}` behind `HYDRA_HAVE_DBUS`.
+
+**What fmake does instead, which is the part worth keeping.** It *runs*
+the test binaries of the trees it builds -- `run_tests_now`, with
+`test-env`, `test-args`, `test-cwd` and `test-timeout` as config keys --
+and its own suite builds a `QTEST_MAIN` widget test and executes it under
+`test-env = ["QT_QPA_PLATFORM=offscreen"]`. So a bus launched during an
+fmake-driven build carries fmake's environment and somebody else's calling
+code. A leak attributed to this tree is a fact about what fmake ran, never
+about what fmake asked for.
+
+**The attribution was withdrawn by its author**, on grounds stronger than
+the above: an environment is inherited, so the per-tree table records where
+a session was standing rather than what called for a bus, and respec --
+with no D-Bus surface whatever -- appeared in the same table. Their
+correction is `claude-guidelines` `3f71e57`. The mechanism stands; the
+table is not evidence about any tree's code.
+
+**One limit measured here, because it bounds the figure rather than its
+interpretation.** `/proc/<pid>/environ` is unreadable across accounts. When
+I looked, this machine had four `dbus-daemon` processes -- one system, three
+owned by `funk` -- and as `claude` every one gave *Permission denied*. So a
+population gathered that way is bounded by the measuring account. Worse, my
+first loop printed `addr_in_environ=0` for all four, which reads as *the
+address was unset* and meant *I could not look*: unset is exactly what the
+mechanism needs, so the instrument fails silently in the direction that
+confirms the claim.
+
+**And the first attempt to count them matched its own command line.** `ps
+... | awk '/dbus-daemon/'` reported the shell running the awk, and the awk,
+as session buses. Matching on `comm` rather than on `args` cannot do that,
+since no shell is named `dbus-daemon` -- the same self-match that
+`running-code.md` records for `pgrep` watchers, met while measuring instead
+of while waiting.
