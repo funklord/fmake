@@ -19596,6 +19596,66 @@ def an_archive_that_carries_an_entry_point_is_reported(t):
 
 
 @case
+def an_entry_point_in_plain_text_is_not_blamed_on_a_macro(t):
+	"""Section 395: the warning above asserted a cause it had not checked.
+
+    Its own comment states the model -- the scanner's misses are the only
+    way a main-defining object reaches a library -- and there is a second
+    route, which fmake chose on purpose. A tree whose only programs are
+    tests is built as a library, and with nothing else to root it the
+    archive is rooted at a test source, which keeps its main(). So the
+    warning fired on a file whose `int main(void)' is right there in the
+    text, and told the reader a macro or an included header had written it.
+    A reader who went looking found neither.
+
+    Two files reproduce it, which is why this is a case rather than a note.
+    `has_main' was already recorded by the scan, so the message checks the
+    claim now instead of restating it.
+
+    The sibling case above covers the route the message was written for and
+    still passes, which is what says this split did not simply move the
+    wording."""
+	t.write("test/a_test.c",
+	        '#include <stdio.h>\nint main(void){ puts("a"); return 0; }\n')
+	t.write("test/b_test.c",
+	        '#include <stdio.h>\nint main(void){ puts("b"); return 0; }\n')
+	name = os.path.basename(t.dir)
+	lib = os.path.join(t.dir, "lib%s.a" % name)
+
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build itself should succeed: {said}")
+	check(os.path.exists(lib), f"no archive was built: {said}")
+	# The same control the case above uses: the archive really does carry
+	# the entry point, so the warning is about something.
+	syms = subprocess.run(["nm", "--format=posix", lib],
+	                      capture_output=True, text=True).stdout
+	check(re.search(r"^main [TT]", syms, re.M),
+	      f"this fixture is meant to put main() in the archive: {syms}")
+	warned = [l for l in said.splitlines() if "carries an entry point" in l]
+	check(warned, f"fmake must say the archive carries one: {said}")
+	check("in its own text" in warned[0],
+	      f"the warning still denies what the file plainly says: "
+	      f"{warned[0]}")
+	check("a macro or an included header" not in warned[0],
+	      f"the warning blames a macro for a main() written in plain "
+	      f"text: {warned[0]}")
+	check("roots this library" in warned[0],
+	      f"and it does not say why the file is in the archive at all: "
+	      f"{warned[0]}")
+
+	# The remedy: a source that is not test material roots it instead, and
+	# then there is no entry point to report.
+	t.write("thing.c", "int thing(void){ return 7; }\n")
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"the remedy must build: {said}")
+	check("carries an entry point" not in said,
+	      f"a non-test source roots the library now, so nothing should "
+	      f"carry an entry point: {said}")
+
+
+@case
 def an_explicit_exe_kind_is_believed_over_the_scan(t):
 	"""The scan is a guess and an annotation is not.
 

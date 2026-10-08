@@ -14138,8 +14138,39 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		if ok and not args.dry_run and t.kind in ("static", "shared"):
 			carry = sorted(u.rel for u in closures[t].link
 			               if "main" in (u.strong or ()))
-			_chead, _crest = capped(carry, 3)
-			if _chead:
+			# Which of them SAY so in their own text, which is the cause this
+			# message asserted without checking. The comment above states the
+			# author's model -- the scanner's misses are the only way a
+			# main-defining object reaches a library -- and there is a second
+			# route, which is deliberate: a tree whose only programs are tests
+			# is built as a library, rooted at a test source because nothing
+			# else roots one, and that file keeps its main(). Two files
+			# reproduce it. So the archive carried an entry point for a reason
+			# the message named wrongly, and a reader sent looking for a macro
+			# or an included header finds neither.
+			#
+			# `has_main' is what the scan already recorded, so this checks the
+			# claim rather than restating it.
+			plain = [r for r in carry if scans.get(r, {}).get("has_main")]
+			hidden = [r for r in carry if r not in plain]
+			if plain:
+				_phead, _prest = capped(plain, 3)
+				_roots = [r for r in _phead if r == t.rel]
+				warn(f"{t.filename} carries an entry point: "
+				     f"{', '.join(_phead)} "
+				     f"{'defines' if len(_phead) == 1 else 'define'} "
+				     f"main() in "
+				     f"{'its' if len(_phead) == 1 else 'their'} own text"
+				     + (f", and {_roots[0]} roots this library because nothing "
+				        f"else here does" if _roots else "")
+				     + f". The next program to link this gets a duplicate "
+				       f"symbol."
+				     + (f"\n    ... and {_prest} more." if _prest else "")
+				     + f"\n    a source that is not test material would root it "
+				       f"instead, or name the members with "
+				       f"{tgt_section(t.name)} sources = [...]")
+			if hidden:
+				_chead, _crest = capped(hidden, 3)
 				warn(f"{t.filename} carries an entry point: "
 				     f"{', '.join(_chead)} "
 				     f"{'defines' if len(_chead) == 1 else 'define'} "

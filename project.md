@@ -444,7 +444,8 @@ that had been green about nothing for five commits ·
 [391. Five lenses from the two above, and what they did not find](#391-five-lenses-from-the-two-above-and-what-they-did-not-find) ·
 [392. fmake asks for no session bus, and runs code that might](#392-fmake-asks-for-no-session-bus-and-runs-code-that-might) ·
 [393. The root-only defines scope can split a binary, and a detector for it would fire on the one real user](#393-the-root-only-defines-scope-can-split-a-binary-and-a-detector-for-it-would-fire-on-the-one-real-user) ·
-[394. A repeated target name was counted as two, however many there were](#394-a-repeated-target-name-was-counted-as-two-however-many-there-were)
+[394. A repeated target name was counted as two, however many there were](#394-a-repeated-target-name-was-counted-as-two-however-many-there-were) ·
+[395. The entry-point warning blamed a macro for a main() in plain text](#395-the-entry-point-warning-blamed-a-macro-for-a-main-in-plain-text)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30719,3 +30720,67 @@ It identified all four of fuzznet's submodules as separate checkouts and
 left their programs to them -- *"monocypher is a separate checkout; leaving
 its own 28 programs to it"* -- so the collision it reported was between the
 tree's own files and not an artifact of vendoring.
+## 395. The entry-point warning blamed a macro for a main() in plain text
+
+Found beside §394, in the same fuzznet session, from a fixture built for
+something else -- which is the cheapest data there is, per `evidence.md`:
+what a test does in passing is evidence you already own.
+
+    * librename.a carries an entry point: a/test/same_test.c defines
+      main(), which nothing in its own text says -- a macro or an included
+      header wrote it.
+
+That file's text is `int main(void){ puts("a"); return 0; }`. The claim was
+false, and it is the expensive kind of false: it sends a reader hunting a
+macro that does not exist.
+
+**The behaviour it fired on is correct and deliberate**, which took a
+reduction to establish rather than assume. Two files are enough -- a tree
+whose only sources are test programs:
+
+    test/a_test.c    int main ... puts("a")
+    test/b_test.c    int main ... puts("b")
+
+    AR  liballmain.a        containing a_test.c.o, with T main
+
+fmake's own comment explains why: *"A tree whose only programs are tests is
+a library with tests beside it, and a plain build should produce the
+library"*, and when nothing else roots one, *"a test's own source roots the
+archive rather than nothing doing"*. The member filter then skips the
+test-material exclusion precisely because the library's own root is test
+material. Every step is intended.
+
+**So the defect is only the diagnosis.** The warning's comment states the
+model it was written under -- the scanner's misses are the only way a
+main-defining object reaches a library, so a main in the archive must have
+come from a macro or a header. The fallback rooting is a second route, and
+the model has no room for it. `scans[rel]["has_main"]` already records
+whether the file's own text declares one, so the message checks the claim
+now instead of restating it:
+
+    * liballmain.a carries an entry point: test/a_test.c defines main() in
+      its own text, and test/a_test.c roots this library because nothing
+      else here does. The next program to link this gets a duplicate
+      symbol.
+        a source that is not test material would root it instead, or name
+        the members with [target.allmain] sources = [...]
+
+The warning itself stays, because it was never the wrong thing to say: a
+consumer linking that archive really does get a duplicate `main`.
+
+**The sibling case still passes**, which is what says the wording was split
+rather than moved: `an_archive_that_carries_an_entry_point_is_reported`
+covers the header-written route with its own fixture, and the new case
+covers this one. Both sabotages fail through their own check -- the first
+reproduces the old sentence verbatim.
+
+### A general shape worth keeping
+
+**A message that explains a cause is a claim, and it rots exactly where
+the code grows a second route to the same symptom.** The author's model
+was written into a comment and was true when written; the fallback was
+added later, for a good reason, by somebody who had no cause to re-read a
+warning about archives. Nothing connected the two. The remedy that
+generalises is not "check the comment" but **let the message test the
+cause it names** -- here one dictionary lookup that was already being
+computed.
