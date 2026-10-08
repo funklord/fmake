@@ -13543,9 +13543,23 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			mine = [p for p in providers if p in reach]
 			if len(mine) != 1:
 				continue
-			if (t.name, mine[0]) not in seen_advice:
-				seen_advice.add((t.name, mine[0]))
-				advice.append(f"    {t.name:<20} {mine[0]}")
+			# Keyed on the SYMBOL as well, and naming it, because the header
+			# above lists the providers of ONE symbol while this loop runs
+			# over every ambiguity in the tree. Where there are two, a line
+			# here named a file that is not among the providers printed
+			# above it, under the words "exactly one of them" -- so the
+			# message said fmake had chosen a definition from a file that
+			# does not define that symbol at all.
+			#
+			# Measured on netcfgd, which has exactly two: the header shows
+			# `ncfg_probes_free' in c/src/daemon/probe.c and
+			# client/ncfg_client.c, and the line under it named
+			# c/src/host/hooks.c -- the single reachable provider of
+			# `ncfg_hook_scripts_free', a different symbol those two files
+			# also collide on.
+			if (t.name, _sym, mine[0]) not in seen_advice:
+				seen_advice.add((t.name, _sym, mine[0]))
+				advice.append(f"    {t.name:<20} {_sym:<28} {mine[0]}")
 			if t.name in seen_stanza:
 				continue
 			seen_stanza.add(t.name)
@@ -13627,10 +13641,18 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			         f"target in {CONF_FILE}, or keep the duplicate out "
 			         f"with [project] exclude.")
 		if advice:
+			# Capped like every other list here, and now that each line
+			# carries its symbol the list grows with the ambiguities rather
+			# than with the targets: one object colliding on eight symbols
+			# is eight lines, which is the thing a cap is for.
+			_adhead, _adrest = capped(advice, 6)
+			if _adrest:
+				_adhead = _adhead + [f"    ... and {_adrest} more "
+				                     f"(-v for all)"]
 			lines += ["",
-			          "The include graph reaches exactly one of them from "
-			          "each program's own root:",
-			          *advice,
+			          "The include graph reaches exactly one provider of "
+			          "the symbols below, from each program's own root:",
+			          *_adhead,
 			          "",
 			          "which is a guess, not a decision. To make it the "
 			          f"answer, put this in {CONF_FILE} -- the source lists "

@@ -447,7 +447,8 @@ that had been green about nothing for five commits ·
 [394. A repeated target name was counted as two, however many there were](#394-a-repeated-target-name-was-counted-as-two-however-many-there-were) ·
 [395. The entry-point warning blamed a macro for a main() in plain text](#395-the-entry-point-warning-blamed-a-macro-for-a-main-in-plain-text) ·
 [396. The same fault one function along, found by a sweep derived from it](#396-the-same-fault-one-function-along-found-by-a-sweep-derived-from-it) ·
-[397. A diagnostic disabled by its own recommendation](#397-a-diagnostic-disabled-by-its-own-recommendation)
+[397. A diagnostic disabled by its own recommendation](#397-a-diagnostic-disabled-by-its-own-recommendation) ·
+[398. The guess named a file that defines another symbol](#398-the-guess-named-a-file-that-defines-another-symbol)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30898,3 +30899,72 @@ The cheap check is `fmake -n`, which validates the configuration eagerly
 and lists the keys it would have accepted. Measured here on a fixture, and
 by hydra on their 116 real sources: **852 objects before and 852 after**,
 so "compiles nothing" holds at that size as well.
+## 398. The guess named a file that defines another symbol
+
+Found by running plain `fmake` on a pristine netcfgd -- the experiment that
+tree's README asks for in as many words: *"whether it can build the daemon
+has not been tried since the daemon became C ... Until somebody runs it and
+sees."*
+
+**The defect.** The ambiguity refusal prints the providers of **one**
+symbol, and the advice block beneath it ran over **every** ambiguity in the
+tree. With two, a line named a file that is not among the providers printed
+above it, under the words *"The include graph reaches exactly one of
+them"*. So the message said fmake had picked a definition out of a file
+which does not define that symbol.
+
+netcfgd's two, measured:
+
+    !!! symbol 'ncfg_probes_free' is defined by more than one file:
+        c/src/daemon/probe.c
+        client/ncfg_client.c
+
+    The include graph reaches exactly one of them ...:
+        main                 c/src/host/hooks.c
+
+`hooks.c` does not define `ncfg_probes_free`. It is the single reachable
+provider of `ncfg_hook_scripts_free`, which those same two files also
+collide on -- confirmed by reading both rather than inferred from the shape.
+
+**The fix is that each line names the symbol it is a guess about**, the
+dedupe key carries that symbol, and the introduction no longer says "one of
+them": it says *one provider of the symbols below*. "Each" would have been
+the next wrong quantity -- only the ambiguities with a single reachable
+provider are listed, and `ncfg_probes_free` reaches both of its, so it
+appears nowhere beneath. The list is capped at six with `(-v for all)`,
+because it now grows with the ambiguities rather than with the targets.
+
+**Why the dedupe key had to change too.** One object that collides with
+another collides on everything it defines, so a provider can be the single
+answer for many symbols. Keyed on `(target, provider)` alone the block
+prints one line naming one symbol while standing for several -- the same
+lie one size smaller -- and it is a separate sabotage from the column
+itself.
+
+### The fixture needs two targets, and every symbol called
+
+Two files are not enough: an unreached file is never compiled and so never
+collides, which is §3 working. Both providers must be reached by
+*something*, and by **different roots**, for the include graph to have one
+answer per target.
+
+And every ambiguous symbol has to be **called**. The first draft declared
+`sym_r` without calling it, so the closure never had to resolve it, it was
+never ambiguous, and the assertion about it failed for want of reaching the
+hazard rather than for the defect. The assertion was right and the fixture
+was not, which is the cheaper way round.
+
+### What fmake did on that tree, which is the rest of the answer
+
+With netcfgd's own `fmake.toml`, plain `fmake` moc'd the Qt client's
+twenty-odd headers and compiled 22 objects of the C daemon before stopping
+at the link set. So the README's open question has an answer: the daemon
+being C rather than a Cargo workspace removed the obstacle it names, and
+what stops it now is two genuine duplicate symbols between the daemon's
+copy and the client's -- a fact about that tree, with the config stanza
+fmake prints as the remedy.
+
+Their `fmake.toml` also carries a comment quoting a refusal fmake no longer
+makes -- *"two targets are both called 'lib'"*, from before §150 named a
+crate root after its enclosing directory. Signalled to them rather than
+corrected here.

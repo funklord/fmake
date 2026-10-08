@@ -25201,6 +25201,80 @@ def an_unguessable_ambiguity_offers_a_remedy_that_works(t):
 
 
 @case
+def the_guess_names_the_symbol_it_is_a_guess_about(t):
+	"""Section 398: the advice named a file that defines another symbol.
+
+    The header lists the providers of ONE ambiguous symbol; the advice
+    block under it ran over every ambiguity in the tree. With two, a line
+    there named a file that is not among the providers printed above it --
+    under the words "exactly one of them" -- so the message said fmake had
+    picked a definition out of a file which does not define that symbol.
+
+    Found by running plain fmake on a pristine netcfgd, the experiment
+    their README asks for in as many words: "until somebody runs it and
+    sees". That tree has exactly two, and both are between the daemon's
+    copy and the client's -- the header showed `ncfg_probes_free' in
+    c/src/daemon/probe.c and client/ncfg_client.c, and the line beneath
+    named c/src/host/hooks.c, which is the single reachable provider of
+    `ncfg_hook_scripts_free'.
+
+    Each line carries its symbol now. The fixture needs two targets rather
+    than two files, because an unreached file is never compiled and so
+    never collides: both providers have to be reached by SOMETHING for the
+    ambiguity to exist, and by different roots for the include graph to
+    have one answer per target."""
+	# p1.c and p2.c each define TWO of the ambiguous symbols, so one
+	# provider is the answer for both -- which is what makes the dedupe
+	# key have to carry the symbol. Keyed on (target, provider) alone it
+	# prints one line naming one symbol while standing for two, the same
+	# lie one size smaller.
+	for n in ("p1", "p2"):
+		t.write(f"{n}.h", "void sym_p(void);\nvoid sym_r(void);\n")
+		t.write(f"{n}.c", f'#include "{n}.h"\n'
+		        "void sym_p(void){}\nvoid sym_r(void){}\n")
+	for n in ("q1", "q2"):
+		t.write(f"{n}.h", "void sym_q(void);\n")
+		t.write(f"{n}.c", f'#include "{n}.h"\nvoid sym_q(void){{}}\n')
+	# Every ambiguous symbol has to be CALLED, or the closure never has
+	# to resolve it and it is never ambiguous: the first draft of this
+	# fixture declared sym_r and called nothing, so the assertion about
+	# it failed for want of reaching the hazard rather than for the
+	# defect.
+	for n, s in (("main_a", "1"), ("main_b", "2")):
+		t.write(f"{n}.c", f'#include "p{s}.h"\n#include "q{s}.h"\n'
+		        "int main(void){ sym_p(); sym_q(); sym_r(); "
+		        "return 0; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two definitions must be refused: {out}")
+
+	# The line that names q1.c has to say which symbol it is a guess
+	# about, and it must not be read as a guess about the header's.
+	qline = [l for l in out.splitlines() if "q1.c" in l and "sym" in l]
+	check(qline,
+	      f"no advice line names q1.c with a symbol, so a reader cannot "
+	      f"tell which ambiguity it answers: {out}")
+	check("sym_q" in qline[0] and "sym_p" not in qline[0],
+	      f"the line naming q1.c does not name sym_q, or attributes it to "
+	      f"sym_p -- q1.c does not define sym_p: {qline[0]}")
+
+	# And the header is about the other symbol, which is the whole reason
+	# the line above had to say so.
+	head = [l for l in out.splitlines() if "is defined by more than one" in l]
+	check(head and "sym_" in head[0],
+	      f"the fixture is meant to put a symbol in the header: {out}")
+
+	# One provider answering two symbols gets a line each: deduped on
+	# the pair alone, the second symbol would vanish behind the first.
+	plines = [l for l in out.splitlines() if "p1.c" in l and "sym" in l]
+	named = {s for l in plines for s in ("sym_p", "sym_r") if s in l}
+	check(named == {"sym_p", "sym_r"},
+	      f"p1.c is the single reachable provider of both sym_p and "
+	      f"sym_r, and the advice names {sorted(named)}: {out}")
+
+
+@case
 def a_misnamed_root_says_which_way_it_is_wrong(t):
 	"""section 376: four causes, one sentence, no remedy.
 
