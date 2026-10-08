@@ -438,7 +438,8 @@ that had been green about nothing for five commits ·
 [385. A flagged root is compiled twice, and one object is linked by nothing](#385-a-flagged-root-is-compiled-twice-and-one-object-is-linked-by-nothing) ·
 [386. The suite's own invocation hid a lost dependency](#386-the-suites-own-invocation-hid-a-lost-dependency) ·
 [387. Two per-file directives, two resolution rules, one misleading refusal](#387-two-per-file-directives-two-resolution-rules-one-misleading-refusal) ·
-[388. The same mistake with a glob, and the config sites that are not it](#388-the-same-mistake-with-a-glob-and-the-config-sites-that-are-not-it)
+[388. The same mistake with a glob, and the config sites that are not it](#388-the-same-mistake-with-a-glob-and-the-config-sites-that-are-not-it) ·
+[389. A nested tool build dropped the exclude with the flags](#389-a-nested-tool-build-dropped-the-exclude-with-the-flags)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30398,3 +30399,65 @@ and `root`, so a basename hint there would mean a tree walk this function
 does not have and a service file is not a source, so `src_set` -- which is
 what §376's did-you-mean for a configured `root` had in hand -- would not
 contain it. Both the reason and the cost say leave it.
+## 389. A nested tool build dropped the exclude with the flags
+
+A `[generate.*] uses` tool runs **here**, on the machine doing the
+building, so its nested build must not inherit the target's flags -- a
+`-march=armv8-a` or a `--sysroot` pointing at the target's filesystem will
+simply not compile. That is what `[build-toolchain]` is for, and the nested
+build implemented it by replacing the whole of `[project]` with the build
+toolchain's `cflags`, `defines` and `std`.
+
+`exclude` was in the part thrown away, and it is not a flag. It says which
+files are part of the build **at all**, which is true of the tree whichever
+machine is being built for.
+
+Measured both ways on one shape -- a tool needing `greet()`, with
+`attic/` excluded:
+
+    [project]
+    exclude = ["attic"]
+
+**Silently, where only the excluded file defined it.** The nested build
+widened into `attic/`, linked it without a word, and the generator *ran*:
+`gen/vals.c` was written by a program built out of a directory the author
+had set aside. In the same output, the outer build of that same target
+refused it by name -- `attic/greet.c is excluded ([project] exclude =
+'attic')` -- so fmake was simultaneously obeying the exclusion and
+ignoring it, two stages apart.
+
+**Loudly, where a kept file defined it too.** The nested build saw both
+and refused:
+
+    !!! symbol 'greet' is defined by more than one file:
+        attic/greet.c
+        greet.c
+    ... or keep the duplicate out with [project] exclude.
+
+which is advice to write the line the `fmake.toml` in front of it already
+had. §372's cause chain is right; it was reasoning about a configuration
+the nested build had discarded.
+
+The fix carries the key across the rebuild, named as a set so that a second
+tree-scope key is added in one place rather than found by whoever meets the
+next instance:
+
+    tree_scope = ("exclude",)
+
+`include-dirs` was the obvious candidate for that set and is **not** in it,
+because it could not be shown to matter: a header in a directory only
+`include-dirs` names is found anyway by fmake's own include graph, so the
+nested build compiles it without the flag. The case where the flag is load
+bearing is a directory outside the tree, and an absolute include path in a
+cross build is arguably the target's rather than this machine's -- which is
+a judgement nobody needs to make until a tree makes it. `libs`, `pkg`,
+`cflags`, `ldflags`, `defines`, `std`, `profile`, `needs` and `rustflags`
+are all machine facts and stay dropped; `test-*` cannot reach a nested
+build.
+
+**Two cases, not one with two arms**, because both halves fail when
+`exclude` is dropped: whichever ran first would intercept, and a control
+that is never reached proves nothing about the one behind it. The silent
+one asserts on the **99 in the generated source** rather than on the exit
+status, because before the fix the run failed anyway for the outer target
+and a status check would have passed for the wrong reason.

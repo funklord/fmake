@@ -10588,10 +10588,30 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# machine, so it takes none of the target's flags. Inheriting them
 		# is not a small inaccuracy: -march=armv8-a, or a --sysroot pointing
 		# at the target's filesystem, simply will not compile here.
+		#
+		# `exclude' is not a flag, and dropping it along with them was
+		# wrong: it says which files are part of the build at all, which is
+		# true of the tree whichever machine is being built for. Measured
+		# both ways. Where only the excluded file defined a symbol the tool
+		# needed, the nested build widened into the excluded directory and
+		# linked it SILENTLY, so the generator ran and wrote a source
+		# produced by a program built from a file the author had set aside --
+		# while the outer build of that same target refused it by name. Where
+		# both an excluded and a kept file defined it, the nested build died
+		# on an ambiguity whose own advice was to "keep the duplicate out
+		# with [project] exclude", which the configuration in front of it
+		# already did.
+		#
+		# Named as a set rather than carried inline, so that a second key
+		# describing the tree rather than a machine is added here instead of
+		# being found by whoever meets the next instance of this.
+		tree_scope = ("exclude",)
 		bt = conf.build_tool_conf
 		conf.tool = bt
+		kept = {k: conf.project[k] for k in tree_scope if k in conf.project}
 		conf.project = {k: v for k, v in bt.items()
 		                if k in ("cflags", "defines", "std")}
+		conf.project.update(kept)
 		conf.profile = {}
 	cfg    = Config(args, conf)
 	# Built here rather than where the -I flags are worked out, because moc

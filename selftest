@@ -4957,6 +4957,96 @@ outputs = ["gen/vals.c"]
 		      f"the refusal names neither the tool nor the reason: {out}")
 
 
+def _tool_exclude_tree(u, keep):
+	"""A generator whose tool needs greet(), defined in an excluded attic/.
+
+    `keep' adds a second definition that IS in the build, which is what
+    separates "the exclusion was obeyed" from "nothing was found".
+    """
+	u.write("tool/mkvals.c",
+	        "#include <stdio.h>\n"
+	        "int greet(void);\n"
+	        "int main(int argc, char **argv){\n"
+	        "    FILE *f = fopen(argv[1], \"w\");\n"
+	        "    fprintf(f, \"int made(void){ return %d; }\\n\", greet());\n"
+	        "    fclose(f); return argc < 2;\n}\n")
+	u.write("attic/greet.c", "int greet(void){ return 99; }\n")
+	if keep:
+		u.write("greet.c", "int greet(void){ return 11; }\n")
+	u.write("main.c", "#include <stdio.h>\nint made(void);\n"
+	        'int main(void){ printf("%d\\n", made()); return 0; }\n')
+	u.write("seed.txt", "seed\n")
+	u.write("fmake.toml", """
+[project]
+exclude = ["attic"]
+
+[generate.vals]
+uses    = "mkvals"
+command = "$tool gen/vals.c"
+inputs  = ["seed.txt"]
+outputs = ["gen/vals.c"]
+""")
+
+
+@case
+def a_tool_is_not_built_from_an_excluded_file(t):
+	"""Section 389: [project] exclude did not reach the tool a generator uses.
+
+    A tool named by `uses' is built by a nested build that must not inherit
+    the target's flags -- a -march or a --sysroot aimed at another machine
+    will not compile here. That rebuild replaced the whole of [project],
+    and `exclude' went with the flags. It is not one: it says which files
+    are part of the build at all, which is true of the tree whichever
+    machine is being built for.
+
+    This is the silent half and the serious one. Nothing in the build
+    defines greet(), so the nested build widened into the excluded
+    directory and linked it without a word: the generator then RAN, and
+    gen/vals.c was written by a program built out of a directory the author
+    had set aside -- while the outer build of that same target refused it
+    by name in the same output. The honest answer is a refusal.
+
+    Asserted on what the generator wrote rather than on the exit status,
+    because before the fix the run failed anyway for the outer target and a
+    status check would have passed for the wrong reason. 99 in that file is
+    the direct witness that an excluded file was linked and run."""
+	_tool_exclude_tree(t, keep=False)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	gen = os.path.join(t.dir, "gen", "vals.c")
+	wrote = open(gen).read() if os.path.exists(gen) else ""
+	check("99" not in wrote,
+	      f"the generator ran from a tool linked against an excluded "
+	      f"file: {wrote!r}\n{out}")
+	check(r.returncode != 0,
+	      f"a tool that cannot be built must fail the build: {out}")
+	check("exclude" in out,
+	      f"the refusal does not name the exclusion: {out}")
+
+
+@case
+def an_excluded_duplicate_does_not_make_a_tool_ambiguous(t):
+	"""Section 389, the loud half of the same dropped `exclude'.
+
+    With a kept definition as well as the excluded one, the nested build
+    saw both and died on an ambiguity listing attic/greet.c beside
+    greet.c -- advising the reader to "keep the duplicate out with
+    [project] exclude", which the fmake.toml in front of it already did.
+
+    Separate from the silent half rather than a second arm of it: both fail
+    when `exclude' is dropped, so whichever ran first would intercept, and
+    a control that is never reached proves nothing about the one behind
+    it. This one also carries what the fix must not break -- that the kept
+    file is still found -- which the other cannot show, having none."""
+	_tool_exclude_tree(t, keep=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"an excluded duplicate must not make the tool ambiguous: {out}")
+	check(t.run(os.path.basename(t.dir)).stdout == "11\n",
+	      f"the tool was built from the wrong greet(): {out}")
+
+
 @case
 def a_dry_run_builds_no_tool(t):
 	"""`-n' says it changes nothing in the tree, and it built a program.
