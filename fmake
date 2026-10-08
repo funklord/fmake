@@ -14128,6 +14128,42 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 
 	cache.save()
 	if args.dry_run and not (args.install or args.uninstall):
+		# The lines above are a plan, and a plan that printed cleanly reads
+		# as an answer to "does this tree build". It is not one. The symbol
+		# closure runs over compiled objects, so the refusals it makes -- a
+		# symbol two files define, a program nothing provides -- cannot be
+		# reached by a run that compiles nothing, and the status is 0
+		# because printing the plan is what succeeded.
+		#
+		# Reported from raidcfgd 2026-10-08 with the cost measured. Their
+		# README claimed for twelve days that fmake built ten of that
+		# tree's eleven programs; the real build links none and refuses on a
+		# symbol two generated files define. The programs in the claim are
+		# exactly the `-o' targets the dry run prints, which is where the
+		# sentence came from, and the exit code did not discriminate either
+		# -- that README had already recorded a non-zero dry run for four
+		# files in submodules that do not compile. What told the truth was
+		# looking for the binaries.
+		#
+		# It is fmake's to answer rather than theirs because
+		# harmonization.md asks a README showing `make' to show `fmake'
+		# beside it HAVING RUN IT first, so a session discharging that rule
+		# reaches for the cheapest check that looks like running it -- and
+		# this is that check. Closing the set instead was the other shape
+		# offered and is not available: it needs the objects, which is the
+		# one thing `-n' promises not to produce. Doing it from a warm
+		# cache would make the answer depend on whether somebody had built
+		# before, which is worse than saying so plainly every time.
+		#
+		# Unconditional, unlike the note below it: --no-libs turns off
+		# library resolution and does not make a dry run able to close a
+		# link set.
+		note("a dry run does not close the link sets, so it cannot say "
+		     "whether this tree builds: the closure runs on compiled "
+		     "objects, and the refusals it makes -- a symbol two files "
+		     "define, a program nothing provides -- are not reached here. "
+		     "The lines above are the plan a build would start from, not a "
+		     "claim that it finishes. Build it and look for the binaries.")
 		if not args.no_libs:
 			note("libraries are not resolved in a dry run: nothing was "
 			     "compiled, so there are no symbols to resolve. The link "

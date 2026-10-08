@@ -439,7 +439,8 @@ that had been green about nothing for five commits ·
 [386. The suite's own invocation hid a lost dependency](#386-the-suites-own-invocation-hid-a-lost-dependency) ·
 [387. Two per-file directives, two resolution rules, one misleading refusal](#387-two-per-file-directives-two-resolution-rules-one-misleading-refusal) ·
 [388. The same mistake with a glob, and the config sites that are not it](#388-the-same-mistake-with-a-glob-and-the-config-sites-that-are-not-it) ·
-[389. A nested tool build dropped the exclude with the flags](#389-a-nested-tool-build-dropped-the-exclude-with-the-flags)
+[389. A nested tool build dropped the exclude with the flags](#389-a-nested-tool-build-dropped-the-exclude-with-the-flags) ·
+[390. A dry run planned links the build refuses, and exited 0](#390-a-dry-run-planned-links-the-build-refuses-and-exited-0)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30461,3 +30462,61 @@ that is never reached proves nothing about the one behind it. The silent
 one asserts on the **99 in the generated source** rather than on the exit
 status, because before the fix the run failed anyway for the outer target
 and a status check would have passed for the wrong reason.
+
+## 390. A dry run planned links the build refuses, and exited 0
+
+Reported from raidcfgd 2026-10-08, with the cost measured rather than
+imagined. On that tree:
+
+    fmake        168 objects compiled, 0 link steps, 0 binaries, rc=1
+    fmake -n     rc=0, link commands printed for all eleven programs
+
+The real build stops at the link set on a symbol two generated files
+define, and its message is not the problem -- it names both files and
+offers the config. The problem is that `-n` never reaches it, so the plan
+it prints is not an answer to *does this tree build*, which is the question
+a dry run looks like it answers.
+
+**What it cost.** That tree's README claimed for twelve days that fmake
+builds ten of its eleven programs. It builds none. The eleven `-o` targets
+the dry run prints are exactly the ten the README listed plus the one it
+said was refused, so that is where the sentence came from, and re-running
+the same check would confirm it again today. The exit code did not
+discriminate either, a non-zero dry run having already been recorded there
+for four files in submodules that do not compile. What told the truth was
+looking for the binaries, and nothing was looking at them.
+
+It is fmake's to answer rather than raidcfgd's because `harmonization.md`
+asks a README showing `make` to show `fmake` beside it **having run it
+first** -- so a session discharging that rule reaches for the cheapest
+check that looks like running it, and fmake said nothing to stop the
+conclusion. A rule meant to find fmake's gaps instead put a false claim
+about fmake in another tree's most-read file.
+
+**Closing the set in a dry run was the other shape offered and is not
+available.** The closure runs over compiled objects, and objects are the
+one thing `-n` promises not to produce; `cl.ambiguous` is empty in a dry
+run because nothing was compiled, not because nothing is wrong. Doing it
+from a warm cache would work on the tree that reported this -- they had
+just compiled 168 objects -- and would make the answer depend on whether
+somebody had built before, which is worse than saying so plainly every
+time.
+
+**So the remedy is a note and not a status.** `-n` cannot honestly fail
+for a refusal it never reached; printing the plan is what succeeded. The
+note is unconditional, unlike the library caveat beside it, because
+`--no-libs` turns off library resolution and does not make a dry run able
+to close a link set:
+
+    a dry run does not close the link sets, so it cannot say whether this
+    tree builds: the closure runs on compiled objects, and the refusals it
+    makes -- a symbol two files define, a program nothing provides -- are
+    not reached here. The lines above are the plan a build would start
+    from, not a claim that it finishes. Build it and look for the binaries.
+
+The case asserts the real build's refusal **beside** the note, because the
+note is unconditional: one that only read it would pass on a tree that
+builds perfectly well, and what makes this a finding is that the plan above
+it is unachievable. Nothing was asked of fmake in raidcfgd -- their remedy
+is an exclude of the vendored copy, which fmake's own include graph
+justifies, and that line is the copyright holder's.

@@ -13778,6 +13778,59 @@ def a_flag_the_build_files_own_parser_would_eat_survives_ejection(t):
 
 
 @case
+def a_dry_run_does_not_claim_the_tree_links(t):
+	"""Section 390: `-n' exits 0 and plans links the real build refuses.
+
+    Reported from raidcfgd 2026-10-08. That tree compiles 168 objects,
+    links nothing and exits 1 on a symbol two generated files define;
+    `fmake -n' on the same tree exits 0 and prints link commands for all
+    eleven of its programs. The dry run cannot reach that refusal -- the
+    closure runs over compiled objects and a dry run compiles nothing --
+    so the plan it prints is not an answer to "does this tree build",
+    which is the question a dry run looks like it answers.
+
+    It cost a false sentence in another tree's most-read file: that README
+    claimed for twelve days that fmake built ten of the eleven, and the
+    programs in the claim are exactly the `-o' targets the dry run prints.
+    The exit status did not discriminate either, a non-zero dry run having
+    already been recorded there for files in submodules that do not
+    compile, so the remedy is a note and not a status: printing the plan
+    is what succeeded, and `-n' cannot honestly fail for a refusal it
+    never reached. What told the truth there was looking for the binaries,
+    which is what the note now says to do.
+
+    The real build's refusal is asserted beside the note, because the note
+    is unconditional -- a case that only read it would pass on a tree that
+    builds perfectly well, and what makes this a finding is that the plan
+    above it is unachievable."""
+	t.write("a/greet.c", "int greet(void){ return 11; }\n")
+	t.write("b/greet.c", "int greet(void){ return 99; }\n")
+	t.write("main.c", "#include <stdio.h>\nint greet(void);\n"
+	        'int main(void){ printf("%d\\n", greet()); return 0; }\n')
+
+	# Cold, as the reported reproduction was, and with --no-libs because
+	# that flag turns off library resolution and does not make a dry run
+	# able to close a link set.
+	for extra in ((), ("--no-libs",)):
+		r = t.fmake("-n", *extra)
+		out = r.stdout + r.stderr
+		check("-o " in out,
+		      f"the dry run printed no link line to be wrong about "
+		      f"{extra}: {out}")
+		check("does not close the link sets" in out,
+		      f"a dry run of a tree that cannot link says nothing about "
+		      f"it {extra}: {out}")
+
+	# The fixture has to be a tree no build can finish.
+	real = t.fmake()
+	out = real.stdout + real.stderr
+	check(real.returncode != 0,
+	      f"the fixture is not a tree the real build refuses: {out}")
+	check("more than one file" in out,
+	      f"refused, but not at the link set: {out}")
+
+
+@case
 def a_dry_run_leaves_the_tree_as_it_found_it(t):
 	"""`-n' prints the commands and runs none of them.
 
