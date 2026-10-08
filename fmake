@@ -2422,8 +2422,23 @@ def wants_a_display(env):
     PLATFORM covers `offscreen', which is how every suite here that has
     widget tests runs them on a machine without a screen.
     """
-	return not any(env.get(k) for k in ("QT_QPA_PLATFORM", "DISPLAY",
-	                                    "WAYLAND_DISPLAY"))
+	# QT_QPA_PLATFORMTHEME was the fourth and this asked about three.
+	# Reported from hydra 2026-10-08, originally hembygd's finding
+	# (their 0d7ac5f), and reproduced here: a platform theme plugin opens
+	# a display of its OWN whatever the QPA is, so `offscreen' with
+	# `gtk3' named still needs one and dies asking for it.
+	#
+	#     offscreen only, theme unset     1 test passed, rc=0
+	#     offscreen + THEME=gtk3          rc=1, cannot open display
+	#
+	# Three questions in order rather than one `any', because they do not
+	# agree: a real display settles it outright, and after that a theme
+	# plugin says YES exactly where a named platform says NO.
+	if env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"):
+		return False
+	if env.get("QT_QPA_PLATFORMTHEME"):
+		return True
+	return not env.get("QT_QPA_PLATFORM")
 
 
 def test_args(conf, t):
@@ -2578,14 +2593,34 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
 			# note is conditional on what the reader can see above it.
 			# bbq-predictor and hembygd each lost tests this way to the
 			# same line beerssh already carries in its fmake.toml.
-			if (rc == -signal.SIGABRT and t.name in gui
-			        and wants_a_display(env or os.environ)):
-				note(f"{t.name} links Qt and no display is set: if the "
-				     f"output above says no Qt platform plugin could be "
-				     f"initialized, `test-env = "
-				     f"[\"QT_QPA_PLATFORM=offscreen\"]' under [project] or "
-				     f"{tgt_section(t.name)} is how a suite runs without "
-				     f"a screen")
+			# The trigger widens with the predicate, and it had to: Qt's own
+			# platform failure ABORTS, where a theme plugin that cannot open
+			# a display exits 1. So correcting wants_a_display alone would
+			# have left this silent in exactly the case that motivated it --
+			# a fix that reads right and is never reached. Widened only where
+			# a theme plugin is named, so an ordinary GUI test failure does
+			# not acquire the note.
+			_tenv = env or os.environ
+			_theme = _tenv.get("QT_QPA_PLATFORMTHEME")
+			if (t.name in gui and wants_a_display(_tenv)
+			        and (rc == -signal.SIGABRT or _theme)):
+				# Naming both variables when the theme is set is the half the
+				# advice was missing: a reader who took the old line kept an
+				# inherited theme and died anyway, and the platform fmake had
+				# just told them to set is what then satisfied the predicate
+				# and silenced this note. test-env ADDS, so an inherited
+				# variable can be blanked and not unset -- which is why the
+				# suggestion is `KEY=' and not a removal.
+				_also = (', "QT_QPA_PLATFORMTHEME="' if _theme else "")
+				note(f"{t.name} links Qt and "
+				     + (f"{_theme!r} names a platform theme plugin, which "
+				        f"opens a display of its own whatever "
+				        f"QT_QPA_PLATFORM says"
+				        if _theme else "no display is set")
+				     + f": if the output above says it cannot open one, "
+				       f"`test-env = [\"QT_QPA_PLATFORM=offscreen\"{_also}]' "
+				       f"under [project] or {tgt_section(t.name)} is how a "
+				       f"suite runs without a screen")
 	if dry_run:
 		return 0
 	say()

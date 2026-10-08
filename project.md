@@ -446,7 +446,8 @@ that had been green about nothing for five commits ·
 [393. The root-only defines scope can split a binary, and a detector for it would fire on the one real user](#393-the-root-only-defines-scope-can-split-a-binary-and-a-detector-for-it-would-fire-on-the-one-real-user) ·
 [394. A repeated target name was counted as two, however many there were](#394-a-repeated-target-name-was-counted-as-two-however-many-there-were) ·
 [395. The entry-point warning blamed a macro for a main() in plain text](#395-the-entry-point-warning-blamed-a-macro-for-a-main-in-plain-text) ·
-[396. The same fault one function along, found by a sweep derived from it](#396-the-same-fault-one-function-along-found-by-a-sweep-derived-from-it)
+[396. The same fault one function along, found by a sweep derived from it](#396-the-same-fault-one-function-along-found-by-a-sweep-derived-from-it) ·
+[397. A diagnostic disabled by its own recommendation](#397-a-diagnostic-disabled-by-its-own-recommendation)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30825,3 +30826,75 @@ A sixth message about `SPDX-License-Identifier` files at the tree root also
 carries *either* and *both* over a joined list. It is left alone: `CLAUDE.md`
 is explicit that licensing is not this project's to raise short of a
 blocker, and a tidier sentence there is not one.
+## 397. A diagnostic disabled by its own recommendation
+
+Reported from hydra 2026-10-08; the original finding is hembygd's
+(`0d7ac5f`), relayed by `claude-guidelines`. Reproduced here, `libqgtk3.so`
+being installed on this machine too:
+
+    offscreen only, theme unset        1 test passed, rc=0
+    offscreen + THEME=gtk3            rc=1, Gtk-WARNING cannot open display
+
+**A platform theme plugin opens a display of its own whatever the QPA
+says.** `wants_a_display` asked about `DISPLAY`, `WAYLAND_DISPLAY` and
+`QT_QPA_PLATFORM` -- three of the four variables that decide it.
+
+**The shape worth keeping is what that cost, in hydra's words: a
+diagnostic disabled by its own recommendation.** fmake handed the reader
+`test-env = ["QT_QPA_PLATFORM=offscreen"]`. The reader took it, kept an
+inherited theme, and the test died anyway -- and this time fmake said
+*nothing*, because the platform it had just told them to set is what
+satisfied the predicate that would have made it speak. A missing check is
+quiet once; advice that silences the check is quiet exactly on the second
+attempt, when the reader has already done as they were told.
+
+**And the fix had a second half that the reporter could not have seen.**
+The note's one consumer is gated on `rc == -signal.SIGABRT` as well as the
+predicate, and a theme plugin that cannot open a display **exits 1** where
+Qt's own platform failure aborts. So correcting `wants_a_display` alone
+would have read right in a diff and never fired. The sabotages are the
+demonstration: dropping the predicate's theme branch silences the note, and
+restoring the SIGABRT-only trigger silences it too, each with the other
+half in place.
+
+hydra stopped at the predicate and said so -- *"you hold the reasons and I
+hold only the symptom"* -- which is `harmonization.md`'s signalling rule
+paying off in the direction it claims rather than the direction it is
+usually defended on. A helpful patch from outside would have been a fix
+that looks correct and is inert.
+
+The predicate is three ordered questions now rather than one `any()`,
+because the variables disagree: a real display settles it outright, and
+after that a theme plugin says yes exactly where a named platform says no.
+The trigger widens only where a theme is named, so an ordinary GUI test
+failure does not acquire the note -- asserted by a control, the same
+failing test with the theme blank, which must not draw it.
+
+The advice names both variables when the theme is set, with `KEY=` rather
+than a removal, because `test-env` adds to the environment: an inherited
+variable can be blanked and not unset. That is in the README now beside
+"added to, not replacing", on hydra's suggestion -- it is the difference
+between a trick that works and one somebody tries to write as `unset`.
+
+### The sibling case cleared three of the four variables too
+
+`a_qt_test_that_aborts_with_no_display_is_told_the_key` built its
+environment as `{"DISPLAY": "", "WAYLAND_DISPLAY": "", "QT_QPA_PLATFORM":
+""}`. Unset here, set on any GTK desktop -- so after this change that case
+would have failed on whoever ran it rather than on fmake. It clears the
+theme as well now. Same shape as the defect: written under one
+configuration, with nothing in it declaring the dependency.
+
+### `--explain` builds, and that is the dual of §390
+
+hydra reached for `fmake --explain` as a cheap "does my `fmake.toml` still
+parse" check and got a timeout mid-build. It is not one, and its own output
+says why: `link set [symbol closure from .fmake/obj/.../main.c.o]`. The
+closure runs over objects, so nothing can report a link set without
+building them -- where a dry run compiles nothing and therefore cannot
+close the set at all. One fact, two opposite consequences.
+
+The cheap check is `fmake -n`, which validates the configuration eagerly
+and lists the keys it would have accepted. Measured here on a fixture, and
+by hydra on their 116 real sources: **852 objects before and 852 after**,
+so "compiles nothing" holds at that size as well.

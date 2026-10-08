@@ -11515,7 +11515,12 @@ def a_qt_test_that_aborts_with_no_display_is_told_the_key(t):
 	        "\tvoid shows() { QWidget w; w.resize(8, 8); QVERIFY(w.width() == 8); }\n"
 	        "};\nQTEST_MAIN(WidgetTest)\n"
 	        '#include "widget_test.moc"\n')
-	bare = {"DISPLAY": "", "WAYLAND_DISPLAY": "", "QT_QPA_PLATFORM": ""}
+	# The theme as well, and for the reason this case exists: it is the
+	# fourth variable that decides whether Qt needs a screen, so a case
+	# that clears three is a case whose verdict depends on whoever ran
+	# it. Unset here, set on any GTK desktop.
+	bare = {"DISPLAY": "", "WAYLAND_DISPLAY": "", "QT_QPA_PLATFORM": "",
+	        "QT_QPA_PLATFORMTHEME": ""}
 
 	r = t.fmake("test", env=bare)
 	out = r.stdout + r.stderr
@@ -11531,6 +11536,74 @@ def a_qt_test_that_aborts_with_no_display_is_told_the_key(t):
 	out = r.stdout + r.stderr
 	check(r.returncode == 0, f"offscreen, the widget test passes: {out}")
 	check("no display is set" not in out, f"and nothing is noted: {out}")
+
+
+@case
+def a_platform_theme_that_wants_a_screen_is_named_in_the_advice(t):
+	"""Section 397: the advice walked the reader into its own blind spot.
+
+    Reported from hydra 2026-10-08, originally hembygd's finding (0d7ac5f),
+    and reproduced here -- libqgtk3.so is installed, so the symptom
+    transferred: a Qt widget test under `QT_QPA_PLATFORM=offscreen' with
+    `QT_QPA_PLATFORMTHEME=gtk3' exits 1 with "cannot open display", because
+    a theme plugin opens a display of its own whatever the QPA says.
+
+    `wants_a_display' asked about three of the four variables. So a reader
+    who took fmake's own advice -- `test-env =
+    ["QT_QPA_PLATFORM=offscreen"]' -- kept an inherited theme, died anyway,
+    and got NO note the second time, because the platform fmake had just
+    told them to set is what satisfied the predicate that would have made
+    it speak. A diagnostic disabled by its own recommendation, which is a
+    nastier shape than a missing check.
+
+    And the trigger had to widen with the predicate: Qt's own platform
+    failure aborts, where a theme plugin exits 1, so correcting the
+    predicate alone would have read right in a diff and never fired. hydra
+    deliberately did not read the consumer and so could not have seen that,
+    which is the signalling rule paying off in the direction it claims.
+
+    The test here fails on its own assertion rather than on the display, so
+    the case does not need the gtk3 plugin to be installed to exercise the
+    note -- the note is advisory about what the reader can see above it. The
+    control is the same failing test with the theme blank, which must NOT
+    draw the note: that is what says the widened trigger did not simply
+    make every GUI failure noisy."""
+	_need_qt()
+	if not _have_pkg("Qt6Test") or not _have_pkg("Qt6Widgets"):
+		raise Skip("Qt6Test and Qt6Widgets are needed")
+	t.write("tests/widget_test.cpp",
+	        "#include <QtTest>\n#include <QApplication>\n#include <QWidget>\n"
+	        "class WidgetTest : public QObject {\n\tQ_OBJECT\n"
+	        "private slots:\n"
+	        "\tvoid fails() { QVERIFY(false); }\n"
+	        "};\nQTEST_MAIN(WidgetTest)\n"
+	        '#include "widget_test.moc"\n')
+
+	themed = {"DISPLAY": "", "WAYLAND_DISPLAY": "",
+	          "QT_QPA_PLATFORM": "offscreen",
+	          "QT_QPA_PLATFORMTHEME": "gtk3"}
+	r = t.fmake("test", env=themed)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the test fails, so the run must: {out}")
+	check("platform theme plugin" in out,
+	      f"a named theme plugin needs a screen and nothing said so: "
+	      f"{out}")
+	check('"QT_QPA_PLATFORMTHEME="' in out,
+	      f"the advice does not name the variable that is still set, which "
+	      f"is the half a reader who took the old line was missing: {out}")
+	check("gtk3" in out, f"and it does not say which theme: {out}")
+
+	# The control: the same failing test with no theme named draws the
+	# ordinary note and not this one, so the widened trigger is not just
+	# noise on every GUI failure.
+	blank = dict(themed, QT_QPA_PLATFORMTHEME="")
+	r = t.fmake("test", env=blank)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the test still fails: {out}")
+	check("platform theme plugin" not in out,
+	      f"with no theme named there is nothing to say about one: {out}")
+	check("QT_QPA_PLATFORMTHEME" not in out,
+	      f"and the variable should not be mentioned at all: {out}")
 
 
 @case

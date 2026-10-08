@@ -419,7 +419,13 @@ suite written to run from `test/`, opening `fixture/<name>` -- and the
 ejected builds `cd` there for the run; `test-env`
 under either takes `KEY=VALUE` settings for the environment it runs in --
 added to what fmake inherited rather than replacing it, with the target's
-setting winning over the project's. A value may say `$bin(NAME)` for where
+setting winning over the project's. Because it adds, **an inherited
+variable can be blanked but not unset**: `KEY=` is accepted and arrives
+set and empty, which is what a reader wanting it gone has to write.
+`QT_QPA_PLATFORMTHEME=` is the case that earns the sentence -- a Qt test
+run with `QT_QPA_PLATFORM=offscreen` still opens a display if a theme
+plugin is named, and the plugin is named by the desktop rather than by
+the tree. A value may say `$bin(NAME)` for where
 this build puts a target, which is how a test is told the path of the program
 it exercises without the filename being written twice; **naming a target that
 way also asks for it**, so `fmake test` on a clean tree builds it. Ejected
