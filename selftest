@@ -8887,6 +8887,99 @@ def a_programs_furniture_installs_where_its_tools_look(t):
 		finally:
 			u.cleanup()
 
+	# section 387: a furniture path is read from the tree root, and
+	# `@sources' is read from the naming file's own directory first. So
+	# the natural spelling -- `@man tool.1' written in `src/main.c', beside
+	# the page it documents -- was refused with *does not exist* about a
+	# file that does exist one directory over, and the reader was sent
+	# looking for something missing.
+	#
+	# The resolution is deliberately unchanged: a file in both places
+	# would make it a guess. What is asserted is that the refusal names
+	# where the file is, and that a genuinely absent one does not gain the
+	# hint -- the same trade section 379 refuses, a typo excused as
+	# something else.
+	u = Tree("furniture-elsewhere")
+	try:
+		u.write("src/tool.1", "manual\n")
+		u.write("src/main.c", '/*! @man tool.1 */\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake("--install", "-n", "--destdir",
+		            os.path.join(u.dir, "s"))
+		said = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a @man path that is not at the root is still refused: "
+		      f"{said}")
+		check("src/tool.1" in said,
+		      f"the refusal has to say where the file actually is: {said}")
+		check("from the tree root" in said,
+		      f"and what the rule is, since the remedy is to write the "
+		      f"root-relative path: {said}")
+
+		# Taking it works.
+		u.write("src/main.c", '/*! @man src/tool.1 */\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake("--install", "-n", "--destdir",
+		            os.path.join(u.dir, "s"))
+		check(r.returncode == 0,
+		      f"the path the refusal named did not work: {r.stdout}"
+		      f"{r.stderr}")
+		check("man1/tool.1" in r.stdout + r.stderr,
+		      f"and it has to land under man1: {r.stdout}{r.stderr}")
+
+		# The control: nothing like it anywhere, so no hint.
+		u.write("src/main.c", '/*! @man ghost.1 */\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake("--install", "-n", "--destdir",
+		            os.path.join(u.dir, "s"))
+		said = r.stdout + r.stderr
+		check(r.returncode != 0, f"a missing page is still refused: {said}")
+		check("in this tree at" not in said,
+		      f"a file that is nowhere must not be reported as being "
+		      f"somewhere: {said}")
+	finally:
+		u.cleanup()
+
+	# The fourth site, and the reason the helper is module-level rather
+	# than nested in `install_plan': @version_script is checked before
+	# anything compiles, in another function, so a nested helper would
+	# have meant the same two lines written twice.
+	u = Tree("version-script-elsewhere")
+	try:
+		u.write("src/lib.map", "{ global: thing; local: *; };\n")
+		u.write("src/lib.c", "/*! @file\n *  @kind shared\n"
+		        " *  @version 1.0\n *  @version_script lib.map\n */\n"
+		        "int thing(void){ return 1; }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a version script that is not at the root is still "
+		      f"refused: {said}")
+		check("src/lib.map" in said,
+		      f"and the refusal has to say where the map actually is: "
+		      f"{said}")
+
+		u.write("src/lib.c", "/*! @file\n *  @kind shared\n"
+		        " *  @version 1.0\n *  @version_script src/lib.map\n */\n"
+		        "int thing(void){ return 1; }\n")
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"the path the refusal named did not work: {r.stdout}"
+		      f"{r.stderr}")
+
+		# The control again, at this site: nowhere means no hint.
+		u.write("src/lib.c", "/*! @file\n *  @kind shared\n"
+		        " *  @version 1.0\n *  @version_script ghost.map\n */\n"
+		        "int thing(void){ return 1; }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check(r.returncode != 0, f"a missing map is still refused: {said}")
+		check("in this tree at" not in said,
+		      f"a map that is nowhere must not be reported as being "
+		      f"somewhere: {said}")
+	finally:
+		u.cleanup()
+
 
 def _service_tree(t):
 	"""A daemon with glue for all four inits."""

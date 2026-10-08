@@ -436,7 +436,8 @@ that had been green about nothing for five commits ·
 [383. The ejected builds did not know what §366 taught fmake](#383-the-ejected-builds-did-not-know-what-366-taught-fmake) ·
 [384. A schema's imports were not in its freshness key](#384-a-schemas-imports-were-not-in-its-freshness-key) ·
 [385. A flagged root is compiled twice, and one object is linked by nothing](#385-a-flagged-root-is-compiled-twice-and-one-object-is-linked-by-nothing) ·
-[386. The suite's own invocation hid a lost dependency](#386-the-suites-own-invocation-hid-a-lost-dependency)
+[386. The suite's own invocation hid a lost dependency](#386-the-suites-own-invocation-hid-a-lost-dependency) ·
+[387. Two per-file directives, two resolution rules, one misleading refusal](#387-two-per-file-directives-two-resolution-rules-one-misleading-refusal)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30293,3 +30294,65 @@ spelling is one instance; relative versus absolute source paths on the
 command line, and anything keyed on the working directory, are the same
 shape. That is a lens rather than a finding, and it is the one this entry
 leaves behind.
+
+## 387. Two per-file directives, two resolution rules, one misleading refusal
+
+`@sources` resolves against **the naming file's own directory** and falls
+back to the tree root -- that is its glob, two tries. Every furniture
+directive and `@headers` resolve against **the root alone**. So the
+natural spelling is refused:
+
+    src/tool.1      a manual page
+    src/main.c      /*! @man tool.1 */
+
+    !!! @man 'tool.1' does not exist (named for furnres)
+
+The file exists, one directory over, beside the source that named it --
+which is where a person writes `@man tool.1`, because that is what
+"beside the thing it documents" means and what the directive's own
+comment in `install_plan` says people do. `@sources helper.c` written in
+the same place resolves and builds.
+
+### The resolution is left alone, and the refusal is fixed
+
+Changing `@headers` and the furniture kinds to try the naming file's
+directory would make a file present in both places a guess, and §3's
+argument is that fmake refuses rather than guesses. The refusal was the
+part that was wrong: it sent the reader to look for a missing file.
+
+    !!! @man 'tool.1' does not exist (named for furnres)
+        it is in this tree at 'src/tool.1'; a @man path is read from the
+        tree root rather than from the file that names it
+
+Which names where the file is, states the rule, and implies the remedy --
+and the remedy was taken and checked, `@man src/tool.1` landing at
+`man1/tool.1`.
+
+**One helper, four sites, and it is module-level for the fourth.**
+`@headers`, the seven furniture kinds and `@completion` all read a
+root-relative path and die with the same sentence, and so does
+`@version_script`:
+
+    !!! src/lib.c: @version_script 'lib.map' is not a file in the tree
+        it is in this tree at 'src/lib.map'; a @version_script path is
+        read from the tree root rather than from the file that names it
+
+That fourth check runs **before anything compiles**, in another function,
+so a helper nested inside `install_plan` would have meant the same two
+lines written twice -- which is the hazard this document keeps arriving
+at from other directions. It was lifted out before the first version was
+committed rather than landed nested and followed by a second entry.
+
+It needs no provenance threaded through: the candidates are the
+directories that could have named the file, and each site already holds
+them -- the closure's units for furniture and headers, and the declaring
+file's own directory for a version script, whose message already led with
+it.
+
+### The control is the trade §379 refuses
+
+A file that is nowhere must not be reported as being somewhere. The
+sabotage that drops the existence check -- naming a candidate path
+whether or not it is there -- fails on that assertion, and the sabotage
+that empties the hint fails on the other. A typo stays a typo, which is
+the same pair that entry argued for in a different message.

@@ -11597,8 +11597,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			    f"exports, but {t.name} has kind {t.kind} -- for a program's "
 			    f"own exported symbols use @ldflags -Wl,--dynamic-list")
 		if not os.path.isfile(os.path.join(root, t.version_script)):
+			# The fourth site, and the one that already knew who named it:
+			# this message leads with `t.rel'. A map written beside the
+			# library it scripts is the natural spelling and was refused
+			# without saying where the file was.
 			die(f"{t.rel}: @version_script {t.version_script!r} is not a "
-			    f"file in the tree")
+			    f"file in the tree"
+			    + named_elsewhere(root, t.version_script,
+			                      [os.path.dirname(t.rel)],
+			                      "a @version_script path"))
 
 	# A tree whose only programs are tests is a library with tests beside
 	# it, and a plain build should produce the library. Before tests were
@@ -17589,6 +17596,43 @@ def published_headers(t, cl):
 	return list(dict.fromkeys(heads))
 
 
+def named_elsewhere(root, path, dirs, what):
+	"""The hint for a path read from the root that is beside its namer.
+
+    Every furniture directive, `@headers`, `@completion` and
+    `@version_script` read their path from the TREE ROOT, while
+    `@sources` reads from the naming file's own directory and falls back
+    to the root. So the natural spelling -- `@man tool.1' written in
+    `src/main.c', beside the page it documents -- was refused with *does
+    not exist* about a file that does exist one directory over, and the
+    reader was sent to look for something missing.
+
+    The resolution is deliberately NOT changed: a file present in both
+    places would make it a guess, and section 3's argument is that fmake
+    refuses rather than guesses. What this fixes is the refusal.
+
+    `dirs` are the directories that could have named it -- the units in a
+    target's closure for the install sites, and the declaring file's own
+    directory for a version script. Returns "" when the file is nowhere,
+    because a typo has to stay a typo (section 379).
+    """
+	near = []
+	for here in dirs:
+		if not here:
+			continue
+		cand = os.path.normpath(os.path.join(here, path))
+		if cand in near:
+			continue
+		if os.path.isfile(os.path.join(root, cand)):
+			near.append(cand)
+	if not near:
+		return ""
+	return ("\n    it is in this tree at "
+	        + ", ".join(repr(n) for n in near[:3])
+	        + f"; {what} is read from the tree root rather than from the "
+	        f"file that names it")
+
+
 def install_plan(targets, closures, root):
 	"""What this project installs, and into which of the three directories.
 
@@ -17647,6 +17691,7 @@ def install_plan(targets, closures, root):
 		else:
 			planned.append(("built", t.filename, where, t.filename, mode))
 
+
 		# @headers is gathered only for libraries: a program does not
 		# publish an API, and the file carrying the directive is often
 		# linked into one of the tree's programs as well, which would
@@ -17655,7 +17700,12 @@ def install_plan(targets, closures, root):
 		# naming it outright is a decision rather than an inference.
 		for h in published_headers(t, closures[t]):
 			if not os.path.isfile(os.path.join(root, h)):
-				die(f"@headers {h!r} does not exist (named for {t.name})")
+				die(f"@headers {h!r} does not exist (named for {t.name})"
+				    + named_elsewhere(
+				        root, h,
+				        [os.path.dirname(u.rel) for u in closures[t].link
+				         if u is not None],
+				        "a header path"))
 			planned.append(("tree", h, "includedir",
 			                install_subpath(h), 0o644))
 
@@ -17685,7 +17735,13 @@ def install_plan(targets, closures, root):
 					named += u.ann.items(kind)
 			for f in dict.fromkeys(named):
 				if not os.path.isfile(os.path.join(root, f)):
-					die(f"@{kind} {f!r} does not exist (named for {t.name})")
+					die(f"@{kind} {f!r} does not exist (named for "
+					    f"{t.name})"
+					    + named_elsewhere(
+					        root, f,
+					        [os.path.dirname(u.rel) for u in units
+					         if u is not None],
+					        f"a @{kind} path"))
 				directory, name = furniture_landing(kind, f, root)
 				planned.append(("tree", f, directory, name, 0o644))
 
@@ -17775,7 +17831,12 @@ def install_plan(targets, closures, root):
 			for f in comp:
 				if not os.path.isfile(os.path.join(root, f)):
 					die(f"@completion {f!r} does not exist (named for "
-					    f"{t.name})")
+					    f"{t.name})"
+					    + named_elsewhere(
+					        root, f,
+					        [os.path.dirname(u.rel) for u in units
+					         if u is not None],
+					        "a @completion path"))
 				planned.append(("tree", f, "completiondir", t.name, 0o644))
 
 		# A second name for one program: netcfgd installs `netcfgd-tui'
