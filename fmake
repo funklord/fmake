@@ -6705,7 +6705,25 @@ def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None,
 		# module graph above supplies. This entry is skipped rather than
 		# resolved so that nothing reintroduces it by making the path work.
 		if not os.path.isabs(dep):
-			continue
+			# ...unless the ASSEMBLER wrote this depfile, where a relative
+			# entry is an ordinary `.include' and not an artifact. gas is
+			# handed `-Wa,--MD' and records a prerequisite as it resolved
+			# it, which under `-I.' is relative -- so the rule above threw
+			# away the one dependency a raw `.s' has.
+			#
+			# Measured: a `.s' doing `.include "part.inc"' did not
+			# reassemble when part.inc changed, and the depfile beside the
+			# object named it. The spelling is not stable either: the same
+			# tree held an absolute entry from one compile and a relative
+			# one from the next, which is how the case asserting this
+			# rebuilds came to pass without testing it.
+			#
+			# Resolved against the tree root, which is where fmake runs the
+			# assembler from, and then treated exactly like an absolute
+			# entry below -- including the outside-the-tree handling.
+			if not u.lang.dep_via_as:
+				continue
+			dep = os.path.join(root, dep)
 		rel = _REL_CACHE.get((root, dep))
 		if rel is None:
 			rel = _REL_CACHE[(root, dep)] = os.path.relpath(dep, root)

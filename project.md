@@ -435,7 +435,8 @@ that had been green about nothing for five commits ·
 [382. The second kind in two days, so the guard moved](#382-the-second-kind-in-two-days-so-the-guard-moved) ·
 [383. The ejected builds did not know what §366 taught fmake](#383-the-ejected-builds-did-not-know-what-366-taught-fmake) ·
 [384. A schema's imports were not in its freshness key](#384-a-schemas-imports-were-not-in-its-freshness-key) ·
-[385. A flagged root is compiled twice, and one object is linked by nothing](#385-a-flagged-root-is-compiled-twice-and-one-object-is-linked-by-nothing)
+[385. A flagged root is compiled twice, and one object is linked by nothing](#385-a-flagged-root-is-compiled-twice-and-one-object-is-linked-by-nothing) ·
+[386. The suite's own invocation hid a lost dependency](#386-the-suites-own-invocation-hid-a-lost-dependency)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30211,3 +30212,84 @@ happened -- two entries for one file. The variant is named
 `progb.c.progb.o`, so the glob could not see it. **The database is
 correct**: it lists both compilations because both happen. The fault was
 the instrument, and it is the fifth of its kind today.
+
+## 386. The suite's own invocation hid a lost dependency
+
+A raw `.s` has exactly one kind of prerequisite -- a file it `.include`s --
+and fmake was throwing it away.
+
+    part.inc     .byte 5
+    tbl.s        .data; .globl tbl; tbl: .include "part.inc"
+
+    first build        5
+    edit part.inc      .byte 8
+    second build       * up to date        and the program still says 5
+
+The depfile was there and named it. `object_key` skips a **relative**
+depfile entry, on a rule written for C++ modules -- *a relative entry is a
+BMI and belongs to nobody's key* -- and gas records a prerequisite as it
+resolved it, which under `-I.` is relative. So the rule for one tool's
+output silently discarded the only dependency another tool reports.
+
+### The case for this existed, asserted it, and could not fail
+
+`the_two_assembly_kinds_differ_by_the_preprocessor` ends with exactly this
+check -- *changing a file the .s includes rebuilt nothing* -- and it
+passed. **It still passed with the fix reverted.** Its own docstring warns
+about the class it fell into: *because a depfile that is written and never
+read looks exactly like one that works.*
+
+The reason is the finding worth keeping, and it is about the harness:
+
+    cd tree && fmake     cwd = the tree    depfile says  part.inc
+    fmake -C tree        cwd = elsewhere   depfile says  /abs/.../part.inc
+
+**And the mechanism is the working directory, not the flags.** Measured
+with a wrapper logging the compiler's argv: fmake passes `-I<absolute
+tree>` either way and does **not** chdir for `-C`, so gas looks in its own
+cwd first -- finding `part.inc` there when fmake was run inside the tree,
+and recording it as it found it -- and otherwise finds the same file
+through `-I` and records the absolute path.
+
+The first version of this entry said the in-tree flag was `-I.`, which is
+what `--explain` prints. It renders paths relative to the tree for
+readability; the flag on the real command line is absolute. A rendering
+read as a command is how a plausible wrong mechanism gets written down,
+and `evidence.md` asks for the reduction and the mechanism to be separate
+claims for exactly this reason.
+
+**Every case in this suite runs `fmake -C <dir>`.** With `-C`, gas records
+an absolute path, `object_key` hashes it, and the dependency works. A user
+who types `fmake` in their own tree gets the relative entry and no
+dependency at all. So the suite was testing a spelling only the suite
+produces -- the harness's own convenience choosing which half of the tool
+got exercised, which is `evidence.md`'s stand-in rule arriving through the
+test runner instead of through a fake compiler.
+
+That case now does both: the `-C` assertions stay, and an in-tree
+invocation follows them. Reverting the fix fails the new one and nothing
+else, which is what the old one could not do.
+
+### The fix, and what is not pinned about it
+
+A relative entry from the assembler is resolved against the tree root --
+where fmake runs the assembler from -- and then treated exactly as an
+absolute one, including the outside-the-tree handling. Scoped by
+`u.lang.dep_via_as`, so the module rule above is untouched.
+
+**The scoping is intentional and no case holds it.** Removing it, so every
+relative entry is resolved, leaves all thirty module cases green -- because
+a module build compiles from the object directory, so a BMI's relative path
+does not exist under the root and `hash_of` screens it out anyway. The
+narrow form says what is meant and cannot hash a tree file that happens to
+sit where a BMI's relative path would point; it is not load-bearing today,
+and recording that is better than implying a sabotage proved it.
+
+### What to look at next, from this
+
+Any fault whose shape depends on **how fmake was invoked** is invisible to
+this suite, because the only invocation it uses is `-C`. The depfile
+spelling is one instance; relative versus absolute source paths on the
+command line, and anything keyed on the working directory, are the same
+shape. That is a lens rather than a finding, and it is the one this entry
+leaves behind.

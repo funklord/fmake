@@ -2159,6 +2159,46 @@ def the_two_assembly_kinds_differ_by_the_preprocessor(t):
 	check(got.stdout.strip().endswith("8"),
 	      f"changing a file the .s includes rebuilt nothing: {got.stdout!r}")
 
+	# section 386: and again from INSIDE the tree, because the assertion
+	# above cannot fail. The spelling of a gas `.include' prerequisite
+	# depends on the WORKING DIRECTORY, not on the flags: fmake passes
+	# `-I<abs tree>' either way and does not chdir for `-C', so gas finds
+	# `part.inc' in its own cwd when fmake runs inside the tree and
+	# records it relative, and finds it through `-I' otherwise and records
+	# it absolute. `object_key' skipped relative entries on the rule that
+	# a relative one is a C++ module BMI, so the dependency was lost for
+	# the spelling a user gets by typing `fmake' -- and every case here
+	# runs `-C', which produces the other one.
+	#
+	# Measured with a wrapper logging the compiler's argv and cwd:
+	#     cd tree && fmake   cwd=tree       ->  part.inc
+	#     fmake -C tree      cwd=elsewhere  ->  /abs/.../part.inc
+	env = dict(os.environ)
+	for _k in ("CFLAGS", "LDFLAGS", "DEBUG", "SANITIZE"):
+		env.pop(_k, None)
+
+	def _inside(*args):
+		return subprocess.run([FMAKE, *args], cwd=t.dir, env=env,
+		                      capture_output=True, text=True,
+		                      timeout=FMAKE_TIMEOUT)
+
+	# Reassemble from inside the tree, so the depfile beside the object is
+	# in the spelling that was being thrown away.
+	t.write("tbl.s", '.data\n.globl tbl\ntbl:\n.include "part.inc"\n'
+	        "# assembled from inside the tree\n")
+	r = _inside()
+	check(r.returncode == 0,
+	      f"the in-tree build failed: {r.stdout}{r.stderr}")
+	t.write("part.inc", "\t.byte 3\n")
+	r = _inside()
+	check(r.returncode == 0,
+	      f"the in-tree rebuild failed: {r.stdout}{r.stderr}")
+	got = subprocess.run([exe], capture_output=True, text=True)
+	check(got.stdout.strip().endswith("3"),
+	      f"a changed .include rebuilt nothing when fmake ran from inside "
+	      f"the tree, which is the spelling gas writes under -I. and the "
+	      f"one every user gets: {got.stdout!r}")
+
 
 @case
 def a_generated_file_nothing_can_compile_is_named(t):
