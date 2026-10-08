@@ -1908,6 +1908,56 @@ def two_targets_that_are_one_make_variable_are_refused(t):
 
 
 @case
+def every_make_variable_collision_is_named_with_a_remedy_that_finishes(t):
+	"""Section 396: the same two faults as §394, one function along.
+
+    The case above covers two names and passes either way, which is why
+    this needed its own. Found by a sweep derived from §394 -- messages
+    whose text asserts a quantity while their data is a list -- and this
+    was the one real hit of six candidates.
+
+    Three names mapping to one Make variable were answered with "give one
+    of them a different name", which leaves two of them colliding; and a
+    second colliding pair in the same tree was never mentioned at all,
+    because the check died on the first. So a reader renamed one name per
+    run, twice, to learn what one run could have said.
+
+    The remedy's wording is the same as §394's deliberately: it is the same
+    situation, and one tool answering it two ways teaches a reader to trust
+    neither."""
+	for i, name in enumerate(("my-app", "my_app", "my+app")):
+		t.write(f"a{i}.c", f'/** @target {name} */\n#include <stdio.h>\n'
+		        f'int main(void){{ puts("{i}"); return 0; }}\n')
+	t.write("b0.c", '/** @target other-one */\n'
+	        'int main(void){ return 0; }\n')
+	t.write("b1.c", '/** @target other_one */\n'
+	        'int main(void){ return 0; }\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the collisions should be refused: {out}")
+	for name in ("my-app", "my_app", "my+app"):
+		check(name in out, f"{name} is not named: {out}")
+	check("MY_APP" in out and "OTHER_ONE" in out,
+	      f"both shared variables should be named in one run, so the tree "
+	      f"is not fixed one collision per run: {out}")
+	check("all but one" in out,
+	      f"the remedy still tells the reader to rename one of three: "
+	      f"{out}")
+
+	# And the remedy finishes: renaming all but one of each builds.
+	for i, name in enumerate(("my-app", "keep_two", "keep_three")):
+		t.write(f"a{i}.c", f'/** @target {name} */\n#include <stdio.h>\n'
+		        f'int main(void){{ puts("{i}"); return 0; }}\n')
+	t.write("b1.c", '/** @target other_two */\n'
+	        'int main(void){ return 0; }\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the remedy the message offers does not build: "
+	      f"{r.stdout}{r.stderr}")
+
+
+@case
 def two_groups_that_are_one_make_variable_are_refused(t):
 	"""`slow-net` and `slow_net` are two groups and one Make variable.
 

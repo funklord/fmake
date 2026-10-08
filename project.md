@@ -445,7 +445,8 @@ that had been green about nothing for five commits ·
 [392. fmake asks for no session bus, and runs code that might](#392-fmake-asks-for-no-session-bus-and-runs-code-that-might) ·
 [393. The root-only defines scope can split a binary, and a detector for it would fire on the one real user](#393-the-root-only-defines-scope-can-split-a-binary-and-a-detector-for-it-would-fire-on-the-one-real-user) ·
 [394. A repeated target name was counted as two, however many there were](#394-a-repeated-target-name-was-counted-as-two-however-many-there-were) ·
-[395. The entry-point warning blamed a macro for a main() in plain text](#395-the-entry-point-warning-blamed-a-macro-for-a-main-in-plain-text)
+[395. The entry-point warning blamed a macro for a main() in plain text](#395-the-entry-point-warning-blamed-a-macro-for-a-main-in-plain-text) ·
+[396. The same fault one function along, found by a sweep derived from it](#396-the-same-fault-one-function-along-found-by-a-sweep-derived-from-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30784,3 +30785,43 @@ warning about archives. Nothing connected the two. The remedy that
 generalises is not "check the comment" but **let the message test the
 cause it names** -- here one dictionary lookup that was already being
 computed.
+## 396. The same fault one function along, found by a sweep derived from it
+
+§394 fixed a message that hard-coded a count and offered a remedy that did
+not finish. The lens that follows from it is **a message whose text asserts
+a quantity while its data is a list**, and it is cheap to run: sweep every
+`die`/`warn`/`note` literal for *two*, *both*, *either*, *neither*, *one of
+them*, and keep the ones that also interpolate a joined list.
+
+38 messages carry such a word; 6 also join a list. Read, five are correct
+-- *"neither a target nor a file"* and *"Neither backend can name these"*
+are about two named categories, not about the list's length. The sixth is
+`refuse_ident_collisions`, which the check §394 fixed calls **one line
+later**:
+
+    !!! targets 'my+app' and 'my-app' and 'my_app' are the same Make
+        variable (MY_APP_...): give one of them a different name
+
+Both of §394's faults, intact. Renaming one of three leaves two colliding,
+and a second colliding pair in the same tree -- `other-one` and
+`other_one`, sharing `OTHER_ONE_...` -- was never mentioned, because it
+died on the first. A reader renamed one name per run, twice, to learn what
+one run could have said.
+
+**The remedy's wording is deliberately §394's**, word for word: it is the
+same situation, and one tool answering it two ways teaches a reader to
+trust neither.
+
+Two existing cases covered this function and both use two names, so both
+pass either way -- which is why the third was needed. The sweep's other
+five hits are recorded as read rather than as a count, per `evidence.md`:
+a control proves a probe can fire and says nothing about whether it is
+aimed at the right population, so what settles it is reading what the
+findings are.
+
+### The one hit not pursued, and why
+
+A sixth message about `SPDX-License-Identifier` files at the tree root also
+carries *either* and *both* over a joined list. It is left alone: `CLAUDE.md`
+is explicit that licensing is not this project's to raise short of a
+blocker, and a tidier sentence there is not one.

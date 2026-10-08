@@ -15257,11 +15257,29 @@ def refuse_ident_collisions(what, names):
 	spelt = {}
 	for name in names:
 		spelt.setdefault(_mk_ident(name).upper(), []).append(name)
-	for ident, clashing in sorted(spelt.items()):
-		if len(clashing) > 1:
-			die(f"{what} {' and '.join(repr(c) for c in sorted(clashing))} "
-			    f"are the same Make variable ({ident}_...): give one of "
-			    f"them a different name")
+	# Every colliding identifier, and a remedy that is right above two.
+	# Both faults are section 394's, in the check this function is called
+	# beside -- found by a sweep derived from that one, for a message whose
+	# text asserts a quantity while its data is a list.
+	#
+	# Three names mapping to one variable were answered with "give one of
+	# them a different name", which leaves two of them colliding; and a
+	# second colliding pair in the same tree was never mentioned, because
+	# this died on the first. The wording matches section 394's because it
+	# is the same situation, and two messages in one tool answering it two
+	# ways is how a reader learns to distrust both.
+	clashes = [(ident, sorted(c)) for ident, c in sorted(spelt.items())
+	           if len(c) > 1]
+	if clashes:
+		shown, rest = capped(clashes, 6)
+		lines = []
+		for ident, clashing in shown:
+			lines.append(f"{what} "
+			             f"{' and '.join(repr(c) for c in clashing)} "
+			             f"are the same Make variable ({ident}_...)")
+		if rest:
+			lines.append(f"... and {rest} more collision(s) (-v for all)")
+		die("\n".join(lines) + "\nrename all but one of each")
 
 
 RE_NINJA_ESCAPE = re.compile(r"([ :$])")
