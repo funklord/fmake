@@ -440,7 +440,8 @@ that had been green about nothing for five commits ·
 [387. Two per-file directives, two resolution rules, one misleading refusal](#387-two-per-file-directives-two-resolution-rules-one-misleading-refusal) ·
 [388. The same mistake with a glob, and the config sites that are not it](#388-the-same-mistake-with-a-glob-and-the-config-sites-that-are-not-it) ·
 [389. A nested tool build dropped the exclude with the flags](#389-a-nested-tool-build-dropped-the-exclude-with-the-flags) ·
-[390. A dry run planned links the build refuses, and exited 0](#390-a-dry-run-planned-links-the-build-refuses-and-exited-0)
+[390. A dry run planned links the build refuses, and exited 0](#390-a-dry-run-planned-links-the-build-refuses-and-exited-0) ·
+[391. Five lenses from the two above, and what they did not find](#391-five-lenses-from-the-two-above-and-what-they-did-not-find)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30520,3 +30521,45 @@ builds perfectly well, and what makes this a finding is that the plan above
 it is unachievable. Nothing was asked of fmake in raidcfgd -- their remedy
 is an exclude of the vendored copy, which fmake's own include graph
 justifies, and that line is the copyright holder's.
+## 391. Five lenses from the two above, and what they did not find
+
+Both findings suggested a shape to look for elsewhere. All five sweeps
+came up empty, and they are recorded because an empty sweep is only a
+measurement if its method is written down -- otherwise the next pass
+cannot tell "this was checked" from "nobody looked", and those license
+opposite work.
+
+**Another mode that cannot reach a stage** -- section 390's shape. `--eject
+make` on the same two-definition tree refuses: rc=1, no Makefile on
+stdout, the ambiguity named. Eject closes the link set because it
+compiles, so `-n` is the only mode that plans links without being able to
+check them, which is why 390 is specific to it rather than a family.
+
+**A stale test binary.** `build-and-commit.md` forbids concluding that a
+test passes from a binary the build step did not rebuild, and fmake owns
+that promise for the trees it drives. Break a test's source after a good
+build and `fmake test` says `b_test skipped: b_test.c did not compile`
+and `no target could be built`, rc=1. The previous binary is not run.
+
+**A tally over work that did not happen.** Two tests, one of them
+uncompilable: fmake runs *neither*, with `1 file(s) did not compile; not
+running tests` and rc=1. There is no `1 test passed` line sitting above a
+skip, which `evidence.md` calls the half that stands a reader down.
+
+**A timeout reported as a pass.** A test that never returns, under
+`[project] test-timeout = 2`: `hang_test timed out after 2s`, counted into
+`1 of 1 failed`, the key that raises it named in the same line, and no
+`hang_test` left in the process table afterwards.
+
+**The build toolchain's flags missing from the tool's key** -- section
+389's shape, since the nested build rebuilds its own configuration and a
+key assembled there could lose an input. Changing only `[build-toolchain]
+defines` from `WHICH=11` to `WHICH=22` rebuilt the tool, re-ran the
+generator, and the program printed 22. Covered.
+
+**What the set says about where to look next.** Four of the five are the
+test runner and the modes around it, and all four are right, so the next
+lens is not a sixth variant of this one. Both real findings were about a
+*derived* configuration -- one rebuilt for another machine, one never
+computed at all -- and neither was about running or reporting, which is
+where these five looked.
