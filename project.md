@@ -442,7 +442,8 @@ that had been green about nothing for five commits ·
 [389. A nested tool build dropped the exclude with the flags](#389-a-nested-tool-build-dropped-the-exclude-with-the-flags) ·
 [390. A dry run planned links the build refuses, and exited 0](#390-a-dry-run-planned-links-the-build-refuses-and-exited-0) ·
 [391. Five lenses from the two above, and what they did not find](#391-five-lenses-from-the-two-above-and-what-they-did-not-find) ·
-[392. fmake asks for no session bus, and runs code that might](#392-fmake-asks-for-no-session-bus-and-runs-code-that-might)
+[392. fmake asks for no session bus, and runs code that might](#392-fmake-asks-for-no-session-bus-and-runs-code-that-might) ·
+[393. The root-only defines scope can split a binary, and a detector for it would fire on the one real user](#393-the-root-only-defines-scope-can-split-a-binary-and-a-detector-for-it-would-fire-on-the-one-real-user)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30616,3 +30617,59 @@ as session buses. Matching on `comm` rather than on `args` cannot do that,
 since no shell is named `dbus-daemon` -- the same self-match that
 `running-code.md` records for `pgrep` watchers, met while measuring instead
 of while waiting.
+## 393. The root-only defines scope can split a binary, and a detector for it would fire on the one real user
+
+Swept as section 391's next lens -- a *derived* configuration, which is
+what both real findings were about -- and this one is behaving as designed.
+It is recorded because the hazard is real, so the next session to find it
+would otherwise reopen the question, and because the obvious remedy is
+worse than it looks.
+
+**The hazard, measured.** A header whose struct gains a field under
+`#ifdef EXTRA`, a non-root unit that returns `sizeof(struct S)`, and:
+
+    [target.one]
+    defines = ["EXTRA=1"]
+
+    root=8 other=4 SPLIT
+
+One binary, two layouts, nothing said. With `cflags = ["-DEXTRA=1"]`
+instead it is `root=8 other=8 AGREE`.
+
+**It is the documented semantics and not a defect.** §316 states it --
+`[target.*] defines` reaches the root translation unit, `[target.*] cflags`
+reaches everything that program links -- and the README states it again
+with the trade: root-only is what makes a second program cost one compile
+rather than a second build, and `[project] defines` is named there as the
+every-file scope. Document and code agree, so there is nothing to flag.
+
+**Whether fmake should warn, and why not.** The detector would be: for a
+target carrying `defines`, is the macro tested in a conditional in anything
+a non-root unit of that target includes. fmake already has the include
+graph, so that part is cheap. It is the wrong detector, and situ is the
+proof -- the one tree that uses this feature in earnest, compiling its
+suite twice under `-DSITU_CHECKED`:
+
+    runtime/c/situ.h:173   #ifdef SITU_CHECKED ... #endif   96 lines
+
+I read that block: 0 struct, union or enum definitions and 8 `static
+inline` functions. `static inline` is per translation unit with no linkage
+and no layout, so a unit compiled without the macro simply does not have
+the function -- and a unit that called it would fail to compile rather than
+link against a different layout. **The failure mode there is loud.**
+
+So the safe pattern and the dangerous one differ only in *what the
+conditional contains*, which a grep over macro names cannot see. A warning
+keyed on the name would fire on situ's correct usage on every build, and
+`evidence.md`'s rule about a standing gate applies exactly: false findings
+get suppressed with ignore lists, and a gate carrying one has been switched
+off by instalments. Telling them apart needs to know whether the guarded
+region changes layout or linkage, which is C semantic analysis rather than
+a scan.
+
+**So: not built, deliberately.** Revisit it if a tree actually hits the
+split -- that tree will have the fixture, which is the thing this analysis
+lacked and had to construct. The cheap half, if it is ever wanted, is to
+narrow the question to guarded `struct`, `union`, `enum` and non-`static`
+definitions rather than to macro names, since those are what can differ
+between two objects in one link.
