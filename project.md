@@ -434,7 +434,8 @@ that had been green about nothing for five commits ·
 [381. A data file's destination is its path, so its path can climb](#381-a-data-files-destination-is-its-path-so-its-path-can-climb) ·
 [382. The second kind in two days, so the guard moved](#382-the-second-kind-in-two-days-so-the-guard-moved) ·
 [383. The ejected builds did not know what §366 taught fmake](#383-the-ejected-builds-did-not-know-what-366-taught-fmake) ·
-[384. A schema's imports were not in its freshness key](#384-a-schemas-imports-were-not-in-its-freshness-key)
+[384. A schema's imports were not in its freshness key](#384-a-schemas-imports-were-not-in-its-freshness-key) ·
+[385. A flagged root is compiled twice, and one object is linked by nothing](#385-a-flagged-root-is-compiled-twice-and-one-object-is-linked-by-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -30129,3 +30130,84 @@ project's language, which is the principle `[generate.*]`'s `depfile` key
 already rests on: the tool that did the reading is the only thing that
 knows. Signalled to situ with the reproduction; fmake's own fix does not
 wait on it.
+
+## 385. A flagged root is compiled twice, and one object is linked by nothing
+
+Recorded on the copyright holder's instruction after being raised in
+conversation. **Measured, not fixed**: the change is to compile
+scheduling and the skip condition is not simply "always", so it is a
+decision rather than a wiring gap.
+
+A target carrying per-target `defines` has its root compiled twice:
+
+    [1/4] CC  proga.c
+    [2/4] CC  progb.c            <- plain
+    [3/4] CC  shared.c
+    [4/4] CC  progb.c (progb)    <- the variant, -DMODE_B
+
+and the plain object goes nowhere. From `--explain`, with the object
+directory elided:
+
+    link set   [symbol closure from proga.c.o]
+      cc -o proga proga.c.o shared.c.o -Os
+    link set   [symbol closure from progb.c.progb.o]
+      cc -o progb progb.c.progb.o shared.c.o -Os
+
+`progb.c.o` appears in neither. **And it cannot usefully appear in
+another program's link**: a flagged root is a file defining `main`, so a
+second exe linking it would have two. The plain compile of a flagged
+exe root therefore produces an object with no consumer.
+
+`--explain` does not list that compile either. Its `argv` is per target
+and the plain compile belongs to no target, so a reader comparing the
+explanation against the build sees one compile more than the explanation
+accounts for.
+
+### The comment that says this does not happen
+
+At the mirage check:
+
+    # `_root_unit', not `units[t.rel]': the same fact was
+    # derived twice here, and only one of the two consulted
+    # the target's own pool. With a flagged root no longer
+    # compiled plainly, the weaker derivation asked an
+    # uncompiled unit and crashed on None.
+
+*With a flagged root no longer compiled plainly* reads as though this
+compile had already been removed. The measurement above says it happens.
+**Which of the two is wrong is not established here** -- the premise may
+be stale, or it may describe a path these fixtures do not reach -- and
+saying so is better than picking one, since the fix the comment
+documents (`_root_unit` consulting the target's own pool) is sound
+either way.
+
+### Why it was raised rather than changed
+
+The skip is conditional, and the conditions are where it would go wrong:
+
+- a root defining `main` cannot be linked by another exe, but a
+  **library** target can take it as a member;
+- `--force-link` and `--widen-all` pull in units nothing reaches.
+
+So "skip the plain compile of a flagged root" is not a filter anybody
+can write from the outside in one sitting, and a wrong answer is a
+missing object rather than a slow build. Compile scheduling and
+per-target pool construction are the core; the suite is 628 cases and
+would say, but what it cannot say is whether the design intends the
+plain compile for a reason these fixtures do not show.
+
+### The cost, so the decision has a number
+
+One extra compile per flagged target. It matters where flagged targets
+are the norm rather than the exception: situ compiles every test twice by
+design -- that is what `defines` on a root is for, and its own notes say
+so -- and each of those roots takes a plain compile on top of its two.
+
+### An instrument note, because it nearly became a finding
+
+The first look used `find -name 'progb.c.o'`, which reported one object
+and made the compilation database appear to describe a compile that never
+happened -- two entries for one file. The variant is named
+`progb.c.progb.o`, so the glob could not see it. **The database is
+correct**: it lists both compilations because both happen. The fault was
+the instrument, and it is the fifth of its kind today.
