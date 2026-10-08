@@ -449,7 +449,8 @@ that had been green about nothing for five commits ·
 [396. The same fault one function along, found by a sweep derived from it](#396-the-same-fault-one-function-along-found-by-a-sweep-derived-from-it) ·
 [397. A diagnostic disabled by its own recommendation](#397-a-diagnostic-disabled-by-its-own-recommendation) ·
 [398. The guess named a file that defines another symbol](#398-the-guess-named-a-file-that-defines-another-symbol) ·
-[399. Two identical copies are named as copies](#399-two-identical-copies-are-named-as-copies)
+[399. Two identical copies are named as copies](#399-two-identical-copies-are-named-as-copies) ·
+[400. It named one symbol and knew about the rest](#400-it-named-one-symbol-and-knew-about-the-rest)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31027,3 +31028,55 @@ sentence about fmake, true on the day, falsified by a later commit nobody
 connected to it, and nothing in either project re-checking. The
 countermeasure that has actually worked is this one -- somebody running it
 on a pristine copy -- rather than anything either tree could have gated.
+## 400. It named one symbol and knew about the rest
+
+Reported from netcfgd 2026-10-08, acting on §398's refusal in their tree --
+so this is the second finding out of one signal, arriving from the tree the
+signal went to.
+
+**They had six real collisions and fmake showed them two.** The other four
+they found with `nm` over both archives:
+
+    nm --defined-only -g client/libncfg_client.a | awk '$2=="T"{print $3}'
+    nm --defined-only -g c/libncfg.a             | awk '$2=="T"{print $3}'
+    comm -12  ->  20
+
+Their sentence is the finding: *"The four you did not see are the dangerous
+ones, which is only visible once the set is in front of you."* Five of the
+six declare identically over same-named structs with **different layouts** --
+`ncfg_journal_t` is `{records, record_count, record_capacity, owned,
+owned_count, failed}` in the daemon and `{items, count}` in the client, both
+behind `void ncfg_journal_free(ncfg_journal_t *)`. Nothing refuses that at
+compile time and nothing refuses it at link time; whichever copy survives
+runs against the wrong layout.
+
+**So the cost of naming one is not a slower fix.** §394's cost was a reader
+fixing one name per run. This is worse: a reader stops at whichever
+collision was easiest to see, in a set where the first is no more important
+than the others and reads as though it were the problem. The refusal says
+how many it found now, names them capped at six, and says plainly that the
+first is not the important one.
+
+`trouble` holds a row per `(target, symbol)`, so the count comes off the
+**set of symbols** and not off its length -- a separate sabotage, and the
+control is a tree with one ambiguous symbol across two targets, which must
+not grow the line. The first attempt at that sabotage failed through the
+other check instead, so it was redone as a gate on the row count to reach
+the control: *a control has to be reached, not only able to fire*.
+
+### What of their twenty was not fmake's business
+
+Fourteen of the twenty were **one source file compiled into both archives**
+-- `c/Makefile` reads `SHARED_SRCS = ../client/ncfg_json.c` -- so the
+duplicate was in how the archives were composed rather than in what
+anything was called. fmake never saw those at all, and correctly: it
+compiles a source once and closes over objects, so a shared source is one
+unit with one definition. Their twenty was an artifact of `nm` over two
+archives; fmake's count was of files that genuinely define one symbol
+twice.
+
+They asked, explicitly leaving it open, whether fmake can tell a genuine
+parallel copy from a file two targets legitimately share. **For fmake the
+question does not arise** -- there is no arrangement in which a shared
+source becomes two providers -- which is worth saying back rather than
+treating as an open design question.

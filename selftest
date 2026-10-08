@@ -25201,6 +25201,62 @@ def an_unguessable_ambiguity_offers_a_remedy_that_works(t):
 
 
 @case
+def an_ambiguity_says_how_many_symbols_it_found(t):
+	"""Section 400: it named one and knew about the rest.
+
+    Reported from netcfgd 2026-10-08, acting on fmake's own refusal in
+    their tree. They had six real collisions between a daemon archive and
+    a client archive; fmake showed them two, and they found the other four
+    by running `nm` over both archives themselves. Their sentence for why
+    that mattered: "The four you did not see are the dangerous ones, which
+    is only visible once the set is in front of you" -- five of the six
+    declared identically over same-named structs with different layouts,
+    which nothing refuses at compile time and nothing refuses at link
+    time either.
+
+    So the cost of naming one is not a slower fix. It is a reader who
+    stops at whichever collision was easiest to see, in a set where the
+    first is no more important than the others and reads as though it
+    were the problem.
+
+    The control is a tree with exactly one, which must not grow the line:
+    `trouble` holds a row per (target, symbol), so a count taken off its
+    length rather than off the set of symbols would report others that do
+    not exist as soon as two targets are affected."""
+	t.write("a.c", "int s_one(void){ return 1; }\n"
+	        "int s_two(void){ return 2; }\n"
+	        "int s_three(void){ return 3; }\n")
+	t.write("b.c", "int s_one(void){ return 9; }\n"
+	        "int s_two(void){ return 9; }\n"
+	        "int s_three(void){ return 9; }\n")
+	t.write("main.c", "int s_one(void); int s_two(void); int s_three(void);\n"
+	        "int main(void){ return s_one() + s_two() + s_three(); }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"three collisions must be refused: {out}")
+	check("2 other symbol(s)" in out,
+	      f"the refusal names one symbol and does not say how many it "
+	      f"found: {out}")
+	for s in ("s_one", "s_two", "s_three"):
+		check(s in out, f"{s} is never named: {out}")
+
+	# Two targets, one symbol: the count comes off the set of symbols, not
+	# off the rows, so there is nothing "other" to report.
+	t.write("b.c", "int s_one(void){ return 9; }\n")
+	t.write("main.c", "int s_one(void);\n"
+	        "int main(void){ return s_one(); }\n")
+	t.write("second.c", "int s_one(void);\n"
+	        "int main(void){ return s_one() + 1; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"one collision must still be refused: {out}")
+	check("other symbol(s)" not in out,
+	      f"one ambiguous symbol across two targets reported others that "
+	      f"do not exist, so the count is off the rows: {out}")
+
+
+@case
 def two_identical_copies_are_named_as_copies(t):
 	"""Section 399: the duplicated-copy case was left for the reader.
 

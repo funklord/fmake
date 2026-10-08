@@ -13528,6 +13528,36 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		         "    " + listing,
 		         "fmake will not guess which one belongs in "
 		         + ", ".join(sorted({t.name for t, _s, _p in trouble})) + "."]
+		# How many there are, because this names ONE and knew about the
+		# rest. `trouble' holds a row per (target, symbol), so the set is
+		# what counts rather than its length.
+		#
+		# Reported from netcfgd 2026-10-08, who had six real collisions
+		# between a daemon archive and a client archive, saw two of them
+		# from fmake, and found the other four by running `nm' over both
+		# archives themselves. Their words for why that mattered: "The
+		# four you did not see are the dangerous ones, which is only
+		# visible once the set is in front of you" -- five of the six
+		# declared identically over same-named structs with different
+		# layouts, which nothing refuses at compile time and nothing
+		# refuses at link time either.
+		#
+		# So the cost of naming one is not a slower fix, it is a reader
+		# who stops at the one that was easiest to see. Fixing them one
+		# per run would have been section 394's cost; this is worse,
+		# because the first symbol is no more important than the
+		# others and reads as though it were the problem.
+		_others = sorted({_s for _t, _s, _p in trouble} - {first_sym})
+		if _others:
+			_ohead, _orest = capped(_others, 6)
+			lines += ["",
+			          f"{len(_others)} other symbol(s) are also defined "
+			          f"more than once here: " + ", ".join(_ohead)
+			          + (f", and {_orest} more (-v for all)"
+			             if _orest else "")
+			          + "\nEach is the same question as the one above, and "
+			            "the first is not the important one -- read the set "
+			            "before fixing any of them."]
 		# git has usually known the answer all along: one of them is build
 		# output somebody left in the tree. Said before the guessing starts,
 		# because it is the one part of this message that is not a guess.
