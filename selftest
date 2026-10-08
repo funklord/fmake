@@ -22545,6 +22545,57 @@ int extras_sum(void) { Alpha a; Bravo b; Charlie c; return a.n + b.n + c.n; }
 	check(_run_in(t.dir, "./" + prog).returncode == 0,
 	      "the ejected build produced a program whose signal never arrived")
 
+	# section 383: a header the moc'd one INCLUDES is a moc input, and
+	# the ejected rule listed only the moc'd header. Section 366 taught
+	# fmake that -- a slot behind an `#ifdef' a header defines is in the
+	# class and not in the meta-object unless moc runs again -- and the
+	# build fmake writes did not know it.
+	#
+	# Measured before the fix: a `#define' added to the included header
+	# had fmake print `MOC thing.h' while the ejected `make' printed
+	# nothing, exited 0, and left the old meta-object in place. That is
+	# the asymmetry an_ejected_clean_does_not_delete_outside_the_tree
+	# exists to guard against, in the other direction.
+	u = Tree("ejected-moc-dep")
+	try:
+		u.write("flag.h", "#pragma once\n")
+		u.write("dep.h",
+		        "#pragma once\n#include <QObject>\n#include \"flag.h\"\n"
+		        "class Dep : public QObject {\n\tQ_OBJECT\npublic:\n"
+		        "\tint plain();\n"
+		        "#ifdef EXTRA_SLOT\npublic slots:\n\tvoid extra();\n"
+		        "#endif\n};\n")
+		u.write("dmain.cpp",
+		        '#include "dep.h"\nint Dep::plain(){ return 1; }\n'
+		        "#ifdef EXTRA_SLOT\nvoid Dep::extra(){}\n#endif\n"
+		        "int main(){ Dep d; return d.plain() - 1; }\n")
+		r = u.fmake("--eject", "make")
+		check(r.returncode == 0, f"eject failed: {r.stdout}{r.stderr}")
+		with open(os.path.join(u.dir, "Makefile"), "w") as fh:
+			fh.write(r.stdout)
+		shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+
+		out = os.path.join(u.dir, "build/moc/moc_dep.cpp")
+		b = _run_in(u.dir, "make", "-s")
+		check(b.returncode == 0, f"the ejected build failed: {b.stdout}{b.stderr}")
+		before = open(out).read()
+		# Not vacuous: the slot must be absent first, or the assertion
+		# after the change would hold whether or not moc ran.
+		check("extra" not in before,
+		      "the slot is in the meta-object before the header defined "
+		      "it, so this fixture cannot show a re-moc")
+
+		u.write("flag.h", "#pragma once\n#define EXTRA_SLOT 1\n")
+		b = _run_in(u.dir, "make", "-s")
+		check(b.returncode == 0,
+		      f"the rebuild failed: {b.stdout}{b.stderr}")
+		check("extra" in open(out).read(),
+		      "the ejected build did not re-run moc when a header the "
+		      "moc'd header includes changed, so the meta-object is "
+		      "stale while the build reports success")
+	finally:
+		u.cleanup()
+
 # ---------------------------------------------------------------------------
 # uic
 #

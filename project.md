@@ -432,7 +432,8 @@ that had been green about nothing for five commits ·
 [379. The caveat that excused a typo, in the other spelling](#379-the-caveat-that-excused-a-typo-in-the-other-spelling) ·
 [380. Two config keys that validated and did nothing](#380-two-config-keys-that-validated-and-did-nothing) ·
 [381. A data file's destination is its path, so its path can climb](#381-a-data-files-destination-is-its-path-so-its-path-can-climb) ·
-[382. The second kind in two days, so the guard moved](#382-the-second-kind-in-two-days-so-the-guard-moved)
+[382. The second kind in two days, so the guard moved](#382-the-second-kind-in-two-days-so-the-guard-moved) ·
+[383. The ejected builds did not know what §366 taught fmake](#383-the-ejected-builds-did-not-know-what-366-taught-fmake)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -29981,3 +29982,54 @@ spelling of the test would catch. So `normpath` guards the next kind that
 joins a user path onto a prefix, and the sabotage that drops it leaves
 every case green -- which is the honest state of it, found by running that
 sabotage rather than by assuming the pair was covered.
+
+## 383. The ejected builds did not know what §366 taught fmake
+
+§366 taught fmake that a header the moc'd header *includes* is an input
+to moc: a slot behind an `#ifdef` that another header defines is in the
+class and not in the meta-object unless moc runs again. **The build fmake
+writes did not know it.**
+
+    fmake            MOC thing.h, and the meta-object gains the slot
+    ejected make     nothing, exit 0, old meta-object left in place
+    ejected ninja    build .../moc_thing.cpp: moc thing.h
+
+Measured with `thing.h` including `flag.h` and a slot behind
+`#ifdef EXTRA_SLOT`: adding the `#define` to `flag.h` had fmake re-moc
+and the ejected build do nothing and report success. A slot present in
+the class and absent from the meta-object is a `connect` by name that
+fails at run time, from a build that looked clean -- which is
+`an_ejected_clean_does_not_delete_outside_the_tree`'s asymmetry pointed
+the other way, and the class `build-and-commit.md` calls load-bearing:
+*a rule that quietly does not run*, producing a stale artifact and a
+confusing symptom somewhere else.
+
+### The answer was four rules down in the same function
+
+The ejected **rcc** rule already lists its own deps as extra
+prerequisites, in both backends -- plainly in make, and after `|` in
+ninja, where implicit dependencies trigger a rebuild without joining
+`$in`. moc simply never got it. So this is not a design question: the
+convention is in the same function, applied to the sibling tool, and
+`job["deps"]` has been populated since §366.
+
+    make     build/moc/moc_thing.cpp: thing.h flag.h
+    ninja    build build/moc/moc_thing.cpp: moc thing.h | flag.h
+
+Both were then run end to end: the ejected `make` and the ejected
+`ninja` each re-moc when `flag.h` changes, and the moc command line is
+still `moc -I. thing.h -o ...` -- read from the build's own output rather
+than assumed.
+
+### `$<` and not `$^`, which the second sabotage proves is load-bearing
+
+`build-and-commit.md` names the trap: adding a header to a rule that
+uses `$^` hands the compiler the header. The recipe here was already
+written with `$<`, so adding prerequisites was safe -- but nothing
+pinned that. Sabotaging the recipe to `$^` makes moc fail with its own
+usage message, and the case catches it. So the case now constrains the
+dependency *and* the argument list, which is the pair that makes a
+prerequisite safe to add.
+
+`uic` carries no deps -- a `.ui` file includes nothing -- so it is
+untouched, and the only jobs with a `deps` key are moc's and rcc's.

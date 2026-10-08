@@ -15861,7 +15861,22 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"{P}MOCFLAGS = {' '.join(_eject_flags(moc.get('flags', []), root, _mk_flag))}")
 		a("")
 		for j in moc_jobs:
-			a(f"{_eject_src(j['out'])}: {j['src']}")
+			# The headers the moc'd one includes are prerequisites, the
+			# same as the rcc rule four rules down already does with
+			# its own deps. Section 366 taught fmake that such a header
+			# is an input to moc -- a slot behind an `#ifdef' that a
+			# header defines is in the class and not in the meta-object
+			# unless moc runs again -- and the ejected build did not
+			# know it. Measured: with `thing.h' including `flag.h', a
+			# `#define' added to `flag.h' had fmake print `MOC thing.h'
+			# and the ejected `make' print nothing, exit 0, and leave
+			# the old meta-object in place.
+			#
+			# `$<' and not `$^', so a prerequisite does not become an
+			# argument: `build-and-commit.md' names that trap, and the
+			# recipe here was already written the safe way.
+			a(f"{_eject_src(j['out'])}: "
+			  f"{' '.join([j['src'], *j.get('deps', ())])}")
 			a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}MOC) $({P}MOCFLAGS) $< -o $@")
 			a("")
@@ -16625,7 +16640,16 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("  description = MOC $in")
 		a("")
 		for j in moc_jobs:
-			a(f"build {_ninja(_eject_src(j['out']))}: moc {_ninja(j['src'])}")
+			# Implicit dependencies after `|', which is what the rcc
+			# rule below already does with its own deps: they trigger
+			# a rebuild and are not in `$in'. A path containing `|' is
+			# refused for this backend (section 355), so the separator
+			# cannot be produced by a filename.
+			mdeps = j.get("deps") or ()
+			a(f"build {_ninja(_eject_src(j['out']))}: moc "
+			  f"{_ninja(j['src'])}"
+			  + (" | " + " ".join(_ninja(d) for d in mdeps)
+			     if mdeps else ""))
 		a("")
 	# The uic headers, the .moc bodies and a schema's headers are #included
 	# rather than compiled, so nothing declares a dependency on them until a
