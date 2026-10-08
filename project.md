@@ -450,7 +450,8 @@ that had been green about nothing for five commits ·
 [397. A diagnostic disabled by its own recommendation](#397-a-diagnostic-disabled-by-its-own-recommendation) ·
 [398. The guess named a file that defines another symbol](#398-the-guess-named-a-file-that-defines-another-symbol) ·
 [399. Two identical copies are named as copies](#399-two-identical-copies-are-named-as-copies) ·
-[400. It named one symbol and knew about the rest](#400-it-named-one-symbol-and-knew-about-the-rest)
+[400. It named one symbol and knew about the rest](#400-it-named-one-symbol-and-knew-about-the-rest) ·
+[401. Sweeping the trees that claim fmake builds them, and the two instruments that lied](#401-sweeping-the-trees-that-claim-fmake-builds-them-and-the-two-instruments-that-lied)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31080,3 +31081,49 @@ parallel copy from a file two targets legitimately share. **For fmake the
 question does not arise** -- there is no arrangement in which a shared
 source becomes two providers -- which is worth saying back rather than
 treating as an open design question.
+## 401. Sweeping the trees that claim fmake builds them, and the two instruments that lied
+
+`harmonization.md` asks a README that shows `make` to show `fmake` beside
+it **having run it first**. Nine trees carry a runnable `fmake` line. Three
+of them have now gone stale under that rule -- raidcfgd's for twelve days,
+fuzzypickles' for a few hours, netcfgd's answered -- so the rate is worth
+knowing and the **method** is worth writing down, because this will be run
+again.
+
+**The method.** `git archive HEAD` into a scratch directory, each submodule
+checkout copied in beside it, then plain `fmake` with no flags -- never in
+the tree itself, which a build would write into. Then compare against what
+the README actually claims rather than against "it worked".
+
+**Two instruments lied, both in the direction of a false finding.**
+
+**The scratch directory's NAME changes the artifact's name**, because fmake
+names a target after the directory its root sits in. Extracted into
+`claim-openmlx4/`, plain fmake built `./claim-openmlx4` -- so a sweep
+checking openmlx4's claim of "native `./openmlx4`" would have reported it
+false, and the sweep's own directory would have been the whole cause. The
+copy has to be named as the project is. This is `evidence.md`'s scratch-dir
+artifact with a mechanism specific to this tool, which is why it belongs
+here rather than there.
+
+**And `git archive` fails silently enough to look like an empty tree.** git
+refuses a repository owned by another account for dubious ownership, the
+`tar` downstream then has nothing to read, and `fmake` says *no C, C++,
+assembly or Rust source files found here* -- which reads exactly like a
+finding about the project. softkeys produced that, and it has 28 sources.
+Copying the checkout with `tar --exclude=.git` avoids git entirely and is
+what the submodules already needed.
+
+**What the sweep found, as a rate rather than a table**: of the nine
+runnable claims, eight built what they said they would, and the ninth broke
+hours before it was measured. A per-tree table would be stale by the time
+anybody read it, which is the whole shape of the thing being swept for --
+so the standing result is the rate and the method, and a false claim goes
+to its own tree as a signal rather than into a list here.
+
+The one tree whose condition was already documented by its own author is
+beerssh: `fmake` compiles its vendored libvterm from source, the patches in
+`vterm-patch/` are not committed into the submodule, and that README says
+so and attributes it correctly -- *"working as designed rather than a
+problem with either build"*. Nothing to measure there, and worth recording
+that the honest version of this exists.
