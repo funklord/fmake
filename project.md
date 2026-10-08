@@ -451,7 +451,8 @@ that had been green about nothing for five commits ·
 [398. The guess named a file that defines another symbol](#398-the-guess-named-a-file-that-defines-another-symbol) ·
 [399. Two identical copies are named as copies](#399-two-identical-copies-are-named-as-copies) ·
 [400. It named one symbol and knew about the rest](#400-it-named-one-symbol-and-knew-about-the-rest) ·
-[401. Sweeping the trees that claim fmake builds them, and the two instruments that lied](#401-sweeping-the-trees-that-claim-fmake-builds-them-and-the-two-instruments-that-lied)
+[401. Sweeping the trees that claim fmake builds them, and the two instruments that lied](#401-sweeping-the-trees-that-claim-fmake-builds-them-and-the-two-instruments-that-lied) ·
+[402. The tree-local situc was looked for in one place](#402-the-tree-local-situc-was-looked-for-in-one-place)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31127,3 +31128,44 @@ beerssh: `fmake` compiles its vendored libvterm from source, the patches in
 so and attributes it correctly -- *"working as designed rather than a
 problem with either build"*. Nothing to measure there, and worth recording
 that the honest version of this exists.
+## 402. The tree-local situc was looked for in one place
+
+`find_situc` preferred `<root>/bin/situc` over the installed one, for the
+reason its own docstring records: situ's tree holds the schemas and the
+compiler that reads them, and an older situc on PATH stopped on a feature
+the tree had added since. **That is situ's own layout.** A tree that
+*vendors* situ keeps it at `<submodule>/bin/situc`, and `harmonization.md`
+asks a project to vendor a sibling it depends on -- so the vendored
+arrangement is the common one and this found none of it. A rule written
+under one configuration, with nothing in it declaring the dependency.
+
+Found by running plain `fmake` on hull, the twenty-first private tree and
+one nobody had tried. It vendors situ at `vendor/situ`; fmake ran
+`/usr/bin/situc` and reported
+
+    error: expected `;` after the field declaration, found `kind`
+      --> sexpr/canonical.situ:14:11
+
+on `peek u8 kind;` -- which reads as a broken schema and is an old
+compiler. hull's Makefile already knew: *"the packaged situc of 2026-08-05
+prints the same `situc 1.0` as the source tree does, so nothing could tell
+an old one was"*. **So the version strings cannot discriminate**, which is
+why the failure now names the situc that ran as well -- the path is the one
+fact that separates the two cases.
+
+Declared submodules rather than a glob: `.gitmodules` is the repository
+stating that a path belongs to somebody else, the signal `vendored_dirs`
+already trusts. The control removes that declaration and nothing else, so
+what is under test is the declaration and not the path's existence.
+
+**The message half needed its own arm, because the first draft's control
+did not reach it.** It assumed the packaged situc would refuse the
+stand-in's schema; it compiled it and produced a header without
+`msg_check`, so the build failed at `main.c` and no situc failure existed
+to name a path. A stand-in that exits 3 tests the message directly.
+
+With that fixed, hull gets past its schemas and stops on nineteen symbols
+its vendored situ's own examples define alongside hull's -- which §400's
+new line reports as *"18 other symbol(s) are also defined more than once
+here"*, in the first tree it met after being written. That set is hull's to
+exclude, not fmake's to guess.

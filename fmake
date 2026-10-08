@@ -3969,6 +3969,29 @@ def find_situc(configured, root):
 	here = os.path.join(root, "bin", "situc")
 	if os.path.isfile(here) and os.access(here, os.X_OK):
 		return here
+	# And a tree that VENDORS situ keeps the compiler at
+	# <submodule>/bin/situc. The path above is where situ's OWN tree has
+	# it, which is the single configuration the rule was written under --
+	# and harmonization.md asks a project to vendor a sibling it depends
+	# on, so the vendored arrangement is the common one and this missed
+	# every instance of it.
+	#
+	# Found by running plain fmake on hull, which vendors situ at
+	# vendor/situ. Its Makefile says why it never uses PATH: "the
+	# packaged situc of 2026-08-05 prints the same `situc 1.0' as the
+	# source tree does, so nothing could tell an old one was". So fmake
+	# ran /usr/bin/situc over a schema written for the vendored compiler
+	# and reported a parse error on `peek u8 kind;' -- which reads as a
+	# broken schema and is an old compiler, with the version strings
+	# unable to tell anybody otherwise.
+	#
+	# Declared submodules rather than a glob over the tree: .gitmodules
+	# is this repository stating that a path belongs to somebody else,
+	# which is the same signal `vendored_dirs' trusts.
+	for sub in declared_submodules(root):
+		cand = os.path.join(root, sub, "bin", "situc")
+		if os.path.isfile(cand) and os.access(cand, os.X_OK):
+			return cand
 	return shutil.which("situc")
 
 
@@ -4031,8 +4054,14 @@ def situc_wrote(res, root, cmd, src):
 	if res.returncode != 0:
 		# The subcommand by name: `situc failed' is two commands away from
 		# telling the reader which half of the schema did not come out.
+		# Which situc ran, because nothing else can say. hull's Makefile
+		# records that a packaged situc and a source one print the same
+		# version, so a reader looking at a parse error cannot tell an old
+		# compiler from a bad schema -- and the path is the one fact that
+		# discriminates.
 		die(f"situc {cmd[1]} failed on {src} "
-		    f"({describe_exit(res.returncode)})")
+		    f"({describe_exit(res.returncode)})\n"
+		    f"    the situc that ran was {cmd[0]}")
 	return outs
 
 

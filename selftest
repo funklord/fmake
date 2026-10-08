@@ -10764,6 +10764,96 @@ outputs = ["gen/vals.c"]
 
 
 @case
+def a_vendored_situ_supplies_the_compiler_for_its_schemas(t):
+	"""Section 402: the tree-local situc was looked for in one place.
+
+    `find_situc' preferred `<root>/bin/situc' over the installed one, and
+    the docstring records why -- situ's own tree holds the schemas and the
+    compiler that reads them, and an older situc on PATH stopped on a
+    feature the tree had added since. That is situ's OWN layout. A tree
+    that **vendors** situ keeps it at `<submodule>/bin/situc', and
+    harmonization.md asks a project to vendor a sibling it depends on, so
+    the vendored arrangement is the common one and this found none of it.
+
+    Measured on hull, which vendors situ at `vendor/situ`. fmake ran
+    /usr/bin/situc over `sexpr/canonical.situ' and reported
+
+        error: expected `;` after the field declaration, found `kind`
+
+    on `peek u8 kind;` -- which reads as a broken schema and is an old
+    compiler. hull's own Makefile says why it never uses PATH: "the
+    packaged situc of 2026-08-05 prints the same `situc 1.0` as the source
+    tree does, so nothing could tell an old one was". So the version
+    strings cannot discriminate, which is why the failure also names the
+    situc that ran now.
+
+    Declared submodules rather than a glob: `.gitmodules` is the
+    repository stating that a path belongs to somebody else, which is the
+    signal `vendored_dirs' already trusts. The control removes that
+    declaration and nothing else, so what is under test is the
+    declaration and not the path's existence."""
+	situc = t.write("vendor/situ/bin/situc",
+	                FAKE_SITUC % {"stream": "stderr", "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write(".gitmodules",
+	        '[submodule "vendor/situ"]\n'
+	        '\tpath = vendor/situ\n'
+	        '\turl = git@example.invalid:situ.git\n')
+	t.write("schema/msg.situ", "// a schema the stand-in does not read\n")
+	t.write("main.c", '#include "msg.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", msg_check()); return 0; }\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the vendored compiler was not used: {out}")
+	check("SITU schema/msg.situ" in out,
+	      f"the schema was not compiled: {out}")
+	check(t.run(os.path.basename(t.dir)).stdout == "4\n",
+	      f"the program does not carry the stand-in's output, so some "
+	      f"other situc ran: {out}")
+
+	# The control: the same tree with the declaration gone. fmake falls
+	# back to the installed situc, which cannot read the stand-in's
+	# schema -- and the refusal has to name which situc that was, since
+	# the two print the same version.
+	if shutil.which("situc"):
+		os.remove(os.path.join(t.dir, ".gitmodules"))
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"undeclared, the vendored situc must not be found, and the "
+		      f"installed one does not write this stand-in's header: "
+		      f"{out}")
+		check("vendor/situ/bin/situc" not in out,
+		      f"the vendored compiler was used without being declared: "
+		      f"{out}")
+		t.write(".gitmodules",
+		        '[submodule "vendor/situ"]\n'
+		        '\tpath = vendor/situ\n'
+		        '\turl = git@example.invalid:situ.git\n')
+
+	# And the path in the failure, tested with a compiler that fails
+	# rather than with whichever one happens to be installed -- the first
+	# draft assumed the packaged situc would refuse the stand-in's schema
+	# and it compiled it, so the control proved discovery and never
+	# reached the message.
+	with open(situc, "w") as fh:
+		fh.write("#!/bin/sh\necho 'stand-in refusing' >&2\nexit 3\n")
+	os.chmod(situc, 0o755)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a situc exiting 3 must stop the build: {out}")
+	check("the situc that ran was" in out,
+	      f"the failure does not say which situc ran, which is the only "
+	      f"fact separating an old compiler from a bad schema: {out}")
+	check("vendor/situ/bin/situc" in out,
+	      f"and it does not name the vendored one that actually ran: "
+	      f"{out}")
+
+
+@case
 def a_rebuilt_situc_recompiles_the_schemas_it_compiled(t):
 	"""Section 226's shape, for the tool fmake does not build.
 
