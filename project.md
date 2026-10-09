@@ -31275,6 +31275,24 @@ instrument is a coverage run reporting which `die`/`warn` LINES the suite
 never executes. It is exact where a grep is not, and it is a long run for
 a list rather than a fix.
 
+### Closed at 96 per cent, and nothing is waiting in this tree
+
+Stopped here on the holder's threshold rather than at a natural seam, and
+started nothing after it. Everything above is committed and pushed.
+
+**No other session has unfolded work in this tree**, checked rather than
+assumed: no process on either account has its working directory here, no
+write-hold or receipt is left in `.git`, the inbox is empty and read, and
+the only other session state in this project directory is **this
+conversation's own earlier transcript** -- its id is the one the harness
+still writes this session's background-task output under, which is how it
+was identified rather than by its name. So the next session inherits the
+files, the record above, and nothing undocumented.
+
+The two items most worth picking up are hull's, in the section above: a
+per-schema situc prefix that cannot be expressed, and fmake compiling a
+vendored checkout's own programs after naming it as another project's.
+
 ### One thing about this session's method, for whoever reads the log
 
 **Three of my controls failed for the wrong reason before they tested
