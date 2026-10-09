@@ -452,7 +452,8 @@ that had been green about nothing for five commits ·
 [399. Two identical copies are named as copies](#399-two-identical-copies-are-named-as-copies) ·
 [400. It named one symbol and knew about the rest](#400-it-named-one-symbol-and-knew-about-the-rest) ·
 [401. Sweeping the trees that claim fmake builds them, and the two instruments that lied](#401-sweeping-the-trees-that-claim-fmake-builds-them-and-the-two-instruments-that-lied) ·
-[402. The tree-local situc was looked for in one place](#402-the-tree-local-situc-was-looked-for-in-one-place)
+[402. The tree-local situc was looked for in one place](#402-the-tree-local-situc-was-looked-for-in-one-place) ·
+[403. Where this session stopped, and what it left open](#403-where-this-session-stopped-and-what-it-left-open)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31169,3 +31170,77 @@ its vendored situ's own examples define alongside hull's -- which §400's
 new line reports as *"18 other symbol(s) are also defined more than once
 here"*, in the first tree it met after being written. That set is hull's to
 exclude, not fmake's to guess.
+## 403. Where this session stopped, and what it left open
+
+Folded at 91 per cent of the weekly window, which is past the 90 the
+`enforce-fold` hook acts on and short of the 96 where development stops.
+Written because the next session inherits the files without the reasoning
+unless it is here.
+
+**What landed: §389 to §402**, each with its own measurement, its rejected
+alternatives and a sabotage showing the check can fail. Not repeated here;
+the sections are the record. Four came from building real trees with plain
+`fmake` -- fuzznet (§394, §395), netcfgd (§398), fuzzypickles (§399), hull
+(§402) -- and three from peers' reports (§390 raidcfgd, §397 hydra, §400
+netcfgd). That is the ratio worth carrying: **nothing today came from
+reading fmake looking for bugs.**
+
+### Open, and whose each is
+
+- **This file is 2.02x a context window** -- 31,171 lines, ~403k tokens,
+  +15,381 in thirty days and 1,290 of those today. Measured with the
+  method `claude-guidelines` published, re-derived here rather than
+  quoted. **The holder's, raised and not answered.** The shape is now
+  known rather than hypothetical: `claude-guidelines` cut its own from
+  7,923 lines to 5,605 in `8bfc567` by turning CLOSED findings into
+  one-line indexes carrying the lead and the closing commit, touching
+  nothing open. For this file the anchor survives such a cut -- an index
+  line keeps its heading, so every `section N` citation in `selftest` and
+  in commit messages still resolves, and `the_contents_index_lists_every_section`
+  is a ready-made proof that no heading was lost. What it needs before
+  anybody starts is the citation check that precedent did first: no live
+  section may cite a cut one.
+- **hull refuses on nineteen symbols** from `vendor/situ/example/*.situ`
+  alongside its own generated codecs. Theirs to exclude; signalled, no
+  reply yet.
+- **fuzzypickles' README claim is false** since their `3f3331d` added
+  `FZP_VERSION` to `gui.pro` and not to `fmake.toml`. Theirs, one line;
+  signalled, no reply yet.
+- **`tool/style_gate.py` and `tool/test_style_gate.py` are modified and
+  uncommitted in this tree**, synced in by somebody else -- the version
+  that reports the document's size. Not this session's to commit and not
+  to revert.
+- **Still with the holder from before today**: §348's `--uninstall`
+  manifest, §363's service-name charset, §367's `uses` doc/code
+  contradiction, `pkg-optional`'s per-file-versus-per-target semantics,
+  §385's compile-scheduling question.
+
+### What the next session should pick up first
+
+**Build a tree nobody has tried.** It paid four times today and the
+remaining untried one is beerssh, whose own README already states the
+condition honestly -- `fmake` compiles its vendored libvterm from source
+and the patches in `vterm-patch/` are not committed into the submodule --
+so that one is a question about what fmake should do with a patched
+submodule rather than a verification.
+
+**The `die`/`warn` coverage run is still undone, and the reason is
+recorded so nobody repeats my mistake.** A grep-based detector for
+unproduced diagnostics reported 180 of 219, then 210 of 242, and was
+wrong both times: it reads inline literals while fmake assembles many
+messages from variables, one of my own controls was malformed, and a
+comment inside a call can be mistaken for the message. The honest
+instrument is a coverage run reporting which `die`/`warn` LINES the suite
+never executes. It is exact where a grep is not, and it is a long run for
+a list rather than a fix.
+
+### One thing about this session's method, for whoever reads the log
+
+**Three of my controls failed for the wrong reason before they tested
+anything**, and each time the assertion was right and the fixture was
+wrong: a grandchild that exited before it could be observed, a `sleep`
+count contaminated by the measuring command's own `sleep`, and a situc
+control that assumed the packaged compiler would refuse a schema it
+compiled. All three were caught by reading WHICH check failed rather than
+that something did. The ratio is worth knowing when weighing anything
+above: the apparatus was wrong far more often than the code.
