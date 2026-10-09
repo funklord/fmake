@@ -31215,6 +31215,47 @@ reading fmake looking for bugs.**
   contradiction, `pkg-optional`'s per-file-versus-per-target semantics,
   §385's compile-scheduling question.
 
+### hull's three findings, which arrived while this was being written
+
+Read from the inbox before finishing, which is why the rule says to. hull
+reported three; §402 is the first of them, and **the other two are open and
+were not in this session's picture.**
+
+**1. A vendored situc is not found.** Fixed as §402. Their note confirms
+the half I added on their Makefile's evidence was the useful one: *"Naming
+the situc that ran is what made this a one-minute diagnosis. Both situcs
+print `situc 1.0`, so the version cannot tell them apart either."* They
+have reported that to situ as well.
+
+**2. One prefix for every schema, and no way to say otherwise.** With the
+right compiler, hull's two schemas compile under the same prefix and
+collide:
+
+    * redefinition of 'situ_form_view'
+      in sexpr/sexpr.c
+
+Their Makefile gives each schema its own -- `hull_sexpr_r` and
+`hull_sexpr_c` -- because both describe a `form` and a `list`. **`[situ]
+flags` is one list for the whole tree**, so a per-schema prefix cannot be
+expressed at all. That is a capability gap rather than a wording fault,
+and the shape of the answer is a decision: a per-schema table, or
+`@situ_flags` on the schema, or something else. Not started.
+
+**3. It builds the vendored project's own programs, and says so while
+doing it.** The same run compiled 42 units including
+`vendor/situ/test/generated/*`, `vendor/situ/walker/c` and situ's derived
+codecs, then stopped on 19 symbols defined twice. **fmake's own hint
+already says `vendor/situ is inside vendor/situ, a checkout of another
+project`, and it compiles it anyway** -- while nothing in hull includes
+anything there except `runtime/c/situ.h`.
+
+**That corrects what §402 said.** It recorded the nineteen symbols as
+"hull's to exclude, not fmake's to guess". hull's argument is better and
+is the one to act on: fmake is not guessing, it has already identified the
+subtree as another project's checkout and then compiled its test programs
+regardless. Whether a vendored checkout's own programs should enter the
+build at all is fmake's question, not hull's, and it is open.
+
 ### What the next session should pick up first
 
 **Build a tree nobody has tried.** It paid four times today and the
