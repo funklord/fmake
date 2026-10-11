@@ -3924,8 +3924,49 @@ def situ_plan(root, hdrs, scans):
 			wanted.setdefault(os.path.basename(name), []).append(rel)
 	have = {os.path.basename(h) for h in hdrs}
 
+	# A collision between this tree's schema and a vendored project's is
+	# not a tie, and was refused as one. Reported from hull, which vendors
+	# situ: its own `agent/message.situ' and situ's example
+	# `vendor/situ/example/message/message.situ' both write `message.h',
+	# and fmake stopped with "Rename one of the schemas" -- advice the
+	# reader must not take, because renaming the other one means editing a
+	# checkout that belongs to somebody else, which harmonization.md
+	# forbids outright.
+	#
+	# The tree's own wins, which is the principle `find_situc' states one
+	# function along: a compiler in this tree outranks the installed one,
+	# the way a definition in the tree outranks a library's symbol.
+	#
+	# Declared submodules rather than inferred ones: `vendored_dirs' says
+	# a tree merely copied in is indistinguishable from this project's own
+	# code, so the declaration is what makes the question answerable at
+	# all.
+	theirs = tuple(s + os.sep for s in declared_submodules(root))
+	found = list(find_ext(root, SITU_EXT))
+	if theirs:
+		by_base, drop = {}, set()
+		for rel in found:
+			by_base.setdefault(os.path.basename(rel), []).append(rel)
+		for base, rels in sorted(by_base.items()):
+			if len(rels) < 2:
+				continue
+			ours = [r for r in rels if not r.startswith(theirs)]
+			# Exactly one, or there is still nothing to prefer: two of this
+			# tree's own collide as before, and two vendored ones are a
+			# question for whoever vendored both.
+			if len(ours) != 1:
+				continue
+			for rel in rels:
+				if rel == ours[0]:
+					continue
+				drop.add(rel)
+				vinfo(f"{rel} is in a checkout of another project and "
+				      f"{ours[0]} is this tree's, so the tree's own "
+				      f"schema writes {base[:-len(SITU_EXT)]}.h")
+		found = [r for r in found if r not in drop]
+
 	jobs, unused, seen = [], [], {}
-	for rel in find_ext(root, SITU_EXT):
+	for rel in found:
 		path = os.path.join(root, rel)
 		name = os.path.basename(rel)[:-len(SITU_EXT)]
 		header = name + ".h"
@@ -3941,9 +3982,19 @@ def situ_plan(root, hdrs, scans):
 		# it names. The output directory is flat on purpose (see SITU_DIR),
 		# so this is the ambiguity that layout exists to surface.
 		if name in seen:
+			# And the remedy depends on whose the files are. Renaming is
+			# available for two of this tree's own schemas and is not
+			# available for a vendored one, so offering it unconditionally
+			# pointed a reader at an edit they must not make.
+			_both = (seen[name], rel)
+			_vend = [r for r in _both if r.startswith(theirs)]
 			die(f"{seen[name]} and {rel} both generate {header}, and the "
 			    f"source that includes it cannot say which it meant.\n"
-			    f"Rename one of the schemas.")
+			    + (f"Both are in checkouts of other projects, so neither is "
+			       f"yours to rename: keep one out with [project] exclude "
+			       f"in {CONF_FILE}."
+			       if len(_vend) == len(_both) else
+			       "Rename one of the schemas."))
 		seen[name] = rel
 		jobs.append({"src": rel, "name": name, "header": header,
 		             "includers": sorted(set(wanted[header]))})

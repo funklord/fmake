@@ -10764,6 +10764,77 @@ outputs = ["gen/vals.c"]
 
 
 @case
+def this_trees_schema_outranks_a_vendored_projects(t):
+	"""Section 404: a name collision with a vendored schema was a tie.
+
+    Reported from hull, which vendors situ. Its own `agent/message.situ'
+    and situ's example `vendor/situ/example/message/message.situ' both
+    write `message.h', and fmake refused with "Rename one of the schemas"
+    -- advice the reader must not take, because renaming the other one
+    means editing a checkout that belongs to somebody else, which
+    `harmonization.md` forbids outright.
+
+    The tree's own wins, which is the principle `find_situc' states one
+    function along: a compiler in this tree outranks the installed one,
+    the way a definition in the tree outranks a library's symbol.
+
+    Two controls, because the preference must not become a blanket
+    silence. Two of THIS tree's own schemas still collide and still say
+    rename, since there both files are the reader's to move. And where
+    both are vendored there is nothing to prefer, so it still refuses --
+    but the remedy becomes `[project] exclude', because neither file is
+    the reader's to rename."""
+	situc = t.write("bin/situc", FAKE_SITUC % {"stream": "stderr",
+	                                           "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write(".gitmodules",
+	        '[submodule "vendor/situ"]\n\tpath = vendor/situ\n'
+	        '\turl = git@example.invalid:situ.git\n')
+	t.write("msg.situ", "// this tree's own\n")
+	t.write("vendor/situ/example/msg.situ", "// theirs\n")
+	t.write("main.c", '#include "msg.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", msg_check()); return 0; }\n')
+
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a vendored schema of the same name is not a tie: {out}")
+	check("is in a checkout of another project" in out,
+	      f"the preference was silent about which it dropped: {out}")
+	check("SITU msg.situ" in out,
+	      f"this tree's own schema was not the one compiled: {out}")
+	check("SITU vendor/situ/example/msg.situ" not in out,
+	      f"the vendored schema was compiled as well: {out}")
+
+	# Control one: two of this tree's own still collide, and rename is
+	# still the remedy, because both files are the reader's to move.
+	os.remove(os.path.join(t.dir, "vendor/situ/example/msg.situ"))
+	t.write("other/msg.situ", "// also this tree's own\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"two of this tree's own schemas must still refuse: {out}")
+	check("Rename one of the schemas" in out,
+	      f"the remedy for two of the reader's own files is to rename "
+	      f"one: {out}")
+
+	# Control two: both vendored, so there is nothing to prefer -- and
+	# renaming is not available for either.
+	os.remove(os.path.join(t.dir, "other/msg.situ"))
+	os.remove(os.path.join(t.dir, "msg.situ"))
+	t.write("vendor/situ/example/msg.situ", "// theirs\n")
+	t.write("vendor/situ/test/msg.situ", "// theirs too\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two vendored schemas must refuse: {out}")
+	check("neither is yours to rename" in out,
+	      f"it still tells the reader to rename somebody else's file: "
+	      f"{out}")
+	check("[project] exclude" in out,
+	      f"and does not offer the remedy that is available: {out}")
+
+
+@case
 def a_vendored_situ_supplies_the_compiler_for_its_schemas(t):
 	"""Section 402: the tree-local situc was looked for in one place.
 

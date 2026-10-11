@@ -453,7 +453,8 @@ that had been green about nothing for five commits ·
 [400. It named one symbol and knew about the rest](#400-it-named-one-symbol-and-knew-about-the-rest) ·
 [401. Sweeping the trees that claim fmake builds them, and the two instruments that lied](#401-sweeping-the-trees-that-claim-fmake-builds-them-and-the-two-instruments-that-lied) ·
 [402. The tree-local situc was looked for in one place](#402-the-tree-local-situc-was-looked-for-in-one-place) ·
-[403. Where this session stopped, and what it left open](#403-where-this-session-stopped-and-what-it-left-open)
+[403. Where this session stopped, and what it left open](#403-where-this-session-stopped-and-what-it-left-open) ·
+[404. A name collision with a vendored schema was treated as a tie](#404-a-name-collision-with-a-vendored-schema-was-treated-as-a-tie)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31303,3 +31304,55 @@ control that assumed the packaged compiler would refuse a schema it
 compiled. All three were caught by reading WHICH check failed rather than
 that something did. The ratio is worth knowing when weighing anything
 above: the apparatus was wrong far more often than the code.
+## 404. A name collision with a vendored schema was treated as a tie
+
+From hull's finding 3, and the first half of it is fixed. Their tree had
+moved since the report, so the collision surfaces earlier than the symbols
+they saw:
+
+    !!! agent/message.situ and vendor/situ/example/message/message.situ
+        both generate message.h, and the source that includes it cannot
+        say which it meant.
+    Rename one of the schemas.
+
+**One of those is situ's own example inside a vendored checkout, so the
+remedy was one the reader must not take** -- renaming it means editing a
+checkout belonging to somebody else, which `harmonization.md` forbids
+outright. Advice that cannot be followed is worse than none, which is
+§101's rule met in a new place.
+
+**The tree's own schema wins.** That is the principle `find_situc` states
+one function along -- a compiler in this tree outranks the installed one,
+the way a definition in the tree outranks a library's symbol -- and it was
+already the right answer here. Declared submodules are the signal, not
+inferred ones: `vendored_dirs` says a tree merely copied in is
+indistinguishable from this project's own code, so the declaration is what
+makes the question answerable at all.
+
+Done as a pre-pass over the schema list rather than a branch inside the
+loop, so the refusal is left to fire only on genuine ties, of which there
+are two and both are controlled:
+
+- **Two of this tree's own** still refuse and still say *rename*, because
+  there both files are the reader's to move.
+- **Two vendored ones** still refuse -- there is nothing to prefer -- but
+  the remedy becomes `[project] exclude`, since neither is the reader's to
+  rename.
+
+### What remains of finding 3 is finding 2
+
+With this in, hull reaches `situ_crc5_usb` defined by both
+`.fmake/situ/edges_derived.c` and `.fmake/situ/kernels_derived.c` -- two
+generated files from situ's own vendored schemas. **That is hull's finding
+2 rather than a separate fault**: their Makefile gives each schema its own
+`--prefix` (`hull_sexpr_r`, `hull_sexpr_c`) because two schemas describing
+the same shapes generate the same derived codecs, and `[situ] flags` is
+one list for the whole tree with nowhere to say it per schema.
+
+So the chain is: no per-schema flags, therefore colliding derived codecs,
+therefore a refusal that looks like a duplicate-symbol problem. Fixing the
+flags would remove this instance. The shape of that is still open and is
+the next thing to pick up -- `[situ.<name>] flags` would follow the
+`[target.*]`, `[generate.*]`, `[service.*]` pattern this file already
+uses, and a directive in the schema would not, since a `.situ` in a
+vendored checkout is not ours to annotate either.
