@@ -455,7 +455,8 @@ that had been green about nothing for five commits ·
 [402. The tree-local situc was looked for in one place](#402-the-tree-local-situc-was-looked-for-in-one-place) ·
 [403. Where this session stopped, and what it left open](#403-where-this-session-stopped-and-what-it-left-open) ·
 [404. A name collision with a vendored schema was treated as a tie](#404-a-name-collision-with-a-vendored-schema-was-treated-as-a-tie) ·
-[405. 97 of 274 refusals were never produced, measured at last](#405-97-of-274-refusals-were-never-produced-measured-at-last)
+[405. 97 of 274 refusals were never produced, measured at last](#405-97-of-274-refusals-were-never-produced-measured-at-last) ·
+[406. Nine config mistakes keep the words that name them](#406-nine-config-mistakes-keep-the-words-that-name-them)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31417,3 +31418,46 @@ defended -- because reading a message once is not the same as pinning it,
 and a parser diagnostic fires on a user's mistake so its wording is the
 whole of what they get. Both sabotages reword a message and the case
 names which one changed.
+## 406. Nine config mistakes keep the words that name them
+
+The second batch off §405's list of 97, aimed at the sharpest family on
+it: a user who mistypes `fmake.toml` or a directive gets the message and
+nothing else, so at that moment the message is the whole of the tool.
+
+Pinned: a `root` not in the tree; a `root` whose extension fmake does not
+compile; a `kind` that is not one of the kinds; a `test-cwd` that is not a
+directory; a `[generate.*]` input glob matching nothing; a generate rule
+with no command; one whose command is empty; `@install` given two words;
+and `@install` given a word that is not yes or no.
+
+**Four needed a fixture that actually reaches them, and that is the part
+worth recording** -- the same lesson as §398's, in a new place:
+
+- `command = ""` hits *needs a command* first, so *command is empty* is
+  reachable only by a command of **spaces**. The check runs on the
+  EXPANDED line rather than on the config value.
+- `@install` is read while planning an install, so a plain build never
+  reaches it. The case asks for `--install -n`.
+- `kind` is validated after a target has a root, so a stanza with a bad
+  kind and no root is refused for the missing root instead.
+
+**Both generate paths are pinned deliberately.** An empty string and a
+whitespace string are different mistakes with different messages, and a
+case pinning one would not notice the two being merged -- which is what
+the first sabotage does.
+
+### A sabotage that duplicates an existing string cannot restore itself
+
+Worth writing down because it cost a wasted measurement. Sabotage A
+replaced *command is empty* with *needs a command*, which fmake already
+says elsewhere -- so the tree then held two identical strings, the restore
+anchored on that text matched twice, and the match-count proof refused to
+write. **The proof did its job and left the tree sabotaged**, so the next
+sabotage and its test run were both measured against a tree that was
+already wrong, and reported the previous failure rather than their own.
+
+The fix is to anchor a sabotage and its restore on the **guard** rather
+than on the text being changed -- here `if not line.strip():` -- so the
+edit is unique whatever the replacement collides with. Restated both ways
+and verified with `git diff --quiet` after each restore, which is the
+check that would have caught it immediately.

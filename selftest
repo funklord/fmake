@@ -10764,6 +10764,78 @@ outputs = ["gen/vals.c"]
 
 
 @case
+def nine_config_mistakes_keep_the_words_that_name_them(t):
+	"""Section 406: the second batch off §405's list of 97.
+
+    The same argument as the six before them and aimed at the sharpest
+    family on the list: a user who mistypes `fmake.toml' or a directive
+    gets the message and nothing else, so the message is the whole of the
+    tool at that moment.
+
+    Four needed a fixture that actually reaches them, which is the part
+    worth recording. `command = ""' hits "needs a command" first, so
+    "command is empty" is only reached by a command of SPACES -- the check
+    runs on the expanded line, not on the config value. `@install' is read
+    while planning an install, so a plain build never reaches it and the
+    case asks for `--install -n'. And `kind' is validated after a target
+    has a root, so a stanza with a bad kind and no root is refused for the
+    missing root instead.
+
+    Both generate paths are pinned deliberately: an empty string and a
+    whitespace string are different mistakes and get different messages,
+    and a case that pinned one would not notice the two being merged."""
+	cases = (
+	    ("rootmissing", {"fmake.toml": '[target.x]\nroot = "nosuch.c"\n'},
+	     (), "root = 'nosuch.c' is not in this tree"),
+	    ("rootext", {"notes.txt": "notes\n",
+	                 "fmake.toml": '[target.x]\nroot = "notes.txt"\n'},
+	     (), "is there, and '.txt' is not an extension"),
+	    ("badkind", {"lib.c": "int helper(void){ return 1; }\n",
+	                 "fmake.toml": '[target.x]\nroot = "lib.c"\n'
+	                               'kind = "banana"\n'},
+	     (), "kind = 'banana' is not one of"),
+	    ("badcwd", {"x_test.c": '#include <stdio.h>\n'
+	                            'int main(void){ puts("t"); return 0; }\n',
+	                "fmake.toml": '[project]\ntest-cwd = "nosuchdir"\n'},
+	     ("test",), "test-cwd = 'nosuchdir' is not a directory in this tree"),
+	    ("geninput", {"fmake.toml": '[generate.g]\ncommand = "true"\n'
+	                                'inputs = ["nosuch/*.in"]\n'
+	                                'outputs = ["gen/x.c"]\n'},
+	     (), "input 'nosuch/*.in' matched nothing"),
+	    ("gennocmd", {"fmake.toml": '[generate.g]\ninputs = ["main.c"]\n'
+	                               'outputs = ["gen/x.c"]\n'},
+	     (), "[generate.g] needs a command"),
+	    ("genspace", {"fmake.toml": '[generate.g]\ncommand = "   "\n'
+	                                'inputs = ["main.c"]\n'
+	                                'outputs = ["gen/x.c"]\n'},
+	     (), "[generate.g] command is empty"),
+	    ("instwords", {"main.c": "/*! @file\n *  @install yes please\n */\n"
+	                             "#include <stdio.h>\n"
+	                             'int main(void){ puts("x"); return 0; }\n'},
+	     ("--install", "-n"), "@install yes please takes one word"),
+	    ("instvalue", {"main.c": "/*! @file\n *  @install maybe\n */\n"
+	                             "#include <stdio.h>\n"
+	                             'int main(void){ puts("x"); return 0; }\n'},
+	     ("--install", "-n"), "@install maybe is not yes or no"),
+	)
+	for name, files, args, expect in cases:
+		u = Tree("cfg-" + name)
+		try:
+			if "main.c" not in files:
+				u.write("main.c", "int main(void){ return 0; }\n")
+			for rel, text in files.items():
+				u.write(rel, text)
+			r = u.fmake(*args)
+			out = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"{name}: this must be refused: {out}")
+			check(expect in out,
+			      f"{name}: the refusal does not say {expect!r}: {out}")
+		finally:
+			u.cleanup()
+
+
+@case
 def six_refusals_the_suite_never_produced_keep_their_wording(t):
 	"""Section 405: measured, not guessed -- 97 of 274 were unproduced.
 
