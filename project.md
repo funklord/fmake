@@ -454,7 +454,8 @@ that had been green about nothing for five commits ·
 [401. Sweeping the trees that claim fmake builds them, and the two instruments that lied](#401-sweeping-the-trees-that-claim-fmake-builds-them-and-the-two-instruments-that-lied) ·
 [402. The tree-local situc was looked for in one place](#402-the-tree-local-situc-was-looked-for-in-one-place) ·
 [403. Where this session stopped, and what it left open](#403-where-this-session-stopped-and-what-it-left-open) ·
-[404. A name collision with a vendored schema was treated as a tie](#404-a-name-collision-with-a-vendored-schema-was-treated-as-a-tie)
+[404. A name collision with a vendored schema was treated as a tie](#404-a-name-collision-with-a-vendored-schema-was-treated-as-a-tie) ·
+[405. 97 of 274 refusals were never produced, measured at last](#405-97-of-274-refusals-were-never-produced-measured-at-last)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31356,3 +31357,63 @@ the next thing to pick up -- `[situ.<name>] flags` would follow the
 `[target.*]`, `[generate.*]`, `[service.*]` pattern this file already
 uses, and a directive in the schema would not, since a `.situ` in a
 vendored checkout is not ours to annotate either.
+## 405. 97 of 274 refusals were never produced, measured at last
+
+§403 left this undone with the reason recorded: a grep over `die(`
+literals reported **180 of 219**, then **210 of 242**, and was wrong both
+times. The exact figure is **97 of 274**, and the two instruments differ
+because fmake assembles many messages into a variable before passing them
+-- the ambiguity refusal is literally `die("\n".join(lines))`, so its text
+is nowhere in the call.
+
+**The instrument, which needed no new package and no hand-written
+tracer.** `coverage.py` is not installed here and writing a tracer would
+have been a fifth instrument of my own to be wrong. Instead, in a COPY of
+the tree, `die` and `warn` record their CALLER's line through
+`sys._getframe(1).f_lineno` -- two three-line edits rather than 274
+insertions -- and the suite runs there at full speed because nothing is
+traced. Subtract the lines that fired from the call sites enumerated by
+bracket matching.
+
+**Its controls, and both taught something.**
+
+- **Every recorded line must BE a call site**: 0 of 177 were not, which
+  is the corroboration the grep never had.
+- A clean build must record nothing. The first attempt recorded one line,
+  and **the fixture was at fault**: it defined `dup()`, which shadows
+  libc, so fmake warned correctly. Renamed, a clean build records 0.
+- The instrumented suite passed all 637, so the instrumentation changed
+  no behaviour.
+
+**And two corrections to my own figure.** The raw subtraction says 99 of
+276; two of those are the `def die` and `def warn` lines themselves, which
+my definition filter missed, so it is 97 of 274. For calibration,
+`evidence.md` records 93 of 302 measured in another tree by another hand
+-- the same order, which is the first independent thing to compare against.
+
+### What the list is, read rather than counted
+
+Mostly OS-error paths (`{exc}`), toolchain-absent paths (no `nm`, no
+`rustc`, no `uic`/`rcc`/`moc`) and packaging field validation for Debian,
+ebuild and apk. **Two candidates looked like findings and are not:**
+
+- The "situc is not installed" refusal names `situ_jobs[0]` three times
+  and says nothing about how many schemas there are. §400's shape --
+  except one remedy covers every schema, so naming one example is right.
+  Nearly forced the frame on it, which is *a frame that has just been
+  right is the hardest one to drop*.
+- `"{source} has not been built"` exists at two sites with byte-identical
+  text, which §31 would normally refuse. They are in `do_release` and
+  `do_install`, distinct commands, so the invocation disambiguates.
+
+**Licensing entries are left alone**, per `CLAUDE.md`: five SPDX refusals
+are in the list and none is a blocker.
+
+### Six pinned, which is the part that was worth doing
+
+Four `fmake.mk` parse faults, a `[generate.*]` cycle and a `test-env`
+without `KEY=VALUE`. Produced by hand, read, found correct, and now
+defended -- because reading a message once is not the same as pinning it,
+and a parser diagnostic fires on a user's mistake so its wording is the
+whole of what they get. Both sabotages reword a message and the case
+names which one changed.

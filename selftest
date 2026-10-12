@@ -10764,6 +10764,73 @@ outputs = ["gen/vals.c"]
 
 
 @case
+def six_refusals_the_suite_never_produced_keep_their_wording(t):
+	"""Section 405: measured, not guessed -- 97 of 274 were unproduced.
+
+    `evidence.md` says an unproduced diagnostic loses its WORDING rather
+    than its refusal: if a check stops firing something downstream
+    notices, and if it fires saying the wrong thing nothing does. These
+    six were produced by hand and read, found correct, and then pinned,
+    because reading them once is not the same as defending them.
+
+    How the list was taken, since the obvious way does not work. A grep
+    over `die(' literals reported 180 of 219 and then 210 of 242, both
+    wrong, because fmake assembles many messages into a variable first --
+    the ambiguity refusal is literally `die("\n".join(lines))'. The exact
+    instrument is to record the CALLER's line from inside `die' and
+    `warn' in a COPY of the tree, run the suite there, and subtract the
+    lines that fired from the call sites enumerated by bracket matching.
+    Its control is that every line recorded must BE a call site: 0 of 177
+    were not.
+
+    Four of these are `fmake.mk' parse faults, which are the sharpest
+    kind -- a parser diagnostic fires on a user's mistake, so its wording
+    is the whole of what they get. Each assertion names the specific
+    fault rather than checking that something was refused, and each
+    fixture is the smallest file that reaches it."""
+	cases = (
+	    ("norule", {"fmake.mk": "\techo hi\n"}, (),
+	     "fmake.mk:1: recipe line before any rule"),
+	    ("twopct", {"fmake.mk": "%.a.%: in\n\techo hi\n"}, (),
+	     "fmake.mk:1: more than one % in a rule"),
+	    ("unkdir", {"fmake.mk": "@nosuchdir foo\n"}, (),
+	     "fmake.mk:1: unknown directive @nosuchdir"),
+	    ("patstem", {"fmake.mk": "%.o: in.c\n\techo hi\n"}, (),
+	     "a pattern target needs a pattern prerequisite"),
+	    ("gencycle", {"fmake.toml": """
+[generate.one]
+command = "cp b.txt a.txt"
+inputs  = ["b.txt"]
+outputs = ["a.txt"]
+
+[generate.two]
+command = "cp a.txt b.txt"
+inputs  = ["a.txt"]
+outputs = ["b.txt"]
+"""}, (), "[generate.*] rules form a cycle: one -> two -> one"),
+	    ("envkv", {"fmake.toml": '[project]\ntest-env = ["NOEQUALS"]\n',
+	               "x_test.c": '#include <stdio.h>\n'
+	                           'int main(void){ puts("t"); return 0; }\n'},
+	     ("test",), "[project] test-env wants KEY=VALUE, not 'NOEQUALS'"),
+	)
+	for name, files, args, expect in cases:
+		u = Tree("refuse-" + name)
+		try:
+			u.write("main.c", "int main(void){ return 0; }\n")
+			for rel, text in files.items():
+				u.write(rel, text)
+			r = u.fmake(*args)
+			out = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"{name}: this must be refused: {out}")
+			check(expect in out,
+			      f"{name}: the refusal does not say {expect!r}, which is "
+			      f"the whole of what a reader gets: {out}")
+		finally:
+			u.cleanup()
+
+
+@case
 def this_trees_schema_outranks_a_vendored_projects(t):
 	"""Section 404: a name collision with a vendored schema was a tie.
 
