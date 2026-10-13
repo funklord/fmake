@@ -459,7 +459,9 @@ that had been green about nothing for five commits ·
 [406. Nine config mistakes keep the words that name them](#406-nine-config-mistakes-keep-the-words-that-name-them) ·
 [407. The three packagers name their own missing field](#407-the-three-packagers-name-their-own-missing-field) ·
 [408. A tool that does not do its job is named with the job](#408-a-tool-that-does-not-do-its-job-is-named-with-the-job) ·
-[409. The refusal that defends a rule from build-and-commit](#409-the-refusal-that-defends-a-rule-from-build-and-commit)
+[409. The refusal that defends a rule from build-and-commit](#409-the-refusal-that-defends-a-rule-from-build-and-commit) ·
+[410. A name clash the check could not see, because it read the file](#410-a-name-clash-the-check-could-not-see-because-it-read-the-file) ·
+[411. What a plain fmake does on fuzznet, and what stops it](#411-what-a-plain-fmake-does-on-fuzznet-and-what-stops-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31612,3 +31614,125 @@ list, and a second route to it is not a second finding.
 What remains needs either a fabricated toolchain (§408's declined family),
 a failing release path, or the five SPDX refusals `CLAUDE.md` keeps out of
 reach. The cheap ones are done.
+
+## 410. A name clash the check could not see, because it read the file
+
+§394 made the repeated-target-name refusal name every clash with its
+real count. It keys on `t.filename` -- the artifact -- so two targets that
+share a **name** and write different files are not a clash to it. An
+executable `a/foo.c` and a module `b/foo.c` are both called `foo` and build
+`foo` and `foo.so`, so they went straight past it into
+`refuse_ident_collisions`, which groups by Make identifier:
+
+    !!! targets 'foo' and 'foo' are the same Make variable (FOO_...)
+    rename all but one of each
+
+**One string named twice, no file named at all.** The reader is told to
+rename all but one of two things the message gives them no way to tell
+apart, and the fault it blames is a consequence rather than the cause: the
+Make variable collides because the **name** does, and so do three other
+things the message never mentions -- `fmake foo` is ambiguous, the
+`by_name` lookup that resolves it silently keeps whichever target came
+last, and `[target.foo]` cannot address either of them.
+
+So the clash check reads both keys now, the name and the filename, and the
+message is §394's:
+
+    !!! 2 targets are called 'foo':
+        a/foo.c
+        b/foo.c (builds foo.so)
+
+**The artifact is shown where it differs from the name.** Without it two
+different files are listed under one heading with nothing to distinguish
+them, which reads as a tool that cannot count -- the complaint §394 was
+about, arriving by the other road.
+
+### The dedupe needed a fixture of its own, and the first one was vacuous
+
+Two keys can find one pair, so a pair is reported once rather than once per
+key. The obvious place to assert that is the `foo` case above -- and it
+**passed with the dedupe deleted**, because `foo` and `foo.so` are found by
+a single key: the name of both is also the exe's filename, so the second
+key holds one member and is never reported.
+
+What exercises it is two **shared** libraries of one name, found by the name
+and by the `lib...so` both of them write. With the dedupe gone, the same two
+files appear twice under two headings, which reads as two faults in a tree
+that has one. That is `evidence.md`'s *a passing check is not evidence on
+its own*, met inside the case written to prevent it: the assertion was
+true, the code was right, and the check could not have failed.
+
+Three sabotages, each failing through its own assertion: keying on the
+filename alone brings back the message quoted above, dropping the artifact
+suffix leaves two files under one name, and dropping the dedupe reports one
+pair twice.
+
+## 411. What a plain fmake does on fuzznet, and what stops it
+
+`harmonization.md` asks a README that shows `make` to show `fmake` beside
+it, and says that where fmake cannot do what the make line does, **that is
+a finding about fmake**. Seventeen of the nineteen private trees carry an
+fmake line; fuzznet is one of the two that do not, and it is the tree that
+produced §394 and §395. Nobody had run fmake there since those landed.
+
+Measured on a pristine `--shared` clone of fuzznet at `fddf02f`, with the
+tree's own four submodules left for fmake to fetch:
+
+- **It fetches them.** Four `SUB ... (not initialised)` lines, then four
+  `MOC` runs inside qtty, then each of the four named as a separate
+  checkout whose own programs are left to it -- 2, 28, 12 and 6 of them.
+- **Then it refuses**, on §394's own message, with all three repeated
+  names reported together and counted correctly: `messages_test` twice,
+  `provision_test` three times, `relay_test` twice. The fix works on the
+  tree that paid for it.
+- **Every colliding name is a test program.** With the four renamed
+  through the `[target.NEW] root = ...` stanza the message offers, fmake
+  compiles **178 translation units**, holds **235 test programs**, and
+  builds the library and `consumer_check`.
+- **One file does not compile: `node/fuzznetd.c`.** Its content is gated
+  behind the tree's own switches -- `CPPFLAGS += -DFZN_CLI_ON` under
+  `ifdef CLI_ON`, and that Makefile sets `CLI_ON := 1`. Adding
+  `[project] defines = ['FZN_CLI_ON']` moves the errors rather than
+  removing them: the next wave wants `node_apply`,
+  `FZN_NODE_SIBLINGS_MAX`, `ROUTING_ADVERTISE_KEY` and a `logger` member,
+  which are further subsystem switches. fuzznet's README says as much in
+  its own words -- *a backend and a subsystem each carry the define that
+  switches them on* -- so the daemon is a configured build rather than an
+  unannotated one, and reaching it from fmake means a `defines` list that
+  reproduces that configuration. `harmonization.md` forbids exactly that
+  as a README line: a build reached with five flags is a workaround with
+  an entry, not an alternative build.
+
+**So fuzznet is not a tree with an fmake line waiting to be written**, and
+that is the honest answer rather than a gap. What is fmake's to fix is
+§410, found while reading the check that refused.
+
+### The open question the refusal raises, which is not mine to settle
+
+**A plain build refuses over a clash among programs it will not build.**
+The check runs over every target, and the `held`/`wanted` split that keeps
+test programs out of a default build happens eleven lines later -- so on
+fuzznet a bare `fmake` builds nothing at all because three test names
+repeat, and `make` in the same tree builds fine.
+
+Both answers have a case:
+
+- **Refuse, as now.** A repeated name is a property of the tree rather
+  than of an invocation, which is the reasoning §31's root-collision
+  check was widened for -- scoping that one to what was asked for had
+  made it blind. And deferring the diagnosis to `fmake test` means a
+  reader builds, runs a suite, and only then learns their tree needs
+  renaming.
+- **Warn and build.** Neither artifact is written by a plain build, so
+  the collision provably cannot occur in the work being asked for. The
+  reader would get the library and the programs, with the clash and its
+  remedy on screen, and `fmake test`, a named clashing target and
+  `--eject` -- which emits every target, tests included -- would refuse
+  as they do now.
+
+The cost of the second is a check that depends on the invocation, which is
+the shape §31 removed from its neighbour; the cost of the first is that a
+tree with per-module test directories cannot be built by fmake at all
+without renaming its files, and fuzznet has had the remedy since §394 and
+has not taken it. **It is the holder's call**, and it is recorded here
+rather than acted on.

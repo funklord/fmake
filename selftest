@@ -11950,6 +11950,83 @@ root = "e/test/other_test.c"
 
 
 @case
+def two_targets_of_one_name_are_named_even_when_their_files_differ(t):
+	"""Section 410: the clash check keyed on the filename, so it missed
+    two targets that share a NAME and write different files.
+
+    An exe `a/foo.c' and a module `b/foo.c' are both called `foo' and
+    build `foo' and `foo.so', so the check above saw no repeated
+    filename and let them through to refuse_ident_collisions, which
+    groups by Make identifier. What a reader got was
+
+        !!! targets 'foo' and 'foo' are the same Make variable (FOO_...)
+        rename all but one of each
+
+    -- one string named twice, no file named at all, and nothing to
+    act on. The Make variable is a consequence; the fault is the name,
+    because `fmake foo' is ambiguous, the by_name lookup silently
+    keeps whichever target came last, and [target.foo] cannot address
+    either of them.
+
+    The artifact is shown where it differs from the name, so that two
+    files listed under one name do not read as a tool that cannot
+    count. And each pair is reported once although two keys now find
+    it, since a clash on the name is usually a clash on the filename
+    as well."""
+	t.write("a/foo.c", "int main(void){ return 0; }\n")
+	t.write("b/foo.c", "/*! @kind module */\nint hook(void){ return 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two targets called foo must refuse: {out}")
+	check("2 targets are called 'foo'" in out,
+	      f"the name clash is reported as a Make variable rather than "
+	      f"as the repeated name it is: {out}")
+	for rel in ("a/foo.c", "b/foo.c"):
+		check(rel in out, f"{rel} is not named, so there is nothing to "
+		      f"act on: {out}")
+	check("builds foo.so" in out,
+	      f"the two files are listed under one name with nothing to "
+	      f"tell them apart: {out}")
+	check("'foo' and 'foo'" not in out,
+	      f"the message still names one string twice: {out}")
+
+	# One pair, one report, and this needs its own fixture: `foo' and
+	# `foo.so' are found by ONE key, so the pair above cannot exercise the
+	# dedupe at all -- asserting it there passed with the dedupe deleted.
+	# Two shared libraries of one name are found by two keys, the name and
+	# the `lib...so' both targets write, and without the dedupe the same
+	# two files are listed twice under two headings, which reads as two
+	# faults.
+	t.write("c/shared_thing.c",
+	        "/*! @kind shared */\nint one(void){ return 1; }\n")
+	t.write("d/shared_thing.c",
+	        "/*! @kind shared */\nint two(void){ return 2; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two libraries of one name must refuse: {out}")
+	check(out.count("targets are called") == 2,
+	      f"one pair is reported once per key rather than once, so two "
+	      f"files read as two faults: {out}")
+	check("2 targets are called 'libshared_thing.so'" in out,
+	      f"the pair is not named by the file both of them write: {out}")
+
+	# The stanza it offers has to work, per section 375: a message that
+	# hands the reader a name is only as good as the name.
+	t.write("fmake.toml", '[target.hook_mod]\nroot = "b/foo.c"\n'
+	        '\n[target.other_thing]\nroot = "d/shared_thing.c"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the remedy the message offers does not build: {out}")
+	check("hook_mod.so" in out and "are called" not in out,
+	      f"the renamed module was not built, or a clash is still "
+	      f"reported: {out}")
+	check("libother_thing.so" in out,
+	      f"the renamed library was not built: {out}")
+
+
+@case
 def a_stanza_naming_a_root_renames_the_target_on_it(t):
 	"""fuzznet keeps three provision_test.c in three module directories.
 

@@ -11931,9 +11931,21 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		    f"    use -o to put artifacts somewhere else, and keep the "
 		    f"name a name")
 
+	# Two keys, because a target is ADDRESSED by its name and WRITTEN to
+	# its filename, and those collide separately. Keying on the filename
+	# alone let an exe `foo' and a module `foo.so' -- both called `foo' --
+	# through to refuse_ident_collisions below, which groups by Make
+	# identifier and so said "targets 'foo' and 'foo' are the same Make
+	# variable": one string named twice, no file named at all, and a
+	# remedy to rename all but one of two things the reader cannot tell
+	# apart. The name is the fault rather than the variable -- `fmake foo'
+	# is ambiguous, the by_name lookup silently keeps whichever came last,
+	# and [target.foo] cannot address either of them.
 	clash = {}
 	for t in targets:
-		clash.setdefault(t.filename, []).append(t.rel or f"{tgt_section(t.name)}")
+		where = t.rel or f"{tgt_section(t.name)}"
+		for key in dict.fromkeys((t.filename, t.name)):
+			clash.setdefault(key, []).append((where, t.filename))
 	# Every repeated name, not just the first, and the count read off the
 	# list rather than written into the sentence.
 	#
@@ -11953,21 +11965,35 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# per-module test directories has one per repeated name, so the reader
 	# renamed one, re-ran, and met the next. The remedy is identical in
 	# shape for all of them, so serialising it buys nothing.
-	clashes = [(fn, rels) for fn, rels in sorted(clash.items())
-	           if len(rels) > 1]
+	# One pair, one report: a clash on the name is usually a clash on the
+	# filename as well, and saying it twice with two keys reads as two
+	# faults.
+	seen, clashes = set(), []
+	for key, members in sorted(clash.items()):
+		if len(members) < 2:
+			continue
+		sig = frozenset(where for where, _art in members)
+		if sig in seen:
+			continue
+		seen.add(sig)
+		clashes.append((key, members))
 	if clashes:
 		shown, rest = capped(clashes, 6)
 		lines = []
-		for fn, rels in shown:
-			lines.append(f"{len(rels)} targets are called {fn!r}:")
-			lines += [f"    {r}" for r in rels]
+		for key, members in shown:
+			lines.append(f"{len(members)} targets are called {key!r}:")
+			# The artifact, where it is not the name -- otherwise two files
+			# listed under one name look like a tool that cannot count.
+			lines += [f"    {where}" + (f" (builds {art})" if art != key
+			                            else "")
+			          for where, art in members]
 		if rest:
 			lines.append(f"... and {rest} more repeated name(s) "
 			             f"(-v for all)")
 		die("\n".join(lines) + "\n"
 		    f"rename all but one of each: @target on the file, or a section "
 		    f"in {CONF_FILE} that names its root:\n"
-		    f"    [target.NEW_NAME]\n    root = {shown[0][1][0]!r}")
+		    f"    [target.NEW_NAME]\n    root = {shown[0][1][0][0]!r}")
 	refuse_ident_collisions("targets", [t.name for t in targets])
 	for t in targets:
 		if os.path.isdir(os.path.join(outdir, t.filename)):
