@@ -457,7 +457,8 @@ that had been green about nothing for five commits ·
 [404. A name collision with a vendored schema was treated as a tie](#404-a-name-collision-with-a-vendored-schema-was-treated-as-a-tie) ·
 [405. 97 of 274 refusals were never produced, measured at last](#405-97-of-274-refusals-were-never-produced-measured-at-last) ·
 [406. Nine config mistakes keep the words that name them](#406-nine-config-mistakes-keep-the-words-that-name-them) ·
-[407. The three packagers name their own missing field](#407-the-three-packagers-name-their-own-missing-field)
+[407. The three packagers name their own missing field](#407-the-three-packagers-name-their-own-missing-field) ·
+[408. A tool that does not do its job is named with the job](#408-a-tool-that-does-not-do-its-job-is-named-with-the-job)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31516,3 +31517,49 @@ a restore that has no wrong version.
 What is left is mostly OS-error paths carrying `{exc}`, toolchain-absent
 paths needing a tool hidden to reach, the release and submodule-fetch
 paths, and five SPDX refusals `CLAUDE.md` keeps out of reach.
+## 408. A tool that does not do its job is named with the job
+
+A fourth batch off §405's 97, and one family: the tool was found and did
+not deliver. Six pinned -- a situc that exits 0 writing nothing, a situc
+that cannot be executed, an `rcc` and a `uic` that produce nothing, a
+named `moc` that is not there, and a tree of crates with no rustc. Each
+names the tool **and the job it failed at**, which is the half a bare "it
+failed" loses.
+
+**What is deliberately not pinned, and why.** The neighbouring family --
+*"this tree declares Q_OBJECT classes, which need Qt's moc. Install the
+Qt development package"* -- needs a **fabricated** Qt: headers findable
+so the tree compiles, `moc` absent so the refusal fires. A stripped
+`PATH` does not do it, and the attempt demonstrated that by removing
+`timeout` from its own environment and then `python3`, so the measurement
+could not run at all. A case that builds a fake Qt installation to reach
+one sentence is more fixture than the sentence is worth, and it is the
+kind of stand-in §405's own note warns about.
+
+**A non-executable situc is not an exec failure.** `find_situc` tests
+`X_OK`, so a mode-644 situc is skipped and the installed one runs
+instead -- the tree then fails for an unrelated reason. The exec path
+needs a file that IS executable and cannot run, which is a bad
+interpreter line.
+
+### The sabotage discipline held this time, and the reason is mechanical
+
+§407 recorded that a restore should be `git checkout -- <path>` rather
+than a reverse edit. Here a sabotage anchor matched **nothing** -- a
+pattern typed with brackets rather than read out of the file -- and the
+difference from §407 is that the proof refused to write and therefore
+left nothing behind, so the next sabotage ran on a clean tree and its
+result was valid. The anchor was then taken from `grep` output instead of
+being typed, which is the same rule as *read the identifier, do not
+complete it*.
+
+Two of the eight message-wording sabotages in these four batches were
+anchored wrongly. Neither cost anything once the restore stopped being an
+edit.
+
+### What is left after four batches
+
+**Twenty-eight of the ninety-seven are pinned** across §405 to §408. What
+is left is mostly OS-error paths carrying `{exc}`, the install-the-package
+family above, the release and submodule-fetch paths, and five SPDX
+refusals `CLAUDE.md` keeps out of reach.

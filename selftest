@@ -10764,6 +10764,95 @@ outputs = ["gen/vals.c"]
 
 
 @case
+def a_tool_that_does_not_do_its_job_is_named_with_the_job(t):
+	"""Section 408: a fourth batch off §405's list, one family.
+
+    Six refusals for the case where the tool was found and did not deliver:
+    a situc that exits 0 writing nothing, a situc that cannot be executed,
+    an rcc and a uic that produce nothing, a named moc that is not there,
+    and a tree of crates with no rustc. Each names the tool AND the job it
+    failed at, which is the half a bare "it failed" loses.
+
+    **What is deliberately not pinned, with the reason.** The neighbouring
+    family -- "this tree declares Q_OBJECT classes, which need Qt's moc.
+    Install the Qt development package" -- needs a FABRICATED Qt: headers
+    findable so the tree compiles, moc absent so the refusal fires. A
+    stripped PATH does not do it, as the first attempt showed by removing
+    `timeout` and then `python3` from its own environment. A case that
+    builds a fake Qt installation to reach one sentence is more fixture
+    than the sentence is worth, and it would be the kind of stand-in
+    §405's own note warns about.
+
+    A non-executable situc is not an exec failure either: `find_situc'
+    tests X_OK, so it falls back to the installed one. The exec path needs
+    a file that IS executable and cannot run -- a bad interpreter."""
+	situ_tree = {"msg.situ": "// a schema\n",
+	             "main.c": '#include "msg.h"\n'
+	                       "int main(void){ return msg_check(); }\n"}
+	cases = [
+	    ("situc-silent", situ_tree, {"bin/situc": "#!/bin/sh\nexit 0\n"},
+	     None, "situc exited 0 on msg.situ without writing msg.h"),
+	    ("situc-noexec", situ_tree,
+	     {"bin/situc": "#!/nonexistent/interp\nexit 0\n"},
+	     None, "could not run situc"),
+	    ("no-rustc", {"main.rs": 'fn main() { println!("x"); }\n',
+	                  "fmake.toml": '[toolchain]\n'
+	                                'rustc = "/nonexistent/rustc"\n'},
+	     {}, None, "Rust crate(s) and /nonexistent/rustc is not installed"),
+	]
+	if _moc_path() and _have_pkg("Qt6Core"):
+		cases.append(
+		    ("moc-named-absent",
+		     {"a.h": "#pragma once\n#include <QtCore/QObject>\n"
+		             "class A : public QObject { Q_OBJECT public: A(); };\n",
+		      "main.cpp": "/*! @file\n *  @pkg Qt6Core\n */\n"
+		                  '#include "a.h"\nA::A() {}\n'
+		                  "int main(){ A x; return 0; }\n",
+		      "fmake.toml": '[toolchain]\nmoc = "/nonexistent/moc"\n'},
+		     {}, None,
+		     "moc '/nonexistent/moc' (from [toolchain] moc in "
+		     "fmake.toml) not found"))
+		cases.append(
+		    ("rcc-silent",
+		     {"res.qrc": '<RCC><qresource prefix="/">'
+		                 "<file>a.txt</file></qresource></RCC>\n",
+		      "a.txt": "hello\n",
+		      "main.cpp": "/*! @file\n *  @pkg Qt6Core\n */\n"
+		                  "#include <QtCore/QFile>\n"
+		                  'int main(){ QFile f(":/a.txt");\n'
+		                  "    return f.exists() ? 0 : 1; }\n",
+		      "fmake.toml": '[toolchain]\nrcc = "/bin/true"\n'},
+		     {}, None, "rcc produced nothing from res.qrc"))
+	if _moc_path() and _have_pkg("Qt6Widgets"):
+		cases.append(
+		    ("uic-silent",
+		     {"f.ui": '<ui version="4.0"><class>F</class>'
+		              '<widget class="QWidget" name="F"/></ui>\n',
+		      "main.cpp": "/*! @file\n *  @pkg Qt6Widgets\n */\n"
+		                  '#include "ui_f.h"\nint main(){ return 0; }\n',
+		      "fmake.toml": '[toolchain]\nuic = "/bin/true"\n'},
+		     {}, None, "uic produced nothing from f.ui"))
+
+	for name, files, execs, _unused, expect in cases:
+		u = Tree("tool-" + name)
+		try:
+			for rel, text in files.items():
+				u.write(rel, text)
+			for rel, text in (execs or {}).items():
+				os.chmod(u.write(rel, text), 0o755)
+			r = u.fmake()
+			out = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"{name}: this must be refused: {out}")
+			check(expect in out,
+			      f"{name}: the refusal does not say {expect!r}, so it "
+			      f"names neither the tool nor the job it failed at: "
+			      f"{out}")
+		finally:
+			u.cleanup()
+
+
+@case
 def the_three_packagers_name_their_own_missing_field(t):
 	"""Section 407: a third batch off §405's list, and the least-run code.
 
