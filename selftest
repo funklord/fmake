@@ -10764,6 +10764,76 @@ outputs = ["gen/vals.c"]
 
 
 @case
+def the_three_packagers_name_their_own_missing_field(t):
+	"""Section 407: a third batch off §405's list, and the least-run code.
+
+    `a_debian_source_package_is_ejected_and_builds' already covers six deb
+    refusals, so these are the ones it does not reach -- and they are
+    mostly the ebuild and apk emitters, which nothing else here exercises
+    as hard as deb.
+
+    The point of taking all three together is that **the messages differ
+    per backend and have to**: a missing description is "the one-line
+    synopsis Debian requires", "the DESCRIPTION an ebuild requires" and
+    "the pkgdesc an APKBUILD requires", and a reader fixing one package
+    format is not helped by another's vocabulary. A case pinning one of
+    them would not notice the three being collapsed into a generic
+    sentence, which is the thing worth defending here.
+
+    Empty strings rather than absent keys, because `_pkg_min_tree' sets
+    the fields it writes and a caller can only override them -- and
+    measured first: an empty value reaches the same refusal an absent one
+    does.
+
+    The last one is the TOML relay, which is not packaging at all: it
+    turned up by accident when a fixture of mine declared `[package]`
+    twice, and a user who does that gets exactly this and nothing else."""
+	cases = (
+	    ("portage-name", "Bad_Name!", {}, "ebuild",
+	     "'Bad_Name!' is not a package name Portage accepts"),
+	    ("apk-name", "Bad_Name!", {}, "apk",
+	     "'Bad_Name!' is not a package name apk accepts"),
+	    ("ebuild-desc", "ok-name", {"description": '""'}, "ebuild",
+	     "DESCRIPTION an ebuild requires"),
+	    ("apk-desc", "ok-name", {"description": '""'}, "apk",
+	     "pkgdesc an APKBUILD requires"),
+	    ("apk-maintainer", "ok-name", {"maintainer": '""'}, "apk",
+	     "an APKBUILD names one in its first line"),
+	    ("account-name", "ok-name", {"users": '["Bad Name"]'}, "deb",
+	     "groups/users: 'Bad Name' is not an account name"),
+	)
+	for name, pkgname, fields, backend, expect in cases:
+		u = Tree("pkg-" + name)
+		try:
+			_pkg_min_tree(u, pkgname, **fields)
+			r = u.fmake("--eject", backend)
+			out = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"{name}: --eject {backend} must refuse this: {out}")
+			check(expect in out,
+			      f"{name}: the refusal does not say {expect!r}, so a "
+			      f"reader fixing a {backend} package is given another "
+			      f"format's vocabulary: {out}")
+		finally:
+			u.cleanup()
+
+	# And the TOML relay, which needs a file the helper cannot write.
+	u = Tree("pkg-duptable")
+	try:
+		_pkg_min_tree(u, "ok-name")
+		with open(os.path.join(u.dir, "fmake.toml"), "a") as fh:
+			fh.write('\n[package]\ndescription = "again"\n')
+		r = u.fmake("--eject", "deb")
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"a duplicate table must be refused: {out}")
+		check("Cannot declare" in out and "fmake.toml" in out,
+		      f"the parse error is not relayed with the file that holds "
+		      f"it: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def nine_config_mistakes_keep_the_words_that_name_them(t):
 	"""Section 406: the second batch off §405's list of 97.
 

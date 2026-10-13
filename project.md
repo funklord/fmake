@@ -456,7 +456,8 @@ that had been green about nothing for five commits ·
 [403. Where this session stopped, and what it left open](#403-where-this-session-stopped-and-what-it-left-open) ·
 [404. A name collision with a vendored schema was treated as a tie](#404-a-name-collision-with-a-vendored-schema-was-treated-as-a-tie) ·
 [405. 97 of 274 refusals were never produced, measured at last](#405-97-of-274-refusals-were-never-produced-measured-at-last) ·
-[406. Nine config mistakes keep the words that name them](#406-nine-config-mistakes-keep-the-words-that-name-them)
+[406. Nine config mistakes keep the words that name them](#406-nine-config-mistakes-keep-the-words-that-name-them) ·
+[407. The three packagers name their own missing field](#407-the-three-packagers-name-their-own-missing-field)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31461,3 +31462,57 @@ than on the text being changed -- here `if not line.strip():` -- so the
 edit is unique whatever the replacement collides with. Restated both ways
 and verified with `git diff --quiet` after each restore, which is the
 check that would have caught it immediately.
+## 407. The three packagers name their own missing field
+
+A third batch off §405's 97, and deliberately the least-run code:
+`a_debian_source_package_is_ejected_and_builds` already covers six deb
+refusals, so these are the ones it does not reach, which are mostly the
+**ebuild and apk** emitters.
+
+Pinned: a package name Portage rejects; one apk rejects; a missing
+description in the ebuild emitter; the same in apk; a missing maintainer
+in apk; a `groups/users` value that is not an account name; and the TOML
+parse relay.
+
+**Taking all three backends together is the point.** A missing
+description is *"the one-line synopsis Debian requires"*, *"the
+DESCRIPTION an ebuild requires"* and *"the pkgdesc an APKBUILD
+requires"* -- and a reader fixing one package format is not helped by
+another's vocabulary. A case pinning one would not notice the three being
+collapsed into a generic sentence, which is what the first sabotage does.
+
+Empty strings rather than absent keys, because `_pkg_min_tree` sets the
+fields it writes and a caller can only override them. Measured before
+relying on it: an empty value reaches the same refusal an absent one does.
+
+The TOML relay is not packaging at all. It turned up when a fixture of
+mine declared `[package]` twice, and a user who does that gets
+`Cannot declare ('package',) twice` and nothing else.
+
+### Restore a sabotage with git, not with a reverse edit
+
+§406 recorded that a sabotage duplicating an existing string cannot
+restore itself. **This section repeated the mistake within the hour**, one
+batch later: the reverse edit for *DESCRIPTION an ebuild requires* was
+anchored on text I had guessed rather than read, matched nothing, and the
+proof refused to write -- leaving the tree sabotaged so the next sabotage
+measured it and reported the previous failure.
+
+So the remedy §406 gave is not enough. Anchoring on the guard helps and
+still asks a person to construct a correct reverse edit under no
+pressure to get it right. **`git checkout -- fmake` cannot be anchored
+wrongly**, and `git diff --quiet` after it is a check that cannot pass
+vacuously. The rule against discarding another session's work still
+applies, which is why the diff is read first and recognised -- here it was
+one line in `eject_ebuild` and visibly mine.
+
+That is the honest shape of this entry: the lesson was already written
+down, in this file, and writing it down did not stop me. What stops it is
+a restore that has no wrong version.
+
+### Where the list stands
+
+**Twenty-two of the ninety-seven are pinned** across §405, §406 and this.
+What is left is mostly OS-error paths carrying `{exc}`, toolchain-absent
+paths needing a tool hidden to reach, the release and submodule-fetch
+paths, and five SPDX refusals `CLAUDE.md` keeps out of reach.
