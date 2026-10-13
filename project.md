@@ -458,7 +458,8 @@ that had been green about nothing for five commits ·
 [405. 97 of 274 refusals were never produced, measured at last](#405-97-of-274-refusals-were-never-produced-measured-at-last) ·
 [406. Nine config mistakes keep the words that name them](#406-nine-config-mistakes-keep-the-words-that-name-them) ·
 [407. The three packagers name their own missing field](#407-the-three-packagers-name-their-own-missing-field) ·
-[408. A tool that does not do its job is named with the job](#408-a-tool-that-does-not-do-its-job-is-named-with-the-job)
+[408. A tool that does not do its job is named with the job](#408-a-tool-that-does-not-do-its-job-is-named-with-the-job) ·
+[409. The refusal that defends a rule from build-and-commit](#409-the-refusal-that-defends-a-rule-from-build-and-commit)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31563,3 +31564,51 @@ edit.
 is left is mostly OS-error paths carrying `{exc}`, the install-the-package
 family above, the release and submodule-fetch paths, and five SPDX
 refusals `CLAUDE.md` keeps out of reach.
+## 409. The refusal that defends a rule from build-and-commit
+
+A fifth batch off §405's 97, and the one with the most behind it.
+`build-and-commit.md` requires a build to fetch a vendored submodule and
+to **fail loudly** when it cannot, because *"a build that silently
+produces less is worse than one that stops"*. fmake's refusal carries that
+argument in its own last line:
+
+    fetching the submodule vendor/x failed:
+      ...
+    A build that carried on here would compile whatever is in the tree
+    and report the missing pieces as errors in your own sources.
+
+**That sentence is the whole reason the refusal exists, and nothing in the
+suite produced it.** A reader who loses it is told a clone failed and not
+why fmake declines to continue -- and the errors they would then meet look
+like faults in their own sources, which is exactly what the sentence
+pre-empts. The sabotage drops it and the case says so by name.
+
+**The fixture needs a real checkout, which took measuring.** A
+`.gitmodules` alone gets a different refusal -- *"declares 1 submodule(s)
+in .gitmodules and is not a git checkout"* -- because
+`declared_submodules` reads the file while git needs a **gitlink in the
+index** before it treats the path as a submodule at all:
+
+    git update-index --add --cacheinfo 160000,<sha>,vendor/x
+
+Whether the clone then fails for a forbidden `file` transport or a
+missing path is git's business and varies by configuration, so what the
+case asserts is fmake's sentence rather than git's wording.
+
+A malformed `.qrc` rides along as the same shape one layer down: a file
+fmake must parse, and a parse error relayed **with the file that holds
+it** rather than raised as a traceback. Its sabotage removes the filename
+and the case names that.
+
+### One that turned out to be already covered
+
+An unreadable `fmake.toml` reaches `{CONF_FILE}: {exc}` -- the same site
+§407 pinned through a duplicate `[package]` table. Measured rather than
+assumed, and not pinned twice: the site is produced, so it is off the
+list, and a second route to it is not a second finding.
+
+### Thirty of ninety-seven
+
+What remains needs either a fabricated toolchain (§408's declined family),
+a failing release path, or the five SPDX refusals `CLAUDE.md` keeps out of
+reach. The cheap ones are done.

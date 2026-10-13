@@ -10764,6 +10764,84 @@ outputs = ["gen/vals.c"]
 
 
 @case
+def a_submodule_that_cannot_be_fetched_says_why_carrying_on_is_worse(t):
+	"""Section 409: the refusal that defends a rule from build-and-commit.
+
+    `build-and-commit.md` requires a build to FETCH a vendored submodule
+    and to **fail loudly** when it cannot, because "a build that silently
+    produces less is worse than one that stops". fmake's refusal carries
+    that argument in its last line:
+
+        A build that carried on here would compile whatever is in the
+        tree and report the missing pieces as errors in your own sources.
+
+    That sentence is the whole reason the refusal exists, and §405's
+    measurement found nothing in the suite produced it. A reader who loses
+    it is told a clone failed and not why fmake will not continue -- and
+    the failure they would then meet looks like a fault in their own code,
+    which is precisely what the sentence exists to pre-empt.
+
+    The fixture is a real git checkout with a gitlink in the index and a
+    URL that cannot be cloned, because `declared_submodules' reads
+    `.gitmodules' while git itself needs the gitlink to treat the path as
+    a submodule at all. Whether the clone fails for a forbidden transport
+    or a missing path is git's business and varies by configuration; what
+    is asserted is fmake's own sentence rather than git's wording.
+
+    The malformed `.qrc` rides along because it is the same shape one
+    layer down: a file fmake must parse, a parse error relayed with the
+    file that holds it rather than as a traceback."""
+	if not shutil.which("git"):
+		raise Skip("git is needed to make a checkout with a submodule")
+	u = Tree("sub-unfetchable")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write(".gitmodules", '[submodule "vendor/x"]\n'
+		        "\tpath = vendor/x\n"
+		        "\turl = file:///nonexistent/repo.git\n")
+		_run_in(u.dir, "git", "init", "-q", ".")
+		_run_in(u.dir, "git", "-c", "user.email=a@b", "-c", "user.name=a",
+		        "commit", "-q", "--allow-empty", "-m", "init")
+		_run_in(u.dir, "git", "update-index", "--add", "--cacheinfo",
+		        "160000,"
+		        "0000000000000000000000000000000000000001,vendor/x")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"an unfetchable submodule must stop the build: {out}")
+		check("fetching the submodule vendor/x failed" in out,
+		      f"the refusal does not name the submodule: {out}")
+		check("would compile whatever is in the tree" in out,
+		      f"the refusal does not say why carrying on is worse, which "
+		      f"is the whole reason it refuses: {out}")
+	finally:
+		u.cleanup()
+
+	# The same shape one layer down: a file fmake parses, and a parse
+	# error relayed with the file rather than raised.
+	if not _moc_path() or not _have_pkg("Qt6Core"):
+		return
+	u = Tree("qrc-malformed")
+	try:
+		u.write("res.qrc",
+		        '<RCC><qresource prefix="/"><file>a.txt</file>\n')
+		u.write("a.txt", "hello\n")
+		u.write("main.cpp", "/*! @file\n *  @pkg Qt6Core\n */\n"
+		        "#include <QtCore/QFile>\n"
+		        'int main(){ QFile f(":/a.txt");\n'
+		        "    return f.exists() ? 0 : 1; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"an unparseable resource file must be refused: {out}")
+		check("res.qrc: cannot read as a Qt resource file" in out,
+		      f"the refusal does not name the file it could not read: "
+		      f"{out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_tool_that_does_not_do_its_job_is_named_with_the_job(t):
 	"""Section 408: a fourth batch off §405's list, one family.
 
