@@ -462,7 +462,8 @@ that had been green about nothing for five commits ·
 [409. The refusal that defends a rule from build-and-commit](#409-the-refusal-that-defends-a-rule-from-build-and-commit) ·
 [410. A name clash the check could not see, because it read the file](#410-a-name-clash-the-check-could-not-see-because-it-read-the-file) ·
 [411. What a plain fmake does on fuzznet, and what stops it](#411-what-a-plain-fmake-does-on-fuzznet-and-what-stops-it) ·
-[412. The ejected file did not say which targets it lacks](#412-the-ejected-file-did-not-say-which-targets-it-lacks)
+[412. The ejected file did not say which targets it lacks](#412-the-ejected-file-did-not-say-which-targets-it-lacks) ·
+[413. Which name reached across, and what that bounds](#413-which-name-reached-across-and-what-that-bounds)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31802,3 +31803,95 @@ That is twice in two sections -- §410's dedupe and this one -- where the
 assertion was true, the code was right, and the check could not have
 failed. The shape is the same both times: **a fixture chosen to
 demonstrate the fix rather than to separate it from the bug.**
+
+## 413. Which name reached across, and what that bounds
+
+Widening proposes a file from the **text** scan when a name it appears to
+define is unresolved, and it said only this:
+
+    * widening: 3 more file(s) may define 408 unresolved symbol(s)
+
+Both sides counted, neither named. hull's finding 3 is open on this pass
+-- their build refused on nineteen symbols defined twice after widening
+reached into a vendored situ -- and the question in every instance is
+**which name reached across**. The module arm of the same loop already
+answers it, saying `exports {m!r}, which a file just admitted imports`;
+the symbol arm now does too:
+
+    * widening: notes/test/notes_sync_test.c may define 'write'
+    * widening: session/random_linux.c may define 'fzn_random_system_init'
+
+`widen_candidates` returns the matched names **with** the unit rather than
+leaving the message to intersect a second time, so what the build says
+pulled a file in cannot drift from what pulled it in.
+
+**Every name, and the suite refused the first version for capping at
+three.** `a_truncated_list_says_it_is_one_and_where_the_rest_are` holds a
+rule this file already argued for and I had not read: a `vinfo` line
+prints only under `-v`, so there is nowhere further to send a reader and a
+cap is a dead end by construction. Its partition assertion caught the new
+line rather than a case about widening -- which is the thing that
+assertion was written to do, since a case per site proves the sites that
+exist and says nothing about the one somebody adds next week.
+
+### What the first run of it found
+
+That `write` is `static int write(...)` -- a 700-line test's own helper,
+whose name collides with the C library function the build genuinely has
+unresolved. **A `static` definition can never resolve an undefined
+symbol**, so the proposal was useless by construction, and one wasted C++
+compile per clean build is what it costs. Reproduced in four lines: a
+`main` calling `thing()`, a `lib/s.c` whose only `thing` is `static`,
+widening proposes the file, compiles it, and the link fails on `thing`
+anyway.
+
+**It is left alone, and the reason is in the code it would change.**
+`RE_FUNC_DEF` is a union of patterns, and the comment beside it records
+why it is deliberately generous -- a wider single pattern was measured
+against seven real trees and dropped matches the old one made, so
+*a definition this misses is a build that does not happen*. A `static`
+filter removes matches, which is that trade in reverse, and a mis-detected
+`static` is the worse error of the two.
+
+### The bound, which is the part hull's question needs
+
+**A file admitted for a name it cannot define is harmless on its own.**
+Measured: two pool files that share an unneeded symbol, one of them
+admitted only because a `static` definition matched, and the
+duplicate-symbol refusal does **not** fire -- the closure links only what
+resolves something, so neither copy of the unneeded symbol enters a link
+set and the build fails honestly on the undefined name instead.
+
+Checked from the other end too: on fuzznet the three vendored qtty test
+units widening admitted appear in the ejected Makefile only under `CLEAN`
+and `OBJS`, in no program's link line at all.
+
+So hull's nineteen cannot have come from the proposal alone. Whatever was
+admitted there **also defined symbols hull's own generated codecs define
+and something needed**, which is a narrower thing to look for than "it
+builds the vendored project's programs" -- and with the line above, their
+next run names it.
+
+### A frame abandoned, and the control that killed it
+
+The explanation on the way to this was that fmake holds **test
+directories** out of the initial pool and widening is the back door that
+re-admits them: a vendored `flog/tests/extra.c` is not compiled on the
+first pass and arrives on the second, and the same is true of a tree's own
+`test/extra.c`. Both observations are correct and the conclusion was
+wrong. One control settles it -- move the file from `test/` to `lib/` and
+it behaves identically. **The initial pool is the roots**, everything else
+arrives by widening when a symbol needs it, and there is no
+test-directory rule to be inconsistent about. That is §3 exactly as
+documented, which is what makes the wrong frame embarrassing rather than
+subtle: it was contradicted by the design it was built on.
+
+### Signalled rather than fixed
+
+**beerssh's README cites §293 as unsettled**, in the paragraph telling a
+reader to use `make` in a tree where `tool/build-deps-android.sh` has run.
+§305 settled it on 2026-09-21 in `06d2c26`. Written to their inbox as
+`20261014T0017Z-claude.md`, with what was verified here -- the behaviour
+and the case that pins it -- separated from what was not: their
+`build-deps-android` is 510 MB of untracked artifacts, so the dry run that
+would close it in their own tree is theirs to take.

@@ -8093,6 +8093,16 @@ def symbol_tokens(sym):
 
 
 def widen_candidates(symbols, pool_units):
+	"""(unit, the names it may define) for every unit worth compiling.
+
+    The matched names come back with the unit rather than being recovered
+    by a second intersection at the message, so that what the build says
+    pulled a file in cannot drift from what pulled it in. One tree's
+    build broke on nineteen symbols defined twice after this pass reached
+    into a vendored checkout, and another compiled three of a vendored
+    project's test units that nothing then linked: in both the question
+    is WHICH name reached across, and the summary line could not say.
+    """
 	toks = set()
 	for s in symbols:
 		toks |= symbol_tokens(s)
@@ -8100,8 +8110,9 @@ def widen_candidates(symbols, pool_units):
 		return []
 	out = []
 	for u in pool_units:
-		if toks.intersection(u.scan.get("defs") or []):
-			out.append(u)
+		hit = toks.intersection(u.scan.get("defs") or [])
+		if hit:
+			out.append((u, sorted(hit)))
 	return out
 
 # ---------------------------------------------------------------------------
@@ -13541,8 +13552,9 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# Said only where it changed the answer. A tree with leftover
 		# generated code that nothing was going to propose anyway does not
 		# need a line about it.
-		would = widen_candidates(fresh, [Unit(rel, root, objdir, scans[rel])
-		                                 for rel in theirs])
+		would = [u for u, _names in
+		         widen_candidates(fresh, [Unit(rel, root, objdir, scans[rel])
+		                                  for rel in theirs])]
 		if would:
 			tools = " and ".join(sorted({scans[u.rel]["genby"]
 			                             for u in would}))
@@ -13564,6 +13576,22 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			break
 		vinfo(f"widening: {len(extra)} more file(s) may define "
 		      f"{len(fresh)} unresolved symbol(s)")
+		# And which name reached, per file. The summary above counts both
+		# sides and names neither, so a file admitted out of another
+		# project's checkout -- which is how one tree's build broke and
+		# how another compiled three units nothing linked -- could not be
+		# traced to the symbol that asked for it. The module arm of this
+		# same loop already says `exports {m!r}, which a file just
+		# admitted imports'; this is that sentence for the symbol arm.
+		# Every name, not the first three: this prints only under -v, so
+		# there is nowhere further to send a reader and a cap would be a
+		# dead end by construction. Written with one first, and the
+		# suite refused it -- `a -v line truncates, and -v is where a
+		# reader goes when they want all of it'.
+		for u, _names in extra:
+			vinfo(f"widening: {u.rel} may define "
+			      + ", ".join(repr(s) for s in _names))
+		extra = [u for u, _names in extra]
 		for u in extra:
 			# `module_own' as well as `own_flags', because these units did
 			# not exist when the module flags were handed out and a unit

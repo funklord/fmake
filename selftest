@@ -32574,6 +32574,79 @@ def an_ejected_build_file_names_the_targets_it_lacks(t):
 	      f"a tree with nothing missing is told something is: {r.stdout}")
 
 
+@case
+def widening_names_the_symbol_that_reached_for_each_file(t):
+	"""Section 413: the summary counted both sides and named neither.
+
+    Widening proposes a file from the TEXT scan when a name it appears to
+    define is unresolved, and said only `widening: 3 more file(s) may
+    define 408 unresolved symbol(s)' -- so a file admitted out of another
+    project's checkout could not be traced to the name that asked for it.
+    hull's build broke on nineteen symbols defined twice after this pass
+    reached into a vendored situ, and fuzznet compiled three of a vendored
+    qtty's test units that nothing then linked. In both the question is
+    WHICH name reached across.
+
+    The module arm of the same loop already says `exports {m!r}, which a
+    file just admitted imports'; this is that sentence for the symbol arm.
+    The names come back from `widen_candidates' with the unit rather than
+    being recovered by a second intersection at the message, so what the
+    build says pulled a file in cannot drift from what pulled it in.
+    Every name is listed rather than a capped three: the line prints
+    only under -v, so a cap there is a dead end, and the suite
+    refused the first version of this message for exactly that.
+
+    The second half pins a bound that was measured rather than fixed. A
+    `static' definition can never resolve an undefined symbol, so a
+    proposal justified only by one is always useless work -- and it is
+    left alone deliberately. `RE_FUNC_DEF' is a union of patterns whose
+    comment records why it is deliberately generous: a definition it
+    misses is a build that does not happen, which is the worse error. And
+    the cost is bounded: a file admitted for a name it cannot define is
+    not linked unless it also defines something genuinely needed, so the
+    duplicate-symbol refusal does not fire on the proposal alone --
+    measured with a fixture where two pool files share an unneeded symbol
+    and the build fails honestly on the undefined one instead."""
+	t.write("api.h", "int alpha(void);\nint beta(void);\n"
+	        "int gamma_(void);\nint delta(void);\n")
+	t.write("lib/four.c", '#include "api.h"\n'
+	        "int alpha(void){ return 1; }\nint beta(void){ return 2; }\n"
+	        "int gamma_(void){ return 3; }\nint delta(void){ return 4; }\n")
+	t.write("main.c", '#include "api.h"\n'
+	        "int main(void){ return alpha() + beta() + gamma_() + delta(); }\n")
+
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build should succeed: {out}")
+	check("widening: 1 more file(s) may define" in out,
+	      f"the summary line is gone: {out}")
+	line = [l for l in out.splitlines() if "widening: lib/four.c" in l]
+	check(line, f"the file admitted is not named with its symbol: {out}")
+	check("may define" in line[0] and "'alpha'" in line[0],
+	      f"the name that reached for it is not in the line: {line}")
+	# Every name, not a capped three. This line prints only under -v,
+	# where a cap is a dead end by construction -- which is the rule
+	# `a_truncated_list_says_it_is_one_and_where_the_rest_are' holds,
+	# and it refused the first version of this message.
+	for _s in ("alpha", "beta", "gamma_", "delta"):
+		check(f"'{_s}'" in line[0],
+		      f"{_s} is not named, so the -v line truncates where there "
+		      f"is nowhere further to send a reader: {line}")
+
+	# A proposal only a static definition justifies. Left as it is, and
+	# the case says so: the link fails honestly, and nothing else does.
+	t.write("stat/s.c", "static int only_here(void){ return 7; }\n"
+	        "int reach(void){ return only_here(); }\n")
+	t.write("main.c", '#include "api.h"\nint only_here(void);\n'
+	        "int main(void){ return alpha() + only_here(); }\n")
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a static definition cannot resolve it: {out}")
+	check("widening: stat/s.c may define 'only_here'" in out,
+	      f"the proposal is not named, so the useless compile cannot be "
+	      f"read: {out}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c, _again=False):
