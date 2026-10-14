@@ -14754,12 +14754,45 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# is the one fmake already uses to decide that a main() in
 			# there is not this tree's program.
 			rest = [r for r in ignored if r not in displaced]
-			_head, _rest = capped(rest)
+			# This tree's own first, and the other projects' counted
+			# rather than listed. Measured on fuzznet: 137 files here,
+			# and 113 of them inside four vendored checkouts -- 54
+			# monocypher, 38 qtty, 16 quirc, 5 flog -- so the five the
+			# cap showed were ALL flog's, and a reader looking for a file
+			# of their own that had fallen out of the build saw none of
+			# their twenty-four and four other projects instead.
+			#
+			# The same signal that decides a main() in there is not this
+			# tree's program, and the same wording the run has already
+			# used for it. Nothing is hidden: under -v every one is
+			# listed, named with the checkout it belongs to, which is
+			# what the cap's own promise requires.
+			theirs, mine = {}, []
+			for rel in rest:
+				owner = vendor_of(rel, vendored)
+				if owner:
+					theirs.setdefault(owner, []).append(rel)
+				else:
+					mine.append(rel)
+			_head, _rest = capped(mine)
 			for rel in _head:
 				note(f"{rel} not compiled: nothing reaches it "
 				     f"(--force-link if it is needed anyway)")
 			if _rest:
 				note(f"... and {_rest} more (-v for all)")
+			if theirs and VERBOSE:
+				for owner, rels in sorted(theirs.items()):
+					for rel in rels:
+						note(f"{rel} not compiled: nothing reaches it "
+						     f"-- in {owner}, a checkout of another "
+						     f"project")
+			elif theirs:
+				note(f"{sum(len(v) for v in theirs.values())} file(s) in "
+				     f"{len(theirs)} separate checkout(s) are not reached "
+				     f"either, which is theirs rather than this tree's: "
+				     + ", ".join(f"{k} ({len(v)})"
+				                 for k, v in sorted(theirs.items()))
+				     + " (-v for all)")
 			# The same answer, for a .rs no crate draws in -- and asked
 			# after the build rather than before it, because the scan is
 			# not the authority on what a crate contains. `mod' is what

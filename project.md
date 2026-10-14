@@ -467,7 +467,8 @@ that had been green about nothing for five commits ·
 [414. A schema compiled for a program fmake does not build](#414-a-schema-compiled-for-a-program-fmake-does-not-build) ·
 [415. A sentence four refusals append, and three declines](#415-a-sentence-four-refusals-append-and-three-declines) ·
 [416. Where this session stopped, second fold](#416-where-this-session-stopped-second-fold) ·
-[417. Which of the two providers is not yours to edit](#417-which-of-the-two-providers-is-not-yours-to-edit)
+[417. Which of the two providers is not yours to edit](#417-which-of-the-two-providers-is-not-yours-to-edit) ·
+[418. The longest line of a good build was mostly somebody else's](#418-the-longest-line-of-a-good-build-was-mostly-somebody-elses)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32238,3 +32239,54 @@ same: select the row the message actually prints, then assert on it.
   `dhcpcd-hook` and raidcfgd's four helpers -- and **neither installs
   through fmake**, netcfgd's README saying `make build` is the way for
   the daemon. §125's rule still holds, so still not built.
+
+## 418. The longest line of a good build was mostly somebody else's
+
+§417 read a refusal. This read the report a **successful** build prints,
+which nobody refuses on and which is therefore where a wrong emphasis
+survives longest.
+
+Measured on fuzznet: **137 files** reported as *nothing reaches it*, and
+where they are is the finding.
+
+    monocypher   54      gui    22
+    qtty         38      wire    1
+    quirc        16      local   1
+    flog          5
+
+**113 of the 137 are inside four vendored checkouts and 24 are fuzznet's
+own.** The list is capped at five, and on that tree **all five shown were
+flog's** -- so a reader looking for a file of their own that had fallen
+out of the build saw none of their twenty-four and four other projects
+instead.
+
+fmake knew which was which. The same run had already printed *"monocypher
+is a separate checkout; leaving its own 28 programs to it"*, and the
+report used none of it: §414's shape again, in a line nobody refuses on.
+
+So the tree's own come first, capped as before, and the rest are counted:
+
+    7 file(s) in 1 separate checkout(s) are not reached either, which is
+    theirs rather than this tree's: vend (7) (-v for all)
+
+**And `-v` still lists every one**, each vendored file named with the
+checkout it is in, because the cap's own promise is *-v for all* and a
+summary that quietly dropped them would be that promise broken. Three
+sabotages: not separating them puts three of vend's files back in the
+five, the `-v` branch gone gives 2 of 9, and dropping the owner leaves
+seven paths that say nothing about why they are held apart.
+
+### The restore that reverted the work
+
+The good copy was taken **before** the edit rather than after it, in the
+same command, so restoring from it after a sabotage undid the change
+itself -- and the next run failed against a tree with no fix in it. The
+sabotage it was testing had not even applied, its anchor having moved, so
+for one run **both the subject and the control were absent** and the
+failure looked like the case being wrong.
+
+Every earlier sabotage this session saved the copy as its own step after
+the edit was verified. The order is the whole of it: **save the good copy
+after the edit, verify the restore with `cmp`, and confirm the sabotage
+landed before reading the result** -- the third of those is already a rule
+here and the first two were assumed.
