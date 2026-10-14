@@ -32408,6 +32408,35 @@ program runs the old `tag()`. That is the shape of the hazard: not a
 missing rebuild anybody notices, but **a green build whose program is the
 previous one**.
 
+### Which generator chains go through to the program, all four asked
+
+The lens that found this is *the suite's assertions all stop at the
+generator*, so the other three generators were asked the same question.
+**Only moc was short, and only moc stops without a reason.**
+
+- **`[generate.*]`** -- `generated_sources_rerun_on_content_change`
+  ends at `t.run(...) == "102\n"`. Through.
+- **uic** -- `uic_reruns_only_when_the_input_changes` ends at the
+  program's exit status changing with the label text. Through, and the
+  dependent recompile is implied: `ui_thing.h` is included by
+  `main.cpp`, so a stale object would keep the old label.
+- **rcc** -- `rcc_reruns_when_an_embedded_file_changes` ends at *"the
+  binary still carried the old resource contents"*. Through.
+- **situ** -- stops at fmake re-running the compiler, **with its reason
+  written in the case**: the stand-in does not read schemas, so asking
+  it what a changed import means would be asking a stand-in a question
+  only the real tool can answer. That is `evidence.md`'s rule, reported
+  from this project, and honouring it is why that case ends where it
+  does.
+
+**Why moc was the odd one out is structural rather than an oversight.**
+uic and `[generate.*]` write a HEADER the dependents include, so a stale
+dependent object keeps the old behaviour and any end-to-end check sees
+it. moc writes a separate translation unit, so recompiling that alone
+still changes the meta-object -- which is exactly why the method count
+reads fresh over stale objects, and why the gap could sit behind ten
+green `MOC` assertions.
+
 ### Four verifications on real trees, with their methods
 
 None found a defect, and each is written down so the next session
