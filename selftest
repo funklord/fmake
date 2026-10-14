@@ -25815,6 +25815,87 @@ def an_unguessable_ambiguity_offers_a_remedy_that_works(t):
 
 
 @case
+def the_other_two_lists_in_that_report_are_held_to_it_too(t):
+	"""Section 419: the same block, two lists further on.
+
+    Section 418 put this tree's own unreached sources in front of the
+    reader. The report it is in holds three more lists, and reading them
+    against the same question found two things.
+
+    **A schema report that a vendored directory can crowd out.** Capped at
+    five over a mixed list, it shows whichever sort first -- and a vendored
+    directory often sorts before the tree's own, `fuzznet/` before `wire/`
+    in raidcfgd. Measured on a fixture of two own schemas and six of a
+    checkout's: with one of the two named so it sorts last, it was cut.
+
+    **A truncation that announced nothing at all.** The crate-orphan list
+    was a bare `[:5]`, so a sixth orphan .rs was dropped in silence. The
+    truncation gate cannot see that shape: it looks FORWARD from a printer
+    call, and this slice is in the loop header that FEEDS one, so the
+    detector written to close that class is blind to the arrangement where
+    the cut happens before the print rather than inside it.
+
+    A wider detector was measured rather than written. Scanning six lines
+    after every `note(`, `warn(`, `info(`, `vinfo(` and `die(` in fmake
+    finds 437 printer sites and **13** slices -- and most are illustrative
+    samples inside a sentence that already carries the count, like *"235
+    test programs not built by default (admin_test, admit_test,
+    aead_monocypher_test, ...)"*, which is not a list pretending to be
+    whole. A gate with eleven waivers is a gate switched off by
+    instalments, so this one was found by reading and fixed by hand."""
+	situc = t.write("bin/situc", FAKE_SITUC % {"stream": "stderr",
+	                                           "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write(".gitmodules", '[submodule "vend"]\n\tpath = vend\n'
+	        "\turl = git@example.invalid:vend.git\n")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	# Named so it sorts AFTER the vendored directory, which is the
+	# arrangement the cap used to lose.
+	t.write("zmine.situ", "// ours, nothing includes it\n")
+	for i in range(1, 7):
+		t.write(f"vend/sch/v{i}.situ", "// theirs\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	rows = [l for l in out.splitlines() if ".situ not compiled" in l]
+	check(any("zmine.situ" in l for l in rows),
+	      f"this tree's own schema was cut by a cap full of another "
+	      f"project's: {rows}")
+	check("more schema(s) (-v for all)" in out,
+	      f"the schema list is no longer capped, or no longer says so: "
+	      f"{out}")
+
+	# The crate-orphan list, which said nothing about what it dropped.
+	u = Tree("orphan-cap")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		for i in range(1, 8):
+			u.write(f"src/m{i}.rs", f"pub fn thing{i}() -> i32 {{ {i} }}\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		# "is reached by", not "no crate root": the ellipsis carried
+		# that phrase too and counted as a sixth row, which is the
+		# same mis-selection section 417 records -- a filter matching
+		# more lines of the message than the one it means.
+		shown = [l for l in out.splitlines() if "is reached by" in l]
+		check(len(shown) == 5,
+		      f"the orphan list is not capped at five: {len(shown)}")
+		check("and 2 more .rs file(s) (-v for all)" in out,
+		      f"two orphans were dropped in silence, which is the class "
+		      f"the truncation gate exists to close: {out}")
+
+		# And -v means all of them, as every other cap here promises.
+		shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+		out = u.fmake("-v").stdout + u.fmake("-v").stderr
+		shown = [l for l in out.splitlines() if "is reached by" in l]
+		check(len(shown) == 7,
+		      f"-v did not list every orphan: {len(shown)} of 7")
+	finally:
+		u.cleanup()
+
+
+@case
 def the_unreached_files_a_reader_owns_come_first(t):
 	"""Section 418: the longest line of a successful build was mostly
 	somebody else's.

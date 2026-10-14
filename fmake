@@ -14806,8 +14806,16 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 					read_by_crates |= {
 					    os.path.relpath(f, root)
 					    for f in crate_inputs(u, root)}
-			for rel in [r for r in crate_orphans
-			            if r not in read_by_crates][:5]:
+			# Through `capped' like its three siblings in this block, and
+			# it was a bare `[:5]' saying nothing about a sixth. The
+			# truncation gate cannot see this shape: it looks FORWARD from
+			# a printer call, and the slice is in the loop header that
+			# feeds one. So the detector that closed this class is blind
+			# to the one arrangement where the cut happens before the
+			# print rather than inside it.
+			_ohead, _orphrest = capped([r for r in crate_orphans
+			                            if r not in read_by_crates])
+			for rel in _ohead:
 				note(f"{rel} is reached by no crate root: nothing declares "
 				     f"it with `mod', and only "
 				     f"{' or '.join(sorted(CRATE_ROOTS))} roots a crate")
@@ -14826,6 +14834,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 					     f"builds these; fmake has no way to be told, "
 					     f"since a target here is named by a crate root "
 					     f"and this is not one.")
+			if _orphrest:
+				note(f"... and {_orphrest} more .rs file(s) (-v for all)")
 			# The remedy names Q_INIT_RESOURCE rather than --force-link,
 			# which was what the documentation said and does not work: a
 			# .qrc is not a source file, so --force-link refuses it by
@@ -14842,7 +14852,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# them is a library a program takes two from -- but it is
 			# invisible, and what it hides is a test meant to exercise a
 			# format that includes the wrong header and passes.
-			_shead, _srest = capped(situ_unused)
+			# Own first, for the reason the sources list above gives: a
+			# cap of five over a mixed list shows whichever sort first,
+			# and a vendored directory often sorts before the tree's own
+			# -- raidcfgd's `fuzznet/' before its `wire/'. Measured on a
+			# fixture of one own schema and six of a checkout's: four of
+			# the five places went to the other project.
+			_smine = [r for r in situ_unused if not vendor_of(r, vendored)]
+			_stheirs = [r for r in situ_unused if vendor_of(r, vendored)]
+			_shead, _srest = capped(_smine + _stheirs)
 			for rel in _shead:
 				stem = os.path.basename(rel)[:-len(SITU_EXT)]
 				note(f"{rel} not compiled: "

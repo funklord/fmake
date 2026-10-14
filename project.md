@@ -468,7 +468,8 @@ that had been green about nothing for five commits ·
 [415. A sentence four refusals append, and three declines](#415-a-sentence-four-refusals-append-and-three-declines) ·
 [416. Where this session stopped, second fold](#416-where-this-session-stopped-second-fold) ·
 [417. Which of the two providers is not yours to edit](#417-which-of-the-two-providers-is-not-yours-to-edit) ·
-[418. The longest line of a good build was mostly somebody else's](#418-the-longest-line-of-a-good-build-was-mostly-somebody-elses)
+[418. The longest line of a good build was mostly somebody else's](#418-the-longest-line-of-a-good-build-was-mostly-somebody-elses) ·
+[419. The same block, two lists further on](#419-the-same-block-two-lists-further-on)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32290,3 +32291,54 @@ the edit was verified. The order is the whole of it: **save the good copy
 after the edit, verify the restore with `cmp`, and confirm the sabotage
 landed before reading the result** -- the third of those is already a rule
 here and the first two were assumed.
+
+## 419. The same block, two lists further on
+
+§418 fixed one list in the report a successful build prints. That block
+holds three more, and reading them against the same question found two
+things.
+
+**A schema report a vendored directory can crowd out.** Capped at five
+over a mixed list, it shows whichever sort first -- and a vendored
+directory often sorts before the tree's own, `fuzznet/` before `wire/` in
+raidcfgd. Measured on a fixture of two own schemas and six of a
+checkout's, with one of the two named so it sorts last: it was cut. Own
+first now, the same treatment and the same reason as §418.
+
+**A truncation that announced nothing at all.** The crate-orphan list was
+a bare `[:5]`, so a sixth orphan `.rs` was dropped in silence -- the class
+`a_truncated_list_says_it_is_one_and_where_the_rest_are` exists to close,
+and that gate **cannot see this shape**: it looks FORWARD from a printer
+call, and the slice is in the loop header that FEEDS one. The detector
+written to close the class is blind to the arrangement where the cut
+happens before the print rather than inside it.
+
+### The wider detector was measured instead of written
+
+Scanning six lines after every `note(`, `warn(`, `info(`, `vinfo(` and
+`die(` in fmake: **437 printer sites, 13 slices.** Most are illustrative
+samples inside a sentence that already carries the count --
+
+    235 test programs not built by default (admin_test, admit_test,
+    aead_monocypher_test, ...)
+
+-- which is three names as an example, not a list pretending to be whole.
+A gate flagging thirteen sites of which eleven are correct is a gate with
+eleven waivers, and `evidence.md` says that is a gate switched off by
+instalments. So this one was found by reading and fixed by hand, and the
+measurement is here so the next reader does not take the detector for the
+obvious missing step.
+
+### The fourth mis-selected assertion, and the wording it improved
+
+The orphan check counted lines containing `no crate root` and got **six**
+of five, because the ellipsis I had just written carried that phrase too.
+The selector keys on `is reached by` now -- and the ellipsis reads `... and
+N more .rs file(s) (-v for all)`, which is what its two siblings in the
+same block already say. A repetitive message and a sloppy selector found
+each other; fixing the message was the better half.
+
+That is four this session -- §412's dedupe, §412's loop sabotage, §417's
+provider rows, and this. Every one is **an assertion over the whole output
+where more than one line matches**, and three of the four passed or failed
+for a reason that had nothing to do with the code under test.
