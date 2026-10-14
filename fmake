@@ -9904,8 +9904,19 @@ def _expand_sources(patterns, root, proj, who):
 
 
 # Directory names that say "sources live here" rather than naming anything.
+# `main' is in this set because `default_name's own docstring is the
+# argument for it: *"main.c is named after its directory, since main
+# names nothing"*. A DIRECTORY called main names nothing by exactly
+# that reasoning, and the set that exists for the one did not hold the
+# other -- so `c/src/main/main.c' in netcfgd produced a program called
+# `main', the one name the rule's own premise rejects, written into
+# the tree root. It is also the one inferred name two unrelated trees
+# will both produce, and two `*/main/main.c' in one tree collide on
+# it. With main skipped the walk reaches `c', which collides with the
+# directory of that name and takes the existing rename -- `<project>_c'
+# -- which is a name rather than a role.
 GENERIC_SRC_DIRS = {"src", "srcs", "source", "sources", "app", "apps",
-                    "cmd", "prog", "programs", "code"}
+                    "cmd", "prog", "programs", "code", "main"}
 
 
 def default_name(rel, root):

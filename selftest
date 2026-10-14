@@ -26076,6 +26076,59 @@ def the_unreached_files_a_reader_owns_come_first(t):
 
 
 @case
+def a_directory_called_main_names_nothing_either(t):
+	"""Section 422: the set that exists because "main" names nothing did
+	not hold "main".
+
+    `default_name`'s own docstring is the argument: *main.c is named after
+    its directory, since "main" names nothing*. A DIRECTORY called `main`
+    names nothing by exactly that reasoning, and `GENERIC_SRC_DIRS` --
+    src, srcs, source, sources, app, apps, cmd, prog, programs, code --
+    did not contain it.
+
+    Measured on netcfgd, which has `c/src/main/main.c`: fmake built a
+    program called **`main`** and wrote it into the tree root. That is the
+    one name the rule's premise rejects; it is also the one inferred name
+    two unrelated trees will both produce, and two `*/main/main.c` in one
+    tree collide on it and refuse.
+
+    The control is the other direction and matters more than the fix: a
+    directory that names something must still name the program, so
+    `widget/main.c` is still `widget` -- here through the pre-existing
+    rename, since the inferred name is a directory that exists."""
+	t.write("src/main/main.c",
+	        '#include <stdio.h>\nint main(void){ puts("daemon"); return 0; }\n')
+	t.write("widget/main.c",
+	        '#include <stdio.h>\nint main(void){ puts("widget"); return 0; }\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	name = os.path.basename(t.dir)
+	check(not os.path.exists(os.path.join(t.dir, "main")),
+	      f"a program called `main' was written into the tree root: {out}")
+	check("LD  main\n" not in out and " built main," not in out,
+	      f"something is still called `main': {out}")
+
+	# src/main/ is two generic directories, so the walk ends at the
+	# project's own name -- which is what a daemon in src/main/ should be
+	# called and is what netcfgd's own build calls it.
+	check(os.path.exists(os.path.join(t.dir, name)),
+	      f"the program in src/main/ is not named after the project: "
+	      f"{sorted(os.listdir(t.dir))}")
+	check(t.run(name).stdout == "daemon\n",
+	      "the program named after the project is not the one in src/main/")
+
+	# And a directory that does name something still names the program.
+	check(any("widget" in f for f in os.listdir(t.dir)
+	          if os.path.isfile(os.path.join(t.dir, f))),
+	      f"a meaningful directory stopped naming its program: "
+	      f"{sorted(os.listdir(t.dir))}")
+	check(t.run(f"{name}_widget").stdout == "widget\n",
+	      "the widget program is not the one in widget/")
+
+
+@case
 def an_ambiguity_names_the_provider_that_is_another_projects(t):
 	"""Section 417: the message offered `exclude' and not which one.
 

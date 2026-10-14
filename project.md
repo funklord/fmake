@@ -471,7 +471,8 @@ that had been green about nothing for five commits ·
 [418. The longest line of a good build was mostly somebody else's](#418-the-longest-line-of-a-good-build-was-mostly-somebody-elses) ·
 [419. The same block, two lists further on](#419-the-same-block-two-lists-further-on) ·
 [420. The half the moc case left to the depfiles](#420-the-half-the-moc-case-left-to-the-depfiles) ·
-[421. netcfgd, and the sentence fmake already had](#421-netcfgd-and-the-sentence-fmake-already-had)
+[421. netcfgd, and the sentence fmake already had](#421-netcfgd-and-the-sentence-fmake-already-had) ·
+[422. A directory called main names nothing either](#422-a-directory-called-main-names-nothing-either)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32562,3 +32563,50 @@ write**: locate the second copy of each marker, assert the span holds
 exactly one of each and exactly two `def` lines, and only then remove it.
 A slice between two `index` calls assumes an order it never checked, and
 asserting that order would have refused the write.
+
+## 422. A directory called main names nothing either
+
+§421's run printed one thing worth reading twice:
+
+    * built netcfgd-remote, live_association, main, netcfgd-gui
+
+**A program called `main`**, written into the tree root. Its root is
+`c/src/main/main.c`, and `default_name` is behaving exactly as written:
+the stem is `main`, so the name comes from the directory above, and that
+directory is called `main`.
+
+**The rule's own docstring is the argument against the answer it gave** --
+*main.c is named after its directory, since "main" names nothing*. A
+DIRECTORY called `main` names nothing by precisely that reasoning, and
+`GENERIC_SRC_DIRS` -- src, srcs, source, sources, app, apps, cmd, prog,
+programs, code -- did not contain it. So the set that exists because one
+word names nothing did not hold that word.
+
+It is also the worst name to infer by accident. `main` is the one
+inferred name **two unrelated trees will both produce**, two
+`*/main/main.c` in one tree collide on it and refuse under §394, and
+`/usr/bin/main` is nobody's program.
+
+### What it yields, said exactly rather than flatteringly
+
+With `main` skipped, `c/src/main/main.c` walks to `c` -- which is a
+directory that exists, so the pre-existing rename takes it to
+`<project>_c`, with the line that rename already prints. For netcfgd that
+is `netcfgd_c`. **Not the name their build would choose**, and the honest
+claim is narrower than that: it is a name rather than a role, it cannot
+collide with another tree's, and `@target` is how a project says what it
+actually wants -- which is the same answer every other inferred name here
+gets.
+
+Where both enclosing directories are generic the walk ends at the
+project's own name, which is the good case: a daemon in `src/main/` is
+called after the project, and that is what the fixture asserts.
+
+### The control is the half that matters
+
+A directory that **does** name something must still name the program, so
+`widget/main.c` is still `widget` -- here through the rename, since the
+inferred name is a directory that exists. Sabotaging the other way, by
+treating every directory as generic, makes both programs fall back to the
+project's name and §394 refuses the clash: loud, and the case goes red on
+it.
