@@ -32791,6 +32791,82 @@ def a_separate_checkouts_own_program_does_not_ask_for_a_schema(t):
 	      f"not get it: {out}")
 
 
+@case
+def a_version_one_directory_up_is_named_and_not_used(t):
+	"""Section 415: a sentence four refusals append, produced by no case.
+
+    `version_elsewhere' exists so that a packaging refusal mentions the
+    one fact that explains it -- hydra keeps its sources in `src/' and its
+    VERSION at the repository root, and documents the build as
+    `fmake -C src', so every reader of the version answered about a tree
+    the file is not in and said nothing at all. Four refusals append it,
+    and the suite produced none of them: if its wording rots or its guard
+    breaks, all four quietly lose the explaining half and each one still
+    reads as correct.
+
+    What it must NOT do is use the number. A package built from a version
+    taken out of another directory ships one under a number belonging to
+    a different project, and nobody downstream is placed to notice -- so
+    the refusal stands and only gains a sentence.
+
+    Both halves of `_project_above' get a control, because each is what
+    stops a false positive and the second was nearly left out. The
+    directory above has to be a repository root: every scratch tree this
+    suite builds sits directly in the temporary directory, so without
+    that a stray VERSION beside them would answer for all of them. And
+    this directory must not be one, because a vendored checkout IS its
+    own project -- `fmake -C ossacli' inside raidcfgd must not be told
+    the enclosing tree's number."""
+	t.write("VERSION", "9.9\n")
+	t.write(".git", "")           # os.path.exists is the test, as above
+	t.write("sub/main.c", "int main(void){ return 0; }\n")
+	sub = os.path.join(t.dir, "sub")
+
+	r = t.fmake("-C", sub, "--eject", "deb")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a tree with no VERSION was packaged: {out}")
+	check("no VERSION file at the root" in out,
+	      f"the refusal itself has changed: {out}")
+	check("says 9.9" in out and "outside the tree this build was given" in out,
+	      f"the file one directory up is not named, so the refusal does "
+	      f"not say what explains it: {out}")
+
+	# Control one: nothing above says it is a project, so there is nothing
+	# to name. A stray VERSION in a scratch directory must stay silent.
+	os.unlink(os.path.join(t.dir, ".git"))
+	r = t.fmake("-C", sub, "--eject", "deb")
+	out = r.stdout + r.stderr
+	check("no VERSION file at the root" in out,
+	      f"the refusal itself has changed: {out}")
+	check("9.9" not in out,
+	      f"a VERSION beside the tree was named although nothing above it "
+	      f"is a repository: {out}")
+
+	# Control two: this directory is its own checkout, so the number above
+	# belongs to somebody else and is not mentioned.
+	t.write(".git", "")
+	t.write("sub/.git", "")
+	r = t.fmake("-C", sub, "--eject", "deb")
+	out = r.stdout + r.stderr
+	check("no VERSION file at the root" in out,
+	      f"the refusal itself has changed: {out}")
+	check("9.9" not in out,
+	      f"a vendored checkout built directly was told the enclosing "
+	      f"tree's version: {out}")
+
+	# And with its own VERSION it gets past this refusal entirely, which
+	# is what shows the two controls above were not passing for want of a
+	# working packaging path.
+	t.write("sub/VERSION", "1.2\n")
+	r = t.fmake("-C", sub, "--eject", "deb")
+	out = r.stdout + r.stderr
+	check("no VERSION file at the root" not in out,
+	      f"its own VERSION was not read: {out}")
+	check("maintainer" in out,
+	      f"the next refusal in the packaging path is not the one "
+	      f"expected, so this fixture may not be reaching it: {out}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c, _again=False):

@@ -464,7 +464,8 @@ that had been green about nothing for five commits ·
 [411. What a plain fmake does on fuzznet, and what stops it](#411-what-a-plain-fmake-does-on-fuzznet-and-what-stops-it) ·
 [412. The ejected file did not say which targets it lacks](#412-the-ejected-file-did-not-say-which-targets-it-lacks) ·
 [413. Which name reached across, and what that bounds](#413-which-name-reached-across-and-what-that-bounds) ·
-[414. A schema compiled for a program fmake does not build](#414-a-schema-compiled-for-a-program-fmake-does-not-build)
+[414. A schema compiled for a program fmake does not build](#414-a-schema-compiled-for-a-program-fmake-does-not-build) ·
+[415. A sentence four refusals append, and three declines](#415-a-sentence-four-refusals-append-and-three-declines)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32006,3 +32007,72 @@ between them now.
   already distinguishes a claim about the TREE, reported once and
   news-gated, from a claim about the ARTIFACT, reported every run. That
   principle is what §412's note needed and is already stated there.
+
+## 415. A sentence four refusals append, and three declines
+
+`version_elsewhere` exists so a packaging refusal mentions the one fact
+that explains it. hydra keeps its sources in `src/` and its `VERSION` at
+the repository root, and documents the build as `fmake -C src`, so every
+reader of the version answered about a tree the file is not in and said
+nothing at all. **Four refusals append the sentence and the suite produced
+none of them** -- so if its wording rots or its guard breaks, all four
+quietly lose the explaining half while each still reads as correct.
+
+    !!! no VERSION file at the root. A package has a version, and fmake
+        reads it from that file rather than asking twice. ../VERSION says
+        9.9, and is outside the tree this build was given: a package
+        version is not taken from another directory, so build from there
+        instead.
+
+**Both halves of `_project_above` get a control, because each is what
+stops a false positive** and the second was nearly left out. The directory
+above has to be a repository root -- every scratch tree the suite builds
+sits directly in the temporary directory, so without that a stray
+`VERSION` beside them would answer for all of them. And this directory
+must not be one, because a vendored checkout **is** its own project:
+`fmake -C ossacli` inside raidcfgd must not be told the enclosing tree's
+number. Each guard has its own sabotage and its own row.
+
+A fourth stage asks for its own `VERSION` and gets past the refusal to the
+maintainer one, which is what shows the two controls were not passing for
+want of a working packaging path.
+
+### Three things measured and not changed
+
+**moc is presence-driven where situ is include-driven, and that is
+deliberate.** `moc_plan` runs moc on every Q_OBJECT it finds, so on
+fuzznet it moc'd `qtty/example/chat/chat.h` -- included only by
+`qtty/example/chat/main.cpp`, one of the programs fmake leaves to qtty --
+and `qtty/tool/tray/main.cpp`, qtty's own tool. Two of four runs are for
+programs fmake will not build, and nothing links the output: the ejected
+Makefile carries no moc rule at all. So the cost is two moc runs and two
+compiles per clean build, and the reason to leave it is the one
+`RE_FUNC_DEF` gives -- a meta-object fmake declines to generate is a link
+that fails, and moc's eagerness never misses. §414's filter was worth
+making because a schema's output pollutes the include path; this one's does
+not.
+
+**A libc-name filter for widening is declined for a reason in the tree.**
+§413 found `notes/test/notes_sync_test.c may define 'write'`, a `static`
+helper matched against the C library's `write`, and the include side
+already refuses that shape -- *the basename fallback is a guess, and it
+must not be made about a name the toolchain owns*. The symbol side cannot
+copy it: `@kind module` exists for LD_PRELOAD shims, which define libc
+names **on purpose**, so a filter keyed on libc's symbols would refuse to
+propose exactly the interposer fmake supports.
+
+**Both ejected backends build fuzznet from clean.** The suite ejects
+fixtures; this is 178 translation units of a real tree. `fmake --eject
+make` then `make -j8` compiles with **zero errors** and links
+`consumer_check`, which runs and prints *"consumer_check: headers and
+sources agree"*; `--eject ninja` then `ninja` does the same in 89 edges,
+ninja building only what the goal needs where make builds every object in
+`OBJS`. Recorded because an eject that is only ever tested on fixtures is
+a claim about fixtures.
+
+### Where the signals went
+
+§414's hull entry said "signalled rather than edited" before the message
+existed; it is `hull/.git/cc-inbox/20261014T0159Z-claude.md`, naming the
+fix, the `HULL_VERSION` line that is theirs, and §413's bound on their
+finding 3. beerssh's is `20261014T0017Z-claude.md`, per §413.
