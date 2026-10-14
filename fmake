@@ -13652,6 +13652,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# and compiles is the tree's business, and section 3 already
 		# refuses when two files define one symbol. What is being declined
 		# is only fmake proposing one on its own initiative.
+		# A file that roots another target is NOT excluded here, and
+		# section 424 records the attempt: section 3 lets a program's
+		# closure reach a function that lives beside another program's
+		# main() ON PURPOSE -- "refusing to link a function because of
+		# what shares its file would be its own kind of guess" -- and
+		# reports the two-main collision that follows, with the fix.
+		# Excluding roots turns that reported, explained refusal into a
+		# link error about a symbol nothing defines, and three cases
+		# say so.
 		pool = [rel for rel in srcs
 		        if rel not in units and rel not in crate_members]
 		theirs = [rel for rel in pool if scans[rel].get("genby")

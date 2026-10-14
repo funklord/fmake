@@ -473,7 +473,8 @@ that had been green about nothing for five commits ·
 [420. The half the moc case left to the depfiles](#420-the-half-the-moc-case-left-to-the-depfiles) ·
 [421. netcfgd, and the sentence fmake already had](#421-netcfgd-and-the-sentence-fmake-already-had) ·
 [422. A directory called main names nothing either](#422-a-directory-called-main-names-nothing-either) ·
-[423. The same argument one stem over, made and withdrawn](#423-the-same-argument-one-stem-over-made-and-withdrawn)
+[423. The same argument one stem over, made and withdrawn](#423-the-same-argument-one-stem-over-made-and-withdrawn) ·
+[424. A plain build that failed on a program it was not building](#424-a-plain-build-that-failed-on-a-program-it-was-not-building)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32665,3 +32666,81 @@ root -- the suite stayed green on it, and its collision case is pinned.
 **The rule this pair leaves behind: changing an inferred name is a
 compatibility change, not a tidying, and it needs a tree that is wrong
 today rather than a premise that is right.**
+
+## 424. A plain build that failed on a program it was not building
+
+Four more trees swept with plain `fmake`, one at a time: **hembygd, situ
+and bbq-predictor built; hydra exited 1** -- while reporting
+`* built hydra, list_coverage`. Nothing had been dropped. The status came
+from a **test** file, and the chain is worth keeping even though the fix
+is not.
+
+- A plain build says *105 test programs not built by default ... `fmake
+  live` or `fmake test` builds and runs them*, and then compiles **86 of
+  those roots**.
+- They are not candidates. A dry run of a fresh clone plans 93 compiles
+  in `src/` and one in `tool/`, and **no test file at all** -- so
+  widening admitted them.
+- Their objects are needed by nothing. In the ejected Makefile the test
+  objects appear 525 times and **zero** times in `HYDRA_OBJS` or
+  `LIST_COVERAGE_OBJS`.
+- One cannot compile: `test/live/try_media_model.cpp` includes
+  `"media_corpus.h"`, which is at `test/media_corpus.h` and on no
+  include path. fmake names the file, the header, where it is and the
+  remedy -- `[project] include-dirs = ['test']`.
+
+**So `fmake` in hydra fails because a file of hydra's does not compile,
+and fmake has already said how to fix it in one line. That is theirs.**
+
+### The clause that was written for it, and withdrawn
+
+*Widening must not propose a file that roots a target* -- its `main`
+would be a second one in whatever link set admitted it. On hydra that
+took 248 compiles to 162, compiled no test root, and gave exit 0.
+
+**Three cases refused it, and one of them is the design.**
+`one_program_pulled_into_another_is_reported` says in as many words:
+
+> section 3 excludes other programs' roots when assembling a library and
+> does not when closing over a program, **deliberately** -- refusing to
+> link a function because of what shares its file would be its own kind
+> of guess. So this is reported, with the fix that actually works.
+
+A function defined beside a `main()` is still a function, the closure is
+meant to reach it, and the two-main collision that follows is **reported
+with a working remedy**. The clause turns that into a link error about a
+symbol nothing defines. `pic_is_part_of_the_object_identity` and
+`a_cross_built_test_is_not_run_rather_than_failed` fail with it too.
+
+So the cost on hydra is real and is §415's declined static case at scale:
+86 compiles of files whose matching definitions are `static` and resolve
+nothing. Narrowing the clause to those needs the static detection §415
+declined for a reason -- a definition it misses is a build that does not
+happen. **Left alone, with the reason in the code.**
+
+### Two instrument lessons, which outlast the attempt
+
+**A pass that caches its answer cannot be observed by repeating the
+command.** Hunting the pass that compiled those 86, a `-v` rerun showed
+no `widening:` line at all -- because that run was incremental, `units`
+came out of the cache, and the pass never ran. The first run had the
+lines and was not verbose. Same shape as §420's remembered mirage.
+
+**And the first fixture passed with the clause removed.** It gave the
+held program a `shared_tag` nothing called, so nothing was unresolved and
+widening never proposed it either way: a sabotage that proves nothing,
+passing twice. What reproduces hydra is a name the build genuinely has
+unresolved, defined `static` in the held program's root. That is the
+**fifth** assertion this session that could not have failed -- the first
+four were selectors over an output blob, this one a fixture that never
+reached the condition.
+
+### Two withdrawals in a row, which is itself the finding
+
+§423 and §424 were both changes to behaviour that looked like
+inconsistencies and were decisions: one stated in a docstring, one stated
+in a case. **That is the signal to stop changing behaviour and go back to
+measuring** -- the sweep that produced this section also produced three
+clean builds and, two sections earlier, the `main` naming fault that was
+real. Reading output found the facts; proposing fixes from a premise
+found two reverts.
