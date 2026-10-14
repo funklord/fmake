@@ -22958,6 +22958,105 @@ def moc_reruns_only_when_the_input_changes(t):
 
 
 @case
+def a_changed_moc_header_rebuilds_what_includes_it(t):
+	"""Section 420: the half `moc_reruns_only_when_the_input_changes'
+	leaves to the depfiles.
+
+    That case proves moc itself is keyed on content -- a touch re-runs
+    nothing, a real change re-runs moc. What nothing asserted is the rest
+    of the chain: the translation units that INCLUDE the header have to
+    recompile, and the change has to reach the program. Both are the
+    depfile property `build-and-commit.md` calls load-bearing, in the one
+    arrangement where a generated file sits between the header and the
+    objects.
+
+    Measured by hand on softkeys first, a real Qt tree with an archive:
+    adding a slot to `include/softkeys/key_cap.h' re-moc'd that header,
+    recompiled the moc output and the three sources that include it,
+    re-archived, and put the slot in `libsoftkeys.a' -- and reverting took
+    it out again. This is that in a fixture, because a property checked
+    once by hand is one nobody will check again.
+
+    **The method count does not discriminate, and the first version of
+    this case said it did.** With the depfile half of `object_key'
+    sabotaged, the program still reports the NEW count: `metaObject()' is
+    a virtual call that resolves into the recompiled moc output, so the
+    count is fresh however stale the objects around it are. Measured:
+    `5 5 7 7' -- new count, old inline constant.
+
+    So the end-to-end half is an inline function the dependents carry a
+    copy of. With prerequisites removed from the key, one CXX line runs
+    (the moc output, whose own source changed), the build exits 0, and the
+    program runs the old `tag()'. That is the whole shape of the hazard:
+    not a missing rebuild anybody notices, but a green build whose
+    program is the previous one."""
+	_need_qt()
+	t.write("widget.h", """
+#pragma once
+#include <QObject>
+class Widget : public QObject {
+    Q_OBJECT
+public:
+    explicit Widget(QObject *parent = nullptr) : QObject(parent) {}
+    int methods() const { return metaObject()->methodCount(); }
+    int tag() const { return 7; }
+};
+""")
+	for d in ("a", "b"):
+		t.write(f"{d}.cpp", f"""
+#include "widget.h"
+int count_{d}() {{ Widget w; return w.methods(); }}
+int tag_{d}() {{ Widget w; return w.tag(); }}
+""")
+	t.write("main.cpp", """
+#include <QCoreApplication>
+#include <cstdio>
+int count_a(); int count_b(); int tag_a(); int tag_b();
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    std::printf("%d %d %d %d\\n", count_a(), count_b(), tag_a(), tag_b());
+    return 0;
+}
+""")
+	name = os.path.basename(t.dir)
+	check(t.fmake().returncode == 0, "first build failed")
+	before = t.run(name).stdout.split()
+	check(len(before) == 4 and before[2] == before[3] == "7",
+	      f"the fixture does not report the inline constant: {before}")
+
+	# One edit to one header: a slot the meta-object gains, and the inline
+	# constant the dependents carry a copy of.
+	t.write("widget.h", open(os.path.join(t.dir, "widget.h")).read()
+	        .replace("return 7;", "return 8;")
+	        .replace("    int tag() const { return 8; }\n",
+	                 "    int tag() const { return 8; }\n"
+	                 "public slots:\n    void probe() {}\n"))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the rebuild failed: {out}")
+	check("MOC widget.h" in out,
+	      f"the header changed and moc did not run: {out}")
+	compiled = [l for l in out.splitlines() if "] CXX " in l]
+	for rel in ("a.cpp", "b.cpp", "moc_widget.cpp"):
+		check(any(rel in l for l in compiled),
+		      f"{rel} did not recompile, so a prerequisite is not in the "
+		      f"object key -- a stale object and a green build: {compiled}")
+
+	after = t.run(name).stdout.split()
+	check(after[0] == after[1] == str(int(before[0]) + 1),
+	      f"the meta-object did not gain the one slot: {before} then "
+	      f"{after}")
+	check(after[2] == after[3] == "8",
+	      f"the program still runs the old inline constant, which is what "
+	      f"a missed prerequisite looks like from outside: {after}")
+
+	# Nothing further to do, said by doing nothing.
+	r = t.fmake()
+	check("CXX" not in r.stdout and "MOC" not in r.stdout,
+	      f"a no-op build after the rebuild did work: {r.stdout}")
+
+
+@case
 def moc_output_does_not_cross_between_same_named_sources(t):
 	"""Two local.cpp, each with its own local.moc, must not swap.
 
