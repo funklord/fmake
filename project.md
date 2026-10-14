@@ -461,7 +461,8 @@ that had been green about nothing for five commits ·
 [408. A tool that does not do its job is named with the job](#408-a-tool-that-does-not-do-its-job-is-named-with-the-job) ·
 [409. The refusal that defends a rule from build-and-commit](#409-the-refusal-that-defends-a-rule-from-build-and-commit) ·
 [410. A name clash the check could not see, because it read the file](#410-a-name-clash-the-check-could-not-see-because-it-read-the-file) ·
-[411. What a plain fmake does on fuzznet, and what stops it](#411-what-a-plain-fmake-does-on-fuzznet-and-what-stops-it)
+[411. What a plain fmake does on fuzznet, and what stops it](#411-what-a-plain-fmake-does-on-fuzznet-and-what-stops-it) ·
+[412. The ejected file did not say which targets it lacks](#412-the-ejected-file-did-not-say-which-targets-it-lacks)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31736,3 +31737,68 @@ tree with per-module test directories cannot be built by fmake at all
 without renaming its files, and fuzznet has had the remedy since §394 and
 has not taken it. **It is the holder's call**, and it is recorded here
 rather than acted on.
+
+## 412. The ejected file did not say which targets it lacks
+
+An eject compiles, because §3's link sets come from object symbol tables
+rather than from the include graph -- so a root that does not compile
+leaves no object to close over, and no rule can be written for it. fmake
+warns, drops the target and exits non-zero, and it **still writes the
+build file**, which is right: a tree with one broken source is worth
+ejecting.
+
+What it did not do was say so in the file. Measured on fuzznet while
+taking §411: `fmake --eject make` wrote 6559 lines describing **five
+fewer programs than the tree has** -- `fuzznetd` among them -- and nothing
+in it mentioned any of the five. The warnings went to the terminal; the
+Makefile is what gets committed, read and edited afterwards.
+
+**Its own header already warns about the same hazard one step further
+out** -- *a file nothing refers to is just never compiled, which is not
+[loud]* -- so the one incompleteness that had actually happened in that
+run was the one the artifact left out. Both backends carry the note now,
+for the reason the ninja header gives itself: saying it in one artifact
+and not the other leaves whichever backend a reader chose deciding whether
+they were told.
+
+    # 5 targets are NOT in this file, and nothing below
+    # will say so again, because a rule that does not exist cannot
+    # fail:
+    #
+    #     qtty_render_test   gui/test/qtty_render_test.cpp did not compile
+    #     fuzznetd           node/fuzznetd.c did not compile
+    #     ...
+
+**Not capped at six, which every other long list in fmake is.** `capped`
+returns everything under `-v`, so a cap here would make the *content of an
+artifact* depend on a verbosity flag, and a truncated list in a file
+nobody is going to re-derive is worse than a long one.
+
+### The record was emptied by the pass after the one that filled it
+
+The first version declared the list inside the build's `while True:`
+widening loop. The removal from `wanted` outlives a pass and a list
+initialised inside one does not: fuzznet skipped five targets on pass 1,
+widening ran again, found nothing left to skip -- those targets having
+already been dropped -- and the eject asked an **empty list**. The
+terminal said five things and the artifact said nothing, which is exactly
+the gap the list exists to close.
+
+**And the fixture that proved the fix could not see that bug.** A tree of
+three ordinary files closes in **one pass**, so the record is correct
+wherever it is declared, and the sabotage that moves it back inside the
+loop *passed*. Measured with a counter at the top of the loop: that
+fixture takes 1 pass, fuzznet takes 3.
+
+What makes a second pass is an **unresolved symbol that widening can
+satisfy** -- `fresh = unresolved - tried`, then `if not extra: break`. On
+fuzznet the three files widening reached were `qtty/test/suite_*.cpp`:
+a vendored checkout's test directory, which is not compiled with the rest
+because those files are that project's. So the fixture is a vendored
+`flog` whose `tests/extra.c` defines the one symbol our program needs,
+and the sabotage fails on it.
+
+That is twice in two sections -- §410's dedupe and this one -- where the
+assertion was true, the code was right, and the check could not have
+failed. The shape is the same both times: **a fixture chosen to
+demonstrate the fix rather than to separate it from the bug.**

@@ -12891,6 +12891,18 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				     f"to [project] defines, or stop guarding the "
 				     f"declaration with it")
 
+	# Named in the ejected artifact as well as on the terminal, which is
+	# what `_eject_skipped' is for: a warning is read once and a build
+	# file is read next year.
+	#
+	# Outside the loop, because the removal below outlives a pass and a
+	# record initialised inside one does not. Declared inside, it was
+	# emptied by the pass after the one that filled it: widening runs
+	# again, finds nothing left to skip -- the targets having already
+	# been dropped from `wanted' -- and the eject asked an empty list.
+	# The artifact said nothing while the terminal said five things,
+	# which is the very gap this list exists to close.
+	skipped = []
 	while True:
 		pool = None   # built below, once the flagged targets are known
 		# A target whose stanza carries `cflags' gets its own copy of the
@@ -13149,6 +13161,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 					       else f"{t.rel} did not compile with this "
 					            f"target's own defines")
 					warn(f"{t.name} skipped: {why}")
+					skipped.append((t.name, why))
 					wanted.remove(t)
 					continue
 				# A Rust program has no object here to disagree with: it
@@ -14172,6 +14185,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		emit = eject_ninja if args.eject == "ninja" else eject_make
 		done = set(moc_outs)
 		extra = ({"fragment": True} if args.eject == "make-fragment" else {})
+		extra["skipped"] = skipped
 		if emit is eject_make:
 			# What the reader asked for, so a refusal can offer a
 			# remedy that exists: ninja is an alternative to a
@@ -15796,10 +15810,49 @@ def _refuse_whitespace(targets, closures, root, extra=(),
 		    + "\n" + remedy)
 
 
+def _eject_skipped(a, skipped):
+	"""Say in the artifact which targets are not in it.
+
+    An eject compiles, because the link sets come from object symbol
+    tables -- so a root that does not compile leaves no object to close
+    over, and no rule can be written for it. fmake warns and exits
+    non-zero, and it still writes the file, which is right: a tree with
+    one broken source is worth ejecting. But the warning goes to the
+    terminal and the build file is what gets committed, read and edited
+    afterwards, so the file has to carry the caveat itself.
+
+    Measured on fuzznet: five targets absent, `fuzznetd' among them, and
+    nothing in 372 KB of Makefile said so. Its header already warns that
+    a file nothing refers to is never compiled, which is the same hazard
+    one step further out -- so the one incompleteness that had actually
+    happened was the one it did not mention.
+
+    Not capped. `capped' returns everything under -v, so a cap here would
+    make the CONTENT of an artifact depend on a verbosity flag, and a
+    truncated list in a file nobody is going to re-derive is worse than a
+    long one.
+    """
+	if not skipped:
+		return
+	n = len(skipped)
+	a(f"# {n} target{'' if n == 1 else 's'} "
+	  f"{'is' if n == 1 else 'are'} NOT in this file, and nothing below")
+	a("# will say so again, because a rule that does not exist cannot")
+	a("# fail:")
+	a("#")
+	width = max(len(name) for name, _why in skipped)
+	for name, why in skipped:
+		a(f"#     {name:<{width}}  {why}")
+	a("#")
+	a("# Each root above had no object to close a link set over, so no rule")
+	a("# could be written. Fix them and eject again.")
+	a("#")
+
+
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
                gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
                fragment=False, prefix=None, outdir=None,
-               deferred=None, asked="make"):
+               deferred=None, asked="make", skipped=None):
 	"""A standalone Makefile, or a fragment for an existing one to include.
 
     The fragment exists because replacing a build system is not the only way
@@ -15933,6 +15986,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# silently replace the flags above; CC, CXX and AR are yours, and")
 		a("# use ?= so what you set wins.")
 		a("#")
+	_eject_skipped(a, skipped)
 	a(f"# Built for: {cfg.os}/{cfg.arch}"
 	  + (f"    profile: {conf.profile_name}" if conf.profile_name else ""))
 	a("")
@@ -16791,7 +16845,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
                 gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
-                prefix=None, outdir=None):
+                prefix=None, outdir=None, skipped=None):
 	"""A standalone build.ninja."""
 	# fmake's own object directory, derived rather than passed: `root' and
 	# `cfg' are here already and this is the one fact the BMI rewrite needs.
@@ -16833,6 +16887,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("# an undefined symbol, which is loud; a file nothing refers to is just")
 	a("# never compiled, which is not.")
 	a("#")
+	_eject_skipped(a, skipped)
 	a(f"# Built for: {cfg.os}/{cfg.arch}"
 	  + (f"    profile: {conf.profile_name}" if conf.profile_name else ""))
 	a("")

@@ -32489,6 +32489,91 @@ def the_ejected_builds_compile_the_schema_themselves(t):
 	check(t.run(name).stdout == "4\n", "the ejected build linked no schema")
 
 
+@case
+def an_ejected_build_file_names_the_targets_it_lacks(t):
+	"""Section 412: the artifact outlives the warning, and did not carry it.
+
+    An eject compiles, because the link sets come from object symbol
+    tables -- so a root that does not compile leaves nothing to close over
+    and no rule can be written for it. fmake warns, drops the target and
+    exits non-zero, and it still writes the build file, which is right: a
+    tree with one broken source is worth ejecting.
+
+    What it did not do was say so IN the file. Measured on fuzznet:
+    `fmake --eject make' wrote 6559 lines describing five fewer programs
+    than the tree has -- `fuzznetd' among them -- and nothing in it
+    mentioned any of the five. The warning went to the terminal, and the
+    build file is the thing that gets committed and read afterwards. Its
+    header already warns that a file nothing refers to is never compiled,
+    which is this hazard one step further out, so the one incompleteness
+    that had actually happened was the one it left out.
+
+    The fixture widens deliberately: `main.c' calls a function in
+    `helper.c', which fmake reaches by closing over the symbol, so the
+    build loop runs more than one pass. That is what makes the sabotage
+    detectable -- the first version of this code declared the record
+    INSIDE that loop, where the pass after the one that filled it emptied
+    it again, the targets having already been dropped. On a tree that
+    closes in one pass the bug cannot appear, so a fixture that does not
+    widen would assert this with the defect present."""
+	# A vendored checkout, whose test directory is not compiled with the
+	# rest: those files are that project's, so they enter the build only
+	# if widening reaches for a symbol nothing else defines. `flog_extra'
+	# is that symbol, and it is what makes this tree take two passes --
+	# measured, with a counter at the top of the loop, on this fixture and
+	# on fuzznet, which takes three.
+	t.write("flog/.git", "gitdir: ../.git/modules/flog\n")
+	t.write("flog/flog.h", "void flog_say(void);\nvoid flog_extra(void);\n")
+	t.write("flog/flog.c", '#include <stdio.h>\n#include "flog.h"\n'
+	        'void flog_say(void){ puts("hi"); }\n')
+	t.write("flog/tests/extra.c",
+	        '#include <stdio.h>\n#include "../flog.h"\n'
+	        'void flog_extra(void){ puts("extra"); }\n')
+	t.write("src/main.c", '#include "../flog/flog.h"\n'
+	        "int main(void){ flog_say(); flog_extra(); return 0; }\n")
+	t.write("broken.c", "#include \"nothing_is_here.h\"\n"
+	        "int main(void){ return 0; }\n")
+
+	r = t.fmake("--eject")
+	out, err = r.stdout, r.stderr
+	check("broken skipped" in err,
+	      f"the fixture did not produce a skipped target: {err}")
+	check("1 target is NOT in this file" in out,
+	      f"the ejected Makefile does not say a target is missing: {out}")
+	check("broken" in out.split("# Built for")[0],
+	      f"the missing target is not named in the header: {out}")
+	check("did not compile" in out,
+	      f"the header does not say why the target is missing: {out}")
+	kept = os.path.basename(t.dir)
+	check(kept in out,
+	      f"the target that did compile is missing too: {out}")
+	# The note is a comment, so it cannot cost the file its syntax.
+	if shutil.which("make"):
+		t.write("Makefile", out)
+		rr = subprocess.run(["make", "-C", t.dir, "-n", kept],
+		                    capture_output=True, text=True)
+		check(rr.returncode == 0,
+		      f"the ejected Makefile does not parse: {rr.stderr}")
+
+	# Both backends, for the reason the ninja header gives itself: saying
+	# it in one artifact and not the other leaves whichever backend a
+	# reader chose deciding whether they were told.
+	r = t.fmake("--eject", "ninja")
+	check("1 target is NOT in this file" in r.stdout,
+	      f"the ejected build.ninja does not say a target is missing: "
+	      f"{r.stdout}")
+	check("broken" in r.stdout.split("# Built for")[0],
+	      f"the missing target is not named in build.ninja: {r.stdout}")
+
+	# And it says nothing when there is nothing to say: a note that prints
+	# on a clean tree is the next line somebody stops reading.
+	os.unlink(os.path.join(t.dir, "broken.c"))
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"the clean tree should eject: {r.stderr}")
+	check("NOT in this file" not in r.stdout,
+	      f"a tree with nothing missing is told something is: {r.stdout}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c, _again=False):
