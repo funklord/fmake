@@ -31890,6 +31890,22 @@ against seven real trees and dropped matches the old one made, so
 filter removes matches, which is that trade in reverse, and a mis-detected
 `static` is the worse error of the two.
 
+### It answered a question on the next tree it met
+
+softkeys' plain build compiles one translation unit nobody could account
+for -- `test/main.cpp`, a held test program's root, in a build whose only
+artifact is `libsoftkeys.a`. The archive does not contain it: eighteen
+members, all library sources and moc output. With this line the `-v` run
+says why in one sentence --
+
+    * widening: test/main.cpp may define 'text'
+
+-- a text-scan name match against a symbol the library closure had
+unresolved, which is §415's static case in a different costume and
+equally harmless, since nothing links the object. **Before the line, the
+honest answer to "why was that compiled" was that it would take an
+afternoon.**
+
 ### The bound, which is the part hull's question needs
 
 **A file admitted for a name it cannot define is harmless on its own.**
@@ -32342,3 +32358,14 @@ That is four this session -- §412's dedupe, §412's loop sabotage, §417's
 provider rows, and this. Every one is **an assertion over the whole output
 where more than one line matches**, and three of the four passed or failed
 for a reason that had nothing to do with the code under test.
+
+### The fourth list in that block is left alone, measured
+
+`qrc_unused` is the one not touched, and three of four treated is exactly
+the inconsistency this session keeps finding -- so the reason is here
+rather than left to look like an oversight. **No vendored checkout in this
+workspace carries a `.qrc`**: qtty, quirc, thorvg, vterm, softkeys,
+ossacli, situ and both copies of fuzznet have none, while beerssh has one
+of its own and hydra two. A cap of five over a list that never exceeds
+three has nothing to crowd out, and the treatment would be a branch no
+tree can reach.
