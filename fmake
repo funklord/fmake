@@ -14213,7 +14213,28 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		emit = eject_ninja if args.eject == "ninja" else eject_make
 		done = set(moc_outs)
 		extra = ({"fragment": True} if args.eject == "make-fragment" else {})
-		extra["skipped"] = skipped
+		# Computed here rather than beside the warning below, which is
+		# where it was: the artifact is written before that point, so a
+		# note naming these had to be built first. The filter is the
+		# warning's own and matters -- a mirage swept into the tree's
+		# library IS in the fragment and nothing is missing from it.
+		absent = sorted({r for r in set(mirage)
+		                 if not any(u.rel == r for t in wanted
+		                            for u in closures[t].link)})
+		# Both ways a root leaves the build, because the artifact cannot
+		# tell them apart and the reader meets the same thing: a program
+		# the tree has and the build file does not. The terminal already
+		# says "a program is missing from the file below" for the second
+		# kind, and that sentence is about the file, so it belongs in it.
+		#
+		# A cached mirage never became a target, so there is no name to
+		# print for it -- `nomain' is remembered against the file and the
+		# next run excludes it before anything is proposed. The file is
+		# what the reader has either way, and it is what the warning
+		# below names too.
+		extra["skipped"] = skipped + [
+		    (r, "exports no main(); @kind or [target.*] settles what "
+		        "it is") for r in absent]
 		if emit is eject_make:
 			# What the reader asked for, so a refusal can offer a
 			# remedy that exists: ninja is an alternative to a
@@ -14285,9 +14306,6 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# emits, which is what section 8 exists to prevent. Measured: the
 		# fragment's own `FM_TARGETS' names the archive, and the status
 		# said otherwise.
-		absent = sorted({r for r in set(mirage)
-		                 if not any(u.rel == r for t in wanted
-		                            for u in closures[t].link)})
 		if absent:
 			warn("left out of this fragment, and its object exports no "
 			     "main(): " + ", ".join(absent)
@@ -15872,8 +15890,8 @@ def _eject_skipped(a, skipped):
 	for name, why in skipped:
 		a(f"#     {name:<{width}}  {why}")
 	a("#")
-	a("# Each root above had no object to close a link set over, so no rule")
-	a("# could be written. Fix them and eject again.")
+	a("# Each is a root fmake could not write a rule for, with the")
+	a("# reason beside it. Fix them and eject again.")
 	a("#")
 
 

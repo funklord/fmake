@@ -31775,6 +31775,37 @@ returns everything under `-v`, so a cap here would make the *content of an
 artifact* depend on a verbosity flag, and a truncated list in a file
 nobody is going to re-derive is worse than a long one.
 
+### Both ways a root leaves the build, not just the one I had met
+
+The first version named only the targets dropped for **not compiling**.
+There is a second kind, and the artifact cannot tell them apart because
+the reader meets the same thing: a program the tree has and the build file
+does not. A file whose text defines `main()` inside `#if 0` compiles
+cleanly, exports no `main()`, and is dropped with its own message -- and
+the terminal says of it *"a program is missing from the file below"*,
+which is a sentence about the file and therefore belongs in it.
+
+    #     broken    broken.c did not compile
+    #     pseudo.c  exports no main(); @kind or [target.*] settles what it is
+
+Two things had to be got right to carry it.
+
+**The computation moved rather than being rewritten.** `absent` was
+derived under the eject, after the artifact had been written, so a note
+naming those had to be built first. Its filter is load-bearing and is kept
+exactly: **a mirage swept into the tree's library IS in the fragment**, and
+reporting it missing would be a false claim in a file nobody re-derives.
+The case asserts that by calling the mirage's other function, so its
+object joins the program's link set and the note must not name it;
+dropping the filter fails on that row.
+
+**And the answer is remembered against the file.** `nomain` caches it, so
+the second eject excludes the file before anything is proposed -- a note
+built from the live detection alone would be right once and wrong
+afterwards. The case ejects twice for that reason, which is the same
+mistake as the loop below in a different clothing: a record derived from
+an event rather than from the state the event left.
+
 ### The record was emptied by the pass after the one that filled it
 
 The first version declared the list inside the build's `while True:`

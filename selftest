@@ -32515,7 +32515,16 @@ def an_ejected_build_file_names_the_targets_it_lacks(t):
     INSIDE that loop, where the pass after the one that filled it emptied
     it again, the targets having already been dropped. On a tree that
     closes in one pass the bug cannot appear, so a fixture that does not
-    widen would assert this with the defect present."""
+    widen would assert this with the defect present.
+
+    Both ways a root leaves the build are covered, because the artifact
+    cannot tell them apart and the reader meets the same thing: a program
+    the tree has and the build file does not. The second kind is a file
+    whose text defines main() inside `#if 0' -- it compiles, exports no
+    main(), and is dropped with its own message and its own remedy. That
+    answer is remembered against the file, so the second eject excludes
+    it before anything is proposed, and a note built from the live
+    detection alone would be right once and wrong afterwards."""
 	# A vendored checkout, whose test directory is not compiled with the
 	# rest: those files are that project's, so they enter the build only
 	# if widening reaches for a symbol nothing else defines. `flog_extra'
@@ -32565,9 +32574,54 @@ def an_ejected_build_file_names_the_targets_it_lacks(t):
 	check("broken" in r.stdout.split("# Built for")[0],
 	      f"the missing target is not named in build.ninja: {r.stdout}")
 
+	# The other way a root leaves the build, which the first version of
+	# this note did not carry: a file whose text defines main() inside
+	# `#if 0' compiles cleanly and exports no main(), so it is dropped
+	# with a different message. The terminal says "a program is missing
+	# from the file below" about it -- a sentence about the file, which is
+	# the argument for putting it in the file.
+	t.write("pseudo.c", "#if 0\nint main(void){ return 0; }\n#endif\n"
+	        "int other(void){ return 1; }\n")
+	r = t.fmake("--eject")
+	out = r.stdout + r.stderr
+	check("2 targets are NOT in this file" in out,
+	      f"both ways a root leaves the build should be counted: {out}")
+	head = out.split("# Built for")[0]
+	check("exports no main()" in head,
+	      f"the mirage is not named with its own reason: {out}")
+	check("pseudo.c" in head and "broken" in head,
+	      f"one of the two kinds is missing from the header: {out}")
+
+	# And again, because the answer is remembered against the file: the
+	# second run excludes it before anything is proposed, so a note built
+	# from the live detection alone would be right once and wrong after.
+	r = t.fmake("--eject")
+	head = (r.stdout + r.stderr).split("# Built for")[0]
+	check("pseudo.c" in head,
+	      f"the remembered mirage is absent from the second eject's "
+	      f"header: {head}")
+
+	# A mirage whose object IS in the fragment is not missing from it, and
+	# saying so would be a false claim in a file nobody re-derives. With
+	# `other()' called, pseudo.c is swept into the program's link set --
+	# which is the filter the warning under the eject already applied, and
+	# the reason the computation moved up rather than being rewritten.
+	t.write("src/main.c", '#include "../flog/flog.h"\n'
+	        "int other(void);\n"
+	        "int main(void){ flog_say(); flog_extra(); return other(); }\n")
+	r = t.fmake("--eject")
+	head = (r.stdout + r.stderr).split("# Built for")[0]
+	check("pseudo.c" not in head,
+	      f"a mirage whose object is in the fragment is reported as "
+	      f"missing from it: {head}")
+	check("1 target is NOT in this file" in head,
+	      f"the compile failure should still be the one that is named: "
+	      f"{head}")
+
 	# And it says nothing when there is nothing to say: a note that prints
 	# on a clean tree is the next line somebody stops reading.
 	os.unlink(os.path.join(t.dir, "broken.c"))
+	os.unlink(os.path.join(t.dir, "pseudo.c"))
 	r = t.fmake("--eject")
 	check(r.returncode == 0, f"the clean tree should eject: {r.stderr}")
 	check("NOT in this file" not in r.stdout,
