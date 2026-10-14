@@ -465,7 +465,8 @@ that had been green about nothing for five commits ·
 [412. The ejected file did not say which targets it lacks](#412-the-ejected-file-did-not-say-which-targets-it-lacks) ·
 [413. Which name reached across, and what that bounds](#413-which-name-reached-across-and-what-that-bounds) ·
 [414. A schema compiled for a program fmake does not build](#414-a-schema-compiled-for-a-program-fmake-does-not-build) ·
-[415. A sentence four refusals append, and three declines](#415-a-sentence-four-refusals-append-and-three-declines)
+[415. A sentence four refusals append, and three declines](#415-a-sentence-four-refusals-append-and-three-declines) ·
+[416. Where this session stopped, second fold](#416-where-this-session-stopped-second-fold)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32076,3 +32077,96 @@ a claim about fixtures.
 existed; it is `hull/.git/cc-inbox/20261014T0159Z-claude.md`, naming the
 fix, the `HULL_VERSION` line that is theirs, and §413's bound on their
 finding 3. beerssh's is `20261014T0017Z-claude.md`, per §413.
+
+## 416. Where this session stopped, second fold
+
+§403 folded this session once, at 91 per cent of the weekly window. The
+window reset and the work continued; this is the second fold, at **22 per
+cent**, and it stops because there is nothing outstanding that is this
+session's rather than because the budget says so.
+
+**What landed: §409 to §415.** Five of the seven are code; two pin
+refusals the suite never produced. Where they came from is the ratio worth
+carrying, and it is the same as §403's: **not one came from reading fmake
+looking for bugs.**
+
+    409  the last cheap refusals off 405's ninety-seven
+    410  a name clash the filename-keyed check could not see
+    411  what a plain fmake does on fuzznet, and what stops it
+    412  the ejected file did not say which targets it lacks
+    413  which name reached across, and what that bounds
+    414  a schema compiled for a program fmake does not build
+    415  a sentence four refusals append, and three declines
+
+§410 came from reading the check that refused a fuzznet build. §412 and
+§414 came from building fuzznet and hull. §413 came from hull's own
+report. §415 came from walking past the thing §414 was about.
+
+### Four trees built, and what each said
+
+- **fuzznet**, pristine clone: fetches its four submodules, refuses on
+  §394's message with all three repeated test names counted correctly,
+  and with those renamed compiles 178 units and holds 235 test programs.
+  One file does not compile and it is gated behind that tree's own
+  switches, so the absent fmake line in its README is an answer rather
+  than a gap. Both ejected backends then build it from clean.
+- **softkeys**: plain `fmake` produces `libsoftkeys.a` and `fmake test`
+  runs 16 cases. Both README claims hold.
+- **hull**: §414, and its remaining blocker is one `defines` line of
+  theirs.
+- **raidcfgd**, the deepest vendoring here -- it vendors ossacli and
+  fuzznet, and fuzznet vendors four more. It refuses on
+  `situ_msg_init` defined by two generated `situ.c`, which is §371's
+  recorded refusal, and §371's added sentence is there in the output:
+  *"This one is affected too, and fmake has no guess for it ...
+  bridge_main"*. **Checked against the pre-§414 fmake and identical**,
+  which is the control that matters after a pass that changed which
+  schemas get compiled. No regression, and nothing new.
+
+### Still open at the second fold, and whose each is
+
+- **This file is past two context windows.** The number is not written
+  here, because `make style` prints it on every run -- heading count,
+  lines and an estimate in tokens -- and a figure quoted in the
+  document it measures is stale by the sentence that quotes it: the
+  first draft of this line said 32,078 and was wrong twice before
+  this paragraph was finished.
+  **The holder's, raised twice and not answered.** The shape is in
+  §403: `claude-guidelines` cut its own by turning closed findings into
+  one-line indexes that keep their headings, so every `section N`
+  citation still resolves and `the_contents_index_lists_every_section`
+  proves no heading was lost. The precondition is unchanged: no live
+  section may cite a cut one.
+- **hull's finding 2**, one prefix for every schema, and **the shape of
+  `[situ] flags` per schema**. Theirs to ask for, the holder's to spell.
+- **hull's finding 3** is bounded by §413 and §414 rather than closed.
+  The schema half is fixed; whether a vendored checkout's own programs
+  should enter the pool at all is still open, and §413's measurement
+  says a wrong widening proposal cannot by itself break a build.
+- **Whether a plain build should refuse over a clash among programs it
+  will not build** -- §411's question, with both cases written out.
+  **The holder's.**
+- **beerssh's README cites §293 as unsettled**, which §305 settled on
+  2026-09-21. Signalled; the dry run that closes it in their tree is
+  theirs, their dependency tree being 510 MB of untracked artifacts.
+- **`tool/style_gate.py` and `tool/test_style_gate.py` are still
+  modified and uncommitted here**, synced in by somebody else. Not this
+  session's to commit and not to revert.
+- **Still with the holder from before**: §348's `--uninstall` manifest,
+  §363's service-name charset, §367's `uses` doc/code contradiction,
+  `pkg-optional`'s per-file-versus-per-target semantics, §385's
+  compile-scheduling question.
+
+### The lens to pick up next
+
+**The lens that paid this session is "a decision made in one place and
+not carried into another."** It gave §414 and it has been swept twice
+since, with both results recorded so nobody re-runs them: the moc plan
+is presence-driven on purpose, and the inferred include set is already
+driven by what gets compiled. The next instance is likelier in a plan
+nobody has read against it than in those two.
+
+**No other session has unfolded work in this tree**, checked rather than
+assumed: no process on either account has its working directory here, the
+inbox is empty and read, and the only state left in the project directory
+is this conversation's own.
