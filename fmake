@@ -9943,6 +9943,13 @@ def default_name(rel, root):
     @target and [target.*] say so, which is how every other inferred name
     here is overridden.
     """
+	# `lib' is NOT in the test below, and section 423 records why: the
+	# docstring's argument covers it -- `lib.rs' names nothing either --
+	# and treating the stem that way renames a target whose
+	# `[target.lib]' section is then keyed on a name nothing has, which
+	# turns a working fmake.toml into a refusal. Five cases in this
+	# suite broke on it, no tree here has a `lib.c' at all, and a
+	# naming improvement nobody has asked for does not buy that.
 	stem = os.path.splitext(os.path.basename(rel))[0]
 	if stem != "main" and os.path.basename(rel) not in CRATE_ROOTS:
 		return stem

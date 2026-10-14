@@ -472,7 +472,8 @@ that had been green about nothing for five commits ·
 [419. The same block, two lists further on](#419-the-same-block-two-lists-further-on) ·
 [420. The half the moc case left to the depfiles](#420-the-half-the-moc-case-left-to-the-depfiles) ·
 [421. netcfgd, and the sentence fmake already had](#421-netcfgd-and-the-sentence-fmake-already-had) ·
-[422. A directory called main names nothing either](#422-a-directory-called-main-names-nothing-either)
+[422. A directory called main names nothing either](#422-a-directory-called-main-names-nothing-either) ·
+[423. The same argument one stem over, made and withdrawn](#423-the-same-argument-one-stem-over-made-and-withdrawn)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32610,3 +32611,57 @@ inferred name is a directory that exists. Sabotaging the other way, by
 treating every directory as generic, makes both programs fall back to the
 project's name and §394 refuses the clash: loud, and the case goes red on
 it.
+
+## 423. The same argument one stem over, made and withdrawn
+
+§422's docstring says both halves outright: *"main" names nothing*, and
+*`lib.rs` names nothing either*. Only the first was implemented as a
+**stem** -- the second reached Rust alone, because `lib.rs` is in
+`CRATE_ROOTS` -- so `src/lib.c` with `@kind shared` produced
+
+    LD  liblib.so
+
+a name that says *this is a library* twice and names nothing once. Four
+lines reproduce it, the docstring already argues against it, and the
+change is one word. **It is reverted, and the reason is worth more than
+the fix.**
+
+### What the full suite said that the trees did not
+
+Before writing it I measured the trees: **no private tree has a `lib.c`,
+`lib.cpp` or `lib.cc`**, and none has a `main.c` or `main.cpp` at its
+root, so neither the fault nor the collision it risks had an instance.
+What I did not measure was **this suite's own fixtures**, and the full run
+answered: **five cases red.** Four use `lib.c` as a library root and one
+compiles one.
+
+Four of the five are expectations about a filename and would be a
+rewrite. **The fifth is the cost that is not obvious**, and it is the one
+that decided this:
+
+    !!! fmake.toml: [target.lib] declares no root and no sources, so
+        fmake cannot tell what is in it
+
+A `[target.*]` section is **keyed by the name a target already has**. Change
+what a file infers and every section keyed on the old name stops matching
+-- so a working `fmake.toml` becomes a refusal on an fmake upgrade, in a
+tree whose author did nothing. `a_target_the_config_asks_for_is_not_silently_dropped`
+failed the other way for the same reason: two targets walked to the
+project's name and §410 refused the clash.
+
+So: a naming improvement **nobody has asked for**, against breaking
+configurations keyed on the current inference. §415 and §417 each declined
+a change for having no instance; this is the same answer with a sharper
+cost attached, and the one-word test keeps `lib` out with the reason
+beside it.
+
+### It is also the limit of §422, which is why §422 had to earn it
+
+§422 renames too, so it carries the same exposure: a tree with
+`c/src/main/main.c` and a `[target.main]` section would meet exactly that
+refusal. What makes it worth paying is that §422 has an instance --
+netcfgd was building a program called `main` and writing it into the tree
+root -- the suite stayed green on it, and its collision case is pinned.
+**The rule this pair leaves behind: changing an inferred name is a
+compatibility change, not a tidying, and it needs a tree that is wrong
+today rather than a premise that is right.**
