@@ -32456,3 +32456,32 @@ re-measures rather than re-derives.
   relayed whole, and fmake's own summary names it --
   `* softkeys-tests failed (exit 1)` then `* 1 of 1 failed:
   softkeys-tests`.
+
+### A fifth probe, abandoned, and why it is written down
+
+**Does a build killed part-way leave a tree that still builds?** It is
+the commonest thing a person does to a build, so it is worth asking, and
+the answer here is structural rather than measured: the lock is `flock`,
+which the kernel releases when the holder dies, so no kill can leave a
+stale one; `a_truncated_object_is_compiled_again` and
+`a_truncated_artifact_is_linked_again` cover a half-written output; and
+the cache discards what it cannot parse, which
+`a_cache_says_which_fmake_decided_what_is_in_it` pins from the harder
+direction, a cache that parses and lies.
+
+**The experiment itself failed three times, each time on the
+instrument.** `kill -9` on the pid from `pgrep -f "fmake$"` hit the
+`timeout` wrapper, whose command line also ends in `fmake`, so the build
+carried on and finished -- and the control that was supposed to show an
+incomplete tree, *no artifact 0.4 s after the kill*, was true at the
+moment it was taken and false a second later. A second attempt killed
+the wrapper again. A third, launching python directly, read `$!` for a
+process that had already exited.
+
+So nothing here is a verification of kill-recovery, and saying so is the
+point: **three instrument failures in a row is the signal to stop
+adjusting the probe**, not to adjust it again. What a session doing this
+properly needs is the pid of the python process itself, confirmed by
+reading `/proc/<pid>/cmdline` before signalling -- which is
+`running-code.md`'s rule, and which the first attempt skipped by trusting
+a pattern match.
