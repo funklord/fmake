@@ -474,7 +474,8 @@ that had been green about nothing for five commits ·
 [421. netcfgd, and the sentence fmake already had](#421-netcfgd-and-the-sentence-fmake-already-had) ·
 [422. A directory called main names nothing either](#422-a-directory-called-main-names-nothing-either) ·
 [423. The same argument one stem over, made and withdrawn](#423-the-same-argument-one-stem-over-made-and-withdrawn) ·
-[424. A plain build that failed on a program it was not building](#424-a-plain-build-that-failed-on-a-program-it-was-not-building)
+[424. A plain build that failed on a program it was not building](#424-a-plain-build-that-failed-on-a-program-it-was-not-building) ·
+[425. Eight checkouts, four duplicated, and one refusal per round](#425-eight-checkouts-four-duplicated-and-one-refusal-per-round)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32744,3 +32745,68 @@ measuring** -- the sweep that produced this section also produced three
 clean builds and, two sections earlier, the `main` naming fault that was
 real. Reading output found the facts; proposing fixes from a premise
 found two reverts.
+
+## 425. Eight checkouts, four duplicated, and one refusal per round
+
+fuzzypickles vendors eight projects -- monocypher, flog, iniparser,
+quirc, miniz, thorvg, fuzznet and qtty -- and fuzznet vendors four of
+them again. It is the deepest vendoring here after raidcfgd, and the
+first tree to meet §421's consolidation at that fan-out.
+
+**Everything this session built held.** Plain `fmake` compiles 349
+translation units and refuses, and the refusal is §399, §400 and §417
+working together:
+
+    !!! symbol '_flog_print' is defined by more than one file:
+        flog/flog.c  -- in flog, a checkout of another project
+        fuzznet/flog/flog.c  -- in fuzznet/flog, a checkout of another project
+    19 other symbol(s) are also defined more than once here: ...
+    These are the same file byte for byte, so one is a duplicated copy
+    Keep one of them out with [project] exclude in fmake.toml
+
+§417 annotates **both** providers -- the case its own comment anticipated,
+where excluding is the only admissible remedy because renaming somebody
+else's file is forbidden. §399 recognises the copies. §400 names the
+nineteen others so the first is not taken for the problem. And the
+report at the end carries §419's ordering in §421's wording: *4 of them
+are in fuzznet, which is another project's checkout rather than this
+tree's source*. Both qtty checkouts' own programs were left to them, 12
+and 11.
+
+### The remedy, verified one round at a time
+
+Their exclude already carries `"fuzznet/monocypher"`, taken from an
+earlier note this session. The other three were missing, and the list was
+established by running it rather than by reasoning:
+
+    + "fuzznet/flog", "fuzznet/qtty"    381 compiles, stops on quirc_begin
+    + "fuzznet/quirc"                   377 compiles, no refusal, builds
+
+The build produces `fzp, fzpd, tab_strip_demo, fzp-gui,
+fuzzypickles_qtty-spike, fzptui` -- the four their README names, plus a
+demo and a spike. So that README line is false on a fresh clone and true
+with three entries, which is what the signal says.
+
+`FZP_VERSION` is in their `fmake.toml` now and nothing complained, so the
+earlier note about it is closed.
+
+### The open question: byte-identical providers
+
+**fmake computes that the two files are identical and tells the reader
+so, and then refuses anyway.** For identical bytes the choice has no
+observable consequence -- either object resolves the same symbols -- so
+the reader pays a refusal, an edit and a full rebuild **per duplicated
+checkout**, four times here.
+
+- **The option**: where every provider of a symbol is byte-identical,
+  pick one, say which, and build. The fact is already computed and
+  already printed.
+- **The cost**: §3's stance is that refusing beats guessing, and a tree
+  with its dependencies vendored at two depths is one whose vendoring
+  wants tidying -- `harmonization.md`'s *how a dependency quietly
+  forks*. A build that quietly picks removes the pressure to fix the
+  tree, and "identical today" is not "identical after the next bump".
+- **Whose**: the holder's. §423 and §424 were both withdrawn for
+  contradicting a decision already made, and turning a refusal into a
+  build is the most consequential version of that -- so this is named
+  rather than acted on.
