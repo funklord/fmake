@@ -447,6 +447,44 @@ def say(m=""):    print(m, file=PROGRESS)
 def info(m):  say(f"{GREEN('*')} {m}")
 def warn(m):  say(f"{YELLOW('*')} {m}")
 def note(m):  say(f"{DIM('  ' + m)}")
+def theirs_last(rels, vendored, of=lambda r: r):
+	"""This tree's own first, then the other projects', and the counts.
+
+    `(ordered, {owner: how many})`. Four lists in two reports ask this,
+    and by the time the fourth arrived there were three spellings of it:
+    a sort key, a two-list partition, and a `mine + theirs'
+    concatenation. One of them also invented a second sentence for the
+    counts, which is the thing `evidence.md` warns about from the
+    reader's end -- two sentences about one subtree answering
+    differently is how a reader learns to trust neither.
+
+    The ordering is the point rather than the counting. Reported from
+    raidcfgd for the did-not-compile list: 21 files, five printed, and
+    the two that were THEIRS -- the only two they could act on -- were
+    not among the five, because nineteen sat in a checkout they widen
+    into and sorted ahead alphabetically. A truncated list is a choice
+    about what the reader sees first, and it was making it by path.
+
+    `of' reads the path out of whatever the caller holds, since one of
+    these lists carries unit keys rather than paths.
+    """
+	ordered = sorted(rels, key=lambda r: (bool(vendor_of(of(r), vendored)),
+	                                      of(r)))
+	counts = {}
+	for r in ordered:
+		owner = vendor_of(of(r), vendored)
+		if owner:
+			counts[owner] = counts.get(owner, 0) + 1
+	return ordered, counts
+
+
+def elsewhere_lines(counts):
+	"""The sentence each checkout gets, in the one wording fmake uses."""
+	return [f"{n} of them are in {owner}, which is another project's "
+	        f"checkout rather than this tree's source"
+	        for owner, n in sorted(counts.items())]
+
+
 def capped(items, cap=5):
 	"""What to print now, and how many are being held back.
 
@@ -14767,32 +14805,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# used for it. Nothing is hidden: under -v every one is
 			# listed, named with the checkout it belongs to, which is
 			# what the cap's own promise requires.
-			theirs, mine = {}, []
-			for rel in rest:
-				owner = vendor_of(rel, vendored)
-				if owner:
-					theirs.setdefault(owner, []).append(rel)
-				else:
-					mine.append(rel)
-			_head, _rest = capped(mine)
+			_rord, _rcounts = theirs_last(rest, vendored)
+			_head, _rest = capped(_rord)
 			for rel in _head:
 				note(f"{rel} not compiled: nothing reaches it "
 				     f"(--force-link if it is needed anyway)")
 			if _rest:
 				note(f"... and {_rest} more (-v for all)")
-			if theirs and VERBOSE:
-				for owner, rels in sorted(theirs.items()):
-					for rel in rels:
-						note(f"{rel} not compiled: nothing reaches it "
-						     f"-- in {owner}, a checkout of another "
-						     f"project")
-			elif theirs:
-				note(f"{sum(len(v) for v in theirs.values())} file(s) in "
-				     f"{len(theirs)} separate checkout(s) are not reached "
-				     f"either, which is theirs rather than this tree's: "
-				     + ", ".join(f"{k} ({len(v)})"
-				                 for k, v in sorted(theirs.items()))
-				     + " (-v for all)")
+			for line in elsewhere_lines(_rcounts):
+				note(line)
 			# The same answer, for a .rs no crate draws in -- and asked
 			# after the build rather than before it, because the scan is
 			# not the authority on what a crate contains. `mod' is what
@@ -14858,9 +14879,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# -- raidcfgd's `fuzznet/' before its `wire/'. Measured on a
 			# fixture of one own schema and six of a checkout's: four of
 			# the five places went to the other project.
-			_smine = [r for r in situ_unused if not vendor_of(r, vendored)]
-			_stheirs = [r for r in situ_unused if vendor_of(r, vendored)]
-			_shead, _srest = capped(_smine + _stheirs)
+			_sord, _scounts = theirs_last(situ_unused, vendored)
+			_shead, _srest = capped(_sord)
 			for rel in _shead:
 				stem = os.path.basename(rel)[:-len(SITU_EXT)]
 				note(f"{rel} not compiled: "
@@ -14869,6 +14889,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				           f"it would write"))
 			if _srest:
 				note(f"... and {_srest} more schema(s) (-v for all)")
+			for line in elsewhere_lines(_scounts):
+				note(line)
 			# Recorded only where it was reported, so "said before" means
 			# said. A quiet run prints nothing and stores nothing, which
 			# leaves the next ordinary build to say it.
@@ -15073,22 +15095,16 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# because nineteen were in a checkout they widen into and sorted
 		# ahead alphabetically. A truncated list is a choice about what
 		# the reader sees first, and it was making it by path.
-		keys = sorted(broken, key=lambda k: (
-		    bool(vendor_of(k.partition("\0")[0], vendored)), k))
+		keys, _kcounts = theirs_last(broken, vendored,
+		                             of=lambda k: k.partition("\0")[0])
 		_khead, _krest = capped(keys)
 		for key in _khead:
 			rel, _, variant = key.partition("\0")
 			note(f"{rel} ({variant})" if variant else rel)
 		if _krest:
 			note(f"... and {_krest} more (-v for all)")
-		elsewhere = {}
-		for key in keys:
-			owner = vendor_of(key.partition("\0")[0], vendored)
-			if owner:
-				elsewhere[owner] = elsewhere.get(owner, 0) + 1
-		for owner, n in sorted(elsewhere.items()):
-			note(f"{n} of them are in {owner}, which is another project's "
-			     f"checkout rather than this tree's source")
+		for line in elsewhere_lines(_kcounts):
+			note(line)
 
 	if failed:
 		say()

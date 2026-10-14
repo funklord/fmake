@@ -25996,8 +25996,8 @@ def the_other_two_lists_in_that_report_are_held_to_it_too(t):
 
 @case
 def the_unreached_files_a_reader_owns_come_first(t):
-	"""Section 418: the longest line of a successful build was mostly
-	somebody else's.
+	"""Section 418, rewritten by section 421: ordering, in the one spelling
+	fmake already had.
 
     Measured on fuzznet: 137 files reported as `nothing reaches it', of
     which **113 are inside four vendored checkouts** -- 54 monocypher, 38
@@ -26008,12 +26008,17 @@ def the_unreached_files_a_reader_owns_come_first(t):
 
     fmake knew which was which: the same run had already printed
     "monocypher is a separate checkout; leaving its own 28 programs to
-    it". The decision was made in one place and not carried into this
-    report, which is section 414's shape in a line nobody refuses on.
+    it".
 
-    Nothing is hidden, because the cap promises `-v for all' and that has
-    to stay true: under `-v` every one is listed, each vendored file named
-    with the checkout it belongs to."""
+    **The first version of this case asserted the wrong remedy.** It had
+    the vendored files kept OUT of the capped list and summarised in a
+    sentence of their own -- and the did-not-compile list two screens
+    further down had already solved this, by ordering them last and
+    counting them in a sentence fmake already owned. That one has a report
+    behind it, from raidcfgd. So all four lists share `theirs_last' now,
+    and what this asserts is the ordering: a reader's own first, the other
+    projects' after, the count per checkout in the wording the rest of the
+    tool uses."""
 	t.write(".gitmodules", '[submodule "vend"]\n\tpath = vend\n'
 	        "\turl = git@example.invalid:vend.git\n")
 	t.write("main.c", "int main(void){ return 0; }\n")
@@ -26027,21 +26032,25 @@ def the_unreached_files_a_reader_owns_come_first(t):
 	out = r.stdout + r.stderr
 	check(r.returncode == 0, f"build failed: {out}")
 	reached = [l for l in out.splitlines() if "nothing reaches it" in l]
-	check(len(reached) == 2,
-	      f"the capped list should hold this tree's two and no more, so "
-	      f"that what a reader owns is what they see: {reached}")
+	check(len(reached) == 5, f"the list is not capped at five: {reached}")
+	# Ordering is the property: ours before theirs, whatever the paths
+	# sort as -- `own/' happens to sort first here, so the fixture names
+	# the vendored directory `vend/' and the own one `own/' to make the
+	# alphabetical answer agree with the right one only by luck. What
+	# would catch a sort by path is the count: two of ours, three of
+	# theirs, and ours are the first two.
 	for i in (1, 2):
-		check(any(f"own/u{i}.c" in l for l in reached),
-		      f"own/u{i}.c is not in the list a reader reads first: {out}")
-	check(not any("vend/" in l for l in reached),
-	      f"a vendored file took one of the five places: {reached}")
-	check("7 file(s) in 1 separate checkout(s)" in out and "vend (7)" in out,
-	      f"the other project's files are neither listed nor counted: "
-	      f"{out}")
+		check(f"own/u{i}.c" in reached[i - 1],
+		      f"this tree's own file is not among the first shown: "
+		      f"{reached}")
+	check(all("vend/" in l for l in reached[2:]),
+	      f"a vendored file came before one of ours: {reached}")
+	check("7 of them are in vend, which is another project's checkout "
+	      "rather than this tree's source" in out,
+	      f"the other project's files are not counted in the sentence "
+	      f"fmake uses for exactly this: {out}")
 
-	# The cap promises -v for all, so -v has to show them -- each named
-	# with the checkout it is in, since a bare path in a list of nine
-	# says nothing about why it is held apart.
+	# The cap promises -v for all, so -v shows every one.
 	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
 	r = t.fmake("-v")
 	out = r.stdout + r.stderr
@@ -26049,11 +26058,6 @@ def the_unreached_files_a_reader_owns_come_first(t):
 	check(len(reached) == 9,
 	      f"-v did not list every unreached file, which is what the cap "
 	      f"offers: {len(reached)} of 9")
-	vend = [l for l in reached if "vend/lib/" in l]
-	check(len(vend) == 7 and all("in vend, a checkout of another project"
-	                             in l for l in vend),
-	      f"the vendored files are listed without saying whose they are: "
-	      f"{vend}")
 
 	# And a tree with no vendoring says nothing about checkouts at all.
 	u = Tree("unreached-plain")
@@ -26064,7 +26068,7 @@ def the_unreached_files_a_reader_owns_come_first(t):
 		out = r.stdout + r.stderr
 		check("nothing reaches it" in out,
 		      f"the ordinary report is gone: {out}")
-		check("separate checkout" not in out,
+		check("another project's checkout" not in out,
 		      f"a tree with nothing vendored was told about checkouts: "
 		      f"{out}")
 	finally:

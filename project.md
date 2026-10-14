@@ -470,7 +470,8 @@ that had been green about nothing for five commits ·
 [417. Which of the two providers is not yours to edit](#417-which-of-the-two-providers-is-not-yours-to-edit) ·
 [418. The longest line of a good build was mostly somebody else's](#418-the-longest-line-of-a-good-build-was-mostly-somebody-elses) ·
 [419. The same block, two lists further on](#419-the-same-block-two-lists-further-on) ·
-[420. The half the moc case left to the depfiles](#420-the-half-the-moc-case-left-to-the-depfiles)
+[420. The half the moc case left to the depfiles](#420-the-half-the-moc-case-left-to-the-depfiles) ·
+[421. netcfgd, and the sentence fmake already had](#421-netcfgd-and-the-sentence-fmake-already-had)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32485,3 +32486,79 @@ properly needs is the pid of the python process itself, confirmed by
 reading `/proc/<pid>/cmdline` before signalling -- which is
 `running-code.md`'s rule, and which the first attempt skipped by trusting
 a pattern match.
+
+## 421. netcfgd, and the sentence fmake already had
+
+The least-exercised path here is a mixed-language tree: netcfgd is 329 C
+files, 159 Rust, 129 headers and 68 C++, with `rustc` and `cargo`
+installed. It had never been run against this session's changes, so it was
+the regression check §414, §417, §418 and §419 had not had outside C and
+Qt.
+
+**And the tree has moved out from under the edge list that describes
+it.** `harmonization.md` records netcfgd's fuzznet relationship as *design,
+not build -- nothing in its Cargo manifests depends on it*, measured
+2026-08-27. The clone carries `.gitmodules` with **both `fuzznet` and
+`qtty`**, checked out, with `fuzznet/quirc` nested inside; fuzznet is
+still absent from the Cargo manifests, so that sentence is right about the
+manifests and out of date about the tree. That document says of itself
+that an edge list is a claim about other people's build files and must be
+re-measured before being cited, which is what this is -- and it means the
+run reached the vendored-checkout paths after all.
+
+**What it did: four programs built** -- `netcfgd-remote`,
+`live_association`, `main`, `netcfgd-gui` -- 344 compiles, no refusal and
+no traceback, and 39 files that did not compile. That is further than
+their README reports (*"a stop on two duplicate symbols between the
+daemon and the client"*), so the stop is gone. **37 of the 39 are in
+vendored checkouts** -- 1 fuzznet, 18 `fuzznet/qtty`, 18 `qtty`, the same
+project twice over by two routes -- and the two that are netcfgd's own are
+their GUI tests.
+
+### The sentence fmake already had, which §418 did not use
+
+The did-not-compile list prints this, once per checkout:
+
+    1 of them are in fuzznet, which is another project's checkout
+      rather than this tree's source
+
+**Its comment carries §418's finding, reported from raidcfgd**: *21 files,
+five printed, and the two that were theirs -- the only two they could act
+on -- were not among the five, because nineteen sat in a checkout they
+widen into and sorted ahead alphabetically.* So the argument §418 made
+from fuzznet had already been made from raidcfgd, two screens further down
+the same function, and the fix was already there.
+
+§418 invented a second mechanism and a second sentence for it, and §419
+invented a third spelling for the schema list. Four lists in two reports,
+three implementations and two wordings -- which is exactly what §417's own
+docstring warns about from the reader's end: **two sentences about one
+subtree answering differently is how a reader learns to trust neither.**
+
+So there is one statement of it now, `theirs_last`, and
+`elsewhere_lines` for the wording, with four callers. The ordering is what
+it asserts -- ours first, theirs after -- rather than §418's exclusion,
+because the version with a report behind it ordered rather than excluded,
+and because a vendored file that failed to compile is still something a
+reader may need to look at.
+
+### What that cost, and the repair
+
+§418's case had pinned the behaviour that disagreed with its sibling, so
+it is rewritten to assert the ordering and the shared sentence. **And the
+rewrite corrupted the file**: the slice took `src.index(start)` and
+`src.index(end)` where the end marker sits EARLIER in the file than the
+start marker -- §419's case was inserted above §418's -- so the span
+between them was duplicated rather than replaced, leaving two copies of
+each case and the old assertions still registered. The suite said `1 of 2
+failed` for one name, which is what two definitions of one case looks
+like.
+
+`git checkout -- selftest` is the obvious repair and was refused as
+irreversible, correctly: `CLAUDE.md` says a discard in a shared tree is
+unrecoverable in a way a bad commit is not. The repair that was available
+instead is the one that rule asks for -- **read the span, prove it, then
+write**: locate the second copy of each marker, assert the span holds
+exactly one of each and exactly two `def` lines, and only then remove it.
+A slice between two `index` calls assumes an order it never checked, and
+asserting that order would have refused the write.
