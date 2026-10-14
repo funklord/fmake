@@ -32701,6 +32701,96 @@ def widening_names_the_symbol_that_reached_for_each_file(t):
 	      f"read: {out}")
 
 
+@case
+def a_separate_checkouts_own_program_does_not_ask_for_a_schema(t):
+	"""Section 414: fmake ran the schema compiler for programs it had
+	already decided not to build.
+
+    Measured on a clone of hull, which vendors situ. Of twelve situc runs,
+    nine were situ's own example and test schemas -- bmp, icmp, packet,
+    protobuf, sqlite, tiff, kernels, edges, header -- and the requester in
+    every case was a program inside the vendored checkout. fmake had named
+    those in the same run: *"vendor/situ is a separate checkout; leaving
+    its own 13 programs to it (probe.c, test_bmp.c, ...)"*. So twenty-seven
+    files were written into the state directory, **none of them compiled**,
+    and `bmp.h', `edges.h' and `header.h' went onto the include path, where
+    a name that generic can shadow a tree's own header.
+
+    The tenth was sharper and is why this is not merely wasted work. hull's
+    own `agent/message.situ' was compiled, and the only file in the tree
+    including `message.h' is `vendor/situ/test/generated/test_message.c' --
+    one of those thirteen programs. So the collision section 404 resolved
+    between hull's schema and situ's example existed only because a
+    vendored test program asked for the header. Nothing hull builds
+    includes it, and now neither is compiled.
+
+    Two controls, because a filter that silences a real requester is worse
+    than the overbuild it replaces. Our own file including the header still
+    compiles the schema; and a vendored file carrying `@target' IS built
+    here, so its include counts -- which is the guard that passes those
+    programs over, matched rather than approximated."""
+	situc = t.write("bin/situc", FAKE_SITUC % {"stream": "stderr",
+	                                           "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write(".gitmodules",
+	        '[submodule "vendor/lib"]\n\tpath = vendor/lib\n'
+	        '\turl = git@example.invalid:lib.git\n')
+	t.write("vendor/lib/thing.situ", "// theirs\n")
+	t.write("vendor/lib/test/test_thing.c",
+	        '#include "thing.h"\nint main(void){ return thing_check(); }\n')
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check("SITU vendor/lib/thing.situ" not in out,
+	      f"the schema was compiled for a program fmake does not build: "
+	      f"{out}")
+	check("separate checkout" in out,
+	      f"the fixture did not pass the vendored program over, so this "
+	      f"case is not testing what it says: {out}")
+	# And the reason is the true one. "nothing includes thing.h" would be
+	# false -- their program does -- and a wrong reason is worse than the
+	# wasted run this removes.
+	check("thing.situ not compiled" in out,
+	      f"the schema left alone is not reported: {out}")
+	check("leaves to it" in out,
+	      f"the reason does not say a checkout's own program is the only "
+	      f"thing asking: {out}")
+	check("nothing includes \"thing.h\"" not in out,
+	      f"the reason claims nothing includes a header their program "
+	      f"includes: {out}")
+
+	# Control one: our own file asks, and the schema is compiled.
+	t.write("main.c", '#include "thing.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", thing_check()); return 0; }\n')
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed with our own includer: {out}")
+	check("SITU vendor/lib/thing.situ" in out,
+	      f"a vendored schema this tree does include was not compiled: "
+	      f"{out}")
+
+	# Control two: a vendored file fmake DOES build still counts. @target
+	# is what takes it out of the pass-over, so the filter has to match on
+	# the same condition rather than on the directory alone.
+	#
+	# The state goes first, because control one compiled this schema and a
+	# schema is not recompiled until it changes -- so the SITU line below
+	# would be absent for the wrong reason, which is how the first version
+	# of this control failed.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("vendor/lib/test/test_thing.c",
+	        '/*! @target vendored_tool */\n#include "thing.h"\n'
+	        "int main(void){ return thing_check(); }\n")
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("SITU vendor/lib/thing.situ" in out,
+	      f"a vendored file this tree builds asked for the schema and did "
+	      f"not get it: {out}")
+
+
 # ---------------------------------------------------------------------------
 
 def run_case(c, _again=False):

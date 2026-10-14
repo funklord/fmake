@@ -3918,8 +3918,43 @@ def situ_plan(root, hdrs, scans):
     over the top of it would replace a source with a build artifact while
     both answer the same #include.
     """
-	wanted = {}
+	# Declared submodules, read before the requester map rather than after
+	# it: what a separate checkout's own PROGRAMS include is not a reason
+	# to run the schema compiler, because fmake has already decided not to
+	# build them.
+	#
+	# Measured on hull, which vendors situ. `vendor/situ/test/generated/
+	# test_bmp.c' includes "bmp.h", that file is one of the thirteen fmake
+	# names in "vendor/situ is a separate checkout; leaving its own 13
+	# programs to it", and fmake ran situc over nine of situ's own example
+	# and test schemas for it -- writing twenty-seven files into the state
+	# directory, compiling none of them, and putting `bmp.h', `edges.h'
+	# and `header.h' on hull's include path, where a name that generic can
+	# shadow a tree's own header. The decision not to build those programs
+	# was made in one place and not carried into this one.
+	#
+	# The guard matches the one that passes them over: `has_main' and
+	# neither @kind nor @target, since an annotated file in a submodule IS
+	# built and does need its header. Declared submodules only, for the
+	# reason the collision pre-pass below gives.
+	theirs = tuple(s + os.sep for s in declared_submodules(root))
+
+	def _left_to_its_own_project(rel):
+		"""Is this a separate checkout's own program, which fmake will not build?"""
+		if not theirs or not rel.startswith(theirs):
+			return False
+		scan = scans[rel]
+		if not scan.get("has_main"):
+			return False
+		ann = Ann(scan.get("dirs"))
+		return not ann.scalar("kind") and not ann.scalar("target")
+
+	wanted, theirs_only = {}, {}
 	for rel in sorted(scans):
+		if _left_to_its_own_project(rel):
+			for _kind, name, _line in scans[rel]["incs"]:
+				theirs_only.setdefault(os.path.basename(name), []).append(rel)
+			continue
 		for _kind, name, _line in scans[rel]["incs"]:
 			wanted.setdefault(os.path.basename(name), []).append(rel)
 	have = {os.path.basename(h) for h in hdrs}
@@ -3941,7 +3976,6 @@ def situ_plan(root, hdrs, scans):
 	# a tree merely copied in is indistinguishable from this project's own
 	# code, so the declaration is what makes the question answerable at
 	# all.
-	theirs = tuple(s + os.sep for s in declared_submodules(root))
 	found = list(find_ext(root, SITU_EXT))
 	if theirs:
 		by_base, drop = {}, set()
@@ -3960,18 +3994,39 @@ def situ_plan(root, hdrs, scans):
 				if rel == ours[0]:
 					continue
 				drop.add(rel)
-				vinfo(f"{rel} is in a checkout of another project and "
-				      f"{ours[0]} is this tree's, so the tree's own "
-				      f"schema writes {base[:-len(SITU_EXT)]}.h")
+				# Said only where the header is wanted, because otherwise
+				# neither of them writes it and the sentence is false. On
+				# hull the only file including "message.h" is a program of
+				# the vendored checkout, so after the filter above nothing
+				# asks for either schema -- and this line claimed the
+				# tree's own was writing it. The drop stays unconditional:
+				# it decides which one would win, not whether one runs.
+				if base[:-len(SITU_EXT)] + ".h" in wanted:
+					vinfo(f"{rel} is in a checkout of another project and "
+					      f"{ours[0]} is this tree's, so the tree's own "
+					      f"schema writes {base[:-len(SITU_EXT)]}.h")
 		found = [r for r in found if r not in drop]
 
-	jobs, unused, seen = [], [], {}
+	# Why a schema was left alone, where the default sentence would be
+	# false. "nothing includes bmp.h" is not true of hull -- a program in
+	# the vendored checkout does -- and a wrong reason is worse than a
+	# wasted situc run, which is what makes this half of the change part
+	# of the same change.
+	jobs, unused, seen, why = [], [], {}, {}
 	for rel in found:
 		path = os.path.join(root, rel)
 		name = os.path.basename(rel)[:-len(SITU_EXT)]
 		header = name + ".h"
 		if header not in wanted:
 			unused.append(rel)
+			if header in theirs_only:
+				_who = theirs_only[header]
+				why[rel] = (f"only {_who[0]}"
+				            + (f" and {len(_who) - 1} other file(s)"
+				               if len(_who) > 1 else "")
+				            + f" include{'s' if len(_who) == 1 else ''} "
+				            + f"\"{header}\", and that is a program of the "
+				            + "checkout it is in, which fmake leaves to it")
 			continue
 		if header in have:
 			vinfo(f"{rel}: this tree carries {header} already, so the "
@@ -3998,7 +4053,7 @@ def situ_plan(root, hdrs, scans):
 		seen[name] = rel
 		jobs.append({"src": rel, "name": name, "header": header,
 		             "includers": sorted(set(wanted[header]))})
-	return jobs, unused
+	return jobs, unused, why
 
 
 def find_situc(configured, root):
@@ -11120,7 +11175,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# Taken before anything runs, so that the prune below can tell a file
 	# this build wrote from one left over by an earlier one.
 	situ_started = time.time()
-	situ_jobs, situ_unused = situ_plan(root, hdrs, scans)
+	situ_jobs, situ_unused, situ_why = situ_plan(root, hdrs, scans)
 	if situ_jobs:
 		situc_exe = find_situc(cfg.situc, root)
 		if not situc_exe:
@@ -14726,8 +14781,10 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			_shead, _srest = capped(situ_unused)
 			for rel in _shead:
 				stem = os.path.basename(rel)[:-len(SITU_EXT)]
-				note(f"{rel} not compiled: nothing includes "
-				     f"\"{stem}.h\", which is what it would write")
+				note(f"{rel} not compiled: "
+				     + (situ_why.get(rel)
+				        or f"nothing includes \"{stem}.h\", which is what "
+				           f"it would write"))
 			if _srest:
 				note(f"... and {_srest} more schema(s) (-v for all)")
 			# Recorded only where it was reported, so "said before" means

@@ -463,7 +463,8 @@ that had been green about nothing for five commits ·
 [410. A name clash the check could not see, because it read the file](#410-a-name-clash-the-check-could-not-see-because-it-read-the-file) ·
 [411. What a plain fmake does on fuzznet, and what stops it](#411-what-a-plain-fmake-does-on-fuzznet-and-what-stops-it) ·
 [412. The ejected file did not say which targets it lacks](#412-the-ejected-file-did-not-say-which-targets-it-lacks) ·
-[413. Which name reached across, and what that bounds](#413-which-name-reached-across-and-what-that-bounds)
+[413. Which name reached across, and what that bounds](#413-which-name-reached-across-and-what-that-bounds) ·
+[414. A schema compiled for a program fmake does not build](#414-a-schema-compiled-for-a-program-fmake-does-not-build)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31926,3 +31927,82 @@ reader to use `make` in a tree where `tool/build-deps-android.sh` has run.
 and the case that pins it -- separated from what was not: their
 `build-deps-android` is 510 MB of untracked artifacts, so the dry run that
 would close it in their own tree is theirs to take.
+
+## 414. A schema compiled for a program fmake does not build
+
+hull's finding 3 said fmake builds a vendored project's own programs. It
+does not -- it names them and leaves them -- and §413 bounded the symbol
+half of their report. This is the half that was real, found by building a
+clone of hull rather than by reading either tree.
+
+**Twelve situc runs, nine of them situ's.** `bmp`, `icmp`, `packet`,
+`protobuf`, `sqlite`, `tiff`, `std/kernels`, `test/schema/edges` and
+`test/schema/header` -- situ's own examples and test fixtures. The
+requester in every case is a program inside the vendored checkout, and
+fmake had named those in the same run:
+
+    * vendor/situ is a separate checkout; leaving its own 13 programs
+      to it (probe.c, test_bmp.c, test_header.c, and 10 more)
+
+`vendor/situ/test/generated/test_bmp.c` includes `"bmp.h"`, and
+`test_bmp.c` is in that list. So **the decision not to build those
+programs was made in one place and not carried into the schema plan**:
+twenty-seven files written into the state directory, **none of them
+compiled**, and `bmp.h`, `edges.h` and `header.h` put on hull's include
+path -- where a name that generic can shadow a tree's own header, which is
+§293's hazard arriving by a route fmake creates itself.
+
+### The tenth run is the sharp one, and it corrects what §404 recorded
+
+hull's **own** `agent/message.situ` was being compiled, and the only file
+in that tree including `message.h` is
+`vendor/situ/test/generated/test_message.c` -- one of the thirteen. So the
+collision §404 resolved between hull's schema and situ's example **existed
+only because a vendored test program asked for the header.** Nothing hull
+builds includes it, and with the requester discounted neither schema is
+compiled: twelve runs become two, hull's own `canonical` and `readable`.
+
+§404's own notice had to be gated with it. It said *"vendor/situ/example/
+message/message.situ is in a checkout of another project and
+agent/message.situ is this tree's, so the tree's own schema writes
+message.h"* -- and after the filter **neither** writes it, so the sentence
+was false. It prints only where the header is wanted now. The drop stays
+unconditional: it decides which schema would win, not whether one runs.
+
+### The false reason was the other half of the same change
+
+`"nothing includes \"bmp.h\", which is what it would write"` is not true of
+hull: their vendored checkout's program does include it. **A wrong reason
+is worse than a wasted situc run**, so the report names the real one --
+only a program of the checkout it is in asks, and fmake leaves that to it.
+`situ_plan` returns the reasons beside the list for it.
+
+### Two controls, because a filter that silences a real requester is worse
+
+Our own file including the header still compiles the schema. And a
+vendored file carrying `@target` **is** built here, so its include counts
+-- the guard matches the one that passes those programs over, `has_main`
+and neither `@kind` nor `@target`, rather than keying on the directory.
+Sabotaging the annotation half leaves the second control red.
+
+The first version of that control failed for the wrong reason: control one
+had already compiled the schema, and a schema is not recompiled until it
+changes, so the missing `SITU` line proved nothing. The state is cleared
+between them now.
+
+### What else the clone showed, and two verifications
+
+- **hull's remaining blocker is `HULL_VERSION`**, which their Makefile
+  injects and their `fmake.toml` does not -- and fmake prints the exact
+  remedy, `[project] defines = ['HULL_VERSION="$file(VERSION)"']`. Theirs,
+  one line; signalled rather than edited.
+- **softkeys builds.** Plain `fmake` produces `libsoftkeys.a` and
+  `fmake test` builds and runs 16 cases, so the two claims in its README
+  hold. Nothing to report, which is what a verification usually earns.
+- **The §412 lens swept and came up empty**, recorded so the next pass
+  does not re-run it: a record filled at a warning site whose condition is
+  cached. `declined_generated` is declared before the widening loop and
+  accumulates with `|=`, so it is correct; and the build's report block
+  already distinguishes a claim about the TREE, reported once and
+  news-gated, from a claim about the ARTIFACT, reported every run. That
+  principle is what §412's note needed and is already stated there.
