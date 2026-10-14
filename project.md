@@ -466,7 +466,8 @@ that had been green about nothing for five commits ·
 [413. Which name reached across, and what that bounds](#413-which-name-reached-across-and-what-that-bounds) ·
 [414. A schema compiled for a program fmake does not build](#414-a-schema-compiled-for-a-program-fmake-does-not-build) ·
 [415. A sentence four refusals append, and three declines](#415-a-sentence-four-refusals-append-and-three-declines) ·
-[416. Where this session stopped, second fold](#416-where-this-session-stopped-second-fold)
+[416. Where this session stopped, second fold](#416-where-this-session-stopped-second-fold) ·
+[417. Which of the two providers is not yours to edit](#417-which-of-the-two-providers-is-not-yours-to-edit)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32170,3 +32171,70 @@ nobody has read against it than in those two.
 assumed: no process on either account has its working directory here, the
 inbox is empty and read, and the only state left in the project directory
 is this conversation's own.
+
+## 417. Which of the two providers is not yours to edit
+
+§416 said nothing outstanding was this session's. The instruction was to
+continue, so the ambiguity refusal §416 had just quoted from raidcfgd got
+read rather than cited:
+
+    !!! symbol 'situ_msg_init' is defined by more than one file:
+        fuzznet/wire/generated/situ.c
+        wire/generated/situ.c
+
+Two paths, nothing to tell them apart, and the same message's last line
+offers *keep the duplicate out with `[project] exclude`*. **Which one that
+may be is the whole question**: excluding the tree's own breaks the build,
+and editing the other is what `harmonization.md` forbids outright, so a
+reader who guesses wrong does the one thing they must not. The listing
+names it now:
+
+        fuzznet/wire/generated/situ.c  -- in fuzznet, a checkout of
+                                          another project
+        wire/generated/situ.c
+
+The wording is §404's on purpose, and `vendor_of` is the same function
+behind *"X is a separate checkout; leaving its own N programs to it"*
+earlier in the same run -- two sentences about one subtree answering
+differently is how a reader learns to trust neither.
+
+### A clause written, measured, and removed
+
+A second half named the generator that wrote each provider. `genby`
+recognises moc, uic and rcc by their banners and nothing else, so it is
+**empty for both of raidcfgd's `situ.c`** -- the very files that prompted
+this. And whether a Qt-generated file can be an ambiguous provider at all
+could not be established: widening declines generated code, and a
+committed copy beside a header is compiled *instead* of fmake's rather
+than as well. **A clause that cannot be seen to fire is a sentence a
+reader believes this message can print**, so it is gone and the reason is
+in the code.
+
+### The third mis-selected assertion of this session
+
+The first version read *the first line containing this path*, which is the
+compile progress line -- `[2/2] CC  vend/lib/gen.c` -- so it failed for one
+provider and **passed vacuously for the other**, the one asserting that
+this tree's own file is NOT annotated. Both now key on the listing's own
+rows.
+
+That is three in one session: §412's dedupe, §412's loop sabotage, and
+this. The shape is the same each time -- **an assertion over the whole
+output blob, where more than one line matches** -- and the remedy is the
+same: select the row the message actually prints, then assert on it.
+
+### Two sweeps that came up empty, with their methods
+
+- **`published_headers` walks a library's link closure and collects each
+  unit's `@headers`**, so a vendored checkout's annotation would publish
+  its headers in our install plan. Eleven vendored checkouts here --
+  qtty, flog, monocypher, quirc, ossacli, fuzznet twice, vterm,
+  softkeys, situ -- and **none carries `@headers`**. Structural, with no
+  instance, and a project that vendors a library it genuinely republishes
+  would want exactly this behaviour. Left alone.
+- **`libexecdir` and a per-target install destination** are what §296
+  deferred pending *a tree that installs through fmake and has something
+  privileged*. Re-measured: two trees install into libexec -- netcfgd's
+  `dhcpcd-hook` and raidcfgd's four helpers -- and **neither installs
+  through fmake**, netcfgd's README saying `make build` is the way for
+  the daemon. §125's rule still holds, so still not built.

@@ -13723,11 +13723,42 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	if trouble:
 		first_sym, first_providers = trouble[0][1], trouble[0][2]
 		shown, _arest = capped(first_providers, 6)
-		listing = "\n    ".join(shown)
+
+		# What each provider IS, where that is what decides the remedy.
+		# Measured on raidcfgd: `situ_msg_init' is defined by
+		# `wire/generated/situ.c' and `fuzznet/wire/generated/situ.c',
+		# both situc output and one of them inside a checkout of another
+		# project -- and this message named neither fact while its own
+		# last line offers `[project] exclude' without saying which of
+		# the two may be excluded. Editing the other is what
+		# harmonization.md forbids outright, so a reader who guesses
+		# wrong does the one thing they must not.
+		#
+		# `vendor_of' and not the declared submodules alone, so that
+		# this agrees with the line the same run already printed --
+		# "X is a separate checkout; leaving its own N programs to it".
+		# Two sentences about one subtree answering differently is how a
+		# reader learns to trust neither.
+		# One fact and not two. A clause naming the generator that wrote
+		# a provider was written here and removed: `genby' recognises
+		# moc, uic and rcc by their banners and nothing else, so it is
+		# empty for both of raidcfgd's situ.c -- the very files that
+		# prompted this -- and whether a Qt-generated file can be an
+		# ambiguous provider at all could not be established: widening
+		# declines generated code, and a committed copy beside a header
+		# is compiled INSTEAD of fmake's rather than as well. A clause
+		# that cannot be seen to fire is a sentence a reader believes
+		# this message can print.
+		def _provider_is(rel):
+			owner = vendor_of(rel, vendored)
+			return (f"    {rel}"
+			        + (f"  -- in {owner}, a checkout of another project"
+			           if owner else ""))
+		listing = "\n".join(_provider_is(r) for r in shown)
 		if _arest:
 			listing += f"\n    ... and {_arest} more (-v for all)"
 		lines = [f"symbol {first_sym!r} is defined by more than one file:",
-		         "    " + listing,
+		         listing,
 		         "fmake will not guess which one belongs in "
 		         + ", ".join(sorted({t.name for t, _s, _p in trouble})) + "."]
 		# How many there are, because this names ONE and knew about the

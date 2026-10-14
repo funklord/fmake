@@ -25815,6 +25815,80 @@ def an_unguessable_ambiguity_offers_a_remedy_that_works(t):
 
 
 @case
+def an_ambiguity_names_the_provider_that_is_another_projects(t):
+	"""Section 417: the message offered `exclude' and not which one.
+
+    Measured on raidcfgd, which vendors ossacli and fuzznet. Its
+    `situ_msg_init' is defined by `wire/generated/situ.c' and
+    `fuzznet/wire/generated/situ.c', and the refusal listed both paths
+    with nothing to tell them apart -- while its own last line offers
+    *keep the duplicate out with [project] exclude*. Which one that may
+    be is the whole question: excluding the tree's own breaks the build,
+    and editing the other is what `harmonization.md` forbids outright, so
+    a reader who guesses wrong does the one thing they must not.
+
+    The wording is section 404's, deliberately -- *is in a checkout of
+    another project* -- because two sentences about one subtree answering
+    differently is how a reader learns to trust neither. `vendor_of' for
+    the same reason: it is what printed "X is a separate checkout;
+    leaving its own N programs to it" earlier in the same run.
+
+    The quiet half is asserted too. The tree's own provider carries no
+    annotation, and a subtree that is merely copied in carries none
+    either -- `vendored_dirs' documents both of its signals as statements
+    rather than guesses, a `.gitmodules' entry and a `.git' git put
+    there, and a copied tree has neither and is indistinguishable from
+    this project's own code."""
+	t.write(".gitmodules", '[submodule "vend"]\n\tpath = vend\n'
+	        "\turl = git@example.invalid:vend.git\n")
+	t.write("own/gen.c", "int shared_init(void){ return 1; }\n")
+	t.write("vend/lib/gen.c", "int shared_init(void){ return 2; }\n")
+	t.write("main.c", "int shared_init(void);\n"
+	        "int main(void){ return shared_init() - 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two providers of one symbol must refuse: {out}")
+	check("is defined by more than one file" in out,
+	      f"the refusal itself has changed: {out}")
+	# The listing's own rows, which open with the path. Keying on "the
+	# first line containing this path" picked the compile progress line
+	# instead -- `[2/2] CC  vend/lib/gen.c' -- so the first version of
+	# this read the wrong line for both providers, failing for one and
+	# passing vacuously for the other.
+	def row(rel):
+		return [l for l in out.splitlines()
+		        if l.startswith("    ") and l.strip().startswith(rel)]
+
+	vend = row("vend/lib/gen.c")
+	check(vend and "in vend, a checkout of another project" in vend[0],
+	      f"the provider that is another project's is not named as one, so "
+	      f"the reader cannot tell which the exclude is for: {out}")
+	own = row("own/gen.c")
+	check(own and "checkout of another project" not in own[0],
+	      f"this tree's own provider was annotated too, which says nothing "
+	      f"and costs a line of an already long message: {own}")
+
+	# A tree merely copied in says nothing about itself, so neither does
+	# fmake. This is the no-false-positive half of `vendored_dirs'.
+	os.unlink(os.path.join(t.dir, ".gitmodules"))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the collision is still a collision: {out}")
+	check("checkout of another project" not in out,
+	      f"a copied-in subtree was called another project's checkout, "
+	      f"which nothing in the tree says: {out}")
+
+	# The other signal git leaves, and it is enough on its own.
+	t.write("vend/.git", "gitdir: ../.git/modules/vend\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("in vend, a checkout of another project" in out,
+	      f"a .git git put there is the second signal and was not read: "
+	      f"{out}")
+
+
+@case
 def an_ambiguity_says_how_many_symbols_it_found(t):
 	"""Section 400: it named one and knew about the rest.
 
