@@ -32864,29 +32864,49 @@ is §413's bound holding on a third tree. hydra is where it stopped being
 free: one of its 86 could not compile, and the status followed the file
 rather than the request (§424).
 
-### The option, its cost, and whose it is
+### The option was named, measured, and does not work
 
-**The genuine proposals match a CLASS token and the spurious ones do
-not.** In qtty's own output the six real ones name `CellBuffer`,
-`GridStyle`, `Compositor`, `InputRouter`, `CellPaintDevice`,
-`QStyledItemDelegate`; the five spurious ones name method words only.
-Token *count* does not separate them -- `suite_backend` matched nine --
-but the class component does.
+The reading was that **the genuine proposals match a CLASS token and the
+spurious ones do not**: in qtty's output the six real ones name
+`CellBuffer`, `GridStyle`, `Compositor`, `InputRouter`,
+`CellPaintDevice`, `QStyledItemDelegate`, and the five quoted above name
+method words only. So the option was: for a mangled symbol, require the
+candidate to define the component **before** the method, not merely the
+method.
 
-- **The option**: for a **mangled** symbol with more than one identifier
-  component, require the candidate to define the component before the
-  method, not merely the method. The mangled name already carries it and
-  `symbol_tokens` already splits it.
-- **The cost**: §415's reason, which has not changed -- *a definition
-  this misses is a build that does not happen*. A class whose token the
-  scan never recorded (a template, a macro-built name, an `extern "C"`
-  wrapper) would stop being proposed, and the symptom is a link failure
-  rather than a wasted compile. It must also apply only where mangling
-  exists: C has none, so the C half keeps today's behaviour and §415's
-  `static` case with it.
-- **Whose**: the holder's. §423 and §424 were both withdrawn for
-  contradicting a decision already made, and this one would change what
-  the closure reaches -- the most load-bearing guess fmake makes.
+**It was measured before being proposed further, and it fails.** A probe
+copy of fmake logged, for every proposal, how many of the matching
+symbols that rule would keep and how many it would drop -- 14 proposals,
+114 symbols kept, 136 dropped -- and then which FILES it would stop
+proposing:
+
+    removed entirely        test/suite_graphics.cpp
+    still proposed          suite_backend 7   suite_router 61
+                            suite_widgets 2   suite_runtime 1
+                            suite_budget  1   suite_placements 1
+                            suite_render  1
+
+**One of the eight.** And `suite_router.cpp` keeps sixty-one, for the
+reason that kills the idea: a test suite that subclasses `QWidget`
+*mentions* `QWidget`, `QObject`, `QLineEdit`, `QPushButton` -- so it
+defines those class tokens as surely as the library does, and the class
+component is no more discriminating than the method component once the
+file subclasses the framework. The single-symbol keeps are the other
+half: a match on an **unmangled** name exempts the file by construction,
+since C has no components to compare.
+
+So the option is withdrawn before anybody acted on it, and what remains
+is the diagnosis plus the knowledge that **the obvious discriminator is
+not one**. Whoever takes this next needs a signal that separates *a class
+this file implements* from *a class this file merely uses*, which a text
+scan of identifiers does not carry.
+
+**Whose it is, now that the cheap answer is gone.** Whether widening
+should reach into a tree's test directories at all is the holder's --
+§424 tried the nearby version of that and was withdrawn for
+contradicting §3 -- and the cost to weigh is the measurement above
+rather than a premise: a quarter to a third of a Qt tree's plain build,
+linked nowhere, and one tree where it decided the exit status.
 
 **What is already banked is the diagnosis.** Before §413 the honest answer
 to *why did a plain build compile eight test suites* was that it would
