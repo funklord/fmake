@@ -32864,49 +32864,63 @@ is §413's bound holding on a third tree. hydra is where it stopped being
 free: one of its 86 could not compile, and the status followed the file
 rather than the request (§424).
 
-### The option was named, measured, and does not work
+### Two discriminators measured, both rejected, and the cause is elsewhere
 
-The reading was that **the genuine proposals match a CLASS token and the
-spurious ones do not**: in qtty's output the six real ones name
-`CellBuffer`, `GridStyle`, `Compositor`, `InputRouter`,
-`CellPaintDevice`, `QStyledItemDelegate`, and the five quoted above name
-method words only. So the option was: for a mangled symbol, require the
-candidate to define the component **before** the method, not merely the
-method.
+**First**: require a mangled symbol's **class** component, not just its
+method. A probe copy logged, per proposal, how many matching symbols that
+rule keeps and drops. It removes **one** of the eight test files
+(`suite_graphics.cpp`) and `suite_router.cpp` keeps sixty-one -- because a
+suite that subclasses `QWidget` *mentions* `QWidget`, `QObject`,
+`QLineEdit`, `QPushButton`, so it defines those class tokens as surely as
+the library does. Useless.
 
-**It was measured before being proposed further, and it fails.** A probe
-copy of fmake logged, for every proposal, how many of the matching
-symbols that rule would keep and how many it would drop -- 14 proposals,
-114 symbols kept, 136 dropped -- and then which FILES it would stop
-proposing:
+**Second**: require the **qualified pair**. An out-of-line member
+definition is written `Class::method(...)` and is in the text; a member
+defined inside a class body is not, which is how a throwaway test widget
+differs from a library implementation. Measured the same way:
 
-    removed entirely        test/suite_graphics.cpp
-    still proposed          suite_backend 7   suite_router 61
-                            suite_widgets 2   suite_runtime 1
-                            suite_budget  1   suite_placements 1
-                            suite_render  1
+    file                           keeps  drops
+    src/render/cell_paint.cpp          0     17
+    src/widget/cell_item_delegate.cpp  0     15
+    src/core/cell_buffer.cpp           2      9
+    test/suite_* (seven of eight)      0    1-10
 
-**One of the eight.** And `suite_router.cpp` keeps sixty-one, for the
-reason that kills the idea: a test suite that subclasses `QWidget`
-*mentions* `QWidget`, `QObject`, `QLineEdit`, `QPushButton` -- so it
-defines those class tokens as surely as the library does, and the class
-component is no more discriminating than the method component once the
-file subclasses the framework. The single-symbol keeps are the other
-half: a match on an **unmangled** name exempts the file by construction,
-since C has no components to compare.
+It removes seven of the eight test files **and two genuine library
+providers**, which is §415's cost arriving exactly as that section said
+it would: a definition this misses is a build that does not happen.
+Unsafe.
 
-So the option is withdrawn before anybody acted on it, and what remains
-is the diagnosis plus the knowledge that **the obvious discriminator is
-not one**. Whoever takes this next needs a signal that separates *a class
-this file implements* from *a class this file merely uses*, which a text
-scan of identifiers does not carry.
+**And the symbols it would have dropped say why.** They are
+`_ZN4Qtty15CellPaintDeviceC1ERNS_10CellBufferE` -- a constructor, which
+carries no method identifier at all -- and
+`_ZN19QStyledItemDelegate11eventFilterEP7QObjectP6QEvent`, which belongs
+to **Qt**, not to this tree, and which `-lQt6Widgets` resolves.
 
-**Whose it is, now that the cheap answer is gone.** Whether widening
-should reach into a tree's test directories at all is the holder's --
-§424 tried the nearby version of that and was withdrawn for
-contradicting §3 -- and the cost to weigh is the measurement above
-rather than a premise: a quarter to a third of a Qt tree's plain build,
-linked nowhere, and one tree where it decided the exit status.
+### 192 of 250: the driving symbols are mostly the library's
+
+Counted over every proposal in that run: **250 symbols drive them, and
+192 have an outermost component that is a Qt class** -- `suite_router`
+alone 129 of 140. Method: the probe treats a mangled symbol as the
+library's when its first identifier component begins with `Q` and is not
+this tree's own namespace `Qtty`, which is a heuristic about a heuristic
+and will miscount a `QtPrivate` or a tree class called `Qfoo`; re-derive
+it rather than quoting it.
+
+So the noise is not a naming problem. **Widening runs against an
+unresolved set that still holds the external library's symbols**, and
+`symbol_tokens` tokenises `_ZN7QWidget11paintEventEP11QPaintEvent` onto
+any tree file defining a method of that name -- which in a Qt tree is
+every widget subclass, and test suites subclass most freely.
+
+That points at **order** rather than at a better guess: fmake's own design
+note says *includes propose and supply -I, symbols confirm*, so the
+include-proposed library set exists before anything is compiled, and a
+symbol a library is going to provide need not be offered to the tree.
+**Named as an observation with its measurement, not as a change** --
+§423, §424 and both heuristics above were all withdrawn, and this is the
+fourth idea about the same code in one day. Whether widening should see
+library symbols at all is the holder's, and the cost to weigh is the
+number above rather than anybody's reading of it.
 
 **What is already banked is the diagnosis.** Before §413 the honest answer
 to *why did a plain build compile eight test suites* was that it would
