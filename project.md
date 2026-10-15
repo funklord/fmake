@@ -476,7 +476,8 @@ that had been green about nothing for five commits ·
 [423. The same argument one stem over, made and withdrawn](#423-the-same-argument-one-stem-over-made-and-withdrawn) ·
 [424. A plain build that failed on a program it was not building](#424-a-plain-build-that-failed-on-a-program-it-was-not-building) ·
 [425. Eight checkouts, four duplicated, and one refusal per round](#425-eight-checkouts-four-duplicated-and-one-refusal-per-round) ·
-[426. Why widening reaches for Qt test code, on three trees](#426-why-widening-reaches-for-qt-test-code-on-three-trees)
+[426. Why widening reaches for Qt test code, on three trees](#426-why-widening-reaches-for-qt-test-code-on-three-trees) ·
+[427. fmake's own package, built and linted for the first time here](#427-fmakes-own-package-built-and-linted-for-the-first-time-here)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32934,3 +32935,51 @@ number above rather than anybody's reading of it.
 to *why did a plain build compile eight test suites* was that it would
 take an afternoon; it is now one `-v` line per file, and it is what made
 three trees' worth of this legible as one cause.
+
+## 427. fmake's own package, built and linted for the first time here
+
+Every tree this session built was somebody else's. **fmake's own
+deliverable had not been exercised**: `make deb` drives
+`dpkg-buildpackage` and `make lint` runs `lintian --pedantic` over the
+result, both tools are on this machine, and neither target had been run.
+
+From a clean clone at `f4f9207`, not in the working tree -- which is the
+stronger test, being what a source package build actually sees, and which
+keeps build output out of a tree another session has files in:
+
+    build/deb/fmake_1.0_all.deb
+    lintian: clean
+
+The package carries `/usr/bin/fmake`, the bash completion, the man page,
+the changelog and the copyright -- and nothing else. The script in it is
+**identical to the tree's below the shebang**, which `install` rewrites
+from `env python3` to `/usr/bin/python3`, and the packaged man page is
+byte-identical to what that same script emits, which is the Makefile's
+own claim about why it generates both rather than committing them.
+
+### What that closes, and whose the last step is
+
+Three READMEs carry the same caveat -- **beerssh, openmlx4 and
+fuzzypickles** all say in as many words *not `/usr/bin/fmake`, the
+packaged one predates `$file()`*, and tell the reader to run the script
+out of fmake's own tree instead. Measured: the installed
+`/usr/bin/fmake` is dated 2026-08-04 and matches `$file`/`_file_ref` 12
+times; the freshly built one matches it 21 times, so the caveat is
+accurate and the gap is real.
+
+**So the remedy for a workaround three trees document is an install, not
+a change.** The package builds and lints clean today; installing it needs
+root and is the holder's act rather than this session's. Recorded here so
+that the next person reading one of those READMEs knows the fix is
+waiting rather than outstanding.
+
+### One honest correction about the run
+
+The harness reported the build task as *failed with exit code 2*, and the
+build had succeeded. The failure was my **watcher**: `running --pid 20320`
+was issued after the build had already finished, so the declaration was
+refused for a dead pid and the chained wait exited non-zero. The log and
+the artifact are what settle it, which is `evidence.md`'s rule about
+believing a gate's artifact over a measurement of the process that
+produced it -- and the reason this is written down is that the first
+reading of that notification was "the package build failed".
