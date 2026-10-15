@@ -32288,17 +32288,25 @@ fmake knew which was which. The same run had already printed *"monocypher
 is a separate checkout; leaving its own 28 programs to it"*, and the
 report used none of it: §414's shape again, in a line nobody refuses on.
 
-So the tree's own come first, capped as before, and the rest are counted:
+So the tree's own come first and the other projects' are counted. **The
+mechanism and the wording here are §421's, not this section's**, and the
+difference matters to anyone reading this entry: what landed first was a
+second implementation and a second sentence of my own --
 
-    7 file(s) in 1 separate checkout(s) are not reached either, which is
-    theirs rather than this tree's: vend (7) (-v for all)
+    7 file(s) in 1 separate checkout(s) are not reached either, ...
 
-**And `-v` still lists every one**, each vendored file named with the
-checkout it is in, because the cap's own promise is *-v for all* and a
-summary that quietly dropped them would be that promise broken. Three
-sabotages: not separating them puts three of vend's files back in the
-five, the `-v` branch gone gives 2 of 9, and dropping the owner leaves
-seven paths that say nothing about why they are held apart.
+-- and §421 found that the did-not-compile list two screens down the same
+function had already solved this, from a raidcfgd report, by **ordering**
+the vendored files last and counting them in a sentence fmake already
+owned:
+
+    7 of them are in vend, which is another project's checkout rather
+    than this tree's source
+
+All four lists share `theirs_last` now. Ordering rather than excluding is
+why `-v` needs no special branch: the cap returns everything under `-v`
+by itself, which is the promise it already made. **Read §421 for what the
+code does; this section is the measurement that asked for it.**
 
 ### The restore that reverted the work
 
