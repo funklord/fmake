@@ -475,7 +475,8 @@ that had been green about nothing for five commits ·
 [422. A directory called main names nothing either](#422-a-directory-called-main-names-nothing-either) ·
 [423. The same argument one stem over, made and withdrawn](#423-the-same-argument-one-stem-over-made-and-withdrawn) ·
 [424. A plain build that failed on a program it was not building](#424-a-plain-build-that-failed-on-a-program-it-was-not-building) ·
-[425. Eight checkouts, four duplicated, and one refusal per round](#425-eight-checkouts-four-duplicated-and-one-refusal-per-round)
+[425. Eight checkouts, four duplicated, and one refusal per round](#425-eight-checkouts-four-duplicated-and-one-refusal-per-round) ·
+[426. Why widening reaches for Qt test code, on three trees](#426-why-widening-reaches-for-qt-test-code-on-three-trees)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32810,3 +32811,84 @@ checkout**, four times here.
   contradicting a decision already made, and turning a refusal into a
   build is the most consequential version of that -- so this is named
   rather than acted on.
+
+## 426. Why widening reaches for Qt test code, on three trees
+
+qtty builds: 33 compiles, no refusal, eight programs -- `chat`,
+`qtty-inspect`, `install-probe`, `qtty-negotiate`, `qtty-replay`,
+`screen-probe`, `style-probe`, `qtty-tray-check`. Its README claims *the
+four tools, the probe and the example*, so the claim holds.
+
+**Eight of those 33 compiles are test suites**, in a build that held the
+test program back and said so: *1 test program not built by default
+(qtty_test)*. §413's per-file lines say why, and this is the answer that
+has been missing all session:
+
+    * widening: test/suite_backend.cpp may define 'clear', 'closeEvent',
+      'contextMenuEvent', 'keyPressEvent', 'on_focus_change', 'on_key',
+      'on_mouse', 'on_paste', 'on_resize'
+    * widening: test/suite_budget.cpp may define 'columnCount', 'size'
+    * widening: test/suite_graphics.cpp may define 'size'
+    * widening: test/suite_placements.cpp may define 'paintEvent'
+    * widening: test/suite_render.cpp may define 'paintEvent'
+
+Every one of those names is a **Qt virtual method override**.
+`paintEvent`, `keyPressEvent`, `closeEvent`, `size`, `columnCount`,
+`eventFilter`, `sizeHint` -- defined by every widget subclass ever
+written, and in a test suite they belong to that suite's own throwaway
+widget.
+
+### The mechanism, named
+
+The text scan records a **bare identifier** -- `paintEvent`. The
+unresolved symbol in C++ is a **mangled member name** --
+`_ZN4Qtty11CellBuffer7to_textEv` -- and `symbol_tokens` splits that into
+identifier components so the two can ever meet. So a file defining *any*
+method of that name matches a symbol belonging to *any* class. In C that
+is an occasional collision, which §415 measured (`static int write` in a
+fuzznet test) and declined to filter. **In Qt it is a language
+convention**: the commonest method names in the framework appear in every
+file that subclasses a widget.
+
+### Measured on three trees, and nothing links any of it
+
+    qtty       8 of 33 compiles   24%   suites, on paintEvent/size/on_key
+    hydra     86 of 248 compiles  35%   test drivers, same names
+    fuzznet    1                        notes_sync_test.c, on `write'
+
+Proved by ejection rather than by reading: in qtty's ejected Makefile the
+eleven suite objects appear **only** in `QTTY_TEST_OBJS`, and `CHAT`,
+`QTTY_INSPECT`, `STYLE_PROBE` and `SCREEN_PROBE` hold **zero** of them.
+So this is wasted compilation, not test code shipped in a tool -- which
+is §413's bound holding on a third tree. hydra is where it stopped being
+free: one of its 86 could not compile, and the status followed the file
+rather than the request (§424).
+
+### The option, its cost, and whose it is
+
+**The genuine proposals match a CLASS token and the spurious ones do
+not.** In qtty's own output the six real ones name `CellBuffer`,
+`GridStyle`, `Compositor`, `InputRouter`, `CellPaintDevice`,
+`QStyledItemDelegate`; the five spurious ones name method words only.
+Token *count* does not separate them -- `suite_backend` matched nine --
+but the class component does.
+
+- **The option**: for a **mangled** symbol with more than one identifier
+  component, require the candidate to define the component before the
+  method, not merely the method. The mangled name already carries it and
+  `symbol_tokens` already splits it.
+- **The cost**: §415's reason, which has not changed -- *a definition
+  this misses is a build that does not happen*. A class whose token the
+  scan never recorded (a template, a macro-built name, an `extern "C"`
+  wrapper) would stop being proposed, and the symptom is a link failure
+  rather than a wasted compile. It must also apply only where mangling
+  exists: C has none, so the C half keeps today's behaviour and §415's
+  `static` case with it.
+- **Whose**: the holder's. §423 and §424 were both withdrawn for
+  contradicting a decision already made, and this one would change what
+  the closure reaches -- the most load-bearing guess fmake makes.
+
+**What is already banked is the diagnosis.** Before §413 the honest answer
+to *why did a plain build compile eight test suites* was that it would
+take an afternoon; it is now one `-v` line per file, and it is what made
+three trees' worth of this legible as one cause.
