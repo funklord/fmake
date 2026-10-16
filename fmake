@@ -7499,6 +7499,49 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			blame = origins.get(first_unit.rel, first_unit.rel)
 			if blame != first_unit.rel:
 				note(f"generated from {blame}")
+				# And a generated unit carries no directives, which is the
+				# half of that fact nothing said. A compile flag is per
+				# translation unit by design, so a header shaped by an
+				# `@define' its includers carry is read by the generated
+				# unit with that macro undefined -- `#error "HAVE_X is
+				# required"' inside a moc output, from a tree where every
+				# hand-written file has it. hydra met this family twice
+				# through `@pkg_optional', whose macro is tree-wide for
+				# exactly this reason; `@define' is not.
+				#
+				# Stated as a fact and not a diagnosis: the error above may
+				# have nothing to do with it, and only the reader can say.
+				# Printed only when such a directive actually exists on a
+				# file that includes the blamed one, so a tree with none
+				# never sees the line.
+				_base = os.path.basename(blame)
+				_carry, _dirs = [], []
+				for _other in units:
+					if _other.rel == first_unit.rel:
+						continue
+					if not any(os.path.basename(n) == _base for _k, n, _l
+					           in (_other.scan.get("incs") or [])):
+						continue
+					_had = ([f"@define {d}"
+					         for d in _other.ann.items("define")]
+					        + [f"@cflags {c}"
+					           for c in _other.ann.items("cflags")])
+					if _other.ann.scalar("std"):
+						_had.append("@std " + _other.ann.scalar("std"))
+					if _had:
+						_carry.append(_other.rel)
+						_dirs += [d for d in _had if d not in _dirs]
+				if _carry:
+					_head, _rest = capped(sorted(_carry), 3)
+					note(f"{blame} is included by {', '.join(_head)}"
+					     + (f" and {_rest} more (-v for all)"
+					        if _rest else "")
+					     + f", which carry {', '.join(capped(_dirs, 3)[0])}"
+					     + (" and more" if len(_dirs) > 3 and not VERBOSE
+					        else ""))
+					note(f"a compile flag is per translation unit, so the "
+					     f"generated file has none -- [project] defines, "
+					     f"cflags or std in {CONF_FILE} reaches every unit")
 
 			# Before the header advice, because a tree using modules will
 			# not be fixed by any of it. `module 'hello' not found' looks

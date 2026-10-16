@@ -480,7 +480,8 @@ that had been green about nothing for five commits ·
 [427. fmake's own package, built and linted for the first time here](#427-fmakes-own-package-built-and-linted-for-the-first-time-here) ·
 [428. Two lists of three files, and nothing compared them](#428-two-lists-of-three-files-and-nothing-compared-them) ·
 [429. The include that asks for a package is usually not in a .c file](#429-the-include-that-asks-for-a-package-is-usually-not-in-a-c-file) ·
-[430. hull has asked for per-schema situc flags, and named what it blocks](#430-hull-has-asked-for-per-schema-situc-flags-and-named-what-it-blocks)
+[430. hull has asked for per-schema situc flags, and named what it blocks](#430-hull-has-asked-for-per-schema-situc-flags-and-named-what-it-blocks) ·
+[431. A generated unit carries no directives, and nothing said so](#431-a-generated-unit-carries-no-directives-and-nothing-said-so)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33149,6 +33150,12 @@ angle includes as the unit's own. Three things about how:
 - **Proposals only.** Nothing here decides a link; the symbol evidence of
   section 3 still does. What changes is that an `-I` the compile needed is
   on the line.
+- **It brings this in line with the other three plans**, which is evidence
+  the shape was right rather than merely convenient: `uic_plan` and
+  `rcc_plan` are already given `srcs + gen_hdrs`, and `moc_plan` scans
+  every tree header for `Q_OBJECT`. The package proposal was the one
+  reader of the include graph that looked at sources alone. Checked while
+  asking whether the same gap was in those three; it is not.
 - **Paths and defines only, for a name reached through a header.** The
   flags this function returns are applied to every unit in the tree, and
   `@pkg_optional` already draws that line one screen down for the same
@@ -33240,3 +33247,70 @@ take a path as a table name.
 
 hull's README still says make for now, which is correct until the key
 exists.
+
+## 431. A generated unit carries no directives, and nothing said so
+
+A moc output is a translation unit nobody annotated. `@define` is per
+translation unit **by design** -- the docstring says so, and the
+asymmetry with `@ldflags` is what makes declaring a dependency beside
+the code that uses it work at all -- so a header behind `#ifndef HAVE_X`
+is read by `moc_thing.cpp` with `HAVE_X` undefined while every
+hand-written file in the tree carries it.
+
+What came out was already most of the way there:
+
+    * #error "HAVE_X is required to read this header"
+      in .fmake/moc/moc_thing.cpp
+      generated from thing.h
+
+That names the cause exactly -- section 98's blame line, which exists
+because advice naming a file under `.fmake` is an instruction to edit
+something fmake will overwrite. Section 366 is the neighbour on the other
+axis: there the generated file was stale because moc had not been told
+about a header behind the macro, and here it is fresh and compiled
+without one. What it stopped short of is the remedy:
+nothing said that a generated unit gets no directives at all, or where a
+flag for the whole tree is written. The build then fails at the link with
+`undefined reference to vtable for thing`, which is a second hop away
+from the fix.
+
+It now adds two lines, and only when there is something to name:
+
+    thing.h is included by main.cpp, thing.cpp, which carry @define HAVE_X
+    a compile flag is per translation unit, so the generated file has none
+    -- [project] defines, cflags or std in fmake.toml reaches every unit
+
+**Stated as a fact rather than a diagnosis.** The compile error above it
+may have nothing to do with the macro, and only the reader can say -- so
+the lines report what the includers carry and what a generated unit does
+not get, and leave the inference where it belongs.
+
+**hydra met this family twice**, through `@pkg_optional`, whose macro is
+tree-wide for exactly this reason: a header that shapes itself on a macro
+is included by units that never named the package, and two units
+disagreeing about a type is the quiet version of the same fault. `@define`
+is not tree-wide and is not about to be on this finding's authority --
+whether a generated unit should inherit the flags of the units that
+include its origin is a real question and a bigger one than a message.
+Named here rather than answered: it would change what "per translation
+unit by design" promises, and the cost of getting it wrong is two
+definitions of one class compiled from different text, which is what
+`@pkg_optional` went tree-wide to prevent.
+
+### The case, and the part of it that is section 147's
+
+`a_failing_generated_unit_names_the_directive_it_did_not_get` asserts
+three things, and the second is the one that matters:
+
+- the advice appears, naming the includers and the directive;
+- **taking it works** -- `[project] defines` builds the same tree, so
+  this is not advice that merely sounds plausible. That is the test
+  section 147 asks for and the reason this is a fix rather than a
+  sentence;
+- a tree whose header needs a macro **nobody** defines does not get the
+  line. Measured: the control prints the blame and the file list and
+  stops, because a message that fired anyway would be noise on every
+  unrelated generated-file failure.
+
+Reverting the change fails the case, which is how its first two
+assertions were shown not to be vacuous.

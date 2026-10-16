@@ -11435,6 +11435,77 @@ def a_header_the_mocd_one_includes_is_an_input_to_moc(t):
 
 
 @case
+def a_failing_generated_unit_names_the_directive_it_did_not_get(t):
+	"""A moc output read a header its includers had shaped, and had no macro.
+
+	`@define` is per translation unit by design, and a generated unit is a
+	translation unit nobody annotated -- so a header behind `#ifndef
+	HAVE_X` is read by `moc_thing.cpp` with HAVE_X undefined, while every
+	hand-written file in the tree carries it. What came out was
+
+	    * #error "HAVE_X is required to read this header"
+	      in .fmake/moc/moc_thing.cpp
+	      generated from thing.h
+
+	which names the cause exactly and stops one step short of the remedy:
+	nothing said that the generated file gets no directives, or where a
+	flag for the whole tree is written. hydra met this family twice
+	through `@pkg_optional`, whose macro is tree-wide for exactly this
+	reason; `@define` is not, and is not about to be.
+
+	Three assertions, and the second is the one section 147 asks for:
+
+	  * the advice appears, naming the includers and the directive;
+	  * taking it works -- `[project] defines` builds the tree, so this is
+	    not advice that merely sounds plausible;
+	  * a tree whose header needs a macro NOBODY defines does not get the
+	    line, because there is no directive to name and a message that
+	    fired anyway would be noise on every unrelated failure."""
+	_need_qt()
+	hdr = ('#pragma once\n#include <QObject>\n'
+	       '#ifndef HAVE_X\n#error "HAVE_X is required to read this header"\n'
+	       '#endif\nclass thing : public QObject {\n\tQ_OBJECT\n'
+	       'public:\n\tthing();\n};\n')
+	t.write("thing.h", hdr)
+	t.write("thing.cpp", '/*! @define HAVE_X */\n#include "thing.h"\n'
+	        "thing::thing() {}\n")
+	t.write("main.cpp", '/*! @target mocdefine\n    @define HAVE_X */\n'
+	        '#include "thing.h"\nint main(void){ thing t; return 0; }\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the fixture must fail to build: {out}")
+	check("generated from thing.h" in out,
+	      f"the blame has to reach the header, or this case is about "
+	      f"something else: {out}")
+	check("which carry @define HAVE_X" in out,
+	      f"the directive the generated unit did not get must be named: "
+	      f"{out}")
+	check("per translation unit" in out and "[project] defines" in out,
+	      f"and where to write it for the whole tree: {out}")
+
+	# Taking the advice has to work.
+	t.write("fmake.toml", '[project]\ndefines = ["HAVE_X"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the advice must be takeable: {r.stdout}{r.stderr}")
+
+	# And it must not fire where there is no directive to name.
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("thing.h", hdr.replace("HAVE_X", "NEVER_SET"))
+	t.write("thing.cpp", '#include "thing.h"\nthing::thing() {}\n')
+	t.write("main.cpp", '/*! @target mocdefine */\n#include "thing.h"\n'
+	        "int main(void){ thing t; return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the control must still fail: {out}")
+	check("generated from thing.h" in out,
+	      f"the control has to reach the same blame line: {out}")
+	check("per translation unit" not in out,
+	      f"but with no directive to name there is nothing to advise: "
+	      f"{out}")
+
+
+@case
 def a_rewritten_moc_re_mocs_what_it_wrote(t):
 	"""Section 245's gap, closed: the moc key is wired, not only situc's.
 
