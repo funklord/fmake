@@ -33754,3 +33754,36 @@ invocation to succeed.
 `a_schema_is_compiled_because_a_source_includes_its_header` had been
 de-skipped the same way earlier, which is why this was worth doing rather
 than inventing.
+
+### And a second skip, split rather than removed
+
+`a_cross_build_derives_the_cxx_compiler` cross-compiles and reads the ELF
+machine out of the binary, so it needs a real `aarch64-linux-gnu-g++` and
+skips on most machines -- including every machine here. The bug it was
+written for is the one its own docstring calls the worst shape a build
+tool has: a tree declaring linux/aarch64 compiled its C++ with the host
+compiler, linked with it, wrote an x86-64 binary and printed `built
+prog`. A regression of that was invisible here.
+
+That case is left alone, because what it checks genuinely needs the
+toolchain. The **derivation** does not: a prefixed NAME is enough to ask
+which compiler fmake picks, so
+`the_cxx_compiler_is_derived_from_a_cross_cc_anywhere` makes symlinks
+called `aarch64-linux-gnu-{gcc,g++,nm,ar}` pointing at the host tools and
+asks a dry run. Reverting the one line that derives it -- back to
+`os.environ.get("CXX") or tool.get("cxx") or "c++"`, which is what the
+original defect was -- fails the case on `c++ -c prog.cpp`.
+
+**Its second half is the part worth having.** With the derived `g++`
+taken away, fmake falls back to the host `c++`; the dry run says nothing,
+because a dry run has compiled nothing and cannot know, and the real
+build refuses on the object's own machine type:
+
+    !!! prog.cpp compiled for x86_64/64le, but this tree is being built
+        for linux/aarch64
+        the compiler used was 'c++'
+        name the right one with [toolchain] cxx, or $CXX
+
+Both are asserted, so the silent half cannot quietly become the loud one
+or the other way about. The refusal names the compiler it used, which is
+the fact a reader needs and the one the original bug withheld.

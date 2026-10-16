@@ -14016,6 +14016,71 @@ def an_arch_the_canonicaliser_names_is_one_the_check_can_read(t):
 
 
 @case
+def the_cxx_compiler_is_derived_from_a_cross_cc_anywhere(t):
+	"""The derivation half of the case below, on a machine with no cross
+	toolchain.
+
+	`a_cross_build_derives_the_cxx_compiler` is the real thing -- it
+	cross-compiles and reads the ELF machine out of the binary -- and it
+	skips wherever `aarch64-linux-gnu-g++` is not installed, which is
+	most machines. The bug it was written for is the worst shape a build
+	tool has: a tree declaring linux/aarch64 compiled its C++ with the
+	host compiler, linked with it, wrote an x86-64 binary and printed
+	`built prog'. A regression of that would go unnoticed here.
+
+	The derivation does not need a real cross compiler to be tested, only
+	a prefixed NAME: symlinks called `aarch64-linux-gnu-{gcc,g++,nm,ar}'
+	pointing at the host tools are enough to ask which one fmake picks,
+	and a dry run asks without compiling anything.
+
+	The second half is the backstop, and it is why this is worth having
+	rather than merely cheap. With the derived `g++' absent, fmake falls
+	back to the host `c++' and the DRY RUN says nothing -- a dry run
+	cannot know, having compiled nothing -- while the real build refuses
+	on the object's own machine type and names the compiler it used. Both
+	are asserted, so neither can quietly become the other."""
+	shim = os.path.join(t.dir, "shim")
+	os.makedirs(shim, exist_ok=True)
+	for name, host in (("gcc", "cc"), ("g++", "c++"), ("nm", "nm"),
+	                   ("ar", "ar")):
+		found = shutil.which(host)
+		if not found:
+			raise Skip(f"no host {host} to stand in for a cross one")
+		os.symlink(found, os.path.join(shim, "aarch64-linux-gnu-" + name))
+	env = {"PATH": shim + os.pathsep + os.environ.get("PATH", "")}
+	t.write("prog.cpp", "#include <string>\n"
+	        'int main(){ std::string s = "x"; return (int)s.size() - 1; }\n')
+	t.write("fmake.toml", '[toolchain]\ncc = "aarch64-linux-gnu-gcc"\n'
+	        'os = "linux"\narch = "aarch64"\n')
+
+	r = t.fmake("-n", env=env)
+	line = next((l for l in r.stdout.splitlines() if " -c " in l), "")
+	check("aarch64-linux-gnu-g++" in line,
+	      f"the C++ compiler was not derived from the cross cc: {line}")
+
+	# The backstop: take the derived compiler away and the host one is
+	# used, silently in a dry run and refused in a real build.
+	os.unlink(os.path.join(shim, "aarch64-linux-gnu-g++"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake("-n", env=env)
+	line = next((l for l in r.stdout.splitlines() if " -c " in l), "")
+	check("aarch64-linux-gnu" not in line,
+	      f"with no derived g++ the host compiler is what runs, and this "
+	      f"line should show it: {line}")
+
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a host object in a cross build must be "
+	      f"refused: {out}")
+	check("but this tree is being built for linux/aarch64" in out,
+	      f"the refusal must name what the tree asked for: {out}")
+	check("the compiler used was" in out,
+	      f"and which compiler produced the object: {out}")
+	check(not os.path.exists(os.path.join(t.dir, "prog")),
+	      "a binary for the wrong machine was left behind")
+
+
+@case
 def a_cross_build_derives_the_cxx_compiler(t):
 	"""Naming the compiler is supposed to be enough, and was not for C++.
 
