@@ -479,7 +479,8 @@ that had been green about nothing for five commits ·
 [426. Why widening reaches for Qt test code, on three trees](#426-why-widening-reaches-for-qt-test-code-on-three-trees) ·
 [427. fmake's own package, built and linted for the first time here](#427-fmakes-own-package-built-and-linted-for-the-first-time-here) ·
 [428. Two lists of three files, and nothing compared them](#428-two-lists-of-three-files-and-nothing-compared-them) ·
-[429. The include that asks for a package is usually not in a .c file](#429-the-include-that-asks-for-a-package-is-usually-not-in-a-c-file)
+[429. The include that asks for a package is usually not in a .c file](#429-the-include-that-asks-for-a-package-is-usually-not-in-a-c-file) ·
+[430. hull has asked for per-schema situc flags, and named what it blocks](#430-hull-has-asked-for-per-schema-situc-flags-and-named-what-it-blocks)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32166,8 +32167,10 @@ report. §415 came from walking past the thing §414 was about.
   citation still resolves and `the_contents_index_lists_every_section`
   proves no heading was lost. The precondition is unchanged: no live
   section may cite a cut one.
-- **hull's finding 2**, one prefix for every schema, and **the shape of
-  `[situ] flags` per schema**. Theirs to ask for, the holder's to spell.
+- **hull's finding 2**, now **per-schema situc flags** rather than only a
+  prefix: section 430 has their ask, their reproduction and the `--layer`
+  half that a prefix key would not cover. The asking half is done; **the
+  spelling is the holder's**.
 - **hull's finding 3** is bounded by §413 and §414 rather than closed.
   The schema half is fixed; whether a vendored checkout's own programs
   should enter the pool at all is still open, and §413's measurement
@@ -33175,3 +33178,57 @@ the header is outside the tree, needs the `.pc`'s own `-I`, and the case
 asserts that neither `.c` file mentions it, since a case whose source
 wrote the include would pass against the old behaviour. Reverting the fix
 fails it on `main.c did not compile`, which is the reproduction above.
+
+## 430. hull has asked for per-schema situc flags, and named what it blocks
+
+Delivered through `.git/cc-inbox` on 2026-10-16 by hull's session,
+measured in a `--shared` clone of hull at `9768823` with fmake at
+`b683bd8`, their tree untouched. Recorded here in their words because it
+is their measurement.
+
+**Section 414's half worked.** hull now carries `fmake.toml` with
+`[project] defines = ['HULL_VERSION="$file(VERSION)"']`, the
+`HULL_VERSION` error is gone, and the run compiles fourteen units with
+situ's own examples no longer among them.
+
+**What stops it is that `[situ] flags` is one list for the whole tree.**
+hull's Makefile gives situc different options per schema:
+
+    agent/message.situ   --layer frame --prefix hull_agent
+    sexpr/readable.situ  --prefix hull_sexpr_r
+    sexpr/canonical.situ --layer edit --prefix hull_sexpr_c
+    core/frontend.situ   --prefix hull_frontend
+
+and fmake stops with three errors, of which two are this gap:
+
+- `message_frame.h: No such file or directory`, in `agent/framing.c` and
+  two other files. That header is written **only** by `--layer frame`,
+  and nothing in fmake's configuration can say that for one schema.
+- `redefinition of 'situ_form_view'`, in `sexpr/sexpr.c`. Without a
+  per-schema `--prefix`, readable and canonical both define it.
+
+**So it is not only the prefix question.** Sections 403 and 404 recorded
+hull's finding 2 as one prefix for every schema; the `--layer` half is
+new, and it means a per-schema place for flags is the general shape
+rather than a `--prefix` key.
+
+The third error is **situ's** finding 18 -- the generated C calls a
+validator of an imported schema before declaring it -- which hull works
+round with `-include core/frontend_view.h` on that one generated file.
+They named it so that it would not read as fmake's, which is worth
+keeping: the next reader of that error list would otherwise chase it
+here.
+
+**Their ask is a per-schema place for situc flags**, for example
+`[situ."agent/message.situ"] flags = [...]`, and their message says in as
+many words that whether it takes that shape is fmake's decision.
+
+**Whose, now.** This document already recorded the item as "theirs to ask
+for, the holder's to spell". The asking half is done, and with a measured
+reproduction and two named errors behind it. The spelling is not, and
+nothing here will invent a configuration key for a consumer that has
+asked for one -- a key is a promise, and this one would be the first to
+take a path as a table name.
+
+hull's README still says make for now, which is correct until the key
+exists.
