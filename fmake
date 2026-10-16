@@ -9411,12 +9411,57 @@ def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
 	sig = pkg.signature()
 	sysincs = {os.path.realpath(d) for d in sysincs}
 	cflags, proposed, seen = [], {}, set()
-	for u in units:
-		for kind, name, line in (u.scan.get("incs") or []):
+	# The TUs first, then the tree headers they reach -- and the second half
+	# is not a refinement. A class that derives from QWidget declares that in
+	# its HEADER, which is where `#include <QWidget>' goes, and the .cpp
+	# includes the header. Walking only the TUs left that include unresolved:
+	# `QWidget is on no include path here', advising @pkg for a package that
+	# is installed and that fmake resolves perfectly well one file over.
+	#
+	# Measured on a two-file tree -- a header deriving from QWidget and a
+	# .cpp including it -- which failed, against the same tree with one more
+	# TU writing `#include <QWidget>' itself, which built both files. So the
+	# flags were already reaching every unit; what decided whether they were
+	# found at all was which FILE happened to write the include. qtty is of
+	# the first shape and builds only because of the second: its
+	# `include/qtty/delegate.h' includes <QStyledItemDelegate> and nothing
+	# else would have resolved QtWidgets, but many of its .cpp files write
+	# <QWidget> or <QStyle> directly -- the count is in section 429, with
+	# its date, because a census of another tree does not belong here. A moc output is the pure case -- it
+	# includes the Q_OBJECT header and nothing of its own -- so a Qt tree
+	# whose sources all include through headers does not compile at all.
+	#
+	# Units before headers so that a name written in a TU keeps naming that
+	# TU in the proposal: the provenance is what a message about a chosen
+	# library quotes, and only names found NOWHERE but a header get a
+	# header's.
+	#
+	# A name reached only through a header contributes PATHS AND DEFINES
+	# and nothing else, which is the line `@pkg_optional' already draws
+	# one screen down and for the same reason: a `-fno-common' or an
+	# `-fexceptions' in somebody's .pc is theirs, and what goes back here
+	# is applied to every unit in the tree. A TU's own include keeps the
+	# whole cflags, because there at least one file in the build asked for
+	# the package by name. Measured: without the filter, a package reached
+	# through a shaped header put its `-fno-common' on a file that never
+	# named it, which is the one thing
+	# `an_optional_packages_paths_and_defines_follow_its_macro' exists to
+	# refuse -- so this arrived as a failing case rather than as foresight.
+	spots = [(u.rel, u.scan.get("incs") or [], True) for u in units]
+	if proj is not None:
+		# One walk over the whole set rather than one per unit: `seen' is
+		# global here, so a per-unit walk would resolve each name once
+		# anyway and pay for the graph many times.
+		for hdr in sorted(proj.reachable_headers([u.rel for u in units])):
+			scan = proj.scans.get(hdr)
+			if scan:
+				spots.append((hdr, scan.get("incs") or [], False))
+	for where, incs, own in spots:
+		for kind, name, line in incs:
 			if kind != "<" or name in seen:
 				continue
 			seen.add(name)
-			if proj is not None and proj.resolve_header(name, u.rel, kind):
+			if proj is not None and proj.resolve_header(name, where, kind):
 				continue        # a project header that happens to use <>
 			# A header the tree put on the path deliberately is resolved,
 			# not proposed: proposing it would ask pkg-config for a
@@ -9433,10 +9478,12 @@ def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
 				if (f.startswith("-I")
 				        and os.path.realpath(f[2:]) in sysincs):
 					continue
+				if not own and not f.startswith(PATH_CFLAGS + ("-D",)):
+					continue
 				if f not in cflags:
 					cflags.append(f)
 			for l in mod_libs:
-				proposed.setdefault(l[2:], (module, f"{u.rel}:{line}", name))
+				proposed.setdefault(l[2:], (module, f"{where}:{line}", name))
 	return cflags, proposed
 
 PATH_CFLAGS = ("-I", "-isystem", "-idirafter", "-iquote", "-F")

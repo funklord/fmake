@@ -478,7 +478,8 @@ that had been green about nothing for five commits ·
 [425. Eight checkouts, four duplicated, and one refusal per round](#425-eight-checkouts-four-duplicated-and-one-refusal-per-round) ·
 [426. Why widening reaches for Qt test code, on three trees](#426-why-widening-reaches-for-qt-test-code-on-three-trees) ·
 [427. fmake's own package, built and linted for the first time here](#427-fmakes-own-package-built-and-linted-for-the-first-time-here) ·
-[428. Two lists of three files, and nothing compared them](#428-two-lists-of-three-files-and-nothing-compared-them)
+[428. Two lists of three files, and nothing compared them](#428-two-lists-of-three-files-and-nothing-compared-them) ·
+[429. The include that asks for a package is usually not in a .c file](#429-the-include-that-asks-for-a-package-is-usually-not-in-a-c-file)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33069,3 +33070,108 @@ rule, an `fmake.mk` pattern rule, a static archive, its `.pc`, and the
 program) was built from pristine with the ejected Makefile and cleaned:
 `find` reported nothing left that the build had put there.
 
+## 429. The include that asks for a package is usually not in a .c file
+
+`propose_from_headers` asks pkg-config to resolve every angle include the
+tree does not own, and the `-I` it gets back is what makes an external
+header compile at all. It read those includes **from translation units
+and from nowhere else** -- so a tree whose external include is written in
+a header, which is where it normally goes, got
+
+    QWidget is on no include path here
+    if it comes from a package, install it or name it with @pkg
+
+about a package that is installed and that fmake resolves perfectly well
+one file over.
+
+**Measured as a pair, which is what makes it a defect rather than a
+preference.** Two files -- a header deriving from `QWidget`, a `.cpp`
+including it -- failed. The same tree with one more `.cpp` writing
+`#include <QWidget>` itself built **both** files. The flags were always
+reaching every unit; what decided whether they were found at all was
+which file happened to write the include.
+
+**The pure case is a moc output**, which includes the Q_OBJECT header and
+nothing of its own. A Qt tree whose sources all include through their
+headers therefore could not compile at all -- and the Qt convention is
+exactly that shape, since a class deriving from `QWidget` must say so in
+its header.
+
+**Why no tree here showed it: a sibling file was resolving the package
+for everybody.** qtty's `include/qtty/delegate.h` includes
+`<QStyledItemDelegate>` and nothing else would have resolved QtWidgets --
+but 27 of its `.cpp` files write `<QWidget>`, `<QStyle>` or `<QtWidgets>`
+directly, measured 2026-10-16 with `grep -rln` over `*.cpp`, so the flags
+went tree-wide and the moc outputs compiled.
+
+That figure was first written as **four**, from a `grep` whose output had
+been truncated to ten lines by a `head` and then read as a total. The
+claim it supports is unchanged either way -- one such file is enough to
+resolve the package for the whole tree -- which is exactly why nothing
+would have caught it: a number nobody depends on is a number nobody
+checks. It is recorded because `evidence.md` says an invented value
+cannot be found by measuring again, and the only reason this one was is
+that the count was re-run before being quoted. The feature was
+satisfied by coincidence in every Qt tree fmake has been run on, which is
+the version of a bug that survives longest: not absent, accidentally
+supplied.
+
+**And section 271 already said the broader thing.** Its sentence is
+`propose_from_headers` "asks pkg-config to resolve every `<angle>` header
+that is not in the tree". That is the intent, written when the Android
+cross build needed it, and the code did less than the document claimed.
+The discrepancy is recorded rather than quietly resolved in the
+document's favour: what settles it is the measurement above, where the
+same two files succeed or fail on which of them wrote the include.
+
+The fix walks the tree headers each unit reaches -- the include graph is
+already built and already offers `reachable_headers` -- and treats their
+angle includes as the unit's own. Three things about how:
+
+- **Units first, headers second.** `seen` is global, so a name written in
+  a TU still names that TU in the proposal, which is the provenance a
+  message about a chosen library quotes. Only a name found nowhere but a
+  header gets a header's.
+- **One walk over the whole unit set**, not one per unit: with `seen`
+  global a per-unit walk resolves each name once anyway and pays for the
+  graph many times.
+- **Proposals only.** Nothing here decides a link; the symbol evidence of
+  section 3 still does. What changes is that an `-I` the compile needed is
+  on the line.
+- **Paths and defines only, for a name reached through a header.** The
+  flags this function returns are applied to every unit in the tree, and
+  `@pkg_optional` already draws that line one screen down for the same
+  reason: a `-fno-common` in somebody's `.pc` is theirs. A TU's own
+  include keeps the whole cflags, because there at least one file in the
+  build named the package.
+
+**That last one arrived as a failing case rather than as foresight**, and
+it is the part worth keeping. The first version of the fix passed every
+probe written for it and failed
+`an_optional_packages_paths_and_defines_follow_its_macro`, which exists to
+refuse exactly this: with `HAVE_OPTLIB` defined tree-wide, its shaped
+header reaches the optional package, so the new walk found the package
+through the header and spread its `-fno-common` to a file that had never
+named it. The rule was written down months ago, for the directive next
+door, and the new code walked into it from the other side -- which is what
+a suite is for, and is a better outcome than a case written to match the
+fix. The narrowing needs no case of its own: the one that caught it is the
+one that pins it.
+
+**And it changes nothing where the coincidence was already working**,
+which is the other half of a fix like this and is measured rather than
+argued. softkeys is the same shape -- `<QWidget>` in
+`include/softkeys/resize_grip.h`, `<QObject>` in `modifiers.h` -- and
+eleven of its sources write a Qt include directly, so it built before.
+Built twice from a `git archive` copy, once with each tool, and the
+compile flag sets compared across all 19 entries of
+`--compile-commands`: identical. So no object is re-keyed and no tree
+pays a rebuild for this.
+
+The case is `a_package_named_only_by_a_header_is_still_found`, written
+with the kit of section 270 rather than with Qt so that it runs on a
+machine with no Qt -- and because the kit makes the discrimination exact:
+the header is outside the tree, needs the `.pc`'s own `-I`, and the case
+asserts that neither `.c` file mentions it, since a case whose source
+wrote the include would pass against the old behaviour. Reverting the fix
+fails it on `main.c did not compile`, which is the reproduction above.

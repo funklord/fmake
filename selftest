@@ -12825,6 +12825,78 @@ def a_package_set_outside_the_default_pkg_config_path_is_found(t):
 
 
 @case
+def a_package_named_only_by_a_header_is_still_found(t):
+	"""The include that asks for a package is usually not in a .c file.
+
+	A class that derives from QWidget says so in its HEADER, and that is
+	where `#include <QWidget>` goes; the .cpp includes the header. fmake
+	proposed packages from the angle includes written in a translation unit
+	and from nowhere else, so a tree of that shape stopped on
+
+	    QWidget is on no include path here
+	    if it comes from a package, install it or name it with @pkg
+
+	about a package that is installed and that fmake resolves perfectly
+	well when a .cpp happens to write the include itself. Measured as a
+	pair: a two-file tree -- a header deriving from QWidget, a .cpp
+	including it -- failed, and the same tree with one more .cpp writing
+	`#include <QWidget>` built BOTH files. So the flags always reached
+	every unit; what decided whether they were found at all was which file
+	wrote the include.
+
+	The pure case is a moc output, which includes the Q_OBJECT header and
+	nothing of its own: a Qt tree whose sources all include through headers
+	could not compile at all. qtty is of that shape and builds only by
+	coincidence -- four of its .cpp files write <QWidget> or <QStyle>
+	directly, and nothing else would have resolved QtWidgets.
+
+	Written with the kit rather than with Qt so that it runs on a machine
+	with no Qt, and because the kit makes the discrimination exact: the
+	header is outside the tree, needs the `.pc`'s own -I, and no source
+	file here mentions it."""
+	if not shutil.which("pkg-config") and not shutil.which("pkgconf"):
+		raise Skip("no pkg-config to point anywhere")
+	kit = os.path.join(t.dir, "kit")
+	t.write("kit/include/frob/frob.h", "int frobnicate(void);\n")
+	impl = os.path.join(t.dir, "frob_impl.c")
+	with open(impl, "w") as fh:
+		fh.write("int frobnicate(void){ return 7; }\n")
+	obj = os.path.join(t.dir, "frob.o")
+	subprocess.run(["cc", "-c", impl, "-o", obj], check=True)
+	os.makedirs(os.path.join(kit, "lib"))
+	subprocess.run(["ar", "rcs", os.path.join(kit, "lib", "libfrob.a"), obj],
+	               check=True)
+	t.write("kit/pkgconfig/frob.pc",
+	        f"prefix={kit}\nName: frob\nDescription: named by a header\n"
+	        "Version: 1.0\nCflags: -I${prefix}/include\n"
+	        "Libs: -L${prefix}/lib -lfrob\n")
+	# The one file that names the package, and it is a header.
+	t.write("src/thing.h", "#pragma once\n#include <frob/frob.h>\n"
+	        "int thing_value(void);\n")
+	t.write("src/thing.c", '#include "thing.h"\n'
+	        "int thing_value(void){ return frobnicate(); }\n")
+	t.write("src/main.c", '#include "thing.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", thing_value()); return 0; }\n')
+	t.write("src/fmake.toml",
+	        '[toolchain]\npkg-config-path = ["../kit/pkgconfig"]\n')
+	src = _src(t)
+
+	# The discriminator, asserted rather than assumed: if a source file
+	# wrote the include, this case would pass against the old behaviour.
+	for rel in ("main.c", "thing.c"):
+		body = open(os.path.join(src, rel)).read()
+		check("<frob/" not in body,
+		      f"{rel} names the package itself, so the case proves nothing")
+
+	r = _run_in(src, FMAKE)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a package named only by a header must still resolve: {out}")
+	check(_run_in(src, os.path.join(src, "src")).stdout == "7\n",
+	      "the program built against the header's package does not run")
+
+
+@case
 def a_header_on_an_explicit_include_path_proposes_no_package(t):
 	"""A cross build against a Qt kit puts the kit's own include on the
 	path and must not then have pkg-config answer `<QApplication>` with
