@@ -33646,13 +33646,29 @@ recorded so nobody repeats them: no advice line names a configuration key
 that does not exist, and the file sets the three builds leave are
 identical but for ninja's own `.ninja_log` and `.ninja_deps`.
 
-**The lens to try next is the third reader.** The parity triangle here is
-the runner and the two emitters, and it paid three times in one day. The
-`--deb`, `--ebuild` and `--apkbuild` emitters are the fourth, fifth and
-sixth renderings of the same model; they delegate to the ejected Makefile
-rather than re-deriving it, which is why they inherited 432's fix for
-free -- but that inheritance is a claim worth measuring rather than
-assuming, and nobody has.
+**The lens to try next was the third reader, and it has been tried.**
+The parity triangle here is the runner and the two emitters, and it paid
+three times in one day. The `--eject deb`, `ebuild` and `apk` emitters
+are the fourth, fifth and sixth renderings of the same model, and the
+claim about them -- that they delegate to the ejected Makefile rather
+than re-deriving it, so they inherited 432's fix for free -- was written
+here as a claim worth measuring. It was measured the same afternoon,
+because an unmeasured claim in this file is the thing section 403's own
+licensing entries went stale as.
+
+All three write a `Makefile` beside their packaging and all three carry
+`PKG_CONFIG_PATH_TREE := ../kit/pkgconfig`, checked on the kit tree of
+section 270. So the delegation is real and the lens comes back empty
+here -- which is the useful kind of empty, since the next session would
+otherwise have spent the sweep.
+
+Two refusals worth keeping from that run, both correct and both the
+reason the experiment needed three attempts: the deb emitter declines a
+tree with no `LICENSE` ("a tree with none is in its intended state, and
+cannot be packaged until its holder decides") and the ebuild emitter
+declines to pick a Portage category. Each also reported honestly that it
+could not derive a build dependency for `frob` -- *"dpkg does not know
+which package ships them here"* -- rather than inventing one.
 
 ### Still open, and whose
 
