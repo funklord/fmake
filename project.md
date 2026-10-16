@@ -477,7 +477,8 @@ that had been green about nothing for five commits ·
 [424. A plain build that failed on a program it was not building](#424-a-plain-build-that-failed-on-a-program-it-was-not-building) ·
 [425. Eight checkouts, four duplicated, and one refusal per round](#425-eight-checkouts-four-duplicated-and-one-refusal-per-round) ·
 [426. Why widening reaches for Qt test code, on three trees](#426-why-widening-reaches-for-qt-test-code-on-three-trees) ·
-[427. fmake's own package, built and linted for the first time here](#427-fmakes-own-package-built-and-linted-for-the-first-time-here)
+[427. fmake's own package, built and linted for the first time here](#427-fmakes-own-package-built-and-linted-for-the-first-time-here) ·
+[428. Two lists of three files, and nothing compared them](#428-two-lists-of-three-files-and-nothing-compared-them)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -32973,6 +32974,25 @@ root and is the holder's act rather than this session's. Recorded here so
 that the next person reading one of those READMEs knows the fix is
 waiting rather than outstanding.
 
+### Two further checks on the same artifact
+
+**The packaged program works, not just builds.** Unpacked and run as the
+installed form -- shebang rewritten to `/usr/bin/python3` -- it built a
+two-file tree and the program printed what it should. A package that
+lints clean and whose program does not run is worse than no package, and
+`lintian` cannot see that.
+
+**And the man page documents exactly what `--help` offers**: 32 long
+options in each, no gap in either direction. That is what the Makefile's
+generate-both design is for, verified rather than assumed.
+
+The first attempt at that comparison **manufactured a 27-option gap**.
+The man page writes `\-\-flag\fR`, so a regex for `--[a-z-]+` captured
+the trailing roff font switch and no name matched its counterpart. The
+same class as everything else this session: an instrument that invents a
+difference, reported as a finding unless it is checked. Strip `\-` and
+`\f[BIRP]` first, and the sets are equal.
+
 ### One honest correction about the run
 
 The harness reported the build task as *failed with exit code 2*, and the
@@ -32983,3 +33003,69 @@ the artifact are what settle it, which is `evidence.md`'s rule about
 believing a gate's artifact over a measurement of the process that
 produced it -- and the reason this is written down is that the first
 reading of that notification was "the package build failed".
+
+## 428. Two lists of three files, and nothing compared them
+
+`install` in the `Makefile` names three files -- the program, the manual
+page, the bash completion -- and `uninstall` names them again on an
+`rm -f` line. Two statements of one fact, kept in step by hand, and
+nothing in `make check` looked at either.
+
+**The failure that argues for it is already in this document, about a tree
+fmake builds rather than about fmake.** hydra's icons went uninstalled for
+eleven days because a rename pass spelled the directory singular in one of
+the two places it appears; the install line and the removal line are the
+shape that goes wrong, and it goes wrong silently in the direction that
+leaves files behind after a purge.
+
+`make install-check` is behavioural rather than textual. It installs into
+a scratch `DESTDIR` under this tree's own `build` directory, asserts a
+program actually landed there, runs `uninstall` over the same `DESTDIR`,
+and fails if `find` still reports a file. Parsing the two recipes would be
+a second thing to be wrong about, and it would pass over a file that
+`install` creates by a route other than an `install` line.
+
+It is wired into `check`, which now reads `version-check install-check
+style test`.
+
+### Two controls, and the first was run twice because the first run was wrong
+
+The target has two assertions and each needs its own, because the second
+is **vacuous if the first does not hold**: a `DESTDIR` nothing was
+installed into has nothing left in it, and the leftover test passes
+loudest when the install did nothing at all.
+
+- **A fourth file installed and forgotten in `uninstall`.** Adding a
+  second completion file to the install recipe makes the target print
+  *uninstall left files behind* and name it, exit 1.
+- **Nothing installed under `bin`.** Removing the two lines that write
+  the program makes it print *install put no program under DESTDIR*,
+  exit 1, before it ever reaches the leftover test.
+
+**The first attempt at the first control failed at the wrong step.** The
+fourth file was put under `share/doc`, which the recipe's `install -d`
+never creates, so `install` itself failed and the target went red without
+the leftover assertion ever running. A control has to fail the way the
+thing it controls for fails -- a forgotten `rm -f` line leaves a file in a
+directory that does exist -- and a red result from the step before the one
+under test is not evidence about that step. Re-run with the extra file
+under a directory the recipe already creates, it failed as designed.
+
+The restore after that run also misreported: `cp -p` cannot set times on a
+file owned by the other account, so it exited non-zero and the `cmp`
+chained behind it never ran. The Makefile's state was unknown for a moment
+rather than confirmed, which is the whole reason the discipline is save the
+good copy *after* the edit and verify the restore with `cmp`. Plain `cp`,
+then `cmp`, and it was byte-identical.
+
+### The same class one layer out, measured and clean
+
+An ejected build's `clean` is the other pair of lists: what the build
+creates, and what the clean names. That one is single-sourced already --
+fmake writes the list from the objects it was about to `-include`
+depfiles for -- and it was measured rather than taken on trust. A fixture
+exercising eight kinds of artifact at once (moc, uic, rcc, a `[generate]`
+rule, an `fmake.mk` pattern rule, a static archive, its `.pc`, and the
+program) was built from pristine with the ejected Makefile and cleaned:
+`find` reported nothing left that the build had put there.
+

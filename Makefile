@@ -75,7 +75,7 @@ BINDIR  = $(DESTDIR)$(PREFIX)/bin
 COMPDIR = $(DESTDIR)$(PREFIX)/share/bash-completion/completions
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: all install uninstall check version-check deb lint clean test veryclean distclean style style-source style-docs hooks help
+.PHONY: all install uninstall check version-check install-check deb lint clean test veryclean distclean style style-source style-docs hooks help
 
 all: fmake.1 fmake.bash
 
@@ -101,7 +101,36 @@ install: fmake.1 fmake.bash
 uninstall:
 	rm -f $(BINDIR)/fmake $(MANDIR)/fmake.1 $(COMPDIR)/fmake
 
-check: version-check style test
+# `install' names three files and `uninstall' names them again, and until
+# this target nothing compared the two lists. The failure that argues for
+# it is in the suite already, about the trees fmake builds rather than
+# about fmake: hydra's icons went unseen for eleven days when a rename
+# pass spelled `icons' singular, because the install line and the rm line
+# are two statements of one fact kept in step by hand.
+#
+# Behavioural rather than textual: install into a scratch DESTDIR, run
+# uninstall over the same one, and fail if anything is left. A fourth file
+# added to `install' and forgotten in `uninstall' is then a red `make
+# check' rather than a file that outlives the package. Parsing the recipes
+# would be a second thing to be wrong.
+#
+# The directory is this tree's own `build/' so that `clean' already owns
+# it, and it is removed here on both paths rather than left for a reader.
+install-check:
+	@rm -rf build/install-check
+	@$(MAKE) --no-print-directory install DESTDIR=build/install-check >/dev/null
+	@test -s build/install-check$(PREFIX)/bin/fmake || { \
+		echo "install-check: install put no program under DESTDIR" >&2; \
+		rm -rf build/install-check; exit 1; }
+	@$(MAKE) --no-print-directory uninstall DESTDIR=build/install-check >/dev/null
+	@left=$$(find build/install-check -type f 2>/dev/null); \
+	 rm -rf build/install-check; \
+	 test -z "$$left" || { \
+		echo "install-check: uninstall left files behind:" >&2; \
+		printf '  %s\n' $$left >&2; exit 1; }
+	@echo "install-check: install and uninstall name the same files"
+
+check: version-check install-check style test
 
 # The version is written in two files and nothing else compares them. This
 # is what debian/rules runs in place of the suite: it needs no compiler, so
