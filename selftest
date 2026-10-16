@@ -33300,18 +33300,56 @@ def a_committed_header_is_not_generated_over(t):
 
 @case
 def a_missing_situc_names_the_key_that_supplies_one(t):
-	"""Section 31: the remedy has to be one the reader can act on."""
-	if shutil.which("situc"):
-		raise Skip("situ is installed here, so there is one to find")
+	"""Section 31: the remedy has to be one the reader can act on.
+
+	This used to skip wherever situ was installed, which is backwards:
+	the machine with no situc is the one whose reader needs the message,
+	and a case that runs only there runs nowhere anybody would notice it
+	had broken. `a_schema_is_compiled_because_a_source_includes_its_header`
+	had the same shape and was fixed the same way.
+
+	So the toolchain is put on a PATH of its own -- symlinks to the few
+	programs fmake shells out to -- and situc is simply not on it.
+	Separating them by directory does not work: `situc` is in /usr/bin
+	beside cc, nm and ar on this machine."""
+	shim = os.path.join(t.dir, "shim")
+	os.makedirs(shim, exist_ok=True)
+	# python3 because fmake's shebang is `#!/usr/bin/env python3', and
+	# pkg-config because a tree with a package would need it -- both
+	# found by name, not by adding their directory, which is the whole
+	# point.
+	# The compiler's own helpers are on this list because they are on
+	# PATH too: without `as' the control below fails with "cannot
+	# execute 'as'", which is the stripped PATH failing the build rather
+	# than the missing situc, and the whole point of the control is to
+	# tell those two apart.
+	for tool in ("cc", "c++", "nm", "ar", "as", "ld", "python3",
+	             "pkg-config"):
+		found = shutil.which(tool)
+		if found:
+			os.symlink(found, os.path.join(shim, tool))
+	if os.path.exists(os.path.join(shim, "situc")):
+		raise Skip("a situc came with the toolchain symlinks")
 	_situ_tree(t, pin=False)
 	os.unlink(os.path.join(t.dir, "bin/situc"))
-	r = t.fmake()
+	r = t.fmake(env={"PATH": shim})
 	check(r.returncode != 0, "a schema with no compiler should stop the build")
 	out = r.stdout + r.stderr
 	check("[toolchain] situc" in out,
 	      f"the message does not name the key that supplies one: {out}")
 	check("msg.h" in out and "schema/msg.situ" in out,
 	      f"the message names neither the include nor the schema: {out}")
+
+	# The control, and it is what says the refusal was about the absence
+	# rather than about the stripped PATH: put the tree's own compiler
+	# back, change nothing else, and the same invocation builds. The
+	# stand-in rather than the installed situc, so this does not depend
+	# on what a real one makes of the fixture's schema.
+	_situc(t, pin=False)
+	r = t.fmake(env={"PATH": shim})
+	check(r.returncode == 0,
+	      f"with a situc in the tree the same build must succeed, or the "
+	      f"refusal above was about something else: {r.stdout}{r.stderr}")
 
 
 @case

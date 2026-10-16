@@ -486,7 +486,8 @@ that had been green about nothing for five commits ·
 [433. The deadline the runner applies and the emitted builds dropped](#433-the-deadline-the-runner-applies-and-the-emitted-builds-dropped) ·
 [434. A build that cleaned a file it never made](#434-a-build-that-cleaned-a-file-it-never-made) ·
 [435. Advice that asked for a directive in a header](#435-advice-that-asked-for-a-directive-in-a-header) ·
-[436. Where this session stopped, third fold](#436-where-this-session-stopped-third-fold)
+[436. Where this session stopped, third fold](#436-where-this-session-stopped-third-fold) ·
+[437. Three checks on the day's work, and a case that stopped skipping](#437-three-checks-on-the-days-work-and-a-case-that-stopped-skipping)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33694,3 +33695,62 @@ Unchanged from the second fold except where noted:
 - **Still with the holder from before**: section 348's `--uninstall`
   manifest, 363, 367, `pkg-optional`'s per-file-versus-per-target
   semantics, 385.
+
+## 437. Three checks on the day's work, and a case that stopped skipping
+
+Section 429 changed how every tree resolves a package, so the day's work
+needed three things measured rather than assumed.
+
+**It builds four real trees.** hembygd, bbq-predictor, openmlx4 and
+ossacli, extracted with `git archive` into scratch so nothing of theirs
+is touched -- the four private trees with no submodules, which is what
+makes a `git archive` copy buildable at all. All four build with the
+patched tool. openmlx4 reported, correctly and unprompted, that
+`src/mfa.c:17: lzma.h is behind a conditional the preprocessor did not
+take, so liblzma was not linked`, which is section 176 working rather
+than a regression.
+
+**It costs nothing measurable.** The worry was real and worth stating:
+`propose_from_headers` is called once over the whole tree and **again per
+target** from `resolve_libraries`, and each call now walks the include
+graph. A no-op build, which is the time a reader feels most, was timed
+three times with each tool:
+
+    ossacli          patched 0.39-0.42s    base 0.39-0.41s
+    bbq-predictor    patched 0.53-0.57s    base 0.54s
+    hembygd          patched 0.44-0.48s    base 0.42-0.46s
+
+Those trees have few targets, which is the case the per-target call
+multiplies, so a synthetic one was built for it: 40 programs each
+reaching a header that includes `<zlib.h>`. Patched 0.46-0.49s, base
+0.45-0.51s. The `seen` set is global, so pkg-config is asked once per
+distinct name however many targets ask, which is where the expense would
+have been; what repeats is the graph walk itself, and at these sizes it
+does not show. `Project.resolve_header` has no memo -- checked rather
+than assumed, after a first draft of this paragraph claimed one -- so a
+tree large enough for the walk to matter would pay in `os.path.isfile`
+calls, and the number to watch is targets times distinct includes.
+
+**And a case stopped skipping.** `a_missing_situc_names_the_key_that_
+supplies_one` skipped wherever situ was installed, which is backwards:
+the machine with no situc is the one whose reader needs that message, so
+the check ran only where nobody would notice it had broken.
+
+It now puts the toolchain on a PATH of its own -- symlinks to the
+programs fmake shells out to -- and leaves situc off it. Separating them
+by directory does not work here: `situc` is in `/usr/bin` beside `cc`,
+`nm` and `ar`.
+
+**The shim needed `as` and `ld`, and that is the interesting part.**
+Without them the control failed with *"cannot execute 'as':
+posix_spawnp"* -- the stripped PATH breaking the build rather than the
+missing situc, which is exactly the confusion the control exists to
+prevent. So the control earned its place by failing for the wrong reason
+first: a case that strips the environment has to prove the refusal it
+asserts came from what it removed on purpose. It restores the tree's own
+stand-in compiler, changes nothing else, and requires the same
+invocation to succeed.
+
+`a_schema_is_compiled_because_a_source_includes_its_header` had been
+de-skipped the same way earlier, which is why this was worth doing rather
+than inventing.
