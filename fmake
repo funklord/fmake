@@ -7682,8 +7682,29 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				else:
 					note(f"if it comes from a package, install it or name "
 					     f"it with @pkg")
-					note(f"if {blame} belongs to another platform, "
-					     f"@os NAME or @arch NAME keeps it out of this build")
+					# `@pkg', `@os' and `@arch' are read from SOURCES, and
+					# fmake warns in as many words when it finds one in a
+					# header. So where the blamed file IS a header -- which
+					# is exactly what section 98's generated-file blame
+					# produces, a moc output blamed on the Q_OBJECT header
+					# it was made from -- both remedies name a file that
+					# cannot carry either. Measured: a Q_OBJECT header
+					# including a package that is not installed printed
+					# "if plat.h belongs to another platform, @os NAME ...
+					# keeps it out of this build", which is advice fmake
+					# itself would have told the reader does nothing.
+					if os.path.splitext(blame)[1] in HDR_EXTS:
+						note(f"{blame} is a header, and a directive in a "
+						     f"header does nothing -- @pkg, @os and @arch "
+						     f"are read from sources, so they go on the "
+						     f"files that include it")
+						note(f"[project] exclude keeps the header itself "
+						     f"from being read, which is what a platform "
+						     f"header needs when moc or a scan reaches it")
+					else:
+						note(f"if {blame} belongs to another platform, "
+						     f"@os NAME or @arch NAME keeps it out of "
+						     f"this build")
 			found_version = _undeclared_version(msg, root)
 			if found_version:
 				# Same shape as the header remedy above: name the exact

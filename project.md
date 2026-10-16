@@ -484,7 +484,8 @@ that had been green about nothing for five commits ·
 [431. A generated unit carries no directives, and nothing said so](#431-a-generated-unit-carries-no-directives-and-nothing-said-so) ·
 [432. The ejected Makefile was never told where the .pc files are](#432-the-ejected-makefile-was-never-told-where-the-pc-files-are) ·
 [433. The deadline the runner applies and the emitted builds dropped](#433-the-deadline-the-runner-applies-and-the-emitted-builds-dropped) ·
-[434. A build that cleaned a file it never made](#434-a-build-that-cleaned-a-file-it-never-made)
+[434. A build that cleaned a file it never made](#434-a-build-that-cleaned-a-file-it-never-made) ·
+[435. Advice that asked for a directive in a header](#435-advice-that-asked-for-a-directive-in-a-header)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33531,3 +33532,76 @@ The case asserts through `pkg-config --modversion` rather than by
 looking for the file, because a `.pc` that exists and cannot be read
 answers the wrong question. It falls back to existence where pkg-config
 is not installed, which is the honest weaker check rather than a skip.
+
+## 435. Advice that asked for a directive in a header
+
+Section 98 made a generated file's failure blame the file it was
+generated from, because advice naming something under `.fmake/` is an
+instruction to edit what fmake will overwrite. Section 431 added what a
+generated unit does not get. This is the third thing that blame line
+meets: **the remedies offered next are read from sources.**
+
+A Q_OBJECT header including a package that is not installed printed
+
+    * nosuchpackage/api.h: No such file or directory
+      in .fmake/moc/moc_plat.cpp and 1 other file(s)
+      generated from plat.h
+      nosuchpackage/api.h is on no include path here
+      if it comes from a package, install it or name it with @pkg
+      if plat.h belongs to another platform, @os NAME or @arch NAME
+      keeps it out of this build
+
+`@pkg`, `@os` and `@arch` are read from sources, and fmake **warns in as
+many words** when it finds a directive in a header: *"@NAME is in a
+header and does nothing; directives are read from sources"*. So the last
+line is advice the same program would have refused, offered about a file
+it had just named itself.
+
+It says this instead, where the blamed file is a header:
+
+    plat.h is a header, and a directive in a header does nothing --
+    @pkg, @os and @arch are read from sources, so they go on the files
+    that include it
+    [project] exclude keeps the header itself from being read, which is
+    what a platform header needs when moc or a scan reaches it
+
+### Both halves are named because both are needed, and that is measured
+
+The obvious reading is that the exclude is belt and braces. It is not.
+With `@os windows` on the only source that includes `plat.h` and nothing
+else changed:
+
+    LD  hdradvice2
+    * built hdradvice2
+    * 1 file(s) did not compile
+      .fmake/moc/moc_plat.cpp
+
+The program builds and the moc output still fails, because **the moc plan
+reads every header in the tree whatever its includers say** -- a
+Q_OBJECT header is moc'd on its own account. Adding `[project] exclude =
+["plat.h"]` is what stops that, and with both the build is clean. So the
+first half alone is the half-fix a reader reaches for first, and the case
+asserts the failure as well as the success.
+
+A source-blamed failure keeps the wording that fits a source, asserted as
+the control: `if main.c belongs to another platform` is still what a
+`.c` is told, and it is not told about headers.
+
+### It superseded part of section 98's own case
+
+`advice_about_a_generated_file_names_its_source` failed on the first full
+run, and correctly: it pinned the **wording**, asking for a line saying
+"belongs to another platform" and naming `src/thing.h`. That line named
+the right file and asked for a directive the file cannot carry, which is
+this finding -- so the case was asserting half of a defect.
+
+Rewritten rather than loosened, and the difference matters: the property
+section 98 exists for is *the advice names the origin and never a path
+fmake wrote*, and that is what it asserts now, by looking for the origin
+in the advice and for the absence of any `@os`/`@arch` line naming
+something under `.fmake/`. A case that had merely dropped the failing
+check would have stopped testing section 98 at all.
+
+The header branch is also asserted there now, so the two cases agree
+about one behaviour from two directions rather than one of them being
+free to drift.

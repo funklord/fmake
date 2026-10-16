@@ -11506,6 +11506,83 @@ def a_failing_generated_unit_names_the_directive_it_did_not_get(t):
 
 
 @case
+def advice_about_a_header_does_not_ask_for_a_directive_in_one(t):
+	"""Section 98's blame line, meeting the rule that headers carry none.
+
+	A moc output that will not compile is blamed on the Q_OBJECT header
+	it was generated from, which is right -- the remedy must not name a
+	file under `.fmake/` that fmake overwrites. But the remedies offered
+	next were `@pkg` and `@os NAME or @arch NAME`, and those are read
+	from SOURCES: fmake warns in as many words when it finds a directive
+	in a header. So it printed
+
+	    if plat.h belongs to another platform, @os NAME or @arch NAME
+	    keeps it out of this build
+
+	about a file that cannot carry either -- advice fmake itself would
+	have told the reader does nothing.
+
+	The replacement names both halves, and the case proves that both are
+	needed rather than taking it on trust: `@os` on the source alone
+	leaves the moc output failing, because the moc plan reads every
+	header in the tree whatever its includers say, and `[project]
+	exclude` on the header is what stops that. One without the other is
+	the half-fix a reader would reach for first."""
+	_need_qt()
+	hdr = ('#pragma once\n#include <QObject>\n'
+	       '#include <nosuchpackage/api.h>\n'
+	       'class plat : public QObject {\n\tQ_OBJECT\npublic:\n'
+	       '\tplat();\n};\n')
+	t.write("plat.h", hdr)
+	t.write("main.cpp", '/*! @target hdradvice */\n#include "plat.h"\n'
+	        "int main(void){ return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the fixture must fail: {out}")
+	check("generated from plat.h" in out,
+	      f"the blame has to reach the header, or this is a different "
+	      f"case: {out}")
+	check("a directive in a header does nothing" in out,
+	      f"the advice must say why @os on the header would not help: "
+	      f"{out}")
+	check("[project] exclude" in out,
+	      f"and name the thing that does: {out}")
+	check("if plat.h belongs to another platform" not in out,
+	      f"the old wording asked for a directive in a header: {out}")
+
+	# Both halves are needed, which is why the message names both. The
+	# source directive alone leaves the moc output failing.
+	t.write("main.cpp", '/*! @target hdradvice\n    @os windows */\n'
+	        '#include "plat.h"\nint main(void){ return 0; }\n')
+	t.write("other.cpp", "/*! @target other */\nint main(void){ return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("moc_plat.cpp" in out and "did not compile" in out,
+	      f"@os on the source alone should leave the moc output failing, "
+	      f"or the second half of the advice is unnecessary: {out}")
+
+	t.write("fmake.toml", '[project]\nexclude = ["plat.h"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "did not compile" not in out,
+	      f"taking both halves has to work: {out}")
+
+	# The control: a source keeps the wording that fits a source.
+	u = Tree("hdradvice_src")
+	try:
+		u.write("main.c", "/*! @target srcadvice */\n"
+		        "#include <nosuchpackage/api.h>\nint main(void){ return 0; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check("if main.c belongs to another platform" in out,
+		      f"a source is still told about @os on itself: {out}")
+		check("a directive in a header does nothing" not in out,
+		      f"and not told about headers: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_package_only_a_published_header_names_reaches_requires(t):
 	"""The second consumer of the proposal, and only one was wired.
 
@@ -23607,15 +23684,25 @@ class Thing : public QObject { Q_OBJECT public: int n = 0; };
 	r = t.fmake()
 	check(r.returncode != 0, "a missing header should fail the build")
 	said = r.stdout + r.stderr
-	advice = [l for l in said.splitlines() if "belongs to another platform" in l]
-	check(advice, f"the platform advice was not offered at all: {said}")
-	check("src/thing.h" in advice[0],
-	      f"the advice names something other than the source: {advice[0]}")
-	check(".fmake" not in advice[0],
-	      f"the advice still names a generated file, which cannot be "
-	      f"annotated: {advice[0]}")
+	# Section 435 supersedes the WORDING this case used to pin. It asked
+	# for a line saying "belongs to another platform" and naming
+	# src/thing.h -- which named the right file and asked for a directive
+	# the file cannot carry, because this origin is a header and fmake
+	# reads directives from sources. The property section 98 is about is
+	# unchanged and is what is asserted here: the advice names the origin
+	# and never a path fmake wrote.
+	advice = [l for l in said.splitlines()
+	          if "src/thing.h" in l and "generated from" not in l]
+	check(advice, f"nothing in the advice named the origin: {said}")
+	check(not [l for l in said.splitlines()
+	           if ".fmake" in l and ("@os" in l or "@arch" in l
+	                                 or "belongs to another platform" in l)],
+	      f"the advice still asks for a directive on a generated file: "
+	      f"{said}")
 	check("generated from src/thing.h" in said,
 	      f"nothing said where the generated file came from: {said}")
+	check("a directive in a header does nothing" in said,
+	      f"and a header origin has to be told that much: {said}")
 
 	# An error in an ordinary source still blames that source: the map has
 	# to be empty for files nobody generated, or every failure would start
