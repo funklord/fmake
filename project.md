@@ -483,7 +483,8 @@ that had been green about nothing for five commits ·
 [430. hull has asked for per-schema situc flags, and named what it blocks](#430-hull-has-asked-for-per-schema-situc-flags-and-named-what-it-blocks) ·
 [431. A generated unit carries no directives, and nothing said so](#431-a-generated-unit-carries-no-directives-and-nothing-said-so) ·
 [432. The ejected Makefile was never told where the .pc files are](#432-the-ejected-makefile-was-never-told-where-the-pc-files-are) ·
-[433. The deadline the runner applies and the emitted builds dropped](#433-the-deadline-the-runner-applies-and-the-emitted-builds-dropped)
+[433. The deadline the runner applies and the emitted builds dropped](#433-the-deadline-the-runner-applies-and-the-emitted-builds-dropped) ·
+[434. A build that cleaned a file it never made](#434-a-build-that-cleaned-a-file-it-never-made)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33474,3 +33475,37 @@ nobody mentions and cannot tell a dropped fact from one carried by value.
 Four of the five were the second kind. That is the right ratio for a
 cheap sweep -- the alternative was reading two emitters of 1,700 lines
 against a 33-key schema by eye, which is the reading nobody does twice.
+
+## 434. A build that cleaned a file it never made
+
+The parity lens of section 433 again, and the third of the three readers
+this time. fmake writes a target's `.pc` on an **ordinary build** --
+which is what lets another project point pkg-config at an uninstalled
+checkout -- and both emitted builds wrote one only as a prerequisite of
+`install`. Measured on a static target with `@version` and `@headers`:
+
+    fmake        -> api.c  apilib.pc  fmake.toml  inc  libapilib.a
+    make         -> api.c             fmake.toml  inc  libapilib.a
+
+So the same sources left different trees depending on which build ran.
+The tell was in the emitted file all along: its `clean` names
+`apilib.pc`, so the Makefile removed a file its default target never
+created -- a build that cleans what it does not make, which is section
+428's shape read from the other end.
+
+Both emitters attach the `.pc` files to the default target now, through
+**the same predicate the clean list uses**, so the two cannot disagree
+about which targets have one.
+
+**ninja needed a second `default`.** A ninja target must be declared
+before a `default` statement names it, and the `.pc` rules are written
+inside the install section, well below the first `default`. Multiple
+`default` statements accumulate -- checked by running a file with two
+rather than by reading the manual -- so the `.pc` gets its own line
+beside the rule that builds it, which also keeps it next to the comment
+explaining why.
+
+The case asserts through `pkg-config --modversion` rather than by
+looking for the file, because a `.pc` that exists and cannot be read
+answers the wrong question. It falls back to existence where pkg-config
+is not installed, which is the honest weaker check rather than a skip.

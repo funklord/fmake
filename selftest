@@ -11506,6 +11506,61 @@ def a_failing_generated_unit_names_the_directive_it_did_not_get(t):
 
 
 @case
+def all_three_builds_write_the_pc_file(t):
+	"""fmake wrote one on an ordinary build; both emitted builds did not.
+
+	A library's `.pc` sitting in the tree is what lets another project
+	point pkg-config at an uninstalled checkout, and fmake writes one
+	whenever a target has a version and published headers. The emitted
+	Makefile and build.ninja produced it only as a prerequisite of
+	`install` -- so `fmake` and `make` left different trees from the same
+	sources, while `clean` in the same emitted file named the file for
+	removal, which is a build that cleans what it never makes.
+
+	Asserted through pkg-config rather than by looking for the file: a
+	`.pc` that exists and cannot be read answers the wrong question."""
+	t.write("inc/api.h", "#pragma once\nint api_add(int a, int b);\n")
+	t.write("api.c", "/*! @target apilib\n    @kind static\n"
+	        "    @version 1.0\n    @headers inc/api.h */\n"
+	        '#include "api.h"\nint api_add(int a, int b){ return a + b; }\n')
+	t.write("fmake.toml", '[project]\ninclude-dirs = ["inc"]\n')
+
+	def pc_says_one(where):
+		if not shutil.which("pkg-config"):
+			return os.path.exists(os.path.join(where, "apilib.pc"))
+		r = subprocess.run(["pkg-config", "--modversion", "apilib"],
+		                   capture_output=True, text=True,
+		                   errors="replace",
+		                   env=dict(os.environ, PKG_CONFIG_PATH=where))
+		return r.returncode == 0 and r.stdout.strip() == "1.0"
+
+	check(t.fmake().returncode == 0, "the fixture does not build")
+	check(pc_says_one(t.dir), "fmake wrote no readable apilib.pc")
+
+	def clean_out():
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		for f in ("apilib.pc", "libapilib.a"):
+			if os.path.exists(os.path.join(t.dir, f)):
+				os.unlink(os.path.join(t.dir, f))
+
+	if shutil.which("make"):
+		t.write("Makefile", t.fmake("--eject").stdout)
+		clean_out()
+		r = _run_in(t.dir, "make")
+		check(r.returncode == 0, f"the ejected make build failed: {r.stderr}")
+		check(pc_says_one(t.dir),
+		      "the ejected make build left the .pc to `install'")
+	if shutil.which("ninja"):
+		t.write("build.ninja", t.fmake("--eject", "ninja").stdout)
+		clean_out()
+		r = _run_in(t.dir, "ninja")
+		check(r.returncode == 0, f"the ejected ninja build failed: {r.stdout}")
+		check(pc_says_one(t.dir),
+		      "the ejected ninja build left the .pc to `install'")
+
+
+@case
 def an_ejected_test_recipe_carries_the_deadline_fmake_applies(t):
 	"""The limit the runner enforces, dropped by both emitted builds.
 

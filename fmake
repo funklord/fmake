@@ -16558,13 +16558,26 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		                                             key=lambda x: x.name)))
 	a("")
 	phonies = " ".join(group_rule(g) for g in group_names)
+	# The .pc files belong to the default build, not only to `install'.
+	# fmake writes them on an ordinary build -- a library's `.pc' in the
+	# tree is what lets another project point pkg-config at an
+	# uninstalled checkout -- and both emitted builds produced one only
+	# as a prerequisite of `install', so `fmake' and `make' left
+	# different trees. Measured on a static target with @version and
+	# @headers: `apilib.pc' after the first, absent after the second,
+	# while `clean' in the same file named it for removal. Same predicate
+	# the clean list uses, so the two cannot disagree about which targets
+	# have one.
+	pc_files = " ".join(t.name + ".pc" for t in targets
+	                    if pc_text(t, conf))
 	if fragment:
 		a(".PHONY: fmake-all fmake-clean"
 		  + (" " + phonies if phonies else ""))
-		a("fmake-all: $(FM_TARGETS)")
+		a("fmake-all: $(FM_TARGETS)"
+		  + (" " + pc_files if pc_files else ""))
 	else:
 		a(".PHONY: all clean" + (" " + phonies if phonies else ""))
-		a(f"all: {names}")
+		a(f"all: {names}" + (" " + pc_files if pc_files else ""))
 	a("")
 	for g in group_names:
 		_dep = bin_deps(conf, by_group[g], eject_files)
@@ -17881,6 +17894,19 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# decides its output is not, so a second install under a
 			# different prefix republished the first one's file.
 			a(f"build {_ninja(t.name)}.pc: pc_{_mk_ident(t.name)} | always")
+			# ... and in the default build, not only in `install'. fmake
+			# writes a .pc on an ordinary build -- which is what lets
+			# another project point pkg-config at an uninstalled
+			# checkout -- and both emitted builds wrote one only as an
+			# install prerequisite, so `fmake' and `ninja' left
+			# different trees while `clean' named the file in both.
+			#
+			# A second `default' rather than the one at the top, because
+			# a ninja target must be declared before a `default' names
+			# it and these rules are written here, inside the install
+			# section. ninja accumulates them; checked by running a file
+			# with two.
+			a(f"default {_ninja(t.name)}.pc")
 
 		a("")
 		a("build always: phony")
