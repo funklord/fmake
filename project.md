@@ -485,7 +485,8 @@ that had been green about nothing for five commits ·
 [432. The ejected Makefile was never told where the .pc files are](#432-the-ejected-makefile-was-never-told-where-the-pc-files-are) ·
 [433. The deadline the runner applies and the emitted builds dropped](#433-the-deadline-the-runner-applies-and-the-emitted-builds-dropped) ·
 [434. A build that cleaned a file it never made](#434-a-build-that-cleaned-a-file-it-never-made) ·
-[435. Advice that asked for a directive in a header](#435-advice-that-asked-for-a-directive-in-a-header)
+[435. Advice that asked for a directive in a header](#435-advice-that-asked-for-a-directive-in-a-header) ·
+[436. Where this session stopped, third fold](#436-where-this-session-stopped-third-fold)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33605,3 +33606,75 @@ check would have stopped testing section 98 at all.
 The header branch is also asserted there now, so the two cases agree
 about one behaviour from two directions rather than one of them being
 free to drift.
+
+## 436. Where this session stopped, third fold
+
+Eleven commits of work plus this record, six defects fixed, six cases
+added, 661 in the suite and `make check` green at each one. The whole of it came from two lenses, and
+the second was derived from the first, which is the part worth carrying
+forward rather than the list.
+
+### What was found
+
+- **Section 429**, and it is the one that would have bitten a user
+  tomorrow: the package proposal read angle includes from translation
+  units and nowhere else, so a Qt tree whose `#include <QWidget>` lives
+  in the header that derives from it -- which is where it goes -- did not
+  compile. Every Qt tree here builds only because some `.cpp` happens to
+  name a Widgets header directly.
+- **Section 432**: the ejected Makefile asks pkg-config at build time and
+  was never told where the tree keeps its `.pc` files.
+- **Section 433**: the per-test deadline the runner applies, dropped by
+  both emitted builds.
+- **Section 434**: fmake writes a `.pc` on an ordinary build and both
+  emitted builds left it to `install`, while their own `clean` named it.
+- **Sections 431 and 435**: two diagnostics that named a cause and then
+  asked for something the named file could not do.
+- **Section 428**: `install` and `uninstall` in fmake's own Makefile were
+  two lists of three files with nothing comparing them.
+
+### The two lenses, and which to try next
+
+**"Two statements of one fact, kept in step by hand"** gave 428 and then
+433 and 434. **"A tree states a fact; does the ejected build carry it?"**
+was derived from 432 and gave 433 directly -- asked mechanically, every
+key in `CONF_SCHEMA` against the text of both emitters, which is the
+cheap instrument that found a real one among five candidates.
+
+Both are now largely swept, and the sweeps that came back empty are
+recorded so nobody repeats them: no advice line names a configuration key
+that does not exist, and the file sets the three builds leave are
+identical but for ninja's own `.ninja_log` and `.ninja_deps`.
+
+**The lens to try next is the third reader.** The parity triangle here is
+the runner and the two emitters, and it paid three times in one day. The
+`--deb`, `--ebuild` and `--apkbuild` emitters are the fourth, fifth and
+sixth renderings of the same model; they delegate to the ejected Makefile
+rather than re-deriving it, which is why they inherited 432's fix for
+free -- but that inheritance is a claim worth measuring rather than
+assuming, and nobody has.
+
+### Still open, and whose
+
+Unchanged from the second fold except where noted:
+
+- **This file is past two context windows**, and `make style` prints the
+  figure on every run. **The holder's, raised three times now.**
+- **hull's finding 2 is now a per-schema situc flags request**, with
+  their reproduction, in section 430. The asking half is done; **the
+  spelling is the holder's.**
+- **hull's finding 3**, whether a vendored checkout's own programs should
+  enter the pool at all.
+- **Section 411's question**, whether a plain build should refuse over a
+  clash among programs it will not build. **The holder's.**
+- **Section 432's sibling**: `PKG_CONFIG_SYSROOT_DIR` and
+  `PKG_CONFIG_LIBDIR` are not emitted either, which is worse than what
+  was fixed because the host answers rather than failing. Not fixed
+  because it cannot be tested here -- a fake sysroot has no crt and
+  cannot link -- and that is the whole reason, not a judgement that it
+  matters less.
+- **Whether a generated unit should inherit the flags of the units that
+  include its origin**, which section 431 names rather than answers.
+- **Still with the holder from before**: section 348's `--uninstall`
+  manifest, 363, 367, `pkg-optional`'s per-file-versus-per-target
+  semantics, 385.
