@@ -11506,6 +11506,77 @@ def a_failing_generated_unit_names_the_directive_it_did_not_get(t):
 
 
 @case
+def a_package_only_a_published_header_names_reaches_requires(t):
+	"""The second consumer of the proposal, and only one was wired.
+
+	Section 429 widened the package proposal to the headers a unit
+	reaches, which is what makes a tree whose external include lives in a
+	header compile at all. `public_pkgs` reads the same proposal to decide
+	what a published `.pc` must name -- a consumer compiling against these
+	headers needs the kit's `-I` too, and `Requires:` is where pkg-config
+	carries that.
+
+	So this is the "a value with two consumers where only some are wired"
+	lens pointed at the fix itself: the build was asserted, the `.pc` was
+	not. Measured end to end with the kit, whose header is outside the
+	tree and needs the `.pc`'s own `-I`.
+
+	The control is the half that matters: a published header that does
+	NOT reach the kit must leave `Requires:` out, or the line would be
+	noise on every library in a tree that happens to have a kit on its
+	pkg-config path."""
+	if not shutil.which("pkg-config") and not shutil.which("pkgconf"):
+		raise Skip("no pkg-config to point anywhere")
+	kit = os.path.join(t.dir, "kit")
+	t.write("kit/include/frob/frob.h", "int frobnicate(void);\n")
+	impl = os.path.join(t.dir, "frob_impl.c")
+	with open(impl, "w") as fh:
+		fh.write("int frobnicate(void){ return 7; }\n")
+	obj = os.path.join(t.dir, "frob.o")
+	subprocess.run(["cc", "-c", impl, "-o", obj], check=True)
+	os.makedirs(os.path.join(kit, "lib"))
+	subprocess.run(["ar", "rcs", os.path.join(kit, "lib", "libfrob.a"), obj],
+	               check=True)
+	t.write("kit/pkgconfig/frob.pc",
+	        f"prefix={kit}\nName: frob\nDescription: a kit\n"
+	        "Version: 1.0\nCflags: -I${prefix}/include\n"
+	        "Libs: -L${prefix}/lib -lfrob\n")
+	t.write("src/inc/api.h", "#pragma once\n#include <frob/frob.h>\n"
+	        "int api_add(int a, int b);\n")
+	t.write("src/api.c", "/*! @target apilib\n    @kind static\n"
+	        "    @version 1.0\n    @headers inc/api.h */\n"
+	        '#include "api.h"\n'
+	        "int api_add(int a, int b){ return a + b + frobnicate() - 7; }\n")
+	t.write("src/fmake.toml", '[project]\ninclude-dirs = ["inc"]\n\n'
+	        '[toolchain]\npkg-config-path = ["../kit/pkgconfig"]\n')
+	src = _src(t)
+
+	r = _run_in(src, FMAKE)
+	check(r.returncode == 0, f"the library must build: {r.stdout}{r.stderr}")
+	pc = open(os.path.join(src, "apilib.pc")).read()
+	check("Requires: frob" in pc,
+	      f"a package only the published header names must be required: "
+	      f"{pc}")
+
+	# The control: the same tree with the kit out of the published header.
+	t.write("src/inc/api.h", "#pragma once\nint api_add(int a, int b);\n")
+	t.write("src/api.c", "/*! @target apilib\n    @kind static\n"
+	        "    @version 1.0\n    @headers inc/api.h */\n"
+	        '#include "api.h"\n#include <frob/frob.h>\n'
+	        "int api_add(int a, int b){ return a + b + frobnicate() - 7; }\n")
+	shutil.rmtree(os.path.join(src, ".fmake"), ignore_errors=True)
+	r = _run_in(src, FMAKE)
+	check(r.returncode == 0, f"and still build: {r.stdout}{r.stderr}")
+	pc = open(os.path.join(src, "apilib.pc")).read()
+	check("Requires: frob" not in pc,
+	      f"a package the implementation alone uses is nobody else's "
+	      f"business: {pc}")
+	check("-lfrob" in pc,
+	      f"but the static archive still needs it at link time, which is "
+	      f"Libs.private: {pc}")
+
+
+@case
 def all_three_builds_write_the_pc_file(t):
 	"""fmake wrote one on an ordinary build; both emitted builds did not.
 

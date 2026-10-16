@@ -33189,6 +33189,28 @@ compile flag sets compared across all 19 entries of
 `--compile-commands`: identical. So no object is re-keyed and no tree
 pays a rebuild for this.
 
+**The proposal has a second consumer, and only the first was pinned.**
+`public_pkgs` reads the same proposal to decide what a published `.pc`
+must name: a consumer compiling against these headers needs the kit's
+`-I` too, and `Requires:` is where pkg-config carries that. So the
+"value with two consumers where only some are wired" lens, pointed at
+this fix. Measured on the kit: a static library whose published header
+includes `<frob/frob.h>` and whose implementation names nothing now
+writes
+
+    Requires: frob
+
+and `a_package_only_a_published_header_names_reaches_requires` holds it
+there. **Its two controls are not equal and the weaker one is named as
+such**: run against the tool before this fix the case fails at the
+build, not at the `Requires:` line, because such a tree did not compile
+at all -- so that sabotage shows the case depends on the fix and says
+nothing about the `.pc` logic. The control that does is inside the case:
+the same tree with the kit include moved into the `.c` must leave
+`Requires:` out and keep `-lfrob` in `Libs.private`, which is what
+separates "what a consumer must compile against" from "what this archive
+needs at link time".
+
 The case is `a_package_named_only_by_a_header_is_still_found`, written
 with the kit of section 270 rather than with Qt so that it runs on a
 machine with no Qt -- and because the kit makes the discrimination exact:
