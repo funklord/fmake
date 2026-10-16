@@ -481,7 +481,8 @@ that had been green about nothing for five commits ·
 [428. Two lists of three files, and nothing compared them](#428-two-lists-of-three-files-and-nothing-compared-them) ·
 [429. The include that asks for a package is usually not in a .c file](#429-the-include-that-asks-for-a-package-is-usually-not-in-a-c-file) ·
 [430. hull has asked for per-schema situc flags, and named what it blocks](#430-hull-has-asked-for-per-schema-situc-flags-and-named-what-it-blocks) ·
-[431. A generated unit carries no directives, and nothing said so](#431-a-generated-unit-carries-no-directives-and-nothing-said-so)
+[431. A generated unit carries no directives, and nothing said so](#431-a-generated-unit-carries-no-directives-and-nothing-said-so) ·
+[432. The ejected Makefile was never told where the .pc files are](#432-the-ejected-makefile-was-never-told-where-the-pc-files-are)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33314,3 +33315,85 @@ three things, and the second is the one that matters:
 
 Reverting the change fails the case, which is how its first two
 assertions were shown not to be vacuous.
+
+## 432. The ejected Makefile was never told where the .pc files are
+
+Section 233 defers a pkg-config module whose flags name a place: the
+emitted Makefile asks that machine's pkg-config at build time, so a
+package built elsewhere, or for another architecture, resolves for
+itself. What it never carried is the other half of the question --
+**which directories to look in.**
+
+A tree that states its own with `[toolchain] pkg-config-path`, which is
+section 270's whole feature, built with fmake and did not build from its
+own ejected Makefile:
+
+    cc -Os -I. -c main.c ...
+    main.c:1:10: fatal error: frob/frob.h: No such file or directory
+
+`$(shell $(PKG_CONFIG) --cflags frob)` answered nothing, because nothing
+in the file said where `frob.pc` was. `$(shell ...)` over a failed
+command is empty rather than an error, so the `-I` vanished silently and
+the compiler reported a missing header -- two hops from the cause.
+
+**The ninja backend built the same tree.** It bakes the paths, by the
+measured decision in section 233: ninja has no parse-time shell, so a
+deferred module would be one pkg-config run per compile. So one tree got
+two answers from two backends, and the one implementing the more careful
+feature was the one that failed.
+
+### Why section 233's own case could not see it
+
+That case carries its own module and asserts the deferral end to end,
+including a control with `PKG_CONFIG=false`. It passed throughout,
+because it puts its `.pc` on the **environment's** `PKG_CONFIG_PATH` --
+which a child `make` inherits, so the emitted file needs to say nothing.
+
+Two spellings of one fact, and the deferral was proved on the one that
+travels by itself. That is `evidence.md`'s vacuous pass wearing a
+different hat: the check inspected something, and the something was the
+half that cannot fail.
+
+### What it emits
+
+    # The .pc directories [toolchain] pkg-config-path named.
+    PKG_CONFIG_PATH_TREE := ../kit/pkgconfig
+    PKG_FROB_CFLAGS := $(shell PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_TREE):$$PKG_CONFIG_PATH" $(PKG_CONFIG) --cflags frob)
+
+Three choices in that, each for a reason:
+
+- **Set on the queries, not exported.** An exported `PKG_CONFIG_PATH`
+  would reach every pkg-config any recipe runs, including a reader's own
+  rules in a file they are invited to edit.
+- **Prepended**, exactly as the live side prepends, so the tree's own kit
+  wins over whatever the caller's environment already had.
+- **The spelling the tree used, not fmake's resolution of it.** fmake
+  absolutises these for its own use because pkg-config runs with
+  cwd=root; make runs there too, so `../kit/pkgconfig` means the same
+  thing in both -- and an absolute path into a kit is a fact about this
+  machine, which is the thing deferring exists to avoid.
+
+The case is section 270's own, extended to eject and build with
+`PKG_CONFIG_PATH` **cleared from the environment**, so an inherited value
+cannot stand in for the line the file has to carry. Reverting the emitter
+fails it, and fails
+`a_package_named_only_by_a_header_is_still_found` with it -- that case's
+ejected half is what found this.
+
+### The sibling omission, measured as far as it can be here
+
+The live side sets three variables, not one: `PKG_CONFIG_PATH` from
+`[toolchain] pkg-config-path`, and `PKG_CONFIG_SYSROOT_DIR` with
+`PKG_CONFIG_LIBDIR` when `[toolchain] sysroot` is set. **Only the first
+is emitted.** A cross build with a sysroot therefore writes a Makefile
+whose deferred queries ask the host's pkg-config about host packages --
+which is worse than this finding, because it answers rather than
+failing, and the wrong flags are the kind that compile.
+
+It is recorded rather than fixed, and the reason is that it cannot be
+tested here: a fixture with a fake sysroot cannot link, since the sysroot
+has no crt or libc, so a case asserting the behaviour would assert the
+text of the emitted file and nothing more. Whoever has a real cross
+sysroot can close it in one place -- the same block, from `cfg.sysroot`,
+with the libdir list lifted out of `Pkg.__init__` rather than written a
+second time.

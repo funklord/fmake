@@ -12894,6 +12894,36 @@ def a_package_set_outside_the_default_pkg_config_path_is_found(t):
 	check(r.returncode == 0, f"a relative pkg-config-path was not resolved "
 	      f"against the tree: {r.stdout}{r.stderr}")
 
+	# And the ejected Makefile, which is where this stated the property
+	# broadly and tested it narrowly. Section 233 defers a module whose
+	# flags name a place, so the emitted file asks pkg-config at build
+	# time -- and it was never told where this tree keeps its .pc files,
+	# so the query answered nothing and the build stopped on a header
+	# pkg-config could have found. Section 233's own case passed
+	# throughout, because it puts its .pc on the ENVIRONMENT's
+	# PKG_CONFIG_PATH, which a child make inherits: two spellings of one
+	# fact, and the deferral was proved on the one that travels by itself.
+	#
+	# The environment is cleared for this build, so an inherited
+	# PKG_CONFIG_PATH cannot stand in for the line the file has to carry.
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("src/Makefile", _run_in(src, FMAKE, "--eject").stdout)
+	shutil.rmtree(os.path.join(src, ".fmake"), ignore_errors=True)
+	shutil.rmtree(os.path.join(src, "build"), ignore_errors=True)
+	prog = os.path.join(src, "src")
+	if os.path.exists(prog):
+		os.unlink(prog)
+	env = dict(os.environ)
+	env.pop("PKG_CONFIG_PATH", None)
+	m = subprocess.run(["make", "-C", src], capture_output=True, text=True,
+	                   errors="replace", env=env)
+	check(m.returncode == 0,
+	      f"the ejected build was not told where the .pc files are: "
+	      f"{m.stdout}{m.stderr}")
+	check(_run_in(src, prog).stdout == "7\n",
+	      "the ejected build linked nothing from the kit")
+
 
 @case
 def a_package_named_only_by_a_header_is_still_found(t):
@@ -12965,6 +12995,31 @@ def a_package_named_only_by_a_header_is_still_found(t):
 	      f"a package named only by a header must still resolve: {out}")
 	check(_run_in(src, os.path.join(src, "src")).stdout == "7\n",
 	      "the program built against the header's package does not run")
+
+	# And both ejected backends, because they are separate readers of the
+	# same flag list and an -I that reaches only the live build is half a
+	# fix. The link line has to carry -lfrob too: the proposal is what
+	# offered the library, and it came from the header.
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	prog = os.path.join(src, "src")
+	for form, build in (("make", ["make", "-C", src]),
+	                    ("ninja", ["ninja", "-C", src])):
+		if form == "ninja" and not shutil.which("ninja"):
+			continue
+		t.write("src/" + ("Makefile" if form == "make" else "build.ninja"),
+		        _run_in(src, FMAKE, "--eject", form).stdout)
+		shutil.rmtree(os.path.join(src, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(src, "build"), ignore_errors=True)
+		if os.path.exists(prog):
+			os.unlink(prog)
+		r = subprocess.run(build, capture_output=True, text=True,
+		                   errors="replace")
+		check(r.returncode == 0,
+		      f"the ejected {form} build lost the header's package: "
+		      f"{r.stdout}{r.stderr}")
+		check(_run_in(src, prog).stdout == "7\n",
+		      f"the ejected {form} build did not link frob")
 
 
 @case

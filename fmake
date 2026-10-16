@@ -5927,9 +5927,15 @@ class Config:
 		# absolute against the tree, since pkg-config runs with cwd=root
 		# and a relative dir would mean nothing from there.
 		_root = os.path.abspath(args.directory)
+		# Kept as written as well as resolved, because an ejected build
+		# file needs the spelling and not the resolution: make runs with
+		# cwd=root exactly as pkg-config does here, so `../kit/pkgconfig'
+		# is valid there and travels with the tree, where the absolute
+		# form is a fact about this machine.
+		self.pkg_config_path_raw = list(tool.get("pkg-config-path", []))
 		self.pkg_config_path = [
 		    d if os.path.isabs(d) else os.path.join(_root, d)
-		    for d in tool.get("pkg-config-path", [])]
+		    for d in self.pkg_config_path_raw]
 		self.ccver  = tool_version(self.cc)
 		self.cxxver = tool_version(self.cxx) if shutil.which(self.cxx) else "?"
 		# The profile is in here through cflags, so switching profiles gets a
@@ -16380,12 +16386,42 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# exists, and the Makefile should default to the same rather than
 		# to the host's.
 		a(f"PKG_CONFIG ?= {os.path.basename(cfg.pkgexe or 'pkg-config')}")
+		# Where this tree keeps the .pc files it was told about. The live
+		# build learns that from `[toolchain] pkg-config-path' and the
+		# file emitted here never did, so `--cflags' answered nothing and
+		# the build stopped on a header pkg-config could have found --
+		# while the same tree built with fmake and with `--eject ninja',
+		# which bakes the paths. Measured on the kit fixture of section
+		# 270.
+		#
+		# section 233's own case passed throughout, because it puts its
+		# `.pc' on the ENVIRONMENT's PKG_CONFIG_PATH, which a child make
+		# inherits. Two spellings of one fact, and the deferral was
+		# proved on the one that travels by itself.
+		#
+		# Set on the queries rather than exported, so nothing else a
+		# recipe runs is affected; prepended, exactly as the live side
+		# prepends, so the tree's own kit wins over the caller's path;
+		# and written as the tree spelled it rather than as fmake
+		# resolved it, because an absolute path into a kit is a fact
+		# about this machine and deferring exists to avoid precisely
+		# those. make runs with cwd=root, which is where pkg-config runs
+		# here, so a relative entry means the same thing in both.
+		pc_env = ""
+		if cfg.pkg_config_path_raw:
+			_dirs = ":".join(cfg.pkg_config_path_raw)
+			a("# The .pc directories [toolchain] pkg-config-path named.")
+			a("PKG_CONFIG_PATH_TREE := "
+			  + shlex.quote(_dirs).replace("$", "$$"))
+			pc_env = 'PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_TREE):$$PKG_CONFIG_PATH" '
 		for module, name in sorted(used.items()):
 			cf, _libs, dirs = deferred[module]
 			if any(f.startswith(PATH_CFLAGS) for f in cf):
-				a(f"{name}_CFLAGS := $(shell $(PKG_CONFIG) --cflags {module})")
+				a(f"{name}_CFLAGS := $(shell {pc_env}$(PKG_CONFIG) "
+				  f"--cflags {module})")
 			if dirs:
-				a(f"{name}_LDIRS := $(shell $(PKG_CONFIG) --libs-only-L {module})")
+				a(f"{name}_LDIRS := $(shell {pc_env}$(PKG_CONFIG) "
+				  f"--libs-only-L {module})")
 		a("")
 	a(var("CFLAGS", common))
 	a(var("CXXFLAGS", common))
