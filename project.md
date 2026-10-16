@@ -32181,9 +32181,17 @@ report. §415 came from walking past the thing §414 was about.
 - **beerssh's README cites §293 as unsettled**, which §305 settled on
   2026-09-21. Signalled; the dry run that closes it in their tree is
   theirs, their dependency tree being 510 MB of untracked artifacts.
-- **`tool/style_gate.py` and `tool/test_style_gate.py` are still
-  modified and uncommitted here**, synced in by somebody else. Not this
-  session's to commit and not to revert.
+- ~~**`tool/style_gate.py` and `tool/test_style_gate.py` are still
+  modified and uncommitted here**, synced in by somebody else.~~
+  **Committed 2026-10-16**, and the earlier reading is worth keeping
+  rather than overwriting: a dirty file in a shared tree is not presumed
+  yours, which is why that fold declined. What changed is the
+  measurement. `diff` against `~/.claude/tool/style_gate.py` and
+  `~/.claude/tool/test_style_gate.py` shows the copies differ from the
+  source **only** by the two-line header naming it -- so this is not
+  somebody's half-made edit but a mechanical sync left uncommitted for a
+  month, which is `build-and-commit.md`'s invisible work. The three
+  source commits it carries are named in the commit message.
 - **Still with the holder from before**: §348's `--uninstall` manifest,
   §363's service-name charset, §367's `uses` doc/code contradiction,
   `pkg-optional`'s per-file-versus-per-target semantics, §385's
