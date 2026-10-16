@@ -2336,6 +2336,22 @@ def describe_exit(rc):
 DEFAULT_TEST_TIMEOUT = 60
 
 
+def test_deadline(conf, t):
+	"""The seconds one test gets, or None where there is no limit.
+
+    One function because three readers have to agree: the live runner and
+    both emitters. They did not -- the runner applied this and the ejected
+    recipes ran `./slow_test' bare, so a tree that states a limit tested
+    differently depending on which build ran, and the ejected one could
+    hang on exactly the fault the limit exists for (section 142: hydra's
+    suite stopped at 47 of 66 because one driver was still fetching a real
+    website). `test-timeout = 0' means no limit and is how a tree opts out
+    of the `timeout' dependency in the emitted files.
+    """
+	default = conf.project.get("test-timeout", DEFAULT_TEST_TIMEOUT)
+	return t.conf.get("test-timeout", default) or None
+
+
 RE_BIN_REF = re.compile(r"\$bin\(([^)]*)\)")
 
 # `$file(PATH)` in a define, resolving to that file's contents.
@@ -2560,7 +2576,7 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
 		exe = os.path.abspath(os.path.join(outdir, t.filename))
 		argv = [exe] + test_args(conf, t)
 		cwd = os.path.join(root, test_cwd(conf, t, root))
-		limit = t.conf.get("test-timeout", default) or None
+		limit = test_deadline(conf, t)
 		pairs = test_env_pairs(conf, t, bin_paths)
 		# Inherited and added to rather than replaced: a test needs PATH
 		# and HOME like anything else, and a caller who exported something
@@ -16564,8 +16580,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			        else os.path.relpath(art(t.filename), where))
 			if where and not prog.startswith((".", "/")):
 				prog = "./" + prog
+			# After the environment and before the program: `VAR=x timeout
+			# 2 ./prog' sets the variable for both, where the other order
+			# asks timeout to execute `VAR=x'.
+			limit = test_deadline(conf, t)
 			a("\t" + (f"cd {shlex.quote(where)} && " if where else "")
-			  + f"{env + ' ' if env else ''}{prog}"
+			  + f"{env + ' ' if env else ''}"
+			  + (f"timeout {limit} " if limit else "")
+			  + f"{prog}"
 			  + (f" {argv}" if argv else ""))
 		a("")
 
@@ -17727,9 +17749,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				prog = os.path.relpath(prog, where)
 			if not prog.startswith((".", "/")):
 				prog = "./" + prog
+			limit = test_deadline(conf, t)
 			words = ([f"cd {shlex.quote(where)} &&"] if where else []) + [
 			    _nj_esc(_sh_env(p))
-			    for p in test_env_pairs(conf, t, eject_bins)] + [
+			    for p in test_env_pairs(conf, t, eject_bins)] + (
+			    [f"timeout {limit}"] if limit else []) + [
 			    " ".join(_nj_esc(shlex.quote(x))
 			             for x in [prog] + test_args(conf, t))]
 			return " ".join(words)

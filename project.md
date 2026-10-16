@@ -482,7 +482,8 @@ that had been green about nothing for five commits ·
 [429. The include that asks for a package is usually not in a .c file](#429-the-include-that-asks-for-a-package-is-usually-not-in-a-c-file) ·
 [430. hull has asked for per-schema situc flags, and named what it blocks](#430-hull-has-asked-for-per-schema-situc-flags-and-named-what-it-blocks) ·
 [431. A generated unit carries no directives, and nothing said so](#431-a-generated-unit-carries-no-directives-and-nothing-said-so) ·
-[432. The ejected Makefile was never told where the .pc files are](#432-the-ejected-makefile-was-never-told-where-the-pc-files-are)
+[432. The ejected Makefile was never told where the .pc files are](#432-the-ejected-makefile-was-never-told-where-the-pc-files-are) ·
+[433. The deadline the runner applies and the emitted builds dropped](#433-the-deadline-the-runner-applies-and-the-emitted-builds-dropped)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33397,3 +33398,79 @@ text of the emitted file and nothing more. Whoever has a real cross
 sysroot can close it in one place -- the same block, from `cfg.sysroot`,
 with the libdir list lifted out of `Pkg.__init__` rather than written a
 second time.
+
+## 433. The deadline the runner applies and the emitted builds dropped
+
+`fmake test` gives every test a deadline -- `[project] test-timeout`, a
+target's own, or 60 seconds -- and section 142 records why: hydra's suite
+stopped at 47 of 66 because one driver was still fetching a real website,
+and a runner with no limit lets one test suspend the whole suite and throw
+away the results already collected.
+
+**Both ejected recipes ran the program bare.**
+
+    test: $(TEST_TARGETS)
+    	./slow_test
+
+So a tree that states a limit tested differently depending on which build
+ran -- and the ejected one is the worse half to lose it from, because that
+is the build a source package runs, unattended, on somebody else's
+machine. Measured: a test sleeping for 60 seconds against a stated limit
+of 2. `fmake test` came back in 8 seconds, most of it compiling; the
+ejected `make test` ran the full minute.
+
+Both emitters carry it now, after the environment and before the program
+-- `VAR=x timeout 2 ./prog` sets the variable for both, where the other
+order asks `timeout` to execute `VAR=x`.
+
+**One function, three readers**, which is the actual fix. The runner had
+`t.conf.get("test-timeout", default) or None` and the two emitters had
+nothing; `test_deadline(conf, t)` is what all three ask now. The drift was
+two emitters re-deriving a fact the runner already held -- section 428's
+shape, a third time.
+
+**`test-timeout = 0` is the opt-out and had to stay one.** It means no
+limit in the runner, so it means no `timeout` in either emitted file --
+otherwise the emitted builds would gain a dependency on coreutils that
+the tree had explicitly declined. Asserted in both forms.
+
+### The one case it broke, and why that is the right outcome
+
+`a_test_runs_from_the_directory_its_paths_were_written_for` failed on the
+first full run: it matched the emitted recipe with `^\tcd test && (\S+)`
+and asserted the group was `../fixture_test`, which is now
+`timeout 60 ../fixture_test`. The behaviour it exists for -- `test-cwd`
+changes directory and the binary is reached from there -- is unchanged,
+and the regex was pinning the *absence* of anything else on the line.
+
+The prefix is optional in that case now, with a comment saying so,
+because the next reader tightening it back to a literal is how it would
+fail for the wrong reason a second time. That is the cheap half of the
+lesson. The other half is that a case asserting a whole recipe line
+asserts every future addition to it. Measured rather than guessed, since
+the first draft of this sentence said "about forty" from no measurement
+at all: 23 assertions in the suite read the ejected Makefile text and 9
+read the ejected ninja text, and exactly one of the 32 anchors on a tab
+at the start of a recipe line, which is the one that broke.
+
+### How the sweep found it
+
+Not by reading the emitters. The lens was section 432's: **a tree states a
+fact; does the ejected build carry it?** Asked mechanically -- every key
+in `CONF_SCHEMA`'s `[project]` and `[toolchain]` tables against the text
+of both emitters -- which named five keys neither mentions:
+
+- `exclude` and `include-dirs`: carried by value. An exclusion is already
+  baked into the file list, and an include directory into `CFLAGS`.
+- `sysroot`: `--sysroot` reaches `CFLAGS` the same way; what does not
+  reach the file is the pkg-config half, which is section 432's recorded
+  sibling omission.
+- `lib-dirs`: carried by value as `-L`, for the same reason as
+  `include-dirs`.
+- `test-timeout`: this.
+
+A grep over a schema is a crude instrument and says so: it finds a key
+nobody mentions and cannot tell a dropped fact from one carried by value.
+Four of the five were the second kind. That is the right ratio for a
+cheap sweep -- the alternative was reading two emitters of 1,700 lines
+against a 33-key schema by eye, which is the reading nobody does twice.

@@ -11506,6 +11506,73 @@ def a_failing_generated_unit_names_the_directive_it_did_not_get(t):
 
 
 @case
+def an_ejected_test_recipe_carries_the_deadline_fmake_applies(t):
+	"""The limit the runner enforces, dropped by both emitted builds.
+
+	`fmake test' gives every test a deadline -- `[project] test-timeout',
+	a target's own, or 60 -- and the reason is section 142's: hydra's
+	suite stopped at 47 of 66 because one driver was still fetching a
+	real website, and a runner with no limit lets one test suspend the
+	whole suite and throw away the results already collected.
+
+	Both ejected recipes ran the program bare. So the same tree tested
+	differently depending on which build ran, and the ejected one could
+	hang on exactly the fault the limit exists for -- which is the worse
+	half, because that is the build a source package runs.
+
+	Measured end to end rather than by reading the recipe: a test that
+	sleeps for 60 seconds, a stated limit of 2, and `make test' is
+	expected to come back in about two seconds with timeout's own 124.
+	Reading the text would have passed on a recipe that named `timeout'
+	somewhere harmless.
+
+	The three readers go through one function now, which is the point:
+	the drift was two emitters re-deriving a fact the runner already
+	had."""
+	if not shutil.which("make") or not shutil.which("timeout"):
+		raise Skip("make and timeout are both needed")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("test/slow_test.c",
+	        "#include <unistd.h>\nint main(void){ sleep(60); return 0; }\n")
+	t.write("fmake.toml", "[project]\ntest-timeout = 2\n")
+	check(t.fmake().returncode == 0, "the fixture does not build")
+
+	t.write("Makefile", t.fmake("--eject").stdout)
+	began = time.time()
+	r = _run_in(t.dir, "make", "test")
+	took = time.time() - began
+	check(r.returncode != 0,
+	      f"a test killed on its deadline is a failed test: {r.stdout}")
+	check(took < 30,
+	      f"the ejected test ran for {took:.1f}s against a stated limit of "
+	      f"2, so the recipe has no deadline")
+	check("124" in r.stdout + r.stderr,
+	      f"and it should be timeout that killed it: {r.stdout}{r.stderr}")
+
+	# The opt-out, because a limit nobody can remove is a limit that gets
+	# worked around: `test-timeout = 0' is no limit in the runner and must
+	# be no limit here either.
+	t.write("fmake.toml", "[project]\ntest-timeout = 0\n")
+	for form in ("make", "ninja"):
+		out = t.fmake("--eject", form).stdout
+		check("timeout" not in out,
+		      f"--eject {form} kept a deadline the tree switched off: "
+		      f"{out[:400]}")
+
+	# And the default reaches both, since the runner applies one whether
+	# or not the tree said anything. The number is read out of fmake
+	# rather than written here, so this cannot become the third copy of
+	# the fact the fix exists to stop copying.
+	default = int(re.search(r"^DEFAULT_TEST_TIMEOUT = (\d+)",
+	                        open(FMAKE).read(), re.M).group(1))
+	t.write("fmake.toml", "[project]\n")
+	for form in ("make", "ninja"):
+		out = t.fmake("--eject", form).stdout
+		check(f"timeout {default} " in out,
+		      f"--eject {form} dropped the default deadline: {out[:400]}")
+
+
+@case
 def a_rewritten_moc_re_mocs_what_it_wrote(t):
 	"""Section 245's gap, closed: the moc key is wired, not only situc's.
 
@@ -12318,8 +12385,13 @@ def a_test_runs_from_the_directory_its_paths_were_written_for(t):
 	check(r.returncode == 0, f"from test/ it is: {r.stdout}{r.stderr}")
 
 	# The ejected builds do the same, and reach the binary from there.
+	# The deadline of section 433 sits between the `cd' and the program,
+	# and this case is about the directory rather than the limit -- so the
+	# prefix is optional here on purpose, and tightening it back to a
+	# literal is how this case would start failing for the wrong reason
+	# again.
 	mk = t.fmake("--eject", "make").stdout
-	m = re.search(r"^\tcd test && (\S+)", mk, re.M)
+	m = re.search(r"^\tcd test && (?:timeout \d+ )?(\S+)", mk, re.M)
 	check(m and m.group(1) == "../fixture_test",
 	      f"the make rule changes directory and finds the binary: "
 	      f"{[l for l in mk.splitlines() if 'fixture_test' in l and l.startswith(chr(9))]}")
@@ -12329,7 +12401,8 @@ def a_test_runs_from_the_directory_its_paths_were_written_for(t):
 		r = _run_in(t.dir, "make", "-s", "test")
 		check(r.returncode == 0, f"and make runs it: {r.stdout}{r.stderr}")
 	nj = t.fmake("--eject", "ninja").stdout
-	check("cd test && ./../fixture_test" in nj or "cd test && ../fixture_test" in nj,
+	check(re.search(r"cd test && (?:timeout \d+ )?\.?/?\.\./fixture_test",
+	                nj),
 	      f"the ninja rule too: {[l for l in nj.splitlines() if 'cd test' in l]}")
 
 	# Outside the tree is refused by name.
