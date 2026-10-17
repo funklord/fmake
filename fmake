@@ -11238,8 +11238,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# every later call raises UnboundLocalError. Three cases caught it,
 	# all of them on paths that call the function several thousand lines
 	# below here.
-	for _skipped, _held in sorted(skipped_source_dirs(root,
-	                                                  _pruned).items()):
+	set_aside_dirs = skipped_source_dirs(root, _pruned)
+	for _skipped, _held in sorted(set_aside_dirs.items()):
 		info(f"{_skipped}/ holds {_held} source file(s) this tree has "
 		     f"committed and is not walked: fmake skips a directory "
 		     f"called {os.path.basename(_skipped)!r} by name")
@@ -15573,6 +15573,26 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# once a library has been excluded.
 			note("no library here exports them, and nothing in this tree "
 			     "appears to define them either")
+			# Unless something was set aside before the walk reached it,
+			# which is where sections 438 and 439 both ended: a committed
+			# `.asm' and a committed `build/helper.c' each produced this
+			# sentence about a symbol they define in plain text. Both now
+			# have their own line at the top of the run, and this is
+			# where the reader is -- so the sentence is qualified here
+			# rather than left to be contradicted several screens up.
+			#
+			# A count and a pointer, not an attribution: fmake has not
+			# read those files and must not imply it knows which of them
+			# holds the name.
+			aside = sorted(unbuilt) + [d + "/" for d in set_aside_dirs]
+			if aside:
+				_a_head, _a_rest = capped(aside, 3)
+				note(f"{len(aside)} thing(s) in this tree were not built "
+				     f"at all and are named at the top of this run "
+				     f"({', '.join(_a_head)}"
+				     + (f", and {_a_rest} more" if _a_rest else "")
+				     + "): a definition in one of those reads exactly "
+				       "like this")
 			note("so either a library this build has not been told about "
 			     "-- --ldflags, or @pkg on the file that needs it -- or "
 			     "something that was never generated: a code generator "

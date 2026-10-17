@@ -2298,6 +2298,26 @@ def a_skipped_directory_holding_committed_source_says_so(t):
 	      f"{out}")
 	check("skips a directory called 'build' by name" in out,
 	      f"and the reason has to say it is the name: {out}")
+	check("were not built at all and are named at the top of this run"
+	      in out and "build/" in out.split("appears to define them")[-1],
+	      f"the link failure was not qualified by the skipped directory: "
+	      f"{out}")
+
+	# The control for that qualifier: a tree with nothing set aside must
+	# not gain the line, or it becomes noise on every undefined symbol.
+	w = Tree("nothing-aside")
+	try:
+		w.write("main.c", "int nowhere(void);\n"
+		        "int main(void){ return nowhere(); }\n")
+		r = w.fmake()
+		said = r.stdout + r.stderr
+		check("appears to define them" in said,
+		      f"the control has to reach the same message: {said}")
+		check("were not built at all" not in said,
+		      f"with nothing set aside there is nothing to qualify: "
+		      f"{said}")
+	finally:
+		w.cleanup()
 
 	# The case the skip exists for: an untracked build tree says nothing,
 	# or every Android build in this workspace gains a line it does not
@@ -2365,6 +2385,14 @@ def a_tracked_file_nothing_can_compile_is_named_too(t):
 	      f"the reason has to say what fmake does build: {out}")
 	check("reads as undefined here" in out,
 	      f"and what it costs, which is the whole reason for the line: "
+	      f"{out}")
+	# And again where the reader actually is. The link failure says
+	# nothing in this tree appears to define them, which is false while
+	# fast.asm sits there defining fast_add, so it is qualified with what
+	# was set aside -- a count and a pointer, never an attribution.
+	check("were not built at all and are named at the top of this run"
+	      in out and "fast.asm" in out.split("appears to define them")[-1],
+	      f"the link failure was not qualified by what was set aside: "
 	      f"{out}")
 
 	# The switch, because a tree that assembles its own with its own rule

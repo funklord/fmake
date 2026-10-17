@@ -33844,15 +33844,36 @@ will compile it"* is the more informative sentence, and the tracked half
 filters out anything `run_generators` returned. The case asserts the
 count is exactly one on three consecutive builds.
 
-### What is not fixed, and why
+### The link-time sentence, qualified rather than left standing
 
-The link-time sentence still says nothing in the tree appears to define
-them. Making it accurate would mean attributing a symbol to an unbuilt
-file -- a text search for the name in nasm syntax, which fmake has no
-scanner for and which the decision in `UNBUILT_SRC_EXTS` deliberately
-declines to grow. The build-time line is section 123's own remedy
-(report at discovery, not at the link) applied to the half that lacked
-it, and it is what the reader has in hand before the link fails.
+This was first recorded as not fixed, on section 123's precedent --
+report at discovery, not at the link -- and that was the wrong call for
+one reason: **the discovery line scrolls away.** Two findings in a row
+ended at the same sentence, which says *"nothing in this tree appears to
+define them either"* while the file that defines the symbol sits in the
+tree, named twenty lines up on a short build and three hundred on a real
+one.
+
+It is qualified now, in the branch that prints it:
+
+    1 thing(s) in this tree were not built at all and are named at the
+    top of this run (fast.asm): a definition in one of those reads
+    exactly like this
+
+**A count and a pointer, never an attribution.** fmake has not read those
+files -- that is what being set aside means -- so it must not imply it
+knows which of them holds the name. The line appears only when something
+was set aside, which is asserted by a control: a tree with an ordinary
+undefined symbol and nothing skipped reaches the same message and gains
+nothing.
+
+The plumbing turned out to be none at all. The link-failure branch is
+inside `build()`, which is where the set-aside lists already live, and
+the only reason this was deferred twice is that nobody had looked.
+
+What stays unfixed is the attribution: naming which unbuilt file defines
+the symbol would mean reading nasm syntax, which `UNBUILT_SRC_EXTS`
+deliberately declines to grow a scanner for.
 
 ## 439. The name guess section 139 rejected, still in the code
 
