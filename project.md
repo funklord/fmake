@@ -488,7 +488,8 @@ that had been green about nothing for five commits ·
 [435. Advice that asked for a directive in a header](#435-advice-that-asked-for-a-directive-in-a-header) ·
 [436. Where this session stopped, third fold](#436-where-this-session-stopped-third-fold) ·
 [437. Three checks on the day's work, and a case that stopped skipping](#437-three-checks-on-the-days-work-and-a-case-that-stopped-skipping) ·
-[438. The committed file nothing compiles, and the claim about the tree](#438-the-committed-file-nothing-compiles-and-the-claim-about-the-tree)
+[438. The committed file nothing compiles, and the claim about the tree](#438-the-committed-file-nothing-compiles-and-the-claim-about-the-tree) ·
+[439. The name guess section 139 rejected, still in the code](#439-the-name-guess-section-139-rejected-still-in-the-code)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33852,3 +33853,86 @@ scanner for and which the decision in `UNBUILT_SRC_EXTS` deliberately
 declines to grow. The build-time line is section 123's own remedy
 (report at discovery, not at the link) applied to the half that lacked
 it, and it is what the reader has in hand before the link fails.
+
+## 439. The name guess section 139 rejected, still in the code
+
+Section 139 answered section 130's question by choosing `.gitignore` over
+a guess, and was explicit about what it was rejecting:
+
+> Skipping `build*` by name is a guess about a word. ... Asking git
+> whether it ignores the directory is not a guess at all ... and a
+> project whose sources live under `build/` has committed them and is
+> therefore **untouched by construction**.
+
+**`SKIP_DIRS` has held the literal `build` since the first commit.** Dated
+rather than assumed: `git log -S` puts it in `e2fd09d`, 2026-07-26,
+*"build C and C++ programs with no build file"*, and
+`ignored_source_dirs` in `34c3d01`, 2026-09-02. So the name guess predates
+the decision against it by five weeks, the decision did not remove it, and
+the sentence above has been false of the code ever since.
+
+**What it cost was silent.** A tree with a committed `build/helper.c`:
+
+    $ fmake
+    [1/1] CC  main.c
+    LD  builddir
+    * builddir did not link
+      no x86_64/64le library exports: helper
+      no library here exports them, and nothing in this tree appears to
+      define them either
+
+`helper` is defined in plain C, in a file this tree has committed, which
+fmake never looked at and never mentioned -- not under `-v` either. The
+same false claim as section 438, reached from the other side: there by a
+file nothing can compile, here by a file nothing walked.
+
+### What changed, and what deliberately did not
+
+**The skip stays.** It is what keeps hydra's `build-android-arm64-v8a/`
+from being compiled against the desktop Qt, and that case is still
+answered by name where git cannot answer at all -- a release tarball with
+no repository, or a build tree nobody has told git about.
+
+**The silence goes.** `_walk` records the directories it prunes by name,
+and a committed source inside one is reported before anything else runs:
+
+    * build/ holds 1 source file(s) this tree has committed and is not
+      walked: fmake skips a directory called 'build' by name
+
+Asked of **tracking** rather than of `check-ignore`, which is section
+139's own signal -- *"has committed them"* -- and not the same question: a
+freshly initialised repository has told git nothing about its build tree,
+so `check-ignore` would answer "not ignored" and the report would fire on
+exactly the case the skip exists for. Both controls are in the case: an
+untracked `build/` says nothing, and a tree with no repository says
+nothing, because a guess there would be worse than silence.
+
+### What the gate caught, which no probe would have
+
+The first version named its loop variables `_rel` and `_n`. There is a
+module-level `_rel(out, root)` a few thousand lines further down, and
+assigning that name anywhere in `build` makes it local to the whole
+function -- so every later call raised
+
+    UnboundLocalError: cannot access local variable '_rel' where it is
+    not associated with a value
+
+Three cases failed on it and every probe written for this finding passed,
+because the probes exercised the new line and none of them reached a path
+that calls `_rel`. A leading underscore reads as "local and private" and
+is exactly the convention the module-level helper uses too, which is what
+made the collision easy to write and invisible to read.
+
+### The decision this does not take
+
+Whether a `build/` whose sources git tracks should be **walked** is not
+mine. Section 139's reasoning says it should -- that is what "untouched by
+construction" means -- and the code has said otherwise since before the
+reasoning existed. Removing the name from `SKIP_DIRS` would change what
+every tree builds, including trees with no `.gitignore` entry for their
+build output, where the loud failure would be duplicate symbols rather
+than a silent omission.
+
+So: the report is the half that cannot be wrong, and **the holder's is
+whether the name should go.** The option, its cost and whose it is, in
+the form section 348 uses.

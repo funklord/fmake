@@ -2251,6 +2251,88 @@ def the_two_assembly_kinds_differ_by_the_preprocessor(t):
 
 
 @case
+def a_skipped_directory_holding_committed_source_says_so(t):
+	"""Section 139 chose git over a name guess, and the guess stayed.
+
+	That section rejected skipping `build*` by name -- *"a guess about a
+	word"* -- and said of the rule it chose that *"a project whose sources
+	live under `build/` has committed them and is therefore untouched by
+	construction"*. `SKIP_DIRS` has held the literal `build` since the
+	first commit, five weeks before that was written, so the sentence was
+	not true of the code.
+
+	What it cost was silent, which is why nothing had noticed: a tree with
+	`build/helper.c` built nothing from it, said nothing about it under
+	`-v` either, and then reported
+
+	    no library here exports them, and nothing in this tree appears to
+	    define them either
+
+	about `helper`, which `build/helper.c` defines in plain C. Section 438
+	is the same false claim from the extension side.
+
+	The skip is unchanged -- it is what keeps hydra's Android build output
+	from being compiled against the desktop Qt -- and the silence is not.
+	Asked of git for section 139's own reason: a committed source is the
+	project's statement that the directory is theirs, so a tracked one is
+	reported and an untracked build tree is not."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 3; }\n")
+	t.write("build/helper.c", "int helper(void){ return 3; }\n")
+	check(subprocess.run(["git", "init", "-q", t.dir],
+	                     capture_output=True).returncode == 0,
+	      "could not make a repository")
+	for args in (["add", "main.c", "build/helper.c"],
+	             ["-c", "user.email=a@b", "-c", "user.name=c",
+	              "commit", "-qm", "init"]):
+		check(subprocess.run(["git", "-C", t.dir] + args,
+		                     capture_output=True).returncode == 0,
+		      f"git {args[0]} failed")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("build/ holds 1 source file(s)" in out,
+	      f"a skipped directory holding committed source was not named: "
+	      f"{out}")
+	check("skips a directory called 'build' by name" in out,
+	      f"and the reason has to say it is the name: {out}")
+
+	# The case the skip exists for: an untracked build tree says nothing,
+	# or every Android build in this workspace gains a line it does not
+	# want.
+	u = Tree("build-untracked")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("build/helper.c", "int helper(void){ return 3; }\n")
+		subprocess.run(["git", "init", "-q", u.dir], capture_output=True)
+		subprocess.run(["git", "-C", u.dir, "add", "main.c"],
+		               capture_output=True)
+		subprocess.run(["git", "-C", u.dir, "-c", "user.email=a@b",
+		                "-c", "user.name=c", "commit", "-qm", "init"],
+		               capture_output=True)
+		r = u.fmake()
+		check("is not walked" not in r.stdout + r.stderr,
+		      f"an untracked build tree must say nothing: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+	# And where git cannot answer at all, nothing is guessed.
+	v = Tree("build-nogit")
+	try:
+		v.write("main.c", "int main(void){ return 0; }\n")
+		v.write("build/helper.c", "int helper(void){ return 3; }\n")
+		r = v.fmake()
+		check("is not walked" not in r.stdout + r.stderr,
+		      f"with no repository there is nothing to be sure of: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_tracked_file_nothing_can_compile_is_named_too(t):
 	"""The other half of the case below, and it had no reader at all.
 

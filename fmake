@@ -5010,8 +5010,13 @@ def doxygen_aliases():
 # Tree walk
 # ---------------------------------------------------------------------------
 
-def _walk(root):
+def _walk(root, pruned=None):
 	"""os.walk, following symlinked directories exactly once each.
+
+    `pruned' collects the directories dropped because their NAME is in
+    SKIP_DIRS, for a caller that wants to report them. Optional because
+    two of the three callers are counting files and have nothing to say
+    about it.
 
     Not following them means a tree laid out as `src/common -> ../shared` --
     which is how a pair of sibling projects usually share code -- is missing
@@ -5044,8 +5049,25 @@ def _walk(root):
 		# Sorting does not make the choice principled -- it is still the
 		# first name in walk order -- but it makes it the same everywhere,
 		# which is the part anybody can rely on.
-		dirnames[:] = sorted(d for d in dirnames
-		                     if d not in SKIP_DIRS and not d.startswith("."))
+		keep = sorted(d for d in dirnames
+		              if d not in SKIP_DIRS and not d.startswith("."))
+		# What was pruned, for whoever wants to say so. A name in
+		# SKIP_DIRS is a guess about a word -- which is the form section
+		# 139 rejected and then left in place here -- and a tree whose
+		# sources live under `build/' is skipped by it silently. The walk
+		# is the only place that knows, and knowing without saying is
+		# what cost the measurement in section 439.
+		#
+		# Only the named ones. A dotted directory is pruned for a
+		# different reason and holding somebody's cache rather than
+		# their source; reporting those would be noise on every tree
+		# with a .venv in it.
+		if pruned is not None:
+			for d in dirnames:
+				if d in SKIP_DIRS and d != STATE_DIR:
+					pruned.append(os.path.relpath(
+					    os.path.join(dirpath, d), root))
+		dirnames[:] = keep
 		yield dirpath, dirnames, filenames
 
 
@@ -5146,8 +5168,10 @@ def find_ext(root, ext):
 	return sorted(out)
 
 
-def walk_tree(root):
+def walk_tree(root, pruned=None):
 	"""Return (sources, headers, unbuilt) as root-relative paths.
+
+    `pruned' is passed through to `_walk': see there.
 
     `unbuilt' is the third list because a file nothing here compiles is a
     fact about the tree and the walk is the only place that sees it. A
@@ -5158,7 +5182,7 @@ def walk_tree(root):
     the tracked half had no reader at all.
     """
 	srcs, hdrs, unbuilt = [], [], []
-	for dirpath, dirnames, filenames in _walk(root):
+	for dirpath, dirnames, filenames in _walk(root, pruned):
 		for f in filenames:
 			ext = os.path.splitext(f)[1]
 			if ext in UNBUILT_SRC_EXTS:
@@ -11202,7 +11226,23 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# fetch_submodules.
 	if not args.no_submodules:
 		fetch_submodules(root, dry_run=bool(args.dry_run))
-	srcs, hdrs, unbuilt = walk_tree(root)
+	_pruned = []
+	srcs, hdrs, unbuilt = walk_tree(root, _pruned)
+	# A directory skipped because of its NAME, holding source this tree
+	# has committed. Said before anything else, because everything after
+	# it is reasoning about a source set that does not contain those
+	# files -- including the link failure that reads "nothing in this
+	# tree appears to define them either".
+	# Not `_rel': there is a module-level `_rel(out, root)' and a loop
+	# variable of that name makes it local to the whole of `build', so
+	# every later call raises UnboundLocalError. Three cases caught it,
+	# all of them on paths that call the function several thousand lines
+	# below here.
+	for _skipped, _held in sorted(skipped_source_dirs(root,
+	                                                  _pruned).items()):
+		info(f"{_skipped}/ holds {_held} source file(s) this tree has "
+		     f"committed and is not walked: fmake skips a directory "
+		     f"called {os.path.basename(_skipped)!r} by name")
 	# Before the scan, so a build directory's contents are not read either.
 	# Headers are left where they are: a build tree is also where a
 	# configure step writes the config.h somebody's source includes, and
@@ -11271,6 +11311,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 
 	if generated:
 		srcs, hdrs, _unbuilt_again = walk_tree(root)
+		# No second report: the walk is the same walk and the line above
+		# has already been printed.
 		srcs = [r for r in srcs if os.path.dirname(r) not in ignored_dirs]
 		for rel in generated:
 			ext = os.path.splitext(rel)[1]
@@ -21019,6 +21061,64 @@ def git_ignored(root, paths):
 	if r.returncode not in (0, 1):
 		return set()
 	return {p for p in r.stdout.split("\0") if p}
+
+
+def skipped_source_dirs(root, pruned):
+	"""Skipped-by-name directories holding source git does NOT ignore.
+
+    Section 139 chose `.gitignore' over a name guess and said why: a name
+    is a guess about a word, and *"a project whose sources live under
+    `build/' has committed them and is therefore untouched by
+    construction"*. SKIP_DIRS has held the literal `build' since the first
+    commit, five weeks before that was written, so the sentence was not
+    true -- and the cost was silent. A tree with `build/helper.c' built
+    nothing from it, said nothing about it, and then reported *"nothing in
+    this tree appears to define them either"* about the function it
+    defines.
+
+    Asked of git for the same reason 139 gave: a committed source is the
+    project's own statement that the directory is theirs. An untracked
+    build tree answers nothing here and is reported by nobody, which is
+    right -- that is the case the skip exists for.
+
+    Returns {directory: count}, empty wherever git cannot answer, since a
+    guess would be worse than silence.
+    """
+	if not pruned or not git_dir(root):
+		return {}
+	holds = {}
+	for rel in sorted(set(pruned)):
+		found = 0
+		for dirpath, _dirnames, filenames in os.walk(
+		        os.path.join(root, rel)):
+			for f in filenames:
+				if os.path.splitext(f)[1] in SRC_EXTS:
+					found += 1
+		if found:
+			holds[rel] = found
+	if not holds:
+		return {}
+	# Tracked, not merely un-ignored, because that is the signal section
+	# 139 named: *"a project whose sources live under `build/' has
+	# committed them"*. `check-ignore' would answer "not ignored" for a
+	# freshly initialised repository whose build tree nobody has told git
+	# about yet, and reporting that one would be the guess this is
+	# avoiding.
+	kept = {}
+	for rel, n in holds.items():
+		try:
+			r = subprocess.run(["git", "-C", root, "ls-files", "-z",
+			                    "--", rel],
+			                   capture_output=True, text=True,
+			                   errors="replace", timeout=10)
+		except (OSError, subprocess.SubprocessError):
+			return {}
+		if r.returncode != 0:
+			return {}
+		if any(os.path.splitext(f)[1] in SRC_EXTS
+		       for f in r.stdout.split("\0") if f):
+			kept[rel] = n
+	return kept
 
 
 def ignored_source_dirs(root, srcs):
