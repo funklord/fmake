@@ -290,6 +290,19 @@ RUST_EDITION = "2021"
 # nothing here has met a tree that wants it. A generator emitting one gets
 # told rather than ignored, which is what section 123 was about.
 UNBUILT_SRC_EXTS = {".asm"}
+
+
+def unbuilt_why(rel):
+	"""Why nothing here will compile this file, in one clause.
+
+    Two readers: the generated-output report of section 123 and the
+    tracked-file one beside the walk. The same sentence written twice in
+    places that far apart is section 428's shape, and the generated half
+    was the only one that existed for long enough to prove the other was
+    missing.
+    """
+	return (f"fmake builds C, C++, assembly and Rust, not "
+	        f"{os.path.splitext(rel)[1]}")
 HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
 
 SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
@@ -3085,9 +3098,8 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	                   if os.path.splitext(o)[1] in UNBUILT_SRC_EXTS})
 	_head, _rest = capped(stranded)
 	for rel in _head:
-		note(f"{rel} was generated and nothing will compile it: fmake "
-		     f"builds C, C++, assembly and Rust, not "
-		     f"{os.path.splitext(rel)[1]}")
+		note(f"{rel} was generated and nothing will compile it: "
+		     + unbuilt_why(rel))
 	if _rest:
 		note(f"... and {_rest} more (-v for all)")
 
@@ -5135,11 +5147,24 @@ def find_ext(root, ext):
 
 
 def walk_tree(root):
-	"""Return (sources, headers) as root-relative paths."""
-	srcs, hdrs = [], []
+	"""Return (sources, headers, unbuilt) as root-relative paths.
+
+    `unbuilt' is the third list because a file nothing here compiles is a
+    fact about the tree and the walk is the only place that sees it. A
+    tracked `.asm' was dropped by the extension test above and mentioned
+    nowhere -- not under `-v' either -- and then the link said "nothing in
+    this tree appears to define them either" about a symbol that file
+    defines by name. Section 123 fixed the generated half of exactly this;
+    the tracked half had no reader at all.
+    """
+	srcs, hdrs, unbuilt = [], [], []
 	for dirpath, dirnames, filenames in _walk(root):
 		for f in filenames:
 			ext = os.path.splitext(f)[1]
+			if ext in UNBUILT_SRC_EXTS:
+				unbuilt.append(os.path.relpath(os.path.join(dirpath, f),
+				                               root))
+				continue
 			if ext not in SRC_EXTS and ext not in HDR_EXTS:
 				continue
 			path = os.path.join(dirpath, f)
@@ -5171,7 +5196,7 @@ def walk_tree(root):
 				srcs.append(rel)
 			else:
 				hdrs.append(rel)
-	return sorted(srcs), sorted(hdrs)
+	return sorted(srcs), sorted(hdrs), sorted(unbuilt)
 
 
 def _gitmodule_paths(path):
@@ -11177,7 +11202,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# fetch_submodules.
 	if not args.no_submodules:
 		fetch_submodules(root, dry_run=bool(args.dry_run))
-	srcs, hdrs = walk_tree(root)
+	srcs, hdrs, unbuilt = walk_tree(root)
 	# Before the scan, so a build directory's contents are not read either.
 	# Headers are left where they are: a build tree is also where a
 	# configure step writes the config.h somebody's source includes, and
@@ -11186,6 +11211,10 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	ignored_dirs = ignored_source_dirs(root, srcs)
 	ignored_srcs = [r for r in srcs if os.path.dirname(r) in ignored_dirs]
 	srcs = [r for r in srcs if os.path.dirname(r) not in ignored_dirs]
+	# A `.asm' inside a directory git is told to ignore is covered by the
+	# line below about that directory, and saying it twice would make a
+	# build tree full of generated assembly shout once per file.
+	unbuilt = [r for r in unbuilt if os.path.dirname(r) not in ignored_dirs]
 	if ignored_srcs:
 		where = sorted({os.path.dirname(r) for r in ignored_srcs})
 		info(f"{len(ignored_srcs)} source file(s) not built: git is told "
@@ -11241,7 +11270,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		cache.objects = cache.data["objects"]
 
 	if generated:
-		srcs, hdrs = walk_tree(root)
+		srcs, hdrs, _unbuilt_again = walk_tree(root)
 		srcs = [r for r in srcs if os.path.dirname(r) not in ignored_dirs]
 		for rel in generated:
 			ext = os.path.splitext(rel)[1]
@@ -11298,6 +11327,28 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			if fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/*") + "/"):
 				return pat
 		return None
+
+	# Said here rather than at the walk, because `[project] exclude' is
+	# the switch that turns it off and `exclude_pattern' does not exist
+	# until now. A tree that assembles its own `.asm' with its own rule
+	# excludes the files and hears nothing.
+	# A generated one belongs to the report in `run_generators', which
+	# says `was generated' and is the more informative of the two. Without
+	# this filter the second build of a tree whose generator writes a
+	# `.asm' said both -- the first build only one, because the first walk
+	# runs before the file exists, which is how a duplicate hides until
+	# somebody builds twice.
+	_stray = [r for r in unbuilt
+	          if r not in set(generated) and not exclude_pattern(r)]
+	_head, _rest = capped(_stray)
+	for rel in _head:
+		info(f"{rel} is not built: " + unbuilt_why(rel))
+	if _rest:
+		info(f"... and {_rest} more (-v for all)")
+	if _stray:
+		info("a symbol one of those defines reads as undefined here with "
+		     "nothing in the tree defining it; [project] exclude silences "
+		     "this")
 
 	excluded = dict(unreadable)
 	by_name = []

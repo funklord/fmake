@@ -2251,6 +2251,80 @@ def the_two_assembly_kinds_differ_by_the_preprocessor(t):
 
 
 @case
+def a_tracked_file_nothing_can_compile_is_named_too(t):
+	"""The other half of the case below, and it had no reader at all.
+
+	Section 123 made a GENERATED `.asm` say so, because left silent it
+	became a link failure listing symbols under advice about `--ldflags'.
+	A `.asm` somebody committed was dropped by the extension test in the
+	walk and mentioned nowhere -- not under `-v' either -- and then the
+	link said
+
+	    no library here exports them, and nothing in this tree appears to
+	    define them either
+
+	about `fast_add`, which `fast.asm` defines by name three lines into
+	the file. A false claim about the tree, under advice pointing at a
+	library or an unrun generator.
+
+	Three things are asserted, and the third is this case's own bug: the
+	report must fire once, from one of the two halves. A generated `.asm`
+	is on disk by the second build, so the walk sees it too -- which is
+	how a duplicate hides until somebody builds twice, and is why the
+	generated half keeps the file and the tracked half filters it out."""
+	t.write("main.c", "int fast_add(int a, int b);\n"
+	        "int main(void){ return fast_add(1, 2) - 3; }\n")
+	t.write("fast.asm", "section .text\nglobal fast_add\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("fast.asm is not built" in out,
+	      f"a tracked file nothing compiles was not named: {out}")
+	check(".asm" in out and "C, C++, assembly and Rust" in out,
+	      f"the reason has to say what fmake does build: {out}")
+	check("reads as undefined here" in out,
+	      f"and what it costs, which is the whole reason for the line: "
+	      f"{out}")
+
+	# The switch, because a tree that assembles its own with its own rule
+	# must be able to stop hearing about it.
+	t.write("fmake.toml", '[project]\nexclude = ["*.asm"]\n')
+	r = t.fmake()
+	check("fast.asm is not built" not in r.stdout + r.stderr,
+	      f"[project] exclude did not silence it: {r.stdout}{r.stderr}")
+
+	# And once, not twice, for a generated one -- on the SECOND build,
+	# which is the only build that can show it.
+	u = Tree("asm-generated")
+	try:
+		u.write("src/mk.py", "import sys\n"
+		        'open(sys.argv[1], "w").write("; nasm, not gas\\n")\n'
+		        'open(sys.argv[2], "w").write("#define N 1\\n")\n')
+		u.write("main.c", '#include "cases.inc"\n'
+		        "int main(void){ return N - 1; }\n")
+		u.write("fmake.toml", f"""
+[project]
+include-dirs = ["gen"]
+
+[generate.cases]
+command = "{sys.executable} src/mk.py gen/cases.asm gen/cases.inc"
+inputs  = ["src/mk.py"]
+outputs = ["gen/cases.asm", "gen/cases.inc"]
+""")
+		for build in (1, 2, 3):
+			r = u.fmake()
+			said = (r.stdout + r.stderr).count("gen/cases.asm")
+			check(said == 1,
+			      f"build {build} named gen/cases.asm {said} time(s), not "
+			      f"once: {r.stdout}{r.stderr}")
+			check("was generated and nothing will compile it"
+			      in r.stdout + r.stderr,
+			      f"build {build} lost the wording that says it was "
+			      f"generated: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_generated_file_nothing_can_compile_is_named(t):
 	"""A file a generator writes and nothing builds must not vanish quietly.
 

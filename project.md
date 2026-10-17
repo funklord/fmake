@@ -487,7 +487,8 @@ that had been green about nothing for five commits ·
 [434. A build that cleaned a file it never made](#434-a-build-that-cleaned-a-file-it-never-made) ·
 [435. Advice that asked for a directive in a header](#435-advice-that-asked-for-a-directive-in-a-header) ·
 [436. Where this session stopped, third fold](#436-where-this-session-stopped-third-fold) ·
-[437. Three checks on the day's work, and a case that stopped skipping](#437-three-checks-on-the-days-work-and-a-case-that-stopped-skipping)
+[437. Three checks on the day's work, and a case that stopped skipping](#437-three-checks-on-the-days-work-and-a-case-that-stopped-skipping) ·
+[438. The committed file nothing compiles, and the claim about the tree](#438-the-committed-file-nothing-compiles-and-the-claim-about-the-tree)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33787,3 +33788,67 @@ build refuses on the object's own machine type:
 Both are asserted, so the silent half cannot quietly become the loud one
 or the other way about. The refusal names the compiler it used, which is
 the fact a reader needs and the one the original bug withheld.
+
+## 438. The committed file nothing compiles, and the claim about the tree
+
+Section 123 made a **generated** `.asm` say so, because left silent it
+became a link failure listing symbols under advice about `--ldflags`. The
+tracked half of the same fact had no reader at all.
+
+A `fast.asm` committed beside a `main.c` was dropped by the extension
+test in `walk_tree` and mentioned nowhere -- not under `-v` either -- and
+then the link said
+
+    * asmtree did not link
+      no x86_64/64le library exports: fast_add
+      no library here exports them, and nothing in this tree appears to
+      define them either
+      so either a library this build has not been told about ... or
+      something that was never generated
+
+**That middle sentence is false**, and that is what makes this more than a
+missing line: `fast.asm` defines `fast_add` by name, three lines into the
+file, and the advice sends the reader to a package or an unrun generator.
+Section 147's shape, with fmake asserting something about the tree rather
+than merely failing to help.
+
+It now says, at the walk:
+
+    * fast.asm is not built: fmake builds C, C++, assembly and Rust, not .asm
+    * a symbol one of those defines reads as undefined here with nothing
+      in the tree defining it; [project] exclude silences this
+
+**One sentence, two readers.** `unbuilt_why` is shared with section 123's
+report, which is the shape 428, 433 and 434 all were: the two sites are
+hundreds of lines apart, and the generated one existed long enough to
+prove the other was missing.
+
+**Said at the walk and gated on `exclude`**, which is why it is reported
+where `exclude_pattern` exists rather than where the files are found. A
+tree that assembles its own `.asm` with its own rule excludes them and
+hears nothing; without that switch this would be a line somebody turns
+off by turning the feature off.
+
+### The duplicate that only a second build could show
+
+The first version reported a generated `.asm` twice. Not on the first
+build -- the walk runs before the generator writes the file -- but on
+every build after, where the file is on disk when the walk looks and the
+generator's own report fires as well. A duplicate that hides until
+somebody builds twice is the same class as section 366's stale moc: the
+first run is the one everybody tests.
+
+The generated half keeps the file, because *"was generated and nothing
+will compile it"* is the more informative sentence, and the tracked half
+filters out anything `run_generators` returned. The case asserts the
+count is exactly one on three consecutive builds.
+
+### What is not fixed, and why
+
+The link-time sentence still says nothing in the tree appears to define
+them. Making it accurate would mean attributing a symbol to an unbuilt
+file -- a text search for the name in nasm syntax, which fmake has no
+scanner for and which the decision in `UNBUILT_SRC_EXTS` deliberately
+declines to grow. The build-time line is section 123's own remedy
+(report at discovery, not at the link) applied to the half that lacked
+it, and it is what the reader has in hand before the link fails.
