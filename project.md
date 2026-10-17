@@ -34018,18 +34018,28 @@ either"* with nothing on screen to explain it.
 - **439** a directory skipped by name (`build/`)
 - **440** a source whose extension is only the wrong case (`.CPP`)
 - **441** a path that is not a regular file (a fifo, a device)
+- **441** a directory whose name begins with a dot, which was found by
+  asking whether the class was complete and measuring the answer
 
 **Everything the walk drops is a thing fmake then asserts does not
-exist.** Four routes, one sentence at the end of each, and none of them a
-bug in the dropping -- every one of the four is dropped for a good
-reason, three of them recorded in comments at the point of the drop. The
-defect each time was the silence, and the common fix is that the walk now
-carries `{path: why}` out with it and the link failure names what was set
-aside.
+exist.** Five routes, one sentence at the end of each, and none of them a
+bug in the dropping -- every one is dropped for a good reason, three of
+them recorded in comments at the point of the drop. The defect each time
+was the silence, and the common fix is that the walk now carries
+`{path: why}` out with it and the link failure names what was set aside.
 
-That is worth more than the four fixes: **a guard that is correct and
+That is worth more than the five fixes: **a guard that is correct and
 silent is indistinguishable from a bug, from outside**, and this tree had
-four of them in one function.
+five of them in one function.
+
+**The fifth was nearly dismissed as noise, and the measurement is why it
+was not.** A dotted directory is skipped for cases like `.venv` and
+`.cache`, so reporting them looked like a line on every tree -- until a
+tracked `.src/helper.c` produced the same false claim, and the tracked
+test that section 439 already needed turned out to keep the caches quiet
+by itself. Asking *"is this class complete?"* and then measuring the
+answer rather than reasoning about it is what turned a fourth fix into a
+closed set.
 
 ### Each reason belongs to the file, not to the report
 

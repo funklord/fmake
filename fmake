@@ -5042,10 +5042,12 @@ def doxygen_aliases():
 def _walk(root, pruned=None):
 	"""os.walk, following symlinked directories exactly once each.
 
-    `pruned' collects the directories dropped because their NAME is in
-    SKIP_DIRS, for a caller that wants to report them. Optional because
-    two of the three callers are counting files and have nothing to say
-    about it.
+    `pruned' is {directory: why} for the ones dropped on their name --
+    SKIP_DIRS or a leading dot -- for a caller that wants to report them.
+    Optional because two of the three callers are counting files and have
+    nothing to say about it. The reason travels with the directory for
+    the reason section 441 gives about `unbuilt': keyed on anything else
+    it is wrong for the second kind.
 
     Not following them means a tree laid out as `src/common -> ../shared` --
     which is how a pair of sibling projects usually share code -- is missing
@@ -5093,9 +5095,25 @@ def _walk(root, pruned=None):
 		# with a .venv in it.
 		if pruned is not None:
 			for d in dirnames:
-				if d in SKIP_DIRS and d != STATE_DIR:
-					pruned.append(os.path.relpath(
-					    os.path.join(dirpath, d), root))
+				if d == STATE_DIR:
+					continue
+				if d in SKIP_DIRS:
+					why = (f"fmake skips a directory called {d!r} "
+					       f"by name")
+				elif d.startswith("."):
+					# The fifth route, and the reason it is here rather
+					# than dismissed as noise: a tracked `.src/helper.c'
+					# produced the same false claim as the other four,
+					# measured. The noise argument was about untracked
+					# caches -- a `.venv', a `.cache' -- and the tracked
+					# test below is what already keeps those quiet, so
+					# the dotted case costs nothing to include.
+					why = ("fmake skips a directory whose name begins "
+					       "with a dot")
+				else:
+					continue
+				pruned[os.path.relpath(os.path.join(dirpath, d),
+				                       root)] = why
 		dirnames[:] = keep
 		yield dirpath, dirnames, filenames
 
@@ -11280,7 +11298,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# fetch_submodules.
 	if not args.no_submodules:
 		fetch_submodules(root, dry_run=bool(args.dry_run))
-	_pruned = []
+	_pruned = {}
 	srcs, hdrs, unbuilt = walk_tree(root, _pruned)
 	# A directory skipped because of its NAME, holding source this tree
 	# has committed. Said before anything else, because everything after
@@ -11295,8 +11313,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	set_aside_dirs = skipped_source_dirs(root, _pruned)
 	for _skipped, _held in sorted(set_aside_dirs.items()):
 		info(f"{_skipped}/ holds {_held} source file(s) this tree has "
-		     f"committed and is not walked: fmake skips a directory "
-		     f"called {os.path.basename(_skipped)!r} by name")
+		     f"committed and is not walked: {_pruned[_skipped]}")
 	# Before the scan, so a build directory's contents are not read either.
 	# Headers are left where they are: a build tree is also where a
 	# configure step writes the config.h somebody's source includes, and

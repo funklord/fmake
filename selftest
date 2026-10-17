@@ -2319,9 +2319,52 @@ def a_skipped_directory_holding_committed_source_says_so(t):
 	finally:
 		w.cleanup()
 
-	# The case the skip exists for: an untracked build tree says nothing,
-	# or every Android build in this workspace gains a line it does not
-	# want.
+	# A dotted directory is the fifth route and the same defect: measured
+	# before it was added, a tracked `.src/helper.c' produced the same
+	# false claim. It is reported with its own reason, and the tracked
+	# test is what keeps a `.cache' or a `.venv' quiet.
+	u0 = Tree("dot-tracked")
+	try:
+		u0.write("main.c", "int helper(void);\n"
+		         "int main(void){ return helper() - 3; }\n")
+		u0.write(".src/helper.c", "int helper(void){ return 3; }\n")
+		subprocess.run(["git", "init", "-q", u0.dir], capture_output=True)
+		subprocess.run(["git", "-C", u0.dir, "add", "main.c",
+		                ".src/helper.c"], capture_output=True)
+		subprocess.run(["git", "-C", u0.dir, "-c", "user.email=a@b",
+		                "-c", "user.name=c", "commit", "-qm", "init"],
+		               capture_output=True)
+		r0 = u0.fmake()
+		said = r0.stdout + r0.stderr
+		check(".src/ holds 1 source file(s)" in said,
+		      f"a tracked dotted directory was not named: {said}")
+		check("begins with a dot" in said,
+		      f"and its reason is not the SKIP_DIRS one: {said}")
+	finally:
+		u0.cleanup()
+
+	# An untracked dotted directory is the case the dot rule exists for:
+	# a .cache or a .venv full of somebody else's C must stay quiet.
+	u1 = Tree("dot-untracked")
+	try:
+		u1.write("main.c", "int main(void){ return 0; }\n")
+		u1.write(".cache/stray.c", "int stray(void){ return 1; }\n")
+		subprocess.run(["git", "init", "-q", u1.dir], capture_output=True)
+		subprocess.run(["git", "-C", u1.dir, "add", "main.c"],
+		               capture_output=True)
+		subprocess.run(["git", "-C", u1.dir, "-c", "user.email=a@b",
+		                "-c", "user.name=c", "commit", "-qm", "init"],
+		               capture_output=True)
+		r1 = u1.fmake()
+		check("is not walked" not in r1.stdout + r1.stderr,
+		      f"an untracked dotted directory must say nothing: "
+		      f"{r1.stdout}{r1.stderr}")
+	finally:
+		u1.cleanup()
+
+	# The case the build skip exists for: an untracked build tree says
+	# nothing, or every Android build in this workspace gains a line it
+	# does not want.
 	u = Tree("build-untracked")
 	try:
 		u.write("main.c", "int main(void){ return 0; }\n")
