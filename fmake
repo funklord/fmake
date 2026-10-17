@@ -21178,39 +21178,49 @@ def skipped_source_dirs(root, pruned):
     """
 	if not pruned or not git_dir(root):
 		return {}
-	holds = {}
-	for rel in sorted(set(pruned)):
-		found = 0
-		for dirpath, _dirnames, filenames in os.walk(
-		        os.path.join(root, rel)):
-			for f in filenames:
-				if os.path.splitext(f)[1] in SRC_EXTS:
-					found += 1
-		if found:
-			holds[rel] = found
-	if not holds:
-		return {}
+	# One question, asked of git, and it answers both halves at once: WHICH
+	# of these directories the tree has committed source in, and HOW MUCH.
+	#
+	# The first version walked each pruned directory counting sources and
+	# then asked git about the ones that had any. That is backwards and it
+	# was measured: on a tree with a 20,000-file `node_modules' it cost
+	# about 40ms on every build, including every no-op build, to walk
+	# files that could not be the answer -- `node_modules' holds `.js'. A
+	# directory nobody committed source in cannot produce this line, and
+	# git knows that without the filesystem being touched.
+	#
 	# Tracked, not merely un-ignored, because that is the signal section
 	# 139 named: *"a project whose sources live under `build/' has
 	# committed them"*. `check-ignore' would answer "not ignored" for a
 	# freshly initialised repository whose build tree nobody has told git
 	# about yet, and reporting that one would be the guess this is
 	# avoiding.
-	kept = {}
-	for rel, n in holds.items():
-		try:
-			r = subprocess.run(["git", "-C", root, "ls-files", "-z",
-			                    "--", rel],
-			                   capture_output=True, text=True,
-			                   errors="replace", timeout=10)
-		except (OSError, subprocess.SubprocessError):
-			return {}
-		if r.returncode != 0:
-			return {}
-		if any(os.path.splitext(f)[1] in SRC_EXTS
-		       for f in r.stdout.split("\0") if f):
-			kept[rel] = n
-	return kept
+	#
+	# The count is of tracked sources rather than of files on disk, which
+	# is also what the sentence says: "holds N source file(s) this tree
+	# has committed".
+	dirs = sorted(set(pruned))
+	try:
+		r = subprocess.run(["git", "-C", root, "ls-files", "-z", "--"]
+		                   + dirs,
+		                   capture_output=True, text=True,
+		                   errors="replace", timeout=10)
+	except (OSError, subprocess.SubprocessError):
+		return {}
+	if r.returncode != 0:
+		return {}
+	holds = {}
+	for path in r.stdout.split("\0"):
+		if not path or os.path.splitext(path)[1] not in SRC_EXTS:
+			continue
+		# The longest match, so a `build/node_modules' is counted there
+		# and not twice.
+		owner = max((d for d in dirs
+		             if path == d or path.startswith(d + "/")),
+		            key=len, default=None)
+		if owner:
+			holds[owner] = holds.get(owner, 0) + 1
+	return holds
 
 
 def ignored_source_dirs(root, srcs):

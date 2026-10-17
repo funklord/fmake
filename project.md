@@ -33946,6 +33946,33 @@ that calls `_rel`. A leading underscore reads as "local and private" and
 is exactly the convention the module-level helper uses too, which is what
 made the collision easy to write and invisible to read.
 
+### Asking git first, which was a 40ms regression until it was measured
+
+The first version walked each pruned directory counting source files and
+then asked git about the ones that had any. That is the wrong way round
+and it cost something real: on a tree with a 20,000-file `node_modules`
+-- the shape this walk exists to avoid -- it added about **40ms to every
+build, including every no-op build**, walking files that could not
+possibly be the answer, since `node_modules` holds `.js`.
+
+One `git ls-files -z -- <dirs>` answers both halves at once: which of
+those directories the tree has committed source in, and how many. A
+directory nobody committed source in cannot produce this line, and git
+knows that without the filesystem being touched. Re-measured on the same
+fixture, patched and unpatched are indistinguishable.
+
+The count is now of **tracked** sources rather than of files on disk,
+which is what the sentence claimed all along -- *"holds N source file(s)
+this tree has committed"*.
+
+**The question that found it was asked of my own change rather than of
+the code.** Section 437 timed section 429 because `propose_from_headers`
+had gained a per-target walk; the same question put to this one found a
+cost that the four trees and the synthetic 40-target fixture could not
+have shown, because none of them has a large skipped directory. A cost
+check is only as good as the fixture's worst case, and the worst case for
+this change is a tree full of files it is designed to ignore.
+
 ### The decision this does not take
 
 Whether a `build/` whose sources git tracks should be **walked** is not
