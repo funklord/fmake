@@ -489,7 +489,8 @@ that had been green about nothing for five commits ·
 [436. Where this session stopped, third fold](#436-where-this-session-stopped-third-fold) ·
 [437. Three checks on the day's work, and a case that stopped skipping](#437-three-checks-on-the-days-work-and-a-case-that-stopped-skipping) ·
 [438. The committed file nothing compiles, and the claim about the tree](#438-the-committed-file-nothing-compiles-and-the-claim-about-the-tree) ·
-[439. The name guess section 139 rejected, still in the code](#439-the-name-guess-section-139-rejected-still-in-the-code)
+[439. The name guess section 139 rejected, still in the code](#439-the-name-guess-section-139-rejected-still-in-the-code) ·
+[440. The third way a source goes unseen: the wrong case](#440-the-third-way-a-source-goes-unseen-the-wrong-case)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33957,3 +33958,40 @@ than a silent omission.
 So: the report is the half that cannot be wrong, and **the holder's is
 whether the name should go.** The option, its cost and whose it is, in
 the form section 348 uses.
+
+## 440. The third way a source goes unseen: the wrong case
+
+`os.path.splitext` is case-sensitive and so is `LANGS`, which it has to
+be -- **`.c` is C and `.C` is C++**, two languages rather than two
+spellings. So `helper.CPP`, which is the shape an MSVC-era tree arrives
+in, was in `SRC_EXTS`, `HDR_EXTS` and `UNBUILT_SRC_EXTS` alike: nowhere.
+Not compiled, not mentioned, and then
+
+    no library here exports them, and nothing in this tree appears to
+    define them either
+
+about the function it defines. Sections 438 and 439's claim a third time,
+by a third route, which is what makes the three of them a class rather
+than three bugs: **everything the walk drops is a thing fmake then
+asserts does not exist.**
+
+It is reported now, through the same channel 438 opened, and the
+condition is the narrow one: a **different case** of the extension is one
+fmake knows. An extension unknown in every case is not source and stays
+silent -- a `readme.TXT` draws nothing, which a control asserts.
+
+### The remedy promises exactly what it delivers
+
+    * helper.CPP is not built: .CPP is matched case-sensitively, because
+      `.c' is C and `.C' is C++; renamed helper.cpp it is compiled
+
+**"it is compiled", not "and it builds"**, and the difference was
+measured rather than reasoned: renaming a `.CPP` holding plain C gets the
+file compiled as C++, after which a C caller has an undefined reference
+to a mangled name. The first draft said "and it builds", which would have
+been section 147's fault written into the line that exists to fix section
+147's fault. The case asserts the weaker wording and that the rename
+compiles the file.
+
+`.C` in its own case is built as C++ and draws no line, which is the
+other control and the distinction that forbids folding the case at all.

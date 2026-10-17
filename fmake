@@ -291,19 +291,43 @@ RUST_EDITION = "2021"
 # told rather than ignored, which is what section 123 was about.
 UNBUILT_SRC_EXTS = {".asm"}
 
+HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
+
+# The lowercase spelling of every extension fmake knows, for telling a
+# file it cannot build from one it could build under a different case.
+# `.CPP' is the shape an MSVC-era tree arrives in, and it was invisible:
+# not in SRC_EXTS, not in HDR_EXTS, not in UNBUILT_SRC_EXTS, so nothing
+# looked at it and nothing said so.
+KNOWN_EXT_LOWER = {e.lower() for e in set(LANGS) | HDR_EXTS
+                   | UNBUILT_SRC_EXTS}
+
 
 def unbuilt_why(rel):
 	"""Why nothing here will compile this file, in one clause.
 
-    Two readers: the generated-output report of section 123 and the
-    tracked-file one beside the walk. The same sentence written twice in
-    places that far apart is section 428's shape, and the generated half
-    was the only one that existed for long enough to prove the other was
-    missing.
+    Three readers now: the generated-output report of section 123, the
+    tracked-file one beside the walk, and the case-variant one. The same
+    sentence written twice in places that far apart is section 428's
+    shape, and the generated half was the only one that existed for long
+    enough to prove the others were missing.
     """
-	return (f"fmake builds C, C++, assembly and Rust, not "
-	        f"{os.path.splitext(rel)[1]}")
-HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
+	ext = os.path.splitext(rel)[1]
+	if ext in UNBUILT_SRC_EXTS or ext.lower() not in KNOWN_EXT_LOWER:
+		return f"fmake builds C, C++, assembly and Rust, not {ext}"
+	# A case variant. Folding the case is not an option and the reason is
+	# the one thing a reader needs to hear: `.c' is C and `.C' is C++, two
+	# languages rather than two spellings, so there is nothing to guess
+	# from and renaming is the only answer.
+	# "compiles it", not "and it builds". Measured: renaming a `.CPP'
+	# whose contents are plain C gets the file compiled as C++, and a C
+	# caller then has an undefined reference to a mangled name -- so the
+	# rename does exactly what this says and no more. Promising the build
+	# would be section 147's fault in the advice written to fix section
+	# 147's fault.
+	return (f"{ext} is matched case-sensitively, because `.c' is C and "
+	        f"`.C' is C++; renamed {os.path.splitext(rel)[0]}"
+	        f"{ext.lower()} it is compiled")
+
 
 SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
                "__pycache__", "CMakeFiles"}
@@ -5190,6 +5214,13 @@ def walk_tree(root, pruned=None):
 				                               root))
 				continue
 			if ext not in SRC_EXTS and ext not in HDR_EXTS:
+				# `helper.CPP' is not source to fmake and would be under
+				# any other spelling, which is worth one line rather than
+				# the silence it used to get. Anything whose extension is
+				# unknown in every case is not source and stays silent.
+				if ext and ext.lower() in KNOWN_EXT_LOWER:
+					unbuilt.append(os.path.relpath(
+					    os.path.join(dirpath, f), root))
 				continue
 			path = os.path.join(dirpath, f)
 			# os.walk lists everything that is not a directory, and a

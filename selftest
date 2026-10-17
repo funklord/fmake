@@ -2353,6 +2353,78 @@ def a_skipped_directory_holding_committed_source_says_so(t):
 
 
 @case
+def a_source_whose_extension_is_the_wrong_case_is_named(t):
+	"""`helper.CPP` was in none of the three sets and seen by nobody.
+
+	`os.path.splitext` is case-sensitive and so is the LANGS table, which
+	it has to be: `.c` is C and `.C` is C++, two languages rather than two
+	spellings, so folding the case is not available. A `.CPP` -- which is
+	the shape an MSVC-era tree arrives in -- was therefore in SRC_EXTS,
+	HDR_EXTS and UNBUILT_SRC_EXTS alike: nowhere. It was not compiled, not
+	mentioned, and the link then said *"nothing in this tree appears to
+	define them either"* about the function it defines, which is sections
+	438 and 439's claim a third time.
+
+	Reported only where a DIFFERENT CASE of the extension is one fmake
+	knows. An extension unknown in every case is not source and stays
+	silent, which the second control asserts with a `readme.TXT`.
+
+	The remedy says `renamed helper.cpp it is compiled` and not `and it
+	builds`, because that is all that was measured: renaming a `.CPP`
+	holding plain C gets it compiled as C++, and a C caller then has an
+	undefined reference to a mangled name. Promising the build would be
+	the fault this line exists to fix."""
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 3; }\n")
+	t.write("helper.CPP", "int helper(void){ return 3; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("helper.CPP is not built" in out,
+	      f"a source in the wrong case was not named: {out}")
+	check("case-sensitively" in out and "renamed helper.cpp" in out,
+	      f"the remedy has to name the spelling that works: {out}")
+	check("and it builds" not in out,
+	      f"the remedy must not promise more than the rename delivers: "
+	      f"{out}")
+
+	# Taking it compiles the file, which is exactly what was promised.
+	os.rename(os.path.join(t.dir, "helper.CPP"),
+	          os.path.join(t.dir, "helper.cpp"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check("CXX helper.cpp" in r.stdout,
+	      f"the renamed file was not compiled: {r.stdout}{r.stderr}")
+
+	# A known extension in its own case is built, not reported -- `.C' is
+	# C++ and this is the distinction that forbids folding the case.
+	u = Tree("upper-C")
+	try:
+		u.write("main.c", "extern int helper(void);\n"
+		        "int main(void){ return helper() - 3; }\n")
+		u.write("helper.C", 'extern "C" int helper(void){ return 3; }\n')
+		r = u.fmake()
+		check(r.returncode == 0 and "CXX helper.C" in r.stdout,
+		      f"`.C' has to build as C++: {r.stdout}{r.stderr}")
+		check("is not built" not in r.stdout + r.stderr,
+		      f"and must not be reported: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+	# And an extension unknown in every case is not source.
+	v = Tree("unknown-ext")
+	try:
+		v.write("main.c", "int main(void){ return 0; }\n")
+		v.write("readme.TXT", "notes\n")
+		r = v.fmake()
+		check(r.returncode == 0, f"the tree must build: {r.stdout}")
+		check("is not built" not in r.stdout + r.stderr,
+		      f"a file that is not source in any case must stay silent: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_tracked_file_nothing_can_compile_is_named_too(t):
 	"""The other half of the case below, and it had no reader at all.
 
