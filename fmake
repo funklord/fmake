@@ -2853,7 +2853,12 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	rules = all_generate_rules(root, conf, srcs, scans)
 	if not rules:
 		return []
-	before, ran = set(sum(walk_tree(root), [])), False
+	# `walk_tree' returns two lists and a {path: why} mapping, so the
+	# paths are the two lists and that mapping's keys. Written out rather
+	# than summed: `sum(..., [])' over the three stopped working the day
+	# the third became a dict, and silently summing whatever a function
+	# returns is how that happens.
+	before, ran = set(_walked_paths(root)), False
 
 	for name, r in sorted(rules.items()):
 		if not (r.get("command") or r.get("commands")):
@@ -3101,7 +3106,7 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 	# comparison would find nothing either way, and no case fails without
 	# it. What it buys is not walking the tree on every no-op build.
 	if ran:
-		after = set(sum(walk_tree(root), []))
+		after = set(_walked_paths(root))
 		declared = {o for r in rules.values() for o in r["outputs"]}
 		extra = sorted(after - before - declared)
 		if extra:
@@ -5095,6 +5100,16 @@ def _walk(root, pruned=None):
 		yield dirpath, dirnames, filenames
 
 
+def _walked_paths(root):
+	"""Every path `walk_tree' saw, as one set of relative names.
+
+    Two callers compare the tree before and after the generators run, and
+    neither cares which of the three groups a path came from.
+    """
+	srcs, hdrs, unbuilt = walk_tree(root)
+	return list(srcs) + list(hdrs) + list(unbuilt)
+
+
 def run_root(path):
 	"""Where to build a `--run` script, and whether its siblings come too.
 
@@ -5197,7 +5212,7 @@ def walk_tree(root, pruned=None):
 
     `pruned' is passed through to `_walk': see there.
 
-    `unbuilt' is the third list because a file nothing here compiles is a
+    `unbuilt' is {path: why} because a file nothing here compiles is a
     fact about the tree and the walk is the only place that sees it. A
     tracked `.asm' was dropped by the extension test above and mentioned
     nowhere -- not under `-v' either -- and then the link said "nothing in
@@ -5205,13 +5220,13 @@ def walk_tree(root, pruned=None):
     defines by name. Section 123 fixed the generated half of exactly this;
     the tracked half had no reader at all.
     """
-	srcs, hdrs, unbuilt = [], [], []
+	srcs, hdrs, unbuilt = [], [], {}
 	for dirpath, dirnames, filenames in _walk(root, pruned):
 		for f in filenames:
 			ext = os.path.splitext(f)[1]
 			if ext in UNBUILT_SRC_EXTS:
-				unbuilt.append(os.path.relpath(os.path.join(dirpath, f),
-				                               root))
+				_rel_u = os.path.relpath(os.path.join(dirpath, f), root)
+				unbuilt[_rel_u] = unbuilt_why(_rel_u)
 				continue
 			if ext not in SRC_EXTS and ext not in HDR_EXTS:
 				# `helper.CPP' is not source to fmake and would be under
@@ -5219,8 +5234,9 @@ def walk_tree(root, pruned=None):
 				# the silence it used to get. Anything whose extension is
 				# unknown in every case is not source and stays silent.
 				if ext and ext.lower() in KNOWN_EXT_LOWER:
-					unbuilt.append(os.path.relpath(
-					    os.path.join(dirpath, f), root))
+					_rel_u = os.path.relpath(os.path.join(dirpath, f),
+					                         root)
+					unbuilt[_rel_u] = unbuilt_why(_rel_u)
 				continue
 			path = os.path.join(dirpath, f)
 			# os.walk lists everything that is not a directory, and a
@@ -5243,15 +5259,22 @@ def walk_tree(root, pruned=None):
 			# crash exists because a dangling link once raised KeyError,
 			# and it requires the report that replaced the crash.
 			if os.path.exists(path) and not os.path.isfile(path):
-				vinfo(f"{os.path.relpath(path, root)} is not a regular "
-				      f"file; not treating it as source")
+				# The fourth way a source goes unseen, and it was behind
+				# `-v' while the other three are not. A fifo named
+				# `helper.c' is dropped here -- rightly, reading it would
+				# block -- and the link then said "nothing in this tree
+				# appears to define them either" with nothing on screen
+				# to explain it. Section 441.
+				_rel_u = os.path.relpath(path, root)
+				unbuilt[_rel_u] = ("not a regular file, and reading one "
+				                   "would block or never end")
 				continue
 			rel = os.path.relpath(path, root)
 			if ext in SRC_EXTS:
 				srcs.append(rel)
 			else:
 				hdrs.append(rel)
-	return sorted(srcs), sorted(hdrs), sorted(unbuilt)
+	return sorted(srcs), sorted(hdrs), unbuilt
 
 
 def _gitmodule_paths(path):
@@ -11285,7 +11308,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# A `.asm' inside a directory git is told to ignore is covered by the
 	# line below about that directory, and saying it twice would make a
 	# build tree full of generated assembly shout once per file.
-	unbuilt = [r for r in unbuilt if os.path.dirname(r) not in ignored_dirs]
+	unbuilt = {r: w for r, w in unbuilt.items()
+	           if os.path.dirname(r) not in ignored_dirs}
 	if ignored_srcs:
 		where = sorted({os.path.dirname(r) for r in ignored_srcs})
 		info(f"{len(ignored_srcs)} source file(s) not built: git is told "
@@ -11411,11 +11435,11 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# `.asm' said both -- the first build only one, because the first walk
 	# runs before the file exists, which is how a duplicate hides until
 	# somebody builds twice.
-	_stray = [r for r in unbuilt
-	          if r not in set(generated) and not exclude_pattern(r)]
+	_stray = sorted(r for r in unbuilt
+	                if r not in set(generated) and not exclude_pattern(r))
 	_head, _rest = capped(_stray)
 	for rel in _head:
-		info(f"{rel} is not built: " + unbuilt_why(rel))
+		info(f"{rel} is not built: {unbuilt[rel]}")
 	if _rest:
 		info(f"... and {_rest} more (-v for all)")
 	if _stray:

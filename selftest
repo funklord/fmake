@@ -2353,6 +2353,47 @@ def a_skipped_directory_holding_committed_source_says_so(t):
 
 
 @case
+def a_source_that_is_not_a_regular_file_is_named(t):
+	"""The fourth way, and the only one that was already handled.
+
+	A fifo named `helper.c` is dropped by the walk and must be: reading
+	one blocks until somebody writes, and a device like `/dev/zero` never
+	stops producing, so either is a build that never returns. The guard is
+	right and old. What was behind `-v` is the only line that said so --
+	and the link then reported *"nothing in this tree appears to define
+	them either"* with nothing on screen to explain it, which is sections
+	438, 439 and 440's claim a fourth time.
+
+	It joins the same channel as those three now, with its own reason
+	rather than theirs, and the link failure names it among what was set
+	aside.
+
+	Bounded on purpose: if the guard ever stops working this case hangs
+	rather than fails, so the suite's own timeout is what catches that,
+	and the fixture is removed in a `finally` so a fifo is not left for
+	the next run to meet."""
+	fifo = os.path.join(t.dir, "helper.c")
+	try:
+		os.mkfifo(fifo)
+	except (OSError, AttributeError):
+		raise Skip("no mkfifo here")
+	try:
+		t.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper() - 3; }\n")
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check("helper.c is not built" in out,
+		      f"a source that is not a regular file was not named: {out}")
+		check("not a regular file" in out and "block or never end" in out,
+		      f"the reason has to say why it cannot be read: {out}")
+		check("helper.c" in out.split("appears to define them")[-1],
+		      f"and the link failure has to name it among what was set "
+		      f"aside: {out}")
+	finally:
+		os.unlink(fifo)
+
+
+@case
 def a_source_whose_extension_is_the_wrong_case_is_named(t):
 	"""`helper.CPP` was in none of the three sets and seen by nobody.
 
@@ -30784,11 +30825,18 @@ def something_that_is_not_a_file_is_not_a_source(t):
 		      "the symlinked source was skipped along with the rest, so the "
 		      "guard costs a shape that trees actually use")
 
+		# Section 441 moved this out from behind `-v': the guard was
+		# right and silent, and the link failure then claimed nothing in
+		# the tree defined the symbol. So it is asserted on the plain run
+		# as well as the verbose one, and per LINE rather than against
+		# the whole output, so the sentence can gain a clause -- it has
+		# already gained "is not built:" -- without failing here for it.
 		v = t.fmake("-v", "-B")
-		out = v.stdout + v.stderr
-		for name in ("blocks.c", "endless.c"):
-			check(f"{name} is not a regular file" in out,
-			      f"{name} was not reported as skipped: {out}")
+		for out in (r.stdout + r.stderr, v.stdout + v.stderr):
+			for name in ("blocks.c", "endless.c"):
+				line = next((l for l in out.splitlines() if name in l), "")
+				check("not a regular file" in line,
+				      f"{name} was not reported as skipped: {out}")
 	finally:
 		shutil.rmtree(outside, ignore_errors=True)
 

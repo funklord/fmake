@@ -490,7 +490,8 @@ that had been green about nothing for five commits ·
 [437. Three checks on the day's work, and a case that stopped skipping](#437-three-checks-on-the-days-work-and-a-case-that-stopped-skipping) ·
 [438. The committed file nothing compiles, and the claim about the tree](#438-the-committed-file-nothing-compiles-and-the-claim-about-the-tree) ·
 [439. The name guess section 139 rejected, still in the code](#439-the-name-guess-section-139-rejected-still-in-the-code) ·
-[440. The third way a source goes unseen: the wrong case](#440-the-third-way-a-source-goes-unseen-the-wrong-case)
+[440. The third way a source goes unseen: the wrong case](#440-the-third-way-a-source-goes-unseen-the-wrong-case) ·
+[441. The fourth way, and the class the four of them make](#441-the-fourth-way-and-the-class-the-four-of-them-make)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33995,3 +33996,64 @@ compiles the file.
 
 `.C` in its own case is built as C++ and draws no line, which is the
 other control and the distinction that forbids folding the case at all.
+
+## 441. The fourth way, and the class the four of them make
+
+A fifo named `helper.c` is dropped by the walk, and **must** be: reading
+one blocks until somebody writes, and a device like `/dev/zero` never
+stops producing, so either is a build that does not return. That guard is
+right and it is old. What was wrong is that the only line saying so was
+behind `-v`:
+
+    $ fmake            # nothing about helper.c
+    $ fmake -v
+    * helper.c is not a regular file; not treating it as source
+
+and the link then reported *"nothing in this tree appears to define them
+either"* with nothing on screen to explain it.
+
+### The class, now that there are four
+
+- **438** a committed file nothing can compile (`.asm`)
+- **439** a directory skipped by name (`build/`)
+- **440** a source whose extension is only the wrong case (`.CPP`)
+- **441** a path that is not a regular file (a fifo, a device)
+
+**Everything the walk drops is a thing fmake then asserts does not
+exist.** Four routes, one sentence at the end of each, and none of them a
+bug in the dropping -- every one of the four is dropped for a good
+reason, three of them recorded in comments at the point of the drop. The
+defect each time was the silence, and the common fix is that the walk now
+carries `{path: why}` out with it and the link failure names what was set
+aside.
+
+That is worth more than the four fixes: **a guard that is correct and
+silent is indistinguishable from a bug, from outside**, and this tree had
+four of them in one function.
+
+### Each reason belongs to the file, not to the report
+
+The first version keyed the reason on the extension, which worked while
+there were two kinds and broke on the third: a fifo named `helper.c` has
+a known extension, so an extension-keyed `unbuilt_why` called it a case
+variant. The walk writes the reason beside the path now, and
+`unbuilt_why` answers only for the two cases that really are about an
+extension.
+
+**The case that already covered the hang pinned the old wording.**
+`something_that_is_not_a_file_is_not_a_source` asked for
+`blocks.c is not a regular file` as one string, and the line now reads
+`blocks.c is not built: not a regular file, and reading one would block
+or never end` -- the same facts with a clause between the name and the
+reason. It asserts per LINE now, and on the plain run as well as the
+verbose one, which is the behaviour that actually changed. Same shape as
+the case section 435 superseded: a case matching a whole sentence is a
+case asserting every future clause of it.
+
+**`sum(walk_tree(root), [])` stopped working the same hour**, in two
+callers that compare the tree before and after the generators run: the
+third element became a mapping and a list concatenation cannot take one.
+They go through `_walked_paths` now, which says which parts it wants.
+Summing whatever a function happens to return is a dependency on its
+shape that nothing states -- it broke loudly here, which is the good
+case, and the suite was what noticed.
