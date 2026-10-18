@@ -25538,6 +25538,77 @@ def a_stray_object_beside_its_source_is_ignored(t):
 	      f"the stray object reached the build: {r.stdout}")
 
 
+def _two_offer_tree(t):
+	"""Two programs, each reaching one of two definitions of one symbol.
+
+    The shape that makes fmake offer a source list: both providers are
+    compiled, because each is reached from a different root, and exactly
+    one of them is reachable from each root. The subdirectories are what
+    make the target names INVENTED -- an artifact called `a' would
+    collide with the directory `a', so fmake names it `<tree>_a' -- which
+    is the condition sections 442 is about.
+    """
+	t.write("a/one.h", "#pragma once\nint shared_thing(void);\n")
+	t.write("a/one.c", '#include "one.h"\n'
+	        "int shared_thing(void){ return 1; }\n")
+	t.write("a/main.c", '#include "one.h"\n'
+	        "int main(void){ return shared_thing() - 1; }\n")
+	t.write("b/two.h", "#pragma once\nint shared_thing(void);\n")
+	t.write("b/two.c", '#include "two.h"\n'
+	        "int shared_thing(void){ return 1; }\n")
+	t.write("b/main.c", '#include "two.h"\n'
+	        "int main(void){ return shared_thing() - 1; }\n")
+
+
+@case
+def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
+	"""fmake's own remedy did not work where fmake had named the target.
+
+	An ambiguity prints a `sources' stanza to put in fmake.toml. A
+	section is matched to a discovered target by NAME -- and the name may
+	be one fmake invented: where an artifact would collide with a
+	directory it becomes `<tree>_<dir>', computed after the sections are
+	read. So the stanza matched nothing, became a second target with the
+	same name, and the next build said
+
+	    !!! 2 targets are called 'tree_a':
+	        a/main.c
+	        a/main.c
+
+	the same file twice, telling the reader to rename one of them. The
+	advice was not merely unhelpful, it could not be followed, which is
+	section 31's shape and the sharpest version of it.
+
+	Taken verbatim here rather than approximated: the stanzas are lifted
+	out of fmake's own output, written to fmake.toml, and the tree has to
+	build. A case that retyped them would be testing the retyping."""
+	_two_offer_tree(t)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "put this in fmake.toml" in out,
+	      f"the fixture must reach the ambiguity offer: {out}")
+	check("would be built as a, which is a directory" in out,
+	      f"and the target names have to be fmake's own invention, or "
+	      f"this case is not about the bug: {out}")
+
+	lines = out.splitlines()
+	at = next(n for n, l in enumerate(lines) if "put this in fmake.toml" in l)
+	body = [l[4:] for l in lines[at + 1:]
+	        if l.startswith("    ") or not l.strip()]
+	stanzas = "\n".join(body).strip() + "\n"
+	check(stanzas.count("[target.") == 2,
+	      f"two stanzas were expected: {stanzas!r}")
+	check("root = " in stanzas,
+	      f"the stanza has to name the root, or a name fmake invented "
+	      f"matches nothing: {stanzas!r}")
+	t.write("fmake.toml", stanzas)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"following fmake's own printed advice must build the tree: "
+	      f"{r.stdout}{r.stderr}")
+
+
 @case
 def an_ambiguity_says_when_git_already_ignores_one(t):
 	"""The commonest confusing collision, and git knew all along.
@@ -32573,6 +32644,45 @@ def i_asks_nothing_when_there_is_no_terminal(t):
 	      f"the refusal does not say what was missing: {r.stdout}{r.stderr}")
 	check(not os.path.exists(os.path.join(t.dir, "fmake.toml")),
 	      "nothing should have been written without an answer")
+
+
+@case
+def an_answer_given_before_eof_is_written_and_reported(t):
+	"""Ctrl-D is "no more answers", not "undo the ones I gave".
+
+    The write happens after the question loop, and the EOF branch
+    returned before reaching it while still reporting what it had
+    collected. So `y' to the first of two offers and then Ctrl-D said
+
+        * nothing written
+        !!! fmake.toml now answers for prog_a. Read what was written,
+            then run fmake again.
+
+    with no fmake.toml on disk: two contradictory lines, the actionable
+    one false, and "run fmake again" leading straight back to the same
+    refusal.
+
+    `declining_i_leaves_the_build_stuck_and_the_config_alone' is the
+    sibling for `n', and the interrupt is the third answer: Ctrl-C stays
+    a cancel, writes nothing, and says only that -- which cannot be
+    driven from here, since a pty interrupt reaches this process's own
+    group as well."""
+	_ambiguous(t)
+	out = _pty_fmake(t, "y\n\x04")
+	conf = os.path.join(t.dir, "fmake.toml")
+	check("now answers for" in out,
+	      f"the answer that was given has to be reported: {out[-600:]}")
+	check("nothing written" not in out,
+	      f"and not called written and unwritten in two adjacent lines: "
+	      f"{out[-600:]}")
+	check(os.path.exists(conf),
+	      f"it said it wrote the answer and wrote nothing: {out[-600:]}")
+	text = open(conf).read()
+	check(text.count("[target.") == 1,
+	      f"exactly the one answered offer should be written: {text}")
+	check("root = " in text,
+	      f"and the stanza must name its root, or it matches no target "
+	      f"when fmake invented the name: {text}")
 
 
 @case

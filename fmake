@@ -14215,7 +14215,25 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				continue
 			seen_stanza.add(t.name)
 			members = sorted(r for r in reach if r in proj.src_set)
-			stanzas.append(f"{tgt_section(t.name)}\nsources = ["
+			# `root' as well as `sources', and it is not decoration.
+			# A section is matched to a discovered target by NAME, and
+			# the name here may be one fmake invented: where an
+			# artifact would collide with a directory it becomes
+			# `<tree>_<dir>', computed after the sections are read. So a
+			# stanza keyed on that name matched nothing, became a second
+			# target with the same name, and the clash check reported
+			#
+			#     !!! 2 targets are called 'tree_a':
+			#         a/main.c
+			#         a/main.c
+			#
+			# -- the same file twice, telling the reader to rename one of
+			# them. Naming the root matches the stanza to the file
+			# instead, which works whether the name was invented or
+			# given, and reads better either way.
+			stanzas.append(f"{tgt_section(t.name)}\n"
+			               f"root = {toml_string(t.rel)}\n"
+			               f"sources = ["
 			               + ", ".join(toml_string(m) for m in members)
 			               + "]")
 			offers.append({"name": t.name, "root": t.rel, "sym": _sym,
@@ -21326,10 +21344,29 @@ def offer_answers(root, offers):
 		say("")
 		try:
 			answer = input(f"  Accept {o['chosen']} for {o['name']}? [y/N] ")
-		except (EOFError, KeyboardInterrupt):
+		except EOFError:
+			# Ctrl-D is "no more answers", not "undo the ones I gave", so
+			# this breaks to the write below. It used to return `taken'
+			# from here, before the write -- so a reader who accepted the
+			# first of two offers and then closed stdin was told
+			#
+			#     * nothing written
+			#     !!! fmake.toml now answers for prog_a. Read what was
+			#         written, then run fmake again.
+			#
+			# with no fmake.toml on disk at all: two contradictory lines,
+			# the actionable one false, and the advice to run again
+			# leading straight back to the same refusal.
+			say("")
+			break
+		except KeyboardInterrupt:
+			# Ctrl-C is a cancel. Nothing is written and nothing may say
+			# otherwise, which is what returning an empty list buys: the
+			# caller's own message is then "nothing was answered, so the
+			# build is still stuck", which is true.
 			say("")
 			info("nothing written")
-			return taken
+			return []
 		if answer.strip().lower() not in ("y", "yes"):
 			continue
 		taken.append(o["name"])
@@ -21397,9 +21434,16 @@ def _answer_block(o):
 	among = o["providers"][:4]
 	listed = ", ".join(among) + (f" and {len(o['providers']) - 4} more"
 	                             if len(o["providers"]) > len(among) else "")
+	# `root' for the reason the printed stanza carries it: the name may
+	# be one fmake invented, and a section keyed on an invented name
+	# matches nothing and collides with the target it was meant to
+	# configure. This is the half that writes the file, so it is the half
+	# where getting it wrong hands somebody a tree that builds less than
+	# it did before they asked for help.
 	return (f"# {o['name']}, {when}: {o['sym']!r} was defined by {listed};\n"
 	        f"# the include graph from {o['root']} reached {o['chosen']}.\n"
 	        f"{tgt_section(o['name'])}\n"
+	        f"root = {toml_string(o['root'])}\n"
 	        f"sources = [{sources}]\n")
 
 

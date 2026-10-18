@@ -491,7 +491,8 @@ that had been green about nothing for five commits ·
 [438. The committed file nothing compiles, and the claim about the tree](#438-the-committed-file-nothing-compiles-and-the-claim-about-the-tree) ·
 [439. The name guess section 139 rejected, still in the code](#439-the-name-guess-section-139-rejected-still-in-the-code) ·
 [440. The third way a source goes unseen: the wrong case](#440-the-third-way-a-source-goes-unseen-the-wrong-case) ·
-[441. The fourth way, and the class the four of them make](#441-the-fourth-way-and-the-class-the-four-of-them-make)
+[441. The fourth way, and the class the four of them make](#441-the-fourth-way-and-the-class-the-four-of-them-make) ·
+[442. Two bugs behind a gap claim that was false](#442-two-bugs-behind-a-gap-claim-that-was-false)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34094,3 +34095,88 @@ They go through `_walked_paths` now, which says which parts it wants.
 Summing whatever a function happens to return is a dependency on its
 shape that nothing states -- it broke loudly here, which is the good
 case, and the suite was what noticed.
+
+## 442. Two bugs behind a gap claim that was false
+
+Two real defects in `-i`, and a wrong sentence about why nobody had found
+them. The sentence is first because the rule that catches it landed in
+`evidence.md` two days before this was written, and caught it.
+
+### The gap claim, and how the instrument produced it
+
+The survey was: list the long options out of `--help`, grep the suite for
+each, and look at what nothing mentions. It reported exactly one --
+`--interactive` -- and the conclusion written down was *"the only flag
+with no case"* and *"a flag nobody tests"*.
+
+**Both false.** `-i` has three cases of its own, one of which drives it
+through a pty, and the suite carries a `_pty_fmake` helper written for
+exactly that. The grep searched the **long** spelling; every one of those
+cases uses `-i`. `evidence.md`'s new rule says to search the method and
+the quantity rather than the prose, and to suspect the harness when a
+fresh measurement comes back surprising -- and "no case at all" for a
+flag this file has a whole section about (section 145) should have been
+surprising.
+
+What is true is narrower and was worth saying on its own: **the EOF path
+and the stanza it writes had no case**, which is how two bugs survived in
+a feature that is otherwise covered.
+
+### What it said it wrote, and did not
+
+Answering `y` to the first of two offers and then sending Ctrl-D:
+
+    * nothing written
+    !!! fmake.toml now answers for tree_a. Read what was written, then
+        run fmake again.
+
+with no `fmake.toml` on disk. Two contradictory lines, the actionable one
+false, and *"run fmake again"* leading straight back to the same refusal.
+
+The write happens after the question loop and the EOF branch returned
+before reaching it while still reporting what it had collected. **Ctrl-D
+is "no more answers", not "undo the ones I gave"**, so it breaks to the
+write now. Ctrl-C stays a cancel and returns nothing, so the caller's own
+*"nothing was answered, so the build is still stuck"* is all that is
+said. The case is `an_answer_given_before_eof_is_written_and_reported`,
+beside the `n` case that was already there.
+
+### A stanza keyed on a name fmake invented
+
+The second one is not `-i`'s. An ambiguity prints a `sources` stanza to
+put in `fmake.toml`, and `-i` writes that same stanza. A section is
+matched to a discovered target **by name** -- and the name may be fmake's
+own invention, because an artifact that would collide with a directory
+becomes `<tree>_<dir>`, computed after the sections are read.
+
+So the stanza matched nothing, became a second target with the same name,
+and the next build said
+
+    !!! 2 targets are called 'tree_a':
+        a/main.c
+        a/main.c
+
+-- the same file twice, telling the reader to rename one of them. **The
+advice could not be followed**, which is section 31's shape, in the one
+place fmake offers to edit a config on somebody's behalf.
+
+Both writers name the root now. Measured before and after: with explicit
+`@target` names the printed advice always worked, which is why this
+survived -- **the fixture anybody would write by hand is the one that
+cannot show it**, because a hand-written fixture names its targets.
+
+`the_stanza_an_ambiguity_prints_can_be_taken_verbatim` lifts the stanzas
+out of fmake's own output, writes them to `fmake.toml` and requires the
+tree to build. A case that retyped them would be testing the retyping.
+It also asserts the condition it depends on -- *"would be built as a,
+which is a directory"* -- so a later change to how targets are named
+cannot quietly turn it into a case about something else.
+
+### The case that was written and thrown away
+
+The first version of the `-i` case brought its own pty harness, its own
+no-terminal assertion and its own refusal loop: all three already
+existed. It was deleted rather than kept beside them. A duplicate case
+costs what the duplicate stanza above costs -- two statements of one
+fact, and the suite is where this file keeps saying that is the thing to
+avoid.
