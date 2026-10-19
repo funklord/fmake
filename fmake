@@ -4000,7 +4000,7 @@ def situ_imports(root, rel, cache, seen=None):
 	return sorted(out)
 
 
-def situ_plan(root, hdrs, scans):
+def situ_plan(root, hdrs, scans, skip=None):
 	"""Which .situ schemas this tree's sources actually ask for.
 
     Selected by what is included rather than by what is present, which is
@@ -4044,11 +4044,32 @@ def situ_plan(root, hdrs, scans):
 		ann = Ann(scan.get("dirs"))
 		return not ann.scalar("kind") and not ann.scalar("target")
 
-	wanted, theirs_only = {}, {}
+	# `skip' is "this build already decided not to compile that file", and
+	# it is the same argument the submodule guard above makes: what a file
+	# fmake is not building includes is not a reason to run the schema
+	# compiler. Without it, `[project] exclude = ["old"]' and an
+	# `@os windows' both left their file as the only requester of a
+	# schema and situc ran anyway -- writing three files into the state
+	# directory, compiling none of them, and putting the schema's header
+	# on the include path where a generic name can shadow the tree's own.
+	#
+	# Found by taking beerssh's finding (section 447) as a lens rather
+	# than as a bug: section 305's filter reached one consumer of the
+	# exclusion and not another, so the question was which other
+	# consumers there are. This is one, and the sentence for it was
+	# already in this function's own comment about submodules -- "the
+	# decision not to build those programs was made in one place and not
+	# carried into this one".
+	wanted, theirs_only, skipped_only = {}, {}, {}
 	for rel in sorted(scans):
 		if _left_to_its_own_project(rel):
 			for _kind, name, _line in scans[rel]["incs"]:
 				theirs_only.setdefault(os.path.basename(name), []).append(rel)
+			continue
+		if skip is not None and skip(rel):
+			for _kind, name, _line in scans[rel]["incs"]:
+				skipped_only.setdefault(os.path.basename(name),
+				                        []).append(rel)
 			continue
 		for _kind, name, _line in scans[rel]["incs"]:
 			wanted.setdefault(os.path.basename(name), []).append(rel)
@@ -4122,6 +4143,18 @@ def situ_plan(root, hdrs, scans):
 				            + f" include{'s' if len(_who) == 1 else ''} "
 				            + f"\"{header}\", and that is a program of the "
 				            + "checkout it is in, which fmake leaves to it")
+			elif header in skipped_only:
+				# The same shape as the line above, and for the same
+				# reason: "nothing includes msg.h" would be false of a
+				# tree whose excluded file includes it, and a wrong
+				# reason is worse than a wasted run.
+				_who = skipped_only[header]
+				why[rel] = (f"only {_who[0]}"
+				            + (f" and {len(_who) - 1} other file(s)"
+				               if len(_who) > 1 else "")
+				            + f" include{'s' if len(_who) == 1 else ''} "
+				            + f"\"{header}\", and this build is not "
+				            + "compiling those")
 			continue
 		if header in have:
 			vinfo(f"{rel}: this tree carries {header} already, so the "
@@ -11536,7 +11569,24 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# Taken before anything runs, so that the prune below can tell a file
 	# this build wrote from one left over by an earlier one.
 	situ_started = time.time()
-	situ_jobs, situ_unused, situ_why = situ_plan(root, hdrs, scans)
+	def _not_compiled_here(rel):
+		"""Whether this build has already decided to leave `rel' out.
+
+        `[project] exclude' and the platform tests, which is every
+        exclusion that is decided before the targets are -- the same two
+        branches the `excluded' dict below records with their reasons.
+        Built as a predicate rather than read off that dict because the
+        schema plan runs first: a schema's header has to be on the
+        include path before anything that includes it is compiled.
+        """
+		if exclude_pattern(rel):
+			return True
+		ann = Ann(scans.get(rel, {}).get("dirs"))
+		return bool(platform_excludes(ann, cfg.os, cfg.arch)
+		            or filename_excludes(rel, ann, cfg.os, cfg.arch))
+
+	situ_jobs, situ_unused, situ_why = situ_plan(root, hdrs, scans,
+	                                             skip=_not_compiled_here)
 	if situ_jobs:
 		situc_exe = find_situc(cfg.situc, root)
 		if not situc_exe:

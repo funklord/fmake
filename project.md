@@ -497,7 +497,8 @@ that had been green about nothing for five commits ·
 [444. A crate that would not compile, reported as a link failure](#444-a-crate-that-would-not-compile-reported-as-a-link-failure) ·
 [445. The flag-bearing keys, and a fixture that proved nothing](#445-the-flag-bearing-keys-and-a-fixture-that-proved-nothing) ·
 [446. Ten probes that came back clean](#446-ten-probes-that-came-back-clean) ·
-[447. beerssh closed section 305's measurement and found its other half](#447-beerssh-closed-section-305s-measurement-and-found-its-other-half)
+[447. beerssh closed section 305's measurement and found its other half](#447-beerssh-closed-section-305s-measurement-and-found-its-other-half) ·
+[448. The same exclusion, one consumer further on](#448-the-same-exclusion-one-consumer-further-on)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34535,3 +34536,52 @@ build must still succeed -- a filter that emptied moc's include path
 altogether would satisfy the first two and fail the third. It also
 asserts that a moc line was found at all, since both negative checks pass
 vacuously in a tree where moc never ran.
+
+## 448. The same exclusion, one consumer further on
+
+Section 447 was beerssh's finding: section 305's filter reached the
+compiler's include path and not moc's. **Taken as a lens rather than as a
+bug**, the question it asks is which other consumers of the exclusion
+exist, and the schema plan is one.
+
+`situ_plan` collected its requesters from every scanned file, so a file
+this build is not compiling was reason enough to run situc. Measured both
+ways it can happen, with the excluded file as the only includer of the
+schema's header:
+
+    [project] exclude = ["old"]     SITU schema/msg.situ ran
+    @os windows, on a Linux build   SITU schema/msg.situ ran
+
+Each wrote three files into the state directory, compiled none of them,
+and put a generic `msg.h` on the include path -- where, in this
+function's own words about the submodule case, "a name that generic can
+shadow a tree's own header".
+
+**The sentence for it was already in `situ_plan`'s comment**, about
+submodules: *the decision not to build those programs was made in one
+place and not carried into this one.* That is the third time this
+session a fix has been licensed by a sentence already in the code
+describing the neighbouring case.
+
+### The reason matters as much as the skip
+
+Left at the default, the schema would be reported as *"nothing includes
+msg.h"*, which is false in a tree whose excluded file includes it. The
+same objection the submodule branch was written for, so it takes the same
+shape: *"only old/legacy.c includes "msg.h", and this build is not
+compiling those"*. Both are asserted, because a wrong reason is worse
+than a wasted run.
+
+### The predicate, and why it is not the `excluded` dict
+
+`_not_compiled_here` tests `[project] exclude` and the two platform
+branches -- every exclusion decided before the targets are. It is built
+as a predicate rather than read off the `excluded` dict that records
+those with their reasons, because the schema plan runs **first**: a
+schema's header has to be on the include path before anything that
+includes it is compiled.
+
+The control is the half that would break the feature rather than merely
+fail: a schema a **built** file includes must still be compiled and its
+program must run. Sabotaging the fix fails the case on *"situc ran for a
+file this build is not compiling"*.

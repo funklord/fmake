@@ -9305,6 +9305,80 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def a_file_this_build_excludes_does_not_ask_for_a_schema(t):
+	"""Section 447's lens, pointed at the next consumer of the exclusion.
+
+	beerssh's finding was that section 305's filter reached the
+	compiler's include path and not moc's. That makes "which other
+	consumers of the exclusion are there" the question, and the schema
+	plan is one: it collected requesters from every scanned file, so a
+	file this build is not compiling was reason enough to run situc.
+
+	Measured both ways it can happen -- `[project] exclude` and an
+	`@os` for another platform -- with the excluded file as the ONLY
+	includer of the schema's header. situc ran in both, wrote three
+	files into the state directory, compiled none of them, and put a
+	generic `msg.h` on the include path where it can shadow the tree's
+	own.
+
+	The sentence for it was already in `situ_plan`'s own comment, about
+	submodules: *the decision not to build those programs was made in
+	one place and not carried into this one.*
+
+	The reason matters as much as the skip, which is why it is asserted:
+	the default *"nothing includes msg.h"* is false in this tree, and a
+	wrong reason is worse than a wasted run -- which is the argument that
+	comment makes about the submodule case too.
+
+	The control is the half that would break the feature: a schema a
+	BUILT file includes must still be compiled, and the program must
+	run."""
+	situc = _situc(t, pin=False)
+	t.write("schema/msg.situ", "// a schema the stand-in does not read\n")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("old/legacy.c", '#include "msg.h"\n'
+	        "int legacy(void){ return msg_check(); }\n")
+	assert os.path.exists(situc)
+
+	for how, conf, legacy in (
+	        ("[project] exclude",
+	         '[project]\nexclude = ["old"]\n',
+	         '#include "msg.h"\nint legacy(void){ return msg_check(); }\n'),
+	        ("@os",
+	         None,
+	         '/*! @os windows */\n#include "msg.h"\n'
+	         "int legacy(void){ return msg_check(); }\n")):
+		if conf is None:
+			os.remove(os.path.join(t.dir, "fmake.toml"))
+		else:
+			t.write("fmake.toml", conf)
+		t.write("old/legacy.c", legacy)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake("-v")
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"{how}: the build failed: {out}")
+		check("SITU " not in out,
+		      f"{how}: situc ran for a file this build is not compiling: "
+		      f"{out}")
+		check("this build is not compiling those" in out,
+		      f"{how}: the reason given is the default one, which is "
+		      f"false here: {out}")
+
+	# The control: a schema a built file includes is still compiled, and
+	# the program runs.
+	os.remove(os.path.join(t.dir, "old", "legacy.c"))
+	t.write("main.c", '#include "msg.h"\n'
+	        "int main(void){ return msg_check() - 4; }\n")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0 and "SITU " in r.stdout,
+	      f"a schema a built file includes must still compile: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program built against the schema does not run")
+
+
+@case
 def an_excluded_subtree_stays_off_mocs_include_path_too(t):
 	"""Section 305 filtered the compiler's include path and not moc's.
 
