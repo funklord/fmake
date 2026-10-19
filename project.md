@@ -495,7 +495,8 @@ that had been green about nothing for five commits ·
 [442. Two bugs behind a gap claim that was false](#442-two-bugs-behind-a-gap-claim-that-was-false) ·
 [443. The option survey done properly, and six keys it led to](#443-the-option-survey-done-properly-and-six-keys-it-led-to) ·
 [444. A crate that would not compile, reported as a link failure](#444-a-crate-that-would-not-compile-reported-as-a-link-failure) ·
-[445. The flag-bearing keys, and a fixture that proved nothing](#445-the-flag-bearing-keys-and-a-fixture-that-proved-nothing)
+[445. The flag-bearing keys, and a fixture that proved nothing](#445-the-flag-bearing-keys-and-a-fixture-that-proved-nothing) ·
+[446. Five probes that came back clean](#446-five-probes-that-came-back-clean)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33415,23 +33416,42 @@ fails it, and fails
 `a_package_named_only_by_a_header_is_still_found` with it -- that case's
 ejected half is what found this.
 
-### The sibling omission, measured as far as it can be here
+### The sibling omission, and the cost I asserted without measuring
 
 The live side sets three variables, not one: `PKG_CONFIG_PATH` from
 `[toolchain] pkg-config-path`, and `PKG_CONFIG_SYSROOT_DIR` with
 `PKG_CONFIG_LIBDIR` when `[toolchain] sysroot` is set. **Only the first
-is emitted.** A cross build with a sysroot therefore writes a Makefile
-whose deferred queries ask the host's pkg-config about host packages --
-which is worse than this finding, because it answers rather than
-failing, and the wrong flags are the kind that compile.
+is emitted.** That much is true and still true.
 
-It is recorded rather than fixed, and the reason is that it cannot be
-tested here: a fixture with a fake sysroot cannot link, since the sysroot
-has no crt or libc, so a case asserting the behaviour would assert the
-text of the emitted file and nothing more. Whoever has a real cross
-sysroot can close it in one place -- the same block, from `cfg.sysroot`,
-with the libdir list lifted out of `Pkg.__init__` rather than written a
-second time.
+~~A cross build with a sysroot therefore writes a Makefile whose deferred
+queries ask the host's pkg-config about host packages -- which is worse
+than this finding, because it answers rather than failing.~~ **That was
+asserted and not measured, and it does not reproduce.** Built since, on a
+fake sysroot carrying its own `frob.pc`:
+
+- with a **relative** `sysroot = "sr"`, the module's flags are **baked**
+  into `CFLAGS` -- `-Isr/usr/include` -- and no `PKG_CONFIG` block is
+  emitted at all;
+- with an **absolute** sysroot, the same: baked, no deferral.
+
+`deferred_modules` defers a module whose flags name a place on this
+machine, and what came back here was a path fmake had already rewritten
+through the sysroot and relativised against the tree. A baked relative
+path is portable, so the emitted file never asks the host anything and
+the two missing variables cost nothing in either shape.
+
+**What is actually unknown** is whether a real cross sysroot -- one whose
+`.pc` files hand back absolute paths fmake does not rewrite -- defers the
+module and then asks the host. That needs a machine with such a sysroot,
+which is the same reason the behaviour could not be tested here in the
+first place. The emission is still missing and would still be one block
+from `cfg.sysroot`, with the libdir list lifted out of `Pkg.__init__`
+rather than written a second time.
+
+The correction is kept rather than quietly dropped because the original
+sentence is the shape `evidence.md` now has a rule about: a claim that
+nobody re-derives, written in the entry that records it as unfixed, which
+is exactly where nothing would ever contradict it.
 
 ## 433. The deadline the runner applies and the emitted builds dropped
 
@@ -34394,3 +34414,34 @@ covered: six furniture keys, `nm`, `version-script`, `define` singular,
 behaviour, and where section 230's own cases already build and lint a
 real package. That is a list, not a finding, and it is where this sweep
 stops.
+
+## 446. Five probes that came back clean
+
+Written down because a probe nobody records is one the next session
+runs again. Each of these was measured today, in the Rust path and
+around it, after section 444 suggested that path was the less worn one.
+None of them found anything, and that is the result.
+
+- **A Rust test program honours `test-timeout`.** `test/main.rs`
+  sleeping 60 seconds under `test-timeout = 2` comes back in 2.7s. The
+  deadline of section 433 is language-agnostic and behaves so.
+- **A `.rs` that roots nothing is named.** `test/slow.rs` -- not
+  `main.rs` or `lib.rs`, so not a crate root -- draws *"is reached by no
+  crate root: nothing declares it with `mod', and only lib.rs or main.rs
+  roots a crate"*, which names the cause and both routes out. Section
+  419's work, met by accident while writing the fixture above with the
+  wrong filename.
+- **Mixed C and Rust links and runs.** A `#[no_mangle] extern "C"` crate
+  and a `main.c` calling it: built, linked by symbol evidence, exits 0.
+  Already covered by `a_c_program_links_a_rust_crate_with_no_build_file`
+  and `the_ejected_builds_agree_with_the_live_one_about_a_crate`, which
+  is the better outcome than a finding.
+- **The exit status is one code per outcome.** 0, 1 for every failure
+  shape measured (no source, a compile error, an unresolved symbol), and
+  130 for an interrupt. The `120` seen earlier in this session came from
+  a pty probe closing its master while fmake was writing, not from
+  fmake.
+- **A deleted source does not leave its symbols behind.** Build, remove
+  `helper.c`, rebuild: the link fails on `helper` rather than quietly
+  using the stale object, which is still in `.fmake/obj` as cache and is
+  not in the link set.
