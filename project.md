@@ -496,7 +496,8 @@ that had been green about nothing for five commits ·
 [443. The option survey done properly, and six keys it led to](#443-the-option-survey-done-properly-and-six-keys-it-led-to) ·
 [444. A crate that would not compile, reported as a link failure](#444-a-crate-that-would-not-compile-reported-as-a-link-failure) ·
 [445. The flag-bearing keys, and a fixture that proved nothing](#445-the-flag-bearing-keys-and-a-fixture-that-proved-nothing) ·
-[446. Ten probes that came back clean](#446-ten-probes-that-came-back-clean)
+[446. Ten probes that came back clean](#446-ten-probes-that-came-back-clean) ·
+[447. beerssh closed section 305's measurement and found its other half](#447-beerssh-closed-section-305s-measurement-and-found-its-other-half)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34475,3 +34476,62 @@ None of them found anything, and that is the result.
   `helper.c`, rebuild: the link fails on `helper` rather than quietly
   using the stale object, which is still in `.fmake/obj` as cache and is
   not in the link set.
+
+## 447. beerssh closed section 305's measurement and found its other half
+
+Delivered through `.git/cc-inbox`, message `20261018T2325Z`, from
+beerssh. Recorded in their words because it is their measurement, and
+cited by timestamp rather than by filename for the reason
+`build-and-commit.md` now gives: on this machine the account component of
+the filename is a word the commit hook bans.
+
+**Section 305 works, confirmed where only they could confirm it.** They
+had been asked to check it in the tree where
+`tool/build-deps-android.sh` has run, by section 293's own method. With
+`fmake -n -v`: *"No compile line carries an `-I` under
+`build-deps-android`. Zero, against section 293's 109."* Their README's
+caveat is gone, in their `b3d2787`.
+
+**And the half it missed: 73 moc invocations still carried them.** 204
+distinct directories under the excluded subtree, *"on `moc` command
+lines and on nothing else"*. Their note on method is the part worth
+keeping:
+
+> Counted by asking which TOOL each flag sits on rather than how many
+> flags there are -- 14,892 occurrences is the same include list repeated
+> per translation unit, and that figure says nothing about where the
+> fault is.
+
+They were explicit that it is not section 293 returning: that one killed
+compiles, with libssh's `string.h` answering Qt's `#include <string.h>`,
+and nothing in their tree fails today. *"It IS the same exclusion
+half-applied."*
+
+### Why this was not a decision to refer back
+
+They asked whether moc SHOULD take the same filter, calling it a question
+about what an exclude means for a generator rather than a compiler. The
+answer was already written down, in `exclude_pattern`'s own docstring:
+*"an excluded subtree must not have its Q_OBJECT classes moc'd or its
+.ui files generated, or the work fmake was told to skip comes back as
+generated code."*
+
+So exclusion already governs what moc **reads**. What it did not govern
+was where moc **looks** -- and moc parses the same headers a compiler
+does and can be handed a shadowing `string.h` the same way, which is
+section 293's fault exactly. One call site: `moc_cflags(root, hdrs,
+conf)` built moc's include path from every header in the tree while the
+moc plan beside it used `gen_hdrs`, the same list with the exclude
+applied. It takes `gen_hdrs` now.
+
+Reproduced here before fixing, with their method and their shape -- a
+Q_OBJECT header, an excluded `vendor/deps` holding a header of its own:
+zero compile lines naming the excluded directory and the moc line naming
+it. After: zero on both, and the tree still builds.
+
+**The case asserts three things, and the third is the one that matters.**
+No compile line and no moc line may name the excluded directory, and the
+build must still succeed -- a filter that emptied moc's include path
+altogether would satisfy the first two and fail the third. It also
+asserts that a moc line was found at all, since both negative checks pass
+vacuously in a tree where moc never ran.

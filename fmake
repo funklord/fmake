@@ -11781,7 +11781,25 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			die("this tree declares Q_OBJECT classes, which need Qt's moc.\n"
 			    "Install the Qt development package, or name it with "
 			    f"[toolchain] moc in {CONF_FILE}.")
-		moc_flags = moc_cflags(root, hdrs, conf)
+		# `gen_hdrs', not `hdrs': the same filter the moc PLAN takes.
+		# Reported from beerssh, inbox message 20261018T2325Z, closing
+		# the measurement section 305 left them and finding the half it
+		# missed. In their tree no compile line carried an `-I' under
+		# the excluded subtree -- zero against section 293's 109 -- and
+		# 73 moc invocations still did, 204 distinct directories, on moc
+		# command lines and on nothing else. Counted by asking which
+		# TOOL each flag sat on rather than how many flags there were,
+		# which is why the figure means anything.
+		#
+		# Not a new decision: `exclude_pattern' already says an excluded
+		# subtree "must not have its Q_OBJECT classes moc'd or its .ui
+		# files generated, or the work fmake was told to skip comes back
+		# as generated code". moc parses the same headers a compiler
+		# does and can be handed a shadowing `string.h' the same way --
+		# which is section 293's fault exactly -- so the same exclusion
+		# applying to what moc READS and not to where it LOOKS was half
+		# an answer.
+		moc_flags = moc_cflags(root, gen_hdrs, conf)
 		moc_outs = run_moc(root, moc_jobs, moc_exe, moc_flags, cache,
 		                   args.dry_run, tool_origin("moc", cfg.moc))
 		done = set(moc_outs)

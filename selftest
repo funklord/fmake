@@ -9305,6 +9305,58 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def an_excluded_subtree_stays_off_mocs_include_path_too(t):
+	"""Section 305 filtered the compiler's include path and not moc's.
+
+	Reported from beerssh, inbox message 20261018T2325Z, closing the
+	measurement section 305 had left them. In their tree no compile line
+	carried an `-I` under the excluded subtree -- zero against section
+	293's 109 -- and **73 moc invocations still did**, 204 distinct
+	directories, on moc command lines and on nothing else. They counted
+	by asking which TOOL each flag sat on rather than how many flags
+	there were, which is what makes the number mean something.
+
+	Not a new decision. `exclude_pattern' already says an excluded
+	subtree must not have its Q_OBJECT classes moc'd or its .ui files
+	generated; moc parses the same headers a compiler does and can be
+	handed a shadowing `string.h' the same way, which is section 293's
+	fault exactly. The exclusion applying to what moc READS and not to
+	where it LOOKS was half an answer.
+
+	Both halves are asserted here, because the compiler half is what
+	section 305 fixed and a later change could take either away: no
+	compile line and no moc line may name the excluded directory, and
+	the tree still has to build -- a filter that emptied moc's include
+	path altogether would pass the first two checks and fail the
+	third."""
+	_need_qt()
+	t.write("src/thing.h", "#pragma once\n#include <QObject>\n"
+	        "class thing : public QObject { Q_OBJECT public: thing(); };\n")
+	t.write("src/thing.cpp", '#include "thing.h"\nthing::thing() {}\n')
+	t.write("src/main.cpp", '/*! @target mocexcl */\n#include "thing.h"\n'
+	        "int main(void){ thing t; return 0; }\n")
+	t.write("vendor/deps/include/stray.h", "#pragma once\n"
+	        "int vendored(void);\n")
+	t.write("fmake.toml", '[project]\nexclude = ["vendor/deps"]\n')
+
+	r = t.fmake("-n")
+	lines = (r.stdout + r.stderr).splitlines()
+	for what, pick in (("a compile", lambda l: " -c " in l),
+	                   ("a moc", lambda l: "moc" in l and " -c " not in l)):
+		carrying = [l for l in lines if pick(l) and "vendor/deps" in l]
+		check(not carrying,
+		      f"{what} line names the excluded subtree: {carrying[:1]}")
+	moc_lines = [l for l in lines if "moc" in l and " -c " not in l]
+	check(moc_lines,
+	      f"no moc line was found, so neither check above asserted "
+	      f"anything: {lines[:4]}")
+
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"and moc still has what it needs: {r.stdout}{r.stderr}")
+
+
+@case
 def the_flag_bearing_config_keys_reach_the_tool(t):
 	"""`ldflags' and `rustflags', at every level that accepts them.
 
