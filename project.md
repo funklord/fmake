@@ -496,7 +496,7 @@ that had been green about nothing for five commits ·
 [443. The option survey done properly, and six keys it led to](#443-the-option-survey-done-properly-and-six-keys-it-led-to) ·
 [444. A crate that would not compile, reported as a link failure](#444-a-crate-that-would-not-compile-reported-as-a-link-failure) ·
 [445. The flag-bearing keys, and a fixture that proved nothing](#445-the-flag-bearing-keys-and-a-fixture-that-proved-nothing) ·
-[446. Five probes that came back clean](#446-five-probes-that-came-back-clean)
+[446. Ten probes that came back clean](#446-ten-probes-that-came-back-clean)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34415,7 +34415,7 @@ behaviour, and where section 230's own cases already build and lint a
 real package. That is a list, not a finding, and it is where this sweep
 stops.
 
-## 446. Five probes that came back clean
+## 446. Ten probes that came back clean
 
 Written down because a probe nobody records is one the next session
 runs again. Each of these was measured today, in the Rust path and
@@ -34441,6 +34441,36 @@ None of them found anything, and that is the result.
   130 for an interrupt. The `120` seen earlier in this session came from
   a pty probe closing its master while fmake was writing, not from
   fmake.
+- **The ejected builds are incrementally correct.** Touch a header after
+  an ejected build: `make` rebuilds both objects and relinks, then says
+  *"Nothing to be done"*; `ninja` rebuilds the dependent object and
+  relinks, then *"no work to do"*. The depfiles carry it in both.
+- **The fragment form cannot clobber its parent.** `--eject
+  make-fragment` emits `CC ?=`, `CXX ?=`, `AR ?=` and `PREFIX ?=` --
+  conventional names that yield -- and prefixes everything else `FM_`,
+  with `fmake-all` and `fmake-clean` rather than `all` and `clean`. The
+  one unprefixed target is the artifact's own name, which is
+  unavoidable. hydra's `objsets.py` is the consumer that would pay.
+- **The ejected `uninstall` is already covered over the richest plan.**
+  Looked for, expecting a gap: the furniture case runs `install` and
+  `uninstall` through both backends and asserts the whole staging tree
+  is empty afterwards, not just `bindir`. The aliases case does the same
+  for the symlinks. The gap that section 428 found in fmake's OWN
+  Makefile does not exist in what fmake emits.
+- **Nothing in twenty private trees triggers the reports of sections 438
+  to 441.** Asked of each tree's index rather than guessed -- `git
+  ls-files` for a tracked `.asm`, for an uppercase source extension, for
+  source under `build/`, and for source in a dotted directory -- and the
+  answer is zero in every tree for every one of the four. So those lines
+  add no noise anywhere until somebody creates the shape they are about.
+  A cross-tree claim, so the four commands are the row anybody can
+  re-run to contradict it.
+- **The four real trees build identically with the current tool.**
+  hembygd, bbq-predictor, openmlx4 and ossacli, from `git archive`
+  copies, after the walk's return shape changed under three callers and
+  five report sites were added -- same outcomes as the run in section
+  437, down to openmlx4's `lzma.h is behind a conditional` note, which
+  is section 176 working.
 - **A deleted source does not leave its symbols behind.** Build, remove
   `helper.c`, rebuild: the link fails on `helper` rather than quietly
   using the stale object, which is still in `.fmake/obj` as cache and is
