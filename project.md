@@ -34246,8 +34246,29 @@ The other 38 unexercised keys are mostly packaging detail --
 `[debian] preinst`, `[gentoo] keywords`, `[alpine] subpackages`, the
 `[situ] *dir` overrides -- plus three with no directive spelling either:
 `[target] version-script`, `[toolchain] nm` and
-`[toolchain] rust-edition`. The `nm` one is worth a second look by
-somebody, because fmake's own advice names it: *"Set [toolchain] nm in
-fmake.toml"* is printed when nm reads no symbols, and a key an error
-message recommends is one the error message should have been tested
-against.
+`[toolchain] rust-edition`.
+
+### The nm the advice names, and the measurement that was nearly a defect
+
+`[toolchain] nm` was taken first, because **fmake's own error message
+recommends it**: when nm reads no symbols from anything it says *"Set
+[toolchain] nm in fmake.toml, or $NM, to one that reads <arch>
+objects"*, and a remedy nothing has taken is a remedy nobody has
+checked.
+
+Both halves work, and `the_nm_the_advice_names_is_one_that_works` pins
+the advice and each remedy against a shim nm that exits 0 in silence.
+
+**The first measurement said `$NM` did not work, and writing that up
+would have been wrong.** The `$NM` fixture was a COPY of a tree that had
+already been built, and something of that earlier build decided the
+answer: it produced a static archive -- the no-symbols outcome -- while
+the `fmake.toml` half, on a fresh tree, produced the program. Re-measured
+on a fresh tree, `$NM` builds the program too, and `find_nm` reads it
+first of all five candidates.
+
+So the fourth instrument error of this sweep was a **reused fixture**
+rather than a regex, and it is the one that would have reached a commit
+message as a defect in fmake. Each half of the case gets its own tree,
+and the docstring says why -- a reader shortening it to one tree would
+reintroduce exactly this.

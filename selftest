@@ -9305,6 +9305,76 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def the_nm_the_advice_names_is_one_that_works(t):
+	"""A key an error message recommends, with no case either way.
+
+	When nm reads no symbols from anything, fmake says so and offers two
+	remedies: *"Set [toolchain] nm in fmake.toml, or $NM, to one that
+	reads <arch> objects"*. Section 443 found that neither `[toolchain]
+	nm' nor `$NM' was written by any fixture -- the key has no `@'
+	spelling either, so there was no second route covering it -- which
+	makes this a remedy nothing had taken.
+
+	Both work. The first measurement said `$NM' did not, and it was
+	wrong: the fixture was a COPY of a tree that had already been built,
+	so something of the earlier build decided the answer. Re-measured on
+	a fresh tree it builds the program. Each half gets its own tree here
+	for that reason, and the case would have reported a defect that is
+	not there if it reused one."""
+	shim = os.path.join(t.dir, "shim")
+	os.makedirs(shim, exist_ok=True)
+	with open(os.path.join(shim, "nm"), "w") as fh:
+		fh.write("#!/bin/sh\nexit 0\n")
+	os.chmod(os.path.join(shim, "nm"), 0o755)
+	real = shutil.which("nm")
+	if not real:
+		raise Skip("no nm to name")
+	path = shim + os.pathsep + os.environ.get("PATH", "")
+
+	def tree(u):
+		u.write("helper.c", "int helper(void){ return 3; }\n")
+		u.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper() - 3; }\n")
+
+	# The advice, from a tree where nm answers nothing.
+	tree(t)
+	r = t.fmake(env={"PATH": path})
+	out = r.stdout + r.stderr
+	check("read no symbols" in out,
+	      f"a silent nm has to be reported: {out}")
+	check("[toolchain] nm" in out and "$NM" in out,
+	      f"and both remedies named: {out}")
+
+	# Taking the first: the key is honoured over the nm on PATH.
+	u = Tree("nm-by-key")
+	try:
+		tree(u)
+		u.write("fmake.toml", f'[toolchain]\nnm = "{real}"\n')
+		r = u.fmake(env={"PATH": path})
+		check(r.returncode == 0 and "read no symbols" not in
+		      r.stdout + r.stderr,
+		      f"[toolchain] nm was not honoured: {r.stdout}{r.stderr}")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "the program built with the named nm does not run")
+	finally:
+		u.cleanup()
+
+	# And the second, on its own tree: a reused one answered this wrongly
+	# once already.
+	v = Tree("nm-by-env")
+	try:
+		tree(v)
+		r = v.fmake(env={"PATH": path, "NM": real})
+		check(r.returncode == 0 and "read no symbols" not in
+		      r.stdout + r.stderr,
+		      f"$NM was not honoured: {r.stdout}{r.stderr}")
+		check(v.run(os.path.basename(v.dir)).returncode == 0,
+		      "the program built with $NM does not run")
+	finally:
+		v.cleanup()
+
+
+@case
 def the_furniture_keys_work_in_fmake_toml_too(t):
 	"""Six schema keys exercised only through their `@' spelling.
 
