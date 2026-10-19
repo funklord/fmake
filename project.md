@@ -493,7 +493,8 @@ that had been green about nothing for five commits ·
 [440. The third way a source goes unseen: the wrong case](#440-the-third-way-a-source-goes-unseen-the-wrong-case) ·
 [441. The fourth way, and the class the four of them make](#441-the-fourth-way-and-the-class-the-four-of-them-make) ·
 [442. Two bugs behind a gap claim that was false](#442-two-bugs-behind-a-gap-claim-that-was-false) ·
-[443. The option survey done properly, and six keys it led to](#443-the-option-survey-done-properly-and-six-keys-it-led-to)
+[443. The option survey done properly, and six keys it led to](#443-the-option-survey-done-properly-and-six-keys-it-led-to) ·
+[444. A crate that would not compile, reported as a link failure](#444-a-crate-that-would-not-compile-reported-as-a-link-failure)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34294,3 +34295,59 @@ rather than a regex, and it is the one that would have reached a commit
 message as a defect in fmake. Each half of the case gets its own tree,
 and the docstring says why -- a reader shortening it to one tree would
 reintroduce exactly this.
+
+## 444. A crate that would not compile, reported as a link failure
+
+`[toolchain] rust-edition` was the last of section 443's three keys with
+no `@` spelling and no case. The program written to test it found
+something worse than the gap it was written for.
+
+The program is `let async = 1;` -- an identifier in edition 2015, a
+keyword from 2018 on. rustc at the default edition says
+
+    error: expected identifier, found keyword `async`
+    help: escape `async` to use it as an identifier
+
+and fmake reported it as
+
+    ... 10 more linker lines (-v for all)
+    * edition did not link
+
+**Both halves are wrong and a reader acts on both.** The phase was the
+compile, not the link. And the lines being truncated were rustc's own
+explanation -- the `help:` line, the one that fixes it, was the part cut
+off -- under a sentence calling them linker output, which sends somebody
+looking for a library.
+
+**It is general, not an artifact of a parse error.** A type error gets
+the same treatment: `rserr did not link`, `... 3 more linker lines`. Any
+Rust compile error, which is every Rust user's first typo. The C path has
+always said `main.c did not compile` and `-v for the full compiler
+output` for the same mistake.
+
+### Why it happens, and why the fix is two words
+
+For a crate there is no separate compile step: `crate_cmd(..., exe=True)`
+has rustc compile and link in one command, so a compile error arrives at
+the link reporter. The site already knows -- `cl.root.crate_exe` is
+consulted three lines above, to print `RS` rather than `LD`.
+
+So the headline says **`did not build`** for a crate, because one command
+did both and neither word alone is true, and the truncation names whose
+output it is: `lines from rustc` rather than `linker lines`.
+
+**A genuine crate link failure reads correctly too**, which is worth
+stating because it is the case the wording has to serve as well: a
+missing `extern "C"` symbol gets `did not build` and `lines from rustc`,
+and that is right -- rustc ran the link, and the spew it relays is
+rustc's. The one-step framing is true in both halves.
+
+### The control is the C path, unchanged
+
+A dozen call sites of a missing symbol, so the truncation fires: still
+`did not link`, still `linker lines`, no mention of rustc. Without that
+half the fix could have been a blanket rename and nothing would have
+noticed.
+
+And the key works: edition 2015 builds what 2021 refuses, asserted in
+the same case, which is what the program was written to measure.

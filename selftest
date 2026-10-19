@@ -9305,6 +9305,76 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def a_crate_that_does_not_compile_is_not_called_a_link_failure(t):
+	"""rustc compiles and links in one command, and fmake said "link".
+
+	`[toolchain] rust-edition' was the last of section 443's three keys
+	with no `@' spelling and no case, and the program written to test it
+	-- `let async = 1', which edition 2015 accepts and 2021 refuses --
+	found a worse thing than the gap it was written for. At the default
+	edition fmake reported
+
+	    ... 10 more linker lines (-v for all)
+	    * edition did not link
+
+	for a parse error. Both halves are wrong and the reader acts on
+	both: the phase was the compile, and the lines being truncated were
+	rustc's own explanation -- the `help: escape `async` to use it as an
+	identifier' was the part cut off. The C path says `main.c did not
+	compile' for the same mistake.
+
+	So: `did not build' for a crate, because one command did both and
+	neither word alone is true, and the truncation names rustc. The
+	control is a C program with a dozen call sites of a missing symbol,
+	which must still say `did not link' and `linker lines'.
+
+	And the key works: edition 2015 builds what 2021 refuses, which is
+	what this program was written to measure in the first place."""
+	if not shutil.which("rustc"):
+		raise Skip("no rustc")
+	t.write("main.rs", "fn main() {\n    let async = 1;\n"
+	        "    std::process::exit(async - 1);\n}\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"edition 2021 must refuse this: {out}")
+	check("did not build" in out,
+	      f"a crate that will not compile is not a link failure: {out}")
+	check("did not link" not in out,
+	      f"and must not be called one: {out}")
+	check("lines from rustc" in out or "escape `async`" in out,
+	      f"the truncated lines are rustc's, not the linker's: {out}")
+	check("linker lines" not in out,
+	      f"rustc's own explanation was called linker output: {out}")
+
+	# The key this program was written for.
+	t.write("fmake.toml", '[toolchain]\nrust-edition = "2015"\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"[toolchain] rust-edition did not reach rustc: "
+	      f"{r.stdout}{r.stderr}")
+
+	# The control: a C link failure keeps the words that fit it. A dozen
+	# call sites, so the truncation fires and can be read.
+	u = Tree("c-link-failure")
+	try:
+		calls = " + ".join(["nowhere()"] * 12)
+		u.write("main.c", "extern int nowhere(void);\n"
+		        f"int main(void){{ return {calls}; }}\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check("did not link" in out,
+		      f"a C program that compiled and would not link is a link "
+		      f"failure: {out}")
+		check("did not build" not in out,
+		      f"and keeps the word that fits it: {out}")
+		check("lines from rustc" not in out,
+		      f"no rustc is involved here: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_version_script_hides_what_it_does_not_export(t):
 	"""`[target.*] version-script', the last untested key that does work.
 

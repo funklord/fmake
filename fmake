@@ -10712,8 +10712,15 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		if VERBOSE or len(lines) <= LINK_ERR_LINES:
 			PROGRESS.write(r.stderr)
 		else:
+			# Whose output it is, because for a crate it is not the
+			# linker's. rustc compiles and links in one command, so a
+			# plain compile error arrives here -- and calling rustc's
+			# own explanation "linker lines" sends the reader to look
+			# for a library while the help text that would have fixed
+			# it is the part being cut off.
+			whose = "lines from rustc" if cl.root.crate_exe else "linker lines"
 			PROGRESS.write("\n".join(lines[:LINK_ERR_LINES]) + "\n")
-			note(f"... {len(lines) - LINK_ERR_LINES} more linker lines (-v "
+			note(f"... {len(lines) - LINK_ERR_LINES} more {whose} (-v "
 			     f"for all)")
 	# The same question as the compile above, and the one that was
 	# loudest: `ar' and the linker were the two steps with no check at
@@ -15453,7 +15460,14 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		say()
 		hidden_moc = set()
 		for name, cl, res in failed:
-			warn(f"{name} did not link")
+			# "did not link" is the wrong phase for a crate, and the
+			# phase is what a reader acts on: rustc compiles and links
+			# in one command, so `let async = 1' under edition 2021 --
+			# a parse error -- was reported as a link failure, above a
+			# truncation calling rustc's diagnostic linker lines. The C
+			# path says `main.c did not compile' for the same mistake.
+			warn(f"{name} did not build" if cl.root.crate_exe
+			     else f"{name} did not link")
 			if cl.root.crate_exe:
 				# Nothing below applies. rustc compiled and linked this in
 				# one command, so there is no link line fmake assembled
