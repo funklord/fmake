@@ -9221,6 +9221,16 @@ def _furniture_tree(t):
 	        " *  @dbus packaging/se.vibes.furn.conf\n"
 	        " *  @udev packaging/71-furn.rules\n"
 	        " */\n#include <stdio.h>\nint main(void){ puts(\"hi\"); return 0; }\n")
+	_furniture_files(t)
+
+
+def _furniture_files(t):
+	"""The furniture itself, without the declaration that claims it.
+
+    Factored out so the `@' spelling and the fmake.toml spelling share one
+    statement of what the files are: two copies of this list would be the
+    thing section 428 is about, in the suite rather than in the tool.
+    """
 	t.write("packaging/se.vibes.furn.conf",
 	        '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus '
 	        'Configuration 1.0//EN" "http://www.freedesktop.org/standards/'
@@ -9249,6 +9259,31 @@ def _write_png(path, w, h):
 		         + chunk(b"IEND", b""))
 
 
+def _furniture_toml(t):
+	"""The same furniture, declared in fmake.toml instead of in comments.
+
+    Every one of these keys is in `CONF_SCHEMA' and every one of them was
+    exercised only through its `@' spelling: measured by decoding the
+    suite's own string literals and looking for each key beside an `=',
+    which is section 443. Two spellings of one fact with one of them
+    tested is section 380's shape, and section 380's defect was a key
+    that validated and did nothing.
+    """
+	t.write("main.c",
+	        '#include <stdio.h>\nint main(void){ puts("hi"); return 0; }\n')
+	_furniture_files(t)
+	name = os.path.basename(t.dir)
+	t.write("fmake.toml", f"""
+[target.{name}]
+man = ["packaging/furn.1"]
+desktop = ["packaging/se.vibes.furn.desktop"]
+icons = ["packaging/se.vibes.furn.svg", "packaging/furn-48.png"]
+metainfo = ["packaging/se.vibes.furn.metainfo.xml"]
+dbus = ["packaging/se.vibes.furn.conf"]
+udev = ["packaging/71-furn.rules"]
+""")
+
+
 FURNITURE = [
     "lib/udev/rules.d/71-furn.rules",
     "share/applications/se.vibes.furn.desktop",
@@ -9267,6 +9302,43 @@ def _under(stage, prefix="usr/local"):
 		for f in files:
 			found.append(os.path.relpath(os.path.join(d, f), root))
 	return sorted(found)
+
+
+@case
+def the_furniture_keys_work_in_fmake_toml_too(t):
+	"""Six schema keys exercised only through their `@' spelling.
+
+	Section 443 measured it: of 146 keys in `CONF_SCHEMA', these six --
+	`man', `desktop', `icons', `metainfo', `dbus', `udev' -- were written
+	into no fixture's fmake.toml, while `@man', `@desktop' and the rest
+	appear 22 times. Two spellings of one fact with one of them tested,
+	which is section 380's shape: that section's defect was two keys that
+	validated and did nothing at all.
+
+	These do work -- checked by hand first, then pinned here -- so what
+	this closes is the coverage rather than a bug. The case below is the
+	directive half and this is the only difference between them: the same
+	files, declared in the config instead of in a comment, have to land
+	in the same places.
+
+	The program is built from a main.c with no directives in it at all,
+	so nothing can pass by the other route."""
+	_furniture_toml(t)
+	said = open(os.path.join(t.dir, "main.c")).read()
+	check("@" not in said,
+	      f"the fixture must declare nothing in the source, or this case "
+	      f"cannot tell the two spellings apart: {said}")
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--destdir", stage)
+	check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+	prog = "bin/" + os.path.basename(t.dir)
+	check(_under(stage) == sorted([prog] + FURNITURE),
+	      f"the config spelling landed: {_under(stage)}")
+
+	u = t.fmake("--uninstall", "--destdir", stage)
+	check(u.returncode == 0, f"uninstall failed: {u.stdout}{u.stderr}")
+	check(_under(stage) == [],
+	      f"uninstall left files behind: {_under(stage)}")
 
 
 @case

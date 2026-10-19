@@ -492,7 +492,8 @@ that had been green about nothing for five commits ·
 [439. The name guess section 139 rejected, still in the code](#439-the-name-guess-section-139-rejected-still-in-the-code) ·
 [440. The third way a source goes unseen: the wrong case](#440-the-third-way-a-source-goes-unseen-the-wrong-case) ·
 [441. The fourth way, and the class the four of them make](#441-the-fourth-way-and-the-class-the-four-of-them-make) ·
-[442. Two bugs behind a gap claim that was false](#442-two-bugs-behind-a-gap-claim-that-was-false)
+[442. Two bugs behind a gap claim that was false](#442-two-bugs-behind-a-gap-claim-that-was-false) ·
+[443. The option survey done properly, and six keys it led to](#443-the-option-survey-done-properly-and-six-keys-it-led-to)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34180,3 +34181,73 @@ existed. It was deleted rather than kept beside them. A duplicate case
 costs what the duplicate stanza above costs -- two statements of one
 fact, and the suite is where this file keeps saying that is the thing to
 avoid.
+
+## 443. The option survey done properly, and six keys it led to
+
+Section 442's survey was wrong about its one finding. Run again with both
+spellings -- long and short -- **every one of the 32 options is mentioned
+by the suite, and every one is actually passed to fmake by some case**,
+which is the stronger question and the one worth recording so nobody runs
+this sweep a third time.
+
+So the CLI surface is covered. The configuration surface is not, and that
+is where the same question pays.
+
+### 146 keys, and the instrument that lied twice about them
+
+The question: which keys in `CONF_SCHEMA` does no fixture write into an
+`fmake.toml`? The first instrument grepped the suite for `\bKEY\s*=` and
+reported 57. **It was wrong, and the reason is worth more than the
+number.** The suite writes TOML inside Python string literals, so a key
+usually appears as `\nicons = [...]`; `\b` asserts a word boundary, and
+there is none between the `n` of the escape and the `i` of the key. Every
+key written at the start of a line in a literal was invisible.
+
+The second instrument decodes the suite with `ast` and searches the
+string values -- which is what the fixtures actually contain -- and
+reports 46. It carries three controls, keys this session had just written
+into fixtures itself (`pkg-config-path`, `test-timeout`,
+`include-dirs`), and all three come back present. The first instrument
+failed all three and nobody had asked it to try.
+
+**That is three instrument errors in a row**, counting section 442's
+long-option grep and this file's own `-i` claim: a survey over source
+text keeps failing on the escaping of the text it searches. The remedy is
+cheap and was missing every time -- **ask the instrument about a case you
+know the answer to, before believing its absences.**
+
+### What the corrected list led to
+
+Of the 46, eight are install glue -- `icons`, `desktop`, `polkit`,
+`udev`, `dbus`, `metainfo`, `completion`, `aliases` -- and every one of
+them is exercised **only** through its `@` spelling, which appears 22
+times in the suite. Two spellings of one fact with one of them tested is
+section 380's shape, and section 380's defect was two keys that validated
+and did nothing at all.
+
+Checked by hand first: `[target.X] icons = [...]` installs to
+`share/icons/hicolor/scalable/apps/`, correctly. So this is coverage
+rather than a bug, and `the_furniture_keys_work_in_fmake_toml_too` pins
+six of them -- the same files the directive case uses, declared in the
+config instead of in a comment, landing in the same places and leaving
+nothing after `--uninstall`.
+
+**The fixture's `main.c` carries no directives at all**, and the case
+asserts that: without it, the furniture could arrive by the route the
+case is not testing and nothing would notice.
+
+The files themselves are now `_furniture_files`, shared by both
+fixtures. Two copies of that list would have been this file's own
+recurring complaint, in the suite rather than in the tool.
+
+### What is left, and it is a list rather than a finding
+
+The other 38 unexercised keys are mostly packaging detail --
+`[debian] preinst`, `[gentoo] keywords`, `[alpine] subpackages`, the
+`[situ] *dir` overrides -- plus three with no directive spelling either:
+`[target] version-script`, `[toolchain] nm` and
+`[toolchain] rust-edition`. The `nm` one is worth a second look by
+somebody, because fmake's own advice names it: *"Set [toolchain] nm in
+fmake.toml"* is printed when nm reads no symbols, and a key an error
+message recommends is one the error message should have been tested
+against.
