@@ -494,7 +494,8 @@ that had been green about nothing for five commits ·
 [441. The fourth way, and the class the four of them make](#441-the-fourth-way-and-the-class-the-four-of-them-make) ·
 [442. Two bugs behind a gap claim that was false](#442-two-bugs-behind-a-gap-claim-that-was-false) ·
 [443. The option survey done properly, and six keys it led to](#443-the-option-survey-done-properly-and-six-keys-it-led-to) ·
-[444. A crate that would not compile, reported as a link failure](#444-a-crate-that-would-not-compile-reported-as-a-link-failure)
+[444. A crate that would not compile, reported as a link failure](#444-a-crate-that-would-not-compile-reported-as-a-link-failure) ·
+[445. The flag-bearing keys, and a fixture that proved nothing](#445-the-flag-bearing-keys-and-a-fixture-that-proved-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34351,3 +34352,45 @@ noticed.
 
 And the key works: edition 2015 builds what 2021 refuses, asserted in
 the same case, which is what the program was written to measure.
+
+## 445. The flag-bearing keys, and a fixture that proved nothing
+
+Four more of section 443's unexercised keys: `ldflags` at project and
+target level, `rustflags` at project and profile level, with
+`[project] profile` alongside because a profile's flags cannot be reached
+without selecting it. All of them work.
+
+**The first `ldflags` fixture proved nothing, and that is the part worth
+keeping.** It took the address of an undefined symbol twice and
+subtracted:
+
+    extern int injected;
+    int main(void){ return (int)(long)&injected - (int)(long)&injected; }
+
+which links with or without `-Wl,--defsym=injected=42`, so the run
+"passed" at every level and said nothing about any of them. A call to an
+undefined function does not link, and that is what makes the flag
+visible. **The control is asserted first in the case now** -- without the
+flag the fixture must fail, naming the symbol -- so the three assertions
+after it cannot be vacuous.
+
+`rustflags` is asserted on the **exit status of the program**, not on the
+build: `--cfg thing` chooses between two `main` functions, so a flag that
+never arrived leaves a program that builds and answers 1. Asserting the
+build would have been the same vacuous pass one language over.
+
+An unknown profile is refused by name -- *"no profile 'nosuch' (defined:
+none)"* -- which is asserted too, since a silently ignored profile would
+make every `[profile.*]` assertion above it meaningless.
+
+### What is left of the sweep
+
+Of section 443's 46, the ones that do something to a build are now
+covered: six furniture keys, `nm`, `version-script`, `define` singular,
+`ldflags`, `rustflags`, `profile`, and `rust-edition` through section
+444. What remains is packaging detail -- `[debian] preinst`,
+`[gentoo] keywords`, `[alpine] subpackages`, the `[situ] *dir` overrides
+-- where a case means asserting the text of an emitted file rather than a
+behaviour, and where section 230's own cases already build and lint a
+real package. That is a list, not a finding, and it is where this sweep
+stops.

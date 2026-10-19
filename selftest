@@ -9305,6 +9305,81 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def the_flag_bearing_config_keys_reach_the_tool(t):
+	"""`ldflags' and `rustflags', at every level that accepts them.
+
+	Four more of section 443's unexercised keys, taken together because
+	they share one question -- does the flag reach the tool -- and one
+	trap: a fixture that builds either way proves nothing. The first
+	`ldflags' fixture took the address of an undefined symbol twice and
+	subtracted, which links without the flag, so the control passed and
+	the measurement was worthless. A call to an undefined function does
+	not link, which is what makes `--defsym' visible.
+
+	`rustflags' is asserted on the EXIT STATUS of the program rather
+	than on the build: `--cfg thing' chooses between two `main'
+	functions, so a flag that never arrived leaves a program that builds
+	and answers 1. A build that succeeded would have been the same
+	vacuous pass as the first ldflags fixture.
+
+	`[project] profile' comes with them, since a profile's flags cannot
+	be reached without selecting it, and an unknown profile name is
+	refused by name."""
+	t.write("main.c", "extern void injected(void);\n"
+	        "int main(void){ injected(); return 0; }\n")
+
+	# The control first: without the flag this must not link, or nothing
+	# below is evidence.
+	r = t.fmake()
+	check(r.returncode != 0 and "injected" in r.stdout + r.stderr,
+	      f"the fixture links without the flag, so it cannot show one: "
+	      f"{r.stdout}{r.stderr}")
+
+	for where in ("[project]", f"[target.{os.path.basename(t.dir)}]"):
+		t.write("fmake.toml",
+		        f'{where}\nldflags = ["-Wl,--defsym=injected=0"]\n')
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake()
+		check(r.returncode == 0,
+		      f"{where} ldflags did not reach the link: "
+		      f"{r.stdout}{r.stderr}")
+
+	if not shutil.which("rustc"):
+		return
+	u = Tree("rustflags")
+	try:
+		u.write("main.rs", "#[cfg(not(thing))]\n"
+		        "fn main() { std::process::exit(1); }\n\n"
+		        "#[cfg(thing)]\nfn main() { std::process::exit(0); }\n")
+		name = os.path.basename(u.dir)
+		check(u.fmake().returncode == 0, "the crate does not build")
+		check(u.run(name).returncode == 1,
+		      "the fixture answers 0 without the flag, so it cannot show "
+		      "one")
+		for conf in ('[project]\nrustflags = ["--cfg", "thing"]\n',
+		             '[project]\nprofile = "odd"\n\n'
+		             '[profile.odd]\nrustflags = ["--cfg", "thing"]\n'):
+			u.write("fmake.toml", conf)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			r = u.fmake()
+			check(r.returncode == 0,
+			      f"the crate did not build with {conf!r}: "
+			      f"{r.stdout}{r.stderr}")
+			check(u.run(name).returncode == 0,
+			      f"the flag did not reach rustc with {conf!r}")
+
+		# And a profile nobody defined is refused rather than ignored.
+		u.write("fmake.toml", '[project]\nprofile = "nosuch"\n')
+		r = u.fmake()
+		check(r.returncode != 0 and "no profile 'nosuch'" in
+		      r.stdout + r.stderr,
+		      f"an unknown profile should be refused by name: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_crate_that_does_not_compile_is_not_called_a_link_failure(t):
 	"""rustc compiles and links in one command, and fmake said "link".
 
