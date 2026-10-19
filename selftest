@@ -9305,6 +9305,72 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def a_version_script_hides_what_it_does_not_export(t):
+	"""`[target.*] version-script', the last untested key that does work.
+
+	Section 443's sweep left three keys with no `@' spelling and no case:
+	`[toolchain] nm', `[toolchain] rust-edition' and this one. Both
+	emitters already read `t.version_script' -- the linker flag is in the
+	Makefile and in the build.ninja -- so what was missing was anything
+	asserting the property the flag exists for.
+
+	Asserted on the artifact rather than on the command line: the whole
+	point of a version script is which symbols a consumer can see, and a
+	`-Wl,--version-script' on a line proves only that the flag was
+	passed. `nm -D' on the library is the question itself.
+
+	All three builds, because a shared library's exported set is exactly
+	the kind of fact that reaches a consumer and never reaches a test:
+	the live build, the ejected Makefile and the ejected ninja must all
+	hide `private_fn' and keep `public_fn'."""
+	if not shutil.which("nm"):
+		raise Skip("no nm to read the library with")
+	t.write("lib.c", "/*! @target vlib\n    @kind shared\n"
+	        "    @version 1.0 */\n"
+	        "int public_fn(void){ return 1; }\n"
+	        "int private_fn(void){ return 2; }\n")
+	t.write("vlib.map", "{ global: public_fn; local: *; };\n")
+	t.write("fmake.toml", '[target.vlib]\nversion-script = "vlib.map"\n')
+	lib = os.path.join(t.dir, "libvlib.so")
+
+	def exported():
+		r = subprocess.run(["nm", "-D", "--defined-only", lib],
+		                   capture_output=True, text=True, errors="replace")
+		return {l.split()[-1] for l in r.stdout.splitlines() if l.split()}
+
+	def clean():
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		for f in glob.glob(os.path.join(t.dir, "libvlib.so*")):
+			os.unlink(f)
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the library did not build: {r.stdout}{r.stderr}")
+	syms = exported()
+	check("public_fn" in syms,
+	      f"the script's global symbol is not exported: {sorted(syms)}")
+	check("private_fn" not in syms,
+	      f"a local symbol reached the dynamic table, so the version "
+	      f"script did nothing: {sorted(syms)}")
+
+	for form, build in (("make", ["make", "-C", t.dir]),
+	                    ("ninja", ["ninja", "-C", t.dir])):
+		if not shutil.which(build[0]):
+			continue
+		t.write("Makefile" if form == "make" else "build.ninja",
+		        t.fmake("--eject", form).stdout)
+		clean()
+		r = subprocess.run(build, capture_output=True, text=True,
+		                   errors="replace")
+		check(r.returncode == 0,
+		      f"the ejected {form} build failed: {r.stdout}{r.stderr}")
+		syms = exported()
+		check("public_fn" in syms and "private_fn" not in syms,
+		      f"the ejected {form} build dropped the version script: "
+		      f"{sorted(syms)}")
+
+
+@case
 def the_nm_the_advice_names_is_one_that_works(t):
 	"""A key an error message recommends, with no case either way.
 

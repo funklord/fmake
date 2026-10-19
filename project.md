@@ -34248,6 +34248,28 @@ The other 38 unexercised keys are mostly packaging detail --
 `[target] version-script`, `[toolchain] nm` and
 `[toolchain] rust-edition`.
 
+### Two more taken, and both work
+
+**`[project] define` and `[target] define`, the singular spellings.** The
+schema accepts `define` beside `defines`, and only the plural was ever
+written by a fixture -- which is `[project] libs`'s shape exactly, and
+that one did nothing for a while (section 380). Measured with a `#error`
+guarding the macro: both singulars reach the compile line.
+
+**`[target.*] version-script`**, which is the substantial one. Both
+emitters already read `t.version_script`, so the flag was in the
+Makefile and the `build.ninja`; what was missing was anything asserting
+the property the flag exists for.
+`a_version_script_hides_what_it_does_not_export` asserts it **on the
+artifact** -- `nm -D` on the library, in all three builds -- because a
+`-Wl,--version-script` on a command line proves the flag was passed and
+nothing about which symbols a consumer can see. Sabotaging the one line
+that reads the key leaves `private_fn` in the dynamic table and fails the
+case on exactly that.
+
+That leaves `[toolchain] rust-edition` of the three keys with no `@`
+spelling, and the packaging detail, which is a list rather than a finding.
+
 ### The nm the advice names, and the measurement that was nearly a defect
 
 `[toolchain] nm` was taken first, because **fmake's own error message
