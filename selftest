@@ -29405,6 +29405,66 @@ int main(void){ return 0; }
 
 
 @case
+def an_ejected_fragment_is_not_read_as_the_tree_s_own_fmake_mk(t):
+	"""Following the fragment's own advice made fmake unusable.
+
+    `--eject make-fragment` writes a file its own header tells the reader
+    to call `fmake.mk` -- *include fmake.mk* is the line it offers -- and
+    `fmake.mk` is the file fmake reads project directives and generator
+    rules from. So a tree that took that advice could not run fmake
+    again. Measured on a one-file tree, where a plain build worked, the
+    fragment went to the documented name, and the next build stopped:
+
+        !!! fmake.mk:38: expected `targets: prerequisites',
+            got 'CC             ?= cc'
+
+    Recognised by the marker every emitted file carries rather than by
+    name, so this cannot be defeated by ejecting under a third name, and
+    said once rather than skipped in silence -- somebody whose directives
+    were in that file and who then ejected over it has lost them.
+
+    The second arm is the half that matters more: a hand-written
+    `fmake.mk` is still read. A fix that silenced the file by name would
+    pass the first arm and take the feature away.
+    """
+	t.write("main.c", '#include <stdio.h>\n'
+	        'int main(void){ puts("hi"); return 0; }\n')
+	check(t.fmake().returncode == 0, "the plain build failed")
+	e = t.fmake("--eject", "make-fragment")
+	check(e.returncode == 0, f"--eject make-fragment failed: {e.stderr}")
+	check("include fmake.mk" in e.stdout,
+	      "the fragment no longer names fmake.mk, so this case is about "
+	      "a collision that may have been solved another way")
+	t.write("fmake.mk", e.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a tree whose fmake.mk is an ejected fragment cannot build: "
+	      f"{out}")
+	check("not read for project directives" in out,
+	      f"the file was skipped and nothing said so, which loses a "
+	      f"reader's directives in silence: {out}")
+
+	# And the feature itself, in the same tree: a rule somebody wrote.
+	t.write("seed.txt", "seed\n")
+	os.makedirs(os.path.join(t.dir, "gen"), exist_ok=True)
+	t.write("main.c", "int table_value(void);\n"
+	        "int main(void){ return table_value(); }\n")
+	t.write("fmake.mk",
+	        "gen/table.c: seed.txt | gen\n"
+	        '\tprintf "int table_value(void){ return 5; }\\n" > $@\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"the hand-written rule broke the build: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 5,
+	      "the rule in a hand-written fmake.mk did not run, so the fix "
+	      "silenced the file rather than recognising fmake's own output")
+
+
+@case
 def a_file_that_cannot_compile_is_not_remembered(t):
 	"""A failure must not be cached as a discovery.
 
