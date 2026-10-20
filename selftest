@@ -909,6 +909,135 @@ def an_ejected_ninja_says_which_bands_it_baked(t):
 	      "the ejected Makefile claims to have baked a switchable band in")
 
 
+def _interposing_module(t):
+	"""A `@kind module` that stands in for a libc function, and a user.
+
+    `getpid` because it is harmless and unmistakable: the shim answers
+    4242, so a binary that linked it says so without a controller, a
+    filesystem or a signal anywhere in the fixture.
+    """
+	t.write("shim.c", """
+/*! @file
+ *  @target    sgshim
+ *  @kind      module
+ *  @interpose
+ */
+#include <sys/types.h>
+pid_t getpid(void){ return 4242; }
+""")
+	t.write("prog.c", "#include <stdio.h>\n#include <unistd.h>\n"
+	        "int main(void){ printf(\"%d\\n\", (int)getpid()); return 0; }\n")
+
+
+@case
+def a_module_is_kept_out_whether_or_not_this_run_builds_it(t):
+	"""Two commands on one tree produced two different programs.
+
+    A module's sources are its own: an `@kind module` interposer must not
+    be linked into a program in libc's place, which is section 219's
+    measured harm in ossacli -- their simulator reached every program
+    fmake built, and a binary answered `slot 1 Smart Array P410` with
+    nothing preloaded.
+
+    The exclusion was keyed on the WANTED set, so it lapsed in any run
+    that did not build the module. Measured before the fix:
+
+        fmake          prog prints a real pid, no getpid in it
+        fmake prog     prog prints 4242, `T getpid' linked in
+
+    Naming the program is the ordinary way to build one of several, and
+    `fmake test' is the same shape -- there the wanted set is the test
+    group, so a test that preloads the shim got it linked instead and
+    passed with nothing preloaded. A preload test that cannot fail is
+    worse than no preload test.
+
+    Whether the module is built is a question about this run. Whether a
+    program may link an interposer is a question about the tree.
+    """
+	_interposing_module(t)
+
+	def built(*args):
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		for junk in ("prog", "sgshim.so"):
+			path = os.path.join(t.dir, junk)
+			if os.path.exists(path):
+				os.unlink(path)
+		r = t.fmake(*args)
+		check(r.returncode == 0,
+		      f"fmake {' '.join(args) or '(no arguments)'} failed: "
+		      f"{r.stdout}{r.stderr}")
+		out = subprocess.run(["nm", os.path.join(t.dir, "prog")],
+		                     capture_output=True, text=True).stdout
+		return t.run("prog").stdout.strip(), " T getpid" in out
+
+	# The control first: a bare build has always kept it out, and the case
+	# is about the other invocations agreeing with this one.
+	says, linked = built()
+	check(not linked and says != "4242",
+	      f"a bare build linked the interposer into the program: "
+	      f"{says!r}")
+
+	says, linked = built("prog")
+	check(not linked,
+	      f"naming the program on the command line linked the interposer "
+	      f"into it, which a bare build does not: it answers {says!r} with "
+	      f"nothing preloaded")
+	check(says != "4242",
+	      f"the program answers from the shim without it being preloaded: "
+	      f"{says!r}")
+
+
+@case
+def a_preload_test_fails_when_nothing_is_preloaded(t):
+	"""The other half, and the one that makes a test unable to fail.
+
+    `test-env` with `$bin(NAME)` builds the named target and hands the
+    test its path, which is what lets a test preload a module fmake
+    built. What must not happen is the module being LINKED into the test
+    as well: then it answers from the shim whether or not the preload
+    worked, and the test passes for a reason it does not state.
+
+    So the test is run both ways. Under `fmake test` it passes, and run
+    bare afterwards it must fail -- which is the only evidence that the
+    preload is what made it pass.
+
+    **It does not fail on the defect the case above guards**, and that is
+    worth knowing rather than hiding: `$bin(NAME)` asks for the target,
+    so the module is in the wanted set and the exclusion applied even
+    when it was keyed on that set. Which is the argument for this
+    spelling over a literal path -- a literal one builds nothing, and
+    before the fix it also got the shim linked in.
+    """
+	_interposing_module(t)
+	t.write("test/preloaded_test.c", """
+/*! @file
+ *  @target preloaded_test
+ *  @test   yes
+ */
+#include <stdio.h>
+#include <unistd.h>
+int main(void){ pid_t p = getpid(); printf("%d\\n", (int)p);
+                return p == 4242 ? 0 : 1; }
+""")
+	t.write("fmake.toml", '[target.preloaded_test]\n'
+	        'test-env = ["LD_PRELOAD=$bin(sgshim)"]\n')
+
+	r = t.fmake("test")
+	check(r.returncode == 0,
+	      f"the preloaded test did not pass: {r.stdout}{r.stderr}")
+	check(os.path.exists(os.path.join(t.dir, "sgshim.so")),
+	      "$bin(sgshim) in test-env did not build the module")
+	out = subprocess.run(["nm", os.path.join(t.dir, "preloaded_test")],
+	                     capture_output=True, text=True).stdout
+	check(" T getpid" not in out,
+	      "the module was linked into the test as well as preloaded, so "
+	      "the test cannot tell whether the preload worked")
+	bare = t.run("preloaded_test")
+	check(bare.returncode != 0,
+	      f"the test passes with nothing preloaded, so it is not testing "
+	      f"the preload: {bare.stdout}{bare.stderr}")
+
+
 @case
 def cli_flags_override_annotations(t):
 	"""The command line is an override, so it has to come last.

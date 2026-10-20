@@ -512,7 +512,8 @@ that had been green about nothing for five commits ·
 [459. 53 MB of archive, from one dollar-caret](#459-53-mb-of-archive-from-one-dollar-caret) ·
 [460. Two build paths, one tree, two programs -- and not mine to settle](#460-two-build-paths-one-tree-two-programs----and-not-mine-to-settle) ·
 [461. The decision was in the tree; one of its two readers had it](#461-the-decision-was-in-the-tree-one-of-its-two-readers-had-it) ·
-[462. Three directories the ejected build could move and fmake could not](#462-three-directories-the-ejected-build-could-move-and-fmake-could-not)
+[462. Three directories the ejected build could move and fmake could not](#462-three-directories-the-ejected-build-could-move-and-fmake-could-not) ·
+[463. One tree, two commands, two different programs](#463-one-tree-two-commands-two-different-programs)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -35724,3 +35725,132 @@ was checked both ways: a fabricated option reports absent, three real
 ones report present. Section 442 made the opposite mistake -- a gap
 claimed from a grep that searched only the long spelling -- and this
 detector reads every spelling of each option and the `=` form.
+
+## 463. One tree, two commands, two different programs
+
+A `@kind module` that interposes on libc must not be linked into a
+program in libc's place. That is section 219, and the harm is ossacli's:
+their `LD_PRELOAD` simulator reached every program fmake built, and a
+binary answered `slot 1 Smart Array P410` with nothing preloaded and no
+controller in reach.
+
+The exclusion was keyed on the **wanted** set -- `for m in wanted: if
+m.kind == "module"` -- so it lapsed in any invocation that did not build
+the module. Measured on one tree whose shim answers `getpid()` with
+4242:
+
+    $ fmake && ./prog
+    2852                     # nm prog: no getpid
+    $ fmake prog && ./prog
+    4242                     # nm prog: T getpid
+
+Same source, same configuration, two commands, two programs. And naming
+a target is not an exotic invocation: it is how anybody builds one of
+several.
+
+**`fmake test` is the same shape and the worse half.** There the wanted
+set is the test group, so a test that preloads the shim gets it *linked*
+instead -- measured, the test printed 4242 and passed with nothing
+preloaded at all. A preload test that cannot fail is worse than no
+preload test, and it is the one ossacli would have written.
+
+The fix is one word. Whether the module gets built is a question about
+this run; whether a program may link an interposer is a question about
+the tree, so the set comes from `targets`.
+
+### What fmake said while doing it
+
+Not nothing, which would have been easier to dismiss:
+
+    shim.c interposes on purpose (@interpose): getpid()
+        -- linked into prog deliberately
+
+The note is section 219's, and it is right that the *interposition* is on
+purpose. Nobody asked for the *link*: `@kind module` says the opposite
+and a bare build honours it. Without `@interpose` the same case is a
+warning whose remedy reads "`@kind module` says it is a loadable shim and
+keeps it out of every other target" -- true of a bare build, false of
+`fmake prog`. So the diagnosis misdescribed the state either way, which
+is why reading the message did not find this and running two commands
+did.
+
+### The sibling that was right, and why it was
+
+`interposing_material` -- the `tests/` doubles -- is built from the
+file pool and from where the files live, not from `wanted`, so it never
+had this fault. Two mechanisms for one rule, one keyed on the tree and
+one on the invocation, and only the invocation-keyed one broke. **A set
+computed from `wanted` is a claim about this run; a rule about what may
+be linked is a claim about the tree.** That is the transferable half.
+
+### What the fix does not take away, measured
+
+Widening the set from `wanted` to `targets` means a module not being
+built now contributes its sources to the exclusion, and the conservative
+branch adds a module source that is not compiled in this run. So the
+control is a tree where a program and a module legitimately share a
+file:
+
+    helper.c    int helper(void){ return 7; }
+    plugin.c    @kind module, calls helper()
+    prog.c      calls helper()
+
+    $ fmake        -> myplugin.so, prog; ./prog prints 7
+    $ fmake prog   -> CC helper.c, LD prog; ./prog prints 7
+
+Both build. `module_rels` holds a module's own root and its *declared*
+members, so a file a module merely links is shared like any other
+source. Where a module does declare such a file, taking it out of the
+program's link set is the documented trade already -- the note at the
+module warning says so in as many words -- and the fix makes `fmake
+prog` agree with the bare build about it rather than inventing a third
+answer.
+
+### The same question asked of every other use of `wanted`
+
+Having found one, the rest were enumerated rather than assumed. Of the
+places that read the wanted set, two look like this defect and neither
+is:
+
+- **`-fPIC` is added tree-wide only when a shared or module target is
+  wanted**, so `fmake prog` compiles without it where a bare `fmake`
+  compiles with it. That cannot produce a wrong artifact, because the
+  flag is in the configuration identity and the two land in different
+  object directories -- which is exactly what
+  `pic_is_part_of_the_object_identity` asserts. The cost is a recompile
+  when switching, and the benefit is that naming a program does not pay
+  for PIC. Deliberate, documented and tested.
+- **libc's exports are read only when a module is wanted**, because that
+  costs an `nm` and a tree with no module must not pay it. The set feeds
+  a warning about the modules in this run, so the invocation is the right
+  scope.
+
+Everything else that reads `wanted` is about what to build or what to
+print. So the discriminator is not "does it read `wanted`" but **what the
+answer is a claim about**: a flag's identity and a warning's subject
+belong to the run, and what a program is permitted to link belongs to the
+tree.
+
+### The preload composition, measured because it is what to recommend
+
+`test-env = ["LD_PRELOAD=$bin(sgshim)"]` is the spelling that works, and
+all four properties were measured rather than assumed: the module is
+built (`$bin(NAME)` asks for the target), the test binary has no
+`getpid` in it, the test passes under `fmake test`, and run bare
+afterwards it **exits 1**. The last is the only evidence that the
+preload is what made it pass.
+
+Its case does not fail on the defect above, and says so in its own
+docstring: `$bin()` puts the module in the wanted set, so the exclusion
+applied even when it was keyed on that set. Which is the argument for
+that spelling over a literal path -- a literal path builds nothing, and
+before the fix it also got the shim linked in.
+
+**So ossacli's README is accurate about their configuration and stale
+about fmake.** It says the shim "which fmake does not build", and they
+keep `src/shim/` out with `[project] exclude` -- which is the remedy that
+works in every invocation and the one they were offered in September.
+The mechanism that builds the shim, keeps it out of the programs and
+preloads it for the two tests that need it exists and is measured above.
+That is theirs to take or leave, so it goes to their inbox with the
+reproduction rather than into their tree.

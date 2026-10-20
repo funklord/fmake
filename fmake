@@ -13971,7 +13971,26 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# "cannot tell" has to fall on the conservative side of that.
 		module_material = set()
 		module_rels = set()
-		for m in wanted:
+		# Every module the TREE declares, not the ones this invocation
+		# happens to build. Keyed on `wanted', the exclusion lapsed in any
+		# run that did not build the module -- which is every `fmake test',
+		# where the wanted set is the test group, and every `fmake <program>',
+		# where it is the named target. Measured on one tree with an
+		# `@kind module @interpose' shim defining getpid():
+		#
+		#     fmake          prog prints a real pid, no getpid in it
+		#     fmake prog     prog prints 4242, `T getpid' linked in
+		#
+		# Same source, same configuration, two commands, two different
+		# programs -- and the only thing said was a note calling the link
+		# deliberate, which the tree's own `@kind module' denies. A test is
+		# the worse half: one that preloads the shim got it linked instead
+		# and passed with nothing preloaded, so a preload test could not
+		# fail.
+		#
+		# Whether the module is built is a question about this run; whether
+		# a program may link an interposer is a question about the tree.
+		for m in targets:
 			if m.kind == "module":
 				module_rels.add(m.rel)
 				module_rels.update(m.members or ())
