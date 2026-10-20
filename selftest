@@ -16978,6 +16978,112 @@ polkitdir = "share/mypolkit"
 	      f"pkgconfigdir should be refused, since it follows libdir: {out}")
 
 
+def _one_of_every_install_kind(t):
+	"""A target that lands something in every row of the install table.
+
+    Nine kinds on one target plus a service with all four init files,
+    which between them reach every INSTALL_DIRS row -- 17 declared
+    variables in the ejected Makefile when this was written, and the case
+    below counts none of them: it compares sets.
+    """
+	t.write("profile.conf", "x\n")
+	t.write("app.bash", "# completion\n")
+	t.write("app.1", "x\n")
+	t.write("app.desktop", "[Desktop Entry]\nName=app\nType=Application\n")
+	t.write("app.metainfo.xml", '<?xml version="1.0"?>\n<component/>\n')
+	t.write("action.policy", '<?xml version="1.0"?>\n<policyconfig/>\n')
+	t.write("app.conf", "<busconfig/>\n")
+	t.write("99-app.rules", 'ACTION=="add"\n')
+	# An SVG rather than a `.png' holding the word "icon": fmake reads an
+	# icon's content and refuses one that is neither SVG nor PNG, which is
+	# how the first version of this fixture was caught.
+	t.write("app.svg",
+	        '<svg xmlns="http://www.w3.org/2000/svg" width="16" '
+	        'height="16"/>\n')
+	t.write("app.service", "[Unit]\nDescription=app\n[Service]\n"
+	        "ExecStart=/usr/bin/app\n[Install]\n"
+	        "WantedBy=multi-user.target\n")
+	for name, body in (("app.init", "#!/bin/sh\n# init\n"),
+	                   ("app.openrc",
+	                    "#!/sbin/openrc-run\ncommand=/usr/bin/app\n"),
+	                   ("app.procd",
+	                    "#!/bin/sh /etc/rc.common\nSTART=99\n")):
+		path = t.write(name, body)
+		os.chmod(path, 0o755)
+	t.write("app.c", """
+/*! @file
+ *  @target     app
+ *  @install    yes
+ *  @man        app.1
+ *  @desktop    app.desktop
+ *  @icons      app.svg
+ *  @metainfo   app.metainfo.xml
+ *  @dbus       app.conf
+ *  @udev       99-app.rules
+ *  @polkit     action.policy
+ *  @data       profile.conf
+ *  @completion app.bash
+ */
+int main(void){ return 0; }
+""")
+	return ('[service.app]\nsystemd = ["app.service"]\n'
+	        'sysvinit = "app.init"\nopenrc = "app.openrc"\n'
+	        'procd = "app.procd"\n')
+
+
+@case
+def every_directory_the_ejected_build_declares_is_a_config_key(t):
+	"""The structural half of section 462, with no list in the suite.
+
+    That section's defect was a row of `INSTALL_DIRS` reaching the
+    emitted builds as an overridable variable while `[install]` refused
+    the key -- three times, each when a row was added and the schema was
+    not. A case naming the rows would be a fourth statement of the table
+    to keep in step; this compares two of fmake's own.
+
+    The declared set comes from the ejected Makefile. The accepted set
+    comes from fmake's refusal of a key that does not exist, which is the
+    only place the accepted names are published. Every declared `*DIR`
+    must be accepted, with one exception asserted by name: `PKGCONFIGDIR`
+    is relative to `libdir` rather than to the prefix, so it follows the
+    library wherever a multiarch `LIBDIR` puts it and is deliberately not
+    a key.
+    """
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	service = _one_of_every_install_kind(t)
+	t.write("fmake.toml", service)
+	e = t.fmake("--eject", "make")
+	check(e.returncode == 0, f"--eject failed: {e.stdout}{e.stderr}")
+	declared = set(re.findall(r"(?m)^([A-Z][A-Z0-9]*DIR) +\?=", e.stdout))
+	# Not vacuous: the three rows section 462 was about have to be in
+	# there, or an eject that declared nothing would pass.
+	for row in ("DATADIR", "COMPLETIONDIR", "POLKITDIR", "PKGCONFIGDIR"):
+		check(row in declared,
+		      f"the fixture does not reach {row}, so this proves nothing: "
+		      f"{sorted(declared)}")
+
+	t.write("fmake.toml", service + '\n[install]\nnosuchdir = "x"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "expected one of:" in out,
+	      f"a bogus [install] key should be refused with the list: {out}")
+	accepted = {k.strip() for k in
+	            out.split("expected one of:")[1].split(")")[0].split(",")}
+	check("bindir" in accepted and "prefix" in accepted,
+	      f"the accepted list did not parse: {accepted}")
+
+	missing = sorted(d for d in declared
+	                 if d.lower() not in accepted and d != "PKGCONFIGDIR")
+	check(not missing,
+	      f"the ejected build offers directories [install] will not take, "
+	      f"so a packager can move them from the command line and not from "
+	      f"the config: {missing}")
+	check("pkgconfigdir" not in accepted,
+	      "pkgconfigdir is a key now; it followed libdir on purpose, so "
+	      "either this exception or that reasoning has changed")
+
+
 @case
 def uninstall_removes_exactly_what_install_placed(t):
 	"""The inverse, held to `clean`'s rule rather than to a pattern.

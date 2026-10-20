@@ -35594,6 +35594,119 @@ hits**. A pattern precise enough to avoid false positives is a pattern
 precise enough to manufacture an absence, and the absence is the
 dangerous direction.
 
+### And the proof the file can carry itself
+
+A case runs when somebody runs it. **The table and the schema can be
+held to each other at import time**, which is what the file already does
+for its directive tables -- `assert not (DIRECTIVE_SCALAR &
+DIRECTIVE_LIST)` and the equality beside it. The same shape fits here,
+and the relationship is an exact equality rather than a containment:
+
+    every row whose base is the prefix (or nothing) is an [install] key
+    pkgconfigdir is the one row that hangs off another, and follows it
+
+Measured over the 18 rows before it was written: the two sets are equal,
+`only in schema: []`, `only in rows: []`. So the assert states an
+equality rather than a subset, which catches a key with no row as well
+as a row with no key.
+
+It fires on every invocation, including each of the suite's six hundred
+and eighty, where the case fires once. Both earn their place: the assert
+proves the table against the schema, and the case proves the *emitted
+variables* against the schema, which is the pair the emitter stands
+between. That is `harmonization.md`'s rule for a mechanical change --
+state what must not change, check it in the tool, refuse to run when it
+fails -- applied to a table rather than to a sweep.
+
+### The structural half, with no list in the suite
+
+The case above exercises three rows. The defect was that a row could
+reach the emitted builds and not the schema, which happened three times
+-- once per row added -- so what is wanted is a guard that fires when the
+fourth is added rather than three assertions naming the first three. A
+case naming the rows would be a fourth statement of the table to keep in
+step.
+
+**So it compares two of fmake's own statements.** The declared set comes
+from the ejected Makefile, `^([A-Z]+DIR) +\?=`. The accepted set comes
+from fmake's refusal of a key that does not exist, which is the only
+place the accepted names are published:
+
+    !!! [install]: unknown key 'nosuchdir' (expected one of:
+        applicationsdir, bindir, completiondir, ...)
+
+Every declared `*DIR` must be in that list, with `PKGCONFIGDIR` the one
+exception and asserted by name in both directions -- declared, and not
+accepted -- so the exception cannot quietly become the rule. Reverting
+the schema line names exactly the three: *the ejected build offers
+directories [install] will not take ... ['COMPLETIONDIR', 'DATADIR',
+'POLKITDIR']*.
+
+Its fixture reaches every row of the table -- nine kinds on one target
+and a service with all four init files, seventeen declared variables
+when this was written -- and the case counts none of them. It asserts
+the four rows the finding was about are among the declared, which is
+what stops an eject that declared nothing from passing.
+
+**The fixture was caught by fmake on the way in**, which is worth
+keeping: a `.png` holding the word `icon` is refused, *an icon is an SVG
+or a PNG, and this is neither*. The icon is an SVG now.
+
+### The same sweep over every other section, which was clean
+
+Having found one table-and-schema pair out of step, the rest were asked
+the same question rather than assumed. Every `[gentoo]` key --
+`category`, `src-uri`, `keywords`, `iuse`, `rdepend`, `bdepend` -- is
+read by the ebuild emitter. Every `[alpine]` key is read by the APKBUILD
+emitter, `pkggroups` and `pkgusers` through one loop over both. The four
+Debian maintainer scripts are read by one loop over all four, which is
+why only `postinst` needing a fixture costs nothing. `[service]
+restart-on-upgrade` and `[target] test-group` each have their reader.
+
+So of the 19 schema keys no fixture sets, the four install rows were the
+whole finding and the other fifteen are wired and merely unexercised.
+The loop form is what makes that safe: `for script in ("preinst",
+"postinst", "prerm", "postrm")` cannot acquire a gap the way a row added
+to a table by hand can.
+
+The two other table pairs in the file that could drift the same way were
+checked and hold: `MK_PROJECT_DIRECTIVES` is a subset of `DIRECTIVES`,
+and `INSTALL_CLASSIC` -- the four rows an ejected build declares whether
+the plan uses them or not -- names only rows that exist. Neither has ever
+drifted, so neither gained an assert; the one above earned it by having
+drifted three times. An assert per table pair is the kind of thing that
+accretes, and the 30 Doxygen alias labels are the case against it: they
+match the 30 directives exactly and the consumer falls back to the
+directive's own name, so a gap there degrades rather than disappears.
+
+### A run of three failures that was void rather than red
+
+The first full run after this change reported `3 of 683 failed`, and all
+three were mine. Three distinct syntax errors, at three unrelated lines
+of `fmake` -- `'(' was never closed` at 20814, an unterminated
+triple-quoted string at 13994, an `IndentationError` at 12283 -- in
+three cases that do nothing but read a message fmake prints.
+
+**Three syntax errors at three unrelated lines is not a defect, it is a
+file being written while it was read.** The sabotage runs that proved
+the two new cases patch `fmake` in place and restore it; both
+restorations were verified with `cmp` and the tree parses -- but the
+suite was running at the time, and every case spawns `./fmake`. One
+that spawned it mid-write got whatever had been flushed.
+
+So the run was void and was re-run rather than investigated, which is
+the one judgement that needed care. `evidence.md` says a gate that
+disagrees with code you believe correct is the first suspect; here the
+first suspect was the gate's *input*. What distinguishes the two is the
+shape: a real defect does not move its line number between three cases.
+
+**The workflow fix needs no change to the suite.** `FMAKE` is derived
+from `selftest`'s own path, so a sabotage can copy both files into a
+scratch directory and patch the copy, and the running suite never sees
+it. Editing the file a running suite executes is the hazard
+`running-code.md` records as a concurrent `make` deleting a test binary
+underneath an invocation, pointed at the program rather than the test.
+
 ### Two sweeps that came back clean, and what they close
 
 **Nothing in the workspace carries a committed ejected build file.**

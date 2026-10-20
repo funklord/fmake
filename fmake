@@ -18542,6 +18542,22 @@ INSTALL_DIRS = (
 	# netcfgd ships one beside its unit and its openrc-run script.
     ("procddir",         "/etc/init.d",           None),
 )
+
+# Every row that does not hang off another row is a key `[install]' takes,
+# which is how the live build is told to move it; the ejected builds
+# declare the same rows as overridable variables. `pkgconfigdir' is the one
+# row that does hang off another -- `libdir' -- so it follows the library
+# wherever a multiarch LIBDIR puts it and needs no key of its own.
+#
+# Asserted here rather than left to a case because the three rows that went
+# missing (section 462) went missing one at a time, each in the commit that
+# added the row, and an assert fails on the next invocation rather than on
+# the next time somebody runs the case that would have caught it. The file
+# already proves its directive tables this way.
+assert ({k for k, _d, base in INSTALL_DIRS if base in (None, "prefix")}
+        == set(CONF_SCHEMA["install"])), \
+       "INSTALL_DIRS and the [install] schema disagree about a directory"
+
 INSTALL_DEFAULTS = {key: default for key, default, _base in INSTALL_DIRS}
 # The rows a plan can name, in the order the ejected install rules list
 # them: everything but the prefix, which is a base and never a landing.
