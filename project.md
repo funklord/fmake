@@ -513,7 +513,8 @@ that had been green about nothing for five commits ·
 [460. Two build paths, one tree, two programs -- and not mine to settle](#460-two-build-paths-one-tree-two-programs----and-not-mine-to-settle) ·
 [461. The decision was in the tree; one of its two readers had it](#461-the-decision-was-in-the-tree-one-of-its-two-readers-had-it) ·
 [462. Three directories the ejected build could move and fmake could not](#462-three-directories-the-ejected-build-could-move-and-fmake-could-not) ·
-[463. One tree, two commands, two different programs](#463-one-tree-two-commands-two-different-programs)
+[463. One tree, two commands, two different programs](#463-one-tree-two-commands-two-different-programs) ·
+[464. Where this session stopped, fifth fold](#464-where-this-session-stopped-fifth-fold)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -35890,3 +35891,149 @@ Named by its timestamp rather than by its filename, which is
 `build-and-commit.md`'s rule and not a preference: the account component
 of an inbox filename is a word the commit-msg hook bans, so quoting the
 full name refuses the commit that records the act.
+
+## 464. Where this session stopped, fifth fold
+
+Nine commits since `8b2cb7e`, sections 454 to 463, `make check` green at
+every one and 684 cases at the end. Every fix came from one of two
+lenses, and neither was chosen in advance.
+
+### The two lenses, and where each came from
+
+**"Where does a step report success it did not earn."** Asked first of
+this tree's own Makefile because `claude-guidelines` signalled one
+instance, and it kept paying: `make hooks` printing *commit-msg
+installed* over a failed install (454); `./fmake --man > $@` leaving a
+zero-byte manual page that the next `make` called up to date (455); the
+ejected Makefile keeping a generated file whose recipe failed (456); the
+`SANITIZE=1` switch that recompiled nothing and left a binary catching
+no overflow (458); and the static archive that nested a 53 MB crate
+staticlib because `$^` is every prerequisite (459).
+
+**"One decision, two readers, only one wired."** Sections 447 and 450
+established it; this session got three more. `--eject ninja` baking the
+switchable bands and never saying so (457); `pc_text` inventing the
+`built by fmake` description the packaging path refuses in as many words
+(461); three `INSTALL_DIRS` rows the ejected build could move and
+`[install]` would not take (462).
+
+**Section 463 is the one that came from neither**, and it is the best of
+them: a rule about what a program may link, computed from the set of
+targets this invocation happens to build. `fmake` and `fmake prog` gave
+one tree two different programs. It was found by running two commands,
+not by reading, and the diagnosis it printed was actively misleading --
+*linked into prog deliberately*, about a link nobody asked for.
+
+### What the emitters taught
+
+Four of the five findings in the first lens were in the make emitter and
+ninja was right every time, for four different reasons: its log knows
+what it ran, it has no conditionals to lose, it names its inputs rather
+than taking them all, and its install recipe reads the environment. The
+common cause is not a property of ninja. **It is that something was
+asking make less** -- including the suite's strongest case, which
+asserts that an ejected build produces *the same program* and watched
+one backend while naming "one backend before the other" as the failure
+it exists for. Both now.
+
+### Two real trees, before and after
+
+**fuzzypickles rebuilt identically.** Qt with moc and uic, 38 schemas,
+eight submodules, twenty-one exclude patterns; reconstructed into
+scratch with `git archive` per submodule. Exit 0, the same six programs,
+the same diagnostics as section 453's run. Nine commits touching the
+emitters, the archive, the install schema and the module exclusion moved
+nothing there.
+
+**raidcfgd's verdict is unchanged**, which is the control that mattered
+most because its own README records the expected output precisely. Same
+refusal, same symbol, same five programs named:
+
+    !!! symbol 'situ_msg_init' is defined by more than one file:
+        fuzznet/wire/generated/situ.c  -- in fuzznet, a checkout of
+                                          another project
+        wire/generated/situ.c
+    fmake will not guess which one belongs in bridge_main, fuzz_request,
+    fuzz_wire, raidcfgd, raidtray.
+
+Zero link steps, zero binaries, exactly as they wrote it. **The object
+count did not match and the reason is mine**: 148 here against their 180,
+because `git archive` carries no submodule contents and fuzznet's four
+nested ones came out empty, so two files could not compile --
+`monocypher.h` and a `peer_persist.h` that fuzzypickles' own config
+excludes for the same reason. A number that differs for a reason the
+measurer can name is not a finding, and saying which half is the
+instrument is the whole of the work there.
+
+**softkeys' README claim holds.** It offers `fmake` and `fmake test`
+beside `make`, and both were run rather than read: `libsoftkeys.a` from
+18 translation units with moc, and 16 test functions passing under
+`fmake test`.
+
+### Probes that came back clean, so nobody repeats them
+
+The three install paths agree entry for entry including modes and
+symlinks, and write byte-identical `.pc` files. All 31 command-line
+options are passed as arguments somewhere in the suite, with the
+detector checked against a fabricated option. No tree in this workspace
+carries a committed ejected build file, so the five changes to what
+fmake emits have nobody holding a stale copy -- 23 trees searched, the
+seven non-repositories named, the pattern checked against real output
+first. Every `[gentoo]` and `[alpine]` key reaches its artifact,
+measured end to end. The 30 directives and 30 Doxygen labels match, and
+`--features` is derived from the schema rather than kept beside it, so
+section 462's three new keys appeared there without being added.
+
+### Two instruments lied, and the remedy was crudeness
+
+The sweep that found 462 first reported **45** schema keys missing from
+the suite; nine of the first ten were present. The detector wanted the
+key at the start of a line and a fixture writes TOML inside a Python
+string. That is the sixth instrument error in two sessions, and it
+sharpens section 452's rule: the fix was not a better pattern but **the
+crudest possible detector plus reading the hits**, because a pattern
+precise enough to avoid false positives is precise enough to
+manufacture an absence.
+
+And a full run reported `3 of 683 failed` with three different syntax
+errors at three unrelated lines of `fmake` -- a file being written while
+it was read, because the sabotages that prove a new case rewrite it in
+place and the suite was running. The run was void, not red. `FMAKE` is
+derived from `selftest`'s own path, so a sabotage can copy both into
+scratch and leave a running suite alone.
+
+### What went out, and what is still open
+
+One signal: ossacli's inbox, timestamped `20261020T1818Z`, with the
+measured configuration that builds their `LD_PRELOAD` shim, keeps it out
+of their programs and preloads it for the two tests that need it --
+sent after 463 was committed, because before that the recommendation
+would have linked the shim into those very tests.
+
+Still the copyright holder's, unchanged by this session: this file's
+size, raised five times now; whether `build` should leave `SKIP_DIRS`
+(439); the sysroot emission (432); whether a generated unit inherits its
+origin's includers' flags (431); hull's per-schema situc flags (430),
+which hull's own README names as the reason it builds with make;
+object-directory pruning (15); the `--uninstall` manifest (348); 363;
+367; `pkg-optional` semantics; 385; 411; and whether the ejected builds
+should correct a submodule drifted off its gitlink (460), which costs a
+git process per submodule per invocation and would retire a case that
+asserts the opposite.
+
+### Where the next lens will not come from
+
+Both lenses that paid are now swept: every use of `wanted` has been
+asked what its answer is a claim about, every table pair that could
+drift has been compared, and the five surfaces where a fact could be
+lost between the live build and an emitted one have each been measured.
+Section 451 said the inbox is the highest-yield input this project has
+and that remains true -- it was empty all session, and the one thing
+that came from outside, `claude-guidelines`' `make hooks` signal, turned
+into the first finding within the hour.
+
+So the next lens is more likely to come from **running fmake over a tree
+nobody has run it over**, which is what the README rule in
+`project-attribution` asks for and what produced 463: ossacli's README
+named something fmake could not do, the attempt to confirm it reached
+for `@kind module`, and two commands disagreed.
