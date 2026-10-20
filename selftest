@@ -9305,6 +9305,81 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def a_separate_checkouts_own_program_does_not_ask_for_uic(t):
+	"""Sections 404 and 414, carried to the other generator that pollutes.
+
+	Section 414 settled this for schemas and said in as many words why
+	moc was left alone: *"414's filter was worth making because a
+	schema's output pollutes the include path; this one's does not"*.
+	uic's output is one flat directory on the include path, so it is in
+	the schema's category and nothing had carried either rule to it.
+
+	Both measured on a declared submodule carrying a `panel.ui` and its
+	own `main.cpp` including "ui_panel.h":
+
+	  * fmake said *"vendor/dep is a separate checkout; leaving its own 1
+	    program to it"* and ran uic for that program in the same breath,
+	    writing a generic `ui_panel.h` into the flat directory;
+	  * with a `panel.ui` in this tree as well it refused the build --
+	    *"ui_panel.h is ambiguous -- panel.ui and vendor/dep/panel.ui
+	    would both produce it ... so rename one"* -- advice the reader
+	    must not take, because one of the two is in a checkout belonging
+	    to somebody else. Section 404's words for the identical refusal
+	    about schemas.
+
+	Two controls, for the same reason section 414's case has two: a
+	filter that silences a real requester is worse than the overbuild it
+	replaces. Our own file asking for a vendored `.ui` must still
+	generate it, and the collision must resolve to ours rather than
+	refuse."""
+	_need_qt()
+	t.write(".gitmodules",
+	        '[submodule "vendor/dep"]\n\tpath = vendor/dep\n'
+	        "\turl = git@example.invalid:dep.git\n")
+	t.write("vendor/dep/panel.ui", '<?xml version="1.0" encoding="UTF-8"?>\n<ui version="4.0"><class>panel</class>\n <widget class="QWidget" name="panel"/>\n <resources/><connections/>\n</ui>\n')
+	t.write("vendor/dep/main.cpp", '#include "ui_panel.h"\n'
+	        "int main(void){ return 0; }\n")
+	t.write("main.cpp", "/*! @target app */\nint main(void){ return 0; }\n")
+
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	check("separate checkout" in out,
+	      f"the fixture did not pass the vendored program over, so this "
+	      f"case is not testing what it says: {out}")
+	check("UIC " not in out,
+	      f"uic ran for a program fmake does not build: {out}")
+	check("a program of the checkout it is in" in out,
+	      f"and the reason has to say so: {out}")
+	check(not os.path.exists(os.path.join(t.dir, ".fmake", "ui",
+	                                      "ui_panel.h")),
+	      "their program's header was generated into the flat directory")
+
+	# Control one: the collision resolves to this tree's own file rather
+	# than refusing with advice nobody may take.
+	t.write("panel.ui", '<?xml version="1.0" encoding="UTF-8"?>\n<ui version="4.0"><class>panel</class>\n <widget class="QWidget" name="panel"/>\n <resources/><connections/>\n</ui>\n')
+	t.write("main.cpp", '/*! @target app */\n#include "ui_panel.h"\n'
+	        "int main(void){ return 0; }\n")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the collision was refused: {out}")
+	check("UIC panel.ui" in out,
+	      f"the tree's own .ui should be the one compiled: {out}")
+	check("ambiguous" not in out,
+	      f"a vendored file is not a tie: {out}")
+
+	# Control two: our own file asking for a vendored .ui still gets it.
+	os.remove(os.path.join(t.dir, "panel.ui"))
+	os.remove(os.path.join(t.dir, "vendor", "dep", "main.cpp"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0 and "UIC vendor/dep/panel.ui" in r.stdout,
+	      f"a vendored .ui this tree asks for must still be compiled: "
+	      f"{r.stdout}{r.stderr}")
+
+
+@case
 def a_file_this_build_excludes_does_not_run_a_generator(t):
 	"""The loudest instance of sections 447 and 448's shape.
 

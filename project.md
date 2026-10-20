@@ -499,7 +499,8 @@ that had been green about nothing for five commits ·
 [446. Ten probes that came back clean](#446-ten-probes-that-came-back-clean) ·
 [447. beerssh closed section 305's measurement and found its other half](#447-beerssh-closed-section-305s-measurement-and-found-its-other-half) ·
 [448. The same exclusion, one consumer further on](#448-the-same-exclusion-one-consumer-further-on) ·
-[449. An excluded file's generator rule, and the loudest form of the shape](#449-an-excluded-files-generator-rule-and-the-loudest-form-of-the-shape)
+[449. An excluded file's generator rule, and the loudest form of the shape](#449-an-excluded-files-generator-rule-and-the-loudest-form-of-the-shape) ·
+[450. uic, and the two rules the schema plan already had](#450-uic-and-the-two-rules-the-schema-plan-already-had)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34638,3 +34639,63 @@ predicate already (`Project`), or is asked a question for which the
 unfiltered set is the right answer -- `uic_plan`'s second argument and
 `situ_plan`'s `have`, both of which mean "this header exists on disk",
 which an exclusion does not change.
+
+## 450. uic, and the two rules the schema plan already had
+
+Fourth instance of section 447's lens, and the one where the record
+itself said which category it belonged in. Section 414, explaining why
+moc was left alone:
+
+> §414's filter was worth making because a schema's output pollutes the
+> include path; this one's does not.
+
+**uic's output is one flat directory on the include path.** So uic is in
+the schema's category by that test, and neither of the two rules settled
+for schemas had been carried to it.
+
+Measured on a declared submodule carrying a `panel.ui` and its own
+`main.cpp` including `"ui_panel.h"`:
+
+- fmake said *"vendor/dep is a separate checkout; leaving its own 1
+  program to it"* and **ran uic for that program in the same breath**,
+  writing a generic `ui_panel.h` into the flat directory -- section 414's
+  finding exactly, one generator over;
+- with a `panel.ui` in this tree as well it **refused the build**:
+
+      !!! main.cpp:2: #include "ui_panel.h" is ambiguous -- panel.ui and
+          vendor/dep/panel.ui would both produce it. An unqualified
+          include cannot say which, so rename one.
+
+  which is advice the reader must not take, one of the two files being in
+  a checkout that belongs to somebody else. Section 404's words for the
+  identical refusal about schemas.
+
+Both rules are now uic's as well: a separate checkout's own program is
+not a requester, and where two `.ui` files would write one header and
+exactly one is ours, the tree's own wins with a line saying so.
+
+**One implementation, again.** The predicate was a closure inside
+`situ_plan`; it is `their_own_program` at module level now and
+`situ_plan` delegates to it -- the same move section 449 needed for
+`exclude_by_pattern`, and for the same reason: a second copy written to
+fix two bugs about disagreeing copies would be the joke writing itself.
+
+**Two controls, for section 414's reason.** A filter that silences a real
+requester is worse than the overbuild it replaces, so the case asserts
+that our own file asking for a vendored `.ui` still generates it, and
+that the collision resolves to ours rather than refusing.
+
+### Where the lens stops
+
+    305   the compiler's include path    before this session
+    447   moc's include path            beerssh found it
+    448   the schema plan's requesters   this lens
+    449   generator rules in comments    this lens, worst consequence
+    450   uic's requesters and ties      this lens, by 414's own test
+
+moc stays presence-driven, which section 414 measured on fuzznet and
+decided deliberately: its output is linked or it is not, and a
+meta-object fmake declines to generate is a link that fails. rcc is
+include-driven already and its output is a `.cpp` compiled into one
+program rather than a header on everyone's path, so neither rule applies
+to it. That is every generator fmake has.

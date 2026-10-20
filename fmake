@@ -2771,6 +2771,27 @@ def run_phony(name, rule, root, built, dry_run):
 	return 0
 
 
+def their_own_program(rel, theirs, scans):
+	"""Is this a separate checkout's own program, which fmake will not build?
+
+    Hoisted out of `situ_plan', which had it as a closure, because the
+    uic plan needs the same question -- sections 404 and 414 settled it
+    for schemas and nothing carried it to the other generator whose
+    output lands on the include path. `theirs' is the tuple of declared
+    submodule prefixes; the guard matches the one that passes such a
+    program over, `has_main' with neither `@kind' nor `@target', since an
+    annotated file in a submodule IS built and does need its generated
+    header.
+    """
+	if not theirs or not rel.startswith(theirs):
+		return False
+	scan = scans.get(rel)
+	if not scan or not scan.get("has_main"):
+		return False
+	ann = Ann(scan.get("dirs"))
+	return not ann.scalar("kind") and not ann.scalar("target")
+
+
 def exclude_by_pattern(conf, rel):
 	"""The `[project] exclude' pattern matching a path, or None.
 
@@ -3527,14 +3548,41 @@ def uic_plan(files, hdrs, scans, root):
     Unlike moc there is no symbol to fall back on -- a generated header is an
     include-graph dependency, so the include has to be believed.
     """
+	# Sections 404 and 414 settled both of these for schemas, and nothing
+	# carried either to uic -- whose output lands in ONE flat directory on
+	# the include path, which is the criterion section 414 itself used to
+	# say the schema filter was worth making and moc's was not.
+	#
+	# Measured on a declared submodule carrying a `panel.ui' and its own
+	# `main.cpp' including "ui_panel.h": fmake said "vendor/dep is a
+	# separate checkout; leaving its own 1 program to it" and ran uic for
+	# that program in the same breath. With a `panel.ui' in this tree as
+	# well it refused the build outright --
+	#
+	#     !!! main.cpp:2: #include "ui_panel.h" is ambiguous -- panel.ui
+	#         and vendor/dep/panel.ui would both produce it ... so rename
+	#         one.
+	#
+	# -- advice the reader must not take, because one of the two is in a
+	# checkout that belongs to somebody else. Section 404's words for the
+	# identical refusal about schemas.
+	theirs = tuple(s + os.sep for s in declared_submodules(root))
 	have = {os.path.basename(h) for h in hdrs}
-	wanted = {}
+	wanted, theirs_only = {}, {}
 	for rel in sorted(files):
+		mine = not their_own_program(rel, theirs, scans)
 		for _kind, name, line in scans.get(rel, {}).get("incs", ()):
 			base = os.path.basename(name)
 			m = RE_UI_HEADER.match(base)
 			if m and base not in have:
-				wanted.setdefault(m.group(1), (rel, line))
+				if mine:
+					wanted.setdefault(m.group(1), (rel, line))
+				else:
+					theirs_only.setdefault(m.group(1), rel)
+	for stem, rel in sorted(theirs_only.items()):
+		if stem not in wanted:
+			vinfo(f"ui_{stem}.h is included only by {rel}, a program of "
+			      f"the checkout it is in, so uic is not run for it")
 	if not wanted:
 		return []
 
@@ -3542,6 +3590,23 @@ def uic_plan(files, hdrs, scans, root):
 	for rel in find_ext(root, ".ui"):
 		stem = os.path.splitext(os.path.basename(rel))[0]
 		by_stem.setdefault(stem, []).append(rel)
+	# The tree's own wins, which is section 404's rule for a schema
+	# colliding with a vendored one: the ambiguity below is real between
+	# two of this tree's own files and is not a tie when one of them is
+	# somebody else's.
+	if theirs:
+		for stem, rels in sorted(by_stem.items()):
+			if len(rels) < 2:
+				continue
+			ours = [r for r in rels if not r.startswith(theirs)]
+			if len(ours) != 1:
+				continue
+			for dropped in rels:
+				if dropped != ours[0] and stem in wanted:
+					vinfo(f"{dropped} is in a checkout of another project "
+					      f"and {ours[0]} is this tree's, so the tree's "
+					      f"own writes ui_{stem}.h")
+			by_stem[stem] = ours
 
 	jobs = []
 	for stem, (rel, line) in sorted(wanted.items()):
@@ -4049,14 +4114,8 @@ def situ_plan(root, hdrs, scans, skip=None):
 	theirs = tuple(s + os.sep for s in declared_submodules(root))
 
 	def _left_to_its_own_project(rel):
-		"""Is this a separate checkout's own program, which fmake will not build?"""
-		if not theirs or not rel.startswith(theirs):
-			return False
-		scan = scans[rel]
-		if not scan.get("has_main"):
-			return False
-		ann = Ann(scan.get("dirs"))
-		return not ann.scalar("kind") and not ann.scalar("target")
+		"""This plan's name for `their_own_program', which uic shares."""
+		return their_own_program(rel, theirs, scans)
 
 	# `skip' is "this build already decided not to compile that file", and
 	# it is the same argument the submodule guard above makes: what a file
