@@ -9305,6 +9305,76 @@ def _under(stage, prefix="usr/local"):
 
 
 @case
+def a_file_this_build_excludes_does_not_run_a_generator(t):
+	"""The loudest instance of sections 447 and 448's shape.
+
+	`@rule' lives in a comment, and the rules were read from every
+	scanned source -- before the exclusion is computed, because a
+	generated file has to be an ordinary source by the time the include
+	graph runs. So a rule in a file `[project] exclude' removes ran its
+	generator, and fmake then COMPILED AND LINKED the generated source
+	into the program: code in the binary from an instruction in a file
+	the build was told to skip.
+
+	The other half of the same cause is louder and arrives sooner: a
+	MALFORMED `@rule' in such a file failed the whole build --
+	`old/legacy.c:1: rule for gen/made.c has no recipe' -- so an
+	excluded file could stop a tree from building at all.
+
+	The control is what the fix must not break: a rule in a file that IS
+	built still runs, its output is compiled, and the program answers.
+
+	The predicate is the one the schema plan takes, and `[project]
+	exclude' now has a single implementation at module level --
+	`exclude_by_pattern' -- because this pass needs it before the closure
+	that used to hold it could exist, and two readings of one key that
+	disagree is what 447 and 448 were both about."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("old/seed.txt", "seed\n")
+	t.write("fmake.toml", '[project]\nexclude = ["old"]\n')
+	rule = ('/*! @file\n *  @rule gen/made.c: old/seed.txt\n'
+	        ' *        printf "int made(void){ return 1; }\\\\n" > $@\n */\n'
+	        "int legacy(void){ return 0; }\n")
+	t.write("old/legacy.c", rule)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build failed: {out}")
+	check("GEN " not in out,
+	      f"a generator ran for a rule in an excluded file: {out}")
+	check(not os.path.exists(os.path.join(t.dir, "gen", "made.c")),
+	      "the excluded file's rule wrote a source anyway")
+
+	# Malformed, in the same excluded file: it must not be read at all,
+	# so it cannot be refused either.
+	t.write("old/legacy.c", '/*! @file\n *  @rule gen/made.c: old/seed.txt\n'
+	        " */\nint legacy(void){ return 0; }\n")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a malformed rule in an excluded file stopped the build: "
+	      f"{r.stdout}{r.stderr}")
+
+	# The control: a rule in a file that is built still runs, and what it
+	# writes reaches the program.
+	u = Tree("rule-built")
+	try:
+		u.write("seed.txt", "seed\n")
+		u.write("main.c", '/*! @file\n *  @rule gen/made.c: seed.txt\n'
+		        ' *        printf "int made(void){ return 1; }\\\\n" > $@\n'
+		        " */\nextern int made(void);\n"
+		        "int main(void){ return made() - 1; }\n")
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"the control build failed: {r.stdout}{r.stderr}")
+		check(os.path.exists(os.path.join(u.dir, "gen", "made.c")),
+		      "a rule in a built file did not run")
+		check(u.run(os.path.basename(u.dir)).returncode == 0,
+		      "the generated source did not reach the program")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_file_this_build_excludes_does_not_ask_for_a_schema(t):
 	"""Section 447's lens, pointed at the next consumer of the exclusion.
 

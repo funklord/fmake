@@ -498,7 +498,8 @@ that had been green about nothing for five commits ·
 [445. The flag-bearing keys, and a fixture that proved nothing](#445-the-flag-bearing-keys-and-a-fixture-that-proved-nothing) ·
 [446. Ten probes that came back clean](#446-ten-probes-that-came-back-clean) ·
 [447. beerssh closed section 305's measurement and found its other half](#447-beerssh-closed-section-305s-measurement-and-found-its-other-half) ·
-[448. The same exclusion, one consumer further on](#448-the-same-exclusion-one-consumer-further-on)
+[448. The same exclusion, one consumer further on](#448-the-same-exclusion-one-consumer-further-on) ·
+[449. An excluded file's generator rule, and the loudest form of the shape](#449-an-excluded-files-generator-rule-and-the-loudest-form-of-the-shape)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34585,3 +34586,55 @@ The control is the half that would break the feature rather than merely
 fail: a schema a **built** file includes must still be compiled and its
 program must run. Sabotaging the fix fails the case on *"situc ran for a
 file this build is not compiling"*.
+
+## 449. An excluded file's generator rule, and the loudest form of the shape
+
+Third instance of section 447's lens, and the one with the worst
+consequence. `@rule` lives in a comment, so the rules were read from
+every scanned source -- **before** the exclusion is computed, because a
+generated file has to be an ordinary source by the time the include graph
+runs. So a rule in a file `[project] exclude` removes ran its generator:
+
+    GEN gen_made_c
+    [1/2] CC  gen/made.c
+    LD  genexcl
+
+Not merely wasted work. The generated source was **compiled and linked
+into the program** -- code in the binary from an instruction in a file
+the build was told to skip.
+
+**And the same cause arrives louder and sooner.** A malformed `@rule` in
+such a file failed the whole build:
+
+    !!! old/legacy.c:1: rule for gen/made.c has no recipe
+
+so an excluded file could stop a tree from building at all. One cause,
+two symptoms, and the quiet one is the dangerous one.
+
+### One implementation of `[project] exclude`
+
+The fix is the predicate the schema plan already takes, which this pass
+needs **earlier** than the closure that held it could exist. So
+`exclude_by_pattern` is module-level now and the closure delegates to it.
+That is the smaller half of the change and the more important one: two
+readings of one configuration key that disagree is precisely what
+sections 447 and 448 were about, and leaving a second copy here to fix
+the first two would have been the joke writing itself.
+
+The control is what the fix must not break, and it is asserted: a rule in
+a file that **is** built still runs, its output is compiled, and the
+program answers. Sabotaging the change fails the case on *"a generator
+ran for a rule in an excluded file: GEN gen_made_c"*.
+
+### Where the lens has got to
+
+    section 305   the compiler's include path    fixed before this session
+    section 447   moc's include path             beerssh found it
+    section 448   the schema plan's requesters   this lens
+    section 449   generator rules in comments    this lens, and the worst
+
+Everything else that reads the scan population either takes the
+predicate already (`Project`), or is asked a question for which the
+unfiltered set is the right answer -- `uic_plan`'s second argument and
+`situ_plan`'s `have`, both of which mean "this header exists on disk",
+which an exclusion does not change.

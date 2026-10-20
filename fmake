@@ -2771,6 +2771,20 @@ def run_phony(name, rule, root, built, dry_run):
 	return 0
 
 
+def exclude_by_pattern(conf, rel):
+	"""The `[project] exclude' pattern matching a path, or None.
+
+    Module-level because three passes ask it and one of them -- the
+    generator pass -- runs before the closure that used to hold it could
+    exist. Two readings of `[project] exclude' that disagree is the shape
+    sections 447 and 448 were both about, so there is one.
+    """
+	for pat in conf.project.get("exclude", []):
+		if fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/*") + "/"):
+			return pat
+	return None
+
+
 def rules_from_comments(root, srcs, scans):
 	"""@rule blocks, parsed by the same function fmake.mk goes through.
 
@@ -11390,9 +11404,29 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		args.targets = [default_name(run_rel, root)]
 	scan_all(srcs + hdrs)
 
+	# Rules are read from the files this build is COMPILING, which is not
+	# what `srcs' is yet: exclusion is computed below, because generated
+	# files have to be ordinary sources by the time the include graph
+	# runs. So the same predicate the schema plan takes is built here --
+	# both halves of it depend only on `conf', `cfg' and the scans, all of
+	# which exist already.
+	#
+	# Section 449: an `@rule' in a file `[project] exclude' removes ran
+	# its generator, and fmake then COMPILED AND LINKED the generated
+	# source into the program -- code in the binary from an instruction in
+	# a file the build was told to skip. A malformed one in such a file
+	# failed the whole build, which is the same cause arriving louder.
+	def _left_out(rel):
+		if exclude_by_pattern(conf, rel):
+			return True
+		ann = Ann(scans.get(rel, {}).get("dirs"))
+		return bool(platform_excludes(ann, cfg.os, cfg.arch)
+		            or filename_excludes(rel, ann, cfg.os, cfg.arch))
+
 	generated = run_generators(root, conf, cache, args.dry_run,
 	                           None if _bootstrapping else build_tool,
-	                           [r for r in srcs if r in scans], scans)
+	                           [r for r in srcs
+	                            if r in scans and not _left_out(r)], scans)
 	if bootstrapped:
 		# A nested build wrote object entries to the same cache file. Merge
 		# them in rather than replacing this cache, which still holds the
@@ -11473,14 +11507,16 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	def exclude_pattern(rel):
 		"""The [project] exclude pattern matching a path, or None.
 
+        A thin wrapper on `exclude_by_pattern' now, which the generator
+        pass above needs before this closure exists. One implementation,
+        because two readings of `[project] exclude' that disagree is the
+        shape section 447 and 448 were both about.
+
         Wanted for headers too, not just sources: an excluded subtree must
         not have its Q_OBJECT classes moc'd or its .ui files generated, or
         the work fmake was told to skip comes back as generated code.
         """
-		for pat in conf.project.get("exclude", []):
-			if fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/*") + "/"):
-				return pat
-		return None
+		return exclude_by_pattern(conf, rel)
 
 	# Said here rather than at the walk, because `[project] exclude' is
 	# the switch that turns it off and `exclude_pattern' does not exist
