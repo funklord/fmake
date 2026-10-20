@@ -7377,6 +7377,59 @@ RE_VERSION_MISSING = tuple(re.compile(p) for p in (
 ))
 
 
+# Qt makes `signals', `slots' and `emit' macros, so a C++ file that uses
+# one of those words as an identifier does not compile in a Qt build --
+# and the compiler's error names neither Qt nor the word. Measured on
+# fuzznet's `static const fzn_persist_slot_t slots[5]': gcc said
+# `expected identifier before numeric constant' and then complained
+# about a structured binding declaration having a type, forty characters
+# from the cause. Their Makefile carries -DQT_NO_KEYWORDS for exactly
+# this and nothing in the tree says so.
+#
+# Keyed on the LINE the compiler named rather than on the file, because
+# `public slots:' is how every Q_OBJECT class writes the same word
+# legitimately and a file-wide search would fire on all of them. A colon
+# after the word is Qt's own usage; anything else is an identifier.
+RE_QT_KEYWORD_ID = re.compile(r"\b(signals|slots|emit)\b\s*(?![:\w])")
+# What says this compile reaches Qt: a module directory, which is
+# capitalised, or one of Qt's own feature macros. **Not a lowercase `qt'
+# anywhere in a flag**, which was the first version and matched the
+# TREE's own path -- a scratch directory called `qtkw3' and, more to the
+# point, any project with a `qtty/' in it. Measured: the negative
+# control, a tree with no Qt at all whose failing file uses `slots' as a
+# name, took the advice. A substring is not a structural test.
+RE_QT_ON_PATH = re.compile(r"(?:^-DQT_)|(?:/Qt[A-Z])")
+RE_ERROR_AT = re.compile(r"^(.+?):(\d+):\d+: (?:fatal )?error:", re.M)
+
+
+def _qt_keyword_clash(msg, root, incflags):
+	"""(word, file, line) where a Qt macro is used as a name, or None.
+
+    Gated three ways, because the remedy is tree-wide and a wrong line
+    here would send a reader to define a macro that has nothing to do
+    with their error: the build has to be reaching Qt's headers, the file
+    has to be C++, and the word has to be on the line the compiler
+    named.
+    """
+	if not any(RE_QT_ON_PATH.search(f) for f in incflags):
+		return None
+	for m in RE_ERROR_AT.finditer(msg):
+		path, want = m.group(1), int(m.group(2))
+		if os.path.splitext(path)[1] not in CXX_EXTS:
+			continue
+		try:
+			with open(path, errors="replace") as fh:
+				for n, text in enumerate(fh, 1):
+					if n < want:
+						continue
+					hit = RE_QT_KEYWORD_ID.search(text.split("//")[0])
+					return ((hit.group(1), os.path.relpath(path, root), want)
+					        if hit else None)
+		except OSError:
+			continue
+	return None
+
+
 def _undeclared_version(msg, root):
 	"""A version macro a build system was expected to inject, or None.
 
@@ -7980,6 +8033,29 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 						note(f"if {blame} belongs to another platform, "
 						     f"@os NAME or @arch NAME keeps it out of "
 						     f"this build")
+			# `first_err', not `msg': the group key is the diagnostic's
+			# text with the `file:line:col' prefix already stripped, so
+			# the line number this needs is only in the full output. And
+			# the unit's own command rather than the tree's include
+			# flags, because Qt reaches a file through `@pkg' and never
+			# through those -- measured, the gate was false on a tree
+			# whose compile line carried three `-I...qt6' entries.
+			found_qt = _qt_keyword_clash(first_err, root,
+			                             compile_cmd(first_unit, cfg,
+			                                         incflags))
+			if found_qt:
+				_qword, _qwhere, _qline = found_qt
+				# Said as a fact rather than a diagnosis, like the
+				# directive note above it: the error may have another
+				# cause and only the reader can say. What fmake knows is
+				# that the word on that line is one Qt takes.
+				note(f"{_qwhere}:{_qline} uses `{_qword}' as a name, and "
+				     f"Qt makes `{_qword}' a macro -- so the error above "
+				     f"is the preprocessor's substitution rather than "
+				     f"anything wrong with the line")
+				note(f"[project] defines = ['QT_NO_KEYWORDS'] turns Qt's "
+				     f"keywords off for the whole tree, which is what a "
+				     f"tree using that word as a name needs")
 			found_version = _undeclared_version(msg, root)
 			if found_version:
 				# Same shape as the header remedy above: name the exact

@@ -29165,6 +29165,116 @@ int main(void){ printf("%d\\n", dep_value() + extra() + BONUS); return 0; }
 
 
 @case
+def a_qt_keyword_used_as_a_name_is_named_as_the_cause(t):
+	"""The error says neither Qt nor the word that caused it.
+
+    Measured on fuzznet's `gui/test/qtty_render_test.cpp:473`, which is
+    `static const fzn_persist_slot_t slots[5] = {...}`: gcc reported
+    `expected identifier before numeric constant' and then complained
+    that a structured binding declaration cannot have a type, forty
+    characters from the cause. `QT_NO_KEYWORDS` is in that project's
+    Makefile for exactly this and nothing in the tree says so.
+
+    Three arms, because the remedy is tree-wide and a wrong line would
+    send a reader to define a macro that has nothing to do with their
+    error. It fires for a Qt build whose failing line uses one of the
+    three words as a name; it stays silent on `public slots:`, which is
+    how every Q_OBJECT class writes the same word; and it stays silent
+    in a tree with no Qt in it.
+
+    **The third arm caught the first version.** The Qt test was `"/qt"
+    in a flag, lowercased`, which matched the tree's own path -- the
+    scratch directory was called `qtkw3`, and any project with a
+    `qtty/` in it would have done the same. A substring is not a
+    structural test, so it asks for a capitalised module directory or
+    one of Qt's own feature macros.
+    """
+	_need_qt()
+	# Something that builds, so the run reaches the per-failure report
+	# rather than stopping at "no target could be built".
+	t.write("good.cpp", "#include <cstdio>\n"
+	        'int main(void){ std::puts("ok"); return 0; }\n')
+	t.write("app.cpp", """
+#include <QObject>
+#include <cstdio>
+typedef int slot_t;
+class thing : public QObject { Q_OBJECT public: thing(){} };
+int main(void){
+	static const slot_t slots[3] = { 1, 2, 3 };
+	std::printf("%d\\n", slots[0]);
+	return 0;
+}
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("did not compile" in out,
+	      f"the control is wrong: the Qt keyword clash should stop the "
+	      f"compile: {out}")
+	check("uses `slots' as a name" in out and "QT_NO_KEYWORDS" in out,
+	      f"nothing named the word or the remedy: {out}")
+
+	# A legitimate `public slots:' in a file that fails for another
+	# reason must not take the advice.
+	t.write("app.cpp", """
+#include <QObject>
+class thing : public QObject {
+	Q_OBJECT
+public slots:
+	void go(){ nowhere_at_all(); }
+};
+int main(void){ thing t; return 0; }
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("did not compile" in out, f"the second control failed: {out}")
+	check("QT_NO_KEYWORDS" not in out,
+	      f"`public slots:' is Qt's own spelling and took the advice "
+	      f"anyway: {out}")
+
+
+@case
+def a_qt_keyword_advice_stays_out_of_a_tree_with_no_qt(t):
+	"""The negative control that caught the first implementation.
+
+    No Qt anywhere, a failing file that uses `slots' as a name. The
+    advice must not appear: its remedy is a Qt macro, and a tree without
+    Qt has no reason to hear about one. The first version matched `/qt`
+    case-insensitively in the compile flags and so matched the tree's
+    own directory name, which is how this arm earned its place before it
+    had ever guarded a regression.
+
+    Separate from the case above because it needs no Qt and must
+    therefore run on a machine that has none -- where the other case
+    skips, this one is the only arm left.
+
+    **The include directory is called `qtsupport` on purpose.** The first
+    implementation looked for `/qt` in the compile flags with the case
+    folded, and `-I<root>/qtsupport` is exactly what that matched in the
+    tree where the bug was found. Without a directory of that shape this
+    arm passes against the broken gate as readily as against the fixed
+    one -- checked, which is why it is written this way rather than as
+    the name of the thing it guards.
+    """
+	t.write("qtsupport/helper.h", "int helper(void);\n")
+	t.write("fmake.toml", '[project]\ninclude-dirs = ["qtsupport"]\n')
+	t.write("good.c", '#include "helper.h"\n'
+	        "int helper(void){ return 0; }\n"
+	        "int main(void){ return helper(); }\n")
+	# C++, because the advice is gated on the extension as well and a
+	# `.c' file would be skipped before the Qt test was reached -- so a C
+	# fixture here would pass against both gates and prove neither.
+	t.write("app.cpp", """
+int main(void){ int slots[2] = {1, 2}; nowhere_at_all(); return slots[0]; }
+""")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("did not compile" in out,
+	      f"the control is wrong: this file should not compile: {out}")
+	check("QT_NO_KEYWORDS" not in out and "as a name" not in out,
+	      f"a tree with no Qt in it was advised about a Qt macro: {out}")
+
+
+@case
 def a_test_run_that_will_not_run_names_the_files_that_stopped_it(t):
 	"""`fmake test' printed a count and no names, where a build prints both.
 

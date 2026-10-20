@@ -516,7 +516,8 @@ that had been green about nothing for five commits ·
 [463. One tree, two commands, two different programs](#463-one-tree-two-commands-two-different-programs) ·
 [464. Where this session stopped, fifth fold](#464-where-this-session-stopped-fifth-fold) ·
 [465. The tree nobody had run this over](#465-the-tree-nobody-had-run-this-over) ·
-[466. Nine trees, after eleven commits](#466-nine-trees-after-eleven-commits)
+[466. Nine trees, after eleven commits](#466-nine-trees-after-eleven-commits) ·
+[467. The word the error did not name](#467-the-word-the-error-did-not-name)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36210,3 +36211,78 @@ other sessions explaining what fmake could not work out about their own
 trees. So the set re-reads eight pieces of somebody else's reasoning
 about this tool, which is where section 465's finding came from: a
 sentence in ossacli's README naming something fmake could not do.
+
+## 467. The word the error did not name
+
+Section 465 found `QT_NO_KEYWORDS` by hand, and the way it was found is
+the finding. fuzznet's `gui/test/qtty_render_test.cpp:473` is
+
+    static const fzn_persist_slot_t slots[5] = { ... };
+
+and `slots` is a macro Qt defines. What gcc says about it:
+
+    error: expected identifier before numeric constant
+    error: structured binding declaration cannot have type
+           'const fzn_persist_slot_t'
+
+Neither line names Qt, and neither names `slots`. The remedy is a
+define their Makefile has carried all along. Working it out took reading
+the source line, recognising the word, and knowing that Qt takes it --
+and fmake knew two of those three before the reader did.
+
+So it says so now:
+
+    gui/test/qtty_render_test.cpp:473 uses `slots' as a name, and Qt
+    makes `slots' a macro -- so the error above is the preprocessor's
+    substitution rather than anything wrong with the line
+    [project] defines = ['QT_NO_KEYWORDS'] turns Qt's keywords off for
+    the whole tree, which is what a tree using that word as a name needs
+
+Stated as a fact rather than a diagnosis, which is the form the
+directive note above it already uses: the error may have another cause
+and only the reader can say. What fmake knows is that the word on the
+line the compiler named is one Qt takes.
+
+### Three gates, because the remedy is tree-wide
+
+A wrong line here sends somebody to define a macro that has nothing to
+do with their error, so: the build has to be reaching Qt's headers, the
+file has to be C++, and the word has to be on **the line the compiler
+named**. The last is what keeps it quiet in a Qt tree: `public slots:`
+is how every `Q_OBJECT` class writes the same word, and a file-wide
+search would fire on all of them. A colon after the word is Qt's usage;
+anything else is a name.
+
+### Two wrong implementations, each caught by a control rather than by reading
+
+**The first gate was `"/qt" in a flag, lowercased.** It matched the
+tree's own path -- the scratch directory was called `qtkw3`, and any
+project with a `qtty/` in it would do the same. The negative control, a
+tree with no Qt at all, took the advice. It asks for a capitalised
+module directory or one of Qt's own feature macros now: `-DQT_` or
+`/Qt[A-Z]`.
+
+**And the first version read the wrong string.** It was handed `msg`,
+which is the group key -- the diagnostic's text with the
+`file:line:col` prefix already stripped -- so the line number it needed
+was not in it and nothing ever matched. It reads `first_err`, the full
+output, and takes the unit's own compile command rather than the tree's
+include flags, because Qt reaches a file through `@pkg` and never
+through those.
+
+### The control took three attempts to be able to fail
+
+This is the part worth keeping. The negative control passed against the
+broken gate twice, each time for a reason other than the one it
+claimed:
+
+| attempt | why it passed anyway |
+|---|---|
+| a bare non-Qt tree | the suite's own scratch path has no `/qt` in it |
+| plus a `qtsupport/` include dir | the fixture was `.c`, skipped on extension |
+| plus making it C++ | it fails against the loose gate, as it should |
+
+`evidence.md` says a check is untested until it has been seen to fail.
+Twice here it had been seen to *pass*, which is not the same thing and
+looks identical in a green run -- and the arm that was meant to guard a
+substring mistake would have gone on passing through the next one.
