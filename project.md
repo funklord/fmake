@@ -506,7 +506,9 @@ that had been green about nothing for five commits ·
 [453. The richest tree, built with the tool that changed](#453-the-richest-tree-built-with-the-tool-that-changed) ·
 [454. A target that announced an install it did not do](#454-a-target-that-announced-an-install-it-did-not-do) ·
 [455. The same lens, one line up: a redirect that creates its target first](#455-the-same-lens-one-line-up-a-redirect-that-creates-its-target-first) ·
-[456. The third instance was in what fmake writes, not in what builds it](#456-the-third-instance-was-in-what-fmake-writes-not-in-what-builds-it)
+[456. The third instance was in what fmake writes, not in what builds it](#456-the-third-instance-was-in-what-fmake-writes-not-in-what-builds-it) ·
+[457. A baked band the artifact did not mention](#457-a-baked-band-the-artifact-did-not-mention) ·
+[458. A switch the ejected build offered and could not keep](#458-a-switch-the-ejected-build-offered-and-could-not-keep)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -35170,3 +35172,168 @@ has always been read correctly. The name was known to this program before
 either of its emitters wrote it and before its own build declared it --
 which is what three instances in one sitting look like from inside: not a
 thing nobody knew, a thing nobody had asked the right file about.
+
+## 457. A baked band the artifact did not mention
+
+**The behaviour is sections 88 and 274's, deliberate and twice recorded:
+`--eject ninja` bakes DEBUG, SANITIZE and COVERAGE, because ninja has no
+conditionals and "the honest place for that switch is the generator".**
+Nothing here revisits that. What was missing is narrower and was in the
+artifact rather than in the design: the file did not say it had done it.
+
+Measured, on a one-file tree with `SANITIZE=1 COVERAGE=1` in the
+environment. The Makefile:
+
+    CFLAGS       = -I.
+    ifneq ($(filter-out 0,$(SANITIZE)),)
+    CFLAGS      += -fsanitize=address,undefined -fno-omit-frame-pointer
+
+    $ make -s -f Makefile.gen p          # expand CFLAGS with nothing set
+    -Os -I.
+
+and `build.ninja` from the same run:
+
+    # Built for: linux/x86_64
+
+    cflags = -Os -fsanitize=address,undefined -fno-omit-frame-pointer \
+             --coverage -I.
+
+The Makefile defaults to a plain build and documents both switches in the
+file. The ninja file is permanently instrumented, and a grep for
+`sanitize`, `coverage` or `debug` in its comments returns nothing.
+
+**The cost is a session's own habits.** Debugging under `SANITIZE=1` is
+what the switch is for; ejecting to commit the build is what section 15
+tells people to do; and nothing between those two acts mentions that the
+file being committed is two to three times slower and needs a runtime
+library the deployment may not have. Both halves are ordinary and the
+combination is silent.
+
+So the ninja header now names what it baked, and only then:
+
+    # Baked in: SANITIZE=1 COVERAGE=1 -- ninja has no conditionals, so
+    # these are in the flags below rather than switchable. Re-eject
+    # without them for an ordinary build.
+
+The argument is one `eject_make` already makes for the staleness
+contract, in its own comment: said in the artifact rather than only in
+`project.md`, because `project.md` is not where the reader is. This is
+that rule applied to a decision the record had made and the file had
+not carried.
+
+### Derived from the flags, not from the switches
+
+`--cflags` replaces the optimisation band outright, and DEBUG then has no
+effect -- section 88 says as much, which is why the `DEBUG` block is not
+emitted in that case. A header keyed on `debug_wanted()` would name a
+cause that did not act, so the line is derived from `cfg.opt_flags`,
+`cfg.sanitize_flags` and `cfg.coverage_flags`: what is in the flags is
+what gets named.
+
+### Both directions, because a line that is always there says nothing
+
+The case asserts the plain eject does **not** carry the line, and three
+controls guard against the arms passing for the wrong reason: the
+sanitized eject must really contain `-fsanitize=address` and
+`--coverage`, the DEBUG eject must really contain `-Og`, and the ejected
+*Makefile* must not grow the line at all -- it keeps its switches, which
+is the whole reason this is ninja's problem and not both emitters'.
+
+## 458. A switch the ejected build offered and could not keep
+
+Section 87 quotes fuzzypickles' `common/Makefile` warning its reader that
+objects are not segregated by `DEBUG` and `SANITIZE`, so a switch
+"silently relink[s] against whichever flavour's `.o` happens to be lying
+around" -- and then says, in bold, **that failure cannot happen here**,
+because section 76 keys the object directory on the whole configuration.
+
+That is true of fmake. It was not true of the Makefile fmake writes.
+Section 88 gave the emitted file the same two switches and did not give it
+the thing that makes them safe. Measured, on the overflow fixture the
+sanitizer case already uses:
+
+    $ make                       # plain
+    cc -Os -I.  -c prog.c -o build/prog.c.o ...
+    $ ./prog; echo $?
+    0
+    $ make SANITIZE=1
+    make: Nothing to be done for 'all'.
+    $ ./prog; echo $?
+    0
+
+**The switch recompiled nothing, relinked nothing, and left a binary that
+caught no overflow.** That is the worst shape this class takes: the tool
+whose entire job is to find the bug reports that there is none. Everything
+about the sequence is ordinary -- section 15 tells people to eject and
+commit the build, and reaching for `SANITIZE=1` when something is corrupt
+is what the switch is for.
+
+### ninja was right again, for the reason section 456 found
+
+A re-eject under `SANITIZE=1` over the same tree recompiled and the
+sanitizer fired on the next run. ninja records each command in its log and
+re-runs an edge whose command line changed; make compares timestamps and
+cannot see a flag. Three sections running, the same asymmetry: ninja's log
+knows what it ran and make's timestamps only know when.
+
+### A stamp, and why the first answer was not enough
+
+The first fix was a per-flavour `BUILD_DIR` -- `build`, `build-sanitize`
+-- which is what fuzzypickles' own warning recommends. It fixes one
+direction. The objects separate, but the **binary** does not: it sits at
+one path for every flavour, so after a sanitized build a plain `make`
+finds the program newer than the plain objects and has nothing to do.
+
+That is the mechanism rather than a reading of make's manual, and it was
+measured directly on the fixed tree, where the only way to produce the
+state is by hand:
+
+    $ touch prog && make
+    $ echo $?
+    0                        # nothing printed, nothing relinked
+
+    17:26:15 build/prog.c.o
+    17:27:03 prog
+
+A switch that is safe going out and not coming back is not safe, and the
+hole is in the direction where the surprise is a program several times
+slower than the one that was asked for. The implementation was reasoned
+out and dropped before it was written, so what is recorded here is the
+mechanism that condemned it, not a measurement of the thing itself.
+
+So the emitted file carries a stamp instead:
+
+    FLAVOUR_STAMP = $(BUILD_DIR)/flavour.stamp
+
+    $(FLAVOUR_STAMP): FORCE
+            @mkdir -p $(@D)
+            @printf '%s\n' '$(FLAVOUR)' | cmp -s - $@ || \
+                    printf '%s\n' '$(FLAVOUR)' > $@
+
+`FLAVOUR` is appended to by each switch block that fires, so it is the
+switches in effect rather than a hash of them -- a reader opening the file
+can see what the stamp holds. `cmp` and not a bare write: writing every
+time would move the timestamp every time and rebuild the tree on every
+invocation. `FORCE` after the default goal, so it cannot become one.
+
+Every object rule and every crate rule takes the stamp as a *normal*
+prerequisite, for the same reason a module interface's object is one in
+section 329: it has to date the rule. The one rule in the file that uses
+`$^` is the static archive, and it does not get the stamp -- it would
+otherwise take it as a member. The link rules need nothing, because their
+objects have just been rebuilt.
+
+### What the existing case could not see
+
+`an_ejected_build_keeps_the_debug_and_sanitize_switches` asserts every row
+of section 87's table against the emitted file and passed throughout. It
+reads `make -n` on a tree with no objects, where make prints the compile
+whatever the state of the world, so what it proves is that the *flags*
+reach the command line. The defect is that the command is not run. That is
+`evidence.md`'s vacuous pass with a different costume: a check that
+inspected the right file and asked it the wrong question.
+
+The new case asserts the behaviour instead -- the sanitized run reports
+the overflow the plain one does not, and then the plain rebuild stops
+reporting it, which is the direction the per-flavour directory would have
+left broken.

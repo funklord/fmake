@@ -16878,6 +16878,13 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	def art(name):
 		return f"$({P}OUTDIR)/{name}" if outdir else name
 
+	# Initialised rather than left to the first block that appends to it:
+	# make imports the environment, so an exported FLAVOUR would otherwise
+	# become part of the stamp's contents and a tree would rebuild when a
+	# variable nothing here owns changed.
+	a(var("FLAVOUR", "", ":="))
+	a("")
+
 	# DEBUG and SANITIZE survive the exit.
 	#
 	# Baking them in would leave a Makefile that answers `make DEBUG=1' by
@@ -16911,6 +16918,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		for name in ("CFLAGS", "CXXFLAGS"):
 			a(var(name, _eject_flags(DEBUG_CFLAGS, root, _mk_flag)
 			      + [f"$({P}{name})"], ":="))
+		a(var("FLAVOUR", f"$({P}FLAVOUR) DEBUG=1", ":="))
 		a("endif")
 		a("")
 	a("# Set SANITIZE=1 for AddressSanitizer and UndefinedBehaviorSanitizer.")
@@ -16921,6 +16929,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	san = " ".join(_eject_flags(SANITIZE_CFLAGS, root, _mk_flag))
 	a(var("CFLAGS", san, "+="))
 	a(var("CXXFLAGS", san, "+="))
+	a(var("FLAVOUR", f"$({P}FLAVOUR) SANITIZE=1", ":="))
 	# No LDFLAGS line: it is defined as $(CFLAGS) above, so adding one here
 	# would put the sanitizer on the link twice.
 	a("endif")
@@ -16931,7 +16940,33 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	cov = " ".join(_eject_flags(COVERAGE_CFLAGS, root, _mk_flag))
 	a(var("CFLAGS", cov, "+="))
 	a(var("CXXFLAGS", cov, "+="))
+	a(var("FLAVOUR", f"$({P}FLAVOUR) COVERAGE=1", ":="))
 	a("endif")
+	a("")
+	# The switches above change the compile line of every object, and make
+	# compares timestamps: it cannot see a flag. Measured on an ejected
+	# Makefile, a plain `make' followed by `make SANITIZE=1':
+	#
+	#     make: Nothing to be done for 'all'.
+	#
+	# Nothing recompiled, nothing relinked, and the binary left behind
+	# caught no overflow -- a sanitizer reporting a clean run on
+	# uninstrumented objects, which is the worst shape this takes.
+	#
+	# fuzzypickles' own Makefile warns about it and tells the reader to run
+	# `make clean' when switching; section 76 is why the live build needs no
+	# such warning, the configuration naming the object directory. This
+	# gives the emitted build the same property with the only mechanism make
+	# has: a file holding the switches in effect, rewritten only when they
+	# change, so its timestamp is the one thing in the tree that moves when
+	# a flag does. Every object below depends on it.
+	#
+	# A stamp rather than a per-flavour BUILD_DIR, which was the first
+	# answer and fixes only one direction: the objects separate, but the
+	# BINARY does not, so after a sanitized build a plain `make' finds its
+	# program newer than the plain objects and relinks nothing. A switch
+	# that is safe going out and not coming back is not safe.
+	a(var("FLAVOUR_STAMP", f"$({P}BUILD_DIR)/flavour.stamp"))
 	a("")
 	# The default target does not build tests, and a separate one builds
 	# and runs them. That is what three of the projects that read this
@@ -16972,7 +17007,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	pc_files = " ".join(t.name + ".pc" for t in targets
 	                    if pc_text(t, conf))
 	if fragment:
-		a(".PHONY: fmake-all fmake-clean"
+		a(".PHONY: fmake-all fmake-clean FM_FORCE"
 		  + (" " + phonies if phonies else ""))
 		a("fmake-all: $(FM_TARGETS)"
 		  + (" " + pc_files if pc_files else ""))
@@ -16995,8 +17030,18 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# than its input, so nothing would rebuild it.")
 		a(".DELETE_ON_ERROR:")
 		a("")
-		a(".PHONY: all clean" + (" " + phonies if phonies else ""))
+		a(".PHONY: all clean FORCE" + (" " + phonies if phonies else ""))
 		a(f"all: {names}" + (" " + pc_files if pc_files else ""))
+	a("")
+	# After the default goal, so it cannot become one. `cmp' rather than a
+	# bare write: writing every time would move the timestamp every time
+	# and rebuild the tree on every invocation.
+	a(f"$({P}FLAVOUR_STAMP): {P}FORCE")
+	a("\t@mkdir -p $(@D)")
+	a(f"\t@printf '%s\\n' '$({P}FLAVOUR)' | cmp -s - $@ || \\")
+	a(f"\t\tprintf '%s\\n' '$({P}FLAVOUR)' > $@")
+	a("")
+	a(f"{P}FORCE:")
 	a("")
 	for g in group_names:
 		_dep = bin_deps(conf, by_group[g], eject_files)
@@ -17295,6 +17340,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# not `$^', which is the hazard the order-only form was avoiding.
 		dating = sorted({_mod_obj[m] for m in (u.scan.get("modimp") or [])
 		                 if m in _mod_obj and _mod_obj[m] != obj})
+		# The stamp with them, and a normal prerequisite for the same
+		# reason `dating' is one: it has to DATE this rule. Safe here
+		# because the recipe uses `$<', and off the one rule in this file
+		# that uses `$^' -- a static archive, which would otherwise take
+		# the stamp as a member.
+		dating = dating + [f"$({P}FLAVOUR_STAMP)"]
 		order_only = (" | " + " ".join(after)) if after else ""
 		a(f"{obj}: {_eject_src(rel)}"
 		  f"{(' ' + ' '.join(dating)) if dating else ''}{order_only}")
@@ -17325,7 +17376,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			u = crate_libs[rel]
 			out = f"$({P}BUILD_DIR)/{_eject_obj(rel)}.a"
 			deps = " ".join([_eject_src(rel)]
-			                + [_eject_src(m) for m in sorted(u.members)])
+			                + [_eject_src(m) for m in sorted(u.members)]
+			                + [f"$({P}FLAVOUR_STAMP)"])
 			a(f"{out}: {deps}")
 			a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}RUSTC) $({P}RUSTFLAGS) --crate-type=staticlib \\")
@@ -17344,7 +17396,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# a Makefile has no closure to recompute.
 			deps = " ".join([_eject_src(root_unit.rel)]
 			                + [_eject_src(m)
-			                   for m in sorted(root_unit.members)])
+			                   for m in sorted(root_unit.members)]
+			                + [f"$({P}FLAVOUR_STAMP)"])
 			# The one recipe here that writes two files to two places:
 			# the program, which goes where the target says, and the
 			# depfile, which goes under BUILD_DIR keeping the source's
@@ -17610,6 +17663,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	            + [_eject_src(j["out"]) for j in uic_jobs]
 	            + [_eject_src(j["out"]) for j in moc_jobs]
 	            + [_eject_src(j["out"]) for j in rcc_jobs]
+	            + [f"$({P}FLAVOUR_STAMP)"]
 	            + [o for o in gen_outs if _within(o)])
 	# Said, not silently dropped. A build that quietly stops cleaning
 	# something it makes is the shape a stale artifact hides in, and the
@@ -17698,6 +17752,31 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	_eject_skipped(a, skipped)
 	a(f"# Built for: {cfg.os}/{cfg.arch}"
 	  + (f"    profile: {conf.profile_name}" if conf.profile_name else ""))
+	# The three switchable bands, named because this file BAKES them. The
+	# Makefile emits each as a conditional, so one ejected under SANITIZE=1
+	# still defaults to a plain build and says in the file how to ask for
+	# the other -- measured, `-Os -I.` from a plain expansion. ninja has no
+	# conditionals, so the same eject puts
+	# `-fsanitize=address,undefined ... --coverage' in `cflags' and nothing
+	# said so: a session debugging under SANITIZE that ejects to commit the
+	# build commits an instrumented one, two or three times slower and
+	# needing a runtime, with no clue in the artifact.
+	#
+	# Derived from the flags rather than from the switches, because
+	# `--cflags' replaces the optimisation band outright and DEBUG then had
+	# no effect; reporting the switch would name a cause that did not act.
+	# Silent when none is on, so an ordinary eject is unchanged.
+	baked = []
+	if cfg.opt_flags and list(cfg.opt_flags) == list(DEBUG_CFLAGS):
+		baked.append("DEBUG=1")
+	if cfg.sanitize_flags:
+		baked.append("SANITIZE=1")
+	if cfg.coverage_flags:
+		baked.append("COVERAGE=1")
+	if baked:
+		a(f"# Baked in: {' '.join(baked)} -- ninja has no conditionals, so")
+		a("# these are in the flags below rather than switchable. Re-eject")
+		a("# without them for an ordinary build.")
 	a("")
 	# 1.7 where a crate is present, for the implicit outputs the rustc
 	# rules below need. Not raised otherwise: a tree with no Rust in it has

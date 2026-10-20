@@ -855,6 +855,61 @@ const char *greet(void){ return msg; }
 
 
 @case
+def an_ejected_ninja_says_which_bands_it_baked(t):
+	"""The Makefile keeps the switches; ninja cannot, so it has to say.
+
+    DEBUG, SANITIZE and COVERAGE are the three bands fmake decides per
+    run rather than per tree. The ejected Makefile emits each as a
+    conditional, so one ejected under SANITIZE=1 still defaults to a plain
+    build -- `-Os -I.` from a plain expansion, measured -- and the file
+    documents the switch. ninja has no conditionals, so the same eject
+    bakes `-fsanitize=address,undefined` and `--coverage` into `cflags`.
+
+    That is defensible and was silent, which is the defect: a session
+    debugging under SANITIZE that ejects to commit its build commits an
+    instrumented one, several times slower and needing a runtime, with
+    nothing in the artifact to say so. So the header names what it baked.
+
+    Both directions are asserted. A plain eject must NOT carry the line,
+    or a file that always says it is instrumented says nothing at all.
+    """
+	t.write("main.c", "int main(void){ return 0; }\n")
+	bands = {"SANITIZE": "1", "COVERAGE": "1"}
+
+	plain = t.fmake("--eject", "ninja")
+	check(plain.returncode == 0, f"--eject ninja failed: {plain.stderr}")
+	check("Baked in:" not in plain.stdout,
+	      "a plain eject claims to have baked a band in")
+	check("-fsanitize" not in plain.stdout,
+	      f"a plain eject carries sanitize flags: {plain.stdout[:400]}")
+
+	hot = t.fmake("--eject", "ninja", env=bands)
+	check(hot.returncode == 0, f"--eject ninja failed: {hot.stderr}")
+	check("-fsanitize=address" in hot.stdout and "--coverage" in hot.stdout,
+	      "the control is wrong: ninja did not bake the bands at all, so "
+	      "there would be nothing to declare")
+	head = hot.stdout.split("ninja_required_version", 1)[0]
+	check("Baked in: SANITIZE=1 COVERAGE=1" in head,
+	      f"the header does not name the bands it baked: {head!r}")
+
+	# DEBUG is the third, and it reaches the flags by a different route --
+	# it replaces the optimisation band rather than adding one.
+	dbg = t.fmake("--eject", "ninja", env={"DEBUG": "1"})
+	check(dbg.returncode == 0, f"--eject ninja failed: {dbg.stderr}")
+	check("-Og" in dbg.stdout,
+	      "the control is wrong: DEBUG=1 did not reach the flags")
+	check("Baked in: DEBUG=1" in dbg.stdout.split("ninja_required_version")[0],
+	      "the header does not name a baked DEBUG")
+
+	# And the Makefile is not given the line, because it does not need it:
+	# its switches survive, which is what makes this ninja's problem.
+	mk = t.fmake("--eject", "make", env=bands)
+	check(mk.returncode == 0, f"--eject make failed: {mk.stderr}")
+	check("Baked in:" not in mk.stdout,
+	      "the ejected Makefile claims to have baked a switchable band in")
+
+
+@case
 def cli_flags_override_annotations(t):
 	"""The command line is an override, so it has to come last.
 
@@ -18241,6 +18296,82 @@ int main(void) {
 
 	check(objdir(plain) != objdir(san),
 	      f"sanitized and plain objects share a directory: {objdir(plain)}")
+
+
+@case
+def an_ejected_build_does_not_reuse_objects_across_a_switch(t):
+	"""The case above, asked of the file fmake writes rather than of fmake.
+
+	`sanitize_reaches_the_link_and_actually_catches_something` ends by
+	proving the live build keeps two flavours of object apart, which is
+	section 76 and why the record says fuzzypickles' warning about
+	relinking against "whichever flavour's .o happens to be lying around"
+	cannot happen here. It cannot happen in fmake. It happened in the
+	Makefile fmake emits, which section 88 gave the same switches without
+	the thing that makes them safe.
+
+	Measured before the fix: a plain `make', then `make SANITIZE=1', and
+
+	    make: Nothing to be done for 'all'.
+
+	-- the objects were newer than their sources, so the switch recompiled
+	nothing, relinked nothing, and left a binary that caught no overflow.
+	A sanitizer reporting a clean run on uninstrumented objects is the
+	worst shape this can take: the tool whose job is to find the bug says
+	there is none.
+
+	The remedy is the one fuzzypickles' Makefile recommends and the only
+	one make has -- the object directory carries the switches. The
+	assertion is the behaviour rather than the directory name: the
+	sanitized run has to report the overflow that the plain one does not.
+	"""
+	if not shutil.which("make"):
+		raise Skip("make not installed")
+	t.write("overflow.c", """
+#include <stdlib.h>
+int main(void) {
+	int *p = malloc(4 * sizeof(int));
+	p[4] = 1;
+	free(p);
+	return 0;
+}
+""")
+	check(t.fmake().returncode == 0, "build failed")
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	with open(os.path.join(t.dir, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.unlink(os.path.join(t.dir, "overflow"))
+
+	b = _run_in(t.dir, "make")
+	check(b.returncode == 0, f"the ejected build failed: {b.stdout}{b.stderr}")
+	quiet = _run_in(t.dir, "./overflow")
+	check("runtime error" not in quiet.stderr
+	      and "AddressSanitizer" not in quiet.stderr,
+	      f"the plain ejected build already reported it, so this proves "
+	      f"nothing: {quiet.stderr}")
+
+	b = _run_in(t.dir, "make", "SANITIZE=1")
+	check(b.returncode == 0,
+	      f"the sanitized ejected build failed: {b.stdout}{b.stderr}")
+	check("Nothing to be done" not in b.stdout,
+	      "`make SANITIZE=1' after a plain build had nothing to do, so the "
+	      "switch relinked nothing")
+	loud = _run_in(t.dir, "./overflow", env={"ASAN_OPTIONS": "exitcode=0"})
+	check("runtime error" in loud.stderr or "AddressSanitizer" in loud.stderr,
+	      f"the ejected build honoured SANITIZE=1 in its flags and linked "
+	      f"objects compiled without it: {loud.stdout}{loud.stderr}")
+
+	# And back again, which is the other direction of the same reuse: the
+	# plain binary must not keep the instrumentation either.
+	b = _run_in(t.dir, "make")
+	check(b.returncode == 0, f"the plain rebuild failed: {b.stdout}{b.stderr}")
+	again = _run_in(t.dir, "./overflow")
+	check("runtime error" not in again.stderr
+	      and "AddressSanitizer" not in again.stderr,
+	      f"going back to a plain build kept the sanitized objects: "
+	      f"{again.stderr}")
 
 
 @case
