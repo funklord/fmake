@@ -16977,6 +16977,24 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("fmake-all: $(FM_TARGETS)"
 		  + (" " + pc_files if pc_files else ""))
 	else:
+		# A [generate] command runs through a shell, so one ending in
+		# `> $out' is ordinary -- and the shell creates that file before
+		# the generator starts. Make keeps a failed target unless this is
+		# declared, and the leftover is NEWER than the input that caused
+		# the run, so the next make regenerates nothing and compiles
+		# whatever the failed run left. ninja needs no equivalent: it
+		# records the edge as failed and re-runs it whatever the mtimes
+		# say, which is why only this emitter carries a line for it.
+		#
+		# Not in a fragment. The declaration is global to the make
+		# invocation, so including it would change how the parent's own
+		# rules behave on failure -- the thing the FM_ prefix exists to
+		# prevent. A parent wanting it declares it itself.
+		a("# A recipe that redirects into its target has created the file")
+		a("# before it fails, and make would otherwise keep it -- newer")
+		a("# than its input, so nothing would rebuild it.")
+		a(".DELETE_ON_ERROR:")
+		a("")
 		a(".PHONY: all clean" + (" " + phonies if phonies else ""))
 		a(f"all: {names}" + (" " + pc_files if pc_files else ""))
 	a("")

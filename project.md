@@ -505,7 +505,8 @@ that had been green about nothing for five commits ·
 [452. The scope of 448 to 450, and the fifth instrument error](#452-the-scope-of-448-to-450-and-the-fifth-instrument-error) ·
 [453. The richest tree, built with the tool that changed](#453-the-richest-tree-built-with-the-tool-that-changed) ·
 [454. A target that announced an install it did not do](#454-a-target-that-announced-an-install-it-did-not-do) ·
-[455. The same lens, one line up: a redirect that creates its target first](#455-the-same-lens-one-line-up-a-redirect-that-creates-its-target-first)
+[455. The same lens, one line up: a redirect that creates its target first](#455-the-same-lens-one-line-up-a-redirect-that-creates-its-target-first) ·
+[456. The third instance was in what fmake writes, not in what builds it](#456-the-third-instance-was-in-what-fmake-writes-not-in-what-builds-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -35106,3 +35107,66 @@ ships and not in the three lines that build it, because the code is what
 gets read for faults and the build is what gets read when it breaks. Both
 of this session's Makefile defects were invisible from inside `fmake`, and
 both were two minutes' work once the question was asked of the right file.
+
+## 456. The third instance was in what fmake writes, not in what builds it
+
+Sections 454 and 455 were defects in this tree's own Makefile, which is
+not the software. The same question asked once more -- **where does a step
+report success it did not earn** -- found the third instance in the
+Makefile fmake *emits*, which is.
+
+A `[generate]` command runs through a shell, `shell=True`, so a rule whose
+command ends in `> gen/made.c` is ordinary and both emitters pass it
+through verbatim. The shell opens that file before the generator starts.
+When the generator fails having written something valid but wrong, make
+keeps the file -- newer than the input that caused the run -- so the next
+`make` regenerates nothing, compiles the wrong file, links, and exits 0.
+
+**This is the silent form of the class**, where section 455's instance in
+this tree was loud. Measured in the new case's fixture, whose generator
+prints `return 0` and exits 1: before the fix the second build prints
+**0** and reports success.
+
+### The two emitters disagreed, and ninja was right
+
+Measured directly rather than reasoned about, with a four-line
+`build.ninja` whose only command writes its output and exits 1:
+
+    ninja: build stopped: subcommand failed.      # and out.c is on disk
+    $ ninja
+    [1/1] sh -c 'echo partial > out.c; exit 1'    # it runs it again
+
+**ninja records the edge as failed in its log and re-runs it whatever the
+mtimes say.** It leaves the partial file behind, but the staleness half --
+the half that costs a wrong binary -- cannot happen. make trusts the
+timestamps, and deletes a failed target only where `.DELETE_ON_ERROR:` is
+declared.
+
+So the fix is one declaration in the standalone Makefile and nothing in
+`build.ninja`, and the asymmetry is the reason one emitter carries a line
+the other does not. The case asserts both backends for exactly that
+reason: an emitter nothing asserts is where the two drift.
+
+### Not in the fragment, and that is asserted too
+
+`.DELETE_ON_ERROR:` is global to the make invocation. A fragment
+declaring it would change how the *parent's* own rules behave on failure
+-- which is the hazard the `FM_` prefix exists to prevent, arriving by a
+different door. So the standalone form declares it, the fragment does
+not, and a parent wanting it declares it itself.
+
+That distinction is a decision rather than an oversight, and nothing but
+the code would have said so, so the case asserts the presence in one form
+and the absence in the other. Both arms were seen to fail: emitting it
+for both forms gives *the fragment declares .DELETE_ON_ERROR, which is
+global to the make invocation*, and removing it entirely gives *the
+ejected make build kept the output of a generator that failed: '0\n'*.
+
+### One thing already agreed with it
+
+fmake's own Makefile parser lists `.DELETE_ON_ERROR` in
+`MK_IGNORED_TARGETS`, so a tree whose hand-written Makefile declares it
+has always been read correctly. The name was known to this program before
+either of its emitters wrote it and before its own build declared it --
+which is what three instances in one sitting look like from inside: not a
+thing nobody knew, a thing nobody had asked the right file about.

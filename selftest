@@ -5116,6 +5116,112 @@ def an_ejected_build_regenerates_a_stale_source(t):
 			u.cleanup()
 
 
+def _redirect_gen_tree(u):
+	"""A generator that writes through a shell redirect, and can fail.
+
+    The redirect is the point: `command` goes to a shell, so `> gen/made.c`
+    is ordinary and both emitters pass it through verbatim. A marker file
+    rather than an environment variable, because what has to be controlled
+    is the generator's behaviour on a run make itself decides to make.
+    """
+	u.write("mk.py",
+	        "import os, sys\n"
+	        "if os.path.exists('gen_fail'):\n"
+	        "    print('int made(void){ return 0; }')\n"
+	        "    sys.exit(1)\n"
+	        "print('int made(void){ return 42; }')\n")
+	u.write("main.c", "#include <stdio.h>\nint made(void);\n"
+	        'int main(void){ printf("%d\\n", made()); return 0; }\n')
+	u.write("fmake.toml", f"""
+[generate.thing]
+command = "{sys.executable} mk.py > gen/made.c"
+inputs  = ["mk.py"]
+outputs = ["gen/made.c"]
+""")
+
+
+@case
+def an_ejected_build_discards_a_failed_generators_output(t):
+	"""A redirect has created the target before the generator fails.
+
+    `command` is run through a shell, so a rule whose command ends in
+    `> gen/made.c` is ordinary -- and the shell opens that file before the
+    generator starts. If the generator then fails having written something
+    valid but wrong, make leaves the file in place, NEWER than the input
+    that caused the run. The next `make` regenerates nothing, compiles the
+    wrong file, links, and exits 0.
+
+    Silent rather than loud, which is what makes it worth a case: the
+    fixture's generator writes `return 0` and fails, so a build that does
+    not discard the output prints 0 and reports success.
+
+    make needs `.DELETE_ON_ERROR:` for this and ninja needs nothing --
+    measured: ninja records the edge as failed in its log and re-runs it on
+    the next invocation whatever the mtimes say, while make trusts the
+    timestamps. Both are asserted here because that asymmetry is the reason
+    one emitter grew a line the other did not, and an unasserted emitter is
+    where the two drift.
+    """
+	for backend, out, cmd in (("make", "Makefile", ["make"]),
+	                          ("ninja", "build.ninja", ["ninja"])):
+		if not shutil.which(backend):
+			continue
+		u = Tree("genfail-" + backend)
+		try:
+			_redirect_gen_tree(u)
+			e = u.fmake("--eject", backend)
+			check(e.returncode == 0,
+			      f"--eject {backend} failed: {e.stderr}")
+			u.write(out, e.stdout)
+			shutil.rmtree(os.path.join(u.dir, ".fmake"), ignore_errors=True)
+			shutil.rmtree(os.path.join(u.dir, "gen"), ignore_errors=True)
+
+			prog = "./" + os.path.basename(u.dir)
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} failed: {b.stdout}{b.stderr}")
+			check(_run_in(u.dir, prog).stdout == "42\n",
+			      f"the ejected {backend} build produced a broken binary")
+
+			# The generator starts failing, and the input moves so that the
+			# rule is one the build will run.
+			u.write("gen_fail", "")
+			os.utime(os.path.join(u.dir, "mk.py"), None)
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode != 0,
+			      f"the sabotaged generator did not fail the {backend} "
+			      f"build: {b.stdout}{b.stderr}")
+
+			# And now it works again, with nothing else touched. Only a
+			# build that discarded the failed output has anything to do.
+			os.unlink(os.path.join(u.dir, "gen_fail"))
+			b = _run_in(u.dir, *cmd)
+			check(b.returncode == 0,
+			      f"{backend} rebuild failed: {b.stdout}{b.stderr}")
+			got = _run_in(u.dir, prog).stdout
+			check(got == "42\n",
+			      f"the ejected {backend} build kept the output of a "
+			      f"generator that failed: {got!r}")
+		finally:
+			u.cleanup()
+
+	# And the fragment does not carry it, deliberately: the declaration is
+	# global to the make invocation, so a fragment would change how the
+	# parent's own rules behave on failure. Asserted because nothing else
+	# records the distinction, and a later pass reading one emitter against
+	# the other would read the absence as an oversight.
+	_redirect_gen_tree(t)
+	whole = t.fmake("--eject", "make")
+	frag = t.fmake("--eject", "make-fragment")
+	check(whole.returncode == 0 and frag.returncode == 0,
+	      f"--eject failed: {whole.stderr}{frag.stderr}")
+	check(".DELETE_ON_ERROR:" in whole.stdout,
+	      "the standalone Makefile does not declare .DELETE_ON_ERROR")
+	check(".DELETE_ON_ERROR" not in frag.stdout,
+	      "the fragment declares .DELETE_ON_ERROR, which is global to the "
+	      "make invocation and would reach the parent's own rules")
+
+
 def _depfile_tree(t, target='out'):
 	"""A generator that reads a file nothing declares, and says so.
 
