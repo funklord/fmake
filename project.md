@@ -510,7 +510,8 @@ that had been green about nothing for five commits ·
 [457. A baked band the artifact did not mention](#457-a-baked-band-the-artifact-did-not-mention) ·
 [458. A switch the ejected build offered and could not keep](#458-a-switch-the-ejected-build-offered-and-could-not-keep) ·
 [459. 53 MB of archive, from one dollar-caret](#459-53-mb-of-archive-from-one-dollar-caret) ·
-[460. Two build paths, one tree, two programs -- and not mine to settle](#460-two-build-paths-one-tree-two-programs----and-not-mine-to-settle)
+[460. Two build paths, one tree, two programs -- and not mine to settle](#460-two-build-paths-one-tree-two-programs----and-not-mine-to-settle) ·
+[461. The decision was in the tree; one of its two readers had it](#461-the-decision-was-in-the-tree-one-of-its-two-readers-had-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -23666,7 +23667,8 @@ rather than a line that would reach the compiler as its own text.
 **The `.git` bound is not decoration and the case checks it both
 ways.** Every scratch tree this suite builds sits directly in the
 temporary directory, so without it a stray `/tmp/VERSION` would answer
-for all 556 cases. Dropping the guard turns the case red on the negative
+for every case in the suite. Dropping the guard turns the case red on the
+negative
 control, which is the half that would otherwise have gone unwatched.
 
 **The bound has a second half, and it was nearly left out.** Do not
@@ -30267,8 +30269,9 @@ The skip is conditional, and the conditions are where it would go wrong:
 So "skip the plain compile of a flagged root" is not a filter anybody
 can write from the outside in one sitting, and a wrong answer is a
 missing object rather than a slow build. Compile scheduling and
-per-target pool construction are the core; the suite is 628 cases and
-would say, but what it cannot say is whether the design intends the
+per-target pool construction are the core; the suite -- 628 cases when
+this was written -- would say, but what it cannot say is whether the
+design intends the
 plain compile for a reason these fixtures do not show.
 
 ### The cost, so the decision has a number
@@ -35447,3 +35450,67 @@ here rather than acted on. The safety question is already answered:
 `git submodule update` refuses on a checkout that is dirty *and*
 drifted, which is git's guarantee rather than fmake's, and section 188
 measured that row too.
+
+## 461. The decision was in the tree; one of its two readers had it
+
+Found by comparing the three install paths file by file -- which agreed
+exactly, modes and symlinks included, so the probe came back clean -- and
+then reading what they had written rather than only whether they matched.
+All three published:
+
+    Description: greet, built by fmake
+
+The packaging path decided against that string long ago and says so where
+it refuses: *"a package that says `built by fmake' about itself is one
+lintian rightly refuses"*, and `[package] description` is required rather
+than invented, because its first sentence is the synopsis Debian wants.
+`pc_text` invented exactly the refused string and published it, in a
+field a consumer reads with `pkg-config --list-all`.
+
+So this is not a new decision. It is **one decision with two readers,
+where only one was wired** -- section 447 for moc, 450 for uic, and the
+lens working-practice calls the highest-yield one. The tell is the same
+each time: a working sibling explaining itself in a comment, while the
+other site does the opposite with no comment at all.
+
+Three rungs now, and `package_synopsis` is the one place the second is
+computed, so the `.pc` Description and the Debian synopsis cannot come to
+differ about one string:
+
+| rung | source |
+|---|---|
+| the target's own words | `[target.X] description` |
+| the project's | first sentence of `[package] description` |
+| the bare name | `t.name` |
+
+**Not a refusal at the end**, which is what the packaging path does.
+pkg-config will not read a `.pc` with no Description, so there has to be
+a last rung -- and the bare name says nothing while naming the right
+subject, where the old default said nothing and named the tool.
+
+`description` is a config key and not an annotation: the directive set is
+deliberately small and carries no `@description`, so an unknown directive
+would have been ignored in silence. The case writes it where the tool
+reads it, which is worth saying because the annotation is the obvious
+place to reach for.
+
+### The strongest case in the suite was watching one emitter
+
+`an_ejected_build_matches_symbol_for_symbol` is the case that makes the
+README's claim testable -- not that the ejected build *works*, which is
+weaker, but that it produces the same program. Its own docstring names
+the failure it exists for: "the two places that nearly broke it --
+vendored archives, and the shared library soname -- were both added to
+the linker and to one ejection backend before the other." It then
+asserted make and skipped when make was absent, so the backend that
+lagged twice was the one it watched and the other was unasserted. Both
+now.
+
+ninja passes, which is the point of a guard rather than a
+disappointment. **It was seen to fail, and honestly it failed one step
+earlier than the name suggests**: with ninja's vendored-archive list
+emptied, the arm stops at *the ejected ninja build failed* rather than
+at the symbol comparison, because in a program a missing archive is an
+undefined reference at the link. The comparison is what would catch a
+divergence that still links -- a flag, an order, a soname -- and that is
+the case the sabotage cannot cheaply reach.

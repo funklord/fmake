@@ -18596,6 +18596,22 @@ def install_rows_for(plan):
 	return rows
 
 
+def package_synopsis(conf):
+	"""The first sentence of `[package] description', or "".
+
+    One line describing the project, which is what a Debian control file
+    needs and what a `.pc' Description wants when the target has none of
+    its own. Written once because it was written twice: the packaging
+    path computed it and refused to invent one -- "a package that says
+    `built by fmake' about itself is one lintian rightly refuses" -- while
+    `pc_text' invented exactly that string and published it. The decision
+    existed in the tree and only one of the two readers had it.
+    """
+	text = conf.package.get("description", "").strip()
+	return (text.split("\n\n")[0].replace("\n", " ")
+	        .split(". ")[0].rstrip(".").strip())
+
+
 def pc_text(t, conf, prefix=None, ldflags=(), root=None, public=(),
             defines=()):
 	"""The pkg-config file for a library, or None if none was asked for.
@@ -18639,7 +18655,10 @@ def pc_text(t, conf, prefix=None, ldflags=(), root=None, public=(),
 	    "includedir=" + var("includedir"),
 	    "",
 	    "Name: " + t.name,
-	    "Description: " + (t.description or f"{t.name}, built by fmake"),
+	    # The target's own words, else the project's, else the bare name.
+	    # Never the tool's: see package_synopsis.
+	    "Description: " + (t.description or package_synopsis(conf)
+	                       or t.name),
 	    "Version: " + t.version,
 	    "Libs: -L${libdir} -l" + t.name,
 	]
@@ -19919,8 +19938,7 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	# The one-line synopsis: a target's own `description', else the
 	# first sentence of the package's. Never invented -- a package that
 	# says "built by fmake" about itself is one lintian rightly refuses.
-	synopsis = long_desc.split("\n\n")[0].replace("\n", " ").split(". ")[0]
-	synopsis = synopsis.rstrip(".").strip()
+	synopsis = package_synopsis(conf)
 	if not synopsis and not all(len(p["targets"]) == 1
 	                            and p["targets"][0].description
 	                            for p in packages):

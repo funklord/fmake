@@ -16756,6 +16756,85 @@ def _same_install(mine, theirs, who):
 
 
 @case
+def a_published_pc_describes_the_project_and_not_the_tool(t):
+	"""`Description: greet, built by fmake' went out to consumers.
+
+    The packaging path already refuses to invent a synopsis, and says
+    why in as many words: a package that says "built by fmake" about
+    itself is one lintian rightly refuses. `pc_text' invented exactly
+    that string -- so the decision existed in the tree and only one of
+    its two readers had it, which is the shape section 450 closed for
+    uic and section 447 for moc.
+
+    Three rungs now, asserted in order: the target's own `description',
+    then the first sentence of `[package] description', then the bare
+    name. The tool's name is in none of them, and `pkg-config
+    --list-all' is where the old default was read.
+    """
+	t.write("greet.h", "#pragma once\nconst char *greet(void);\n")
+	t.write("greet.c", """
+/*! @file
+ *  @target  greet
+ *  @kind    static
+ *  @headers greet.h
+ *  @version 1.2.3
+ */
+#include "greet.h"
+const char *greet(void){ return "hello"; }
+""")
+
+	def described():
+		check(t.fmake().returncode == 0, "build failed")
+		with open(os.path.join(t.dir, "greet.pc")) as fh:
+			text = fh.read()
+		check("built by fmake" not in text,
+		      f"the .pc advertises the build tool: {text}")
+		line = [l for l in text.splitlines() if l.startswith("Description:")]
+		check(len(line) == 1, f"expected one Description line: {text}")
+		return line[0][len("Description:"):].strip()
+
+	# The bare name, with nothing else to go on. Not "greet, built by
+	# fmake", and not a refusal: pkg-config will not read a .pc with no
+	# Description, so there has to be a last rung.
+	check(described() == "greet",
+	      f"with no description anywhere the .pc should carry the name: "
+	      f"{described()!r}")
+
+	# The project's own words, first sentence only, exactly as the Debian
+	# synopsis takes them -- so the two cannot disagree about one string.
+	t.write("fmake.toml", '''
+[package]
+description = """
+Greets the caller politely. The rest of this paragraph is the long
+description and is not the synopsis.
+
+A second paragraph, which is not either.
+"""
+''')
+	got = described()
+	check(got == "Greets the caller politely",
+	      f"the .pc should take the project's first sentence: {got!r}")
+
+	# And a target that describes itself outranks both. `description' is
+	# a config key rather than an annotation -- the directive set is
+	# deliberately small and does not carry one -- so it is written where
+	# the tool reads it.
+	t.write("fmake.toml", '''
+[package]
+description = """
+Greets the caller politely. The rest of this paragraph is the long
+description and is not the synopsis.
+"""
+
+[target.greet]
+description = "A greeting library"
+''')
+	got = described()
+	check(got == "A greeting library",
+	      f"the target's own description should win: {got!r}")
+
+
+@case
 def an_install_directory_cannot_climb_out_of_the_prefix(t):
 	"""`[install] bindir` was joined onto the prefix exactly as written.
 
@@ -28687,8 +28766,8 @@ def an_ejected_build_matches_symbol_for_symbol(t):
     The tree deliberately covers what a plain hello world would not: a
     per-file @define, an -I only the config supplies, and a prebuilt archive
     that has to land after the objects."""
-	if not shutil.which("make"):
-		raise Skip("make not installed")
+	if not shutil.which("make") and not shutil.which("ninja"):
+		raise Skip("neither make nor ninja is installed")
 	_vendor(t, "vendor/libextra.a", "extra", "int extra(void){ return 20; }\n")
 	t.write("include/dep.h", "int dep_value(void);\n")
 	t.write("src/dep.c", '#include "dep.h"\nint dep_value(void){ return 22; }\n')
@@ -28708,42 +28787,52 @@ int main(void){ printf("%d\\n", dep_value() + extra() + BONUS); return 0; }
 	mine = os.path.join(t.dir, "ejected")
 	check(t.run("ejected").stdout.strip() == "43", "fmake built it wrong")
 
-	r = t.fmake("--eject")
-	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	def syms(path):
+		out = subprocess.run(["nm", "--format=posix", path],
+		                     capture_output=True, text=True).stdout
+		return sorted(l.split()[0] + " " + l.split()[1]
+		              for l in out.splitlines() if len(l.split()) >= 2)
 
-	# A copy with no .fmake in it, so the emitted file is on its own.
-	other = tempfile.mkdtemp(prefix="fmake-ejected-")
-	try:
-		for name in os.listdir(t.dir):
-			if name in (".fmake", "ejected"):
-				continue
-			src = os.path.join(t.dir, name)
-			dst = os.path.join(other, name)
-			(shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
-		with open(os.path.join(other, "Makefile"), "w") as fh:
-			fh.write(r.stdout)
+	# Both backends. The failure this case exists for is one backend
+	# gaining something the other did not -- its own docstring names the
+	# two that nearly did -- and for a long time it watched only make,
+	# which is the shape of an unasserted emitter.
+	for backend, out in (("make", "Makefile"), ("ninja", "build.ninja")):
+		if not shutil.which(backend):
+			continue
+		r = t.fmake("--eject", backend)
+		check(r.returncode == 0, f"--eject {backend} failed: {r.stderr}")
 
-		m = _run_in(other, "make")
-		check(m.returncode == 0, f"the ejected build failed: {m.stdout}{m.stderr}")
-		theirs = os.path.join(other, "ejected")
-		check(_run_in(other, "./ejected").stdout.strip() == "43",
-		      "the ejected build produced a different answer")
+		# A copy with no .fmake in it, so the emitted file is on its own.
+		other = tempfile.mkdtemp(prefix="fmake-ejected-")
+		try:
+			for name in os.listdir(t.dir):
+				if name in (".fmake", "ejected"):
+					continue
+				src = os.path.join(t.dir, name)
+				dst = os.path.join(other, name)
+				(shutil.copytree if os.path.isdir(src)
+				 else shutil.copy2)(src, dst)
+			with open(os.path.join(other, out), "w") as fh:
+				fh.write(r.stdout)
 
-		def syms(path):
-			out = subprocess.run(["nm", "--format=posix", path],
-			                     capture_output=True, text=True).stdout
-			return sorted(l.split()[0] + " " + l.split()[1]
-			              for l in out.splitlines() if len(l.split()) >= 2)
+			m = _run_in(other, backend)
+			check(m.returncode == 0,
+			      f"the ejected {backend} build failed: {m.stdout}{m.stderr}")
+			theirs = os.path.join(other, "ejected")
+			check(_run_in(other, "./ejected").stdout.strip() == "43",
+			      f"the ejected {backend} build produced a different answer")
 
-		a, b = syms(mine), syms(theirs)
-		check(a and b, "one of the binaries had no symbols to compare")
-		extra_a = [s for s in a if s not in b]
-		extra_b = [s for s in b if s not in a]
-		check(not extra_a and not extra_b,
-		      f"the two binaries differ: only in fmake's {extra_a[:5]}, "
-		      f"only in the ejected one {extra_b[:5]}")
-	finally:
-		shutil.rmtree(other, ignore_errors=True)
+			a, b = syms(mine), syms(theirs)
+			check(a and b, "one of the binaries had no symbols to compare")
+			extra_a = [s for s in a if s not in b]
+			extra_b = [s for s in b if s not in a]
+			check(not extra_a and not extra_b,
+			      f"the {backend} binary differs from fmake's: only in "
+			      f"fmake's {extra_a[:5]}, only in the ejected one "
+			      f"{extra_b[:5]}")
+		finally:
+			shutil.rmtree(other, ignore_errors=True)
 
 
 @case
