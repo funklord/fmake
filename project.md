@@ -35656,13 +35656,30 @@ or a PNG, and this is neither*. The icon is an SVG now.
 ### The same sweep over every other section, which was clean
 
 Having found one table-and-schema pair out of step, the rest were asked
-the same question rather than assumed. Every `[gentoo]` key --
-`category`, `src-uri`, `keywords`, `iuse`, `rdepend`, `bdepend` -- is
-read by the ebuild emitter. Every `[alpine]` key is read by the APKBUILD
-emitter, `pkggroups` and `pkgusers` through one loop over both. The four
-Debian maintainer scripts are read by one loop over all four, which is
-why only `postinst` needing a fixture costs nothing. `[service]
+the same question rather than assumed -- and the packaging keys were
+measured end to end rather than read, which is the stronger answer. One
+fixture setting all six `[gentoo]` keys and all seven `[alpine]` ones,
+ejected both ways:
+
+    DESCRIPTION="Does a thing"        depends="busybox"
+    SRC_URI=".../app-${PV}.tar.gz"    makedepends="linux-headers"
+    KEYWORDS="~amd64 ~arm64"          checkdepends="bash"
+    IUSE="debug"                      pkggroups="appgrp"
+    RDEPEND="sys-libs/zlib"           pkgusers="appusr"
+    BDEPEND="virtual/pkgconfig        subpackages="app-doc"
+             dev-util/cmake"          source=".../app-$pkgver.tar.gz"
+
+Thirteen keys, thirteen values in the artifacts, including the two the
+emitter appends to a derived list rather than replacing. The four Debian
+maintainer scripts are read by one loop over all four, which is why only
+`postinst` having a fixture costs nothing; `[service]
 restart-on-upgrade` and `[target] test-group` each have their reader.
+
+No case was added for the thirteen. A key read once in an emitter is not
+the shape that fails silently -- a table row added without its schema
+line is, which is what the assert above is for -- and a case per config
+key is the accretion that makes a suite expensive without making it
+stronger.
 
 So of the 19 schema keys no fixture sets, the four install rows were the
 whole finding and the other fifteen are wired and merely unexercised.
@@ -35774,6 +35791,17 @@ keeps it out of every other target" -- true of a bare build, false of
 is why reading the message did not find this and running two commands
 did.
 
+**The fix makes the note true wherever it still fires.** A module's
+source can no longer be pulled into another target, so the note is left
+to the case it was written for -- a tree's own portability shim carrying
+`@interpose` and genuinely part of the program. Measured after the fix:
+a bare `@interpose` file defining `getpid()` still produces *shim.c
+interposes on purpose (@interpose): getpid() -- linked into prog
+deliberately*, and there the sentence is accurate. The existing case's
+fixtures are plain sources with no `@kind module`, so they are untouched
+and still assert the note and its `(@interpose)` token, which is what
+ossacli greps.
+
 ### The sibling that was right, and why it was
 
 `interposing_material` -- the `tests/` doubles -- is built from the
@@ -35852,5 +35880,13 @@ keep `src/shim/` out with `[project] exclude` -- which is the remedy that
 works in every invocation and the one they were offered in September.
 The mechanism that builds the shim, keeps it out of the programs and
 preloads it for the two tests that need it exists and is measured above.
-That is theirs to take or leave, so it goes to their inbox with the
-reproduction rather than into their tree.
+That is theirs to take or leave, so it went to their inbox with the
+reproduction rather than into their tree: the message timestamped
+`20261020T1818Z`, delivered after this fix was committed, since until
+then recommending `@kind module` to them would have linked the shim into
+the very tests it was meant to preload into.
+
+Named by its timestamp rather than by its filename, which is
+`build-and-commit.md`'s rule and not a preference: the account component
+of an inbox filename is a word the commit-msg hook bans, so quoting the
+full name refuses the commit that records the act.
