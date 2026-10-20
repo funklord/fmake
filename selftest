@@ -6118,6 +6118,74 @@ def a_path_with_an_equals_is_refused_by_make_and_built_by_ninja(t):
 
 
 @case
+def an_extended_description_does_not_repeat_the_synopsis(t):
+	"""lintian: description-synopsis-is-duplicated, which is an error.
+
+    `[package] description' supplies both halves: its first sentence is
+    the synopsis Debian requires, and the paragraph below it is the
+    extended description. The emitter took the first sentence for the
+    synopsis and the WHOLE string for the body, so every description
+    written the obvious way said the synopsis twice -- the first line of
+    the extended description repeating the line above it.
+
+    The emission site has named that tag since it was written and
+    guarded one shape of it: a description that IS the synopsis and
+    nothing else, which it refuses. The shape it emitted is the one that
+    OPENS with it.
+
+    **Why the heavy deb case did not catch this**, although it builds
+    two packages and runs lintian over both: its fixture gives every
+    target a `description' of its own, so the synopsis comes from the
+    target and the body from the package and the two are never the same
+    text. A fixture that cannot reach the hazard is the one way a green
+    lintian run means nothing, and this is a one-target tree with no
+    per-target description -- which is what every real tree writes.
+
+    Measured on a real package before the fix, built from ossacli with
+    fmake's own emitted packaging: `E: deb-oss:
+    description-synopsis-is-duplicated line 1'. Gone after it, with the
+    same package rebuilt and re-linted.
+	"""
+	_deb_tools()
+	t.write("prog.c", "int main(void){ return 0; }\n")
+	shutil.copy("/usr/share/common-licenses/GPL-3",
+	            os.path.join(t.dir, "LICENSE"))
+	t.write("VERSION", "1.0\n")
+	# A name, because a scratch directory's is not one Debian accepts and
+	# fmake says so rather than mangling it.
+	t.write("fmake.toml", """
+[project]
+name = "oneliner"
+
+[package]
+maintainer = "Test Person <test@example.invalid>"
+section = "utils"
+description = \"\"\"
+Does one thing to whatever it is given.
+
+ A second paragraph, which is the extended description Debian wants
+ below the synopsis. The first sentence above is the synopsis, and
+ saying it twice is what lintian calls an error.
+\"\"\"
+""")
+	r = t.fmake("--eject", "deb")
+	check(r.returncode == 0, f"--eject deb failed: {r.stdout}{r.stderr}")
+	with open(os.path.join(t.dir, "debian", "control")) as fh:
+		control = fh.read()
+	block = control.split("Description:", 1)[1].splitlines()
+	synopsis = block[0].strip()
+	body = [l.strip() for l in block[1:] if l.startswith(" ")]
+	check(synopsis.startswith("Does one thing"),
+	      f"the synopsis is not the first sentence: {synopsis!r}")
+	check(body, f"there is no extended description: {control}")
+	check(body[0].rstrip(".") != synopsis.rstrip("."),
+	      f"the extended description repeats the synopsis, which is "
+	      f"lintian's description-synopsis-is-duplicated: {body[0]!r}")
+	check(any("second paragraph" in l for l in body),
+	      f"the paragraph below the synopsis was dropped: {body}")
+
+
+@case
 def a_description_with_a_newline_is_refused(t):
 	"""A description is one line of a build file, and ninja reads the
 	next one as a statement of its own.
@@ -10665,6 +10733,17 @@ def a_service_installs_its_companion_systemd_units(t):
 @case
 def a_debian_source_package_is_ejected_and_builds(t):
 	"""Section 227's second layer: `--eject deb', proved by dpkg and lintian.
+
+    **This fixture cannot reach one hazard, and says so rather than
+    appearing to cover it**: every target here has a `description` of its
+    own, so a package's synopsis comes from the target and its extended
+    description from `[package] description`, and the two are never the
+    same text. The commoner shape -- one target, no description of its
+    own, both halves from one string -- is
+    `an_extended_description_does_not_repeat_the_synopsis`, where
+    lintian's `description-synopsis-is-duplicated` is guarded. This case
+    ran green over two packages while the emitter produced that error for
+    every tree written the other way.
 
     The package is written in Debian's own words from the same plan the
     three installs read -- control, rules, changelog, copyright, one

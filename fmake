@@ -18744,6 +18744,35 @@ def install_rows_for(plan):
 	return rows
 
 
+def strip_synopsis(text, synopsis):
+	"""`description' with the synopsis sentence taken off the front.
+
+    Debian's extended description must not repeat the synopsis, and
+    lintian says so at error severity -- `description-synopsis-is-
+    duplicated'. The guard at the emission site has named that tag since
+    it was written and caught one shape of it: a description that IS the
+    synopsis and nothing else. The commoner shape is a description that
+    OPENS with it, which is exactly what `package_synopsis' takes the
+    synopsis from, so every `[package] description' written the obvious
+    way produced the error. Measured on a real tree: `E: deb-oss:
+    description-synopsis-is-duplicated line 1'.
+
+    Paragraph-wise, because a description is paragraphs: the first one
+    loses its first sentence, or goes entirely if that is all it was.
+    """
+	paras = text.strip().split("\n\n")
+	first = " ".join(paras[0].split())
+	want = synopsis.strip().rstrip(".")
+	if not want:
+		return text.strip()
+	if first.rstrip(".") == want:
+		paras = paras[1:]
+	elif first.startswith(want):
+		rest = first[len(want):].lstrip(". ").strip()
+		paras = ([rest] if rest else []) + paras[1:]
+	return "\n\n".join(p for p in paras if p.strip()).strip()
+
+
 def package_synopsis(conf):
 	"""The first sentence of `[package] description', or "".
 
@@ -20166,7 +20195,10 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 		elif p["kind"] == "runtime":
 			what = f"{what} - shared library"
 		c.append(f"Description: {what}")
-		body = sec.get("description") or long_desc
+		# The synopsis comes off the front: see strip_synopsis. The
+		# refusal below is unchanged and is what fires when nothing is
+		# left, which is the one-sentence description it was written for.
+		body = strip_synopsis(sec.get("description") or long_desc, what)
 		# lintian: description-synopsis-is-duplicated. A [package]
 		# description of one sentence is the synopsis, and saying it
 		# twice is an error, not a repetition.

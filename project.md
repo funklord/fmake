@@ -519,7 +519,8 @@ that had been green about nothing for five commits ·
 [466. Nine trees, after eleven commits](#466-nine-trees-after-eleven-commits) ·
 [467. The word the error did not name](#467-the-word-the-error-did-not-name) ·
 [468. The ejected builds agree, and one of them is more reproducible](#468-the-ejected-builds-agree-and-one-of-them-is-more-reproducible) ·
-[469. All three emitted forms, five trees, and two faults in the instrument](#469-all-three-emitted-forms-five-trees-and-two-faults-in-the-instrument)
+[469. All three emitted forms, five trees, and two faults in the instrument](#469-all-three-emitted-forms-five-trees-and-two-faults-in-the-instrument) ·
+[470. A lintian error nobody could reach](#470-a-lintian-error-nobody-could-reach)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36448,3 +36449,93 @@ avoided by waiting and once walked into**, which is the ratio worth
 recording -- the rule was known each time and the third case was the one
 where the file did not look like a program. The re-run goes through a
 copy nothing is going to edit.
+
+## 470. A lintian error nobody could reach
+
+Section 469 ran the three emitted build files against real trees. The
+fourth thing fmake emits is a Debian package, and that had never been
+built from a real tree either -- the suite builds one from a fixture and
+fmake's own `make deb` uses hand-written packaging, so the emitter's
+output had never met a real project's `[package]` section.
+
+ossacli, in scratch, with the two facts fmake refuses to guess taken off
+that tree's own `debian/control`. **Four refusals on the way, every one
+of them right:**
+
+    [package] maintainer = "Name <address>" is needed: every Debian
+        package names one, and there is no place in a source tree fmake
+        could read it from honestly
+    COPYING, LICENSE are all at the root and nothing in the tree says
+        whether a recipient may choose either or must satisfy both
+    debian already exists here, and it is yours: fmake does not
+        overwrite a packaging somebody wrote
+    Makefile already exists here and is not the one this would write
+
+The second is openmlx4's, which stopped that tree's run entirely and is
+recorded here only as why: a licence question is the holder's and this
+file does not raise them. The third and fourth are fmake declining to
+write over work it did not produce, and both name the remedy -- move it
+aside, or compare in a copy.
+
+### What the package said
+
+With a maintainer, a section and a two-paragraph description supplied,
+the eject succeeded and `dpkg-buildpackage` built it. Then:
+
+    E: deb-oss: description-synopsis-is-duplicated line 1
+    W: deb-oss: no-manual-page [usr/bin/ossa-check]
+
+**An error, from lintian, on fmake's own output.** The emitted
+`Description` was:
+
+    Description: command-line tool and library for HP Smart Array ...
+     command-line tool and library for HP Smart Array controllers
+     .
+     Reads controller, array and physical drive state ...
+
+`[package] description` supplies both halves -- its first sentence is
+the synopsis Debian requires and the paragraph below is the extended
+description -- and the emitter took the first sentence for the synopsis
+and the **whole string** for the body. So the first line of the
+extended description repeated the line above it, for every tree that
+writes the key the obvious way.
+
+The three `no-manual-page` warnings are ossacli's: they ship manual
+pages and nothing in the tree says so with `@man`, which is their
+configuration rather than fmake's output.
+
+### The guard knew the tag and tested the wrong shape
+
+The emission site has carried this comment since it was written:
+
+    # lintian: description-synopsis-is-duplicated. A [package]
+    # description of one sentence is the synopsis, and saying it
+    # twice is an error, not a repetition.
+
+and the condition under it refuses a description that **is** the
+synopsis and nothing else. The shape it emitted is the one that
+**opens** with it -- which is precisely what `package_synopsis` takes
+the synopsis from, so the two halves of the same function disagreed
+about what the body was. `strip_synopsis` takes the sentence off the
+front now, paragraph-wise, and the old refusal still fires when nothing
+is left.
+
+Verified the way it was found: the same package re-emitted, rebuilt and
+re-linted, and the error is gone with only ossacli's own three warnings
+left.
+
+### Why the suite's lintian run could not see it
+
+**The heavy deb case already builds two packages and asserts lintian
+reports no error.** It ran green throughout. Its fixture gives every
+target a `description` of its own, so a package's synopsis comes from
+the target and its extended description from `[package] description`,
+and the two are never the same text.
+
+That is `evidence.md`'s fixture-cannot-reach-the-hazard, with the
+strongest possible arbiter attached to it: an external checker, at error
+severity, over a real package, reporting nothing because the input could
+not produce the error. The new case is the one-target shape -- no
+per-target description, both halves from one string, which is what every
+real tree writes -- and the heavy case's docstring now says what it
+cannot reach and where that half is guarded.
