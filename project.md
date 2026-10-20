@@ -500,7 +500,8 @@ that had been green about nothing for five commits ·
 [447. beerssh closed section 305's measurement and found its other half](#447-beerssh-closed-section-305s-measurement-and-found-its-other-half) ·
 [448. The same exclusion, one consumer further on](#448-the-same-exclusion-one-consumer-further-on) ·
 [449. An excluded file's generator rule, and the loudest form of the shape](#449-an-excluded-files-generator-rule-and-the-loudest-form-of-the-shape) ·
-[450. uic, and the two rules the schema plan already had](#450-uic-and-the-two-rules-the-schema-plan-already-had)
+[450. uic, and the two rules the schema plan already had](#450-uic-and-the-two-rules-the-schema-plan-already-had) ·
+[451. Where this session stopped, fourth fold](#451-where-this-session-stopped-fourth-fold)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34711,3 +34712,96 @@ meta-object fmake declines to generate is a link that fails. rcc is
 include-driven already and its output is a `.cpp` compiled into one
 program rather than a header on everyone's path, so neither rule applies
 to it. That is every generator fmake has.
+
+## 451. Where this session stopped, fourth fold
+
+Thirty-five commits since `b683bd8`, 677 cases, `make check` green at
+every one. The third fold (section 436) named a lens to try next and it
+paid; what followed came almost entirely from one other lens, handed in
+by another tree.
+
+### The lens that produced most of it was beerssh's
+
+Section 447 arrived through `.git/cc-inbox`: section 305's filter reached
+the compiler's include path and not moc's. **Taken as a lens rather than
+as a bug** -- *which other consumers of this decision are there?* -- it
+gave three more fixes in a row, each with a worse consequence than the
+last:
+
+    447  moc's include path             beerssh measured it
+    448  the schema plan's requesters    wasted situc runs, header on the path
+    449  generator rules in comments     generated code LINKED into the binary
+    450  uic's requesters and ties       a refusal nobody may act on
+
+449 is the one to remember: an `@rule` in a file `[project] exclude`
+removes ran its generator and fmake compiled the output into the program.
+450 is the one the record decided for me -- section 414 had already
+written down the test (*does this generator's output pollute the include
+path?*), which puts uic in the schema's category and moc outside it.
+
+**The lens is closed rather than set down.** Every consumer of the scan
+population is now accounted for: four take the filter, `Project` takes
+the predicate, and `uic_plan`'s second argument with `situ_plan`'s `have`
+both mean "this header exists on disk", which an exclusion does not
+change. moc stays presence-driven on section 414's measured decision, and
+rcc's output is a `.cpp` compiled into one program rather than a header
+on everyone's path.
+
+### Two things each fix needed, and both were new work
+
+**One implementation of the decision.** `[project] exclude` was a closure
+defined after the pass that needed it, so 449 hoisted
+`exclude_by_pattern`; the submodule test was a closure inside
+`situ_plan`, so 450 hoisted `their_own_program`. Leaving a second copy
+behind while fixing bugs about disagreeing copies would have been the
+joke writing itself.
+
+**A control that would break the feature**, not merely fail. A filter
+that silences a real requester is worse than the overbuild it replaces,
+so every one of the four asserts the positive case too: a rule in a built
+file still runs, a schema a built file includes still compiles, our own
+file asking for a vendored `.ui` still gets it, and moc still has what it
+needs.
+
+### Four instrument errors, in one sweep, all mine
+
+Section 443's config-key sweep is worth reading for its instruments
+rather than its findings. Three regexes lied -- a long-option grep that
+could not see `-i`, a `\b` anchor that could not see a key after a `\n`
+in a Python literal, and the gap claim that rode on the first -- and the
+fourth was a **reused fixture**: a `$NM` test run in a copy of an
+already-built tree reported a defect that does not exist. The three
+regexes were caught by controls. The fixture was caught only by
+re-measuring on fresh state, which is the one of the four that would have
+reached a commit message as a bug in fmake.
+
+### Still open at the fourth fold, and whose
+
+- **This file is past two context windows** and `make style` prints the
+  figure on every run. **The holder's, raised four times now.**
+- **Whether to prune object directories from other configurations.**
+  Section 15's question, and the count is already printed under `-v` --
+  measured again today: five configurations leave five object trees and
+  nothing reclaims them but `--clean`. The comment at that site says
+  loudness and pruning are one question, which is why it is verbose only.
+- **Whether `build` should leave `SKIP_DIRS`** (section 439), the sysroot
+  half of section 432, whether a generated unit should inherit its
+  origin's includers' flags (431), and hull's per-schema situc flags
+  (430), whose asking half is done.
+- **Still from before**: 348's `--uninstall` manifest, 363, 367,
+  `pkg-optional`'s per-file-versus-per-target semantics, 385, 411.
+
+### The lens to try next, and the honest state of the others
+
+Three probes in a row now have landed on ground the record had already
+settled -- moc's eagerness (414), a vendored library's headers in the
+install plan (416), and the object directories above. Each was found by
+grepping the record before acting, which is the order that matters, but
+three in a row says the areas reachable by reading and probing are
+covered.
+
+So the next lens is unlikely to come from in here. The two that paid this
+session both came from outside it: a consumer tree's measurement
+(beerssh, 447) and a question put by a consumer tree (hull, 430). **The
+inbox is the highest-yield input this project has**, and it is worth
+reading before inventing a sweep.
