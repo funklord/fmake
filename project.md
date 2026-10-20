@@ -523,7 +523,8 @@ that had been green about nothing for five commits ·
 [470. A lintian error nobody could reach](#470-a-lintian-error-nobody-could-reach) ·
 [471. Everything fmake emits, against a real tree](#471-everything-fmake-emits-against-a-real-tree) ·
 [472. The fragment fmake tells you to name after a file it reads](#472-the-fragment-fmake-tells-you-to-name-after-a-file-it-reads) ·
-[473. Every artifact, asked of the program that reads it](#473-every-artifact-asked-of-the-program-that-reads-it)
+[473. Every artifact, asked of the program that reads it](#473-every-artifact-asked-of-the-program-that-reads-it) ·
+[474. A cross build, with readelf as the witness](#474-a-cross-build-with-readelf-as-the-witness)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36711,3 +36712,60 @@ entries, nothing missing. **A checker that reports a clean graph and a
 checker that has no graph print nearly the same thing**, and the
 difference is the node count -- which is why it is quoted here rather
 than summarised.
+
+## 474. A cross build, with readelf as the witness
+
+`--arch` is the one substantial path no real tree had been taken down
+here, and the machine has `aarch64-linux-gnu-gcc`. openmlx4, 32 sources
+of plain C:
+
+    $ fmake --arch aarch64
+    * --arch aarch64: building with aarch64-linux-gnu-gcc into
+      build-aarch64/
+    * built cross-oml
+
+    $ readelf -h build-aarch64/cross-oml | grep Machine
+      Machine:                           AArch64
+
+**And the keyed object directory, at the one boundary where getting it
+wrong is unmistakable.** Section 76 says two configurations keep
+separate objects; a cross build is that claim where the evidence is an
+ELF header rather than a flag:
+
+    native build in the same tree  -> cross-oml       X86-64
+    cross build                    -> build-aarch64/  AArch64
+    object directories                                2
+    the cross build again                   `cross-oml up to date'
+
+Switching either way recompiles nothing it has already built, and
+neither binary is the other's machine. `readelf` is the witness, which
+is the point of section 473: a flag on a command line is fmake's word
+for what it did, and an ELF header is somebody else's.
+
+### The emitted Makefile crosses too, when told
+
+Its header says `CC`, `CXX` and `AR` are the parent's and use `?=` so
+what you set wins. Asked of openmlx4's emitted Makefile:
+
+    $ make CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar
+    aarch64-linux-gnu-gcc -Os '-DOMLX4_VERSION="1.0.0"' -I. -Isrc -c ...
+
+    $ readelf -h ej-openmlx4 | grep Machine
+      Machine:                           AArch64
+
+So the claim in that header is true of a real tree, and a cross build
+of an ejected Makefile needs nothing from fmake.
+
+### Two external checks that came back clean, and why neither is a gap
+
+`make --warn-undefined-variables` over the emitted Makefile names
+exactly three variables -- `DEBUG`, `SANITIZE`, `COVERAGE` -- and
+nothing else. Those are the switches, tested with `$(filter-out
+0,$(DEBUG))` precisely so that unset, empty and `0` all mean off, and
+warning about an unset one is what that flag does to the idiom. The
+useful half of the result is the *nothing else*: no accidental
+undefined variable anywhere in the file.
+
+`make -r -R`, which strips every built-in rule and variable, builds the
+emitted Makefile unchanged. That is the standalone claim in its header,
+checked by taking make's own furniture away.
