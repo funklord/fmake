@@ -518,7 +518,8 @@ that had been green about nothing for five commits ·
 [465. The tree nobody had run this over](#465-the-tree-nobody-had-run-this-over) ·
 [466. Nine trees, after eleven commits](#466-nine-trees-after-eleven-commits) ·
 [467. The word the error did not name](#467-the-word-the-error-did-not-name) ·
-[468. The ejected builds agree, and one of them is more reproducible](#468-the-ejected-builds-agree-and-one-of-them-is-more-reproducible)
+[468. The ejected builds agree, and one of them is more reproducible](#468-the-ejected-builds-agree-and-one-of-them-is-more-reproducible) ·
+[469. All three emitted forms, five trees, and two faults in the instrument](#469-all-three-emitted-forms-five-trees-and-two-faults-in-the-instrument)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36379,3 +36380,71 @@ The second is a default-flag decision and the first is a structural one.
 measurement rather than taken: six copies of a build directory in one
 binary, none in the same tree's ejected build, and two ways to make the
 first match the second.
+
+## 469. All three emitted forms, five trees, and two faults in the instrument
+
+Section 468 built five real trees from their own ejected Makefile. fmake
+emits three forms, and the other two had no real-tree control either.
+
+| emitted form | trees | programs | result |
+|---|---|---|---|
+| `--eject make` | 5 | 14 | all symbol-identical |
+| `--eject ninja` | 5 | 14 | all symbol-identical |
+| `--eject make-fragment` | 5 | 14 | all symbol-identical |
+
+qtty's eight, ossacli's three, and one each from hembygd,
+bbq-predictor and openmlx4, each compared against the binaries fmake
+itself built from the same tree.
+
+**The fragment is worth its own leg**, because section 456 deliberately
+leaves `.DELETE_ON_ERROR:` out of it -- the declaration is global to the
+make invocation and a fragment must not change how a parent's own rules
+behave. The control therefore builds through the parent its own header
+tells a reader to write:
+
+    all: fmake-all
+
+    include fmake.mk
+
+### The clean round-trip
+
+`build-and-commit.md` says a clean target removes the files it names and
+nothing else, and it is the one target everybody runs without reading.
+`an_ejected_clean_names_what_it_removes` checks that on a fixture. The
+real-tree form: snapshot a fresh reconstruction's file list, build from
+the emitted Makefile, `clean`, and diff the list.
+
+    ossacli: clean left 0 file(s) behind, removed 0 it was given
+    hembygd: clean left 0 file(s) behind, removed 0 it was given
+    qtty:    clean left 0 file(s) behind, removed 0 it was given
+
+Three trees back to exactly the files they arrived with, qtty's moc
+output included. The emitted `CLEAN` names `$(FLAVOUR_STAMP)` too --
+section 458's stamp appears 40 times in qtty's Makefile, 39 as a
+prerequisite and once in the clean list -- so the file that makes the
+switches safe is removed by the clean that made it.
+
+### Two faults in the instrument, both the same lesson twice over
+
+**It wrote the ejected Makefile over the tree's own.** ossacli and
+hembygd carry a committed `Makefile`; the driver ejected to that name
+and then filtered the name out of the comparison, so a real build file
+read as *removed 1 it was given*. Every private tree with a Makefile
+would have been reported that way, and the filter is what hid it. It
+ejects to `Ejected.mk` and builds with `make -f` now, which is also how
+a reader would try it without clobbering anything.
+
+**And the first run died because the driver was edited while `sh` was
+reading it:**
+
+    eject-clean.sh: 42: Syntax error: ")" unexpected
+
+`sh` parses a script incrementally, so an edit mid-run corrupts the
+parse. That is the third instance of one lesson in this session: a
+`make check` was voided by a sabotage rewriting `fmake` while the suite
+executed it, the fuzznet runs were left alone for the same reason, and
+then the same mistake landed in this project's own tooling. **Twice
+avoided by waiting and once walked into**, which is the ratio worth
+recording -- the rule was known each time and the third case was the one
+where the file did not look like a program. The re-run goes through a
+copy nothing is going to edit.
