@@ -514,7 +514,7 @@ that had been green about nothing for five commits ·
 [461. The decision was in the tree; one of its two readers had it](#461-the-decision-was-in-the-tree-one-of-its-two-readers-had-it) ·
 [462. Three directories the ejected build could move and fmake could not](#462-three-directories-the-ejected-build-could-move-and-fmake-could-not) ·
 [463. One tree, two commands, two different programs](#463-one-tree-two-commands-two-different-programs) ·
-[464. Where this session stopped, fifth fold](#464-where-this-session-stopped-fifth-fold) ·
+[464. Where this session had got to, fifth fold](#464-where-this-session-had-got-to-fifth-fold) ·
 [465. The tree nobody had run this over](#465-the-tree-nobody-had-run-this-over) ·
 [466. Nine trees, after eleven commits](#466-nine-trees-after-eleven-commits) ·
 [467. The word the error did not name](#467-the-word-the-error-did-not-name)
@@ -35895,11 +35895,20 @@ Named by its timestamp rather than by its filename, which is
 of an inbox filename is a word the commit-msg hook bans, so quoting the
 full name refuses the commit that records the act.
 
-## 464. Where this session stopped, fifth fold
+## 464. Where this session had got to, fifth fold
 
 Nine commits since `8b2cb7e`, sections 454 to 463, `make check` green at
-every one and 684 cases at the end. Every fix came from one of two
-lenses, and neither was chosen in advance.
+every one and 684 cases. Every fix came from one of two lenses, and
+neither was chosen in advance.
+
+**It did not stop here**, which is why the heading says otherwise now:
+the prediction at the end of this section -- that the next lens would
+come from running fmake over a tree nobody had run it over -- was acted
+on immediately and produced sections 465, 466 and 467, four more
+commits and two more fixes. A fold is a record of where the work had
+got to, and this one is left as it was written with that pointer added
+rather than rewritten, because its prediction paying is part of what it
+is evidence for.
 
 ### The two lenses, and where each came from
 
