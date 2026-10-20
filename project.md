@@ -32291,6 +32291,18 @@ same: select the row the message actually prints, then assert on it.
   softkeys, situ -- and **none carries `@headers`**. Structural, with no
   instance, and a project that vendors a library it genuinely republishes
   would want exactly this behaviour. Left alone.
+
+  **Re-measured 2026-10-20, all eleven, still zero each.** A
+  present-tense claim about eleven other trees is the kind
+  `evidence.md` gives a shelf life, so here is the row anybody can
+  contradict one checkout at a time: fuzzypickles' qtty, flog,
+  monocypher, quirc and fuzznet; raidcfgd's ossacli and fuzznet;
+  beerssh's vterm and softkeys; hull's vendor/situ; fuzznet's qtty --
+  `grep -rl @headers` in each, zero files. The probe that prompted it
+  was a fixture reproducing the structural case: a declared submodule
+  whose library carries `@headers` and `@version` does install its
+  header and its `.pc` under this tree's prefix, exactly as the entry
+  says it would.
 - **`libexecdir` and a per-target install destination** are what §296
   deferred pending *a tree that installs through fmake and has something
   privileged*. Re-measured: two trees install into libexec -- netcfgd's
