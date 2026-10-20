@@ -29165,6 +29165,57 @@ int main(void){ printf("%d\\n", dep_value() + extra() + BONUS); return 0; }
 
 
 @case
+def a_test_run_that_will_not_run_names_the_files_that_stopped_it(t):
+	"""`fmake test' printed a count and no names, where a build prints both.
+
+    The ordinary path has a careful list -- the tree's own files first,
+    the vendored ones counted rather than listed, a variant's target
+    unpacked from behind the NUL in its key -- and section 390's own
+    comment explains why each of those was needed. The `fmake test' path
+    returns before reaching any of it.
+
+    **That is the path where the names matter most.** The suite did not
+    run, so the count is everything the reader is given, and the
+    compiler's own output is grouped and capped. Measured on fuzznet:
+    `5 file(s) did not compile; not running tests', one compiler error
+    visible in the whole scroll, and no file named anywhere in it.
+
+    One function with two readers now, which is the shape sections 447,
+    450 and 461 each ended at.
+    """
+	t.write("prog.c", "int main(void){ return 0; }\n")
+	t.write("test/good_test.c", """
+/*! @file
+ *  @target good_test
+ *  @test   yes
+ */
+int main(void){ return 0; }
+""")
+	t.write("test/broken_test.c", """
+/*! @file
+ *  @target broken_test
+ *  @test   yes
+ */
+#include "nowhere_at_all.h"
+int main(void){ return 0; }
+""")
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a test run with a file that will not compile should fail: {out}")
+	check("not running tests" in out,
+	      f"the run should decline to run the suite: {out}")
+	# The control: something did build, so `broken' is a list beside a
+	# working target rather than the whole tree failing -- which is the
+	# arrangement that reaches this path at all.
+	check("built good_test" in out,
+	      f"the good test should still have been built: {out}")
+	check("test/broken_test.c" in out.split("not running tests")[1],
+	      f"the count is given and the file is not, so there is nothing "
+	      f"to act on: {out}")
+
+
+@case
 def a_file_that_cannot_compile_is_not_remembered(t):
 	"""A failure must not be cached as a discovery.
 

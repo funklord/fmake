@@ -514,7 +514,8 @@ that had been green about nothing for five commits ·
 [461. The decision was in the tree; one of its two readers had it](#461-the-decision-was-in-the-tree-one-of-its-two-readers-had-it) ·
 [462. Three directories the ejected build could move and fmake could not](#462-three-directories-the-ejected-build-could-move-and-fmake-could-not) ·
 [463. One tree, two commands, two different programs](#463-one-tree-two-commands-two-different-programs) ·
-[464. Where this session stopped, fifth fold](#464-where-this-session-stopped-fifth-fold)
+[464. Where this session stopped, fifth fold](#464-where-this-session-stopped-fifth-fold) ·
+[465. The tree nobody had run this over](#465-the-tree-nobody-had-run-this-over)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36037,3 +36038,121 @@ nobody has run it over**, which is what the README rule in
 `project-attribution` asks for and what produced 463: ossacli's README
 named something fmake could not do, the attempt to confirm it reached
 for `@kind module`, and two commands disagreed.
+
+## 465. The tree nobody had run this over
+
+The fold above predicted the next lens would come from running fmake
+over a tree nobody had run it over. **fuzznet is that tree**: this file
+mentions it a hundred times and every one of them is fuzznet *inside*
+fuzzypickles or raidcfgd. Its README offers `make test`, `make style`,
+`make check` and `make schema`, and no fmake line -- which is the
+correct state for a tree fmake cannot build, and that was the premise
+worth checking.
+
+It builds. 400 C files, 45 C++, 38 `.situ` schemas, 240 test programs,
+four nested submodules, reconstructed with `git archive HEAD` plus one
+archive per submodule into scratch, and `fmake` exits 0 with a
+twelve-line `fmake.toml`:
+
+    [project]
+    exclude = ["qtty/test"]
+    include-dirs = ["qtty/include"]
+    defines = [nine FZN_*_ON]
+
+    [target.node_messages_test]   root = "node/test/messages_test.c"
+    [target.node_provision_test]  root = "node/test/provision_test.c"
+    [target.sim_provision_test]   root = "sim/test/provision_test.c"
+    [target.node_relay_test]      root = "node/test/relay_test.c"
+
+**Every line was found by being refused**, in that order, which is what
+makes each one a fact about the tree rather than a flag that made
+something go away.
+
+### What each refusal was
+
+**Duplicate target names stop a plain `fmake` outright.** Three sets of
+test files share a basename across modules -- `messages_test` in
+`messages/test` and `node/test`, `provision_test` in three places,
+`relay_test` in two -- so three pairs of targets would share a name.
+fmake names a target after its root file, declines to invent a
+qualified one, names the files and asks.
+
+**Whether it should qualify instead is a decision rather than a
+defect**, and it is the copyright holder's. `main.c` in two directories
+already gets two names, from the directories; a colliding
+`messages_test.c` would need a name nobody wrote. Refusing is
+consistent with section 29 and with everything else here that declines
+to invent -- a version, a synopsis, a licence, an ebuild category. The
+cost is that the one tree in this workspace with repeated test
+basenames cannot be built by plain `fmake`, which is worth knowing
+before deciding either way.
+
+**`node/fuzznetd.c` needed nine defines**, and the first attempt with
+one was the instructive part: `FZN_CLI_ON` alone left the error count at
+**217**, unchanged, starting at *'struct <anonymous>' has no member
+named 'logger'* and a failing `static_assert`. The nine together built
+the daemon. They are that Makefile's `CPPFLAGS += -D...` sites, which
+nothing in the tree states -- the ordinary shape of what an
+`fmake.toml` is for.
+
+**The last two lines are qtty's**, and fuzzypickles' own config already
+carries both with the reasoning: `qtty/include` on the path, and
+`qtty/test` excluded because three of qtty's five suite files want
+`qtty` on the include path and two want a define as well, so chasing
+them does not end at an include path.
+
+### What fmake did well, since a build that works is also evidence
+
+It left all four vendored checkouts' own programs to them by name --
+flog's 2, monocypher's 28, qtty's 12, quirc's 6, which is section 450's
+rule at four times the usual scale -- and it named the six schemas
+nothing includes rather than compiling them.
+
+### `fmake test`, the tenth define, and a defect of fmake's own
+
+`fmake test` builds all 240 test programs and then declines to run any
+of them, which is the right answer and is how the tenth define was
+found:
+
+    * 1 file(s) did not compile; not running tests
+      gui/test/qtty_render_test.cpp:473:55: error: expected identifier
+          before numeric constant
+      ... structured binding declaration cannot have type
+          'const fzn_persist_slot_t'
+
+Line 473 is `static const fzn_persist_slot_t slots[5] = {...}` and
+`slots` is Qt's macro. `QT_NO_KEYWORDS` is in their Makefile for exactly
+that and is the tenth define. **The error names neither Qt nor the
+word** -- it is a structured-binding complaint about a type, forty
+characters from the cause.
+
+With it supplied, five files fail instead of one and all five are
+quirc's: `quirc/demo/demo_opencv.cxx` wants `opencv2/videoio.hpp`, and
+fuzzypickles excludes `quirc/demo` and `quirc/tests` for that reason.
+So the suite was never reached, and no `fmake test` line is claimed
+here or offered to them.
+
+**And that is where fmake's own defect was.** `fmake test` said *5
+file(s) did not compile; not running tests* and named none of them. One
+compiler error was visible in the whole scroll -- the output is grouped
+and capped -- so four of the five could not be identified from fmake's
+output at all. The ordinary build path has a careful list for this:
+the tree's own files first, the vendored ones counted rather than
+listed, a variant's target unpacked from behind the NUL in its key,
+each of those paid for by a report from raidcfgd. **The test path
+returns before reaching any of it.**
+
+One function with two readers now. It is the same shape as 447, 450 and
+461, and the worst instance of it: the path that prints a bare count is
+the one where the count is all the reader gets, because the suite did
+not run.
+
+### Where the signal went
+
+To fuzznet's inbox, the message timestamped `20261020T1838Z`, with the
+whole reproduction, the ten defines, and the caution that they are the
+set that happened to work rather than the set fuzznet means -- theirs to
+check against their own Makefile. It says in as many words that `fmake
+test` was not measured, because `project-attribution`'s rule is that a
+line must have been run before it is written and that is the half this
+attempt cannot hand over.

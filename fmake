@@ -484,6 +484,39 @@ def say(m=""):    print(m, file=PROGRESS)
 def info(m):  say(f"{GREEN('*')} {m}")
 def warn(m):  say(f"{YELLOW('*')} {m}")
 def note(m):  say(f"{DIM('  ' + m)}")
+def name_broken(broken, vendored):
+	"""Name the files that did not compile, the tree's own first.
+
+    `broken' holds unit keys, and a variant's carries the target it was
+    compiled for behind a NUL. Printing the key raw showed `t.c
+    t_checked', which reads as two files and is one.
+
+    Sorted so the invoking tree's own files come first and the vendored
+    ones are counted rather than listed. Reported from raidcfgd: 21
+    files, five printed, and the two that were theirs -- the only two
+    they could act on -- were not among the five, because nineteen were
+    in a checkout they widen into and sorted ahead alphabetically. A
+    truncated list is a choice about what the reader sees first, and it
+    was making it by path.
+
+    One function because there are two readers. The ordinary build path
+    had all of this and the `fmake test' path, which returns before
+    reaching it, printed a count and no names -- on the one path where
+    the names matter most, since the suite did not run and the
+    compiler's own output is grouped and capped.
+    """
+	keys, counts = theirs_last(broken, vendored,
+	                           of=lambda k: k.partition("\0")[0])
+	head, rest = capped(keys)
+	for key in head:
+		rel, _, variant = key.partition("\0")
+		note(f"{rel} ({variant})" if variant else rel)
+	if rest:
+		note(f"... and {rest} more (-v for all)")
+	for line in elsewhere_lines(counts):
+		note(line)
+
+
 def theirs_last(rels, vendored, of=lambda r: r):
 	"""This tree's own first, then the other projects', and the counts.
 
@@ -15619,6 +15652,14 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		if broken:
 			say()
 			warn(f"{len(broken)} file(s) did not compile; not running tests")
+			# The same list as the ordinary path, which returned before
+			# reaching it. This is the path where the names matter most:
+			# the suite did not run, so the count is everything the reader
+			# is given, and the compiler's own output is grouped and
+			# capped -- measured on fuzznet, `5 file(s) did not compile'
+			# with one error visible in the scroll and no file named
+			# anywhere.
+			name_broken(broken, vendored)
 			return 1
 		say()
 		gui = {t.name for t in wanted
@@ -15632,26 +15673,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	if broken:
 		say()
 		warn(f"{len(broken)} file(s) did not compile")
-		# `broken' holds unit keys, and a variant's carries the target it
-		# was compiled for behind a NUL. Printing the key raw showed
-		# `t.c t_checked', which reads as two files and is one.
-		# Sorted so the invoking tree's own files come first, and the
-		# vendored ones are counted rather than listed. Reported from
-		# raidcfgd: 21 files, five printed, and the two that were theirs
-		# -- the only two they could act on -- were not among the five,
-		# because nineteen were in a checkout they widen into and sorted
-		# ahead alphabetically. A truncated list is a choice about what
-		# the reader sees first, and it was making it by path.
-		keys, _kcounts = theirs_last(broken, vendored,
-		                             of=lambda k: k.partition("\0")[0])
-		_khead, _krest = capped(keys)
-		for key in _khead:
-			rel, _, variant = key.partition("\0")
-			note(f"{rel} ({variant})" if variant else rel)
-		if _krest:
-			note(f"... and {_krest} more (-v for all)")
-		for line in elsewhere_lines(_kcounts):
-			note(line)
+		name_broken(broken, vendored)
 
 	if failed:
 		say()
