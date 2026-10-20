@@ -522,7 +522,8 @@ that had been green about nothing for five commits ·
 [469. All three emitted forms, five trees, and two faults in the instrument](#469-all-three-emitted-forms-five-trees-and-two-faults-in-the-instrument) ·
 [470. A lintian error nobody could reach](#470-a-lintian-error-nobody-could-reach) ·
 [471. Everything fmake emits, against a real tree](#471-everything-fmake-emits-against-a-real-tree) ·
-[472. The fragment fmake tells you to name after a file it reads](#472-the-fragment-fmake-tells-you-to-name-after-a-file-it-reads)
+[472. The fragment fmake tells you to name after a file it reads](#472-the-fragment-fmake-tells-you-to-name-after-a-file-it-reads) ·
+[473. Every artifact, asked of the program that reads it](#473-every-artifact-asked-of-the-program-that-reads-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36643,3 +36644,70 @@ Whether the fragment should advise a different name is a separate
 question and not one this fix needs: with the marker test, both names
 work. It is worth asking anyway, since a reader who sees `include
 fmake.mk` has no way to know the name is taken.
+
+## 473. Every artifact, asked of the program that reads it
+
+Section 471 noticed that of the five things fmake emits, the only one
+checked by a program whose job is to disagree was the one that produced
+a defect. So every artifact was taken to its own consumer.
+
+| artifact | witness | verdict |
+|---|---|---|
+| `.deb` | `lintian --pedantic` | **an error**, section 470 |
+| `build.ninja` | `ninja -t missingdeps` | 38 nodes, none missing |
+| `.pc` | `pkg-config --validate` | valid, and answers 1.2.3 and `-lgreet` |
+| `compile_commands.json` | `clangd --check` | loads it, 0 errors |
+| manual page | `groff -man -z`, `man --warnings` | silent |
+| completion | `bash -n`, and sourcing it | already in the suite |
+| ebuild, APKBUILD | `bash -n` | already in the suite |
+
+Three of those are new guards in the suite: pkg-config over the
+installed `.pc`, clangd over the database, and -- from section 470 --
+the one-target description shape lintian refuses.
+
+### Two of the three needed a negative control before they meant anything
+
+**clangd answers without a database.** Run in a tree where none had been
+written, `clangd --check=main.c` falls back to its own default flags and
+still prints *All checks completed, 0 errors*. The case asserts the
+`Loaded compilation database` line as well, because the error count
+alone cannot tell a verdict about fmake's database from a verdict about
+clangd's guesses.
+
+**And pkg-config found a module it was not given.** The first negative
+control pointed `PKG_CONFIG_PATH` at the tree root and expected a
+failure; it passed, because fmake writes the `.pc` beside the artifacts
+as well as installing it, so the directory was not empty. It asks about
+a name nothing defines now. Sabotaging the emitter -- one character,
+`Versiom:` -- makes pkg-config refuse the file: *warning: file does not
+declare a `Version' field*.
+
+### What ninja's checker needed before it meant anything either
+
+`ninja -t missingdeps` reports edges whose depfiles name generated files
+the graph does not know about, which is the dependency-tracking hazard
+`makefile-hazards` is mostly about. Its first two runs said:
+
+    Processed 0 nodes.
+    No missing dependencies on generated files found.
+
+Both times `build.ninja` was zero bytes, because `fmake --eject ninja >
+build.ninja` truncates before fmake runs and the eject had refused. The
+first refusal was section 472's finding. **The second was fuzzypickles',
+and it is a true statement about that tree**: two of its test programs
+reach each other's `main()` --
+
+    spike_test links daemon/test/entropy_linux_test.c, which roots
+    entropy_linux_test
+        <- getrandom  (client/calls.c)
+
+-- so an eject, which includes test targets where a default build does
+not, cannot link them. fmake names the remedy and refuses. Their README
+claims the four programs and no more, which is accurate, so this is
+recorded rather than signalled.
+
+The run that counted was qtty's: 38 nodes processed, 24 deps-log
+entries, nothing missing. **A checker that reports a clean graph and a
+checker that has no graph print nearly the same thing**, and the
+difference is the node count -- which is why it is quoted here rather
+than summarised.

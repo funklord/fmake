@@ -6534,6 +6534,35 @@ def a_pkgconfig_file_names_the_prefix_it_is_installed_at(t):
 	check("${prefix}" in text,
 	      f"the paths under it must stay relocatable: {text}")
 
+	# And pkg-config's own verdict, which is the only one that matters
+	# for a file written to be read by pkg-config. Every assertion above
+	# is fmake's idea of the format checked against fmake; this asks the
+	# program. Section 471: of the five artifacts fmake writes, the one
+	# with an external witness is the one that produced a defect.
+	if shutil.which("pkg-config"):
+		where = os.path.dirname(pc)
+		env = {"PKG_CONFIG_PATH": where}
+		v = _run_in(t.dir, "pkg-config", "--validate", "greet", env=env)
+		check(v.returncode == 0,
+		      f"pkg-config rejects the .pc fmake wrote: {v.stdout}{v.stderr}")
+		# Not vacuous: a name no .pc defines must be refused, so the
+		# pass above is about the file rather than about --validate
+		# shrugging. The first spelling of this pointed PKG_CONFIG_PATH
+		# at the tree root and passed, because fmake writes the .pc
+		# beside the artifacts as well as installing it -- a negative
+		# control has to be able to fail.
+		none = _run_in(t.dir, "pkg-config", "--validate", "greet-nonesuch",
+		               env=env)
+		check(none.returncode != 0,
+		      "pkg-config accepted a module nothing defines, so "
+		      "--validate proves nothing here")
+		ver = _run_in(t.dir, "pkg-config", "--modversion", "greet", env=env)
+		check(ver.stdout.strip() == "1.2.3",
+		      f"pkg-config reads a different version: {ver.stdout!r}")
+		libs = _run_in(t.dir, "pkg-config", "--libs", "greet", env=env)
+		check("-lgreet" in libs.stdout,
+		      f"pkg-config does not answer with the library: {libs.stdout!r}")
+
 	for backend, out, run in (("make", "Makefile", ["make", "-s"]),
 	                          ("ninja", "build.ninja", ["ninja"])):
 		if not shutil.which(backend):
@@ -14392,6 +14421,30 @@ def a_compilation_database_lists_what_fmake_compiles(t):
 	# The set the database names and the set the build produced are the
 	# same set. A relationship rather than a count, so it cannot go stale
 	# as features add objects -- which is exactly how it went wrong: a
+	# And the consumer's own verdict, where the consumer is installed.
+	# Every other assertion here is fmake's idea of what the database
+	# should contain checked against fmake; `clangd --check' loads it the
+	# way an editor does and says so. Section 471's point: of the five
+	# artifacts fmake writes, the one with a program whose job is to
+	# disagree is the one that produced a defect.
+	#
+	# **The load line is asserted, not just the error count.** Run
+	# without a database clangd falls back to its own default flags and
+	# still reports `All checks completed, 0 errors' -- measured, in a
+	# tree where no database had been written at all. A pass that cannot
+	# tell those apart is the vacuous one.
+	if shutil.which("clangd"):
+		cd = subprocess.run(["clangd", "--check=main.c",
+		                     "--compile-commands-dir=" + t.dir],
+		                    capture_output=True, text=True, cwd=t.dir)
+		said = cd.stdout + cd.stderr
+		check("Loaded compilation database" in said
+		      and "compile_commands.json" in said,
+		      f"clangd did not load the database fmake wrote, so its "
+		      f"verdict is about its own default flags: {said[-600:]}")
+		check("All checks completed, 0 errors" in said,
+		      f"clangd read the database and found errors: {said[-600:]}")
+
 	# per-target `cflags' compiles a second object per source, and the
 	# database was built from the plain units keyed by path, so every
 	# variant was missing and an editor read the flagged target's sources
