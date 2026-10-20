@@ -515,7 +515,8 @@ that had been green about nothing for five commits ·
 [462. Three directories the ejected build could move and fmake could not](#462-three-directories-the-ejected-build-could-move-and-fmake-could-not) ·
 [463. One tree, two commands, two different programs](#463-one-tree-two-commands-two-different-programs) ·
 [464. Where this session stopped, fifth fold](#464-where-this-session-stopped-fifth-fold) ·
-[465. The tree nobody had run this over](#465-the-tree-nobody-had-run-this-over)
+[465. The tree nobody had run this over](#465-the-tree-nobody-had-run-this-over) ·
+[466. Nine trees, after eleven commits](#466-nine-trees-after-eleven-commits)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36156,3 +36157,56 @@ check against their own Makefile. It says in as many words that `fmake
 test` was not measured, because `project-attribution`'s rule is that a
 line must have been run before it is written and that is the half this
 attempt cannot hand over.
+
+## 466. Nine trees, after eleven commits
+
+Eleven commits in one session touched the ejected Makefile and
+`build.ninja`, the static archive's assembly, the `[install]` schema,
+which sources a module keeps to itself, and a diagnostic. All of that
+is the part of fmake that decides what another project's build
+contains, so the suite is the wrong place to stop: 685 cases are this
+tree's own fixtures, and the trees that matter are elsewhere.
+
+Every private tree with C or C++ in it, reconstructed into scratch with
+`git archive HEAD` plus one archive per submodule, built with the tool
+at `76d2d8f`:
+
+| tree | result |
+|---|---|
+| fuzzypickles | 6 programs, the same six and the same notes as section 453 |
+| fuzznet | builds, with the twelve-line config section 465 derived |
+| raidcfgd | refuses, same symbol, same five programs named |
+| ossacli | 3 programs, which is what their README says fmake does |
+| qtty | 8 programs |
+| softkeys | the static library, and 16 test functions pass |
+| hembygd | 1 program |
+| openmlx4 | 1 program |
+| bbq-predictor | 1 program |
+
+**raidcfgd refusing is a pass**, not a failure: its README records the
+expected refusal precisely and fmake still declines to guess which of
+two `situ_msg_init` belongs in each of five programs.
+
+**openmlx4's note is worth quoting**, because it is the shape this
+session kept finding and here fmake gets right:
+
+    src/mfa.c:17: lzma.h is behind a conditional the preprocessor did
+    not take, so liblzma was not linked -- if a feature macro should
+    have turned it on, say so next to the include with
+    '@pkg_optional liblzma defines MACRO'
+
+A library silently not linked because an include sat behind an untaken
+`#if` is exactly a fact lost between what the source says and what the
+build does, and that one is said rather than discovered later.
+
+### Why this is cheap and worth doing every time
+
+Each tree is one `git archive`, one build and one line of result. The
+whole set cost less than one run of this project's own suite, and it is
+the only check that reads the tool the way its consumers do. **Eight of
+the nine carry a committed `fmake.toml`** -- every one but fuzznet,
+whose config exists only in scratch -- and those files' comments are
+other sessions explaining what fmake could not work out about their own
+trees. So the set re-reads eight pieces of somebody else's reasoning
+about this tool, which is where section 465's finding came from: a
+sentence in ossacli's README naming something fmake could not do.
