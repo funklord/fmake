@@ -511,7 +511,8 @@ that had been green about nothing for five commits ·
 [458. A switch the ejected build offered and could not keep](#458-a-switch-the-ejected-build-offered-and-could-not-keep) ·
 [459. 53 MB of archive, from one dollar-caret](#459-53-mb-of-archive-from-one-dollar-caret) ·
 [460. Two build paths, one tree, two programs -- and not mine to settle](#460-two-build-paths-one-tree-two-programs----and-not-mine-to-settle) ·
-[461. The decision was in the tree; one of its two readers had it](#461-the-decision-was-in-the-tree-one-of-its-two-readers-had-it)
+[461. The decision was in the tree; one of its two readers had it](#461-the-decision-was-in-the-tree-one-of-its-two-readers-had-it) ·
+[462. Three directories the ejected build could move and fmake could not](#462-three-directories-the-ejected-build-could-move-and-fmake-could-not)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -35514,3 +35515,99 @@ at the symbol comparison, because in a program a missing archive is an
 undefined reference at the link. The comparison is what would catch a
 divergence that still links -- a flag, an order, a soname -- and that is
 the case the sabotage cannot cheaply reach.
+
+## 462. Three directories the ejected build could move and fmake could not
+
+`INSTALL_DIRS` is the table of where things go. `[install]` is how the
+live build is told to move a row, and the ejected builds declare the same
+rows for the same purpose. Comparing the table against the config schema:
+
+    in the table, not in the schema: completiondir, datadir,
+                                     pkgconfigdir, polkitdir
+
+Measured, on a tree with `@data`, `@completion` and `@polkit`:
+
+    [install] datadir = "share/app-data"
+    !!! unknown key 'datadir' (expected one of: applicationsdir, ...)
+
+    $ make install DESTDIR=... PREFIX=/usr DATADIR=/usr/share/app-data \
+          COMPLETIONDIR=/usr/share/mycomp POLKITDIR=/usr/share/mypolkit
+    usr/share/app-data/app/profile.conf
+    usr/share/mycomp/app
+    usr/share/mypolkit/action.policy
+
+**So a packager driving the ejected Makefile could place a program's data,
+its completion and its polkit action where the distribution wanted, and
+one using fmake directly could not** -- not with a flag, not with a config
+key, not at all.
+
+### An omission rather than a decision, and git says which
+
+The project's own pattern is to extend both halves, and `git log -S`
+dates it. `1d66e7d` added `mandir`, `applicationsdir`, `icondir` and
+`metainfodir` to the table **and to the schema in one hunk**. The three
+rows added afterwards took only the first half:
+
+| row | commit | schema touched |
+|---|---|---|
+| `datadir` | `2f2f584` | no |
+| `completiondir` | `b972c8f` | no |
+| `polkitdir` | `65f3d00` | no |
+
+That is what makes it an oversight to close rather than a divergence to
+raise: the decision is already in the tree, in the commit that set the
+pattern, and three later commits did half of it. Every consumer reads the
+keys uniformly -- `p.update({k: v for k, v in conf.install.items() if
+v})` -- so the fix is the schema line and nothing else.
+
+**`pkgconfigdir` stays out, and the case asserts it stays out.** It is
+relative to `libdir` rather than to the prefix, so it follows the library
+wherever a multiarch `LIBDIR` puts it, which is what every distribution
+wants without a second setting. `1d66e7d` left it out while honouring the
+pattern for four others, which is what distinguishes it from the three.
+
+### One name, two mechanisms
+
+The case asserts `DATADIR`, `COMPLETIONDIR` and `POLKITDIR` appear in
+both emitted files, and the first attempt looked for the lowercase
+spelling in `build.ninja` on the assumption that it would be a ninja
+variable. It is not: ninja has no way to set one on the command line, so
+its install recipe reads the environment -- `: "$${DATADIR:=$$PREFIX/...}"`
+-- in the same uppercase name make declares with `?=`. Different
+mechanisms, one name, so a packager learns it once. The case failing is
+how that was found.
+
+### The sixth instrument error, and the remedy was a simpler instrument
+
+The sweep that found this first reported **45** schema keys absent from
+the suite. Nine of the first ten checked by hand were present --
+`test-env` appears fifteen times, `ldflags` fifty-two. The detector asked
+whether a key appeared as `^\s*key\s*=` at the start of a line, and a
+fixture writes its TOML inside a Python string where nothing starts a
+line. Re-measured with a plain substring search: **19**, of which the
+four above are the finding.
+
+That is the sixth instrument error in two sessions, and section 452 drew
+the general rule after the fifth. This instance sharpens it: the fix was
+not a better regex but **the crudest possible detector plus reading the
+hits**. A pattern precise enough to avoid false positives is a pattern
+precise enough to manufacture an absence, and the absence is the
+dangerous direction.
+
+### Two sweeps that came back clean, and what they close
+
+**Nothing in the workspace carries a committed ejected build file.**
+Searched 23 git trees for the header fmake emits, naming the seven
+non-repositories skipped, with the pattern checked first against real
+`Makefile`, `build.ninja` and `fmake.mk` output so the zero is not an
+artifact of the pattern. One hit: fmake's own source, which contains the
+string because it writes it. So sections 456 to 461 changed what fmake
+emits and there is nobody holding a stale emitted file to tell -- which
+is section 452's question asked again and answered the same way.
+
+**Every one of the 31 command-line options is passed as an argument
+somewhere in the suite**, not merely named in a docstring. The detector
+was checked both ways: a fabricated option reports absent, three real
+ones report present. Section 442 made the opposite mistake -- a gap
+claimed from a grep that searched only the long spelling -- and this
+detector reads every spelling of each option and the `=` form.

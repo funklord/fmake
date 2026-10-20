@@ -16885,6 +16885,100 @@ def an_install_directory_cannot_climb_out_of_the_prefix(t):
 
 
 @case
+def every_install_directory_the_ejected_build_offers_is_a_config_key(t):
+	"""`[install] datadir` was a refusal while `make install DATADIR=` worked.
+
+    `INSTALL_DIRS` is the table; `[install]` is how the live build is told
+    to move a row, and the ejected builds declare the same rows as `?=`
+    variables. Commit `1d66e7d` set the pattern -- it added mandir,
+    applicationsdir, icondir and metainfodir to the table and to the
+    schema in one hunk -- and the three rows added after it took only the
+    first half. Measured before the fix:
+
+        [install] datadir = "share/app-data"
+        !!! unknown key 'datadir' (expected one of: applicationsdir, ...)
+
+    while `make install DATADIR=/usr/share/app-data` moved the file.
+    So a packager driving the ejected Makefile could place a program's
+    data, its completion and its polkit action where the distribution
+    wanted, and one using fmake directly could not, with no way to say so.
+
+    `pkgconfigdir` is the row deliberately absent and is asserted absent:
+    it is relative to `libdir` rather than to the prefix, so it follows
+    the library wherever a multiarch `LIBDIR` puts it, which is what
+    every distribution wants without a second setting.
+    """
+	t.write("profile.conf", "x\n")
+	t.write("app.bash", "# completion\n")
+	t.write("action.policy", '<?xml version="1.0"?>\n<policyconfig/>\n')
+	t.write("app.c", """
+/*! @file
+ *  @target     app
+ *  @install    yes
+ *  @data       profile.conf
+ *  @completion app.bash
+ *  @polkit     action.policy
+ */
+int main(void){ return 0; }
+""")
+	t.write("fmake.toml", """
+[install]
+datadir = "share/app-data"
+completiondir = "share/mycomp"
+polkitdir = "share/mypolkit"
+""")
+	check(t.fmake().returncode == 0, "build failed")
+
+	want = {"usr/bin/app",
+	        "usr/share/app-data/app/profile.conf",
+	        "usr/share/mycomp/app",
+	        "usr/share/mypolkit/action.policy"}
+	stage = os.path.join(t.dir, "by-fmake")
+	r = t.fmake("--install", "--destdir", stage, "--prefix", "/usr")
+	check(r.returncode == 0, f"--install failed: {r.stdout}{r.stderr}")
+	mine = _staged(stage)
+	check(set(mine) == want,
+	      f"the live install did not honour [install]:\n  got {sorted(mine)}"
+	      f"\n  want {sorted(want)}")
+
+	# The same three rows in both emitted builds, and the same files out
+	# the far side -- the live build and the two emitters are three
+	# readers of one table, which is what section 462 is about.
+	for backend, out, cmd in (("make", "Makefile", ["make", "-s", "install"]),
+	                          ("ninja", "build.ninja", ["ninja", "install"])):
+		if not shutil.which(backend):
+			continue
+		e = t.fmake("--eject", backend)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		# The same spelling in both, which is not obvious: make declares
+		# `DATADIR ?=' as a variable, and ninja -- which has no way to
+		# set one on the command line -- reads the environment inside its
+		# install recipe as `$${DATADIR:=...}'. Different mechanisms, one
+		# name, so a packager learns it once.
+		for row in ("DATADIR", "COMPLETIONDIR", "POLKITDIR"):
+			check(row in e.stdout,
+			      f"the ejected {backend} build declares no {row}: "
+			      f"{e.stdout[:400]}")
+		t.write(out, e.stdout)
+		theirs = os.path.join(t.dir, "by-" + backend)
+		env = {"DESTDIR": theirs, "PREFIX": "/usr"}
+		if backend == "make":
+			cmd = cmd + [f"DESTDIR={theirs}", "PREFIX=/usr"]
+			env = None
+		b = _run_in(t.dir, *cmd, env=env)
+		check(b.returncode == 0,
+		      f"the ejected {backend} install failed: {b.stdout}{b.stderr}")
+		_same_install(mine, _staged(theirs), backend)
+
+	# And the one row that is not a key, with the refusal naming it.
+	t.write("fmake.toml", '[install]\npkgconfigdir = "share/pc"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "pkgconfigdir" in out,
+	      f"pkgconfigdir should be refused, since it follows libdir: {out}")
+
+
+@case
 def uninstall_removes_exactly_what_install_placed(t):
 	"""The inverse, held to `clean`'s rule rather than to a pattern.
 

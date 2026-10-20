@@ -1511,10 +1511,25 @@ CONF_SCHEMA = {
 	# because situc's options are situ's to grow and fmake should not need a
 	# release of its own to keep up with them.
     "situ": {"flags": L},
+	# Every row of INSTALL_DIRS whose base is the prefix, because the
+	# ejected builds declare each of those as an overridable variable and
+	# `[install]' is the same fact for the live one. `1d66e7d' set that
+	# pattern -- it added mandir, applicationsdir, icondir and metainfodir
+	# to the table and to this list in one hunk -- and the three rows added
+	# later took only the first half, so `[install] datadir' was a refusal
+	# while `make install DATADIR=...' worked. Measured: all three files
+	# moved where the ejected build was told and the live one had no way to
+	# be told.
+	#
+	# `pkgconfigdir' is the one row deliberately not here. It is relative
+	# to `libdir' rather than to the prefix, so it follows wherever the
+	# library goes -- which is what every distribution wants and what makes
+	# a multiarch `LIBDIR' carry it without a second setting.
     "install": {
         "prefix": S, "bindir": S, "libdir": S, "includedir": S,
         "mandir": S, "applicationsdir": S, "icondir": S, "metainfodir": S,
-        "dbusdir": S, "udevdir": S,
+        "dbusdir": S, "udevdir": S, "datadir": S, "completiondir": S,
+        "polkitdir": S,
         "unitdir": S, "sysvinitdir": S, "openrcdir": S, "procddir": S,
     },
 	# A service: the files that start it under each init, and what a
