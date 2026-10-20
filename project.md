@@ -501,7 +501,8 @@ that had been green about nothing for five commits ·
 [448. The same exclusion, one consumer further on](#448-the-same-exclusion-one-consumer-further-on) ·
 [449. An excluded file's generator rule, and the loudest form of the shape](#449-an-excluded-files-generator-rule-and-the-loudest-form-of-the-shape) ·
 [450. uic, and the two rules the schema plan already had](#450-uic-and-the-two-rules-the-schema-plan-already-had) ·
-[451. Where this session stopped, fourth fold](#451-where-this-session-stopped-fourth-fold)
+[451. Where this session stopped, fourth fold](#451-where-this-session-stopped-fourth-fold) ·
+[452. The scope of 448 to 450, and the fifth instrument error](#452-the-scope-of-448-to-450-and-the-fifth-instrument-error)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34805,3 +34806,51 @@ session both came from outside it: a consumer tree's measurement
 (beerssh, 447) and a question put by a consumer tree (hull, 430). **The
 inbox is the highest-yield input this project has**, and it is worth
 reading before inventing a sweep.
+
+## 452. The scope of 448 to 450, and the fifth instrument error
+
+Sections 448, 449 and 450 each fixed a real fault with a reproduction.
+None of them changes a build in this workspace, and that is worth
+recording rather than leaving a reader to assume otherwise.
+
+Measured today, by applying the actual `[project] exclude` semantics
+-- `fnmatch` plus the prefix rule, the same two tests `exclude_by_pattern`
+makes -- and by reading each vendored checkout:
+
+    schemas under an excluded subtree     raidcfgd 0 of 19, fuzzypickles 0 of 38
+    @rule under an excluded subtree       none, in any of the nine trees with one
+    .ui inside a vendored checkout        none, in any of the nine checkouts
+    files including a ui_*.h there        none
+
+So all three are structural, with no instance here -- the same standing
+as section 416's `@headers` finding, and for the same reason: the shape
+is reachable, nobody has written it yet, and the fix is what makes the
+tree that eventually does write it behave.
+
+### The fifth instrument error, and it is the same one
+
+The first measurement said fuzzypickles had **190** schemas under its
+exclusions and raidcfgd **2**. Both were wrong, from a shell loop that
+truncated each pattern at its first slash:
+
+    p="/home/funk/src/$t/${pat%%/*}"
+
+so `fuzznet/monocypher` became `fuzznet` and the count was every schema
+under `fuzznet/`, which is not excluded at all. The careful version
+applies the two tests fmake applies and gets zero for both trees.
+
+That is five instrument errors in this session: three regexes, a reused
+fixture, and now a pattern mangled by a shell idiom. Four of the five
+inflated a finding; the fifth invented one. **The common remedy is not a
+better instrument but a second, differently-shaped measurement** -- here,
+reimplementing the predicate the tool itself uses rather than
+approximating it with string surgery. Section 443 said this of regexes
+and the lesson did not generalise on its own.
+
+### Why it was worth measuring at all
+
+Because the next thing after a fix is whether to tell anybody. A
+behaviour change in fuzzypickles' or raidcfgd's build would have been
+theirs to hear about through their inbox, with the per-tree row so they
+could check it. Zero means there is nothing to send, and the measurement
+is what makes that a statement rather than an assumption.
