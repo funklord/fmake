@@ -502,7 +502,10 @@ that had been green about nothing for five commits ·
 [449. An excluded file's generator rule, and the loudest form of the shape](#449-an-excluded-files-generator-rule-and-the-loudest-form-of-the-shape) ·
 [450. uic, and the two rules the schema plan already had](#450-uic-and-the-two-rules-the-schema-plan-already-had) ·
 [451. Where this session stopped, fourth fold](#451-where-this-session-stopped-fourth-fold) ·
-[452. The scope of 448 to 450, and the fifth instrument error](#452-the-scope-of-448-to-450-and-the-fifth-instrument-error)
+[452. The scope of 448 to 450, and the fifth instrument error](#452-the-scope-of-448-to-450-and-the-fifth-instrument-error) ·
+[453. The richest tree, built with the tool that changed](#453-the-richest-tree-built-with-the-tool-that-changed) ·
+[454. A target that announced an install it did not do](#454-a-target-that-announced-an-install-it-did-not-do) ·
+[455. The same lens, one line up: a redirect that creates its target first](#455-the-same-lens-one-line-up-a-redirect-that-creates-its-target-first)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -34854,3 +34857,252 @@ behaviour change in fuzzypickles' or raidcfgd's build would have been
 theirs to hear about through their inbox, with the per-tree row so they
 could check it. Zero means there is nothing to send, and the measurement
 is what makes that a statement rather than an assumption.
+
+## 453. The richest tree, built with the tool that changed
+
+Sections 447 to 450 touched moc's include path, the schema plan, the
+generator rule and uic -- four consumers of one exclusion test, and every
+one of them in the part of the tool that decides what a tree contains.
+Section 452 measured how many files the change moved and got zero in both
+trees it could reach. That is a measurement of the *scope*, not of the
+*result*, and a scope of zero is exactly the condition under which a
+regression would also be invisible to it.
+
+So the result was measured separately, against the tree that exercises all
+four at once. **fuzzypickles: Qt with moc and uic, 38 schemas, eight
+submodules, four of them vendored twice, and an `exclude` list of
+twenty-one patterns written to settle precisely the ambiguities these
+sections touch.** Reconstructed into scratch with `git archive HEAD` per
+submodule rather than built in their tree -- 2577 files, 56 MB -- and
+built with the current `fmake`:
+
+    * built fzp, fzpd, tab_strip_demo, fzp-gui, fp_qtty-spike, fzptui
+
+Exit 0, and the four the project ships are the four its README names. The
+two extra are its own as well -- `gui/prototype/tab_strip_demo.pro` and
+`qtty-spike/` -- which is worth checking rather than assuming, because
+section 450's whole subject is leaving a separate checkout's programs to
+it, and a program appearing in that list from `qtty/` would have been a
+fault in the change rather than a feature of the tree.
+
+The four nested submodules under `fuzznet` came out empty, `git archive`
+carrying no submodule contents and there being no `.git` in scratch to
+fetch from. That costs nothing here: all four are in the project's
+`exclude` for the reason its own comment gives -- fuzznet vendors
+monocypher, flog, qtty and quirc a second time -- so an empty directory
+and an excluded one reach the build identically.
+
+**What this does not prove is that the build is unchanged**, only that it
+still works. The object cache was cold and no previous output existed to
+compare against, so the claim is the weaker one: the richest tree in this
+workspace builds, with the exclusion test rewritten under it.
+
+## 454. A target that announced an install it did not do
+
+`claude-guidelines` signalled it and this tree had it: a `hooks` recipe
+whose install could fail while the target printed success and exited 0.
+The mechanism is make's, not the shell's -- the recipe is one continued
+line, because `dir` is computed inside it from `git rev-parse
+--git-common-dir`, so make sees only the last command's status, and the
+last command was `echo`.
+
+Reproduced in a scratch clone with the install's source file removed,
+before anything was changed:
+
+    install: cannot stat 'tool/hooks/commit-msg': No such file or directory
+    hooks: commit-msg installed from tool/hooks/ into .git/hooks/
+    exit=0
+
+No hook in `.git/hooks`. The fix is two characters: `&&` rather than `;`
+between the `mkdir`, the `install` and the message.
+
+### Why it earned a gate rather than a comment
+
+The same argument `install-check` already carries, which this tree wrote
+for itself: two statements of one fact kept in step by hand drift, and a
+semicolon is one keystroke away from returning. **`make hooks-check` runs
+the real target against a scratch repository, twice.**
+
+`GIT_DIR` is what makes that safe, and it was measured rather than
+assumed: `hooks` asks git where the hooks live, so `GIT_DIR=<dir>` on the
+sub-make redirects the entire target and this tree's own hook is never
+written. The sabotage is a regular file where `hooks/` must be a
+directory, so `mkdir -p` fails -- deterministic, needing no permission
+games, and failing a *non-final* command, which is the property under
+test. Then the file is removed and the same target must install an
+executable hook.
+
+**Five sabotages, four arms, each with its own message**, run against
+copies of the recipe in scratch:
+
+| sabotage | arm that caught it |
+|---|---|
+| the original `;` before the message | `hooks exited 0 with no hook installed` |
+| `;`, plus a failing test after the message | `hooks announced an install that failed` |
+| the install's source renamed away | `hooks failed on a repository it can write to` |
+| the message deleted, status 1 | the same arm |
+| installed `0644` instead of `0755` | `hooks installed no executable hook` |
+
+The first run of the check failed on its own first arm, which is the
+reason to run one. It was written `$(MAKE) hooks && { report failure; }`
+-- and when the sub-make correctly fails, the `&&` list's status *is* the
+sub-make's, so the shell exited 2 and make failed the check for the thing
+it was asserting. A positive control has to *expect* the failure, which
+means `if cmd; then report; fi` and not `cmd && report`: the `if` is what
+turns an expected non-zero into a pass.
+
+### What is not covered
+
+`make -n check` is not a dry run of this. make runs a recipe line
+containing `$(MAKE)` even under `-n`, the sub-make inherits the flag,
+installs nothing and exits 0 -- which is precisely the arm that reads as a
+failure, so the verdict is wrong. Nothing is written, because every other
+line is only printed. It is named at the target rather than worked around,
+which is what ossacli did with the same hazard; their instance destroyed a
+log file and this one only mis-reports.
+
+The other fifteen trees were measured by `claude-guidelines`, not here,
+and this section does not restate their count -- the signal carries it,
+and a number copied into nineteen project files is the one that goes stale
+nineteen times.
+
+## 455. The same lens, one line up: a redirect that creates its target first
+
+Section 454's defect was a success message that was not conditional on the
+work. Asking the rest of this Makefile the same question -- **where does a
+step report success it did not earn** -- found a second instance two
+targets above it, and a worse one, because it needs no message at all.
+
+    fmake.1: fmake
+    	./fmake --man > $@
+
+The shell opens `> $@` before the program runs, so the target exists the
+moment the recipe starts. Make deletes a target whose recipe failed only
+when `.DELETE_ON_ERROR:` is declared, and nothing declared it. Measured,
+with the script left unexecutable so the generation fails and its mtime
+does not move:
+
+    ./fmake --man > fmake.1
+    /bin/sh: 1: ./fmake: Permission denied
+    make: *** [Makefile:85: fmake.1] Error 126
+    $ ls -l fmake.1
+    0 fmake.1
+    $ make                      # the script is runnable again
+    ./fmake --completion bash > fmake.bash
+    $ echo $?
+    0
+
+**The second `make` exits 0 having built only the completion**, because
+the zero-byte manual page is newer than the script that writes it. From
+there `make install` ships the empty manual page, and nothing in this tree
+would have said so: `install-check` tested only that the *program* was
+non-empty.
+
+**`make deb` does not package one, and saying it did was a claim about a
+neighbouring step rather than a measurement of it.** The first version of
+this section said it did. `dpkg-buildpackage` runs `debian/rules clean`
+before anything else, `dh_auto_clean` runs this Makefile's `clean`, and
+`clean` names `fmake.1` and `fmake.bash` outright -- so the stale artifact
+is removed and regenerated, and cannot reach a package. Measured by
+grepping the build log for the clean step after the sabotage passed
+unexpectedly:
+
+     debian/rules clean
+       dh_auto_clean
+    rm -f fmake.1 fmake.bash debian/files ...
+
+The sabotage passing is what exposed the claim. A package build is a
+clean-room build, which is the whole point of one, and this defect needs a
+*stale* tree to show itself -- so the exposure is a hand `make install`
+and a developer tree, not the packaging path.
+
+Two changes, because they answer different questions.
+
+**`.DELETE_ON_ERROR:`** removes the mechanism. One declaration rather than
+a `mv` dance per recipe, and it covers the next rule somebody writes.
+Re-measured with it in place: `make: *** Deleting file 'fmake.1'`, and the
+next `make` rebuilds it.
+
+**`install-check` now requires all three installed files to be
+non-empty**, which is the artifact check and catches an empty manual page
+however it arose rather than only by this route. It gained the three
+paths from `BINDIR`, `MANDIR` and `COMPDIR` under a target-specific
+`DESTDIR`, so they are not spelled a second time in the check that exists
+to catch two spellings drifting apart.
+
+Four sabotages, in a scratch `git archive` copy:
+
+| sabotage | result |
+|---|---|
+| generation fails, before the fix | zero-byte `fmake.1`, next `make` exits 0 |
+| generation fails, after the fix | `Deleting file`, next `make` rebuilds it |
+| `fmake.1` truncated by hand | `install-check: install put nothing at .../fmake.1` |
+| `uninstall` no longer names `fmake.1` | `install-check: uninstall left files behind` |
+
+The fourth is a control rather than a new arm: the check was widened and
+refactored, so the thing it was originally written for had to be shown
+still working.
+
+### What the package build gained, stated as what it actually catches
+
+`override_dh_auto_test` now runs `install-check` beside `version-check`.
+It needs no compiler, which is the reason the suite is not there, and the
+correct justification is **not** the defect above -- the clean step
+already covers that. What it catches is a generation that *succeeds from
+clean and emits nothing*: measured by making the recipe pipe its output
+through `head -0`, which survives the clean because it is the recipe
+rather than the artifact.
+
+    /usr/bin/make version-check install-check
+    install-check: install put nothing at .../man1/fmake.1
+    dpkg-buildpackage: error: debian/rules binary subprocess returned
+        exit status 2
+
+No package is produced. `hooks-check` is deliberately not there: it needs
+git, which is developer tooling the package does not carry and must not
+build-depend on.
+
+### One redirect it does not cover
+
+`install` writes the program with `sed '1s|^#!.*|#!$(PYTHON)|' fmake >
+$(BINDIR)/fmake`, and `.DELETE_ON_ERROR:` cannot help there: the target is
+phony, so there is no file for make to delete. A `sed` that fails
+part-way -- a full disk is the realistic way -- leaves a truncated program
+behind, and make stops before the `chmod 755` that would make it
+runnable. `install-check`'s `test -s` sees a non-empty file and passes,
+because truncated is not empty.
+
+Left as it is rather than fixed: writing to a temporary and moving it on
+success is the remedy, and it is three recipes' worth of complication for
+a failure nobody here has had. Recorded because the next person to read
+`.DELETE_ON_ERROR:` will reasonably assume it covers every redirect in
+the file, and it covers two of three.
+
+### Where the discipline already was
+
+fmake the program checks every generator against its artifact and has for
+a long time -- `rcc produced nothing from {src}`, `uic produced nothing
+from {src}`, `situc exited 0 on {src} without writing {header}`, `built
+{name!r} but found no artifact`, and moc's emptiness-is-the-signal branch,
+which distinguishes a tool that found nothing to do from one that failed.
+Every one of those is this section's rule, written by this project about
+somebody else's tool.
+
+It holds on the reuse side too, which is the same question asked of a
+cached answer rather than a fresh one. Every cache that can say "up to
+date" re-reads the artifact before it does: moc and uic require
+`os.path.isfile(abs_out)` beside the key, the schema store requires every
+remembered output to still be a file, the object cache compares the
+object's size through `_same_file`, and the link store does the same with
+the artifact's size -- including a branch for the bare string an older
+fmake wrote there, which reads as "no size recorded" rather than as a
+match. Four stores, four disk checks; this was read rather than assumed,
+because a cache that trusts its own key is the quietest way to report work
+that is not there.
+
+**The Makefile beside it had none of it.** That is the finding worth more
+than either fix: a tree can hold a rule to a standard in the code it
+ships and not in the three lines that build it, because the code is what
+gets read for faults and the build is what gets read when it breaks. Both
+of this session's Makefile defects were invisible from inside `fmake`, and
+both were two minutes' work once the question was asked of the right file.

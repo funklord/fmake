@@ -8,13 +8,19 @@
 #                         produced by fmake itself so neither can go stale
 #   make test          -- ./selftest: build real trees and check what fmake
 #                         decided about them
-#   make check         -- version-check, style and test; the one to run
-#                         before a commit
+#   make check         -- the three checks, the style gate and the suite;
+#                         the one to run before a commit
 #   make style         -- the shared source gate, plus project.md held to the
 #                         tree it describes
 #   make version-check -- VERSION, the literal in the script and
 #                         debian/changelog all state one number; hold them to
 #                         each other
+#   make install-check -- install and uninstall name the same three files,
+#                         and each arrives with contents: install into a
+#                         scratch DESTDIR and fail if uninstall leaves
+#                         anything
+#   make hooks-check   -- `hooks' installs a hook, and says so only when it
+#                         did: run it against a scratch repository both ways
 #   make install       -- install the script, its manual page and its
 #                         completion under PREFIX
 #   make uninstall     -- remove what install put there
@@ -75,7 +81,24 @@ BINDIR  = $(DESTDIR)$(PREFIX)/bin
 COMPDIR = $(DESTDIR)$(PREFIX)/share/bash-completion/completions
 MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 
-.PHONY: all install uninstall check version-check install-check deb lint clean test veryclean distclean style style-source style-docs hooks help
+# A recipe that redirects into its own target has already created the file
+# by the time it fails: the shell opens `> $@' before the program runs. Both
+# generated files are written that way, and without this line make leaves
+# the truncated output in place -- which is NEWER than the script that
+# makes it, so the next `make' reports nothing to do.
+#
+# Measured, with the script left unexecutable so the generation fails and
+# its mtime does not move: `Error 126', a zero-byte `fmake.1', and then a
+# second `make' that built only the completion and exited 0. `make install'
+# would have shipped the empty manual page. Not `make deb', which cleans
+# first -- measured too, and the reason install-check runs in the package
+# build is a different one, stated in debian/rules.
+#
+# One declaration rather than a `mv' dance in each recipe, because it also
+# covers the next rule somebody writes.
+.DELETE_ON_ERROR:
+
+.PHONY: all install uninstall check version-check install-check hooks-check deb lint clean test veryclean distclean style style-source style-docs hooks help
 
 all: fmake.1 fmake.bash
 
@@ -114,23 +137,85 @@ uninstall:
 # check' rather than a file that outlives the package. Parsing the recipes
 # would be a second thing to be wrong.
 #
+# All three installed files are required to be non-empty, not just the
+# program. A zero-byte manual page is what a failed `./fmake --man > $@'
+# used to leave behind -- see .DELETE_ON_ERROR above, which stops it being
+# produced; this is the artifact check that catches it however it arose.
+#
 # The directory is this tree's own `build/' so that `clean' already owns
 # it, and it is removed here on both paths rather than left for a reader.
+# It is set as DESTDIR for this target only, so BINDIR, MANDIR and COMPDIR
+# name the scratch tree and the three paths are not spelled a second time
+# in the check that exists to catch two spellings drifting apart. A
+# target-specific variable does not reach a sub-make by itself, so each is
+# passed it.
+install-check: DESTDIR = build/install-check
 install-check:
-	@rm -rf build/install-check
-	@$(MAKE) --no-print-directory install DESTDIR=build/install-check >/dev/null
-	@test -s build/install-check$(PREFIX)/bin/fmake || { \
-		echo "install-check: install put no program under DESTDIR" >&2; \
-		rm -rf build/install-check; exit 1; }
-	@$(MAKE) --no-print-directory uninstall DESTDIR=build/install-check >/dev/null
-	@left=$$(find build/install-check -type f 2>/dev/null); \
-	 rm -rf build/install-check; \
+	@rm -rf $(DESTDIR)
+	@$(MAKE) --no-print-directory install DESTDIR=$(DESTDIR) >/dev/null
+	@for f in $(BINDIR)/fmake $(MANDIR)/fmake.1 $(COMPDIR)/fmake; do \
+		test -s "$$f" || { \
+			echo "install-check: install put nothing at $$f" >&2; \
+			rm -rf $(DESTDIR); exit 1; }; \
+	done
+	@$(MAKE) --no-print-directory uninstall DESTDIR=$(DESTDIR) >/dev/null
+	@left=$$(find $(DESTDIR) -type f 2>/dev/null); \
+	 rm -rf $(DESTDIR); \
 	 test -z "$$left" || { \
 		echo "install-check: uninstall left files behind:" >&2; \
 		printf '  %s\n' $$left >&2; exit 1; }
-	@echo "install-check: install and uninstall name the same files"
+	@echo "install-check: three files with contents, and uninstall names them"
 
-check: version-check install-check style test
+check: version-check install-check hooks-check style test
+
+# `hooks' is the one target whose whole purpose is that a hook ends up
+# installed, and until this check nothing asked whether its success line
+# meant anything. The recipe is one continued shell -- it has to be, since
+# `dir' is computed in it -- so make sees only the last command's status,
+# and a semicolon before the echo turned a failed install into a printed
+# success and exit 0. Measured before the fix: `install: cannot stat' on
+# stderr, "commit-msg installed" on stdout, status 0, no hook.
+#
+# Behavioural, like install-check, and for the same reason: reading the
+# recipe for a semicolon would be a second thing to be wrong. GIT_DIR is
+# what makes it safe -- `hooks' asks git where the hooks live, so a scratch
+# repository redirects the whole target and this tree's own hook is never
+# touched. Measured rather than assumed: `GIT_DIR=<dir> git rev-parse
+# --git-common-dir' prints <dir>.
+#
+# The sabotage is a regular file where `hooks/' must be a directory, so
+# `mkdir -p' fails. That is deterministic and needs no permission games,
+# and it fails a non-final command, which is the property under test.
+#
+# `make -n check' is not a dry run of this target. make runs a recipe line
+# containing $(MAKE) even under -n, the sub-make inherits the flag and so
+# compiles nothing and exits 0 -- which is the arm this check reads as a
+# failure. Nothing is written, because every other line is only printed;
+# the verdict is wrong. Named here rather than worked around, as ossacli
+# did with the same hazard.
+hooks-check:
+	@rm -rf build/hooks-check
+	@git init -q build/hooks-check
+	@rm -rf build/hooks-check/.git/hooks && : > build/hooks-check/.git/hooks
+	@if out=$$(GIT_DIR=build/hooks-check/.git $(MAKE) \
+		--no-print-directory hooks 2>/dev/null); then \
+		echo "hooks-check: hooks exited 0 with no hook installed" >&2; \
+		rm -rf build/hooks-check; exit 1; \
+	 elif [ -n "$$out" ]; then \
+		echo "hooks-check: hooks announced an install that failed:" >&2; \
+		printf '  %s\n' "$$out" >&2; \
+		rm -rf build/hooks-check; exit 1; \
+	 fi
+	@rm -f build/hooks-check/.git/hooks
+	@GIT_DIR=build/hooks-check/.git $(MAKE) --no-print-directory hooks \
+		>/dev/null || { \
+		echo "hooks-check: hooks failed on a repository it can write to" >&2; \
+		rm -rf build/hooks-check; exit 1; }
+	@test -x build/hooks-check/.git/hooks/commit-msg || { \
+		echo "hooks-check: hooks installed no executable hook" >&2; \
+		rm -rf build/hooks-check; exit 1; }
+	@rm -rf build/hooks-check
+	@echo "hooks-check: hooks installs, and fails when it cannot"
 
 # The version is written in two files and nothing else compares them. This
 # is what debian/rules runs in place of the suite: it needs no compiler, so
@@ -245,6 +330,15 @@ distclean: veryclean
 #
 # git's absence is reported as its own thing rather than as "not a git
 # repository", which would be a message naming a cause nothing tested.
+#
+# **The `&&` before the message is load-bearing.** The recipe is one
+# continued shell line, because `dir` is computed in it, so make sees only
+# the last command's status -- and with a semicolon there, an install that
+# fails still reaches an echo that succeeds. Measured in a scratch clone
+# with the source file removed: `install: cannot stat` on stderr, "hooks:
+# commit-msg installed" on stdout, exit 0, and no hook in `.git/hooks`. A
+# tree could be told to run this, run it, read the success line, and still
+# have no hook -- which is the one failure this target exists to prevent.
 hooks:
 	@if ! command -v git >/dev/null 2>&1; then \
 		echo "hooks: git is not installed, so there is nowhere to install to." >&2; \
@@ -255,8 +349,8 @@ hooks:
 		echo "hooks: not a git repository, so there is nowhere to install to." >&2; \
 		exit 1; \
 	fi; \
-	mkdir -p "$$dir/hooks"; \
-	install -m 0755 tool/hooks/commit-msg "$$dir/hooks/commit-msg"; \
+	mkdir -p "$$dir/hooks" && \
+	install -m 0755 tool/hooks/commit-msg "$$dir/hooks/commit-msg" && \
 	echo "hooks: commit-msg installed from tool/hooks/ into $$dir/hooks/"
 
 # The TARGETS block in the header is the one statement of what the targets

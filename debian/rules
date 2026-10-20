@@ -12,8 +12,22 @@ override_dh_auto_build:
 # a package build must not get wrong: fmake and debian/changelog each name
 # a version, both are hand-edited, and a mismatch ships a package whose
 # reported version disagrees with the one that installed it.
+#
+# install-check needs no compiler either. What it catches here is a
+# generation that succeeds from clean and emits nothing: the manual page
+# and the completion are written by fmake itself, and an empty one is not
+# an error to anything else in this build. Measured with the recipe piping
+# through `head -0': install-check fails and no package is produced.
+#
+# Not the stale-artifact case that .DELETE_ON_ERROR fixes -- dpkg-build-
+# package runs `debian/rules clean' first and `clean' names both generated
+# files, so a package build cannot inherit one. It installs into a scratch
+# DESTDIR of its own and removes it on both paths.
+#
+# Not hooks-check, which needs git -- developer tooling the package does
+# not carry and must not build-depend on.
 override_dh_auto_test:
-	$(MAKE) version-check
+	$(MAKE) version-check install-check
 
 # The Makefile defaults to /usr/local, which is right for `make install` by
 # hand and forbidden in a package.
