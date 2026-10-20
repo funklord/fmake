@@ -33100,6 +33100,83 @@ pub extern "C" fn only_thing() -> i32 { 1 }
 
 
 @case
+def an_ejected_archive_does_not_nest_the_crate_it_leaves_out(t):
+	"""53 MB where the live build writes 1372 bytes.
+
+	`link_cmd`'s static branch leaves a vendored archive out of its `ar`
+	call rather than nesting it, and says why: `ar` will happily do it and
+	no linker understands the result. The ejected Makefile assembled the
+	archive with `$(AR) rcs $@ $^`, and `$^` is every prerequisite -- so
+	the crate's own staticlib, which is a prerequisite because the build
+	has to produce it, became a member.
+
+	    live     ar t libthing.a -> thing.c.o                1372 bytes
+	    ejected  ar t libthing.a -> thing.c.o, lib.rs.a   53187376 bytes
+
+	The member is inert: GNU ld skips it without a word and a consumer
+	linking the crate's archive separately still runs. So nothing fails
+	and a library fifty thousand times larger than itself is what gets
+	installed and packaged.
+
+	`--eject ninja` was right already, naming its inputs rather than
+	taking them all -- which is the `$^` hazard in `makefile-hazards`,
+	and the remedy is the one recorded there: keep the prerequisite, drop
+	it from the command line.
+	"""
+	env = _rust(t)
+	t.write("lib.rs", """
+#[no_mangle]
+pub extern "C" fn from_rust() -> i32 { 7 }
+""")
+	t.write("thing.c", """
+/*! @file
+ *  @target thing
+ *  @kind   static
+ */
+int from_rust(void);
+int thing_value(void){ return from_rust() + 1; }
+""")
+
+	def members(where):
+		r = subprocess.run(["ar", "t", os.path.join(t.dir, where)],
+		                   capture_output=True, text=True)
+		check(r.returncode == 0, f"ar could not read {where}: {r.stderr}")
+		return r.stdout.split()
+
+	r = t.fmake(env=env)
+	check(r.returncode == 0, f"the tree did not build: {r.stdout}{r.stderr}")
+	live = members("libthing.a")
+	check("thing.c.o" in live,
+	      f"the control is wrong: the live archive has no object in it, so "
+	      f"there is nothing for a nested member to be beside: {live}")
+	check(not [m for m in live if m.endswith(".a")],
+	      f"the live build nested an archive after all: {live}")
+
+	for backend, tool, out in (("make", ["make", "-C", t.dir], "Makefile"),
+	                           ("ninja", ["ninja", "-C", t.dir],
+	                            "build.ninja")):
+		if not shutil.which(backend):
+			continue
+		e = t.fmake("--eject", backend, env=env)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write(out, e.stdout)
+		for gone in (".fmake", "build", "libthing.a"):
+			path = os.path.join(t.dir, gone)
+			shutil.rmtree(path, ignore_errors=True)
+			if os.path.exists(path):
+				os.remove(path)
+		b = subprocess.run(tool, capture_output=True, text=True)
+		check(b.returncode == 0,
+		      f"the ejected {backend} build failed: {b.stdout}{b.stderr}")
+		got = members("libthing.a")
+		check("thing.c.o" in got,
+		      f"the ejected {backend} archive has no object in it: {got}")
+		check(not [m for m in got if m.endswith(".a")],
+		      f"the ejected {backend} build nested the crate's archive "
+		      f"inside the library: {got}")
+
+
+@case
 def a_second_program_from_one_crate_root_is_the_rename_it_reads_as(t):
 	"""`[target.*] root' naming a source that already roots a program is
 	documented as a second program from that file, and `defines' is what

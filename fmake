@@ -17466,7 +17466,24 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\tcp {crate_arcs[0]} $@")
 		elif t.kind == "static":
 			a("\trm -f $@")
-			a("\t$(AR) rcs $@ $^")
+			# The objects by name, not `$^'. A vendored or crate archive is
+			# a PREREQUISITE -- the build has to produce it, and the
+			# consumer links it separately -- but it must not be an INPUT,
+			# because `ar' nests it happily and no linker searches a
+			# nested member. `link_cmd' has left archives out of its own
+			# `ar' call for exactly this reason since it was written; this
+			# recipe took every prerequisite instead, and in a `$^' rule
+			# the prerequisite list and the command line are the same list
+			# with nothing in the syntax to say so.
+			#
+			# Measured on a C static library whose one undefined symbol
+			# comes from a Rust crate: `ar t' listed `lib.rs.a' beside the
+			# object and the archive was 53,187,376 bytes where the live
+			# build wrote 1,372. Nothing failed -- ld skips the member
+			# without a word -- so what shipped was a library fifty
+			# thousand times larger than itself. `--eject ninja' names its
+			# inputs and was right already.
+			a(f"\t$(AR) rcs $@ {objs_txt}")
 		elif t.kind == "shared":
 			vs = (f" -Wl,--version-script,{t.version_script}"
 			      if t.version_script else "")

@@ -508,7 +508,9 @@ that had been green about nothing for five commits ·
 [455. The same lens, one line up: a redirect that creates its target first](#455-the-same-lens-one-line-up-a-redirect-that-creates-its-target-first) ·
 [456. The third instance was in what fmake writes, not in what builds it](#456-the-third-instance-was-in-what-fmake-writes-not-in-what-builds-it) ·
 [457. A baked band the artifact did not mention](#457-a-baked-band-the-artifact-did-not-mention) ·
-[458. A switch the ejected build offered and could not keep](#458-a-switch-the-ejected-build-offered-and-could-not-keep)
+[458. A switch the ejected build offered and could not keep](#458-a-switch-the-ejected-build-offered-and-could-not-keep) ·
+[459. 53 MB of archive, from one dollar-caret](#459-53-mb-of-archive-from-one-dollar-caret) ·
+[460. Two build paths, one tree, two programs -- and not mine to settle](#460-two-build-paths-one-tree-two-programs----and-not-mine-to-settle)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -35337,3 +35339,111 @@ The new case asserts the behaviour instead -- the sanitized run reports
 the overflow the plain one does not, and then the plain rebuild stops
 reporting it, which is the direction the per-flavour directory would have
 left broken.
+
+## 459. 53 MB of archive, from one dollar-caret
+
+Found by reading `makefile-hazards` before editing the emitted Makefile,
+which is what that skill asks for and is the only reason this was looked
+at. Its second entry: **adding a prerequisite to a rule that uses `$^`
+puts it on the command line**, because in such a rule the prerequisite
+list and the command line are the same list and nothing in the syntax
+says so.
+
+`link_cmd`'s static branch has left archives out of its own `ar` call
+since it was written, and says why in as many words -- "a vendored
+archive is left out rather than nested inside this one, which `ar` would
+happily do and no linker would then understand". The emitted recipe was
+
+    libthing.a: $(THING_OBJS) $(BUILD_DIR)/lib.rs.a
+            rm -f $@
+            $(AR) rcs $@ $^
+
+and the crate's staticlib is a prerequisite because the build has to
+produce it. Measured on a C static library whose one undefined symbol
+comes from a Rust crate:
+
+    live      ar t libthing.a -> thing.c.o                 1,372 bytes
+    ejected   ar t libthing.a -> thing.c.o, lib.rs.a   53,187,376 bytes
+
+**Nothing fails.** GNU ld skips the nested member without a word, and a
+consumer linking `build/lib.rs.a` separately builds and prints the right
+answer -- measured, 8. What ships is a static library fifty thousand
+times larger than itself, installed by `make install` and packaged by
+whatever reads it.
+
+### ninja was right, for the third time in three sections
+
+    build libthing.a: archive $build_dir/thing.c.o
+
+1,372 bytes, matching the live build exactly. The ninja emitter names its
+inputs; the make emitter took all of them. Sections 456, 457 and 458 each
+ended the same way, and the causes are different every time -- ninja's log
+knows what it ran, ninja has no conditionals to lose, ninja names what it
+passes. What they share is which emitter was asked less often.
+
+### The fix keeps the prerequisite
+
+`$(AR) rcs $@ $(THING_OBJS)` -- the same list `link_cmd` builds, which is
+`closures[t].link` minus the archives, plus the prebuilt objects. The
+crate archive stays a prerequisite, because the ordering it expresses is
+real; it stops being an input. That is `makefile-hazards`' own remedy,
+and the reason the skill says to prefer naming inputs even where no
+hazardous prerequisite exists yet.
+
+### Why the version-script half of the same shape is not a defect
+
+The rule's prerequisites can also include `t.version_script`, which would
+have reached `ar` the same way. It cannot happen: a `@version_script` on
+anything but a shared target is refused before the build starts, and a
+`library` target's static twin has its script cleared outright. Read
+rather than assumed, because the two look identical from the recipe.
+
+## 460. Two build paths, one tree, two programs -- and not mine to settle
+
+**This one is measured and deliberately not fixed.** It is recorded
+because the measurement is cheap to lose and the decision is the
+holder's.
+
+A submodule checked out at something other than the commit its gitlink
+names is what `git submodule status` flags with `+`. fmake parses that
+flag and acts on it: section 188's table has the row, *drifted off the
+gitlink -- reset to the gitlink; drift gone*. The emitted builds key
+their fetch on the submodule's own `.git`, which exists once it has been
+fetched, so they never look again -- stated in the emitter's own comment
+("fires when it is absent and never otherwise") and asserted by
+`an_ejected_build_fetches_the_submodule_too`, whose last check is that a
+settled tree starts no git process at all.
+
+Both halves are deliberate. Together they make one tree build two
+programs. Measured on a two-repository fixture whose submodule provides
+`lib_answer()`, drifted to return 99 where the pinned commit returns 42:
+
+    live fmake        resets the drift, prints 42, status flag clears
+    ejected make      compiles the drifted file, prints 99, flag stays
+
+No message either way. The ejected build is the one a project commits
+and the one a second person runs, which is the direction that matters.
+
+### The option, the cost, and whose it is
+
+make cannot see a gitlink, so the only mechanism is to ask git every
+time: `<sub>/.git: FORCE` in the Makefile, and for ninja an `| always`
+order-only input with `restat = 1`, since that edge's outputs include
+the sources inside the submodule and ninja would otherwise recompile
+them on every build.
+
+The cost is one git process per declared submodule per invocation,
+including an invocation with nothing to do. Measured on the fixture, a
+no-op `git submodule update --init --recursive`: **0.25 to 0.34 s and
+about 4.7 MB**, three runs. fuzzypickles declares eight submodules and
+four nested ones, so that is of the order of three seconds added to
+every `make` in the tree that would feel it most -- against a build
+that silently compiles code the tree does not pin.
+
+It is also a change to the build files of other people's trees, and it
+would retire a check that currently asserts the opposite. **So it is the
+copyright holder's decision, not this session's**, and it is written
+here rather than acted on. The safety question is already answered:
+`git submodule update` refuses on a checkout that is dirty *and*
+drifted, which is git's guarantee rather than fmake's, and section 188
+measured that row too.
