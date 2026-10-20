@@ -520,7 +520,8 @@ that had been green about nothing for five commits ·
 [467. The word the error did not name](#467-the-word-the-error-did-not-name) ·
 [468. The ejected builds agree, and one of them is more reproducible](#468-the-ejected-builds-agree-and-one-of-them-is-more-reproducible) ·
 [469. All three emitted forms, five trees, and two faults in the instrument](#469-all-three-emitted-forms-five-trees-and-two-faults-in-the-instrument) ·
-[470. A lintian error nobody could reach](#470-a-lintian-error-nobody-could-reach)
+[470. A lintian error nobody could reach](#470-a-lintian-error-nobody-could-reach) ·
+[471. Everything fmake emits, against a real tree](#471-everything-fmake-emits-against-a-real-tree)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36539,3 +36540,35 @@ not produce the error. The new case is the one-target shape -- no
 per-target description, both halves from one string, which is what every
 real tree writes -- and the heavy case's docstring now says what it
 cannot reach and where that half is guarded.
+
+## 471. Everything fmake emits, against a real tree
+
+fmake emits five things. Until this session none of them had been taken
+from a real tree and used -- the suite exercises all five on fixtures,
+and fmake's own `make deb` uses hand-written packaging. The five now
+stand like this:
+
+| emitted | real-tree evidence |
+|---|---|
+| `--eject make` | 14 programs, 5 trees, symbol-identical to fmake's own |
+| `--eject ninja` | the same 14, the same way |
+| `--eject make-fragment` | the same 14, through the parent its header describes |
+| `--eject deb` | a package built from ossacli and lintian-clean |
+| `--eject ebuild`, `--eject apk` | emitted from ossacli, `bash -n` accepts both |
+
+The ebuild and the APKBUILD are shell, and `bash -n` is the arbiter the
+suite already uses on its fixtures. What a real tree adds is real
+strings: that run's `[package] description` carries an apostrophe --
+*"not this project's own words"* -- which is the input that breaks a
+single-quoted emitter. Both files parse, `license="GPL-3.0-or-later"` is
+identified from the `LICENSE` file rather than stated anywhere, and
+`DESCRIPTION` is the synopsis, which is all either format has room for
+-- so section 470's duplication could not arise there.
+
+**The one finding came from the one emitter with an external checker.**
+`bash -n` says a file parses; lintian says a package is wrong. Four of
+the five emitters can only be checked against fmake's own idea of what
+they should contain, and the fifth has a program whose whole job is to
+disagree -- which is where the error was. That is `evidence.md`'s
+corroboration rule from the useful end: of five artifacts, the one with
+an independent witness is the one that produced a defect.
