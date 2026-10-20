@@ -517,7 +517,8 @@ that had been green about nothing for five commits ·
 [464. Where this session had got to, fifth fold](#464-where-this-session-had-got-to-fifth-fold) ·
 [465. The tree nobody had run this over](#465-the-tree-nobody-had-run-this-over) ·
 [466. Nine trees, after eleven commits](#466-nine-trees-after-eleven-commits) ·
-[467. The word the error did not name](#467-the-word-the-error-did-not-name)
+[467. The word the error did not name](#467-the-word-the-error-did-not-name) ·
+[468. The ejected builds agree, and one of them is more reproducible](#468-the-ejected-builds-agree-and-one-of-them-is-more-reproducible)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36295,3 +36296,86 @@ claimed:
 Twice here it had been seen to *pass*, which is not the same thing and
 looks identical in a green run -- and the arm that was meant to guard a
 substring mistake would have gone on passing through the next one.
+
+## 468. The ejected builds agree, and one of them is more reproducible
+
+Five commits in this session changed what `--eject` writes --
+`.DELETE_ON_ERROR:`, the ninja header's baked bands, the flavour stamp,
+the archive's inputs, the install rows -- and the suite checks all of
+that on fixtures. Section 466 built nine real trees and section 465's
+`an_ejected_build_matches_symbol_for_symbol` compares one. **Neither
+builds a real tree from its own ejected Makefile**, which is the thing
+those five commits actually changed.
+
+So: eject a Makefile from each tree, remove `.fmake/` and the binaries,
+build from the Makefile alone, and compare the symbol set of every
+program.
+
+| tree | programs | result |
+|---|---|---|
+| qtty | 8 | all symbol-identical |
+| ossacli | 3 | all symbol-identical |
+| hembygd | 1 | identical |
+| bbq-predictor | 1 | identical |
+| openmlx4 | 1 | identical |
+
+Fourteen programs across five trees, moc output and Qt libraries
+included. **openmlx4's eject exits 1 and that is correct**: an ejected
+file describes the project rather than the invocation, so it reaches
+`test/diff_layouts.c`, which wants `tools_layouts/tools_open_layouts.h`
+from somewhere no copy of that tree has. fmake names the file, the
+header and the remedy, emits a complete Makefile for everything else,
+and that Makefile builds.
+
+### A byte comparison of the objects, and what it found
+
+Symbol names are a weak comparison -- a dropped `-D` can change
+behaviour without changing a name -- so the objects were compared
+directly. Of 22 shared objects in qtty, 15 are byte-identical and 7
+differ. The seven all contain the tree's absolute path and their
+counterparts do not:
+
+    $ strings style-probe | grep -c /scratchpad/ej-qtt
+    6            # built by fmake
+    0            # built by its own ejected Makefile
+
+**fmake compiles with an absolute source path; the ejected Makefile
+runs from the tree root with a relative one.** So any object using
+`__FILE__` -- every `Q_ASSERT`, every `qWarning`, every `assert` --
+carries the directory the build happened in, and the binary carries the
+builder's directory layout. Two machines building the same tree in
+different places produce different binaries.
+
+**fmake already fixed this exact hazard for moc**, and its comment
+there is the argument: moc is run "from the tree root with relative
+paths on both sides, so absolute arguments here would bake this
+machine's directory layout into a generated source and defeat
+`--eject`". The same reasoning, one consumer wired -- which is this
+session's other lens, arriving in the compile step.
+
+### Prior art, two options, and whose
+
+Both ends of the workspace already handle it. **`dpkg-buildflags` sets
+`-ffile-prefix-map=<tree>=.` by default**, so every `.deb` any of these
+projects builds is already mapped; and **raidcfgd's Makefile sets it by
+hand**, the only private tree that does. A direct `fmake` build is the
+one path that does not.
+
+- **Compile with `cwd=root` and a relative source path**, as moc does.
+  No compiler feature needed. The cost is that several sites assume an
+  absolute path: fmake reads the depfiles it asks for, section 467's new
+  advice opens the file named in a compiler message, and
+  `compile_commands.json` must carry an absolute `file` -- which a case
+  asserts, along with `e["file"] in e["arguments"]`, so the database
+  and the command line would have to stop being the same spelling.
+- **Add `-ffile-prefix-map=<root>=.` to the compile flags.** One flag,
+  no restructuring, and the same thing dpkg and raidcfgd already do. The
+  cost is that it needs gcc 8 or clang 10 and so needs a probe, and that
+  it changes the bytes every tree's binaries are built from -- a change
+  to fmake's default flags.
+
+The second is a default-flag decision and the first is a structural one.
+**Both are the copyright holder's**, so this is recorded with the
+measurement rather than taken: six copies of a build directory in one
+binary, none in the same tree's ejected build, and two ways to make the
+first match the second.
