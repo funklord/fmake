@@ -36219,6 +36219,25 @@ A library silently not linked because an include sat behind an untaken
 `#if` is exactly a fact lost between what the source says and what the
 build does, and that one is said rather than discovered later.
 
+### Re-measured at the end of the session
+
+Fourteen commits landed after the table above, including four that
+changed what fmake emits and two that changed what it refuses. The
+whole set was rebuilt at `3d195a5`:
+
+    fuzzypickles   programs=6   refusals=0
+    raidcfgd       programs=0   refusals=1
+    ossacli        programs=3   refusals=0
+    qtty           programs=8   refusals=0
+    softkeys       programs=1   refusals=0
+    hembygd        programs=1   refusals=0
+    openmlx4       programs=1   refusals=0
+    bbq-predictor  programs=1   refusals=0
+
+Twenty-one programs and raidcfgd's one documented refusal, which is what
+the table says. **A count cited from earlier in the same session is
+still a count nobody has taken since**, and this one cost one pass.
+
 ### Why this is cheap and worth doing every time
 
 Each tree is one `git archive`, one build and one line of result. The
