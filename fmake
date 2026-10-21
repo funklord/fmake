@@ -7514,6 +7514,27 @@ RE_QT_KEYWORD_ID = re.compile(r"\b(signals|slots|emit)\b\s*(?![:\w])")
 # control, a tree with no Qt at all whose failing file uses `slots' as a
 # name, took the advice. A substring is not a structural test.
 RE_QT_ON_PATH = re.compile(r"(?:^-DQT_)|(?:/Qt[A-Z])")
+# The other direction, and the same colon decides it: a word FOLLOWED by
+# a colon is Qt's own usage, which `QT_NO_KEYWORDS' is what removes.
+# `emit' takes no colon, so it is recognised by what follows it instead.
+# Q_SIGNALS, Q_SLOTS and Q_EMIT are deliberately absent: they are the
+# spellings the define leaves alone.
+RE_QT_KEYWORD_USE = re.compile(r"\b(signals|slots)\s*:|\b(emit)\s+\w")
+
+
+def _qt_no_keywords(flags):
+	"""Whether this compile was given QT_NO_KEYWORDS.
+
+    What makes the two Qt advices exclusive. With the define absent, Qt's
+    macros are live and a name that collides with one is the fault; with
+    it present they are gone and a USE of one is. Keyed on the define
+    rather than on which check happened to match first, because the
+    advice for each direction is the other's problem -- telling a reader
+    to set a define they have set is the symmetric wrong answer, and it
+    is the one the name check would have given.
+    """
+	return any(f == "-DQT_NO_KEYWORDS" or f.startswith("-DQT_NO_KEYWORDS=")
+	           for f in flags)
 RE_ERROR_AT = re.compile(r"^(.+?):(\d+):\d+: (?:fatal )?error:", re.M)
 
 
@@ -7528,6 +7549,8 @@ def _qt_keyword_clash(msg, root, incflags):
     """
 	if not any(RE_QT_ON_PATH.search(f) for f in incflags):
 		return None
+	if _qt_no_keywords(incflags):
+		return None
 	for m in RE_ERROR_AT.finditer(msg):
 		path, want = m.group(1), int(m.group(2))
 		if os.path.splitext(path)[1] not in CXX_EXTS:
@@ -7539,6 +7562,48 @@ def _qt_keyword_clash(msg, root, incflags):
 						continue
 					hit = RE_QT_KEYWORD_ID.search(text.split("//")[0])
 					return ((hit.group(1), os.path.relpath(path, root), want)
+					        if hit else None)
+		except OSError:
+			continue
+	return None
+
+
+def _qt_no_keywords_clash(msg, root, flags):
+	"""(word, file, line) where QT_NO_KEYWORDS took a keyword away, or None.
+
+    The mirror of `_qt_keyword_clash', and the direction a tree meets
+    once it has taken that function's advice. The define is project-wide,
+    `signals:' is how every Q_OBJECT class in every Qt header spells the
+    same thing, and the error names the keyword rather than the define --
+    so a define added for one array in one test file breaks the vendored
+    library beside it, in files nobody touched.
+
+    Reported from fuzznet, which took section 465's reproduction, added
+    the define, and found it broke the vendored qtty's own
+    `tool/tray/main.cpp', the moc of `include/qtty/tray.h' and
+    `example/chat', at that project's current pin. It renamed its own
+    array and dropped the define.
+
+    Gated on the define this build is passing rather than on a path or an
+    extension, which is both stronger and necessary: it is a header that
+    declares a class's signals, so the line the compiler names is usually
+    a `.h' -- and `-DQT_NO_KEYWORDS' on the command line fmake itself
+    built is not a guess about whether Qt is in play.
+    """
+	if not _qt_no_keywords(flags):
+		return None
+	for m in RE_ERROR_AT.finditer(msg):
+		path, want = m.group(1), int(m.group(2))
+		if os.path.splitext(path)[1] not in CXX_EXTS | HDR_EXTS:
+			continue
+		try:
+			with open(path, errors="replace") as fh:
+				for n, text in enumerate(fh, 1):
+					if n < want:
+						continue
+					hit = RE_QT_KEYWORD_USE.search(text.split("//")[0])
+					return ((hit.group(1) or hit.group(2),
+					         os.path.relpath(path, root), want)
 					        if hit else None)
 		except OSError:
 			continue
@@ -8171,6 +8236,23 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				note(f"[project] defines = ['QT_NO_KEYWORDS'] turns Qt's "
 				     f"keywords off for the whole tree, which is what a "
 				     f"tree using that word as a name needs")
+			# The mirror. The two cannot both fire -- each is gated on
+			# QT_NO_KEYWORDS and they want opposite answers -- so this
+			# is not conditioned on the one above. It is the direction a
+			# tree reaches by TAKING that advice: fuzznet did, and the
+			# define then broke three files in the library it vendors.
+			found_noqt = _qt_no_keywords_clash(first_err, root,
+			                                   compile_cmd(first_unit, cfg,
+			                                               incflags))
+			if found_noqt:
+				_nword, _nwhere, _nline = found_noqt
+				note(f"{_nwhere}:{_nline} uses `{_nword}' the way every "
+				     f"Q_OBJECT class does, and this build defines "
+				     f"QT_NO_KEYWORDS, which is what takes it away")
+				note(f"a define in [project] reaches vendored code as "
+				     f"well, where a target's own defines reach only "
+				     f"that target -- and Q_SIGNALS, Q_SLOTS and Q_EMIT "
+				     f"are the spellings that compile either way")
 			found_version = _undeclared_version(msg, root)
 			if found_version:
 				# Same shape as the header remedy above: name the exact

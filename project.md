@@ -531,7 +531,8 @@ that had been green about nothing for five commits ·
 [478. Two fmakes in one tree, and one killed in flight](#478-two-fmakes-in-one-tree-and-one-killed-in-flight) ·
 [479. The sixth branch of one refusal](#479-the-sixth-branch-of-one-refusal) ·
 [480. The exec that lost a race with a fork](#480-the-exec-that-lost-a-race-with-a-fork) ·
-[481. Advice about nm, in a build where nothing compiled](#481-advice-about-nm-in-a-build-where-nothing-compiled)
+[481. Advice about nm, in a build where nothing compiled](#481-advice-about-nm-in-a-build-where-nothing-compiled) ·
+[482. The define the advice asks for, met from the other side](#482-the-define-the-advice-asks-for-met-from-the-other-side)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37266,3 +37267,114 @@ sentence is absent, and it fails without the clause.
 `a_silent_nm_is_named_rather_than_the_source` is the positive control on
 the other side: its two files compile, so `broken` is empty, and the
 warning still fires for the tool it was written for.
+
+## 482. The define the advice asks for, met from the other side
+
+fuzznet replied to §465 through its inbox, in its own words: it took the
+reproduction as its section 665, measured at fuzznet `2f855c0` with
+fmake `28503fc` from a `git archive` of HEAD plus its four submodules in
+scratch, and reports that `fmake` built fuzznetd and consumer_check at
+exit 0 and that `fmake test` built and ran every test program, all
+passing. Its README now names `fmake` and `fmake test` beside `make`.
+
+Two things it met that the run here had not.
+
+**`QT_NO_KEYWORDS` project-wide broke the library it vendors.** At qtty
+`1c0d649`, their current pin, the define broke qtty's own
+`tool/tray/main.cpp`, the moc of `include/qtty/tray.h` and
+`example/chat` -- all three use `signals` and `slots`. fuzznet needed
+the define only because `gui/test/qtty_render_test.cpp` named an array
+`slots`; it renamed that to `shown_slots` and dropped the define.
+
+**And the define was fmake's own advice.** §467 added the note that
+names a Qt keyword used as a name and says
+`[project] defines = ['QT_NO_KEYWORDS']` is what a tree using that word
+as a name needs. It is right about the file it names and says nothing
+about the rest of the tree -- so the advice is sound and incomplete, and
+the incompleteness lands on vendored code in a project that vendors
+four things.
+
+So fmake answers the other direction too, keyed on the define it is
+itself passing:
+
+    widget.h:8 uses `signals' the way every Q_OBJECT class does, and
+    this build defines QT_NO_KEYWORDS, which is what takes it away
+    a define in [project] reaches vendored code as well, where a
+    target's own defines reach only that target -- and Q_SIGNALS,
+    Q_SLOTS and Q_EMIT are the spellings that compile either way
+
+### The colon decides both, and headers only matter here
+
+`signals` followed by a colon is Qt's own usage and `signals` followed
+by anything else is an identifier, which is one regex read twice. The
+mirror reads **headers** as well as sources, where §467's check reads
+only C++ sources: a class declares its signals in a `.h`, so that is
+the line the compiler names. What makes that safe is the gate -- not a
+path test or an extension, but `-DQT_NO_KEYWORDS` on the command line
+fmake built itself.
+
+### The symmetric wrong answer, which was live
+
+Writing the mirror turned up the first direction's version of the same
+fault. `_qt_keyword_clash` was not gated on the define at all, so a
+build that **already** defines `QT_NO_KEYWORDS` and fails on a line
+using `slots` as a name was told that "Qt makes `slots' a macro -- so
+the error above is the preprocessor's substitution". With the define
+set, Qt does not, and the advice is to set something already set.
+
+Both are gated on `_qt_no_keywords(flags)` now and cannot both fire.
+That is a stronger arrangement than ordering them, which was the first
+draft: the check that ran second was silent because the first had
+spoken, which is not the same as being right.
+
+### What the pair is worth as a control
+
+One tree, one header, one line -- `signals: void went(int;`, which
+fails either way -- and the define is the only thing that moves:
+
+    without the define   expected ')' before ';' token
+    with the define      ... uses `signals' the way every Q_OBJECT
+                             class does ...
+
+The word is on the named line in both runs, so the arm can fail the way
+the thing it guards against fails. Three arms in all, and each was seen
+to fail: the mirror removed, and the exclusivity gate removed.
+
+### The other half of the report, which needed nothing
+
+`fmake test` declined to run any test in that tree because
+`quirc/demo/demo_opencv.cxx` wants OpenCV, and the message named the
+file; `quirc/demo` is excluded beside `qtty/test` now. That is §465's
+own fix working in a tree nobody here has built -- the test path used to
+print a count and no names, and this is the first report of the names
+being read by somebody who did not write them.
+
+**The same file, in a second tree.** §465 records that fuzzypickles
+excludes `quirc/demo` and `quirc/tests` because
+`quirc/demo/demo_opencv.cxx` wants `opencv2/videoio.hpp`. fuzznet
+vendors the same quirc and reached the same file, which makes this a
+property of that vendored demo rather than of either consumer -- and
+two trees excluding the same path by hand is the shape that eventually
+earns a default, which is quirc's question and not fmake's.
+
+### A static list loses a probe, and that one is fmake's
+
+They also note that the defines list in §465's reproduction matches
+their Makefile's Linux defaults -- each of which is `auto` there, on
+only where a POSIX probe passes -- so writing them into `fmake.toml`
+turns a probed value into a stated one. That is accurate about their
+tree and it is not their question. **fmake is the tool that has no way
+to express it.**
+
+What it would take, said plainly because describing a mechanism
+thoroughly is a way of proposing it and this one is not mine to
+propose. The option is a probe: a define whose value fmake decides by
+compiling something small and keeping the answer, which is the
+configure step every build system of this kind eventually grows. The
+cost is a new concept in `fmake.toml`, a cache whose invalidation is
+the compiler and the libc rather than the tree, and a build that can
+fail in a phase that has nothing to do with the project's own sources
+-- against a tree that today writes three lines of `defines` and gets
+a build. **It is the copyright holder's decision**, and until it is
+taken the honest thing for a README is the static list with its one
+limitation known rather than a probe implied.

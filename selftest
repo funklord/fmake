@@ -29486,6 +29486,118 @@ int main(void){ int slots[2] = {1, 2}; nowhere_at_all(); return slots[0]; }
 
 
 @case
+def a_keyword_the_tree_turned_off_is_named_as_the_cause(t):
+	"""The other direction, which is where taking the advice above leads.
+
+    Reported from fuzznet, which took section 465's reproduction, added
+    `QT_NO_KEYWORDS' for the one array that needed it, and found the
+    define broke the vendored qtty's own `tool/tray/main.cpp', the moc of
+    `include/qtty/tray.h' and `example/chat'. The define is project-wide,
+    `signals:' is how every Q_OBJECT class spells the same thing, and the
+    error names the keyword and never the define -- so the three files
+    that broke were in a library nobody had touched.
+
+    Three arms. It fires on a header whose class declares signals in a
+    build carrying the define; it stays silent on the same tree, the same
+    file and the same line with the define removed, which is the pair
+    that shows the gate is the define rather than the word; and with the
+    define set it must not give the OPPOSITE advice, because telling a
+    reader to set a define they have set is this check's own mistake
+    pointed the other way.
+
+    The line the compiler names is a `.h', since a header is where a
+    class declares its signals, so this reads headers where its mirror
+    reads only C++ sources -- the define on the command line is the gate,
+    and it is a stronger one than any extension or path."""
+	_need_qt()
+	t.write("good.cpp", "#include <cstdio>\n"
+	        'int main(void){ std::puts("ok"); return 0; }\n')
+	t.write("widget.h", """
+#ifndef WIDGET_H
+#define WIDGET_H
+#include <QObject>
+class widget : public QObject {
+	Q_OBJECT
+public:
+	widget() {}
+signals:
+	void went(void);
+};
+#endif
+""")
+	t.write("app.cpp", '#include "widget.h"\n'
+	        "int main(void){ widget w; return 0; }\n")
+	t.write("fmake.toml", '[project]\nname = "qtoff"\n'
+	        'defines = ["QT_NO_KEYWORDS"]\n')
+	# Asked of the file rather than counted off the literal above, which
+	# is one edit away from being wrong and was: `write' drops the
+	# leading newline, so the line this asserts is the line the keyword
+	# is actually on.
+	with open(os.path.join(t.dir, "widget.h")) as fh:
+		keyword_line = next(n for n, text in enumerate(fh, 1)
+		                    if text.startswith("signals:"))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("did not compile" in out,
+	      f"the control is wrong: the define has to break this file: "
+	      f"{out}")
+	check(f"widget.h:{keyword_line}" in out and "`signals'" in out,
+	      f"nothing named widget.h:{keyword_line}, which is the line that "
+	      f"uses the keyword: {out}")
+	check("QT_NO_KEYWORDS, which is what takes it away" in out
+	      and "Q_SIGNALS" in out,
+	      f"neither the cause nor the spelling that survives it was "
+	      f"named: {out}")
+
+	# The same file, the same line, the define gone. The error is a real
+	# one either way -- `signals:' is legal with Qt's keywords on, so the
+	# line carries a syntax error as well, which keeps the compiler
+	# pointing at it.
+	t.write("widget.h", """
+#ifndef WIDGET_H
+#define WIDGET_H
+#include <QObject>
+class widget : public QObject {
+	Q_OBJECT
+public:
+	widget() {}
+signals: void went(int;
+};
+#endif
+""")
+	t.write("fmake.toml", '[project]\nname = "qtoff"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("did not compile" in out,
+	      f"the control is wrong: the line has to still fail: {out}")
+	check("takes it away" not in out,
+	      f"the advice was given to a build that does not define "
+	      f"QT_NO_KEYWORDS, so the word and not the define is the gate: "
+	      f"{out}")
+
+	# And with the define set, a line using the word as a NAME must not
+	# be told to set the define. `slots' as an array is legal precisely
+	# because the define is there; the failure is the undeclared value.
+	t.write("widget.h", "#ifndef WIDGET_H\n#define WIDGET_H\n#endif\n")
+	t.write("app.cpp", """
+#include <QObject>
+int main(void){
+	static const int slots[3] = { nope, 2, 3 };
+	return slots[0];
+}
+""")
+	t.write("fmake.toml", '[project]\nname = "qtoff"\n'
+	        'defines = ["QT_NO_KEYWORDS"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("did not compile" in out,
+	      f"the control is wrong: the array has to fail: {out}")
+	check("as a name" not in out,
+	      f"a build that already defines QT_NO_KEYWORDS was told that Qt "
+	      f"makes the word a macro, which it no longer does: {out}")
+
+
+@case
 def a_test_run_that_will_not_run_names_the_files_that_stopped_it(t):
 	"""`fmake test' printed a count and no names, where a build prints both.
 
