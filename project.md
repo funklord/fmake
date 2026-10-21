@@ -528,7 +528,8 @@ that had been green about nothing for five commits ·
 [475. Six artifacts, three processes, byte for byte](#475-six-artifacts-three-processes-byte-for-byte) ·
 [476. The flag that would have fixed 468, and why a tree cannot write it](#476-the-flag-that-would-have-fixed-468-and-why-a-tree-cannot-write-it) ·
 [477. The stale exclude that is not a finding](#477-the-stale-exclude-that-is-not-a-finding) ·
-[478. Two fmakes in one tree, and one killed in flight](#478-two-fmakes-in-one-tree-and-one-killed-in-flight)
+[478. Two fmakes in one tree, and one killed in flight](#478-two-fmakes-in-one-tree-and-one-killed-in-flight) ·
+[479. The sixth branch of one refusal](#479-the-sixth-branch-of-one-refusal)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37047,3 +37048,52 @@ file** -- fmake never reached the point of writing one. So the next
 build re-derived everything rather than trusting a half-written record,
 built all eight programs, and they run. The safe direction, and the one
 that makes an interrupted build cost time rather than correctness.
+
+## 479. The sixth branch of one refusal
+
+Section 478 ended at the cache, so the cache was fed six broken states:
+empty, garbage, valid JSON of the wrong shape, right shape with wrong
+types, a record claiming an object that is absent, and a mode fmake
+cannot read. Every one built the tree correctly and exited 0, and none
+produced a traceback -- which is the whole of what that probe was for.
+
+**One of the six rebuilt in silence.** `[1, 2, 3]` parses, so no
+`except` fires, and it is not a dict, so neither the accepting `if` nor
+the discarding `elif` matched. It fell past both:
+
+    $ printf '[1,2,3]\n' > .fmake/cache.json && fmake -v | grep -i cache
+    (nothing)
+
+The five that do speak were each given their message for a reason this
+file records, and the `except ValueError` beside them says of itself
+that it was *"a fourth branch of one refusal, which is how an exception
+handler keeps a gap the `if' beside it has closed"*.
+
+**This is that sentence one step further out.** An `elif isinstance(d,
+dict)` is narrower than the `if` it is the alternative to, so it keeps a
+gap in exactly the way the `except` did -- and the gap is invisible for
+the same reason, because a discarded cache recompiles the tree and a
+correct answer arrives either way. It says which now:
+
+    cache discarded and the tree will rebuild: the file holds a list,
+    not an object
+
+### Why it is reachable rather than theoretical
+
+A truncated write leaves a document that usually will not parse -- which
+is the fifth branch, and the case already writes the first 200 bytes of
+a real cache to prove it. But a write that stops at a valid boundary
+leaves one that does, and anything that writes the wrong document at all
+leaves a list or a string. The existing case's own history is the
+argument: *"adding a new section as a list ... silently turned the whole
+build cache off while this project was being worked on"*, and the symptom
+pointed everywhere but at the cache.
+
+### The case gained an arm rather than a sibling
+
+`a_discarded_cache_says_why_it_was_discarded` listed five reasons and a
+sixth that says nothing on purpose. It lists six and a seventh now, with
+the new arm asserting both halves: that the message appears, and that it
+is **not** the unparsable one -- a reason that names the wrong cause is
+the thing this family of messages exists to avoid. Seen to fail with the
+branch removed.

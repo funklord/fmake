@@ -22456,15 +22456,16 @@ def a_file_nothing_reaches_is_reported_when_it_appears(t):
 def a_discarded_cache_says_why_it_was_discarded(t):
 	"""A discarded cache recompiles the tree and used to say nothing.
 
-	Five things invalidate it and they want different responses:
+	Six things invalidate it and they want different responses:
 
 	    the format moved            ordinary after an fmake release
 	    another fmake wrote it      ordinary after a scanner change
 	    a section has a wrong type  something wrote it wrongly
+	    it is not an object at all  a list where a mapping belongs
 	    it will not parse           a half-written file looks like this
 	    it will not open            a mode or owner fmake cannot read
 
-	and a sixth, no cache at all, is the ordinary first build and says
+	and a seventh, no cache at all, is the ordinary first build and says
 	nothing. The case asserts that one too, or the message becomes noise on
 	every fresh tree.
 
@@ -22476,11 +22477,21 @@ def a_discarded_cache_says_why_it_was_discarded(t):
 	job: the cache WAS malformed. What was missing is that a correct refusal
 	was silent, so the symptom pointed anywhere but at it.
 
-	The last two were found by sweeping for exception handlers that swallow
-	without a word -- 47 of them, 46 legitimate, because a stat that fails
-	IS the answer. These were the fourth and fifth branches of one refusal,
-	left behind when the first three were given a message: an `except` keeps
-	a gap the `if` beside it has closed.
+	The will-not-parse and will-not-open reasons were found by sweeping for
+	exception handlers that swallow without a word -- 47 of them, 46
+	legitimate, because a stat that fails IS the answer. These were the
+	fourth and fifth branches of one refusal, left behind when the first
+	three were given a message: an `except` keeps a gap the `if` beside it
+	has closed.
+
+	**The not-an-object reason is the sixth branch and the same shape one
+	step further out.** `[1,2,3]` parses, so no `except` fires, and it is
+	not a dict, so neither the accepting `if` nor the discarding `elif`
+	matched: it fell past both and the tree rebuilt with nothing said. An
+	`elif` narrower than the condition it is the alternative to keeps a gap
+	exactly as an `except` does. Reached by writing a list over the file,
+	which is what a truncated write that stops at a valid boundary can
+	leave.
 	"""
 	t.write("main.c", "int main(void){ return 0; }\n")
 	cache = os.path.join(t.dir, ".fmake", "cache.json")
@@ -22517,6 +22528,18 @@ def a_discarded_cache_says_why_it_was_discarded(t):
 	said = r.stdout + r.stderr
 	check("cache unparsable" in said,
 	      f"a truncated cache should say it will not parse: {said}")
+
+	# Parses, and is not an object: past both branches of the `if'.
+	t.fmake("-j4")
+	with open(cache, "w") as fh:
+		fh.write("[1, 2, 3]\n")
+	r = t.fmake("-j4", "-v")
+	said = r.stdout + r.stderr
+	check("cache discarded" in said and "not an object" in said,
+	      f"a cache that parses but is not an object should say so rather "
+	      f"than rebuilding in silence: {said}")
+	check("unparsable" not in said,
+	      f"it parses, so the reason must not be that it does not: {said}")
 
 	# Present and unreadable, which is a different thing from absent and
 	# the one that looks like fmake simply being slow.

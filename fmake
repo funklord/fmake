@@ -6698,6 +6698,24 @@ class Cache:
 					self.data["generated_outputs"] = {
 					    k: v for k, v in d["generated_outputs"].items()
 					    if isinstance(v, list)}
+			else:
+				# The fifth branch of one refusal, and silent for the same
+				# reason the other four were: a cache file that parses as
+				# JSON but is not an object matched neither `if' above, so
+				# it fell past both and the tree rebuilt with nothing said.
+				# Reached by writing `[1,2,3]' over the file -- which is
+				# what a truncated write that happens to stop at a valid
+				# boundary can leave, and what anything writing the wrong
+				# document leaves.
+				#
+				# The `except ValueError' below says of itself that it was
+				# "a fourth branch of one refusal, which is how an
+				# exception handler keeps a gap the `if' beside it has
+				# closed". This is the same shape one step further out: an
+				# `elif' narrower than the condition it is the alternative
+				# to.
+				vinfo(f"cache discarded and the tree will rebuild: the "
+				      f"file holds a {type(d).__name__}, not an object")
 		except FileNotFoundError:
 			# The ordinary case: no cache yet. Nothing to say about it.
 			pass
