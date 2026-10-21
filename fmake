@@ -10019,7 +10019,7 @@ def _preferred_qt(hits, order):
 	return hits[0]
 
 
-def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
+def propose_from_headers(units, pkg, store, proj=None, cfg=None):
 	"""Packages the system includes suggest, with the -I flags they need.
 
     Runs before compiling, since that is when -I is needed. What comes back
@@ -10043,7 +10043,8 @@ def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
     somewhere the compiler already looks.
     """
 	sig = pkg.signature()
-	sysincs = {os.path.realpath(d) for d in sysincs}
+	sysincs = {os.path.realpath(d)
+	           for d in (cfg.sysincdirs if cfg is not None else ())}
 	cflags, proposed, seen = [], {}, set()
 	# The TUs first, then the tree headers they reach -- and the second half
 	# is not a refinement. A class that derives from QWidget declares that in
@@ -10108,6 +10109,52 @@ def propose_from_headers(units, pkg, store, proj=None, sysincs=()):
 			if got is None:
 				continue
 			module, mod_cflags, mod_libs = got[0], got[1], got[2]
+			# A name the preprocessor already resolves is not a name that
+			# needs finding, and a path flag that answers it with a
+			# DIFFERENT file is worse than redundant. This is the sentence
+			# above -- "a package proposed by a header it does not really
+			# own can reorder a search path nobody asked it to touch" --
+			# arriving as the case where the reordering changes which file
+			# an include means, rather than only its position.
+			#
+			# Measured on hull: `nss/nss_hull.c' writes `#include <nss.h>'
+			# meaning glibc's `/usr/include/nss.h', compiles at exit 0
+			# with no flags at all, and fails under the one `-I' fmake
+			# added. Mozilla's Network Security Services ships
+			# `/usr/include/nss/nss.h', pkg-config has a module called
+			# `nss', and `-I/usr/include/nss' is searched before the
+			# system directories -- so `enum nss_status' became the wrong
+			# library's and a working file stopped building.
+			#
+			# `toolchain_owns_header' rather than a fresh walk of the
+			# system directories: that is section 319's question --
+			# "whether the compiler resolves `inc_name' with no help
+			# from the tree" -- and it was already being asked of the
+			# basename fallback and of nothing else. This is the second
+			# consumer of one fact rather than a second way of deciding
+			# it, which matters because the predicate carries the
+			# toolchain's own 541 names and a cache, and a hand-rolled
+			# `isfile' over the search path carries neither.
+			#
+			# Libraries are kept: the proposal still stands as a proposal
+			# and the symbol evidence settles it, which is how a package
+			# whose header sits in a default directory gets linked at all
+			# -- zlib's `-lz' comes this way. Only the paths go.
+			#
+			# A tree that means the package's header says so with `@pkg',
+			# which is a declaration rather than a proposal and keeps its
+			# flags. Not deciding for it would be the other error: with no
+			# flags the compiler resolves this include one way, and that
+			# is the meaning the file was written against.
+			if cfg is not None and toolchain_owns_header(cfg, name):
+				if any(f.startswith(PATH_CFLAGS) for f in mod_cflags):
+					vinfo(f"{name} is already on the compiler's own "
+					      f"include path, so {module} contributes its "
+					      f"libraries and not its -I: naming its "
+					      f"directory would resolve {name} to that "
+					      f"package's file instead")
+				mod_cflags = [f for f in mod_cflags
+				              if not f.startswith(PATH_CFLAGS)]
 			for f in mod_cflags:
 				if (f.startswith("-I")
 				        and os.path.realpath(f[2:]) in sysincs):
@@ -13757,8 +13804,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		every_unit = [units.get(rel) or Unit(rel, root, objdir, scans[rel])
 		              for rel in srcs if rel not in crate_members]
 		pkg_cflags, _ = propose_from_headers(every_unit, pkg, hdr_store,
-		                                     proj,
-		                                     cfg.sysincdirs)
+		                                     proj, cfg)
 		incflags = base_incflags + [f for f in pkg_cflags
 		                            if f not in base_incflags]
 

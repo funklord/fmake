@@ -533,7 +533,8 @@ that had been green about nothing for five commits ·
 [480. The exec that lost a race with a fork](#480-the-exec-that-lost-a-race-with-a-fork) ·
 [481. Advice about nm, in a build where nothing compiled](#481-advice-about-nm-in-a-build-where-nothing-compiled) ·
 [482. The define the advice asks for, met from the other side](#482-the-define-the-advice-asks-for-met-from-the-other-side) ·
-[483. hull is not waiting for the key it asked for](#483-hull-is-not-waiting-for-the-key-it-asked-for)
+[483. hull is not waiting for the key it asked for](#483-hull-is-not-waiting-for-the-key-it-asked-for) ·
+[484. The -I that changed what an include meant](#484-the--i-that-changed-what-an-include-meant)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37442,11 +37443,12 @@ copyright line, which is also `HULL_VERSION` arriving from
 PID 1", which is the program refusing its environment rather than
 failing.
 
-**Not the whole of `make all`**, and the difference is worth naming
-rather than leaving for somebody to discover: hull's default target also
-builds `libnss_hull.so.2`, a shared library, which has no `main()` and
-so is not a target fmake discovers. `[target.*] kind` exists and was not
-tried. So the claim is two programs built and running, not parity.
+**Not the whole of `make all`** as this was first written: hull's
+default target also builds `libnss_hull.so.2`, a shared library with no
+`main()`, which is not a target fmake discovers. `[target.*] kind`
+exists, and trying it found §484 -- a one-source module that would not
+compile under a flag fmake had added. With that fixed, all three
+artifacts build.
 
 The deferred key is not the blocker either way. Whether it is still the
 better spelling is a different question and still the holder's; what has
@@ -37507,3 +37509,95 @@ Both halves of this section are the same lesson in opposite directions.
 A deferral held a question open that something else had answered; a
 docstring's argument volunteered a severity the measurement would not
 support. Neither error was in the code.
+
+## 484. The -I that changed what an include meant
+
+hull's NSS module is one source, `nss/nss_hull.c`, and fmake could not
+compile it:
+
+    nss/nss_hull.c:112:24: error: return type is an incomplete type
+      112 | static enum nss_status not_found(int *errnop, int *herrnop)
+
+The file compiles at exit 0 with no flags at all. It fails under exactly
+one of the flags fmake added:
+
+    cc -c nss/nss_hull.c -Os                        rc=0
+    cc -c nss/nss_hull.c -Os -I/usr/include/nss     rc=1
+
+`#include <nss.h>` means glibc's `/usr/include/nss.h`, which declares
+`enum nss_status`. Mozilla's Network Security Services ships
+`/usr/include/nss/nss.h`, pkg-config has a module called `nss`, and an
+explicit `-I` is searched **before** the system directories. So fmake
+proposed a package for a header it does not own, and the include stopped
+meaning the file it had always meant.
+
+### The sentence was already written
+
+`propose_from_headers` says of itself: *"an explicit -I is searched
+before the system directories, so re-naming one promotes it past every
+directory in front of it, and a package proposed by a header it does not
+really own can reorder a search path nobody asked it to touch."* That was
+reported from openmlx4, and the remedy it describes drops an `-I` naming
+one of the compiler's own directories.
+
+`/usr/include/nss` is not one of the compiler's own directories. It is a
+subdirectory of one -- and that is where the reordering stops being
+about the position of a directory and becomes a change to which file an
+include resolves to. The rule was right and its implementation covered
+the weaker half.
+
+### Asked of the predicate that already knows
+
+The fix is one clause, and deliberately not a fresh walk of the search
+path:
+
+    if cfg is not None and toolchain_owns_header(cfg, name):
+            ... drop this package's path flags ...
+
+`toolchain_owns_header` is §319's question -- "whether the compiler
+resolves `inc_name` with no help from the tree" -- asked of the toolchain
+rather than of a hand-written list, carrying its 541 measured names and a
+cache. It was consulted by the basename fallback and by nothing else. The
+first draft of this fix re-derived the same fact with `os.path.isfile`
+over `cfg.sysincdirs`, which is the second half of that predicate with
+the measured set and the cache left out: a second way of deciding one
+thing rather than a second consumer of it.
+
+**Libraries are kept and only the paths go.** A proposal still stands as
+a proposal and the symbol evidence settles it, which is how a package
+whose headers sit in a default directory gets linked at all -- zlib's
+`-lz` arrives that way. And a tree that means the package's header says
+so with `@pkg`, which is a declaration rather than a proposal.
+
+### What the pair of arms cannot cover, and is in the case
+
+One package cannot hold both meanings of one include. If a tree
+genuinely needs that package's `-I` for another of its headers, the
+shadowing comes back -- measured while writing the case, where
+`<shadowlib/other.h>` and `<stdio.h>` in one file left `printf`
+undeclared. No command line holds both meanings, so the second arm
+deliberately includes nothing of the C library's: it asserts that a name
+the compiler has **not** got still brings the package's `-I`, because a
+remedy that turned the mechanism off would pass the first arm perfectly.
+
+The conflict is left as a finding rather than answered. fmake could say
+it -- "the -I for this package also holds a file named `stdio.h`, which
+your source includes" -- and whether that sentence is worth its false
+positives is unmeasured: thorvg's vendored `stdint.h`, §319's own
+incident, is a tree that would collect it on every build.
+
+### And hull builds, all three artifacts
+
+With the five `[generate.*]` rules of §483 and `[target.nss] kind =
+"shared"`:
+
+    * built hullx_agent, hull, libnss_hull.so
+
+`readelf -d` gives `SONAME libnss_hull.so.2`, which is what glibc
+dlopens by name; the file itself is `libnss_hull.so`, where hull's
+Makefile writes the versioned name, so an install step would rename.
+`[target.*] cflags` is refused for a shared target -- *"that is a
+program's question"* -- and nothing was lost by it: the one closure-wide
+flag a shared library requires is `-fPIC`, which fmake adds tree-wide
+itself as soon as any target is shared. hull's `-fvisibility=hidden` is
+what `@cflags` in the file is for.

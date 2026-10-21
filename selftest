@@ -172,6 +172,7 @@ def check(cond, what):
 		raise Failure(what)
 
 
+
 def before_externals(explain_out):
 	"""The part of --explain above the external-symbol list.
 
@@ -12626,6 +12627,96 @@ def this_trees_schema_outranks_a_vendored_projects(t):
 	      f"{out}")
 	check("[project] exclude" in out,
 	      f"and does not offer the remedy that is available: {out}")
+
+
+@case
+def a_proposed_package_does_not_shadow_the_compilers_own_header(t):
+	"""An -I is searched first, so proposing one can change what an
+	include MEANS.
+
+    `propose_from_headers\' already says this of itself -- "a package
+    proposed by a header it does not really own can reorder a search path
+    nobody asked it to touch" -- and dropped an `-I\' naming one of the
+    compiler\'s own directories. A subdirectory of one is not one of them,
+    and that is where the reordering stops being about position.
+
+    Measured on hull. `nss/nss_hull.c\' writes `#include <nss.h>\' meaning
+    glibc\'s `/usr/include/nss.h\', and compiles at exit 0 with no flags at
+    all. Mozilla\'s Network Security Services ships
+    `/usr/include/nss/nss.h\', pkg-config has a module called `nss\', and
+    the `-I/usr/include/nss\' fmake added put that file first: `enum
+    nss_status\' became the wrong library\'s and a working file stopped
+    building.
+
+    Two arms, because the remedy must not be the mechanism turned off.
+    A name the compiler already resolves contributes no path flags; a name
+    it does not still gets them. What the pair cannot cover is a tree that
+    means both at once -- one package whose `-I\' is genuinely needed for
+    another of its headers brings the shadowing back, and no command line
+    holds both meanings of one include."""
+	def package(where):
+		os.makedirs(os.path.join(where, "include", "shadowlib"),
+		            exist_ok=True)
+		os.makedirs(os.path.join(where, "pc"), exist_ok=True)
+		# A file named like the C library\'s, which is thorvg\'s vendored
+		# stdint.h one layer out and nss.h on this machine.
+		with open(os.path.join(where, "include", "stdio.h"), "w") as fh:
+			fh.write("#pragma once\n#define SHADOWLIB_WON 1\n")
+		with open(os.path.join(where, "include", "shadowlib", "other.h"),
+		          "w") as fh:
+			fh.write("#pragma once\n#define SHADOWLIB_OTHER 1\n")
+		with open(os.path.join(where, "pc", "shadowlib.pc"), "w") as fh:
+			fh.write(f"prefix={where}\n"
+			         "includedir=${prefix}/include\n\n"
+			         "Name: shadowlib\n"
+			         "Description: a package that owns a standard name\n"
+			         "Version: 1.0\n"
+			         "Cflags: -I${includedir}\n")
+
+	# Outside the tree, or it is not a package: fmake resolves a header
+	# inside the tree by basename and the fixture tests nothing.
+	pkgdir = os.path.join(os.path.dirname(t.dir),
+	                      os.path.basename(t.dir) + "-pkg")
+	try:
+		package(pkgdir)
+		env = {"PKG_CONFIG_PATH": os.path.join(pkgdir, "pc")}
+		t.write("main.c", """
+#include <stdio.h>
+#ifdef SHADOWLIB_WON
+#error "a proposed package's -I shadowed the C library's stdio.h"
+#endif
+int main(void){ printf("ok\\n"); return 0; }
+""")
+		r = t.fmake(env=env)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0,
+		      f"a file that compiles with no flags at all stopped "
+		      f"compiling because a package was proposed for a name the "
+		      f"compiler already resolves: {out}")
+		check(t.run(os.path.basename(t.dir)).stdout.strip() == "ok",
+		      "the program built against the C library's stdio.h is wrong")
+
+		# And the mechanism still works for a name the compiler has not
+		# got, which is what the -I is for.
+		u = Tree("package-still-proposed")
+		try:
+			# And nothing of the C library's in it, deliberately. One
+			# package cannot hold both meanings of `stdio.h': an -I this
+			# tree genuinely needs for `shadowlib/other.h' puts that
+			# package's copy first again, which is the conflict named in
+			# the docstring and not something to assert as correct.
+			u.write("main.c", "#include <shadowlib/other.h>\n"
+			        "int main(void){ return SHADOWLIB_OTHER - 1; }\n")
+			r = u.fmake(env=env)
+			out = r.stdout + r.stderr
+			check(r.returncode == 0,
+			      f"a header only the package has must still bring its "
+			      f"-I, or the remedy has turned the mechanism off: "
+			      f"{out}")
+		finally:
+			u.cleanup()
+	finally:
+		shutil.rmtree(pkgdir, ignore_errors=True)
 
 
 @case
