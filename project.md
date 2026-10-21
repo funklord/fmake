@@ -36938,6 +36938,29 @@ tell a stale exclude from a prophylactic one because there is nothing to
 tell them apart with -- both match nothing today. The silence is right
 and the experiment was reverted.
 
+### The rest of the lens, checked before writing anything
+
+With that lesson, the other places a config entry could be accepted and
+do nothing were measured rather than implemented. Every one is already
+refused, and precisely:
+
+    [target.nosuchtarget]   declares no root and no sources, so fmake
+                            cannot tell what is in it. Targets
+                            discovered here: badsec
+    [debian.nosuchpkg]      names no package this tree builds (they are:
+                            goodpkg), and it is not the source ...
+    [service.nosuchsvc]     systemd = 'units/nosuch.service' does not
+                            exist
+
+`[alpine] subpackages` is the one key that passes a name through
+unchecked, and that is right: a subpackage is produced by a function in
+the APKBUILD, so the list is a declaration for abuild rather than
+something fmake can verify.
+
+So the lens is closed. A section that names something fmake can see is
+validated; the one that names something only the downstream tool can
+see is passed on deliberately.
+
 ### Why this is worth a section
 
 It cost one measurement to find out and would have cost every reader of
