@@ -30515,10 +30515,29 @@ def the_version_identifies_the_build_as_well_as_the_release(t):
 
 	changed = os.path.join(t.dir, "fmake_changed")
 	same = os.path.join(t.dir, "fmake_same")
-	shutil.copy(FMAKE, changed)
-	shutil.copy(FMAKE, same)
-	with open(changed, "a") as fh:
-		fh.write("\n# one byte more\n")
+	# Written by `cp', and appended to by the shell, rather than by
+	# shutil.copy and open() -- because this case then EXECUTES what it
+	# wrote, and the cases run in threads.
+	#
+	# A child takes a copy of the fd table when it starts, and a Python
+	# fd is O_CLOEXEC -- closed at the child's EXEC rather than at the
+	# clone. So a child any other thread starts while the copy is open
+	# holds the copy open for writing until it reaches its own exec, and
+	# an exec of a file that any process holds open for writing fails
+	# with ETXTBSY. That failed this case three times, on loaded full
+	# runs, as `OSError(26, 'Text file busy')'; the frame named
+	# os.posix_spawn, whose window is however long a vforked child waits
+	# to be scheduled.
+	#
+	# Measured rather than reasoned: a child handed a write fd through
+	# pass_fds and told to sleep makes exec of the file fail errno 26,
+	# and the same exec succeeds the moment that child exits. A fd that
+	# only ever exists inside `cp' cannot be inherited by a fork of
+	# ours, so this removes the race rather than retrying past it.
+	for dst in (changed, same):
+		subprocess.run(["cp", FMAKE, dst], check=True)
+	subprocess.run(["sh", "-c", 'printf "\\n# one byte more\\n" >> "$1"',
+	                "sh", changed], check=True)
 	os.chmod(changed, 0o755)
 	os.chmod(same, 0o755)
 
@@ -36119,12 +36138,16 @@ def run_case(c, _again=False):
 	except Failure as exc:
 		return "fail", str(exc) + (f"\n       tree: {t.dir}" if KEEP else "")
 	except Exception as exc:                           # noqa: BLE001
-		# With the line it came from. `OSError(26, 'Text file busy')' is
-		# what this reported once, from a full run on a loaded machine
-		# and never again -- and a repr with no frame cannot be chased
-		# afterwards, so the one occurrence bought nothing but a rerun.
-		# An unexpected exception is the case that most needs the
-		# traceback and was the one throwing it away.
+		# With the line it came from, and the frame is what paid for
+		# itself. `OSError(26, 'Text file busy')' reported twice, both
+		# from full runs on a loaded machine; the first arrived as a
+		# bare repr, could not be chased, and bought nothing but a
+		# rerun. The second named the line, which named the exec of a
+		# copy that another thread's fork still held open for writing
+		# -- see the version case, which writes its copies through
+		# `cp' for that reason. An unexpected exception is the case
+		# that most needs the traceback and was the one throwing it
+		# away.
 		where = traceback.extract_tb(exc.__traceback__)
 		at = f" at {where[-1].filename.rsplit('/', 1)[-1]}:" \
 		     f"{where[-1].lineno}" if where else ""

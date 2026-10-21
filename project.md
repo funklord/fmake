@@ -529,7 +529,8 @@ that had been green about nothing for five commits ·
 [476. The flag that would have fixed 468, and why a tree cannot write it](#476-the-flag-that-would-have-fixed-468-and-why-a-tree-cannot-write-it) ·
 [477. The stale exclude that is not a finding](#477-the-stale-exclude-that-is-not-a-finding) ·
 [478. Two fmakes in one tree, and one killed in flight](#478-two-fmakes-in-one-tree-and-one-killed-in-flight) ·
-[479. The sixth branch of one refusal](#479-the-sixth-branch-of-one-refusal)
+[479. The sixth branch of one refusal](#479-the-sixth-branch-of-one-refusal) ·
+[480. The exec that lost a race with a fork](#480-the-exec-that-lost-a-race-with-a-fork)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37097,3 +37098,91 @@ the new arm asserting both halves: that the message appears, and that it
 is **not** the unparsable one -- a reason that names the wrong cause is
 the thing this family of messages exists to avoid. Seen to fail with the
 branch removed.
+
+## 480. The exec that lost a race with a fork
+
+`make check` failed twice on `OSError(26, 'Text file busy')`, in
+`the_version_identifies_the_build_as_well_as_the_release`, both times
+from a full run on a loaded machine. The first occurrence arrived as a
+bare repr with no frame, could not be chased, and bought nothing but a
+rerun. The frame was added to the suite's unexpected-exception arm
+afterwards, in `60ae276`, for no better reason than that a repr with no
+frame cannot be chased; the second occurrence is what it paid for, a
+line number pointing at the exec of a copy the case had just written.
+
+**The mechanism, and it is the harness rather than fmake.** The cases
+run in threads. A child takes a copy of the fd table at the moment it is
+started, and a Python fd is `O_CLOEXEC`, which closes it at the child's
+**exec** rather than at the clone -- so a child started by any other
+thread while `shutil.copy` has the destination open holds that
+destination open for writing until it gets as far as its own exec. An
+exec of a file that **any** process holds open for writing fails with
+`ETXTBSY`, and the case's next act is to execute what it copied.
+
+The frame said `os.posix_spawn`, which is the detail that explains
+*when*. There is no fd-closing loop on that path at all: glibc's
+`posix_spawn` is `clone(CLONE_VM|CLONE_VFORK)` and the window is however
+long the child takes to reach `exec`. On an idle machine that is
+microseconds. Both failures were on a machine running three sessions'
+gates at once, where a child can be descheduled in that gap -- which is
+why "on a loaded machine" is in both reports and why the experiment
+below had to stop measuring probability and ask the mechanism instead.
+
+### The statistical reproduction failed and the direct one did not
+
+Two rounds of the obvious experiment found nothing: 2000 write-and-exec
+cycles against six threads forking `/bin/true`, then 600 cycles copying
+fmake itself, a megabyte at a time, to widen the window a thousandfold.
+Zero hits in both. That is not evidence against the mechanism -- it is
+what "intermittent" means -- and taking it as a refutation was the
+available comfortable answer.
+
+Asking the mechanism directly settles it in two lines of output. Hand a
+child a write fd through `pass_fds` and tell it to sleep; the parent
+closes its own copy, so no fd of the parent's remains:
+
+    while the child holds it: exec failed errno=26 Text file busy
+    after the child has exited: exec succeeded, rc=7
+
+So a write fd in a *child* is sufficient, and the harness manufactures
+one on every fork that lands inside a copy.
+
+### The fix removes the race rather than retrying past it
+
+The two copies are written by `cp`, and the extra byte appended by the
+shell. A fd that only ever exists inside `cp` cannot be inherited by a
+fork of ours, because a fork copies the fd table of the process that
+forks. Retrying the exec would also have worked and is what build tools
+usually do; it leaves a sleep, a nondeterminism and a flake that has
+been made quiet rather than absent.
+
+### A third occurrence, and the one that was predicted
+
+The fix was parked for one run, so that it and §479 would be two
+commits rather than one -- and that run failed at the same case for the
+third time. Nothing was gained by predicting it, but it is the only
+occurrence that was expected rather than survived, and it dates the
+condition as live at the moment the fix was taken out.
+
+**A flake cannot be proved fixed by its absence**, which is why this
+section is a mechanism and not a count of green runs. What the fix
+claims is narrower and checkable: the race needs a write fd to that
+inode somewhere in a process the harness forks from, and after the
+change there is not one, because the only process that opens it for
+writing is `cp` and nothing forks from `cp`.
+
+### The open half: 44 sites with a different symptom
+
+45 fixtures in the suite are made executable. The other 44 are shims put
+on `PATH` and executed by **fmake**, not by the harness -- so the
+harness cannot retry them, and the failure would not arrive as an
+`OSError` at all. It would arrive as a compiler, `nm` or `ar` that
+appears to have failed for its own reasons, in a case about something
+else.
+
+None has been observed. The only complete cure is a lock held exclusively
+while an executable fixture is written and shared around every
+subprocess launch, which is invasive for zero instances, so what is
+recorded here instead is the symptom -- so that the next transient shim
+failure arrives with its explanation already written rather than costing
+the afternoon this one cost.
