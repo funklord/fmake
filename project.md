@@ -37582,11 +37582,36 @@ deliberately includes nothing of the C library's: it asserts that a name
 the compiler has **not** got still brings the package's `-I`, because a
 remedy that turned the mechanism off would pass the first arm perfectly.
 
-The conflict is left as a finding rather than answered. fmake could say
-it -- "the -I for this package also holds a file named `stdio.h`, which
-your source includes" -- and whether that sentence is worth its false
-positives is unmeasured: thorvg's vendored `stdint.h`, §319's own
-incident, is a tree that would collect it on every build.
+The conflict is left as a finding rather than answered, and the question
+of whether to say it is now measured rather than guessed. fmake could
+print "the -I for this package also holds a file named `stdio.h`, which
+your source includes", and the fear was false positives -- thorvg's
+vendored `stdint.h`, §319's own incident, looked like a tree that would
+collect one on every build.
+
+**Zero, across five trees.** A probe over each tree's own
+`compile_commands.json` takes every `-I` directory on a compile line
+against every `<angle>` include the compiled file writes, and counts the
+pairs where the directory holds that name *and* a default include
+directory holds it too:
+
+    fuzzypickles   398 units   43184 pairs   0 shadows
+    qtty            33 units    2105 pairs   0 shadows
+    ossacli         14 units     164 pairs   0 shadows
+    situ             3 units       6 pairs   0 shadows
+    hull            26 units    1539 pairs   0 shadows
+
+**With a control, because a zero from an instrument nobody tested is not
+a zero.** Fed a database carrying `-I/usr/include/nss` and a file that
+includes `<nss.h>` -- this section's own defect, written out by hand --
+the probe reports `nss.h from /usr/include/nss`, one shadow. So the
+instrument works and the five zeros are real.
+
+That closes it the other way from the fear: the advice would be silent
+on every tree here, which makes it a sentence nobody's build would
+reach and no tree would test. The fixture in
+`a_proposed_package_does_not_shadow_the_compilers_own_header` is the
+only known instance, and it is a fabricated package. Not added.
 
 ### And hull builds, all three artifacts
 
