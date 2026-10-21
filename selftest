@@ -29775,7 +29775,14 @@ def a_silent_nm_is_named_rather_than_the_source(t):
     A warning and not a refusal: on a warm build the objects that still
     have symbols are the ones nm is not asked about, so a couple of
     edited files that genuinely compile to nothing look the same as a
-    tool that has just broken."""
+    tool that has just broken.
+
+    Two further kinds of object are empty with nothing wrong with nm,
+    and both were real. A crate carrying a main() has no object at all.
+    And a unit that failed to compile is given empty tables on purpose,
+    so that nothing closes over it -- which made a tree where EVERY
+    compile failed read as a tree of empty objects, and told the reader
+    to replace a tool that had never been asked anything."""
 	def silent_nm(tree):
 		path = os.path.join(tree.dir, "nm-silent")
 		with open(path, "w") as fh:
@@ -29860,6 +29867,34 @@ def a_silent_nm_is_named_rather_than_the_source(t):
 		      f"the whole discriminator: {out}")
 	finally:
 		u.cleanup()
+
+	# And a unit empty because it did not COMPILE. A failure is given
+	# empty tables and marked compiled so that nothing closes over it --
+	# the same shape as the crate above, from the opposite cause -- so a
+	# tree where every compile fails read here as a tree of empty
+	# objects, and the reader was told to set `[toolchain] nm'.
+	#
+	# Two programs rather than one, because the discriminator is every
+	# object: a tree of `a.c' with a main() and `b.c' without compiles
+	# exactly one file, since fmake compiles what a target needs rather
+	# than what the tree holds. Two failing in the same pass is the
+	# ordinary shape of a typo in a shared header.
+	w = Tree("nothing-compiles")
+	try:
+		w.write("one.c", "int main(void){ return nope; }\n")
+		w.write("two.c", "int main(void){ return nope; }\n")
+		r = w.fmake()
+		out = r.stdout + r.stderr
+		check("did not compile" in out,
+		      f"the control is wrong: both files have to fail, or this "
+		      f"arm never reaches the guard: {out}")
+		check("nope" in out,
+		      f"the real cause stopped being named: {out}")
+		check("read no symbols" not in out,
+		      f"a build where nothing compiled blamed nm, in a run whose "
+		      f"only fault is a misspelled identifier: {out}")
+	finally:
+		w.cleanup()
 
 
 MIRAGE_TOOL = """

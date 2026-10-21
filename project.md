@@ -530,7 +530,8 @@ that had been green about nothing for five commits ·
 [477. The stale exclude that is not a finding](#477-the-stale-exclude-that-is-not-a-finding) ·
 [478. Two fmakes in one tree, and one killed in flight](#478-two-fmakes-in-one-tree-and-one-killed-in-flight) ·
 [479. The sixth branch of one refusal](#479-the-sixth-branch-of-one-refusal) ·
-[480. The exec that lost a race with a fork](#480-the-exec-that-lost-a-race-with-a-fork)
+[480. The exec that lost a race with a fork](#480-the-exec-that-lost-a-race-with-a-fork) ·
+[481. Advice about nm, in a build where nothing compiled](#481-advice-about-nm-in-a-build-where-nothing-compiled)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37186,3 +37187,82 @@ subprocess launch, which is invasive for zero instances, so what is
 recorded here instead is the symptom -- so that the next transient shim
 failure arrives with its explanation already written rather than costing
 the afternoon this one cost.
+
+## 481. Advice about nm, in a build where nothing compiled
+
+Two files, each a typo:
+
+    $ printf 'int main(void){ return nope; }\n' > one.c
+    $ cp one.c two.c && fmake
+    [1/2] CC  one.c
+    [2/2] CC  two.c
+
+    * 'nope' undeclared (first use in this function)
+      in one.c and 1 other file(s)
+    * /usr/bin/nm read no symbols from any of the 2 object(s) this
+      build compiled, and exited 0 for each.
+        ...
+        Set [toolchain] nm in fmake.toml, or $NM, to one that reads
+        unknown objects, and check it is not a wrapper that exits 0
+        having printed nothing.
+
+Three sentences telling the reader their `nm` is broken, in a run whose
+only fault is a misspelled identifier. The guard those come from exists
+for the third route to a silent nm -- exit 0, no plugin message, no
+symbols at all, which §223 diagnosed the other two of and left this one
+-- and it cannot tell that route from **no objects to read**.
+
+### Why a failed unit looks exactly like a silent nm
+
+A unit that fails to compile is deliberately given empty symbol tables
+and marked compiled, so that nothing closes over it and whoever needed
+it fails alone:
+
+    for u, _err in failures:
+            u.undef, u.strong, u.weak = set(), set(), set()
+            u.compiled = True
+            broken.add(u.key)
+
+The guard then selects `u.compiled and u.obj`, which is true of a unit
+with no object file at all, and asks whether any of them has a symbol.
+When every compile fails, none has, and the guard's premise -- that nm
+was asked and answered -- was never true.
+
+**Its own output said so and nobody read it.** "one that reads *unknown*
+objects" is `elf_identity` of a path that does not exist. The sentence
+naming the evidence was the evidence that there was none.
+
+### The fix is `broken`, and `os.path.exists` would be wrong
+
+    _read = [u for u in units.values()
+             if u.compiled and u.obj and u.key not in broken
+             and not u.prebuilt and not u.archive]
+
+Asking the filesystem whether the object is there looks more direct and
+is the weaker test: a stale object from an earlier successful build
+survives a compile that has just failed, so `exists()` is true of a unit
+whose symbol tables this build zeroed. `broken` is what the compile pass
+already knows, and it answers the question the guard means to ask.
+
+The neighbouring code says the rule in as many words, 5700 lines
+earlier, where symbol tables are read: *"Only for what actually
+compiled: a failed unit has no object file, and asking nm to read one
+that is not there is a different error from the one the user needs to
+see."* The guard is the same sentence, read at the wrong distance.
+
+### Why two files, and why it stayed hidden
+
+The discriminator is every object rather than this one, so the guard
+needs `len(_read) > 1` -- and the first fixture tried, `a.c` with a
+`main()` and `b.c` without, compiled exactly one file, because fmake
+compiles what a target needs rather than what the tree holds. One
+failing file was always silent. It takes two targets failing in the same
+pass, which is the ordinary shape of a typo in a shared header and was
+not the shape of any existing case.
+
+`a_build_where_nothing_compiles_does_not_blame_nm` is that tree. It
+asserts the control -- the compile really did fail -- and that the nm
+sentence is absent, and it fails without the clause.
+`a_silent_nm_is_named_rather_than_the_source` is the positive control on
+the other side: its two files compile, so `broken` is empty, and the
+warning still fires for the tool it was written for.

@@ -13949,8 +13949,23 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# to nothing look the same as a tool that has just broken. That
 		# cannot be told apart from this signal, and a refusal would turn
 		# a build that works into one that does not.
+		#
+		# `u.key not in broken' because a unit that failed to compile is
+		# given empty tables and marked compiled on purpose, a few
+		# thousand lines above -- so a tree where EVERY compile failed
+		# reads here as a tree of empty objects, and this warning then
+		# tells the reader their nm is broken in a run whose only fault
+		# is a typo. The compile site says the rule in as many words:
+		# "asking nm to read one that is not there is a different error
+		# from the one the user needs to see."
+		#
+		# Not `os.path.exists(u.obj)', which looks more direct and is
+		# weaker: a stale object from an earlier successful build
+		# survives a compile that has just failed, so the file is there
+		# and its symbols are not. `broken' is what the compile pass
+		# already knows.
 		_read = [u for u in units.values()
-		         if u.compiled and u.obj
+		         if u.compiled and u.obj and u.key not in broken
 		         and not u.prebuilt and not u.archive]
 		if len(_read) > 1 and not any(u.undef or u.strong or u.weak
 		                              for u in _read):
