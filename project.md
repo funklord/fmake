@@ -536,7 +536,8 @@ that had been green about nothing for five commits ·
 [483. hull is not waiting for the key it asked for](#483-hull-is-not-waiting-for-the-key-it-asked-for) ·
 [484. The -I that changed what an include meant](#484-the--i-that-changed-what-an-include-meant) ·
 [485. The fixture that spelled a link flag](#485-the-fixture-that-spelled-a-link-flag) ·
-[486. ossacli's shim, and three refusals that each named the vocabulary](#486-ossaclis-shim-and-three-refusals-that-each-named-the-vocabulary)
+[486. ossacli's shim, and three refusals that each named the vocabulary](#486-ossaclis-shim-and-three-refusals-that-each-named-the-vocabulary) ·
+[487. Three consumers' workarounds for defects fmake has fixed](#487-three-consumers-workarounds-for-defects-fmake-has-fixed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37794,3 +37795,93 @@ rapidjson ships an MSVC-only `stdint.h`, which is §319's own incident.
 That file is inside the tree, so it is the basename fallback's problem
 and not a proposal's -- which is why the check was worth running rather
 than reasoning about.
+
+## 487. Three consumers' workarounds for defects fmake has fixed
+
+§483 found fmake's own record holding a question open that §75 had
+answered. The same reading applied to the consumers' `fmake.toml` files
+-- fifteen of them, 923 lines of commentary, and **every line is a dated
+claim about fmake** -- finds the same shape three times more.
+
+The configs are honest and were right when written. Nothing re-reads
+them: a workaround is written once, the defect it works around gets
+fixed in this tree, and no part of the ordinary course of work brings
+the two together. `evidence.md` says a fact recorded without its method
+has a shelf life; this is a fact recorded *with* its method, which went
+stale anyway because the subject moved.
+
+### ossacli and raidcfgd: the module route does work
+
+ossacli excludes `src/shim`; raidcfgd excludes `ossacli/src/shim/**` and
+cites ossacli's reasoning, which names a specific objection to the
+alternative:
+
+> `@kind module` on the shims is not the answer either -- ossacli
+> measured that it produces an interposer that dies at load, because
+> `simfw.c` has to be in the shim AND in the programs that ship
+> `OSSA_TRANSPORT=mock`.
+
+Both halves of that are in fmake's §292, with its fix: *"a file is kept
+to the module when it defines something libc also defines, and is shared
+like any other source when it does not."* So `simfw.c` -- which defines
+nothing of libc's -- is compiled into the module and into the programs,
+and `sgshim.c`, which stands in for `close()` and `ioctl()`, is kept to
+the module alone.
+
+Measured, all three states, in a `git archive` of ossacli with two module
+stanzas in place of the exclusion:
+
+    bare                        permission denied (need root)
+    OSSA_TRANSPORT=mock         slot 1 ... (sim:sg0)
+    LD_PRELOAD=./ossa-sgshim.so slot 1 ... (/dev/sg4093)
+
+The middle line is the one raidcfgd's objection is about, and it is the
+one I had not run when the first message went to ossacli -- their own
+record is what said which experiment was missing. The three readings
+differ in the right way: the mock transport reaches the simulator
+directly, the preloaded shim intercepts an ioctl on a real-looking path,
+and the bare program refuses because nothing asked.
+
+### hydra: the macro and the paths arrive together now
+
+hydra's config records a live failure:
+
+> fmake gives a `@pkg_optional` *macro* to the whole tree but that
+> package's *cflags* only to the file carrying the annotation, so
+> `-DHYDRA_HAVE_DBUS` here would define the macro everywhere without
+> giving anyone Qt6DBus's include path -- trading a stub collision for a
+> missing header.
+
+That asymmetry is gone, and the code says so in as many words -- *"The
+include path and the package's own defines follow the macro tree-wide,
+because the macro is what sends another file into the real-package
+branch of a header that shapes itself on it"* -- with hydra's
+`QDBusVariant: No such file or directory` quoted as what it cost. Only
+paths and defines follow; a `-std=` or an `-fno-exceptions` from
+somebody's `.pc` stays with the file that named the package.
+
+**Measured rather than read, because `test_theme` is the file their
+report names.** `fmake test_theme -j2` in a `git archive` of hydra, the
+job count their README requires: `* built test_theme`, exit 0. And the
+control that matters, since a build can succeed by never reaching the
+case -- `test_theme.cpp` carries no annotation of its own, and its
+compile line has both halves:
+
+    HYDRA_HAVE_DBUS: True
+    QtDBus -I      : -I/usr/include/x86_64-linux-gnu/qt6/QtDBus
+
+So the file that failed is compiled with the macro defined *and* the
+include path present, which is the state their config says cannot
+happen.
+
+### The lens, which is the part worth keeping
+
+**A consumer's workaround is a dated claim about its dependency, and it
+is the hardest kind to keep true**: it lives in their tree, it is
+justified by a measurement, and the thing that would falsify it happens
+in a different repository. Neither side is wrong and neither side looks.
+
+So the sweep is worth running from this end rather than theirs, because
+this is the end that knows when a defect was fixed. `git log -S` on the
+section number a config cites dates the fix; the config's own
+measurement date says whether it could have known.
