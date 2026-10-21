@@ -526,7 +526,8 @@ that had been green about nothing for five commits ·
 [473. Every artifact, asked of the program that reads it](#473-every-artifact-asked-of-the-program-that-reads-it) ·
 [474. A cross build, with readelf as the witness](#474-a-cross-build-with-readelf-as-the-witness) ·
 [475. Six artifacts, three processes, byte for byte](#475-six-artifacts-three-processes-byte-for-byte) ·
-[476. The flag that would have fixed 468, and why a tree cannot write it](#476-the-flag-that-would-have-fixed-468-and-why-a-tree-cannot-write-it)
+[476. The flag that would have fixed 468, and why a tree cannot write it](#476-the-flag-that-would-have-fixed-468-and-why-a-tree-cannot-write-it) ·
+[477. The stale exclude that is not a finding](#477-the-stale-exclude-that-is-not-a-finding)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36898,3 +36899,51 @@ than the one it claimed, after the Qt gate's two. The pattern is worth
 naming: **an arm written as "a wrong fix would fail here" has to be
 tried with that wrong fix**, because the ordering of the code often
 makes the wrong fix impossible rather than caught.
+
+## 477. The stale exclude that is not a finding
+
+Section 476 was an instance of *a flag accepted and dropped*, so the
+next question was where else a config entry is accepted and silently
+does nothing. `[project] exclude` looks like the answer: patterns are
+paths, paths go stale under a rename, and an exclude that stops matching
+**re-admits the file it was keeping out** -- which for fuzzypickles'
+twenty-one patterns means a duplicate symbol or another project's suite
+coming back.
+
+Measured first: three patterns matching nothing, and fmake says nothing
+at all, not even under `-v`.
+
+    exclude = ["vendor/old/**", "legacy_*.c", "build-*"]
+    [1/1] CC  main.c
+    * built stale-ex
+
+So the next step was obvious -- record which patterns the predicate ever
+matched and name the rest. It was written, as an experiment rather than
+a change, and run against two real configs:
+
+    ossacli   2 exclude pattern(s) matched nothing: debian, libossa.a
+    qtty      1 exclude pattern(s) matched nothing: build-*
+
+**All three are working correctly.** `build-*` and `libossa.a` guard
+build output that does not exist in a fresh checkout -- the pattern is
+prophylactic, and matching nothing is what success looks like until
+somebody runs `make`. And `debian` contains no source file, so no
+candidate is ever under it and the predicate is never asked: the
+directory is excluded in the sense that matters and the pattern never
+fires.
+
+Three real patterns, three false positives, no true ones. **A pattern
+that matched nothing is not evidence of staleness**, and fmake cannot
+tell a stale exclude from a prophylactic one because there is nothing to
+tell them apart with -- both match nothing today. The silence is right
+and the experiment was reverted.
+
+### Why this is worth a section
+
+It cost one measurement to find out and would have cost every reader of
+every tree a wrong line on every build. The cheap version of this
+mistake is the one worth naming: **"fmake could report X" is a
+hypothesis about a population**, and the population here was three
+patterns in two files. Writing the feature and running it over real
+configs is how to test such a hypothesis, and reverting is the result
+rather than a failure.
