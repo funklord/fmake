@@ -534,7 +534,8 @@ that had been green about nothing for five commits ·
 [481. Advice about nm, in a build where nothing compiled](#481-advice-about-nm-in-a-build-where-nothing-compiled) ·
 [482. The define the advice asks for, met from the other side](#482-the-define-the-advice-asks-for-met-from-the-other-side) ·
 [483. hull is not waiting for the key it asked for](#483-hull-is-not-waiting-for-the-key-it-asked-for) ·
-[484. The -I that changed what an include meant](#484-the--i-that-changed-what-an-include-meant)
+[484. The -I that changed what an include meant](#484-the--i-that-changed-what-an-include-meant) ·
+[485. The fixture that spelled a link flag](#485-the-fixture-that-spelled-a-link-flag)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37601,3 +37602,60 @@ program's question"* -- and nothing was lost by it: the one closure-wide
 flag a shared library requires is `-fPIC`, which fmake adds tree-wide
 itself as soon as any target is shared. hull's `-fvisibility=hidden` is
 what `@cflags` in the file is for.
+
+## 485. The fixture that spelled a link flag
+
+The gate for §484 failed one case, and the failure read exactly like a
+regression in the cross path:
+
+    FAIL cross_refuses_host_libraries
+           the host's zlib must not be offered to a cross link:
+    target fmake-cross_refuses_host_libraries-lzcjklfy (exe)
+
+The tree was `/tmp/fmake-cross_refuses_host_libraries-**lz**cjklfy`, and
+`--explain` prints the tree's name at the top of its report. So `"-lz"
+in libs` was true of the fixture's own path. Nothing was offered to the
+cross link; the same output, four lines down, says *"zlib.h at main.c:2
+suggests zlib, but no symbol needs it"* and *"(unresolved)
+zlibVersion"*, which are the assertions that were supposed to fail if
+the fix had broken.
+
+**This is the suite's own rule, which it states about fmake in three
+places: a substring is not a structural test.** §474's first Qt gate
+matched `/qt` in a flag and hit a scratch directory called `qtkw3`;
+§319's basename fallback is the same shape; and here the suite does it
+to itself, in an assertion about the thing it was built to check.
+
+### The odds are per flag, not per run
+
+`mkdtemp`'s suffix is eight characters of `[a-z0-9_]` and the alphabet
+holds no hyphen, so a `-l` can only be formed where this suite joins its
+own prefix to that suffix -- `fmake-{case}-` + `lz...`. Which means every
+`-l<name>` the suite asserts on is spellable, one flag at a time, and
+there were 24 such assertions. Six were negative, where a false match
+fails a passing build; the other eighteen were positive, where it passes
+a broken one. The run that produced this did both at once: the native arm
+of that same case asserts `-lz` IS present, and it was satisfied by the
+path.
+
+### What replaced them
+
+    def links(text, flag):
+            return re.search(r"(?<![\w.-])" + re.escape(flag)
+                             + r"(?![\w.-])", text) is not None
+
+Nine strings as the proof, run against the matcher rather than against
+the suite: the failing path and `-lzma` do not match, `cc -o prog
+main.o -lz -lm` and `['-lz']` and a flag at the end of a line do.
+
+**Two fixes were available and the other one is worth recording.** The
+prefix ends in a hyphen, so `fmake-{case}_` would make the class
+unspellable from the suffix in one character -- for every flag, including
+the `-I`, `-D` and `-O` assertions this sweep did not touch. It was not
+taken because it moves every fixture path in the suite, and the target
+name a case asserts on is derived from that path; a one-character change
+with a whole-suite blast radius is worse than a precise matcher, and the
+matcher is the rule this project already states. The hyphen remains
+spellable by a custom tree name -- `Tree("one-dead-object")` is one
+hyphen from `-l` if the next word began with an l -- which the matcher
+covers and the prefix change would not.

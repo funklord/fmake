@@ -173,6 +173,28 @@ def check(cond, what):
 
 
 
+def links(text, flag):
+	"""Whether this text names a link flag, as a flag.
+
+    A substring is not a structural test, which this suite has written in
+    three places about fmake and then needed about itself. A fixture at
+    `/tmp/fmake-cross_refuses_host_libraries-lzcjklfy\' makes `"-lz" in
+    text\' true of its own path -- the tree name, which `--explain\' prints
+    at the top of its report. In one full run that failed the negative
+    assertion in that case and satisfied the positive one by accident, and
+    the failure read exactly like a regression in the cross path.
+
+    mkdtemp\'s suffix is eight characters of [a-z0-9_] with no hyphen in
+    the alphabet, so the `-\' can only come from the prefix this suite
+    joins it with -- which means any `-l<name>\' is spellable and the odds
+    are per flag, not per run.
+
+    The lookarounds exclude a word character, a dot and a hyphen on either
+    side, so `-lz\' matches in `cc main.o -lz\' and `[\'-lz\']\' and not in
+    `-lzcjklfy\' or `-lzma\'."""
+	return re.search(r"(?<![\w.-])" + re.escape(flag) + r"(?![\w.-])",
+	                 text) is not None
+
 def before_externals(explain_out):
 	"""The part of --explain above the external-symbol list.
 
@@ -3760,7 +3782,7 @@ int main(int argc, char **argv){
 	shown = [l.strip() for l in t.fmake("--explain").stdout.splitlines()
 	         if l.strip().startswith(("cc -o", "c++ -o"))]
 	check(shown, "no link command in --explain")
-	check("-lm" in shown[-1],
+	check(links(shown[-1], "-lm"),
 	      f"the resolved library should appear: {shown[-1]}")
 
 	# The strongest form of the claim: run exactly what was shown, from the
@@ -4661,7 +4683,7 @@ int main(void){ printf("%.0f\\n", sqrt((double)(n()*SCALE*5))); return 0; }
 	      "the directives beside the rule did not take effect")
 	e = t.fmake("--explain").stdout
 	check("-DSCALE=4" in e and "-std=c17" in e, f"flags missing: {e}")
-	check("-lm" in e, f"@libs in fmake.mk should link: {e}")
+	check(links(e, "-lm"), f"@libs in fmake.mk should link: {e}")
 
 
 @case
@@ -6617,7 +6639,7 @@ def a_pkgconfig_file_names_the_prefix_it_is_installed_at(t):
 		check(ver.stdout.strip() == "1.2.3",
 		      f"pkg-config reads a different version: {ver.stdout!r}")
 		libs = _run_in(t.dir, "pkg-config", "--libs", "greet", env=env)
-		check("-lgreet" in libs.stdout,
+		check(links(libs.stdout, "-lgreet"),
 		      f"pkg-config does not answer with the library: {libs.stdout!r}")
 
 	for backend, out, run in (("make", "Makefile", ["make", "-s"]),
@@ -8537,7 +8559,7 @@ def a_pkgconfig_file_names_what_else_the_library_needs(t):
 		text = fh.read()
 	check("Libs.private:" in text,
 	      f"the .pc says nothing about what else the library needs:\n{text}")
-	check("-lz" in text and "-lm" in text,
+	check(links(text, "-lz") and links(text, "-lm"),
 	      f"the .pc names neither the package nor the raw library:\n{text}")
 
 	# The measurement that made this a bug rather than a nicety: a
@@ -11238,7 +11260,7 @@ def an_ejected_makefile_asks_pkg_config_for_the_places(t):
 		e = u.fmake("--eject", "make")
 		if e.returncode != 0:
 			raise Skip("zlib is not installed, so the names-only half is untested")
-		check("PKG_CONFIG" not in e.stdout and "-lz" in e.stdout,
+		check("PKG_CONFIG" not in e.stdout and links(e.stdout, "-lz"),
 		      f"a names-only module was deferred:\n{e.stdout}")
 	finally:
 		u.cleanup()
@@ -13220,7 +13242,7 @@ def a_package_only_a_published_header_names_reaches_requires(t):
 	check("Requires: frob" not in pc,
 	      f"a package the implementation alone uses is nobody else's "
 	      f"business: {pc}")
-	check("-lfrob" in pc,
+	check(links(pc, "-lfrob"),
 	      f"but the static archive still needs it at link time, which is "
 	      f"Libs.private: {pc}")
 
@@ -15945,7 +15967,7 @@ int main(int argc, char **argv){
 	      f"{_elf_machine(prog):#x}")
 
 	e = t.fmake("--explain").stdout
-	check("-lm" in e, f"libm should have been resolved for the target: {e}")
+	check(links(e, "-lm"), f"libm should have been resolved for the target: {e}")
 	check("aarch64" in e, f"the target architecture should be reported: {e}")
 
 	qemu = shutil.which("qemu-aarch64") or shutil.which("qemu-aarch64-static")
@@ -15976,7 +15998,7 @@ def cross_refuses_host_libraries(t):
 	        'int main(void){ printf("%s\\n", zlibVersion()); return 0; }\n')
 
 	# Native first: this must resolve, or the case proves nothing.
-	check("-lz" in t.fmake("--explain").stdout,
+	check(links(t.fmake("--explain").stdout, "-lz"),
 	      "zlib should resolve natively")
 
 	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
@@ -15986,7 +16008,7 @@ def cross_refuses_host_libraries(t):
 	# matching those in a failed build would pass even if -lz were offered.
 	e = t.fmake("--explain").stdout
 	libs = before_externals(e)
-	check("-lz" not in libs,
+	check(not links(libs, "-lz"),
 	      f"the host's zlib must not be offered to a cross link: {libs}")
 	check("(unresolved)" in libs and "zlibVersion" in libs,
 	      f"zlibVersion should be reported unresolved: {libs}")
@@ -16099,9 +16121,9 @@ arch     = "aarch64"
 lib-dirs = ["{host_libs}"]
 """)
 	libs = before_externals(t.fmake("--explain").stdout)
-	check(f"{host_libs}" not in libs or "-lz" not in libs,
+	check(f"{host_libs}" not in libs or not links(libs, "-lz"),
 	      f"a host library was offered to a cross link: {libs}")
-	check("-lz" not in libs,
+	check(not links(libs, "-lz"),
 	      f"host zlib must be rejected by architecture: {libs}")
 	check("zlibVersion" in libs and "(unresolved)" in libs,
 	      f"the symbol should remain unresolved: {libs}")
@@ -19300,7 +19322,7 @@ int main(void){ puts("no math called here"); return 0; }
 """)
 	r = t.fmake("--explain")
 	check(r.returncode == 0, f"explain failed: {r.stderr}")
-	check("-lm" in r.stdout, f"@libs should force the link: {r.stdout}")
+	check(links(r.stdout, "-lm"), f"@libs should force the link: {r.stdout}")
 	check(t.fmake().returncode == 0, "build failed")
 
 
@@ -24213,7 +24235,7 @@ int main(void){
 	r = t.fmake()
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	e = t.fmake("--explain").stdout
-	check("-lz" in e, f"zlib should have been resolved: {e}")
+	check(links(e, "-lz"), f"zlib should have been resolved: {e}")
 	check(t.run(os.path.basename(t.dir)).stdout.endswith(" 1\n"),
 	      "binary did not run correctly")
 
@@ -24302,7 +24324,7 @@ int main(void){
 	r = t.fmake()
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	libs = before_externals(t.fmake("--explain").stdout)
-	check("-lncurses" in libs,
+	check(links(libs, "-lncurses"),
 	      f"ncurses should have been resolved through the script: {libs}")
 	check("(unresolved)" not in libs,
 	      f"every curses symbol should resolve: {libs}")
@@ -24367,7 +24389,7 @@ int main(void){ printf("%d\\n", only_in_decoy()); return 0; }
 		check(r.returncode != 0,
 		      f"nothing linkable exports the symbol, so this cannot build: "
 		      f"{out}")
-		check("-lthing" not in out,
+		check(not links(out, "-lthing"),
 		      f"the comment was believed: fmake resolved the symbol to a "
 		      f"library whose live script does not export it: {out}")
 		check("library exports: only_in_decoy" in out,
@@ -24430,7 +24452,7 @@ int main(int argc, char **argv){
 	libs = before_externals(r.stdout)
 	for bad in ("-lasan", "-ltsan", "-lubsan", "-llsan"):
 		check(bad not in libs, f"{bad} must never be chosen: {libs}")
-	check("-lm" in libs, f"the real implementation should be chosen: {libs}")
+	check(links(libs, "-lm"), f"the real implementation should be chosen: {libs}")
 	check(t.fmake().returncode == 0, "build failed")
 
 
@@ -24450,7 +24472,7 @@ int main(void){ puts("nothing from zlib"); return 0; }
 """)
 	r = t.fmake("--explain")
 	check(r.returncode == 0, f"explain failed: {r.stderr}")
-	check("-lz" not in r.stdout, f"zlib should not be linked: {r.stdout}")
+	check(not links(r.stdout, "-lz"), f"zlib should not be linked: {r.stdout}")
 	check("no symbol needs it" in r.stdout,
 	      f"the unused header should be reported: {r.stdout}")
 
@@ -24478,7 +24500,7 @@ int main(void){
 	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
 	e = t.fmake("--explain").stdout
 	check("-I/usr/include/libxml2" in e, f"missing the -I flag: {e}")
-	check("-lxml2" in e, f"missing the -l flag: {e}")
+	check(links(e, "-lxml2"), f"missing the -l flag: {e}")
 	check(t.run(os.path.basename(t.dir)).stdout == "a\n", "wrong output")
 
 
@@ -26277,7 +26299,7 @@ class W : public QObject { Q_OBJECT public: int n = 0; };
 		        "int main(void){ return zlibVersion() ? 0 : 1; }\n")
 		check(u.fmake().returncode == 0, "the zlib build failed")
 		r = u.fmake("--explain")
-		check("zlib" in r.stdout or "-lz" in r.stdout,
+		check("zlib" in r.stdout or links(r.stdout, "-lz"),
 		      f"zlib was not resolved, so nothing was checked: "
 		      f"{r.stdout[:300]}")
 		check("-fPIC" not in r.stdout,
@@ -27845,7 +27867,7 @@ def one_resolved_archive_needs_no_group(t):
 		r = t.fmake()
 		check(r.returncode == 0, f"the build failed: {r.stdout}{r.stderr}")
 		r = t.fmake("--explain")
-		check("-lzzsolo" in r.stdout, f"the archive was not used: {r.stdout}")
+		check(links(r.stdout, "-lzzsolo"), f"the archive was not used: {r.stdout}")
 		check("--start-group" not in r.stdout,
 		      f"one archive was given a group it does not need: {r.stdout}")
 	finally:
@@ -34837,14 +34859,14 @@ def project_wide_libs_and_pkg_reach_every_target(t):
 
 	name = os.path.basename(t.dir)
 	line = linkline('[project]\nlibs = ["m"]\n')
-	check("-lm" in line,
+	check(links(line, "-lm"),
 	      f"[project] libs has to reach the link, as [project] ldflags "
 	      f"does: {line}")
 
 	# The control: the per-target spelling, which already worked and must
 	# keep working, so this adds a path rather than moving one.
 	line = linkline(f'[target.{name}]\nroot = "main.c"\nlibs = ["m"]\n')
-	check("-lm" in line, f"the per-target spelling regressed: {line}")
+	check(links(line, "-lm"), f"the per-target spelling regressed: {line}")
 
 	# Both, which must not say it twice.
 	line = linkline('[project]\nlibs = ["m"]\n'
@@ -34854,7 +34876,7 @@ def project_wide_libs_and_pkg_reach_every_target(t):
 
 	if _have_pkg("zlib"):
 		line = linkline('[project]\npkg = ["zlib"]\n')
-		check("-lz" in line,
+		check(links(line, "-lz"),
 		      f"[project] pkg has to reach the link too: {line}")
 
 	# And -i still offers a stanza for a target the config has not
