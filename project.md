@@ -532,7 +532,8 @@ that had been green about nothing for five commits ·
 [479. The sixth branch of one refusal](#479-the-sixth-branch-of-one-refusal) ·
 [480. The exec that lost a race with a fork](#480-the-exec-that-lost-a-race-with-a-fork) ·
 [481. Advice about nm, in a build where nothing compiled](#481-advice-about-nm-in-a-build-where-nothing-compiled) ·
-[482. The define the advice asks for, met from the other side](#482-the-define-the-advice-asks-for-met-from-the-other-side)
+[482. The define the advice asks for, met from the other side](#482-the-define-the-advice-asks-for-met-from-the-other-side) ·
+[483. hull is not waiting for the key it asked for](#483-hull-is-not-waiting-for-the-key-it-asked-for)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33335,6 +33336,12 @@ take a path as a table name.
 hull's README still says make for now, which is correct until the key
 exists.
 
+**And the second sentence of that is wrong: §483.** The two errors above
+are expressible today with five `[generate.*]` rules, measured against
+hull at `7a2a5a1`, so what the README is waiting for is situ's finding 18
+rather than this key. The ask stands and the spelling is still the
+holder's; nobody is blocked on it.
+
 ## 431. A generated unit carries no directives, and nothing said so
 
 A moc output is a translation unit nobody annotated. `@define` is per
@@ -37182,12 +37189,22 @@ harness cannot retry them, and the failure would not arrive as an
 appears to have failed for its own reasons, in a case about something
 else.
 
-None has been observed. The only complete cure is a lock held exclusively
-while an executable fixture is written and shared around every
-subprocess launch, which is invasive for zero instances, so what is
-recorded here instead is the symptom -- so that the next transient shim
-failure arrives with its explanation already written rather than costing
-the afternoon this one cost.
+None has been observed, and the timing says why rather than luck
+saying it. The window is the *overlap* of two things: a child of the
+harness holding the fd, and the exec happening while it does. In the
+version case those are microseconds apart -- copy, chmod, exec. A shim
+is written, and then fmake starts, reads a tree, and compiles something
+before it ever execs the shim, which is milliseconds later at best. A
+`posix_spawn` child cannot be in its clone-to-exec gap that long,
+because that gap suspends the thread that opened it.
+
+So the exposure is real in form and small in fact, and the difference is
+the distance between the write and the exec. The only complete cure is a
+lock held exclusively while an executable fixture is written and shared
+around every subprocess launch, which is invasive for zero instances --
+so what is recorded here instead is the symptom, and the measure of how
+worried to be: a site that writes an executable and runs it immediately
+is the one to fix, and the version case was the only one.
 
 ## 481. Advice about nm, in a build where nothing compiled
 
@@ -37378,3 +37395,115 @@ fail in a phase that has nothing to do with the project's own sources
 a build. **It is the copyright holder's decision**, and until it is
 taken the honest thing for a README is the static list with its one
 limitation known rather than a probe implied.
+
+## 483. hull is not waiting for the key it asked for
+
+§430 recorded hull's ask -- a per-schema place for situc flags -- and
+deferred the spelling, correctly: a key is a promise and that one would
+have been the first to take a path as a table name. What it also
+recorded, and what turns out not to be true, is that the ask is what
+stands between hull and an fmake build.
+
+`working-practice.md` says to check whether a project has already
+decided a question somewhere else under a different name before
+deferring it, and the answer was two sections back in this file. **§75:
+"A single `[generate.*]` in `fmake.toml` takes a glob in `inputs` and a
+command that loops."** A per-item command with its own flags, keyed by a
+name the reader chooses, with the path inside the table -- which is the
+shape hull needs, minus the promise.
+
+### Measured, rather than argued
+
+hull at `7a2a5a1` with situ pinned at `7dd8aa0`, reconstructed from
+`git archive` into scratch, fmake at `ad5a4ae`. With hull's own
+`fmake.toml` the three errors of §430 reproduce exactly. With five
+`[generate.*]` rules carrying the flags hull's Makefile gives situc, and
+`include-dirs = ["gen"]`:
+
+    message_frame.h: No such file or directory      gone
+    redefinition of 'situ_form_view'                gone
+    implicit declaration of hull_frontend_list_validate   remains
+
+The one that remains is **situ's finding 18**, which hull already
+attributes to situ and works round with a per-file `-include`: two of
+them, in fact -- `core/frontend_view.h` for `frontend.o` and
+`agent/protocol_view.h` for `protocol.o` -- so no tree-wide `cflags`
+can say it, and a tree-wide one was tried and broke `agent/agent.c` as
+well. But a generate rule writes the file, so it can write that line
+into it:
+
+    command = "... situc build ... --out gen core/frontend.situ &&
+               sed -i '1i #include \"core/frontend_view.h\"' gen/frontend.c"
+
+**With that, fmake builds hull.** `* built hullx_agent, hull`, exit 0,
+and the binaries run: `hull --version` prints `hull 0.1` with the
+copyright line, which is also `HULL_VERSION` arriving from
+`$file(VERSION)`, and the agent exits 2 with "runs as a machine's init,
+PID 1", which is the program refusing its environment rather than
+failing.
+
+**Not the whole of `make all`**, and the difference is worth naming
+rather than leaving for somebody to discover: hull's default target also
+builds `libnss_hull.so.2`, a shared library, which has no `main()` and
+so is not a target fmake discovers. `[target.*] kind` exists and was not
+tried. So the claim is two programs built and running, not parity.
+
+The deferred key is not the blocker either way. Whether it is still the
+better spelling is a different question and still the holder's; what has
+changed is that nobody is waiting on it.
+
+Five rules of three lines each, against four lines of `[situ] flags`
+that cannot say it: the cost is that hull names its inputs and outputs
+by hand, which is what its Makefile already does.
+
+### The second finding, which came out of the first
+
+With the rules in place fmake's own schema pass stands down, and says so
+per schema under `-v`: *"agent/message.situ: this tree carries message.h
+already, so the schema is not compiled over it"*. That rule was already
+there. What was not there is the sweep:
+
+    run 1, [situ] flags       12 files in .fmake/situ
+    run 2, [generate] rules   12 files in .fmake/situ
+
+`prune_generated` is called at four sites and situ's was the only one
+**inside** the branch that stops running. uic, rcc and moc prune before
+their own `if`, keyed only on the dry run, because each computes its
+output names; situ reads its outputs out of situc's own words, so its
+prune waits for the run -- and a plan with no jobs never reached it. The
+one thing it can say without a run is that an empty plan keeps nothing,
+which is now the fourth site. Twelve files to zero.
+
+### The comfortable reading was tested and it failed
+
+`prune_generated`'s docstring argues the uic case in strong terms -- a
+generated header reached through an include path outlives its input,
+nothing it depends on changed, so "a tree which builds here and fails on
+a fresh checkout". A situ header is reached the same way, so the parallel
+writes itself, and this section's first draft asserted it: that the
+leftover headers were shadowing hull's new ones and include-order
+decided which won.
+
+**Three measurements say no.**
+
+- The include dir for the state directory is **inferred from the current
+  run's outputs**. With the plan empty it is not added at all: `0
+  inferred include dir(s) kept besides the tree root`, and a tree whose
+  schema was deleted stops with `thing.h: No such file or directory`
+  rather than compiling against the copy sitting beside it.
+- hull's own depfiles name `gen/readable.h` and `gen/canonical.h`, not
+  the state directory's -- so nothing was shadowed there either.
+- The first run with a schema again prunes what it does not keep.
+  Deleting one schema and adding another left `other.*` and removed
+  `thing.*`, unaided.
+
+So the leak heals exactly when it could start to matter, and the fix is
+tidiness rather than correctness. It is kept because the asymmetry with
+three siblings is real and because that function already states the rule
+for the two that cannot go wrong either: *"Swept anyway: the rule is
+easier to trust when it has no exceptions."*
+
+Both halves of this section are the same lesson in opposite directions.
+A deferral held a question open that something else had answered; a
+docstring's argument volunteered a severity the measurement would not
+support. Neither error was in the code.

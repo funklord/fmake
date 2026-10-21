@@ -12003,6 +12003,33 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 
 	situ_jobs, situ_unused, situ_why = situ_plan(root, hdrs, scans,
 	                                             skip=_not_compiled_here)
+	# An empty plan is the one case the prune below cannot reach, because
+	# it is inside the branch that stops running. The three siblings for
+	# uic, rcc and moc prune BEFORE their own `if', keyed only on the dry
+	# run: each computes its output names, so it can prune against the
+	# plan. This one reads its outputs out of situc's own words, which is
+	# why its prune waits for the run and carries `since' -- but the one
+	# thing it can say without the run is that an empty plan keeps
+	# nothing.
+	#
+	# Measured on hull, migrating from `[situ] flags' to five
+	# `[generate.*]' rules of its own, which takes the plan to nothing:
+	# twelve files survived in the state directory, and would have stayed
+	# for as long as that configuration did.
+	#
+	# **Leaked state and not a stale header**, which is worth saying here
+	# because the uic argument in `prune_generated' invites the stronger
+	# reading. The inferred include dir is derived from THIS run's
+	# outputs, so with the plan empty the state directory is not on any
+	# include path -- measured, "0 inferred include dir(s) kept" and a
+	# build that stops with "thing.h: No such file or directory" rather
+	# than compiling against the file sitting beside it. And the first
+	# run with a schema again prunes what it does not keep, so the leak
+	# heals the moment it could matter. This is the fourth site made to
+	# match the other three, on that function's own rule for moc and rcc:
+	# swept anyway, because a rule with no exceptions is easier to trust.
+	if not situ_jobs and not args.dry_run:
+		prune_generated(root, SITU_DIR, [], since=situ_started)
 	if situ_jobs:
 		situc_exe = find_situc(cfg.situc, root)
 		if not situc_exe:

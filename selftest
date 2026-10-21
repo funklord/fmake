@@ -12629,6 +12629,69 @@ def this_trees_schema_outranks_a_vendored_projects(t):
 
 
 @case
+def a_schema_that_is_gone_takes_its_generated_header_with_it(t):
+	"""Generated output outlives its input, and nothing swept an empty plan.
+
+    situ\'s prune was the one call of four made INSIDE the branch that
+    stops running. uic, rcc and moc prune before their own `if\', keyed
+    only on the dry run, because each computes its output names; situ
+    reads its outputs out of situc\'s own words, so its prune waits for
+    the run -- and a plan with no jobs never reached it.
+
+    Measured on hull, migrating from `[situ] flags\' to five
+    `[generate.*]\' rules of its own, which takes the plan to nothing:
+    twelve generated files survived, and would have stayed for as long as
+    that configuration did.
+
+    **This asserts the sweep, not a staleness hazard**, and the
+    distinction is measured rather than assumed. The include dir for the
+    state directory is inferred from the current run\'s outputs, so while
+    the plan is empty the leftovers are on no include path -- the second
+    run below fails with the header missing rather than compiling against
+    the copy sitting in `.fmake/situ\' -- and the first run with a schema
+    again prunes whatever it does not keep. So the leak heals exactly
+    when it could start to matter, which is why the fix is the fourth
+    site matching the other three on `prune_generated\'s own rule for moc
+    and rcc: swept anyway, because a rule with no exceptions is easier to
+    trust."""
+	situc = t.write("bin/situc", FAKE_SITUC % {"stream": "stdout",
+	                                           "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write("thing.situ", "// a schema\n")
+	t.write("main.c", '#include "thing.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", thing_check()); return 0; }\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the control is wrong: the schema has to build first: {out}")
+	gen = os.path.join(t.dir, ".fmake", "situ")
+	made = sorted(os.listdir(gen)) if os.path.isdir(gen) else []
+	check("thing.h" in made,
+	      f"the control is wrong: nothing was generated to go stale: "
+	      f"{made}")
+
+	# The schema goes and the include stays, which is the shape the uic
+	# argument describes: the file that answered it is gone and the
+	# generated answer is still where the compiler looks.
+	os.remove(os.path.join(t.dir, "thing.situ"))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	left = sorted(os.listdir(gen)) if os.path.isdir(gen) else []
+	check(not left,
+	      f"the schema is gone and its generated files are still on the "
+	      f"include path, answering an #include nothing writes any more: "
+	      f"{left}")
+	# Not a second finding: this is what shows the leftovers were inert.
+	# The state directory is on no include path while the plan is empty,
+	# so the build stops on the header rather than compiling against the
+	# copy that was sitting beside it.
+	check(r.returncode != 0 and "thing.h" in out,
+	      f"the build should stop on the missing header, which is what "
+	      f"makes the files above a leak rather than a stale answer: "
+	      f"{out}")
+
+
+@case
 def a_vendored_situ_supplies_the_compiler_for_its_schemas(t):
 	"""Section 402: the tree-local situc was looked for in one place.
 
