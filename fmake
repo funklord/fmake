@@ -1780,6 +1780,61 @@ def _expand_conf_files(data, root):
 	return data
 
 
+# Where `$root' and `$file()' are substituted, and the keys where writing
+# one is a mistake nothing would otherwise report. `_expand_conf_files'
+# does the defines and says why it does only those: widening the
+# substitution to every value list would be inventing syntax for cases
+# nobody has met.
+#
+# A case has been met since -- `-ffile-prefix-map=$root=.', which is how
+# a tree would stop its own path being baked into every object that uses
+# __FILE__ (section 468) -- and whether to widen it is a decision rather
+# than an omission. What is not a decision is the silence: gcc takes
+# `-ffile-prefix-map=$root=.' without complaint and maps nothing, so the
+# flag is accepted and dropped, which is section 207's shape. Measured:
+# the binary still printed its absolute source path, and nothing said
+# why.
+#
+# Refused rather than warned, because it is never anything but a
+# mistake: fmake runs a compiler as a list and never through a shell, so
+# a literal `$root' in a flag reaches the compiler as those five
+# characters. Safe to refuse rather than warn -- every use of either
+# substitution across the eight private trees that have one is in
+# `defines', measured before this was written.
+# The three value lists that exist at project, profile and target scope
+# and whose entries reach a compiler. `[toolchain]' paths are machine
+# configuration and a different question; `libs' and `pkg' are names
+# rather than paths, where nobody has reached for a substitution yet.
+UNEXPANDED_KEYS = ("cflags", "ldflags", "include-dirs")
+
+
+def _refuse_unexpanded(data):
+	"""Refuse `$root' or `$file()' where nothing substitutes it."""
+	bad = []
+
+	def look(table, where):
+		for key in UNEXPANDED_KEYS:
+			for v in table.get(key) or ():
+				if isinstance(v, str) and (RE_ROOT_REF.search(v)
+				                           or RE_FILE_REF.search(v)):
+					bad.append(f"{where} {key} = [... {v!r} ...]")
+
+	look(data.get("project", {}), f"{CONF_FILE} [project]")
+	for name, sub in (data.get("profile") or {}).items():
+		if isinstance(sub, dict):
+			look(sub, f"{CONF_FILE} [profile.{name}]")
+	for name, sub in (data.get("target") or {}).items():
+		if isinstance(sub, dict):
+			look(sub, f"{CONF_FILE} {tgt_section(name)}")
+	if bad:
+		die("`$root' and `$file()' are substituted in `defines' and "
+		    "nowhere else, so these reach the compiler as the characters "
+		    "you see:\n    " + "\n    ".join(bad)
+		    + "\nA compiler takes an unknown `-ffile-prefix-map=' or `-I' "
+		      "without complaining and does nothing with it, which is why "
+		      "this is refused rather than passed through.")
+
+
 def load_conf(root):
 	"""Read and validate fmake.toml. Returns {} when there is no file."""
 	path = os.path.join(root, CONF_FILE)
@@ -1819,7 +1874,9 @@ def load_conf(root):
 	_check_needs(data)
 	# After validation, so a malformed file is reported as malformed rather
 	# than as an unreadable $file() inside it.
-	return _expand_conf_files(data, root)
+	data = _expand_conf_files(data, root)
+	_refuse_unexpanded(data)
+	return data
 
 
 class Conf:

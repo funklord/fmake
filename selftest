@@ -424,6 +424,62 @@ int main(void){ printf("%s %s\\n", PROBE_VERSION, helper()); return 0; }
 
 
 @case
+def a_substitution_where_nothing_expands_it_is_refused(t):
+	"""A flag accepted and dropped, which is section 207's shape.
+
+    `$root` and `$file()` are substituted in `defines` and nowhere else,
+    and `_expand_conf_files` says why it does only those: widening to
+    every value list would be inventing syntax for cases nobody had met.
+
+    A case has been met since. `-ffile-prefix-map=$root=.` is how a tree
+    would stop its own absolute path being baked into every object that
+    uses `__FILE__` (section 468), and written in `cflags` it reaches
+    the compiler as those characters: gcc takes an unknown
+    `-ffile-prefix-map=` without complaint and maps nothing. Measured --
+    the binary still printed its absolute source path and nothing said
+    why.
+
+    Whether to widen the substitution is a decision. The silence is not,
+    so this is refused. Safe to refuse rather than warn: every use of
+    either substitution across the eight private trees that have one is
+    in `defines`, measured before it was written.
+    """
+	t.write("main.c", "#include <stdio.h>\n"
+	        'int main(void){ printf("%s\\n", __FILE__); return 0; }\n')
+	for key in ("cflags", "ldflags", "include-dirs"):
+		t.write("fmake.toml",
+		        f'[project]\n{key} = ["-ffile-prefix-map=$root=."]\n')
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"[project] {key} with an unexpanded $root was accepted, so "
+		      f"the flag is dropped in silence: {out}")
+		check("substituted in `defines'" in out and key in out,
+		      f"the refusal does not name the key or where it does "
+		      f"expand: {out}")
+
+	# `$file()' is the other half of the same substitution.
+	t.write("VERSION", "1.0\n")
+	t.write("fmake.toml", '[project]\ncflags = ["-DV=$file(VERSION)"]\n')
+	r = t.fmake()
+	check(r.returncode != 0,
+	      f"$file() in cflags was accepted: {r.stdout}{r.stderr}")
+
+	# And the place it does work is untouched. Note what this arm does
+	# NOT guard: refusing the marker in `defines' as well cannot fail
+	# here, because the check runs after `_expand_conf_files' and a
+	# define no longer contains one by then -- tried, and the case
+	# passed. So the over-refusal it was meant to catch is prevented by
+	# the ordering rather than by this assertion, and what the arm
+	# actually proves is that the expansion still happens.
+	t.write("fmake.toml", '[project]\ndefines = [\'WHERE="$root"\']\n')
+	r = t.fmake("-n")
+	check(r.returncode == 0, f"a define with $root was refused: {r.stderr}")
+	check(f'-DWHERE="{t.dir}"' in r.stdout,
+	      f"$root no longer expands in a define: {r.stdout[:400]}")
+
+
+@case
 def a_define_can_name_the_tree_root(t):
 	"""`$root`: qtty's tests read snapshot fixtures out of the repository.
 

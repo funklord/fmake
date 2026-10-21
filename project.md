@@ -525,7 +525,8 @@ that had been green about nothing for five commits ·
 [472. The fragment fmake tells you to name after a file it reads](#472-the-fragment-fmake-tells-you-to-name-after-a-file-it-reads) ·
 [473. Every artifact, asked of the program that reads it](#473-every-artifact-asked-of-the-program-that-reads-it) ·
 [474. A cross build, with readelf as the witness](#474-a-cross-build-with-readelf-as-the-witness) ·
-[475. Six artifacts, three processes, byte for byte](#475-six-artifacts-three-processes-byte-for-byte)
+[475. Six artifacts, three processes, byte for byte](#475-six-artifacts-three-processes-byte-for-byte) ·
+[476. The flag that would have fixed 468, and why a tree cannot write it](#476-the-flag-that-would-have-fixed-468-and-why-a-tree-cannot-write-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36826,3 +36827,74 @@ Section 462 drew the rule as *the crudest possible detector plus reading
 the hits*. This adds the other half: **the cap is part of the
 detector.** `head -6` is not a way of looking at a file; it is a filter
 whose passing condition includes the thing being sought.
+
+## 476. The flag that would have fixed 468, and why a tree cannot write it
+
+Section 468 found that a binary fmake builds carries the build
+directory, because the compile is given an absolute source path, and
+left two ways to close it as the holder's. **One of them is now
+measured rather than plausible**, and trying it turned up something
+else.
+
+Two trees at different paths, one file using `__FILE__`:
+
+    without the flag   objects differ at byte 157
+                       each binary prints its own absolute path
+    with -ffile-prefix-map=<root>=.
+                       objects byte-identical
+                       both binaries print ./main.c
+
+So the flag closes it exactly. And `ar` is already deterministic here --
+`ar tv` shows `0/0` and a 1970 timestamp -- and a fixture whose sources
+do not use `__FILE__` is byte-identical across two directories and two
+seconds. **The absolute source path is the only non-reproducibility
+fmake introduces**, which is worth knowing before deciding anything: the
+question is one flag wide.
+
+### What a tree cannot do for itself
+
+`[project] cflags = ["-ffile-prefix-map=$root=."]` is the obvious way to
+take that decision per tree without touching fmake's defaults. It does
+not work, and says nothing:
+
+    $ fmake -n | grep -o '\-ffile-prefix-map=[^ ]*'
+    -ffile-prefix-map=$root=.
+
+`$root` and `$file()` are substituted in `defines` and nowhere else, and
+`_expand_conf_files` says why it does only those -- *widening the
+substitution to every value list would be inventing syntax for cases
+nobody has met*. Writing the absolute path out instead puts a machine
+fact in a committed file, which is what section 432 and the `.pc`
+prefix both refuse to do.
+
+So the three options now read: widen the substitution, add the flag by
+default, or compile from the tree root as moc already does. **All three
+are still the holder's**, and the reason this section exists is that the
+first one's stated reason has been overtaken -- a case has been met.
+
+### What was not a decision
+
+**gcc accepts `-ffile-prefix-map=$root=.` and maps nothing.** A flag
+accepted and dropped is section 207's shape, and the silence is nobody's
+design. It is refused now, in `cflags`, `ldflags` and `include-dirs`, at
+project, profile and target scope, naming the key and where the
+substitution does work.
+
+Safe to refuse rather than warn, measured first: every use of either
+substitution across the eight private trees that have one is in
+`defines`.
+
+### A control arm that could not fail, again
+
+The case ends by asserting `$root` still expands in a define, described
+as guarding against a fix that refused the marker everywhere. **It
+cannot guard that**: the check runs after `_expand_conf_files`, so a
+define holds no marker by then, and adding `defines` to the refused keys
+leaves the case green -- tried. The arm proves the expansion still
+happens and nothing more, and its comment says so.
+
+That is the third control this session that passed for a reason other
+than the one it claimed, after the Qt gate's two. The pattern is worth
+naming: **an arm written as "a wrong fix would fail here" has to be
+tried with that wrong fix**, because the ordering of the code often
+makes the wrong fix impossible rather than caught.
