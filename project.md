@@ -537,7 +537,8 @@ that had been green about nothing for five commits ·
 [484. The -I that changed what an include meant](#484-the--i-that-changed-what-an-include-meant) ·
 [485. The fixture that spelled a link flag](#485-the-fixture-that-spelled-a-link-flag) ·
 [486. ossacli's shim, and three refusals that each named the vocabulary](#486-ossaclis-shim-and-three-refusals-that-each-named-the-vocabulary) ·
-[487. Three consumers' workarounds for defects fmake has fixed](#487-three-consumers-workarounds-for-defects-fmake-has-fixed)
+[487. Three consumers' workarounds for defects fmake has fixed](#487-three-consumers-workarounds-for-defects-fmake-has-fixed) ·
+[488. Whether git decides what is source: built, measured, reverted](#488-whether-git-decides-what-is-source-built-measured-reverted)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37885,3 +37886,146 @@ So the sweep is worth running from this end rather than theirs, because
 this is the end that knows when a defect was fixed. `git log -S` on the
 section number a config cites dates the fix; the config's own
 measurement date says whether it could have known.
+
+## 488. Whether git decides what is source: built, measured, reverted
+
+`ignored_source_dirs` names its own limit and declines it: *"Directories,
+not files. A single ignored file beside real sources is a different
+question with different answers -- a generator's output, a stale object
+from a native build."* §487's reading of the consumer configs brought the
+question back, because two of them answer it by hand.
+
+**It was implemented, gated, and reverted.** The argument for it is the
+one that function gives one level up -- a source nobody can check out is
+not one fmake could have built for them either -- and the argument
+against it is that the gate found: the change kills a tested diagnostic
+whose own case states the boundary it crosses.
+
+    Not a signal fmake builds with. What to compile is decided from the
+    source, and adding a second authority for that is a design change.
+    This is consulted only while explaining a failure, on a path about
+    to exit, so it costs one subprocess and can be wrong without
+    costing anything.
+
+`git_ignored`'s docstring says it too, in the same words: *"a second
+authority for it is a design change rather than a message"*, with §139's
+carve-out for directories named as the deliberate exception. So the file
+half is not an oversight in a rule; it is the next step of a decision
+somebody took once, and `working-practice.md` is explicit that a
+convention is not adjusted in passing. **Whose: the copyright
+holder's.** Everything below is what it would cost and buy, measured
+while the change existed rather than argued from here.
+
+### How the gate said so
+
+`an_ambiguity_says_when_git_already_ignores_one` failed, and it failed
+by having nothing left to test. With ignored files dropped before the
+closure runs, no member of an ambiguity can be one git ignores, so the
+sentence that case exists for can never print. A change that silently
+retires a tested diagnostic is the shape this file calls one reader of
+two decisions losing its wiring -- except here the diagnostic was the
+decision, written down twice.
+
+### fmake already knows, and asks the reader to act
+
+Faced with the collision the stale file causes, fmake refuses and says:
+
+    fmake will not guess which one belongs in gi.
+    git is told to ignore moc_stale.cpp, so it is probably build output
+    rather than source. [project] exclude in fmake.toml keeps it out.
+
+The right answer, offered as homework. `git_ignored`'s own docstring
+says that use "earned the second use first, on the commonest confusing
+case there is: a build output left in the tree, colliding with the file
+it was generated from". The information was there; the action was not.
+
+### The blast radius, measured before changing it
+
+Eleven private trees, asked of git rather than of fmake -- every
+ignored, untracked source, and whether its directory is already skipped:
+
+| tree | ignored sources | in a directory already skipped |
+|---|---|---|
+| beerssh | 4154 | all |
+| bbq-predictor | 1794 | all |
+| situ | 217 | all |
+| anti-avx | 197 | all |
+| fuzzypickles | 146 | 114 |
+| hydra | 133 | all |
+| netcfgd | 104 | all |
+| qtty | 22 | all |
+| softkeys | 19 | all |
+| raidcfgd | 10 | all |
+| hull | 5 | all |
+
+So the whole incremental effect would be **32 files in one tree**:
+fuzzypickles' `gui/moc_*.cpp`, which qmake left beside its sources. Its
+`fmake.toml` carries an entry for exactly those and records the cost --
+*"a tree anybody has run `make` in refuses with `fzp_base58_decode is
+defined by more than one file`"*.
+
+### The archive half reaches a case the directory rule never did
+
+`find_archives` walks for itself, so `[project] exclude` was its only
+filter and the ignored-directory rule never applied. An archive in a
+build directory git ignores was read as a prebuilt library:
+
+    * helper.c is not compiled, and libstale.a already provides what it
+      defines: if that archive is output from another build of this tree
+      it is stale, and editing helper.c changes nothing.
+
+ossacli excludes `libossa.a` for precisely that, in its own words: *"a
+tree where make has run builds three programs against a possibly-stale
+archive and says nothing, while a fresh checkout compiles all seventeen
+sources. Two different builds behind one command."*
+
+Eight trees hold ignored archives -- 548 in bbq-predictor, 370 in
+fuzzypickles, 173 in beerssh -- and every one is inside a build
+directory. **No tree tracks a single `.a` or `.so`**, which settles the
+only case that needed protecting: there is no committed prebuilt archive
+in this workspace to lose.
+
+**And that corrects a comment in this tree.** The archive filter's
+neighbour says beerssh "ships prebuilt libcrypto.a for two Android
+ABIs". It does not ship them: they are built into `build-deps-android/`
+and git ignores them, which is why the count of tracked archives there
+is zero. The hazard that comment describes was real; the word "ships"
+was not.
+
+### The safeguard that was not needed, written and removed
+
+A `git_tracked` filter went in first, to keep a file somebody committed
+against a matching pattern -- §139's *"has committed them"* asked of a
+file. Sabotaging it changed nothing, because `check-ignore` consults the
+index **by default**:
+
+    git check-ignore moc_stale.cpp             not ignored
+    git check-ignore --no-index moc_stale.cpp  moc_stale.cpp
+
+So git answers that half in the same call that asks the question, and
+the filter was a check whose passing could mean nothing. It is gone, and
+the comment names `--no-index` as the flag that would take the property
+away. Directories are the asymmetric case and keep their own `ls-files`
+query, since git's index holds no directories to consult.
+
+The case's second arm still asserts the property -- a tracked file
+matching the tree's own ignore pattern is still the project's and still
+counts -- which is now a test of what fmake relies on rather than of a
+filter fmake implements.
+
+### What is not covered, measured rather than assumed
+
+fuzzypickles also excludes `*.so`, and that entry is inert: a tree-local
+`.so` is read by nothing. A fixture with a gitignored `libstale.so`
+defining the same symbol compiled `helper.c` and the program returned
+the tree's own answer, so there was never a second definition to refuse.
+Their `*.a` entry is real; `*.so` is neither real nor needed, and that
+is worth their knowing whatever is decided here.
+
+### What is left in the tree
+
+Nothing of the behaviour. One factual correction stays, because it is
+not part of the proposal: the archive filter's neighbour said beerssh
+"ships" prebuilt libcrypto.a, and beerssh tracks no archive at all. The
+word mattered more than it looks -- a shipped archive would be the one
+case any such rule must not touch, and these are the opposite.

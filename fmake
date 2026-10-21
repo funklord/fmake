@@ -13757,10 +13757,17 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	for a in find_archives(root):
 		# `[project] exclude` reaches archives too, and did not. It is the
 		# one lever for "this subtree is not for this build", and beerssh
-		# ships prebuilt libcrypto.a for two Android ABIs beside the
-		# desktop sources: they define the same symbols, section 3 refuses
-		# to choose, and the only remedy fmake could suggest was the one
-		# thing that had no effect on them.
+		# has prebuilt libcrypto.a for two Android ABIs beside the desktop
+		# sources: they define the same symbols, section 3 refuses to
+		# choose, and the only remedy fmake could suggest was the one thing
+		# that had no effect on them.
+		#
+		# This said "ships" until section 488 counted: beerssh tracks no
+		# archive at all, and those files are built into
+		# `build-deps-android/' where git ignores them. The hazard was
+		# real and the word was wrong, which matters because "shipped"
+		# would make them the one case the ignore rule below must not
+		# touch, and they are the opposite.
 		if exclude_pattern(a):
 			continue
 		if os.path.basename(a) in ours:
