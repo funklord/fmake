@@ -527,7 +527,8 @@ that had been green about nothing for five commits ·
 [474. A cross build, with readelf as the witness](#474-a-cross-build-with-readelf-as-the-witness) ·
 [475. Six artifacts, three processes, byte for byte](#475-six-artifacts-three-processes-byte-for-byte) ·
 [476. The flag that would have fixed 468, and why a tree cannot write it](#476-the-flag-that-would-have-fixed-468-and-why-a-tree-cannot-write-it) ·
-[477. The stale exclude that is not a finding](#477-the-stale-exclude-that-is-not-a-finding)
+[477. The stale exclude that is not a finding](#477-the-stale-exclude-that-is-not-a-finding) ·
+[478. Two fmakes in one tree, and one killed in flight](#478-two-fmakes-in-one-tree-and-one-killed-in-flight)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36989,3 +36990,60 @@ hypothesis about a population**, and the population here was three
 patterns in two files. Writing the feature and running it over real
 configs is how to test such a hypothesis, and reverting is the result
 rather than a failure.
+
+## 478. Two fmakes in one tree, and one killed in flight
+
+Two claims this file makes are about what happens when a build is
+interrupted or shares a tree, and neither had been exercised against a
+real tree. `running-code.md` asks every session to look for orphans,
+disk and held-open files after killing something, so this is that look.
+
+### Two at once
+
+qtty, two `fmake -j4` invocations a third of a second apart:
+
+    A  built 8 programs, exit 0
+    B  "waiting for another fmake in this tree"
+       then: 8 programs up to date, exit 0
+
+The lock serialised them, the second reported the work the first had
+done rather than redoing it, and `.fmake/lock` is left in place
+afterwards -- which is what a lock file is, not a leak.
+
+### One killed in flight
+
+`kill -TERM` on fmake with eight compiles running:
+
+    fmake exit=143
+    three cc1plus still alive three seconds later
+    objects written: none
+    /tmp/ccXXXX.s left behind: one, 0 bytes
+
+**The thing that matters held.** The incident this file records -- "`kill
+-TERM` on fmake alone left its three compilers running, and they
+finished and wrote objects into the state directory *after* fmake had
+exited" -- cannot happen now: fmake kills the compiler *drivers*, and a
+`cc1plus` whose driver is gone never reaches the assembler, so a killed
+compile writes **no object at all** rather than a partial one. Measured:
+`.fmake/obj` was empty afterwards.
+
+What outlives fmake is the grandchild: `cc1plus` is a child of the
+driver rather than of fmake, so it finishes its own translation and
+exits, writing only the assembler temporary gcc gave it. One of the
+three leaked that file, at 0 bytes, because the driver that would have
+unlinked it was dead.
+
+**Not fixed, and the reason is the trade.** `-pipe` would remove the
+temporary by removing the file entirely, and that is a change to the
+flags of every build for a 0-byte residue in `/tmp`; killing the process
+*group* instead of the children would reach `cc1plus`, and the temporary
+it had already created would still be there. The residue is gcc's, it is
+empty, and `/tmp` is cleared on boot.
+
+### And the tree recovers
+
+After the kill, `.fmake/` held `lock`, `moc` and `obj` and **no cache
+file** -- fmake never reached the point of writing one. So the next
+build re-derived everything rather than trusting a half-written record,
+built all eight programs, and they run. The safe direction, and the one
+that makes an interrupted build cost time rather than correctness.
