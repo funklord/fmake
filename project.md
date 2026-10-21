@@ -524,7 +524,8 @@ that had been green about nothing for five commits ·
 [471. Everything fmake emits, against a real tree](#471-everything-fmake-emits-against-a-real-tree) ·
 [472. The fragment fmake tells you to name after a file it reads](#472-the-fragment-fmake-tells-you-to-name-after-a-file-it-reads) ·
 [473. Every artifact, asked of the program that reads it](#473-every-artifact-asked-of-the-program-that-reads-it) ·
-[474. A cross build, with readelf as the witness](#474-a-cross-build-with-readelf-as-the-witness)
+[474. A cross build, with readelf as the witness](#474-a-cross-build-with-readelf-as-the-witness) ·
+[475. Six artifacts, three processes, byte for byte](#475-six-artifacts-three-processes-byte-for-byte)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -36769,3 +36770,59 @@ undefined variable anywhere in the file.
 `make -r -R`, which strips every built-in rule and variable, builds the
 emitted Makefile unchanged. That is the standalone claim in its header,
 checked by taking make's own furniture away.
+
+## 475. Six artifacts, three processes, byte for byte
+
+Everything fmake writes is a file somebody may commit, so the question
+is whether two runs of the same tree produce the same bytes. **Python
+randomises string hashing per process**, which is what makes this a
+real check rather than a tautology: any set iterated into the output
+would order differently every time. Measured here --
+`hash('zlib')` gave 217390, 515033 and 8569 in three interpreters, and
+`PYTHONHASHSEED` is unset.
+
+A fixture built for the purpose: one program with five `@pkg`
+dependencies -- zlib, liblzma, libzstd, sqlite3, libpng -- so that every
+list derived from a set has five members rather than one.
+
+| artifact | three processes |
+|---|---|
+| `--eject make` (qtty, 8 programs) | identical |
+| `--eject ninja` (qtty) | identical |
+| `debian/control` | identical |
+| `alpine/APKBUILD` | identical |
+| the ebuild | identical |
+| `compile_commands.json` | identical |
+
+Not vacuous: that `debian/control` carries five `-dev` packages in
+`Build-Depends`, alphabetically, asked of dpkg --
+
+    Build-Depends: debhelper-compat (= 13),
+                   liblzma-dev, libpng-dev, libsqlite3-dev,
+                   libzstd-dev, zlib1g-dev
+
+-- and the ebuild's undeclared-dependency comment names the same five in
+the same order. A sorted list is the reason, and the reason is what the
+check confirms.
+
+### A near-miss worth more than the result
+
+Reading that APKBUILD, `makedepends=""` looked like the apk emitter
+dropping what the ebuild preserves in a comment -- the
+one-decision-two-readers shape this session has found four times. It
+does no such thing:
+
+    makedepends=""
+    # not derived here (no apk to ask): liblzma, libpng, libzstd,
+    #   sqlite3, zlib
+
+The line was there and `grep | head -6` cut it off. **Fourth instrument
+fault of the session and the same one as section 462's**: a truncated
+view read as an absence. The pattern matched six lines, the first five
+were the file's header, and the sixth was `depends=""` -- so the output
+ended one line before the answer.
+
+Section 462 drew the rule as *the crudest possible detector plus reading
+the hits*. This adds the other half: **the cap is part of the
+detector.** `head -6` is not a way of looking at a file; it is a filter
+whose passing condition includes the thing being sought.
