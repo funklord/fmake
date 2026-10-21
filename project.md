@@ -535,7 +535,8 @@ that had been green about nothing for five commits ·
 [482. The define the advice asks for, met from the other side](#482-the-define-the-advice-asks-for-met-from-the-other-side) ·
 [483. hull is not waiting for the key it asked for](#483-hull-is-not-waiting-for-the-key-it-asked-for) ·
 [484. The -I that changed what an include meant](#484-the--i-that-changed-what-an-include-meant) ·
-[485. The fixture that spelled a link flag](#485-the-fixture-that-spelled-a-link-flag)
+[485. The fixture that spelled a link flag](#485-the-fixture-that-spelled-a-link-flag) ·
+[486. ossacli's shim, and three refusals that each named the vocabulary](#486-ossaclis-shim-and-three-refusals-that-each-named-the-vocabulary)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37659,3 +37660,112 @@ matcher is the rule this project already states. The hyphen remains
 spellable by a custom tree name -- `Tree("one-dead-object")` is one
 hyphen from `-l` if the next word began with an l -- which the matcher
 covers and the prefix change would not.
+
+## 486. ossacli's shim, and three refusals that each named the vocabulary
+
+ossacli's README states a gap with its cost measured: *"`big_passthru` and
+`shim_wide` exercise the `LD_PRELOAD` shim, which fmake does not build;
+run bare they fail, so `fmake test` reports 2 of 5 failed where `make
+test` runs both preloaded and passes."* Its `fmake.toml` excludes
+`src/shim` outright, and the reason recorded there is not tidiness:
+
+> `sgshim.c` defines `ioctl`, `open`, `opendir` and `fopen` to interpose
+> on libc, and fmake resolves a symbol closure: libossa refers to
+> `close`, sgshim defines one, so the shim was linked INTO every program
+> fmake built. [...] the fmake-built binaries answered from the simulator
+> with nothing preloaded.
+
+**That hazard is fixed, and fmake's own record says where.** §278 built
+the loadable-object kind, and §281 and §292 made a module's interposing
+sources its own -- the comment in the closure cites `sgshim.c`'s
+`close()` by name. So the exclusion is answering a question that was
+settled, which is the shape §483 found in `project.md` and this is the
+same shape in a consumer's config.
+
+Measured in a `git archive` of ossacli in scratch, their tree untouched,
+with `src/shim` taken out of `exclude` and two module stanzas in its
+place:
+
+    nothing preloaded     ossacli: scan failed: permission denied (need root)
+                          ossa_scrape_success 0
+    shim preloaded        slot 1  Smart Array P410  fw 6.64  2 LD, 4 PD
+
+Both halves of what they measured as broken: the programs answer
+honestly when nothing asked, and the simulator is reached when something
+did.
+
+### Three refusals, and each one taught the next line
+
+Getting there took three tries and fmake declined all three by naming
+what was missing rather than by failing:
+
+- `sources = ["src/shim/sgshim.c"]` built a module with six undefined
+  symbols. `--explain` said *"membership: declared, so the closure is not
+  consulted"*, and the build itself said *"ossa-sgshim.so links with 6
+  undefined symbol(s) that this tree defines elsewhere, and nothing
+  linked it -- simfw_default is defined by src/lib/simfw.c, which this
+  module does not build"*.
+- Dropping `sources` gave *"[target.capture] declares no root and no
+  sources, so fmake cannot tell what is in it"*, with the discovered
+  target names listed beside it.
+- Rooting both gave the real §3 ambiguity -- two modules, both defining
+  `ioctl` -- and refused to guess which provider belonged to which,
+  printing the two stanzas to paste, **including the source list I had
+  got wrong**: `sources = ["src/lib/simfw.c", "src/shim/sgshim.c"]`.
+
+The third is the one worth keeping: the remedy was computed, not
+described, and it carried the caution *"the source lists are that same
+guess and are worth checking"*.
+
+### And I read past the first one
+
+The build that produced the broken module printed the diagnosis in full
+and I missed it, because I had piped its log through
+`grep -E "^\* built|^!!!|did not"` -- four patterns, and the answer was
+on a fifth line. `evidence.md` has that exact rule: **never reduce a
+check's output before you know it passed.** Thirty seconds of reading
+the log would have saved two builds, and the reason it was reduced is
+that the log is long, which is the condition the rule exists for rather
+than an excuse against it.
+
+### And `fmake test` runs all five
+
+With the modules built, `fmake test` still said *"2 of 5 failed:
+big_passthru, shim_wide"* -- correctly, because those two need the shim
+in their environment and a bare run is meant to fail. ossacli's Makefile
+asserts that directly: it runs `shim_wide` bare and complains if it
+*passes*. `[target.*] test-env` is where that goes:
+
+    [target.shim_wide]
+    test-env = ["LD_PRELOAD=./ossa-sgshim.so"]
+
+    [target.big_passthru]
+    test-env = ["LD_PRELOAD=./ossa-sgshim.so"]
+
+    * 5 tests passed
+
+**The caveat belongs with it rather than after it.** `make test` checks
+both directions -- preloaded it must pass, bare it must fail -- and
+`fmake test` with `test-env` checks one. The bare assertion is the half
+that catches a shim that has stopped interposing, so a tree taking this
+route keeps that check in `make test` or loses it. That is a real
+difference between the two commands and not a gap in either.
+
+### Four trees re-measured for §484
+
+Changing which `-I` flags a proposal contributes changes what every tree
+compiles against, so the four most exposed were rebuilt from `git
+archive` at the new HEAD and compared with what §466 recorded:
+
+| tree | built | recorded |
+|---|---|---|
+| fuzzypickles | 6 programs | 6 |
+| qtty | 8 programs | 8 |
+| ossacli | 3 programs | 3 |
+| situ | `libsitu.a`, `situ-walk-c` | its README's pair |
+
+fuzzypickles is the one that mattered: it vendors thorvg, whose
+rapidjson ships an MSVC-only `stdint.h`, which is §319's own incident.
+That file is inside the tree, so it is the basename fallback's problem
+and not a proposal's -- which is why the check was worth running rather
+than reasoning about.
