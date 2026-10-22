@@ -37791,12 +37791,27 @@ archive` at the new HEAD and compared with what §466 recorded:
 | qtty | 8 programs | 8 |
 | ossacli | 3 programs | 3 |
 | situ | `libsitu.a`, `situ-walk-c` | its README's pair |
+| beerssh | `bssh`, `beersshd`, `authenticated`, `plaintext` | not in §466 |
 
-fuzzypickles is the one that mattered: it vendors thorvg, whose
-rapidjson ships an MSVC-only `stdint.h`, which is §319's own incident.
-That file is inside the tree, so it is the basename fallback's problem
-and not a proposal's -- which is why the check was worth running rather
-than reasoning about.
+fuzzypickles is the one that mattered for the stale-header question: it
+vendors thorvg, whose rapidjson ships an MSVC-only `stdint.h`, which is
+§319's own incident. That file is inside the tree, so it is the basename
+fallback's problem and not a proposal's -- which is why the check was
+worth running rather than reasoning about.
+
+**beerssh was added afterwards and is the one that mattered most**, since
+§293 was an include-path fault in that tree -- libssh's headers shadowing
+the C library's `<string.h>` -- and §484 is a change to which include
+paths a proposal contributes. Four programs, exit 0.
+
+It is also the first fmake build of beerssh this file records; §466's
+table left it out. Its README asks for the vterm step first, because the
+patches in `vterm-patch/` are not committed into the submodule, so the
+reconstruction applied all seven from the pristine gitlink commit
+(`934bc2f`) before building. They applied in order with nothing
+refused -- which is incidentally the proof `harmonization.md` asks of a
+patch set, performed by a reader who had no other way to build the
+tree. The set is seven now where that document names five.
 
 ## 487. Three consumers' workarounds for defects fmake has fixed
 
