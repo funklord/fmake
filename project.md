@@ -38482,3 +38482,46 @@ check it is the arm's own. Two sabotages here did not pass that test
 earlier in the session and are recorded in §491 for the same reason --
 one could not reach the mechanism, and one met a fixture that could not
 ask the question.
+
+### The open half is two halves, and only one of them is expensive
+
+This was first written as one thing -- build a control mechanism -- and
+hembygd corrected the framing, which matters because framing them as one
+makes the whole look like it costs a control file. What immunises theirs
+is not the shadow tree or the case list but **one field**: every case
+carries an `expect` string, a fragment of the message the check must
+produce, so a case that fires for any other reason does not count.
+
+- **Assert the arm's own message.** One string per sabotage, no file and
+  no infrastructure. That is what this section already landed, and it is
+  the valuable half.
+- **Place the violation somewhere you did not choose.** The expensive
+  half, and the only one that found their twelve-line-window hole: four
+  hand-placed probes were each correct and each passed, and the
+  mechanism found it because its anchor happened to sit above a correct
+  call and it did not know what was being tested.
+
+So the second stays unstarted on the same grounds as before, and the
+first is not waiting on it.
+
+### And the class this proposed was measured, and is one instance
+
+The reply to hembygd closed with a hypothesis: that a check's scope
+inheriting the language of the file it was first written for is a class.
+They measured it in their own tree within the hour rather than agreeing
+-- ten checks, nine scopes correct, one gap, and the gap was the one
+already fixed. Several scopes are deliberately narrow for good reasons:
+widening their config scan to `test/` would turn every call there into a
+false finding, because those calls are tests OF the ini parser reading
+synthetic sections with deliberately absent keys.
+
+Two of the nine only looked wrong. `git grep -lc` for two idioms both
+named one file, which would have been two more scope gaps, and both hits
+were **comments** -- a grep for presence finding prose, in the hour spent
+writing about detectors that read prose as code.
+
+**So the hypothesis has one instance rather than a pattern, and it is
+recorded here as declined rather than confirmed.** Their reason for
+saying so is the one worth keeping: two sessions comparing notes an hour
+apart on the same idea is close to one witness, and `evidence.md` asks
+for corroboration that could have disagreed. Theirs could have, and did.
