@@ -27365,92 +27365,132 @@ def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
 
 
 @case
-def an_ambiguity_says_when_git_already_ignores_one(t):
-	"""The commonest confusing collision, and git knew all along.
+def a_source_git_ignores_is_not_source(t):
+	"""git is a build authority here, not a diagnostic.
 
-	A build output left in the tree collides with the file it was generated
-	from. The reader is shown two files defining one symbol and given no
-	reason to prefer either -- while `.gitignore` has said for years that
-	one of them is not source. The regression sweep in section 107 hit
-	exactly this twice, in two different projects, and both times the
-	answer was sitting in a file fmake had not looked at.
+	A build output left in the tree collides with the file it was
+	generated from. The reader is shown two files defining one symbol and
+	given no reason to prefer either -- while `.gitignore` has said for
+	years that one of them is not source. The regression sweep in section
+	107 hit exactly this twice, in two different projects, and both times
+	the answer was sitting in a file fmake had not looked at.
 
-	**Not a signal fmake builds with.** What to compile is decided from the
-	source, and adding a second authority for that is a design change. This
-	is consulted only while explaining a failure, on a path about to exit,
-	so it costs one subprocess and can be wrong without costing anything.
+	**This case used to assert that fmake SAID so and left the reader to
+	act.** It did, in those words, and `[project] exclude` was the remedy
+	it named -- which is what fuzzypickles, ossacli and bbq-predictor each
+	wrote by hand. Section 493 acts instead: an ignored source, and an
+	ignored archive, that nothing tracks is not read. The sentence that
+	explained the ambiguity is gone because the ambiguity cannot form.
 
-	The half worth guarding is the quiet one: when git ignores *neither*
-	provider, or *both*, there is nothing to say and saying it would be
-	noise on top of a message that is already hard to read."""
+	Four arms. The ignored source goes and is named; a TRACKED file
+	matching the tree's own ignore pattern still counts, which is section
+	139's signal asked of a file rather than of a directory; an ignored
+	archive goes, which is a case `[project] exclude` and the directory
+	rule both missed because `find_archives` walks for itself; and an
+	ignored HEADER still resolves, because a build tree is also where a
+	configure step writes the config.h somebody's source includes."""
 	if not shutil.which("git"):
 		raise Skip("git not installed")
+	t.write("main.c", '#include "config.h"\n'
+	        "int shared_thing(void);\n"
+	        "int main(void){ return shared_thing() - CONFIG_N; }\n")
+	t.write("real.c", "int shared_thing(void){ return 1; }\n")
+	# A real collision: `extern "C"' so the C++ file defines the same
+	# symbol rather than a mangled one. Without it the duplicate is
+	# invisible and the fixture proves nothing.
+	t.write("generated_copy.cpp",
+	        'extern "C" int shared_thing(void){ return 9; }\n')
+	t.write("config.h", "#define CONFIG_N 1\n")
+	t.write(".gitignore", "generated_*.cpp\nconfig.h\n*.a\n")
 	check(subprocess.run(["git", "init", "-q", t.dir],
 	                     capture_output=True).returncode == 0,
 	      "could not make a repository")
-	t.write(".gitignore", "generated_*.c\n")
-	t.write("real.c", "int shared_thing(void){ return 1; }\n")
-	t.write("generated_copy.c", "int shared_thing(void){ return 1; }\n")
-	t.write("main.c", "int shared_thing(void);\n"
-	        "int main(void){ return shared_thing() - 1; }\n")
+	for args in (["add", "main.c", "real.c", ".gitignore"],
+	             ["-c", "user.email=a@b", "-c", "user.name=c",
+	              "commit", "-qm", "init"]):
+		check(subprocess.run(["git", "-C", t.dir] + args,
+		                     capture_output=True).returncode == 0,
+		      f"git {args[0]} failed")
 
 	r = t.fmake()
-	check(r.returncode != 0, "two providers of one symbol should be refused")
-	said = r.stdout + r.stderr
-	check("git is told to ignore generated_copy.c" in said,
-	      f"the ignored file was not named: {said}")
-	check("exclude" in said, f"no remedy was offered: {said}")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a build output git ignores stopped the build: {out}")
+	# Two substrings rather than one, because the list is alphabetical and
+	# a contiguous match only holds while this file is alone in it. The
+	# header sabotage below put `config.h' in front of it and failed THIS
+	# arm instead of the one it was aimed at, which is how the brittleness
+	# was found.
+	check("git is told to ignore" in out and "generated_copy.cpp" in out
+	      and "nothing tracks them" in out,
+	      f"the skipped file has to be named -- section 439 is what "
+	      f"silence costs here: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program was built against the generated copy, so the wrong "
+	      "file won")
+	check("config.h" not in out,
+	      f"an ignored header must still answer an include: {out}")
 
-	# Neither ignored: nothing to say.
-	u = Tree("neither")
+	# Committed, and it is the project's own file again. Asserting git's
+	# behaviour rather than a filter of fmake's, deliberately:
+	# `check-ignore' consults the index by default, so a tracked path
+	# comes back not-ignored and needs no safeguard here. A `git_tracked'
+	# filter was written for this, sabotaged, and changed nothing.
+	check(subprocess.run(["git", "-C", t.dir, "add", "-f",
+	                      "generated_copy.cpp"],
+	                     capture_output=True).returncode == 0,
+	      "could not commit the ignored file")
+	subprocess.run(["git", "-C", t.dir, "-c", "user.email=a@b",
+	                "-c", "user.name=c", "commit", "-qm", "take it"],
+	               capture_output=True)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "more than one file" in out,
+	      f"a tracked file matching the tree's own ignore pattern is the "
+	      f"project's and must still count -- git reports a tracked path "
+	      f"as not ignored, which is what this relies on: {out}")
+
+	# The archive, which reaches fmake by its own walk: `[project]
+	# exclude' and the ignored-DIRECTORY rule are applied to sources, so
+	# an archive in a build directory git ignores was read regardless.
+	# ossacli excludes libossa.a for this and says what it costs -- a tree
+	# where make has run builds against a possibly-stale archive while a
+	# fresh checkout compiles the sources, "two different builds behind
+	# one command".
+	u = Tree("ignored-archive")
 	try:
-		check(subprocess.run(["git", "init", "-q", u.dir],
-		                     capture_output=True).returncode == 0,
-		      "could not make a repository")
-		u.write("a.c", "int shared_thing(void){ return 1; }\n")
-		u.write("b.c", "int shared_thing(void){ return 1; }\n")
-		u.write("main.c", "int shared_thing(void);\n"
-		        "int main(void){ return shared_thing() - 1; }\n")
+		u.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper() - 3; }\n")
+		u.write("helper.c", "int helper(void){ return 3; }\n")
+		u.write("stale.c", "int helper(void){ return 9; }\n")
+		_cc = _run_in(u.dir, "cc", "-c", "stale.c", "-o", "stale.o")
+		check(_cc.returncode == 0, f"could not build the fixture archive: "
+		                           f"{_cc.stdout}{_cc.stderr}")
+		check(_run_in(u.dir, "ar", "rcs", "libstale.a",
+		              "stale.o").returncode == 0,
+		      "ar failed on the fixture")
+		os.remove(os.path.join(u.dir, "stale.c"))
+		os.remove(os.path.join(u.dir, "stale.o"))
+		u.write(".gitignore", "*.a\n")
+		subprocess.run(["git", "init", "-q", u.dir], capture_output=True)
+		subprocess.run(["git", "-C", u.dir, "add", "main.c", "helper.c",
+		                ".gitignore"], capture_output=True)
+		subprocess.run(["git", "-C", u.dir, "-c", "user.email=a@b",
+		                "-c", "user.name=c", "commit", "-qm", "init"],
+		               capture_output=True)
 		r = u.fmake()
-		check(r.returncode != 0, "the ambiguity should still be refused")
-		check("git is told to ignore" not in r.stdout + r.stderr,
-		      f"said something about git when it had nothing to say: "
-		      f"{r.stdout}{r.stderr}")
+		out = r.stdout + r.stderr
+		check("git is told to ignore libstale.a" in out,
+		      f"an ignored archive has to be named as output: {out}")
+		check("already provides what it defines" not in out,
+		      f"the stale archive was still read, so helper.c was left "
+		      f"uncompiled against output from another build: {out}")
+		check(r.returncode == 0
+		      and u.run(os.path.basename(u.dir)).returncode == 0,
+		      f"the tree has to build from source: {out}")
 	finally:
 		u.cleanup()
-
-	# Both ignored is the same: naming both explains nothing.
-	v = Tree("both")
-	try:
-		check(subprocess.run(["git", "init", "-q", v.dir],
-		                     capture_output=True).returncode == 0,
-		      "could not make a repository")
-		v.write(".gitignore", "gen_*.c\n")
-		v.write("gen_a.c", "int shared_thing(void){ return 1; }\n")
-		v.write("gen_b.c", "int shared_thing(void){ return 1; }\n")
-		v.write("main.c", "int shared_thing(void);\n"
-		        "int main(void){ return shared_thing() - 1; }\n")
-		r = v.fmake()
-		check("git is told to ignore" not in r.stdout + r.stderr,
-		      f"named both providers, which explains nothing: "
-		      f"{r.stdout}{r.stderr}")
-	finally:
-		v.cleanup()
-
-	# And a tree that is not a repository at all must not break.
-	w = Tree("norepo")
-	try:
-		w.write("a.c", "int shared_thing(void){ return 1; }\n")
-		w.write("b.c", "int shared_thing(void){ return 1; }\n")
-		w.write("main.c", "int shared_thing(void);\n"
-		        "int main(void){ return shared_thing() - 1; }\n")
-		r = w.fmake()
-		check("Traceback" not in r.stdout + r.stderr,
-		      f"a tree with no repository tracebacked: {r.stderr}")
-		check("more than one file" in r.stdout + r.stderr,
-		      f"the ambiguity was not reported: {r.stdout}{r.stderr}")
-	finally:
-		w.cleanup()
 
 
 @case

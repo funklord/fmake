@@ -542,7 +542,8 @@ that had been green about nothing for five commits ·
 [489. netcfgd's unmeasured question, and the advice behind the wrong gate](#489-netcfgds-unmeasured-question-and-the-advice-behind-the-wrong-gate) ·
 [490. hembygd builds, and a flag reported absent that was not](#490-hembygd-builds-and-a-flag-reported-absent-that-was-not) ·
 [491. A two-word flag, and the regression 484 left on every compile line](#491-a-two-word-flag-and-the-regression-484-left-on-every-compile-line) ·
-[492. Which arm a sabotage proves, and which it only passes through](#492-which-arm-a-sabotage-proves-and-which-it-only-passes-through)
+[492. Which arm a sabotage proves, and which it only passes through](#492-which-arm-a-sabotage-proves-and-which-it-only-passes-through) ·
+[493. git decides what is source, taken](#493-git-decides-what-is-source-taken)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -37595,6 +37596,10 @@ your source includes", and the fear was false positives -- thorvg's
 vendored `stdint.h`, §319's own incident, looked like a tree that would
 collect one on every build.
 
+**Taken by the copyright holder, and implemented in §493.** What
+follows is the costing as it stood when the decision was open; the
+measurements are unchanged and the verdict is no longer pending.
+
 **Zero, across five trees.** A probe over each tree's own
 `compile_commands.json` takes every `-I` directory on a compile line
 against every `<angle>` include the compiled file writes, and counts the
@@ -38525,3 +38530,99 @@ recorded here as declined rather than confirmed.** Their reason for
 saying so is the one worth keeping: two sessions comparing notes an hour
 apart on the same idea is close to one witness, and `evidence.md` asks
 for corroboration that could have disagreed. Theirs could have, and did.
+
+## 493. git decides what is source, taken
+
+§488 built this, gated it, reverted it and costed it for the copyright
+holder, who has taken it. What follows is the implementation and what it
+cost the thing it displaced.
+
+**The rule.** A source file, and a prebuilt archive, that git ignores and
+nothing tracks is not read. Tracking wins and git does that half without
+being asked: `check-ignore` consults the index by default, so a file
+somebody committed against a matching pattern comes back not-ignored.
+Headers are untouched, because a build tree is also where a configure
+step writes the `config.h` somebody's source includes.
+
+The archive half reaches a case neither `[project] exclude` nor the
+ignored-directory rule did, because `find_archives` walks for itself.
+
+### What it displaced, and the proof that it had to
+
+`git_ignored`'s second use was a diagnostic: faced with two files
+defining one symbol it said *"git is told to ignore X, so it is probably
+build output rather than source. [project] exclude in fmake.toml keeps
+it out."* That sentence is gone, and not by preference -- it cannot be
+reached.
+
+Three measurements rather than an argument:
+
+- The fixture that made it fire -- `generated_copy.c` ignored beside a
+  tracked `real.c`, both defining one symbol -- now **builds**, from the
+  tracked file, and the program returns the tracked file's answer.
+- The ambiguity set is drawn from `srcs`, and an ignored, untracked
+  source is removed from `srcs` before the closure runs. So no member of
+  an ambiguity can be one git ignores.
+- A tracked file matching an ignore pattern is reported not-ignored, so
+  it cannot supply the sentence either. Measured: `git check-ignore
+  moc_stale.cpp` says nothing and `--no-index` names it.
+
+The advice was right and asked the reader to act on it. Acting is now
+what happens, and the skip says so at the top of the run rather than at
+the bottom of a refusal.
+
+### The case was rewritten, not replaced
+
+`an_ambiguity_says_when_git_already_ignores_one` is now
+`a_source_git_ignores_is_not_source`, same fixture, and it carries §107's
+history -- the regression sweep that hit this twice in two projects --
+because that history is why the rule is what it is rather than why the
+sentence was.
+
+Four arms, and **each was sabotaged on its own**, which is §492's
+discipline on its first use after being written:
+
+    the source half removed   -> "a build output git ignores stopped
+                                  the build"
+    the archive half removed  -> "an ignored archive has to be named as
+                                  output"
+    check-ignore --no-index   -> "a tracked file matching the tree's own
+                                  ignore pattern is the project's and
+                                  must still count"
+    headers swept in too      -> "an ignored header must still answer an
+                                  include"
+
+Each is the arm's own message. **And the fourth sabotage failed the
+wrong arm first**, which is what the discipline is for: the naming arm
+asserted `"git is told to ignore generated_copy.cpp"` as one substring,
+the skip list is alphabetical, and `config.h` arriving in front of it
+broke a match that only ever held while that file was alone. The arm
+was brittle, the sabotage found it, and it asserts the two parts
+separately now.
+
+### Measured on a real tree, where git is present
+
+Every tree in §484's and §492's sweeps was a `git archive` extract with
+no repository, so the rule is inert in all of them by construction and
+those results stand. The case that matters is a checkout somebody has
+built in, which only a clone can show:
+
+    clone of ossacli, nothing ignored      3 programs, as recorded
+    libossa.a present, their exclusion
+      of it REMOVED                        "1 archive(s) not read: git
+                                            is told to ignore
+                                            libossa.a", 3 programs built
+                                            from source
+
+That is their own entry made redundant on their own tree, and it is the
+one §488 could only argue for.
+
+### What it still does not buy
+
+§488's corrected costing stands: bbq-predictor's `exclude = ["build-*"]`
+stays needed, because a release tarball has no repository for git to
+answer from, and hydra's config already states that argument. So this
+removes a failure mode in a checkout rather than entries from three
+configs. fuzzypickles' `gui/moc_*.cpp` and `*.a` and ossacli's
+`libossa.a` become redundant in a checkout; their `*.so` was already
+inert; and every one of them is still the only protection in a tarball.

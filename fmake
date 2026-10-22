@@ -11910,6 +11910,54 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		info(f"{len(ignored_srcs)} source file(s) not built: git is told "
 		     f"to ignore {', '.join(where[:2])}"
 		     f"{f' and {len(where) - 2} more directory(ies)' if len(where) > 2 else ''}")
+	# And the file beside real sources, which `ignored_source_dirs' names
+	# as its own question and declines: "a single ignored file beside real
+	# sources is a different question with different answers -- a
+	# generator's output, a stale object from a native build".
+	#
+	# It has the same answer, for the reason that function gives one
+	# level up: a source nobody can check out is not one fmake could have
+	# built for them either. Measured before changing it, across eleven
+	# private trees -- every ignored, untracked source in ten of them is
+	# inside a directory the rule above already skips, and the eleventh is
+	# fuzzypickles with 32 `gui/moc_*.cpp' that qmake left in the source
+	# directory. Its `fmake.toml' carries three exclude entries for
+	# exactly those, and says what they cost: "a tree anybody has run
+	# `make' in refuses with `fzp_base58_decode is defined by more than
+	# one file'".
+	#
+	# Tracked wins, and git does that half without being asked. This
+	# needed no safeguard and had one: a `git_tracked' filter was written
+	# here, sabotaged, and changed nothing, because `check-ignore'
+	# consults the index by DEFAULT and reports a tracked path as not
+	# ignored. Measured on one file, committed with `add -f' against a
+	# pattern that matches it:
+	#
+	#     git check-ignore moc_stale.cpp             not ignored
+	#     git check-ignore --no-index moc_stale.cpp  moc_stale.cpp
+	#
+	# So section 139's signal -- "a project whose sources live under
+	# `build/' has committed them" -- is answered for a FILE by the same
+	# call that asks the question, and `--no-index' is the flag that would
+	# take it away. Directories are the asymmetric case and keep their own
+	# query in `skipped_source_dirs', since git's index holds no
+	# directories to consult.
+	#
+	# Sources only. Headers are left where they are for the reason the
+	# directory rule gives: a build tree is also where a configure step
+	# writes the config.h somebody's source includes.
+	ignored_files = sorted(git_ignored(root, srcs) if srcs else set())
+	if ignored_files:
+		_gone = set(ignored_files)
+		srcs = [r for r in srcs if r not in _gone]
+		unbuilt = {r: w for r, w in unbuilt.items() if r not in _gone}
+		# Named rather than counted, because section 439 is what silence
+		# costs here: a file nothing walked, reported as a symbol nothing
+		# defines. Three is enough to recognise a generator's output.
+		info(f"{len(ignored_files)} source file(s) not built: git is told "
+		     f"to ignore {', '.join(ignored_files[:3])}"
+		     f"{f' and {len(ignored_files) - 3} more' if len(ignored_files) > 3 else ''}"
+		     f", and nothing tracks them")
 	if args.run:
 		# Staged like a generated source, and for the same reason: from
 		# here on it is an ordinary source that the include graph, the
@@ -13883,6 +13931,37 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		        os.path.abspath(os.path.join(root, a)).startswith(out_prefix):
 			continue
 		found_archives.append(a)
+	# An archive git ignores is build output by the same argument the
+	# source rule makes: nobody can check it out, so it cannot be what
+	# this tree builds against. fuzzypickles names the harm -- "static
+	# libraries `make' leaves beside their own sources ... fmake reads
+	# each as a second definition of every symbol its sources already
+	# provide -- so a tree anybody has run `make' in refuses with
+	# `fzp_base58_decode is defined by more than one file'".
+	#
+	# One call for the list rather than one per archive, and after the
+	# loop so the cheap local tests have already thinned it.
+	#
+	# **This reaches a case the source rule does not.** `[project]
+	# exclude' and the ignored-DIRECTORY rule are applied to sources; an
+	# archive sitting inside a build directory git ignores was picked up
+	# regardless, because `find_archives' walks for itself. A path inside
+	# an ignored directory is ignored, so one question answers both.
+	#
+	# A shipped archive is tracked and therefore not ignored -- beerssh
+	# commits libcrypto.a for two Android ABIs -- so the thing this must
+	# not touch is the thing git already excludes.
+	if found_archives:
+		_ignored_a = git_ignored(root, found_archives)
+		if _ignored_a:
+			found_archives = [a for a in found_archives
+			                  if a not in _ignored_a]
+			_named = sorted(_ignored_a)
+			info(f"{len(_named)} archive(s) not read: git is told to "
+			     f"ignore {', '.join(_named[:3])}"
+			     f"{f' and {len(_named) - 3} more' if len(_named) > 3 else ''}"
+			     f", so they are output rather than something this tree "
+			     f"ships")
 	prebuilt = prebuilt_units(sorted(set(forced_objs)), root, cfg, jobs)
 	if prebuilt:
 		vinfo(f"{len(prebuilt)} prebuilt object(s): "
@@ -14863,22 +14942,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			          + "\nEach is the same question as the one above, and "
 			            "the first is not the important one -- read the set "
 			            "before fixing any of them."]
-		# git has usually known the answer all along: one of them is build
-		# output somebody left in the tree. Said before the guessing starts,
-		# because it is the one part of this message that is not a guess.
-		ignored = sorted(git_ignored(root, first_providers))
-		if ignored and len(ignored) < len(first_providers):
-			lines += ["",
-			          "git is told to ignore "
-			          + ", ".join(ignored[:3])
-			          + (f", and {len(ignored) - 3} more" if len(ignored) > 3
-			             else "")
-			          + ", so "
-			          + ("they are" if len(ignored) > 1 else "it is")
-			          + " probably build output rather than source. "
-			          + f"[project] exclude in {CONF_FILE} keeps "
-			          + ("them" if len(ignored) > 1 else "it")
-			          + " out."]
+		# The sentence that used to go here -- "git is told to ignore X,
+		# so it is probably build output rather than source" -- is gone
+		# because it cannot be reached any more. An ignored source that
+		# nothing tracks is dropped before the closure runs, so it can no
+		# longer be one of two providers; a tracked one is reported
+		# not-ignored by `check-ignore', which consults the index. The
+		# advice was right and asked the reader to act on it; acting is
+		# now what happens, and the skip says so at the top of the run.
+		# Section 493.
 
 		# The include graph must not decide this -- section 3 exists because it is
 		# not good enough to -- but it is good enough to *suggest*, and a
@@ -22063,9 +22135,15 @@ def git_ignored(root, paths):
 
     It earned the second use first, on the commonest confusing case there
     is: a build output left in the tree, colliding with the file it was
-    generated from. The reader is shown two files defining one symbol and no
-    reason to prefer either, when git has known all along that one of them is
-    not source.
+    generated from. The reader was shown two files defining one symbol and
+    no reason to prefer either, when git had known all along that one of
+    them is not source.
+
+    **That use is gone and this is now a build authority throughout.**
+    Section 493 acts on the answer rather than printing it: an ignored
+    source, and an ignored archive, that nothing tracks is not read at
+    all. The explanation it replaced cannot be reached from the ambiguity
+    any more, because the file is gone before two providers can exist.
 
     An empty answer is the safe one and every failure returns it: no git, no
     repository, a git that could not answer. Nothing is skipped on a guess.
