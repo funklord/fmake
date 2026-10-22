@@ -12652,6 +12652,91 @@ def this_trees_schema_outranks_a_vendored_projects(t):
 
 
 @case
+def a_root_the_config_states_has_to_agree(t):
+	"""A selector that selected nothing, accepted in silence.
+
+    `[target.NAME] root' says which file a section is about. That is how
+    fuzznet picks one of three identically-named `provision_test.c', and
+    it is the form fmake\'s own advice recommends when two targets claim
+    one default name -- "[target.NEW_NAME] root = ...".
+
+    The four validation branches for it -- a header, a file this build
+    set aside, a path that is not there, an extension fmake does not
+    compile -- ran in the loop over sections that NO discovered target
+    claimed. A section whose key already names a target was skipped, so
+    its root was never checked and never applied: the section attached
+    by its key and the selector did nothing. Found by section 496\'s
+    sweep of refusals the suite never fires, where this one was reached
+    by hand and turned out to be two.
+
+    **A disagreement is a refusal**, set by the copyright holder
+    2026-10-22, rather than a re-rooting: two answers to which file the
+    section is about is one too many, and re-rooting picks one of them
+    silently, which is what the old behaviour did.
+
+    Four arms. A root that disagrees is refused and both files named; one
+    that agrees is accepted, and a rename beside it still works; one that
+    is not a source is answered as a path rather than as a disagreement,
+    since the order decides which message a typo gets; and the selector
+    itself still resolves two identically-named roots, which is the arm
+    that matters most -- breaking it would break the remedy fmake prints
+    for that collision."""
+	t.write("m.c", "int main(void){ return 0; }\n")
+	t.write("other.c", "int other(void){ return 1; }\n")
+	t.write("notes.txt", "not a source\n")
+
+	t.write("fmake.toml", '[target.m]\nroot = "other.c"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "already names the target rooted at" in out
+	      and "other.c" in out and "m.c" in out,
+	      f"a section keyed by a target's own name, stating a different "
+	      f"root, has to be refused and both files named: {out}")
+
+	t.write("fmake.toml", '[target.m]\nroot = "notes.txt"\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "not an extension fmake compiles" in out,
+	      f"a root that is not a source is a path fault, and saying it "
+	      f"disagrees would send the reader to the wrong line: {out}")
+	check("already names the target rooted at" not in out,
+	      f"and it must not also be called a disagreement: {out}")
+
+	t.write("fmake.toml", '[target.m]\nroot = "m.c"\nname = "mm"\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "built mm" in out,
+	      f"a root that agrees is redundant and not wrong, and the rename "
+	      f"beside it still has to work: {out}")
+
+	# The selector, which is what `root' is for. Two programs whose
+	# default name is the same, picked apart by two sections keyed on
+	# names no target has.
+	u = Tree("root-selects")
+	try:
+		u.write("a/probe.c", "int main(void){ return 1; }\n")
+		u.write("b/probe.c", "int main(void){ return 2; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "root = " in out,
+		      f"the control is wrong: two targets of one name have to "
+		      f"collide, and fmake's advice for it is this very key: "
+		      f"{out}")
+		u.write("fmake.toml",
+		        '[target.a_probe]\nroot = "a/probe.c"\n\n'
+		        '[target.b_probe]\nroot = "b/probe.c"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0 and "a_probe" in out and "b_probe" in out,
+		      f"the selector has to keep working -- it is the remedy "
+		      f"fmake prints for that collision: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_duplicate_definition_is_not_a_missing_library(t):
 	"""Two definitions and an offer to install something.
 

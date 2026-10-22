@@ -4560,6 +4560,86 @@ def situc_wrote(res, root, cmd, src):
 	return outs
 
 
+def check_root(name, rel, proj, excluded, root):
+	"""Refuse a `[target.*] root' that is not a source in this tree.
+
+    Lifted out of the loop over sections that no discovered target
+    claimed, because a CLAIMED section's root was never checked at all --
+    section 496. The four causes below reach four remedies and that is
+    the whole reason this is not one sentence: a header wants the source
+    that includes it, an excluded file wants the exclusion changed, a
+    path that is not there wants the near-miss, and an extension fmake
+    does not compile wants a different file.
+    """
+	if rel not in proj.src_set:
+		# Three causes reached one sentence, and it named no remedy
+		# for any of them. Measured: a path that is not there, a
+		# source this build set aside, and a header all produced
+		# `root = X is not a source file in this tree' and nothing
+		# else. Their fixes have nothing in common.
+		#
+		# The middle one is the worst and is why this is worth
+		# branching: the file is on disk, the reader can see it, and
+		# what removed it is their own `exclude' a few lines up in
+		# this same file -- so the sentence reads as fmake being
+		# unable to see a file that is plainly present.
+		#
+		# `excluded' is the map the rest of the build already keeps,
+		# holding the reason as a sentence -- an exclude pattern, an
+		# `@os' or `@arch', or a file that could not be read. Read
+		# rather than re-derived, so this cannot drift from what the
+		# build says about the same file somewhere else.
+		why = excluded.get(rel)
+		ext = os.path.splitext(rel)[1]
+		if ext in HDR_EXTS:
+			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+			    f"a header.\nA root is the translation unit that gets "
+			    f"compiled, so name the source that includes it.")
+		elif why:
+			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+			    f"in this tree, and this build set it aside: {why}.\n"
+			    f"Keep it in the build, or root this target at a file "
+			    f"that is in it.")
+		elif not os.path.exists(os.path.join(root, rel)):
+			# Same basename first: the usual mistake is a directory
+			# that is wrong rather than a name that is -- `src/main.c'
+			# for `main.c' is four edits and one obvious answer, where
+			# the edit test finds nothing.
+			near = sorted(r for r in proj.src_set
+			              if os.path.basename(r)
+			              == os.path.basename(rel))
+			if not near:
+				near = sorted(r for r in proj.src_set
+				              if _one_edit_apart(r, rel))
+			hint = ""
+			if near:
+				hint = ("\nDid you mean "
+				        + ", ".join(repr(r) for r in near[:3])
+				        + ("?" if len(near) <= 3 else
+				           f", or one of {len(near) - 3} more?"))
+			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+			    f"not in this tree.{hint}")
+		elif ext not in SRC_EXTS:
+			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+			    f"there, and {ext!r} is not an extension fmake "
+			    f"compiles.\nRoot the target at a source file.")
+		else:
+			# Exists, is a source extension, and this build did not
+			# set it aside -- so fmake does not know why, and says
+			# that rather than guessing one of the three above.
+			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
+			    f"not a source file in this tree")
+	elif (os.path.splitext(rel)[1] in CRATE_EXTS
+	      and os.path.basename(rel) not in CRATE_ROOTS):
+		# Reachable by hand as well as by inference, and it arrives at
+		# the same missing unit. rustc compiles a root; a module is
+		# read *by* one.
+		die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} roots no "
+		    f"crate. rustc is handed a crate root, and only "
+		    f"{' or '.join(sorted(CRATE_ROOTS))} is one -- a module is "
+		    f"read from the root that declares it with `mod'.")
+
+
 def situ_flags(conf, root, srcs):
 	"""What to pass situc for each schema: {rel: [flags]}, plus the default.
 
@@ -12753,6 +12833,32 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				t.name = t.conf.get("name", name)
 			else:
 				t = Target(rel, root, ann, conf.target(name))
+			# A claimed section's `root' was never looked at -- section
+			# 496. The validation below runs over sections no discovered
+			# target claimed, so `[target.m] root = "missing.c"' where `m'
+			# is already a target was accepted in silence and ignored: the
+			# section applied by its KEY, and the selector it stated did
+			# nothing.
+			#
+			# A disagreement is a refusal rather than a re-rooting, set by
+			# the copyright holder 2026-10-22. `root' selects which file a
+			# section is about -- that is how fuzznet picks one of three
+			# identically-named `provision_test.c' -- so a section keyed by
+			# a name that already names a target, stating a different
+			# root, is two answers to one question. Re-rooting would pick
+			# one of them silently, which is what this was doing.
+			#
+			# Validated as a path first, so `missing.c' is answered as a
+			# path rather than as a disagreement.
+			_declared_root = t.conf.get("root")
+			if _declared_root and _declared_root != rel:
+				check_root(name, _declared_root, proj, excluded, root)
+				die(f"{CONF_FILE}: {tgt_section(name)} root = "
+				    f"{_declared_root!r}, and that section already names "
+				    f"the target rooted at {rel!r}.\n"
+				    f"    `root' says which file the section is about, so "
+				    f"two answers is one too many: drop the root, or key "
+				    f"the section by a name no target has.")
 			# Both names are spoken for: the one the section was found under,
 			# and whatever it renamed the target to. Otherwise a section that
 			# renames looks unconsumed and gets built a second time.
@@ -12813,73 +12919,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				die(f"{CONF_FILE}: {tgt_section(name)} declares no root and no "
 				    f"sources, so fmake cannot tell what is in it{hint}")
 			rel = None
-		elif rel not in proj.src_set:
-			# Three causes reached one sentence, and it named no remedy
-			# for any of them. Measured: a path that is not there, a
-			# source this build set aside, and a header all produced
-			# `root = X is not a source file in this tree' and nothing
-			# else. Their fixes have nothing in common.
-			#
-			# The middle one is the worst and is why this is worth
-			# branching: the file is on disk, the reader can see it, and
-			# what removed it is their own `exclude' a few lines up in
-			# this same file -- so the sentence reads as fmake being
-			# unable to see a file that is plainly present.
-			#
-			# `excluded' is the map the rest of the build already keeps,
-			# holding the reason as a sentence -- an exclude pattern, an
-			# `@os' or `@arch', or a file that could not be read. Read
-			# rather than re-derived, so this cannot drift from what the
-			# build says about the same file somewhere else.
-			why = excluded.get(rel)
-			ext = os.path.splitext(rel)[1]
-			if ext in HDR_EXTS:
-				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
-				    f"a header.\nA root is the translation unit that gets "
-				    f"compiled, so name the source that includes it.")
-			elif why:
-				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
-				    f"in this tree, and this build set it aside: {why}.\n"
-				    f"Keep it in the build, or root this target at a file "
-				    f"that is in it.")
-			elif not os.path.exists(os.path.join(root, rel)):
-				# Same basename first: the usual mistake is a directory
-				# that is wrong rather than a name that is -- `src/main.c'
-				# for `main.c' is four edits and one obvious answer, where
-				# the edit test finds nothing.
-				near = sorted(r for r in proj.src_set
-				              if os.path.basename(r)
-				              == os.path.basename(rel))
-				if not near:
-					near = sorted(r for r in proj.src_set
-					              if _one_edit_apart(r, rel))
-				hint = ""
-				if near:
-					hint = ("\nDid you mean "
-					        + ", ".join(repr(r) for r in near[:3])
-					        + ("?" if len(near) <= 3 else
-					           f", or one of {len(near) - 3} more?"))
-				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
-				    f"not in this tree.{hint}")
-			elif ext not in SRC_EXTS:
-				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
-				    f"there, and {ext!r} is not an extension fmake "
-				    f"compiles.\nRoot the target at a source file.")
-			else:
-				# Exists, is a source extension, and this build did not
-				# set it aside -- so fmake does not know why, and says
-				# that rather than guessing one of the three above.
-				die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} is "
-				    f"not a source file in this tree")
-		elif (os.path.splitext(rel)[1] in CRATE_EXTS
-		      and os.path.basename(rel) not in CRATE_ROOTS):
-			# Reachable by hand as well as by inference, and it arrives at
-			# the same missing unit. rustc compiles a root; a module is
-			# read *by* one.
-			die(f"{CONF_FILE}: {tgt_section(name)} root = {rel!r} roots no "
-			    f"crate. rustc is handed a crate root, and only "
-			    f"{' or '.join(sorted(CRATE_ROOTS))} is one -- a module is "
-			    f"read from the root that declares it with `mod'.")
+		else:
+			check_root(name, rel, proj, excluded, root)
 		t = Target(rel or "", root, Ann(), section)
 		t.name = section.get("name", name)
 		if not rel:

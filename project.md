@@ -546,7 +546,8 @@ that had been green about nothing for five commits ·
 [493. git decides what is source, taken](#493-git-decides-what-is-source-taken) ·
 [494. The per-schema situc key, and the spelling 430 left open](#494-the-per-schema-situc-key-and-the-spelling-430-left-open) ·
 [495. A duplicate definition is not a missing library](#495-a-duplicate-definition-is-not-a-missing-library) ·
-[496. Two findings this session made and did not write down](#496-two-findings-this-session-made-and-did-not-write-down)
+[496. Two findings this session made and did not write down](#496-two-findings-this-session-made-and-did-not-write-down) ·
+[497. The root that had to agree](#497-the-root-that-had-to-agree)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -38954,9 +38955,75 @@ The section still applies, by its key. What is lost is the selector: a
 typo in it reverts silently to whatever the key names, which for
 fuzznet's shape is the ambiguous set the root existed to disambiguate.
 
-Not fixed here. The fix is to validate every section's `root` rather
-than only an unclaimed one's, and the question it leaves is whether a
-claimed section's `root` should also *re-root* the target or stay a
-selector that must agree -- which decides whether a disagreement is a
-refusal or a no-op, and is worth measuring against the trees that use
-it before choosing.
+**Fixed, and the question answered: §497.** The holder chose the
+refusal -- a claimed section's `root` must agree with the target it
+names, because two answers to which file a section is about is one too
+many. The four branches are one function now, asked by both paths, and
+the selector that `root` exists for is unchanged.
+
+## 497. The root that had to agree
+
+§496 recorded this unfixed and named the question it left: whether a
+claimed section's `root` should re-root the target or must agree with
+it. **The copyright holder chose the refusal**, 2026-10-22, and the
+reason is the one that decides it: `root` says which file a section is
+about, so a section keyed by a name a target already has, stating a
+different root, is two answers to one question. Re-rooting picks one of
+them silently -- which is what the old behaviour did, by picking the key
+and discarding the root without a word.
+
+### What was wrong
+
+The four validation branches for `root` -- a header, a file this build
+set aside, a path that is not there, an extension fmake does not compile
+-- ran in the loop over sections that **no discovered target claimed**.
+A section whose key already names a target never entered that loop, so:
+
+    [target.m]
+    root = "missing.c"      built, silently
+    root = "notes.txt"      built, silently
+
+The section still applied, by its key. What was lost is the selector,
+and losing it quietly is the cost: for fuzznet's three identically-named
+`provision_test.c` a typo in the root reverts to the ambiguous set the
+root existed to resolve.
+
+### The chain is one function now
+
+`check_root` is the four branches lifted out, so the claimed path and
+the unclaimed path ask one question rather than two. The order inside
+the claimed path is load-bearing and is its own arm below: **validate
+the path first**, so `notes.txt` is answered as a path and not as a
+disagreement. A typo should be told it is a typo.
+
+    root = 'other.c', and that section already names the target rooted
+    at 'm.c'.
+        `root' says which file the section is about, so two answers is
+        one too many: drop the root, or key the section by a name no
+        target has.
+
+### The arm that mattered most is the one that did not change
+
+`root` as a **selector** is what fmake's own advice recommends when two
+targets claim one default name -- it prints `[target.NEW_NAME] root =
+...` for exactly that. So the regression risk was not in the refusal but
+in the selector beside it, and the case carries it: two programs whose
+default name is the same, refused without a config, built as `a_probe`
+and `b_probe` with two sections keyed on names no target has.
+
+### Four arms, four aimed sabotages, and all four from the start
+
+The first time today that is true rather than discovered afterwards:
+
+    the refusal removed      -> "a section keyed by a target's own name,
+                                stating a different root, has to be
+                                refused"
+    the path check moved
+      after the disagreement -> "a root that is not a source is a path
+                                fault"
+    agreement refused too    -> "a root that agrees is redundant and not
+                                wrong"
+    `by_root' ignored        -> "the selector has to keep working"
+
+Each is its arm's own message, which is what §492 asks and what three of
+today's earlier cases had to be corrected to provide.
