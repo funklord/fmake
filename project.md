@@ -547,7 +547,8 @@ that had been green about nothing for five commits ·
 [494. The per-schema situc key, and the spelling 430 left open](#494-the-per-schema-situc-key-and-the-spelling-430-left-open) ·
 [495. A duplicate definition is not a missing library](#495-a-duplicate-definition-is-not-a-missing-library) ·
 [496. Two findings this session made and did not write down](#496-two-findings-this-session-made-and-did-not-write-down) ·
-[497. The root that had to agree](#497-the-root-that-had-to-agree)
+[497. The root that had to agree](#497-the-root-that-had-to-agree) ·
+[498. Fourteen trees at this head, and the two that were not fmake](#498-fourteen-trees-at-this-head-and-the-two-that-were-not-fmake)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39027,3 +39028,134 @@ The first time today that is true rather than discovered afterwards:
 
 Each is its arm's own message, which is what §492 asks and what three of
 today's earlier cases had to be corrected to provide.
+
+## 498. Fourteen trees at this head, and the two that were not fmake
+
+Six commits since the last sweep touch what another project's build
+contains -- §491 changed which `-I` flags a proposal contributes to
+every tree, §497 touches any tree using `[target.*] root`, and §494 and
+§495 fire for situ trees and duplicate-definition links. So the sweep
+was re-run over all fourteen: `git archive` of HEAD plus one archive per
+submodule at its gitlink, `fmake -j8`, hydra at the `-j2` its README
+requires.
+
+**The expectations were written first**, into a file, before any result
+arrived -- including that two of the fourteen should be non-zero and
+that both are passes. Fitting the expectation to the outcome is the
+failure a sweep invites, and the only guard against it is the order.
+
+    softkeys       the static library
+    hembygd        hembygd
+    openmlx4       1 program
+    fuzznet        fuzznetd, consumer_check
+    raidcfgd       REFUSES: situ_msg_init -- its README records this
+    anti-avx       function_sweep, icache_bench
+    ossacli        ossacli, ossa-check, ossa-metrics
+    qtty           8 programs
+    situ           libsitu.a, situ-walk-c
+    fuzzypickles   6 programs
+    beerssh        4 programs, vterm patches applied from pristine
+    hydra          hydra
+
+Twelve matched exactly. **No regression from any of the six.**
+
+### bbq-predictor was my fixture, and the way it failed is the lesson
+
+    !!! this tree declares 1 submodule(s) in .gitmodules and is not a
+        git checkout, so they cannot be fetched
+
+fmake was right. The submodule directory was empty, because my driver
+ran `git -C "$src/$p" archive "$pin" 2>/dev/null` and git had answered
+
+    fatal: detected dubious ownership in repository at
+    '/home/funk/src/bbq-predictor/monocypher'
+
+`monocypher` had been added to that tree since the last sweep, so it was
+the one path of 42 that `git-safe-directories` had not listed. **The
+`2>/dev/null` turned a refusal into an empty directory**, which is the
+shape this file keeps recording: a silenced failure reading as a clean
+state. The guidelines name the remedy and I had not run it.
+
+Re-run after listing it: **two programs, `bbq-predictor` and `serve`,
+where §466 recorded one.** Their tree gained one; the count was right
+when written.
+
+### hull builds all three artifacts, and that is their work
+
+The written expectation said hull would fail on `message_frame.h` and
+finding 18. It built `hull-agent`, `hull` and `libnss_hull.so`.
+
+Their `fmake.toml` has moved in three commits -- `e657d44`, `d93ea9d`,
+`f2536d2` -- taking §483's `[generate.*]` route for all five schemas,
+with the finding-18 `-include` written into two of the commands by
+`sed`, and §484's `[target.nss] kind = "shared"` for the module. So the
+expectation was stale about **their tree**, not wrong about fmake.
+
+**And they have not taken §494's key, which is the right call rather
+than an oversight.** The key cannot express a per-file `-include`, so
+`frontend` and `protocol` need a `[generate]` command whatever else
+happens; a tree that already has two of those is simpler for having
+five than for having three tables and two commands. The message that
+offered them the key said as much.
+
+### What the sweep cannot reach, stated rather than implied
+
+§493 is inert in all fourteen by construction: a `git archive` extract
+has no repository, so git answers nothing and no source or archive is
+skipped for being ignored. That half is covered by the suite and by one
+clone of ossacli, and the sweep adds nothing to it.
+
+Artifact names carry the `sw-` prefix where a target is named after its
+directory, which is the scratch name rather than a change -- §492's note,
+and the reason `sw-beerssh` is `bssh`.
+
+### What hull measured, in their words
+
+Two messages arrived in this tree's inbox while the sweep ran -- the
+`20261021T1352Z` and `20261021T1524Z` ones -- and they carry more than
+the fact of adoption. Theirs, not mine:
+
+- the fmake-built pair passes hull's **store suite (28), cli suite (217)
+  and qemu suite (110)**, the last booting the agent fmake linked, so
+  the claim holds past "built and running";
+- `libnss_hull.so` carries SONAME `libnss_hull.so.2` and **the same six
+  `_nss_hull_` dynamic symbols as the Makefile's build**, and hull's NSS
+  suite (19 cases, real `getent` lookups through a bound
+  `nsswitch.conf`) passes on it;
+- `[target.agent]` wanted `ldflags = ["-static"]` of their own: the
+  agent is a vm's init in an initrd with no libc, and **fmake's default
+  link is dynamic, so a fmake-built agent would build and then fail to
+  boot with nothing at build time saying so.**
+
+That last one is not a complaint and I am not treating it as a finding:
+a build tool cannot know an artifact is about to be an initrd's init.
+It is recorded because it is the sharpest example yet of what the
+README rule in `project-attribution` buys -- a requirement no amount of
+reading this tree would have produced, found by somebody building
+something real.
+
+### The packaged fmake, and a question whose premise was already answered here
+
+Hull asked whether `/usr/bin/fmake`, which reports `1.0 (5af02348)`,
+is older or newer than §414 -- older meaning the package wants
+rebuilding, newer meaning a regression.
+
+**Neither, because the hash cannot answer it.** §286 records this
+already: `5af02348` is the first eight hex of the SHA-256 of the
+*file*, not a commit, and it reads as a git short hash because eight
+lowercase hex in parentheses after a version is git's spelling. That
+section exists because respec's session asked git the same question and
+got the same alarming `Not a valid object name`.
+
+What does answer it is the mtime: the package is from **2026-08-04**,
+and §414 landed in `281a713` on **2026-10-14**. So the package wants
+rebuilding, and it has wanted it for ten weeks.
+
+**And `--features` is what hull should have been able to ask.** It
+exists precisely so a tree need not build a fixture to find out what
+the fmake on a machine knows -- two trees had already paid for that --
+yet a third tree has now reached for `--version` and reasoned about
+ordering instead. A capability list nobody reaches for is a capability
+list nobody knows about, which is a documentation fault rather than a
+code one: the README's version line says what the hash is, and says
+nothing about the flag that answers the question people actually have.
