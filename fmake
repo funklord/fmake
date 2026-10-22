@@ -7536,6 +7536,16 @@ def _qt_no_keywords(flags):
 	return any(f == "-DQT_NO_KEYWORDS" or f.startswith("-DQT_NO_KEYWORDS=")
 	           for f in flags)
 RE_ERROR_AT = re.compile(r"^(.+?):(\d+):\d+: (?:fatal )?error:", re.M)
+# What rustc says when a `use' names a crate nothing declared. Three
+# spellings for one situation: E0433 for a bare path, E0463 when an
+# `extern crate' has no rlib to find, and E0432 for the import itself,
+# whose message carries the first path segment and so answers for
+# `use libc::c_int' as well as for `use libc'.
+RE_RUSTC_NO_CRATE = (
+    re.compile(r"use of undeclared crate or module `([A-Za-z_]\w*)`"),
+    re.compile(r"can't find crate for `([A-Za-z_]\w*)`"),
+    re.compile(r"unresolved import `([A-Za-z_]\w*)"),
+)
 
 
 def _qt_keyword_clash(msg, root, incflags):
@@ -11119,7 +11129,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 
 	if dry_run:
 		print(" ".join(shlex.quote(c) for c in cmd))
-		return out, True, True
+		return out, True, True, set()
 
 	# The whole command, plus the contents of everything it consumes. Object
 	# mtimes alone miss every change that is not a recompile -- a different
@@ -11155,7 +11165,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 			want, size = was, None
 		if want == key and _same_file(out, size):
 			vinfo(f"up to date {name}")
-			return out, False, True
+			return out, False, True, set()
 
 	if t.kind == "static" and not objs and cmd[0] != "cp":
 		# `ar rcs` over nothing writes a valid, empty archive and exits 0.
@@ -11164,7 +11174,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		PROGRESS.flush()
 		warn(f"{name} would have no members: nothing in this tree compiles "
 		     f"into it")
-		return out, True, False
+		return out, True, False, set()
 	if t.kind == "static" and os.path.exists(out):
 		os.remove(out)          # ar appends; a stale member would survive
 	if not quiet:
@@ -11178,6 +11188,20 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# is the shape section 162 had just recorded about architecture.
 	r = run_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
 	              text=True, errors="replace")
+	# Read here because this is where rustc's words are. The advice they
+	# feed used to be gated on there being a second crate root in the
+	# tree, which is a fact about the layout and not about the failure --
+	# so a parse error in a tree with a lib.rs beside its main.rs was
+	# told about dependency graphs, and `use libc::' in a tree with one
+	# crate was told nothing at all.
+	no_crate = set()
+	if cl.root.crate_exe and r.returncode != 0:
+		for pattern in RE_RUSTC_NO_CRATE:
+			no_crate |= set(pattern.findall(r.stderr))
+		# std, core and alloc come with the compiler and the rest are
+		# paths within this crate rather than crate names, so any of them
+		# here means something other than a missing dependency.
+		no_crate -= {"std", "core", "alloc", "crate", "self", "super"}
 	if r.stderr.strip():
 		# A missing library produces one linker line per call site, which
 		# buries everything else. fmake already knows the unresolved symbols
@@ -11217,7 +11241,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		cache.data.setdefault("links", {})[store_key] = {
 		    "key": key, "size": _file_size(out),
 		}
-	return out, True, r.returncode == 0
+	return out, True, r.returncode == 0, no_crate
 
 # ---------------------------------------------------------------------------
 # --explain
@@ -15473,12 +15497,14 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 
 	for t in wanted:
 		res = resolutions.get(t)
-		out, did, ok = link_target(t, closures[t], cfg, outdir,
-		                           args.dry_run,
-		                           res["ldflags"] if res else [],
-		                           cache, root, quiet=args.quiet)
+		out, did, ok, no_crate = link_target(t, closures[t], cfg, outdir,
+		                                     args.dry_run,
+		                                     res["ldflags"] if res else [],
+		                                     cache, root,
+		                                     quiet=args.quiet)
 		changed = changed or did
-		(built if ok else failed).append((t.filename, closures[t], res))
+		(built if ok else failed).append((t.filename, closures[t], res,
+		                                  no_crate))
 		# Outside `if did', like the version-fallback note further down
 		# and for the same reason: this is a claim about the artifact,
 		# which does not stop being true because nothing was rebuilt.
@@ -15898,7 +15924,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# configuration does not compile at all -- advice about a program
 		# that was never built, which is a worse kind of wrong than being
 		# unhelpful, because acting on it changes a build that was right.
-		in_artifact = {u.rel for _n, cl, _r in built for u in cl.link}
+		in_artifact = {u.rel for _n, cl, _r, _c in built for u in cl.link}
 		fallen = [(rel, name) for rel, name in version_fallen
 		          if rel in in_artifact]
 		_fhead, _frest = capped(fallen, 3)
@@ -15956,7 +15982,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			note(f"... and {_grest} more built and not installed "
 			     f"(-v for all)")
 
-		names = ", ".join(n for n, _, _ in built)
+		names = ", ".join(n for n, _, _, _ in built)
 		if built:
 			info(f"built {names}" if changed else f"{names} up to date")
 
@@ -16046,7 +16072,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	if failed:
 		say()
 		hidden_moc = set()
-		for name, cl, res in failed:
+		for name, cl, res, no_crate in failed:
 			# "did not link" is the wrong phase for a crate, and the
 			# phase is what a reader acts on: rustc compiles and links
 			# in one command, so `let async = 1' under edition 2021 --
@@ -16061,22 +16087,59 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				# and no library it could have failed to find -- and the
 				# ending that offers --ldflags would send the reader to
 				# install something that has nothing to do with it.
-				others = sorted(r for r in crates
-				                if r != cl.root.rel
-				                and not scans[r].get("has_main"))
-				if others:
-					# The common Rust layout is a main.rs beside a lib.rs,
-					# and they are two crates. Cargo makes one available
-					# to the other through a dependency graph in a build
-					# file; fmake has none to read, so `use thing::x' in
-					# the program is an undeclared crate. Said here
-					# because rustc's own `unresolved import' names the
-					# crate and not the reason.
-					note(f"{cl.root.rel} and {', '.join(others)} are "
-					     f"separate crates, and fmake does not make one "
-					     f"available to the other: that is a dependency "
-					     f"graph, and it lives in a build file fmake does "
-					     f"not read")
+				#
+				# Keyed on what rustc said, not on the tree's layout. This
+				# was gated on there being a second crate root here, which
+				# is the sibling case and not the question: a tree with a
+				# lib.rs beside its main.rs was told about dependency
+				# graphs when its real fault was a parse error, and `use
+				# libc::' in a single-crate tree was told nothing at all.
+				# The second is netcfgd's whole situation -- its workspace
+				# depends on libc and serde_json from the registry -- and
+				# the sentence that would have oriented them was one line
+				# away, behind a condition they do not meet.
+				if no_crate:
+					# Two questions, and the error answers only the
+					# first. WHETHER to speak is what rustc said; whether
+					# the SIBLING sentence is relevant is the tree's
+					# layout, which is what the old gate confused it with.
+					# So a crate root here is named whenever there is one,
+					# and the name the reader wrote decides only which
+					# sentence is true OF IT: a sibling is named after its
+					# enclosing directory, which is section 150's finding,
+					# so that is what a `use' of it has to spell, and a
+					# name matching none of them is not in this tree.
+					#
+					# Both can be true at once and that is the useful
+					# case: `use thing::' in a tree whose other crate root
+					# is `lib.rs' means nothing in the tree is called
+					# `thing' AND there is a crate here they may have
+					# meant. Saying only the first would be accurate and
+					# unhelpful.
+					kin = sorted(r for r in crates
+					             if r != cl.root.rel
+					             and not scans[r].get("has_main"))
+					outside = sorted(no_crate
+					                 - {os.path.basename(os.path.dirname(r))
+					                    for r in kin})
+					if outside:
+						note(f"{', '.join(outside)} "
+						     f"{'is' if len(outside) == 1 else 'are'} "
+						     f"used as a crate here and nothing in this "
+						     f"tree declares "
+						     f"{'it' if len(outside) == 1 else 'them'}: "
+						     f"fmake drives rustc over the crate roots it "
+						     f"finds here and resolves nothing from a "
+						     f"registry")
+					if kin:
+						# The common Rust layout is a main.rs beside a
+						# lib.rs, and they are two crates. Cargo makes one
+						# available to the other through a dependency
+						# graph in a build file; fmake has none to read.
+						note(f"{', '.join(kin)} is in this tree and is a "
+						     f"separate crate: making one available to "
+						     f"another is a dependency graph, and it "
+						     f"lives in a build file fmake does not read")
 					note("`mod' draws a file into this crate; `use "
 					     "othercrate::' needs Cargo")
 				continue
@@ -16217,10 +16280,10 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     "through another macro: moc's preprocessor finds it either "
 			     "way, but what decides to run moc is a token search")
 		elif any(u.rel in moc_unreachable
-		         for _n, c, _r in failed for u in c.link):
+		         for _n, c, _r, _x in failed for u in c.link):
 			note('add the missing #include of the .moc file above; if that '
 			     "is not it, name the missing libraries with --ldflags")
-		elif all(c.root.crate_exe for _n, c, _r in failed):
+		elif all(c.root.crate_exe for _n, c, _r, _x in failed):
 			# Every failure here was rustc's, and rustc has already said
 			# what was wrong in its own words.
 			pass

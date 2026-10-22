@@ -538,7 +538,8 @@ that had been green about nothing for five commits ·
 [485. The fixture that spelled a link flag](#485-the-fixture-that-spelled-a-link-flag) ·
 [486. ossacli's shim, and three refusals that each named the vocabulary](#486-ossaclis-shim-and-three-refusals-that-each-named-the-vocabulary) ·
 [487. Three consumers' workarounds for defects fmake has fixed](#487-three-consumers-workarounds-for-defects-fmake-has-fixed) ·
-[488. Whether git decides what is source: built, measured, reverted](#488-whether-git-decides-what-is-source-built-measured-reverted)
+[488. Whether git decides what is source: built, measured, reverted](#488-whether-git-decides-what-is-source-built-measured-reverted) ·
+[489. netcfgd's unmeasured question, and the advice behind the wrong gate](#489-netcfgds-unmeasured-question-and-the-advice-behind-the-wrong-gate)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -38029,3 +38030,102 @@ not part of the proposal: the archive filter's neighbour said beerssh
 "ships" prebuilt libcrypto.a, and beerssh tracks no archive at all. The
 word mattered more than it looks -- a shipped archive would be the one
 case any such rule must not touch, and these are the opposite.
+
+## 489. netcfgd's unmeasured question, and the advice behind the wrong gate
+
+netcfgd's `fmake.toml` excludes its Cargo workspace and ends the entry
+honestly: *"Whether the exclusion is still needed at all has not been
+measured here (10.421)."* §487 says a consumer's dated claim is best
+checked from this end, and this one needed no build to answer.
+
+**It is still needed.** `crates/netcfgd-sys/Cargo.toml` declares `libc =
+"0.2"` and `serde_json` arrives through the workspace; there is no
+`vendor/` directory, so the dependency graph leaves the tree. That is
+the first reason their own entry gives -- fmake "does not resolve a
+workspace, inter-crate dependencies, features, or anything from a
+registry" -- and it is the reason that survives. The naming refusal they
+also cite was fixed by §150 and is, as they say, no longer a reason.
+
+### What asking cost fmake
+
+A single-crate tree that uses a registry crate got rustc's words and
+nothing of fmake's:
+
+    RS  rcrate
+    error[E0432]: unresolved import `libc`
+    * rcrate did not build
+
+fmake has the sentence that would orient a reader -- *"`mod' draws a
+file into this crate; `use othercrate::' needs Cargo"* -- and it sat
+behind a test for a **second crate root in the tree**. netcfgd is
+exactly the tree that does not meet that condition and exactly the tree
+that needed the sentence.
+
+**And the same gate was wrong pointing the other way.** Measured against
+the unfixed binary, on a tree with a `lib.rs` beside a `main.rs` whose
+only fault is `let async = 1`:
+
+    * rparse did not build
+      main.rs and helper/lib.rs are separate crates, and fmake does not
+      make one available to the other: that is a dependency graph, and
+      it lives in a build file fmake does not read
+
+A parse error, answered with advice about dependency graphs. One
+condition, two faults, and neither is a fault in the advice itself --
+the sentences are right, they were asked the wrong question.
+
+### Ask rustc, and say of each name what is true of it
+
+The gate is now what rustc said: `E0433` for a bare path, `E0463` for an
+`extern crate` with no rlib, and `E0432` for the import, whose message
+carries the first path segment and so answers for `use libc::c_int` as
+well as `use libc`. `std`, `core`, `alloc`, `crate`, `self` and `super`
+are removed, since any of those means something other than a missing
+dependency.
+
+Then the names are split, because one of them can be in the tree and the
+other cannot:
+
+    libc is used as a crate here and nothing in this tree declares it:
+    fmake drives rustc over the crate roots it finds here and resolves
+    nothing from a registry
+
+    helper/lib.rs is in this tree and is a separate crate: making one
+    available to another is a dependency graph, and it lives in a build
+    file fmake does not read
+
+A sibling is matched by its enclosing directory, which is §150's rule
+and therefore what a `use` of it has to spell. The first draft said the
+registry sentence over both and was wrong about the one in the tree --
+caught by running the sibling fixture rather than by reading it.
+
+**And the gate turned out to be two questions, which the full run
+found.** `a_rust_program_using_a_sibling_crate_is_told_what_it_needs`
+failed: its fixture writes `use thing::shared` in a tree whose other
+crate root is a bare `lib.rs`, so `thing` matches no sibling and the
+second draft told it only that nothing here declares `thing` -- true,
+and less than the tree knows. **Whether to speak is what rustc said;
+whether the sibling sentence is relevant is the layout**, which is the
+distinction the original gate collapsed and which my first fix collapsed
+the other way. A crate root here is named whenever there is one, and the
+name the reader wrote decides only which sentence is true of it. Both at
+once is the useful case: nothing in this tree is called `thing`, and
+there is a crate here they may have meant.
+
+That case's assertion moved from `separate crates` to `separate crate`,
+since the sentence now names the root it found rather than listing both.
+The substance it checks is unchanged and its comment says why the number
+did.
+
+### Three arms, each seen to fail
+
+`an_undeclared_crate_is_told_apart_from_a_parse_error` covers the
+registry crate, the sibling crate, and the parse error that must draw
+neither. Removing the advice fails the first; restoring the old
+layout-keyed gate fails it too, which is the fault modelled rather than
+merely described.
+
+One caller, so `link_target` returning what rustc could not find costs
+one signature and four returns. The alternative was deriving the name
+from the source, which would have been a second authority on a question
+rustc had already answered.

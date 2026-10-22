@@ -33633,6 +33633,88 @@ def _rust(t):
 
 
 @case
+def an_undeclared_crate_is_told_apart_from_a_parse_error(t):
+	"""The advice was keyed on the tree\'s layout, not on the failure.
+
+    `use libc::c_int' in a single-crate tree got rustc\'s `unresolved
+    import\' and nothing else, because the sentence that would have
+    oriented the reader -- "`use othercrate::\' needs Cargo" -- sat behind
+    a test for a SECOND crate root in the tree. That is netcfgd\'s whole
+    situation: its workspace depends on libc and serde_json from the
+    registry, so the one thing fmake could usefully say was one line away
+    behind a condition that tree does not meet.
+
+    The same gate was wrong in the other direction. Measured against the
+    unfixed binary, on a tree with a `lib.rs\' beside a `main.rs\' whose
+    only fault is `let async = 1\':
+
+        * rparse did not build
+          main.rs and helper/lib.rs are separate crates, and fmake does
+          not make one available to the other: that is a dependency
+          graph ...
+
+    A parse error, answered with advice about dependency graphs. One
+    condition, two faults, and the fix is to ask rustc instead: E0433 for
+    a bare path, E0463 for an `extern crate\' with no rlib, E0432 for the
+    import itself, whose message carries the first path segment.
+
+    Three arms, and the third is the one that was never checked: a crate
+    this tree HAS is not a registry crate, so each name gets the sentence
+    that is true of it."""
+	env = _rust(t)
+	t.write("main.rs", "use libc::c_int;\n\n"
+	        "fn main() {\n    let n: c_int = 3;\n"
+	        '    println!("{}", n);\n}\n')
+	r = t.fmake(env=env)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a use of an undeclared crate must fail: "
+	                         f"{out}")
+	check("libc is used as a crate here" in out
+	      and "resolves nothing from a registry" in out,
+	      f"nothing said where libc was supposed to come from: {out}")
+	check("needs Cargo" in out,
+	      f"and the one orientation fmake can offer was missing: {out}")
+	check("separate crate" not in out,
+	      f"there is no sibling crate in this tree, so that sentence is "
+	      f"about nothing: {out}")
+
+	# A crate this tree holds, named after its enclosing directory, which
+	# is section 150's rule and what a `use' of it has to spell.
+	u = Tree("rust-sibling")
+	try:
+		u.write("helper/lib.rs", "pub fn value() -> i32 { 7 }\n")
+		u.write("main.rs", "use helper::value;\n\n"
+		        'fn main() { println!("{}", value()); }\n')
+		r = u.fmake(env=env)
+		out = r.stdout + r.stderr
+		check("helper/lib.rs is in this tree and is a separate crate" in out,
+		      f"a crate root in the tree has to be named as one: {out}")
+		check("resolves nothing from a registry" not in out,
+		      f"it is in this tree, so the registry sentence is false of "
+		      f"it: {out}")
+		check("needs Cargo" in out,
+		      f"the remedy is the same either way: {out}")
+	finally:
+		u.cleanup()
+
+	# And a failure that is not about crates at all must draw none of it,
+	# which is the half the old gate got wrong.
+	w = Tree("rust-parse-error")
+	try:
+		w.write("helper/lib.rs", "pub fn value() -> i32 { 7 }\n")
+		w.write("main.rs", "fn main() { let async = 1; "
+		        'println!("{}", async); }\n')
+		r = w.fmake(env=env)
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"the parse error must fail: {out}")
+		check("separate crate" not in out and "needs Cargo" not in out,
+		      f"a parse error was answered with advice about dependency "
+		      f"graphs, which is what keying on the layout cost: {out}")
+	finally:
+		w.cleanup()
+
+
+@case
 def a_rustc_replaced_in_place_rebuilds_the_crate(t):
 	"""Section 223 left this half too, with the shape already decided.
 
@@ -34477,7 +34559,14 @@ fn main() { println!("{}", shared()); }
 	r = t.fmake(env=_rust(t))
 	check(r.returncode != 0, f"this cannot build: {r.stdout}")
 	out = r.stdout + r.stderr
-	check("separate crates" in out,
+	# `separate crate\' rather than the plural this asserted until the
+	# advice was re-keyed on rustc\'s own answer: the sentence names the
+	# crate root it found rather than listing both, so the number moved
+	# with the wording. What is asserted is the substance either way --
+	# the reader is told these are separate crates and why that matters.
+	# `thing\' here names neither crate, so the run also says nothing in
+	# this tree declares it, which is the other half being true at once.
+	check("separate crate" in out,
 	      f"the failure does not say why the import cannot resolve: {out}")
 	check("--ldflags" not in out,
 	      f"a target rustc links has no library to name, and offering one "
