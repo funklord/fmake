@@ -4802,6 +4802,13 @@ DIRECTIVES = DIRECTIVE_SCALAR | DIRECTIVE_LIST
 # kind -- see expand_libraries.
 KINDS = ("exe", "shared", "static", "library", "module")
 
+# Every `[target.*]' key `install_plan' reads. A module never reaches it,
+# so naming one there is refused rather than dropped; keep this list and
+# that function in step.
+MODULE_DEAD_KEYS = ("headers", "man", "desktop", "icons", "metainfo",
+                    "dbus", "udev", "polkit", "data", "completion",
+                    "aliases")
+
 # The split above is what decides whether a directive replaces or accumulates,
 # so it has to be the single statement of that fact rather than a comment next
 # to code that reads each one by hand. Ann asserts against it.
@@ -12961,6 +12968,36 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		targets.append(t)
 
 	targets = expand_libraries(targets)
+	# Refused rather than ignored -- section 250's class, and the same
+	# call `cflags' on a library already makes. `install_plan' skips a
+	# module before it reads any of these, deliberately: where a plugin
+	# loads from is the project's to say. So a module naming them in
+	# fmake.toml was telling fmake eleven things it would drop in
+	# silence, and `install = true' is the loudest, because the one who
+	# knows said install this and `--install' answered "nothing to
+	# install" with status 0 and an empty staging tree.
+	#
+	# Config only, and the distinction is load-bearing: an annotation is
+	# gathered from every unit in a non-exe closure, so a module sharing
+	# a source with a program would be refused for an `@man' somebody
+	# wrote about the program. Naming a key in a section is a decision;
+	# inheriting one through a shared file is not.
+	for t in targets:
+		if t.kind != "module":
+			continue
+		named = [k for k in MODULE_DEAD_KEYS if t.conf.get(k)]
+		if t.conf.get("install"):
+			named.insert(0, "install")
+		if named:
+			die(f"{CONF_FILE}: {tgt_section(t.name)} names "
+			    f"{', '.join(named)}, and fmake installs no module: a Qt "
+			    f"plugin, a preload shim and an NSS module each belong "
+			    f"somewhere different, so where this one loads from is "
+			    f"yours to say.\n"
+			    f"    A module is built and left in the tree for your own "
+			    f"install rules to place. If it is a library something "
+			    f"links, `kind = \"shared\"' is the kind that installs.")
+
 	# [project] libs and pkg apply to every target, as [project] cflags,
 	# ldflags, define and std already do. They were accepted by the schema
 	# -- the unknown-key refusal lists them among the fourteen it allows --
@@ -20017,7 +20054,15 @@ def install_plan(targets, closures, root):
 			# emitters a second name for one thing.
 			real = "%s.%s" % (t.filename, t.version)
 			planned.append(("built", t.filename, where, real, mode))
-			planned.append(("symlink", real, where, t.soname, None))
+			# A one-component version collapses the chain, because the
+			# soname IS the major and the real file carries the full
+			# version -- so for `version = "1"' they are one name and
+			# the middle link would point at itself, landing on the
+			# name the real file just took. That is a legitimate way to
+			# version a library and `--install' refused it outright,
+			# reporting a collision whose hint is about headers.
+			if real != t.soname:
+				planned.append(("symlink", real, where, t.soname, None))
 			planned.append(("symlink", t.soname, where, t.filename, None))
 		else:
 			planned.append(("built", t.filename, where, t.filename, mode))
@@ -20027,8 +20072,10 @@ def install_plan(targets, closures, root):
 		# publish an API, and the file carrying the directive is often
 		# linked into one of the tree's programs as well, which would
 		# otherwise install the same header twice under two owners.
-		# An explicit list in fmake.toml is honoured for any kind, since
-		# naming it outright is a decision rather than an inference.
+		# An explicit list in fmake.toml is honoured for any kind that
+		# reaches here, since naming it outright is a decision rather
+		# than an inference -- a module does not reach here at all, and
+		# naming one in its section is refused rather than dropped.
 		for h in published_headers(t, closures[t]):
 			if not os.path.isfile(os.path.join(root, h)):
 				die(f"@headers {h!r} does not exist (named for {t.name})"
@@ -20051,9 +20098,10 @@ def install_plan(targets, closures, root):
 		# where a person writes `@man tool.1', beside the thing it
 		# documents -- and, for a library, from every unit the way
 		# @headers is, since a man3 page sits beside the function it
-		# describes. The config list is honoured for any kind, as with
-		# headers: naming it outright is a decision rather than an
-		# inference. Where each lands is fixed by the tool that will
+		# describes. The config list is honoured for any kind that
+		# reaches here, as with headers: naming it outright is a
+		# decision rather than an inference, and a module -- which
+		# never reaches here -- is refused for naming one. Where each lands is fixed by the tool that will
 		# look for it, and `furniture_landing' says which and refuses
 		# what it cannot place.
 		units = ([closures[t].root] if t.kind == "exe"

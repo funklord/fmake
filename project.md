@@ -549,7 +549,8 @@ that had been green about nothing for five commits ·
 [496. Two findings this session made and did not write down](#496-two-findings-this-session-made-and-did-not-write-down) ·
 [497. The root that had to agree](#497-the-root-that-had-to-agree) ·
 [498. Fourteen trees at this head, and the two that were not fmake](#498-fourteen-trees-at-this-head-and-the-two-that-were-not-fmake) ·
-[499. A module a loader opens by name, and a premise narrower than its kind](#499-a-module-a-loader-opens-by-name-and-a-premise-narrower-than-its-kind)
+[499. A module a loader opens by name, and a premise narrower than its kind](#499-a-module-a-loader-opens-by-name-and-a-premise-narrower-than-its-kind) ·
+[500. The lens §499 handed over, and what a control found instead](#500-the-lens-499-handed-over-and-what-a-control-found-instead)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39247,3 +39248,124 @@ there to show the soname was not simply switched on for every module.
   consumer, and they reached the question by building something real --
   which is the whole argument for the README rule in
   `project-attribution` and the third time this file has recorded it.
+
+## 500. The lens §499 handed over, and what a control found instead
+
+§499's defect was a *key accepted for a kind that ignores it* --
+`version` on a module, silently inert in all three places it could have
+shown. That is a lens rather than an instance, so it was run across
+every `[target.*]` key: for each, which kinds consume it, and is any
+kind accepted and then skipped.
+
+It paid out immediately, and then a control arm of its own test found a
+second defect the lens could not have reached. Both are below, and the
+second is the more interesting one.
+
+### Eleven keys a module names and `install_plan` never reads
+
+`install_plan` opens with
+
+    if t.kind == "module":
+            continue
+
+which is deliberate and right -- a Qt plugin, a preload shim and an NSS
+module each belong somewhere different, so fmake cannot place one. But
+that skip sits **above** every key the function goes on to read, so a
+module naming one in `fmake.toml` was telling fmake something it dropped
+without a word. Measured, on a module declaring three of them:
+
+    [target.plug]
+    kind = "module"
+    install = true
+    headers = ["plug.h"]
+    man = ["plug.1"]
+
+    ->  * built plug.so
+        * nothing to install
+        rc=0, and the staging tree was never created
+
+Eleven keys are in that position: `headers`, `man`, `desktop`, `icons`,
+`metainfo`, `dbus`, `udev`, `polkit`, `data`, `completion` and
+`aliases`. **`install = true` is the loudest of them**, because the
+comment on `installed` says in as many words that it is "said outright,
+by the one who knows" -- and the answer was `nothing to install` with
+status 0.
+
+**Refused rather than ignored**, which is §250's class and the same call
+`cflags` on a library already makes a few hundred lines away. The
+refusal names every key the section got wrong, says fmake installs no
+module and why, and says what to do instead.
+
+**Config only, and the distinction is load-bearing rather than
+fastidious.** An annotation is gathered from every unit in a non-exe
+closure, so a module that shares a source with a program would be
+refused for an `@man` somebody wrote about the *program*. Naming a key
+in a section is a decision; inheriting one through a shared file is not.
+That half has its own sabotage -- refusing on annotations too fails the
+case -- because a distinction asserted only in a comment is one the next
+change will quietly drop.
+
+**Two comments claiming an explicit list is "honoured for any kind" were
+false for exactly this kind** and are narrowed. They were true of every
+kind that reaches the code they sit in, which is how a comment ends up
+describing its own neighbourhood as though it described the function.
+
+### A one-component version could not be installed at all
+
+This was found by the **control** arm -- the one asserting that a
+`shared` target naming the same keys is untouched. It was not untouched;
+it was refused, for an unrelated reason:
+
+    [target.plug] kind = "shared" version = "1"
+    ->  !!! libplug.so and libplug.so.1 would both install as
+            $LIBDIR/libplug.so.1
+
+Measured across component counts: `1` and `2` refuse, `1.2` and `1.2.3`
+install.
+
+The chain is real file, soname link, bare name. The soname is the
+**major alone** -- §22, and the promise it makes -- while the real file
+carries the **full** version, so for a one-component version those are
+one string. The middle link therefore pointed at itself and landed on
+the name the real file had just taken, which fmake's own duplicate-name
+check caught and refused. **The detector was right and its hint was for
+another cause**: it advises putting a header in a directory of its own,
+because a header collision is what usually produces that message.
+
+A library versioned `1` is an ordinary thing to ship -- an ABI with no
+minor -- so the chain collapses now instead of the install refusing:
+
+    version = 1        libplug.so -> libplug.so.1, libplug.so.1 real
+    version = 1.2      libplug.so -> libplug.so.1 -> libplug.so.1.2
+    version = 1.2.3    libplug.so -> libplug.so.1 -> libplug.so.1.2.3
+
+One fix covers `--install`, the ejected install rule and every package
+format, because `install_plan` is the single statement of what a project
+installs -- which is its docstring's whole argument for existing.
+
+**The case asserts the relationship rather than the names.** For each
+count: the bare name is a link, following it wherever it goes lands on a
+real file, that file carries the major soname, and the name the loader
+will ask for exists. A test naming the three files per version would
+have passed against the old code for two of the three and said nothing
+about why.
+
+### What the provenance is worth, which is the part to keep
+
+The lens found the first defect. **The second was found by a control
+placed to prove the first fix had not spread** -- and it was a defect
+older than anything this session touched, in the install path of every
+versioned library.
+
+hembygd's lesson in §492 was that a control you place yourself inherits
+your blind spot. This is the complement and does not contradict it: a
+control is written to be *uninteresting*, so when it fails the failure is
+never the thing you were looking at. The lens could not have found this
+one, because a one-component version is not a key accepted for a kind
+that ignores it -- it is the right key, read by the right kind, with two
+derived names colliding.
+
+So: **run the control arms even when the fix is obviously right, and read
+a control's failure as a finding rather than as noise in the fixture.**
+The instinct when a control fails is to fix the fixture, and here that
+would have cost the better of the two defects.

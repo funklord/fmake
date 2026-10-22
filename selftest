@@ -20751,6 +20751,122 @@ def a_module_is_a_plainly_named_loadable_object(t):
 
 
 @case
+def a_module_naming_install_keys_is_refused_not_ignored(t):
+	"""`install_plan' skips a module before it reads any of them.
+
+	That skip is deliberate -- a Qt plugin, a preload shim and an NSS
+	module each belong somewhere different, so fmake cannot place one --
+	but it sits ABOVE eleven keys the function would otherwise read, so a
+	module naming them in fmake.toml was telling fmake eleven things it
+	dropped in silence. `install = true' is the loudest: the comment on
+	`installed' says it is "said outright, by the one who knows", and
+	`--install' answered "nothing to install" with status 0 and an empty
+	staging tree.
+
+	Section 250's class, and the same call `cflags' on a library already
+	makes: refused rather than ignored.
+
+	Three arms. It refuses at plain build time, not only under
+	`--install', because a tree learning this when somebody packages it
+	has already shipped the config. `install = false' is agreement with
+	fmake rather than a contradiction, so it builds. And the keys are read
+	from the section only -- an annotation is gathered from every unit in
+	a non-exe closure, so a module sharing a source with a program must
+	not be refused for an `@man' somebody wrote about the program.
+	"""
+	t.write("plug.c", "int plug_go(void){ return 1; }\n")
+	t.write("plug.h", "int plug_go(void);\n")
+	t.write("plug.1", "placeholder\n")
+
+	t.write("fmake.toml",
+	        '[target.plug]\nkind = "module"\nroot = "plug.c"\n'
+	        'install = true\nheaders = ["plug.h"]\nman = ["plug.1"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a plain build must refuse: {out}")
+	for key in ("install", "headers", "man"):
+		check(key in out, f"the refusal does not name {key!r}: {out}")
+	check("installs no module" in out,
+	      f"the refusal does not say why: {out}")
+
+	t.write("fmake.toml",
+	        '[target.plug]\nkind = "module"\nroot = "plug.c"\n'
+	        'install = false\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"install = false agrees with fmake and must build: "
+	      f"{r.stdout}{r.stderr}")
+
+	# The control that keeps the refusal off shared sources. The module's
+	# own file carries an @man about the program it is linked beside, so
+	# the key is reachable by annotation and named in no section.
+	u = Tree("module_ann")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("prog.1", "placeholder\n")
+		u.write("src/shim.c",
+		        "/*! @file\n *  @kind module\n *  @target shim\n"
+		        " *  @man prog.1\n */\n"
+		        "int close(int fd){ (void)fd; return 0; }\n")
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"an annotation is not a section's decision and must not be "
+		      f"refused: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
+def a_one_component_version_installs_its_collapsed_chain(t):
+	"""`version = "1"' could not be installed at all.
+
+	The chain is real file, soname link, bare name -- and the soname is
+	the major alone while the real file carries the full version, so for a
+	one-component version those are ONE name. The middle link therefore
+	pointed at itself and landed on the name the real file had just taken,
+	which fmake's own duplicate-name check caught and refused, reporting a
+	collision whose hint is about putting a header in a directory of its
+	own.
+
+	A library versioned `1' is an ordinary thing to ship -- an ABI with no
+	minor -- so the chain has to collapse rather than the install refusing.
+	Asserted as a relationship across three component counts, because the
+	bug is in how the names relate and not in any one of them: whatever
+	the count, the bare name must resolve to a real file, and that file
+	must be the one whose soname the loader will record.
+	"""
+	t.write("plug.c", "int plug_go(void){ return 1; }\n")
+	for version in ("1", "1.2", "1.2.3"):
+		t.write("fmake.toml",
+		        '[target.plug]\nkind = "shared"\nroot = "plug.c"\n'
+		        f'version = "{version}"\n')
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		stage = os.path.join(t.dir, "stage-" + version)
+		r = t.fmake("--install", "--prefix", stage)
+		check(r.returncode == 0,
+		      f"version = {version!r} could not be installed: "
+		      f"{r.stdout}{r.stderr}")
+
+		lib = os.path.join(stage, "lib")
+		bare = os.path.join(lib, "libplug.so")
+		check(os.path.islink(bare), f"{version}: libplug.so is not a link")
+		# Follow it wherever the chain goes and insist it lands on a file.
+		real = os.path.realpath(bare)
+		check(os.path.isfile(real) and not os.path.islink(real),
+		      f"{version}: libplug.so resolves to {real!r}, not a real file")
+		d = subprocess.run(["readelf", "-d", real],
+		                   capture_output=True, text=True)
+		check(f"libplug.so.{version.split('.')[0]}" in d.stdout,
+		      f"{version}: the file the chain lands on does not carry the "
+		      f"major soname: {d.stdout}")
+		# And the name the loader asks for has to be present itself.
+		soname = os.path.join(lib, "libplug.so." + version.split(".")[0])
+		check(os.path.exists(soname),
+		      f"{version}: {os.path.basename(soname)} is missing, so "
+		      f"nothing that recorded the soname could load it")
+
+@case
 def a_module_a_loader_opens_by_name_says_its_name(t):
 	"""hull builds an NSS module, and neither kind fitted it.
 
