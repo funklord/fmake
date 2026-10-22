@@ -545,7 +545,8 @@ that had been green about nothing for five commits ·
 [492. Which arm a sabotage proves, and which it only passes through](#492-which-arm-a-sabotage-proves-and-which-it-only-passes-through) ·
 [493. git decides what is source, taken](#493-git-decides-what-is-source-taken) ·
 [494. The per-schema situc key, and the spelling 430 left open](#494-the-per-schema-situc-key-and-the-spelling-430-left-open) ·
-[495. A duplicate definition is not a missing library](#495-a-duplicate-definition-is-not-a-missing-library)
+[495. A duplicate definition is not a missing library](#495-a-duplicate-definition-is-not-a-missing-library) ·
+[496. Two findings this session made and did not write down](#496-two-findings-this-session-made-and-did-not-write-down)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -38900,3 +38901,62 @@ It asserts the loose form now and says in a comment that the
 discriminating arm is the next one. Three of today's cases have had an
 assertion fixed this way, which is the argument for the discipline
 rather than for my care.
+
+## 496. Two findings this session made and did not write down
+
+Both were measured hours before this entry and neither reached the
+record, which is the failure `working-practice.md` describes as invisible
+work: real, mine, and visible to nobody else.
+
+### 59 of fmake's 228 refusals the suite never fires
+
+Measured by instrumenting `die()` to append its caller's line to a file
+when `FMAKE_DIE_LOG` is set, then running the whole suite with it
+exported -- which reaches every invocation, because `Tree.fmake` inherits
+`os.environ` rather than replacing it. 371 refusals fired over the run,
+from 168 distinct sites. **60 sites never fired, of which one is `die`'s
+own definition**, a detector artefact of matching the word.
+
+The instrument was removed afterwards; it is three lines and is worth
+re-adding rather than keeping, since a `die()` that writes a file is a
+`die()` somebody will one day ship.
+
+**What the list is for is a lens, not a backlog.** Six were probed by
+hand and four were sound: `-C` at a path that is not there, a `kind` that
+is not one of the five, `sources` naming a file that matched nothing,
+and `@headers` naming a header a library target does not have -- that
+last one fires only at install time and only for a target that publishes
+an API, which is why no case had reached it. Two were not, and the second
+is below.
+
+Phrase-matching cannot answer this question, and two attempts at it here
+were wrong in both directions: a 48-character probe claimed 96 untested
+refusals, and a 16-character one claimed 104. The suite paraphrases, so
+the only instrument that answers is the one that watches the code run.
+
+### A `root` the config states and the build ignores
+
+    [target.m]
+    root = "missing.c"      -> built, silently
+    root = "n.txt"          -> built, silently
+
+`[target.NAME] root` is a selector: a section naming a root and no
+defines is *that root's* target under another name, which is how
+fuzznet's `fmake.toml` picks one of three identically-named
+`provision_test.c`. The validation for it -- which has four careful
+branches, for a header, an excluded file, a path that is not there and
+an extension fmake does not compile -- runs in the loop over sections
+that are **not** claimed by a discovered target. A section whose key
+already names a discovered target is skipped, so its `root` is never
+checked and never applied.
+
+The section still applies, by its key. What is lost is the selector: a
+typo in it reverts silently to whatever the key names, which for
+fuzznet's shape is the ambiguous set the root existed to disambiguate.
+
+Not fixed here. The fix is to validate every section's `root` rather
+than only an unclaimed one's, and the question it leaves is whether a
+claimed section's `root` should also *re-root* the target or stay a
+selector that must agree -- which decides whether a disagreement is a
+refusal or a no-op, and is worth measuring against the trees that use
+it before choosing.

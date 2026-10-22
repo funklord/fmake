@@ -12804,6 +12804,27 @@ def a_schema_can_carry_its_own_situc_flags(t):
 	check("  sflags = --layer converse" in nj,
 	      f"and the schema's own have to shadow it on its edge: {nj}")
 
+	# Run both, because the text agreeing is not the three processes
+	# agreeing -- section 475's standard. The stand-in situc reports the
+	# layer name's length, so 8 is `converse' reaching situc through the
+	# emitted file and 4 would be the tree's `view' leaking in.
+	if shutil.which("make"):
+		t.write("Makefile", mk)
+		r = _run_in(t.dir, "make", "two_main")
+		check(r.returncode == 0,
+		      f"the ejected make build failed: {r.stdout}{r.stderr}")
+		check(t.run("two_main").stdout.strip() == "8",
+		      "the ejected make build did not pass the schema's own "
+		      "flags to situc")
+	if shutil.which("ninja"):
+		t.write("build.ninja", nj)
+		r = _run_in(t.dir, "ninja", "two_main")
+		check(r.returncode == 0,
+		      f"the ejected ninja build failed: {r.stdout}{r.stderr}")
+		check(t.run("two_main").stdout.strip() == "8",
+		      "the ejected ninja build did not pass the schema's own "
+		      "flags to situc")
+
 	# A declared schema is compiled whether or not anything includes the
 	# header it would write, which is hull\'s `agent/message.situ\' exactly:
 	# what their tree includes is `message_frame.h\', a DERIVED header that
