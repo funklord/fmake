@@ -12652,6 +12652,105 @@ def this_trees_schema_outranks_a_vendored_projects(t):
 
 
 @case
+def a_two_word_flag_moves_whole_or_not_at_all(t):
+	"""krb5 answers `-isystem /usr/include/mit-krb5\', which is two words.
+
+    Every filter over somebody else\'s cflags read them one token at a
+    time, and the two halves answer a prefix test differently: `-isystem\'
+    starts with a path prefix and `/usr/include/mit-krb5\' does not.
+    Dropping by prefix therefore kept the bare path and threw the flag
+    away; keeping by prefix has the mirror fault, a dangling `-isystem\'
+    that swallows whatever argument follows it.
+
+    Reported from hembygd, which saw the first: twenty compiles, each
+    carrying `/usr/include/mit-krb5\' with no flag in front of it and each
+    answered by `cc: warning: /usr/include/mit-krb5: linker input file
+    unused because linking not done\'. They called it cosmetic. It was a
+    regression from §484, whose filter drops a package\'s path flags when
+    the compiler already owns the header -- curl\'s headers are in
+    /usr/include, so the drop fired and took `-isystem\' without its
+    argument.
+
+    Two arms. A package the compiler does NOT own keeps its pair, in
+    order and adjacent; one it does owns loses both halves. The assertion
+    is on the compile line rather than on fmake\'s output, because a bare
+    directory is a thing the COMPILER reads as an input file."""
+	def package(where, mod, header, flag, nest=True):
+		# `nest' decides whether the header sits under a subdirectory of
+		# includedir or directly in it. Both shapes matter: a nested one
+		# is what needs an -I at all, and a flat one is how a package
+		# comes to own a name the compiler already has.
+		inc = os.path.join(where, "include", mod) if nest \
+		    else os.path.join(where, "include")
+		os.makedirs(inc, exist_ok=True)
+		os.makedirs(os.path.join(where, "pc"), exist_ok=True)
+		with open(os.path.join(inc, header), "w") as fh:
+			fh.write("#pragma once\n#define SPLIT_ONE 1\n")
+		with open(os.path.join(where, "pc", mod + ".pc"), "w") as fh:
+			fh.write(f"prefix={where}\n"
+			         "includedir=${prefix}/include\n\n"
+			         f"Name: {mod}\n"
+			         "Description: answers with a two-word flag\n"
+			         "Version: 1.0\n"
+			         f"Cflags: {flag} ${{includedir}}\n")
+
+	def compile_argv(tree):
+		with open(os.path.join(tree, "compile_commands.json")) as fh:
+			first = json.load(fh)[0]
+		return first.get("arguments") or first["command"].split()
+
+	pkgdir = os.path.join(os.path.dirname(t.dir),
+	                      os.path.basename(t.dir) + "-pkg")
+	try:
+		package(pkgdir, "splitlib", "thing.h", "-isystem")
+		env = {"PKG_CONFIG_PATH": os.path.join(pkgdir, "pc")}
+		t.write("main.c", "#include <splitlib/thing.h>\n"
+		        "int main(void){ return SPLIT_ONE - 1; }\n")
+		r = t.fmake("--compile-commands", env=env)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the fixture has to build: {out}")
+		argv = compile_argv(t.dir)
+		inc = os.path.join(pkgdir, "include")
+		check(inc in argv,
+		      f"the package's directory never reached the compile line, "
+		      f"so this fixture proves nothing: {argv}")
+		check(argv[argv.index(inc) - 1] == "-isystem",
+		      f"the directory is on the line with no flag in front of it, "
+		      f"which the compiler reads as an input file: {argv}")
+		check("linker input file unused" not in out,
+		      f"the compiler said so itself: {out}")
+	finally:
+		shutil.rmtree(pkgdir, ignore_errors=True)
+
+	# And the half that produced the report: a header the compiler already
+	# owns, where section 484 drops the package's paths. Both halves must go.
+	u = Tree("split-flag-owned")
+	udir = os.path.join(os.path.dirname(u.dir),
+	                    os.path.basename(u.dir) + "-pkg")
+	try:
+		package(udir, "ownedlib", "stdio.h", "-isystem", nest=False)
+		env = {"PKG_CONFIG_PATH": os.path.join(udir, "pc")}
+		u.write("main.c", "#include <stdio.h>\n"
+		        'int main(void){ printf("ok\\n"); return 0; }\n')
+		r = u.fmake("--compile-commands", env=env)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"this must still build: {out}")
+		argv = compile_argv(u.dir)
+		inc = os.path.join(udir, "include")
+		check(inc not in argv,
+		      f"the package's path survived a drop that took its flag: "
+		      f"{argv}")
+		check("-isystem" not in argv,
+		      f"and the flag survived without its argument, which "
+		      f"swallows the next one: {argv}")
+		check("linker input file unused" not in out,
+		      f"the compiler said so itself: {out}")
+	finally:
+		shutil.rmtree(udir, ignore_errors=True)
+		u.cleanup()
+
+
+@case
 def a_proposed_package_does_not_shadow_the_compilers_own_header(t):
 	"""An -I is searched first, so proposing one can change what an
 	include MEANS.

@@ -9963,8 +9963,25 @@ def _pc_includedirs(path):
 		return RE_PC_VAR.sub(
 		    lambda m: expand(variables.get(m.group(1), ""), depth + 1), s)
 
-	return [a[2:] for a in shell_split(expand(cflags), "a .pc file's Cflags")
-	        if a.startswith("-I")]
+	# By unit, and not only `-I'. A token test keeping `a.startswith("-I")'
+	# and slicing two characters got both halves of a two-word flag wrong:
+	# `-isystem /usr/include/mit-krb5' advertised nothing, so none of the
+	# six krb5 .pc files on this machine could be attributed to a header,
+	# and a `-I ${includedir}' written with a space produced the EMPTY
+	# string -- which maps every name to whatever sits in the working
+	# directory. Measured over the 469 .pc files here: six use `-isystem'
+	# and none uses the spaced `-I', so the second is latent and the first
+	# is a package family fmake could not see.
+	out = []
+	for u in cflag_units(shell_split(expand(cflags),
+	                                 "a .pc file's Cflags")):
+		if not u[0].startswith(("-I", "-isystem", "-idirafter", "-iquote")):
+			continue
+		d = u[1] if len(u) > 1 else u[0].lstrip("-")[1:] \
+		    if u[0].startswith("-I") else ""
+		if d:
+			out.append(d)
+	return out
 
 
 def _deepest_owner(incdirs, inc, name, found_in):
@@ -10156,28 +10173,84 @@ def propose_from_headers(units, pkg, store, proj=None, cfg=None):
 			# flags. Not deciding for it would be the other error: with no
 			# flags the compiler resolves this include one way, and that
 			# is the meaning the file was written against.
+			# Units rather than tokens, because a two-word flag has to
+			# move whole: see `cflag_units'. Every test below asks about
+			# the unit's FIRST token, which is the flag, and appends all
+			# of its tokens or none.
+			units = cflag_units(mod_cflags)
 			if cfg is not None and toolchain_owns_header(cfg, name):
-				if any(f.startswith(PATH_CFLAGS) for f in mod_cflags):
+				if any(u[0].startswith(PATH_CFLAGS) for u in units):
 					vinfo(f"{name} is already on the compiler's own "
 					      f"include path, so {module} contributes its "
 					      f"libraries and not its -I: naming its "
 					      f"directory would resolve {name} to that "
 					      f"package's file instead")
-				mod_cflags = [f for f in mod_cflags
-				              if not f.startswith(PATH_CFLAGS)]
-			for f in mod_cflags:
-				if (f.startswith("-I")
-				        and os.path.realpath(f[2:]) in sysincs):
+				units = [u for u in units
+				         if not u[0].startswith(PATH_CFLAGS)]
+			for u in units:
+				f = u[0]
+				# The directory is the unit's own argument where the flag
+				# carries one, and the text after `-I' where it does not.
+				_dir = u[1] if len(u) > 1 else f[2:]
+				if f.startswith("-I") and os.path.realpath(_dir) in sysincs:
 					continue
 				if not own and not f.startswith(PATH_CFLAGS + ("-D",)):
 					continue
-				if f not in cflags:
+				if u[0] in SPLIT_CFLAGS and len(u) > 1:
+					# Deduped as a pair: `-isystem' appears in every krb5
+					# module's answer, so deduping the flag alone drops
+					# the second one and leaves its path behind.
+					if list(u) not in [list(p) for p in
+					                   cflag_units(cflags)]:
+						cflags.extend(u)
+				elif f not in cflags:
 					cflags.append(f)
 			for l in mod_libs:
 				proposed.setdefault(l[2:], (module, f"{where}:{line}", name))
 	return cflags, proposed
 
 PATH_CFLAGS = ("-I", "-isystem", "-idirafter", "-iquote", "-F")
+# The ones whose argument is a SEPARATE token, which is why cflags cannot be
+# filtered one token at a time. krb5's .pc answers `-isystem
+# /usr/include/mit-krb5', two words, and every filter here used to read them
+# as two independent flags: one that starts with a path prefix and one that
+# does not. Dropping by prefix then kept the bare path and threw the flag
+# away, which put `/usr/include/mit-krb5' on every compile line in hembygd
+# -- 20 of them, each with `cc: warning: /usr/include/mit-krb5: linker input
+# file unused because linking not done'. Keeping by prefix has the mirror
+# fault: it keeps a dangling `-isystem' that swallows whatever argument comes
+# next.
+#
+# `-I', `-D' and `-U' are here because the compiler takes both spellings and
+# pkg-config passes on whatever the .pc wrote. A token is only a flag of this
+# kind when it is EXACTLY one of these, since `-isystem/usr/include' carries
+# its own argument.
+SPLIT_CFLAGS = frozenset(("-I", "-isystem", "-idirafter", "-iquote", "-F",
+                          "-isysroot", "-include", "-imacros", "-D", "-U",
+                          "-Xpreprocessor"))
+
+
+def cflag_units(flags):
+	"""Walk cflags as units, pairing a flag with its separate argument.
+
+    Every filter over somebody else's cflags has to move both halves of a
+    two-word flag or neither. Returns a list of tuples: one token for an
+    ordinary flag, two where the argument is separate and present.
+
+    A trailing split flag with nothing after it is returned alone rather
+    than discarded -- it is somebody's malformed .pc, and refusing to pass
+    it on would be fmake deciding that, where the compiler says so with a
+    message naming the flag.
+    """
+	out, i = [], 0
+	while i < len(flags):
+		if flags[i] in SPLIT_CFLAGS and i + 1 < len(flags):
+			out.append((flags[i], flags[i + 1]))
+			i += 2
+		else:
+			out.append((flags[i],))
+			i += 1
+	return out
 
 
 def deferred_modules(pkg, hdr_store, units, targets):
@@ -13272,9 +13345,16 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# the file that named the package -- spreading those would let
 			# an optional dependency change how every unrelated file is
 			# compiled.
-			for _f in (got[1] or []):
-				if _f.startswith(PATH_CFLAGS) or _f.startswith("-D"):
-					cfg.add_tree_flag(_f)
+			#
+			# By unit, for the reason `cflag_units' gives. Keeping by
+			# prefix one token at a time has the mirror fault of the one
+			# that reached hembygd: it keeps `-isystem' and drops the path
+			# that belongs to it, leaving a flag that swallows whatever
+			# argument follows it on the compile line.
+			for _u in cflag_units(got[1] or []):
+				if _u[0].startswith(PATH_CFLAGS) or _u[0].startswith("-D"):
+					for _f in _u:
+						cfg.add_tree_flag(_f)
 	objdir = os.path.join(state, "obj", cfg.key)
 	# Said here rather than at `--clean', which is where the cost used to
 	# become visible and is after the decision it should inform. Verbose

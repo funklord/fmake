@@ -539,7 +539,10 @@ that had been green about nothing for five commits ·
 [486. ossacli's shim, and three refusals that each named the vocabulary](#486-ossaclis-shim-and-three-refusals-that-each-named-the-vocabulary) ·
 [487. Three consumers' workarounds for defects fmake has fixed](#487-three-consumers-workarounds-for-defects-fmake-has-fixed) ·
 [488. Whether git decides what is source: built, measured, reverted](#488-whether-git-decides-what-is-source-built-measured-reverted) ·
-[489. netcfgd's unmeasured question, and the advice behind the wrong gate](#489-netcfgds-unmeasured-question-and-the-advice-behind-the-wrong-gate)
+[489. netcfgd's unmeasured question, and the advice behind the wrong gate](#489-netcfgds-unmeasured-question-and-the-advice-behind-the-wrong-gate) ·
+[490. hembygd builds, and a flag reported absent that was not](#490-hembygd-builds-and-a-flag-reported-absent-that-was-not) ·
+[491. A two-word flag, and the regression 484 left on every compile line](#491-a-two-word-flag-and-the-regression-484-left-on-every-compile-line) ·
+[492. Which arm a sabotage proves, and which it only passes through](#492-which-arm-a-sabotage-proves-and-which-it-only-passes-through)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -38204,10 +38207,28 @@ from the source, which would have been a second authority on a question
 rustc had already answered.
 
 
-## 490. hembygd builds, and the one flag that does not come with it
+## 490. hembygd builds, and a flag reported absent that was not
 
 **Signalled from hembygd on 2026-10-22, not fixed from there.** It is
 the caller, so it has the reproduction; fmake has the reasons.
+
+**The second half of this section is wrong and is left standing with
+this pointer rather than rewritten: see §491.** `-ffp-contract=off`
+reaches all 20 compile lines. The measurement behind the finding was a
+grep of fmake's build log, which prints progress markers rather than
+commands, so it returns zero for every flag -- including the two the
+same signal asserts were present, two paragraphs above the claim.
+hembygd re-measured from `compile_commands.json` and confirmed it
+independently.
+
+What remains true below: the build works, the binary runs, and the
+reasoning about why a same-hash comparison could not have settled the
+question -- a machine with no FMA cannot produce the disagreement, so
+two binaries agreeing on it are one witness. That argument is sound and
+was applied to a premise that was false.
+
+Their third item, the one called cosmetic, was a real regression of this
+tree's and is fixed in §491.
 
 ### Plain `fmake` builds it, with no flags
 
@@ -38228,6 +38249,10 @@ rather than an alternative build. **None was needed.** hembygd's README
 now carries the plain `fmake` line beside its `make game` line.
 
 ### The finding: `-ffp-contract=off` does not come with it
+
+**It does come with it -- §491.** What follows is the signal as
+received, kept because the invariant it describes is real and
+because the shape of the mistake is worth more than a deletion.
 
 hembygd's Makefile carries that flag via `override`, for invariant 1 --
 same seed and same inputs give a bit-identical `world_hash`, which is
@@ -38267,3 +38292,193 @@ succeeded -- but it is an include path reaching a position where the
 driver reads it as a linker input, and it is the kind of thing that
 stops being cosmetic when somebody is reading a build log for a real
 fault.
+
+## 491. A two-word flag, and the regression §484 left on every compile line
+
+hembygd signalled three things through the socket. The third they called
+cosmetic, and it was mine:
+
+    cc: warning: /usr/include/mit-krb5: linker input file unused because
+    linking not done
+
+Twenty times, once per compile. A bare directory on the command line,
+which the driver reads as an input file. Reproduced in two lines --
+`#include <curl/curl.h>` and a `main` -- so it was not hembygd's tree.
+
+**krb5 answers in two words.** `pkg-config --cflags libcurl` gives
+`-I/usr/include/x86_64-linux-gnu -isystem /usr/include/mit-krb5
+-I/usr/include/p11-kit-1`, and `-isystem` takes its directory as a
+*separate* token. Every filter over somebody else's cflags read them one
+token at a time, and the two halves answer a prefix test differently:
+`-isystem` starts with a path prefix and `/usr/include/mit-krb5` does
+not. §484's filter drops a package's path flags when the compiler
+already owns the header -- curl's headers are in `/usr/include`, so it
+fired, dropped `-isystem`, and **kept the bare path**.
+
+    mod_cflags  ['-I/usr/.../x86_64-linux-gnu', '-isystem',
+                 '/usr/include/mit-krb5', '-I/usr/include/p11-kit-1']
+    kept                                     ^^^^^^^^^^^^^^^^^^^^^^
+
+### The mirror fault was there before §484
+
+The same loop's older test keeps what starts with a path prefix, for a
+package reached only through a header. That keeps `-isystem` and drops
+the path that belongs to it -- a flag that swallows whatever argument
+follows it on the compile line. Both faults are one cause: **a flag whose
+argument is a separate token cannot be filtered, deduped or reordered a
+token at a time.**
+
+`cflag_units` walks cflags as units now -- one token for an ordinary
+flag, two where the argument is separate -- and every test asks about the
+unit's first token and appends all of it or none. Deduping is on the pair
+as well, which matters because `-isystem` appears in all six krb5 .pc
+files: deduping the flag alone keeps one and leaves the others' paths
+bare.
+
+### The same parse, one layer down
+
+`_pc_includedirs` had it twice over. It kept tokens starting with `-I`
+and sliced two characters off, so:
+
+- `-isystem /usr/include/mit-krb5` advertised **nothing**, and none of
+  the six krb5 packages on this machine could be attributed to a header
+  it ships;
+- a `-I ${includedir}` written with a space yielded the **empty
+  string**, which maps every header name to whatever sits in the working
+  directory.
+
+Measured over the 469 `.pc` files installed here: six use `-isystem`,
+none uses the spaced `-I`. So the first is a package family fmake could
+not see and the second is latent. Both go through `cflag_units` now, and
+the fix was not optional: the case below needs a two-word flag to reach
+the proposal at all, and without the parse it never did -- the fixture
+failed to resolve its own header and the first two sabotages passed
+against it.
+
+### What the arms assert, and what each sabotage proved
+
+`a_two_word_flag_moves_whole_or_not_at_all` fabricates a package whose
+`Cflags` is `-isystem ${includedir}`. A package the compiler does not own
+keeps the pair, adjacent and in order; one it does owns loses both
+halves. The assertions are on `compile_commands.json` rather than on
+fmake's output, because a bare directory is a thing the **compiler**
+reads.
+
+Three sabotages, and the first two are the instructive ones:
+
+- Filtering token-wise *after* the unit filter changed nothing, because
+  the units had already gone. A sabotage that does not reach the
+  mechanism proves the fix no more than the fault.
+- With the fixture's header one directory too deep, no package was
+  proposed for it at all, so the arm could not fail either way.
+- Replacing the unit filter with the token filter reproduces hembygd's
+  line exactly -- a bare `/tmp/.../include` on the compile line -- and
+  the arm catches it. Dropping a kept unit's argument fails the other
+  arm.
+
+### And the finding they led with was a measurement artefact
+
+Their second item was that `-ffp-contract=off` "does not come with it --
+zero occurrences in the build log", which matters to them because a
+bit-identical world hash is their first invariant. It arrives: 20 of 20
+compile lines carry it, read from `compile_commands.json`. **fmake prints
+progress markers rather than commands**, so grepping its output finds
+zero occurrences of every flag -- which is ossacli's recorded mistake in
+this same file, from the other direction: *"fmake prints progress markers
+and `LD`, not one line per compile, so grepping its output for compiles
+finds none and reads as a tree that built nothing."*
+
+Their reasoning about the hash was right and is worth keeping: both
+binaries hashed the same over 40 ticks, and that is one witness rather
+than two, because the machine is a Westmere Xeon with no FMA and cannot
+produce the disagreement. The flag was measured absent, not a difference
+observed -- and the flag was not absent.
+
+## 492. Which arm a sabotage proves, and which it only passes through
+
+§491 ended with a formulation worth keeping -- *when a search returns
+zero, the next command is the one that makes it return one* -- and
+hembygd sent back a refinement that is better than it, because it says
+where to spend that command.
+
+**Separate the checks by direction.** A check asserting PRESENCE fails
+loudly when its detector goes blind: the thing it looks for stops being
+found, and the failure announces itself as a false alarm somebody then
+investigates. A check asserting ABSENCE passes silently, and nothing
+distinguishes "no violation here" from "cannot see violations at all".
+So the control is worth running on the absence half, which in their tree
+was one check of sixteen rather than sixteen.
+
+### Their second finding, which is the one that transfers
+
+They ran four controls by hand on a scan and all four passed: a planted
+violation reported, a violation with the correct spelling in a comment
+above it still reported, the correct call accepted, an empty file list
+refused. Then they wired the same case into a permanent control file,
+which plants its violation at a fixed anchor -- **and the scan excused
+it**, because the anchor sat twelve lines above a correct call and the
+detector used a fixed twelve-line window. Two opens could share one
+timeout, and the hole had been there from the day it was written.
+
+> A control you place yourself inherits your blind spot; one placed by a
+> mechanism that does not know what you are testing does not.
+
+Their four probes each planted one call in clean space, which is the
+arrangement where the question cannot be asked. That is the same shape
+as `working-practice.md`'s paste-to-the-wrong-window defect, where every
+existing test created its session in the window it asserted on.
+
+### Applied here it found a gap in this session's own evidence
+
+**A case stops at its first failing check.** So a multi-arm case
+sabotaged into failing at arm 1 has demonstrated arm 1 and passed
+through the rest. Every sabotage in this session was read as "the case
+fails, therefore the change is load-bearing" -- true, and silent about
+which arm did the work.
+
+Of the absence-direction arms added today, these were each seen to fail
+on their own, because they are the last arm of their case or the
+sabotage reached them directly:
+
+- `read no symbols from any of` absent, in the nm case (§481);
+- the package's path absent from the compile line (§491);
+- the shadowing `-I` absent (§484).
+
+And two were never individually demonstrated:
+
+- §482's silent arm -- no `QT_NO_KEYWORDS` in the build, so no advice
+  about it. The two sabotages run against that case failed arm 1 and
+  arm 3, so this one was only ever passed through.
+- §489's parse-error arm -- a crate failure that is not about crates
+  draws no dependency advice. Restoring the layout-keyed gate fails arm
+  1, and the case stops there.
+
+Both are measured now, each with a sabotage aimed at that arm rather
+than at the case:
+
+    the mirror's define gate removed
+      -> "the advice was given to a build that does not define
+          QT_NO_KEYWORDS, so the word and not the define is the gate"
+
+    the crate gate widened to any crate failure
+      -> "a parse error was answered with advice about dependency
+          graphs, which is what keying on the layout cost"
+
+Each is the arm's own message, which is what shows the arm did the work
+rather than its neighbour.
+
+### What this changes about reading a sabotage
+
+Nothing about the fixes, which stand. What it changes is the sentence
+this file has written a dozen times -- *seen to fail with the change
+removed*. That is a claim about a CASE, and a case with three arms earns
+it three times or once. Where the arms test different directions, as
+both of these do, the one-sabotage reading is the weaker evidence
+wearing the stronger one's words.
+
+The cheap discipline is the one hembygd arrived at from the other side:
+**aim the sabotage at the arm**, and read the message that comes back to
+check it is the arm's own. Two sabotages here did not pass that test
+earlier in the session and are recorded in §491 for the same reason --
+one could not reach the mechanism, and one met a fixture that could not
+ask the question.
