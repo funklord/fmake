@@ -12652,6 +12652,143 @@ def this_trees_schema_outranks_a_vendored_projects(t):
 
 
 @case
+def a_schema_can_carry_its_own_situc_flags(t):
+	"""Section 430's ask, and the spelling it left open.
+
+    hull\'s Makefile gives situc different options per schema -- `--layer
+    frame --prefix hull_agent\' for `agent/message.situ\', `--layer edit
+    --prefix hull_sexpr_c\' for another, and three more -- and `[situ]
+    flags\' is one list for the whole tree. Section 430 recorded the ask,
+    declined to invent the key, and said why: a key is a promise, and the
+    shape hull suggested would have been the first table name to be a
+    path.
+
+    **Keyed by a name with the path inside**, which is section 483\'s
+    answer to that: `[generate.NAME]\' already settles per-item options
+    with `inputs\' naming the file, so a reader who knows one knows this,
+    the name survives the file moving, and another per-schema fact can
+    join the table without respelling the key.
+
+    A schema\'s flags REPLACE the tree\'s rather than extending them.
+    situc\'s options are valued -- two `--layer\'s are a conflict somebody
+    has to resolve, not a refinement -- and fmake cannot see which situc
+    would honour, so it does not stack them and says under -v which it
+    used.
+
+    Both emitters carry it or the ejected build would differ from the
+    live one: make writes the flags in that schema\'s own recipe and
+    leaves `$(SITUFLAGS)\' for the rest, ninja shadows a rule-level
+    `sflags\' on the one edge."""
+	situc = t.write("bin/situc", FAKE_SITUC % {"stream": "stdout",
+	                                           "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write("one.situ", "// the tree's flags\n")
+	t.write("two.situ", "// its own\n")
+	# One schema per program: the stand-in situc writes a `common_check'
+	# into every schema it compiles, so two in one link collide on a
+	# symbol the real one keeps apart with --prefix -- which is the very
+	# thing hull needs per schema.
+	t.write("one_main.c", '#include "one.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", one_check()); return 0; }\n')
+	t.write("two_main.c", '#include "two.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", two_check()); return 0; }\n')
+	t.write("fmake.toml", '[situ]\nflags = ["--layer", "view"]\n\n'
+	        '[situ.frame]\nschema = "two.situ"\n'
+	        'flags = ["--layer", "converse"]\n')
+
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the tree has to build: {out}")
+	check("two.situ: [situ.*] flags --layer converse" in out
+	      and "instead of the tree's --layer view" in out,
+	      f"nothing said which flags that schema got, which is the "
+	      f"question a per-schema key invites: {out}")
+	# The stand-in reports the layer\'s name length, so the programs say
+	# which flags reached situc rather than which fmake printed.
+	check(t.run("one_main").stdout.strip() == "4",
+	      "the tree's --layer view did not reach the other schema")
+	check(t.run("two_main").stdout.strip() == "8",
+	      "the schema's own --layer converse did not reach situc")
+
+	mk = t.fmake("--eject", "make").stdout
+	# `$(SITUC)', uppercase: the first spelling of this looked for
+	# "situc) build" and matched nothing, which is a detector finding
+	# nothing and reading as a tool that emitted nothing.
+	one = [l for l in mk.splitlines() if "SITUC) build" in l
+	       and "SITUFLAGS" in l]
+	two = [l for l in mk.splitlines() if "--layer converse" in l]
+	check(one and two,
+	      f"the ejected Makefile has to carry both: the tree's flags "
+	      f"through the variable and this schema's in its own recipe")
+	nj = t.fmake("--eject", "ninja").stdout
+	# By SCOPE, which is the distinction ninja enforces: the default is a
+	# file-scope binding with no indent, and the edge that shadows it is
+	# indented under its own `build' line. A rule block may carry only
+	# ninja's own variables, and the first version of this put the
+	# default there -- `build.ninja:68: unexpected variable 'sflags''.
+	check("\nsflags = --layer view\n" in nj,
+	      f"the tree's flags have to be a file-scope default, since a rule "
+	      f"block refuses an unknown variable: {nj}")
+	check("  sflags = --layer converse" in nj,
+	      f"and the schema's own have to shadow it on its edge: {nj}")
+
+	# A declared schema is compiled whether or not anything includes the
+	# header it would write, which is hull\'s `agent/message.situ\' exactly:
+	# what their tree includes is `message_frame.h\', a DERIVED header that
+	# only `--layer frame\' produces, and the one file including
+	# `message.h\' is a program of the vendored checkout that fmake passes
+	# over. Selection by inclusion cannot reach it, so no per-schema flag
+	# could either -- section 430 read the missing header as the flag it
+	# could not express, and the flag was necessary but not the binding
+	# half.
+	#
+	# The stand-in situc writes `<name>_frame.h\' only at `--layer
+	# converse\', so this fixture has the same shape with the same cause.
+	v = Tree("declared-schema")
+	try:
+		_sc = v.write("bin/situc", FAKE_SITUC % {"stream": "stdout",
+		                                         "extra": ""})
+		os.chmod(_sc, 0o755)
+		v.write("deep.situ", "// nothing includes deep.h\n")
+		v.write("use.c", '#include "deep_frame.h"\n#include <stdio.h>\n'
+		        'int main(void){ puts("ok"); return 0; }\n')
+		r = v.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "deep_frame.h" in out,
+		      f"the control is wrong: without a declaration this must "
+		      f"fail, since nothing includes deep.h: {out}")
+		v.write("fmake.toml", '[situ.deep]\nschema = "deep.situ"\n'
+		        'flags = ["--layer", "converse"]\n')
+		shutil.rmtree(os.path.join(v.dir, ".fmake"), ignore_errors=True)
+		r = v.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0,
+		      f"a declared schema has to be compiled even though nothing "
+		      f"includes the header it would write: {out}")
+		# `use', after its root TU: the directory's name is taken only
+		# when that TU is `main.*'.
+		check(v.run("use").stdout.strip() == "ok",
+		      "the program built against the declared schema is wrong")
+	finally:
+		v.cleanup()
+
+	# The three refusals, because a mis-spelled key must not read as `no
+	# flags\'.
+	for conf, want in (
+	    ('[situ.frame]\nflags = ["--layer", "edit"]\n',
+	     "needs schema ="),
+	    ('[situ.frame]\nschema = "nothere.situ"\n', "is not a file"),
+	    ('[situ.a]\nschema = "two.situ"\n\n'
+	     '[situ.b]\nschema = "two.situ"\n', "both name")):
+		t.write("fmake.toml", conf)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and want in out,
+		      f"expected a refusal saying {want!r}: {out}")
+
+
+@case
 def a_two_word_flag_moves_whole_or_not_at_all(t):
 	"""krb5 answers `-isystem /usr/include/mit-krb5\', which is two words.
 

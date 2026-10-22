@@ -1543,7 +1543,20 @@ CONF_SCHEMA = {
 	# about the schemas in this tree. One key rather than a key per option,
 	# because situc's options are situ's to grow and fmake should not need a
 	# release of its own to keep up with them.
-    "situ": {"flags": L},
+	# `flags' is the tree's, and a named sub-table is one schema's. hull
+	# asked for the second: its Makefile gives situc `--layer frame
+	# --prefix hull_agent' for one schema and different flags for four
+	# more, and one list for the whole tree cannot say that -- section 430
+	# recorded the ask and left the spelling, which is this.
+	#
+	# Keyed by a NAME with the path inside rather than by the path itself,
+	# which is what hull suggested. Section 430's objection to the path
+	# stands -- it would be the first table name to be one -- and section
+	# 483 is what answers it: `[generate.NAME]' already settles the shape
+	# for per-item options, with `inputs' naming the file. A reader who
+	# knows one knows the other, the name survives the file moving, and a
+	# second per-schema fact can join the table without respelling the key.
+    "situ": {"flags": L, "*": {"schema": S, "flags": L}},
 	# Every row of INSTALL_DIRS whose base is the prefix, because the
 	# ejected builds declare each of those as an overridable variable and
 	# `[install]' is the same fact for the live one. `1d66e7d' set that
@@ -1860,7 +1873,18 @@ def load_conf(root):
 			problems.append(f"{CONF_FILE}: [{section}] must be a table")
 			continue
 		if "*" in spec:
+			# A spec may carry flat keys BESIDE its wildcard, which `[situ]'
+			# is the first to need: `flags' is a fact about the whole tree
+			# and `[situ.NAME]' is one about a schema, and TOML hands both
+			# back in one table. Without this split the flat key reads as a
+			# sub-table name and `[situ] flags = [...]' is refused with
+			# "[situ.flags] must be a table" -- a message about a line
+			# nobody wrote.
+			flat = {k: v for k, v in spec.items() if k != "*"}
 			for name, sub in value.items():
+				if name in flat:
+					_conf_check({name: sub}, flat, f"[{section}]", problems)
+					continue
 				if not isinstance(sub, dict):
 					problems.append(f"{CONF_FILE}: [{section}.{name}] must "
 					                f"be a table")
@@ -4224,7 +4248,7 @@ def situ_imports(root, rel, cache, seen=None):
 	return sorted(out)
 
 
-def situ_plan(root, hdrs, scans, skip=None):
+def situ_plan(root, hdrs, scans, skip=None, declared=()):
 	"""Which .situ schemas this tree's sources actually ask for.
 
     Selected by what is included rather than by what is present, which is
@@ -4236,6 +4260,23 @@ def situ_plan(root, hdrs, scans, skip=None):
     is somebody's -- committed, readable, possibly edited -- and generating
     over the top of it would replace a source with a build artifact while
     both answer the same #include.
+
+    `declared' is the schemas a `[situ.NAME]' table names, and they are
+    planned whether or not anything includes the header they would write.
+    Selection by inclusion cannot reach hull's `agent/message.situ': what
+    its tree includes is `message_frame.h', a DERIVED header that only
+    `--layer frame' produces, and the one file including `message.h' is a
+    program of the vendored checkout -- which the filter above passes
+    over, correctly. So the schema was never planned, and a per-schema
+    flag cannot reach a schema that is not being compiled. Section 430
+    read the missing header as the flag it could not express; the flag was
+    necessary and this was the binding half.
+
+    A table is therefore a declaration that the tree wants that schema,
+    which is what `[generate.*]', `@sources' and `--force-link' all mean
+    by naming a file: declared beats discovered. The carried-header rule
+    above still wins, because generating over somebody's committed file is
+    wrong however it was asked for.
     """
 	# Declared submodules, read before the requester map rather than after
 	# it: what a separate checkout's own PROGRAMS include is not a reason
@@ -4351,7 +4392,7 @@ def situ_plan(root, hdrs, scans, skip=None):
 		path = os.path.join(root, rel)
 		name = os.path.basename(rel)[:-len(SITU_EXT)]
 		header = name + ".h"
-		if header not in wanted:
+		if header not in wanted and rel not in declared:
 			unused.append(rel)
 			if header in theirs_only:
 				_who = theirs_only[header]
@@ -4397,8 +4438,10 @@ def situ_plan(root, hdrs, scans, skip=None):
 			       if len(_vend) == len(_both) else
 			       "Rename one of the schemas."))
 		seen[name] = rel
+		# `.get', because a declared schema need not have an includer:
+		# that is the whole of what declaring one is for.
 		jobs.append({"src": rel, "name": name, "header": header,
-		             "includers": sorted(set(wanted[header]))})
+		             "includers": sorted(set(wanted.get(header, ())))})
 	return jobs, unused, why
 
 
@@ -4517,7 +4560,48 @@ def situc_wrote(res, root, cmd, src):
 	return outs
 
 
-def run_situc(root, jobs, situc, flags, cache, dry_run=False):
+def situ_flags(conf, root, srcs):
+	"""What to pass situc for each schema: {rel: [flags]}, plus the default.
+
+    Returns (per_schema, tree_wide). A schema named by a `[situ.NAME]`
+    table takes that table's flags INSTEAD of the tree's, not as well:
+    the flags situc takes are valued -- `--layer edit', `--prefix
+    hull_sexpr_c' -- and the same option twice is a conflict somebody has
+    to resolve rather than a refinement. fmake cannot see which situc
+    would honour, so it does not stack them and says which it used.
+
+    Refusals, because a key is a promise and a mis-spelled one must not
+    read as "no flags": a table with no `schema', a schema that is not a
+    file in this tree, and two tables naming one schema.
+    """
+	section = (conf.data.get("situ") or {})
+	tree_wide = section.get("flags") or []
+	per, seen = {}, {}
+	for name, sub in sorted(section.items()):
+		if not isinstance(sub, dict):
+			continue        # `flags', the tree-wide list
+		rel = sub.get("schema")
+		if not rel:
+			die(f"{CONF_FILE}: [situ.{name}] needs schema = \"<path>\": a "
+			    f"table named for a schema has to say which one, and the "
+			    f"name is yours to choose rather than the path.")
+		if rel not in srcs and not os.path.isfile(os.path.join(root, rel)):
+			near = sorted(s for s in srcs
+			              if os.path.basename(s) == os.path.basename(rel))
+			die(f"{CONF_FILE}: [situ.{name}] schema = {rel!r} is not a file "
+			    f"in this tree."
+			    + ("\nDid you mean " + ", ".join(repr(n) for n in near[:3])
+			       + "?" if near else ""))
+		if rel in seen:
+			die(f"{CONF_FILE}: [situ.{seen[rel]}] and [situ.{name}] both "
+			    f"name {rel!r}, and fmake will not choose which flags it "
+			    f"takes.")
+		seen[rel] = name
+		per[rel] = sub.get("flags") or []
+	return per, tree_wide
+
+
+def run_situc(root, jobs, situc, cache, dry_run=False):
 	"""Run situc where a schema changed. Returns what it wrote, tree-relative.
 
     Keyed on the schema's contents and on the flags, like everything else
@@ -4541,6 +4625,7 @@ def run_situc(root, jobs, situc, flags, cache, dry_run=False):
 		# depends on them. Without this a change to an imported schema
 		# left the generated code stale and the build said `up to date'.
 		imported = situ_imports(root, src, cache)
+		flags = job["flags"]
 		key = sha("|".join([situc_is, "build+gen-derived", " ".join(flags), src,
 		                    cache.hash_of(os.path.join(root, src), src)
 		                    or "?"]
@@ -5262,7 +5347,9 @@ def feature_list():
 		out.append(f"directive test={word}")
 	for section in sorted(CONF_SCHEMA):
 		spec = CONF_SCHEMA[section]
-		keys = spec.get("*") if "*" in spec else spec
+		# Both halves where a section has both, since `--features' is what
+		# a reader greps to find out whether a key exists at all.
+		keys = (set(spec) - {"*"}) | set(spec.get("*") or ())
 		for key in sorted(keys):
 			out.append(f"config {section}.{key}")
 	out.append(f"* {len(out)} feature(s)")
@@ -12193,8 +12280,12 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		return bool(platform_excludes(ann, cfg.os, cfg.arch)
 		            or filename_excludes(rel, ann, cfg.os, cfg.arch))
 
+	# Before the plan, because a `[situ.NAME]' table is a declaration the
+	# plan has to honour rather than a set of flags applied afterwards.
+	_situ_per, _situ_all = situ_flags(conf, root, srcs)
 	situ_jobs, situ_unused, situ_why = situ_plan(root, hdrs, scans,
-	                                             skip=_not_compiled_here)
+	                                             skip=_not_compiled_here,
+	                                             declared=set(_situ_per))
 	# An empty plan is the one case the prune below cannot reach, because
 	# it is inside the branch that stops running. The three siblings for
 	# uic, rcc and moc prune BEFORE their own `if', keyed only on the dry
@@ -12225,13 +12316,30 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	if situ_jobs:
 		situc_exe = find_situc(cfg.situc, root)
 		if not situc_exe:
-			die(f"{situ_jobs[0]['includers'][0]} includes "
-			    f"{situ_jobs[0]['header']}, which is generated from "
-			    f"{situ_jobs[0]['src']} by situ's schema compiler.\n"
+			# Whichever reason this schema is being compiled for, since
+			# a declared one has no includer to name and quoting an empty
+			# list is how that arrives as an IndexError instead.
+			_j0 = situ_jobs[0]
+			_why0 = (f"{_j0['includers'][0]} includes {_j0['header']}, "
+			         f"which is"
+			         if _j0["includers"] else
+			         f"{CONF_FILE} declares {_j0['src']}, which is")
+			die(f"{_why0} generated from "
+			    f"{_j0['src']} by situ's schema compiler.\n"
 			    f"Install situ, or name its situc with [toolchain] situc "
 			    f"in {CONF_FILE}.")
+		# Resolved onto the jobs rather than passed as one list, because
+		# a schema may carry its own: see `situ_flags'. Said under -v per
+		# schema that takes its own, since "which flags did this one get"
+		# is the question a per-schema key invites.
+		for _j in situ_jobs:
+			_own = _situ_per.get(_j["src"])
+			_j["flags"] = _own if _own is not None else _situ_all
+			if _own is not None:
+				vinfo(f"{_j['src']}: [situ.*] flags "
+				      f"{' '.join(_own) or '(none)'}, instead of the "
+				      f"tree's {' '.join(_situ_all) or '(none)'}")
 		situ_outs = run_situc(root, situ_jobs, situc_exe,
-		                      conf.data.get("situ", {}).get("flags", []),
 		                      cache, args.dry_run)
 		if not args.dry_run:
 			prune_generated(root, SITU_DIR, situ_outs, since=situ_started)
@@ -15495,6 +15603,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			extra["deferred"] = deferred_modules(
 			    pkg, hdr_store, [u for cl in closures.values() for u in cl.link],
 			    wanted)
+		_situ_eject_per, _situ_eject_all = situ_flags(conf, root, srcs)
 		text = emit(wanted, closures, resolutions, cfg, incflags,
 		            root, conf,
 		            all_generate_rules(root, conf, srcs, scans),
@@ -15503,7 +15612,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		            {"exe": uic_exe, "jobs": ui_jobs},
 		            {"exe": rcc_exe, "jobs": qrc_jobs},
 		            {"exe": situc_exe, "jobs": situ_jobs,
-		             "flags": conf.data.get("situ", {}).get("flags", [])},
+		             "flags": _situ_eject_all, "per": _situ_eject_per},
 		            prefix=args.prefix, outdir=args.output, **extra)
 		if args.eject == "deb":
 			# A package is a directory of files, not a stream: the
@@ -17854,7 +17963,17 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				continue
 			a(f"{outs[0]}: {j['src']}")
 			a("\t@mkdir -p $(@D)")
-			a(f"\t$({P}SITUC) build $< $({P}SITUFLAGS) --out $(@D)")
+			# A schema with its own flags carries them in its own recipe
+			# rather than through the variable. The variable is the
+			# tree's and stays overridable from the command line; these
+			# are facts about one schema, and writing them where they
+			# apply is also what makes the emitted file readable -- the
+			# alternative is a target-specific variable per schema, which
+			# says the same thing twice and needs GNU make to say it.
+			_own = (situ.get("per") or {}).get(j["src"])
+			_flagtext = (" ".join(_mk_flag(f) for f in _own) if _own
+			             else f"$({P}SITUFLAGS)")
+			a(f"\t$({P}SITUC) build $< {_flagtext} --out $(@D)")
 			a(f"\t$({P}SITUC) gen-derived $< --out $(@D)")
 			for extra in outs[1:]:
 				a(f"{extra}: {outs[0]}")
@@ -18640,12 +18759,21 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# Selected by the header each source includes, not by a list.")
 		a(f"situc = {_nj_flag(_rel(situ['exe'], root))}")
 		a("")
+		# At file scope, NOT in the rule: ninja allows only its own
+		# variables inside a `rule' block and refuses the rest outright --
+		# `build.ninja:68: unexpected variable 'sflags''. A global binding
+		# is what an edge's own `sflags' then shadows, which is ninja's
+		# way of saying what make says with a recipe. Caught by the suite
+		# rather than by reading: two cases that run the emitted file
+		# failed where the ones that only read it passed.
+		flags = " ".join(_nj_flag(f) for f in situ.get("flags") or [])
+		a(f"sflags = {flags}")
+		a("")
 		a("rule situc")
 		# The output directory is named rather than derived: ninja has no
 		# $(@D), and every schema writes into the one flat directory.
-		flags = " ".join(_nj_flag(f) for f in situ.get("flags") or [])
 		out = _ninja(_eject_src(SITU_DIR))
-		a(f"  command = $situc build $in{' ' + flags if flags else ''} "
+		a(f"  command = $situc build $in $sflags "
 		  f"--out {out} && $situc gen-derived $in --out {out}")
 		a("  description = SITU $in")
 		a("")
@@ -18655,6 +18783,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				continue
 			a(f"build {' '.join(_ninja(o) for o in outs)}: "
 			  f"situc {_ninja(j['src'])}")
+			_own = (situ.get("per") or {}).get(j["src"])
+			if _own:
+				a(f"  sflags = "
+				  f"{' '.join(_nj_flag(f) for f in _own)}")
 		a("")
 
 	uic = uic or {}

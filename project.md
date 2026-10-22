@@ -543,7 +543,8 @@ that had been green about nothing for five commits ·
 [490. hembygd builds, and a flag reported absent that was not](#490-hembygd-builds-and-a-flag-reported-absent-that-was-not) ·
 [491. A two-word flag, and the regression 484 left on every compile line](#491-a-two-word-flag-and-the-regression-484-left-on-every-compile-line) ·
 [492. Which arm a sabotage proves, and which it only passes through](#492-which-arm-a-sabotage-proves-and-which-it-only-passes-through) ·
-[493. git decides what is source, taken](#493-git-decides-what-is-source-taken)
+[493. git decides what is source, taken](#493-git-decides-what-is-source-taken) ·
+[494. The per-schema situc key, and the spelling 430 left open](#494-the-per-schema-situc-key-and-the-spelling-430-left-open)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -33346,6 +33347,11 @@ take a path as a table name.
 hull's README still says make for now, which is correct until the key
 exists.
 
+**The key exists: §494.** `[situ.NAME] schema = "<path>" flags = [...]`,
+keyed by a name with the path inside rather than by the path, which is
+the objection above answered by §483's precedent. A schema's flags
+replace the tree's; both emitters carry them.
+
 **And the second sentence of that is wrong: §483.** The two errors above
 are expressible today with five `[generate.*]` rules, measured against
 hull at `7a2a5a1`, so what the README is waiting for is situ's finding 18
@@ -38626,3 +38632,193 @@ removes a failure mode in a checkout rather than entries from three
 configs. fuzzypickles' `gui/moc_*.cpp` and `*.a` and ossacli's
 `libossa.a` become redundant in a checkout; their `*.so` was already
 inert; and every one of them is still the only protection in a tarball.
+
+## 494. The per-schema situc key, and the spelling 430 left open
+
+§430 recorded hull's ask -- a per-schema place for situc flags -- and
+declined to invent the key: *"a key is a promise, and this one would be
+the first to take a path as a table name."* The copyright holder has
+taken the decision. The ask was never the hard part; the spelling was.
+
+### What it is
+
+    [situ]
+    flags = ["--layer", "view"]
+
+    [situ.frame]
+    schema = "agent/message.situ"
+    flags = ["--layer", "frame", "--prefix", "hull_agent"]
+
+**Keyed by a name with the path inside**, not by the path. §430's
+objection to the path stands and §483 is what answers it:
+`[generate.NAME]` already settles the shape for per-item options, with
+`inputs` naming the file. A reader who knows one knows this; the name
+survives the file moving; and a second per-schema fact can join the
+table without respelling the key. hull suggested
+`[situ."agent/message.situ"]` and said in as many words that the shape
+was fmake's to decide.
+
+**A schema's flags replace the tree's rather than extending them.**
+situc's options are valued -- `--layer edit`, `--prefix hull_sexpr_c` --
+and the same option twice is a conflict somebody has to resolve rather
+than a refinement. fmake cannot see which one situc would honour, so it
+does not stack them, and `-v` says which list a schema got:
+
+    two.situ: [situ.*] flags --layer converse, instead of the tree's
+    --layer view
+
+Extending was the other candidate and is rejected for that reason. It
+is also what the sabotage below aims at, so the choice is tested rather
+than merely argued.
+
+### Three refusals, because a mis-spelled key must not read as "no flags"
+
+A table with no `schema`; a `schema` that is not a file in this tree,
+with the same-basename hint the `root` refusal uses; and two tables
+naming one schema, which fmake will not choose between.
+
+### The validator had to learn a shape it had never needed
+
+`[situ]` is the first section with flat keys **beside** a wildcard.
+The dispatch was one or the other, so `flags = [...]` beside
+`[situ.frame]` was refused with *"[situ.flags] must be a table"* -- a
+message about a line nobody wrote. It splits them now, which changes
+nothing for the wildcard-only sections because their flat half is
+empty. `--features` reads both halves for the same reason, and reports
+`config situ.flags` and `config situ.schema`.
+
+### Both emitters, or the ejected build would differ
+
+That is the §447 lens applied before the fact rather than after it: one
+decision, three readers.
+
+| | how it carries a schema's own flags |
+|---|---|
+| live | resolved onto the job, so the cache key moves with it |
+| `--eject make` | in that schema's own recipe; `$(SITUFLAGS)` for the rest |
+| `--eject ninja` | an edge `sflags` shadowing the rule's |
+
+make could have used a target-specific variable per schema instead. It
+says the same thing twice, needs GNU make to say it, and the flags then
+sit away from the recipe they belong to -- so they are written where
+they apply, and the variable stays for the tree-wide case and stays
+overridable from the command line.
+
+### Four arms, four aimed sabotages
+
+§492's discipline from the start this time rather than after the fact:
+
+    live path ignores a schema's own flags
+      -> "the schema's own --layer converse did not reach situc"
+    make emitter loses them
+      -> "the ejected Makefile has to carry both"
+    ninja emitter loses the edge
+      -> "ninja needs the rule default and the edge that shadows it"
+    flags extend instead of replacing
+      -> "nothing said which flags that schema got"
+
+The programs are what check the flags reached situc rather than fmake:
+the stand-in compiler reports the layer name's length, so `one_main`
+printing 4 is `view` and `two_main` printing 8 is `converse`.
+
+**And one assertion of mine was wrong in the way this file keeps
+finding.** The ejected-Makefile arm first looked for `"situc) build"`
+and matched nothing, because the variable is `$(SITUC)`. A detector
+finding nothing reads as a tool that emitted nothing.
+
+### Tried on hull, which found the key insufficient
+
+hull's five Makefile invocations transcribed into `[situ.NAME]` tables
+and nothing else -- no `[generate]` rules, no `include-dirs`, no sed.
+Four of the five took their flags:
+
+    agent/protocol.situ: [situ.*] flags --prefix hull_protocol
+    core/frontend.situ:  [situ.*] flags --prefix hull_frontend
+    sexpr/canonical.situ: [situ.*] flags --layer edit --prefix hull_sexpr_c
+    sexpr/readable.situ: [situ.*] flags --prefix hull_sexpr_r
+
+`agent/message.situ` was **absent from that list**, and
+`message_frame.h: No such file or directory` was still in the build --
+the very error §430 attributed to the flag that could not be expressed.
+
+**It was never planned.** A schema is selected by something including
+`<stem>.h`, and hull's tree includes `message_frame.h` -- a *derived*
+header that only `--layer frame` writes. The one file including
+`message.h` is `vendor/situ/test/generated/test_message.c`, a program of
+the vendored checkout, which the plan passes over and should. So no
+per-schema flag could reach it: **flags apply to a schema that is being
+compiled, and this one was not.**
+
+§430 read the missing header as the flag it could not express. The flag
+was necessary and the selection was binding, and the second half was
+written down already -- in `situ_plan`'s own comment, two functions from
+the section that diagnosed it:
+
+> On hull the only file including "message.h" is a program of the
+> vendored checkout, so after the filter above nothing asks for either
+> schema
+
+Which is §483 and §487's shape a third time: the answer sitting in this
+tree, in a place that did not reach the question.
+
+### So a table is a declaration
+
+A `[situ.NAME]` table names a schema the tree wants compiled, whether or
+not anything includes the header it would write. That is what
+`[generate.*]`, `@sources` and `--force-link` all mean by naming a file,
+and it is the rule fmake states everywhere else: declared beats
+discovered. The carried-header rule still wins over it, because
+generating over somebody's committed file is wrong however it was asked
+for.
+
+**Two latent assumptions came out with it**, both of the form "every
+schema has an includer": `wanted[header]` raised `KeyError: 'deep.h'`
+for a declared schema with none, and the refusal for a missing situc
+quoted `includers[0]`, which would have been an `IndexError` on the one
+path that most needs to print. A declared schema now carries an empty
+includer list and that refusal says the config declared it instead.
+
+### What hull gets
+
+    before          message_frame.h: No such file or directory
+                    redefinition of 'situ_form_view'
+                    implicit declaration of hull_frontend_list_validate
+
+    after           implicit declaration of hull_frontend_list_validate
+                    implicit declaration of hull_protocol_list_validate
+
+Both errors §430 called fmake's are gone, measured with five tables and
+nothing else. What remains is situ's finding 18, which hull already
+attributes to situ and works round with a per-file `-include` -- and
+which §484 showed no tree-wide `cflags` can express.
+
+Against the `[generate]` route of §483, which reaches the same place:
+that one asks hull to name every input and output by hand and to write
+the view include into the generated file with `sed`. Five tables is the
+smaller thing to maintain, and it keeps fmake's own situ pass -- the
+dependency tracking on schema imports, the cache keyed on the flags --
+which the generate route replaces with a command.
+
+### And the suite caught a ninja mistake that reading did not
+
+`sflags` was emitted inside the `rule situc` block, where ninja allows
+only its own variables and refuses the rest: *"build.ninja:68:
+unexpected variable 'sflags'"*. Two cases that RUN the emitted file
+failed; the arms that only read it passed, and so had my own. The
+default is a file-scope binding now, which an edge's own `sflags`
+shadows, and the case asserts the two by scope rather than by indent.
+
+### Two things noticed and not done
+
+The stand-in situc writes a `common_check` into every schema, so two
+schemas in one program collide on a symbol the real one keeps apart
+with `--prefix` -- which is the very thing hull needs per schema. The
+fixture gives each schema its own program for that reason.
+
+That collision reaches the linker, and fmake answers it with *"name the
+missing libraries with --ldflags, or build only the targets you want"* --
+advice about a missing library for a duplicate definition. §3 refuses a
+duplicate it can see between tree sources; between two generated units
+it does not, and the ending is then the generic one. Recorded, not
+fixed: it wants its own measurement of which generated pairs can
+collide at all.
