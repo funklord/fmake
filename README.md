@@ -352,12 +352,15 @@ program or a static archive, which have no such table to control.
 
 `@kind module` builds a *loadable* shared object — a plugin opened with
 `dlopen`, or an `LD_PRELOAD` shim — named by exactly what loads it, with no
-`lib` prefix, no soname and no `.pc`, since nothing links it by name. fmake
-builds it but does not install it: a Qt plugin, a preload shim and a
-`dlopen` plugin each belong somewhere different, so where it loads from is
-the project's to say. ossacli's `ossa-sgshim.so` is the shape of one, and
-also the case this cannot express yet: a module whose own sources need a
-symbol from the library beside it has no way to say so, and links with it
+`lib` prefix and no `.pc`, since nothing links it by name. It records no
+soname either, unless it declares a `version` — which is how a module a
+*loader* opens by name, such as an NSS or PAM module, says the name it is
+asked for. fmake builds it but does not install it: a Qt plugin, a preload
+shim and a `dlopen` plugin each belong somewhere different, so where it
+loads from is the project's to say. ossacli's `ossa-sgshim.so` is the shape
+of one, and also the case this cannot express yet: a module whose own
+sources need a symbol from the library beside it has no way to say so, and
+links with it
 undefined. fmake says so at the link -- naming the symbol, the file in
 this tree that defines it, and whether naming that file in `sources`
 would take it out of another target -- and cannot resolve it for you. A module's sources are its own — a shim that defines `close()` is not pulled into a program

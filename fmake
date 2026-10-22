@@ -11218,11 +11218,34 @@ class Target:
 			return "lib%s.a" % (self.stem or self.name)
 		# A module is a loadable object -- an LD_PRELOAD shim, a dlopen
 		# plugin -- named by exactly what loads it, with no `lib' prefix and
-		# no soname. libtool spells this `-module' for the same reason: it
+		# no soname unless it declares a version -- see `records_soname'.
+		# libtool spells this `-module' for the same reason: it
 		# is not a library anything links against.
 		if self.kind == "module":
 			return "%s.so" % self.name
 		return self.name
+
+	@property
+	def records_soname(self):
+		"""Whether this artifact states its own name to the loader.
+
+        A shared library always does -- section 22. A module does when it
+        declares a version, and the reason is the *population* rather than
+        the kind. The kind's own comment says a module is opened by path,
+        so a soname would be a promise no consumer reads; that is true of
+        an LD_PRELOAD shim and of a plugin a program opens by filename,
+        and it is false of the ones a loader opens by name. glibc's NSS
+        builds the string `libnss_hull.so.2' and dlopens THAT, and PAM and
+        nscd are the same shape -- so a module in that population has to
+        answer to the name it is asked for.
+
+        Declaring a version is what distinguishes them, because it is the
+        only thing in the population that differs: a shim has no ABI to
+        promise and does not write one down.
+        """
+		if self.kind == "shared":
+			return True
+		return self.kind == "module" and bool(self.version)
 
 	@property
 	def soname(self):
@@ -11235,7 +11258,7 @@ class Target:
         can replace 1.2.3 with 1.2.4 underneath a program that was linked
         years ago.
         """
-		if self.kind != "shared" or not self.version:
+		if not self.records_soname or not self.version:
 			return self.filename
 		return "%s.%s" % (self.filename, self.version.split(".")[0])
 
@@ -11283,10 +11306,14 @@ def link_cmd(t, cl, cfg, outdir, libflags=(), root=None):
 	cxx = any(u.cxx for u in cl.link)
 	shared = []
 	if t.kind == "module":
-		# A loadable module is shared but records no soname: nothing links
-		# it by name, it is opened by path, so a soname would be a promise
-		# no consumer reads.
+		# A module that nothing opens by name records none: a shim or a
+		# plugin loaded by path would be promising something no
+		# consumer reads. One that declares a version is in the other
+		# population -- see `records_soname' -- and has to answer to
+		# the name its loader builds.
 		shared = ["-shared"]
+		if t.records_soname:
+			shared += ["-Wl,-soname," + t.soname]
 	if t.kind == "shared":
 		shared = ["-shared", "-Wl,-soname," + t.soname]
 		# The version script is placed before the objects, where ld reads
@@ -18329,7 +18356,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t$({driver}) -shared -Wl,-soname,{t.soname}{vs} "
 			  f"-o $@ {objs_txt}{tail}")
 		elif t.kind == "module":
-			a(f"\t$({driver}) -shared -o $@ {objs_txt}{tail}")
+			# A versioned module states its name, as fmake's own link
+			# does. Three emitters spell this one fact, so they consult
+			# one predicate: an ejected build that linked a module
+			# without the soname fmake gives it would produce an
+			# artifact no NSS loader finds, and nothing would say so.
+			sn = (f" -Wl,-soname,{t.soname}" if t.records_soname
+			      else "")
+			a(f"\t$({driver}) -shared{sn} -o $@ {objs_txt}{tail}")
 		else:
 			a(f"\t$({driver}) -o $@ {objs_txt}{tail}")
 		a("")
@@ -19084,6 +19118,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			continue
 		rule = {"static": "archive", "shared": "solink",
 		        "module": "module"}.get(t.kind, "link")
+		# A versioned module needs the soname `solink' already
+		# carries, and ninja rule blocks take only their own
+		# variables -- section 492 -- so it borrows the rule rather
+		# than growing a fourth.
+		if t.kind == "module" and t.records_soname:
+			rule = "solink"
 		# Implicit inputs so a changed archive relinks; the command line
 		# places them after the objects and groups them when there is more
 		# than one, neither of which an input list can express. The version
@@ -19096,7 +19136,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"build {art(t.filename)}: {rule} {objs}{after}")
 		if t.kind != "static":
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
-			if t.kind == "shared":
+			if t.records_soname:
 				a(f"  soname = {t.soname}")
 				if t.version_script:
 					a(f"  version_script = "

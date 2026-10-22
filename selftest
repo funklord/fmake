@@ -20712,7 +20712,9 @@ def a_module_is_a_plainly_named_loadable_object(t):
 	not a library anyone links. `@kind shared' cannot name them: it makes
 	`lib<name>.so' with a soname and a `.pc'. `@kind module' is the loadable
 	object libtool spells `-module' -- built with `-shared', named by exactly
-	what loads it, with no `lib' prefix, no soname, and no `.pc'.
+	what loads it, with no `lib' prefix, no `.pc', and -- for a module
+	like this one that declares no version -- no soname either. A
+	versioned module does record one, which is its own case.
 
 	Three things one at a time. It builds to `<name>.so', not `lib<name>.so'.
 	It is a real shared object, which linking without `-shared' could not be
@@ -20747,6 +20749,84 @@ def a_module_is_a_plainly_named_loadable_object(t):
 	check(not any(f.endswith("preload.so") for f in staged),
 	      f"a module is a build product, not installed: {staged}")
 
+
+@case
+def a_module_a_loader_opens_by_name_says_its_name(t):
+	"""hull builds an NSS module, and neither kind fitted it.
+
+	`@kind shared' gave the right file and soname and also published a
+	`.pc' hull ignores; `@kind module' suppressed the `.pc' and recorded
+	no soname at all, because the kind's comment said a module is opened
+	by path so a soname would be a promise nobody reads. That is true of
+	an LD_PRELOAD shim and false of glibc's NSS, which builds the string
+	`libnss_hull.so.2' and dlopens THAT -- PAM and nscd likewise. The
+	premise was narrower than the kind's population.
+
+	A version is what separates them: a shim has no ABI to promise and
+	does not write one down. So a module that declares one records a
+	soname, and one that does not still records none -- which is the
+	control here, and the half that shows the soname was not simply
+	turned on for every module.
+
+	Asserted through all three emitters, because this one fact had three
+	spellings -- fmake's own link, the Makefile recipe and ninja's rule
+	choice -- and a versioned module linked without its soname by an
+	ejected build is an artifact no NSS loader finds, with nothing at
+	build time saying so.
+	"""
+	t.write("nss.c", "int _nss_probe_getpwnam_r(void){ return 0; }\n")
+	t.write("fmake.toml",
+	        '[target.nss]\nkind = "module"\nname = "libnss_probe"\n'
+	        'version = "2"\nroot = "nss.c"\n')
+
+	so = os.path.join(t.dir, "libnss_probe.so")
+
+	def soname_of(what):
+		d = subprocess.run(["readelf", "-d", so],
+		                   capture_output=True, text=True)
+		check(d.returncode == 0, f"{what}: no {so}: {d.stderr}")
+		line = [l for l in d.stdout.splitlines() if "SONAME" in l]
+		check(bool(line), f"{what}: the module records no soname")
+		return line[0]
+
+	r = t.fmake()
+	check(r.returncode == 0, f"build failed: {r.stdout}{r.stderr}")
+	line = soname_of("fmake's own link")
+	check("libnss_probe.so.2" in line,
+	      f"the soname is not the name the loader asks for: {line}")
+	check(not os.path.exists(os.path.join(t.dir, "nss.pc")),
+	      "a module publishes no .pc -- nothing links it")
+
+	for backend, name, tool in (("make", "Makefile", "make"),
+	                            ("ninja", "build.ninja", "ninja")):
+		if not shutil.which(tool):
+			continue
+		e = t.fmake("--eject", backend)
+		check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+		t.write(name, e.stdout)
+		os.remove(so)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		b = _run_in(t.dir, tool)
+		check(b.returncode == 0,
+		      f"the ejected {backend} build failed: {b.stdout}{b.stderr}")
+		line = soname_of(f"the ejected {backend} build")
+		check("libnss_probe.so.2" in line,
+		      f"the ejected {backend} build dropped the soname fmake "
+		      f"gives the same target: {line}")
+		os.remove(os.path.join(t.dir, name))
+
+	# The control. Nothing about an unversioned module may have moved,
+	# and this arm passes both before the change and after it.
+	t.write("fmake.toml",
+	        '[target.nss]\nkind = "module"\nname = "shim"\n'
+	        'root = "nss.c"\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"the unversioned build failed: {r.stdout}")
+	d = subprocess.run(["readelf", "-d", os.path.join(t.dir, "shim.so")],
+	                   capture_output=True, text=True)
+	check("SONAME" not in d.stdout,
+	      f"a module with no version must record no soname: {d.stdout}")
 
 @case
 def a_modules_sources_are_kept_out_of_other_targets(t):

@@ -548,7 +548,8 @@ that had been green about nothing for five commits ·
 [495. A duplicate definition is not a missing library](#495-a-duplicate-definition-is-not-a-missing-library) ·
 [496. Two findings this session made and did not write down](#496-two-findings-this-session-made-and-did-not-write-down) ·
 [497. The root that had to agree](#497-the-root-that-had-to-agree) ·
-[498. Fourteen trees at this head, and the two that were not fmake](#498-fourteen-trees-at-this-head-and-the-two-that-were-not-fmake)
+[498. Fourteen trees at this head, and the two that were not fmake](#498-fourteen-trees-at-this-head-and-the-two-that-were-not-fmake) ·
+[499. A module a loader opens by name, and a premise narrower than its kind](#499-a-module-a-loader-opens-by-name-and-a-premise-narrower-than-its-kind)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39159,3 +39160,90 @@ ordering instead. A capability list nobody reaches for is a capability
 list nobody knows about, which is a documentation fault rather than a
 code one: the README's version line says what the hash is, and says
 nothing about the flag that answers the question people actually have.
+
+## 499. A module a loader opens by name, and a premise narrower than its kind
+
+hull's second message closed with two things "neither blocking": fmake
+wrote an `nss_hull.pc` their tree ignores, and they had reached
+`[target.nss] kind = "shared"` for an NSS module. Following the second
+one found a defect the first is a symptom of.
+
+**The two kinds bundle three decisions, and no combination fits an NSS
+module.** Measured on a two-file fixture:
+
+    kind       file              SONAME               .pc
+    module     thing.so          (none, even with     no
+                                  version = "2")
+    shared     libthing.so       libthing.so.2        yes
+
+An NSS module needs `libnss_hull.so` with SONAME `libnss_hull.so.2` and
+no `.pc`, because glibc builds the string `libnss_hull.so.2` and
+`dlopen`s **that** while nothing on earth links `-lnss_hull`. hull took
+`shared`, which gets the first two right, and the `.pc` is what is left
+over.
+
+**The premise under the `module` kind is the real fault, and it is
+narrower than the kind's population.** The comment said a module records
+no soname because "nothing links it by name, it is opened by path, so a
+soname would be a promise no consumer reads". That is exactly true of an
+`LD_PRELOAD` shim and of a plugin a program opens by filename -- which
+is every module in this workspace, ossacli's shims included -- and it is
+false of the ones a *loader* opens by name. NSS, PAM and nscd are all
+that shape.
+
+This is `working-practice.md`'s rule about a rule written under one
+configuration: the comment was correct about every module anybody had
+built, and nothing in it declared the dependency on which half of the
+population was present.
+
+**So `version` is what separates them**, and it was already the key
+doing nothing: on a `module` it reached the filename (no), the soname
+(no) and the `.pc` (suppressed for modules anyway), so writing it was a
+silent no-op in all three. A shim has no ABI to promise and does not
+write one down; a module that declares a version is saying it answers to
+a name. It now records a soname, and an unversioned one still records
+none.
+
+    [target.nss]
+    kind = "module"
+    name = "libnss_probe"
+    version = "2"
+      ->  libnss_probe.so, SONAME libnss_probe.so.2, no .pc
+
+**One fact had three spellings, which is what made the fix bigger than
+the bug.** fmake's own link, the Makefile recipe and ninja's rule choice
+each decided separately whether a module gets a soname, and `install_plan`
+has a fourth copy of the neighbouring question. They consult one
+predicate now -- `records_soname` -- because an ejected build that linked
+a module without the soname fmake gives the same target produces an
+artifact no NSS loader finds, and nothing at build time would say so.
+ninja borrows the existing `solink` rule rather than growing a fourth,
+since a rule block takes only its own variables (§492).
+
+**Sabotaged three times, separately.** Denying the predicate failed the
+live-link arm; dropping the soname from the Makefile recipe failed the
+ejected-make arm; leaving ninja on the `module` rule failed the
+ejected-ninja arm. Each named its own emitter, which is the property that
+matters: sabotaging one of three would have left the other two unproven,
+and all three are places this fact can rot independently.
+
+The unversioned control passes before the change and after it, and is
+there to show the soname was not simply switched on for every module.
+
+### What this does not do, stated so nobody looks for it
+
+- **The `.pc` is unchanged for a `shared` target**, so hull's stray file
+  goes away only if they move to `kind = "module"`. There is no key to
+  suppress a `.pc`, and inventing one in passing is config surface this
+  tree does not get to add on its own -- `publishes_pc` exists but is
+  internal, set false only for a static twin.
+- **A module is still never installed.** `install_plan` passes every
+  module by, deliberately: where a plugin loads from is the project's to
+  say. hull installs theirs themselves, so the versioned-soname chain a
+  `shared` target gets on install has no counterpart here.
+- **It is inert across all fourteen trees.** Not one declares
+  `kind = "module"` in its `fmake.toml`, and raidcfgd's only mention is a
+  comment recording that the kind used to be ruled out. hull is the one
+  consumer, and they reached the question by building something real --
+  which is the whole argument for the README rule in
+  `project-attribution` and the third time this file has recorded it.
