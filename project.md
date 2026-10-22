@@ -544,7 +544,8 @@ that had been green about nothing for five commits ·
 [491. A two-word flag, and the regression 484 left on every compile line](#491-a-two-word-flag-and-the-regression-484-left-on-every-compile-line) ·
 [492. Which arm a sabotage proves, and which it only passes through](#492-which-arm-a-sabotage-proves-and-which-it-only-passes-through) ·
 [493. git decides what is source, taken](#493-git-decides-what-is-source-taken) ·
-[494. The per-schema situc key, and the spelling 430 left open](#494-the-per-schema-situc-key-and-the-spelling-430-left-open)
+[494. The per-schema situc key, and the spelling 430 left open](#494-the-per-schema-situc-key-and-the-spelling-430-left-open) ·
+[495. A duplicate definition is not a missing library](#495-a-duplicate-definition-is-not-a-missing-library)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -38822,3 +38823,80 @@ duplicate it can see between tree sources; between two generated units
 it does not, and the ending is then the generic one. Recorded, not
 fixed: it wants its own measurement of which generated pairs can
 collide at all.
+
+## 495. A duplicate definition is not a missing library
+
+§494 noticed this and left it: two situ schemas whose generated code
+shares a helper fail at the link, and fmake's ending was
+
+    * m did not link
+      name the missing libraries with --ldflags, or build only the
+      targets you want
+
+Nothing was missing. It is §489's shape again -- advice keyed on "a link
+failed" rather than on what failed -- and it lands in the generic `else`
+of a chain whose eight earlier branches each name a cause.
+
+### Why fmake's own check could not see it
+
+`cl.ambiguous` holds the symbols the closure had to **resolve**. Nothing
+in that program needs `common_check`, so it never reached a choice: both
+definers were drawn in for the symbols that *were* needed, and the
+linker is the first thing to object. §3 refuses a duplicate it had to
+decide between; this one it never had to.
+
+So the reading comes from the linker, where the answer already is:
+
+    RE_LD_DUPLICATE = multiple definition of [`']([^'"]+)'
+
+and `link_target` returns it beside the undeclared-crate set it already
+read. The files come from fmake's own link set rather than from the
+message, because the linker names objects under `.fmake/obj/<hash>/` and
+a reader needs the sources. Strong definitions only -- a weak duplicate
+is legitimate and §3 already allows it.
+
+    common_check is defined by .fmake/situ/a.c, .fmake/situ/b.c, and
+    both are in this program
+    nothing is missing here, so --ldflags is not the remedy: keep one
+    definition out of this link -- [project] exclude in fmake.toml, a
+    target's sources, or a prefix if the files are generated
+
+The last clause is the one that fits the case that found it: a
+per-schema `--prefix` is exactly what keeps two schemas' helpers apart,
+which is §494's key.
+
+### Three arms demonstrated, and one that is a guard rather than a test
+
+§492 asks for the sabotage to be aimed at the arm and the message read
+back. Three were:
+
+    the branch removed        -> "the duplicate was not named"
+    the ending made generic   -> "the ending still offered a library for
+                                  a symbol that is defined twice"
+    the prefix clause dropped -> "the remedy that fits generated code
+                                  was not among them"
+
+**The fourth is not falsifiable by one change and is recorded as such.**
+The control -- a genuinely unresolved symbol still gets advice about
+libraries -- cannot be broken by widening or moving the new branch,
+because that fixture takes an earlier branch of its own ("nothing in
+this tree appears to define them"). Making it fail needs the detection
+falsified *and* the chain reordered. It is a regression guard: if
+somebody later moves this branch ahead of `unprovided`, the case
+objects, which the reorder sabotage confirmed by failing a different arm.
+
+### Two brittle assertions of mine, found by aiming
+
+Both in the control arm, and both the same class as §493's:
+
+- `"--ldflags" in out` is also a substring of the new branch's own
+  *"--ldflags is not the remedy"*, so a sabotage that made the branch
+  fire there passed the arm.
+- `"name the missing libraries with --ldflags"` -- the whole sentence --
+  belongs to the generic ending, which that fixture does not reach. The
+  stricter assertion was wrong in the other direction.
+
+It asserts the loose form now and says in a comment that the
+discriminating arm is the next one. Three of today's cases have had an
+assertion fixed this way, which is the argument for the discipline
+rather than for my care.

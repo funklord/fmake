@@ -7628,6 +7628,11 @@ RE_ERROR_AT = re.compile(r"^(.+?):(\d+):\d+: (?:fatal )?error:", re.M)
 # `extern crate' has no rlib to find, and E0432 for the import itself,
 # whose message carries the first path segment and so answers for
 # `use libc::c_int' as well as for `use libc'.
+# What the linker says when two members of one link set define one name.
+# fmake's own ambiguity check cannot see this: `cl.ambiguous' records the
+# symbols the closure had to RESOLVE, and a symbol nobody needs never
+# reaches a choice -- so both definers are linked and ld refuses them.
+RE_LD_DUPLICATE = re.compile(r"multiple definition of [`']([^'\"]+)'")
 RE_RUSTC_NO_CRATE = (
     re.compile(r"use of undeclared crate or module `([A-Za-z_]\w*)`"),
     re.compile(r"can't find crate for `([A-Za-z_]\w*)`"),
@@ -11289,7 +11294,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 
 	if dry_run:
 		print(" ".join(shlex.quote(c) for c in cmd))
-		return out, True, True, set()
+		return out, True, True, set(), set()
 
 	# The whole command, plus the contents of everything it consumes. Object
 	# mtimes alone miss every change that is not a recompile -- a different
@@ -11325,7 +11330,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 			want, size = was, None
 		if want == key and _same_file(out, size):
 			vinfo(f"up to date {name}")
-			return out, False, True, set()
+			return out, False, True, set(), set()
 
 	if t.kind == "static" and not objs and cmd[0] != "cp":
 		# `ar rcs` over nothing writes a valid, empty archive and exits 0.
@@ -11334,7 +11339,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		PROGRESS.flush()
 		warn(f"{name} would have no members: nothing in this tree compiles "
 		     f"into it")
-		return out, True, False, set()
+		return out, True, False, set(), set()
 	if t.kind == "static" and os.path.exists(out):
 		os.remove(out)          # ar appends; a stale member would survive
 	if not quiet:
@@ -11354,14 +11359,19 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# so a parse error in a tree with a lib.rs beside its main.rs was
 	# told about dependency graphs, and `use libc::' in a tree with one
 	# crate was told nothing at all.
-	no_crate = set()
-	if cl.root.crate_exe and r.returncode != 0:
-		for pattern in RE_RUSTC_NO_CRATE:
-			no_crate |= set(pattern.findall(r.stderr))
-		# std, core and alloc come with the compiler and the rest are
-		# paths within this crate rather than crate names, so any of them
-		# here means something other than a missing dependency.
-		no_crate -= {"std", "core", "alloc", "crate", "self", "super"}
+	no_crate, dup_syms = set(), set()
+	if r.returncode != 0:
+		# Read whatever the failure was about, so the report can key on it
+		# rather than on the fact that a link failed. Two shapes so far:
+		# a crate nothing declares, and a name two members both define.
+		if cl.root.crate_exe:
+			for pattern in RE_RUSTC_NO_CRATE:
+				no_crate |= set(pattern.findall(r.stderr))
+			# std, core and alloc come with the compiler and the rest are
+			# paths within this crate rather than crate names, so any of
+			# them here means something other than a missing dependency.
+			no_crate -= {"std", "core", "alloc", "crate", "self", "super"}
+		dup_syms = set(RE_LD_DUPLICATE.findall(r.stderr))
 	if r.stderr.strip():
 		# A missing library produces one linker line per call site, which
 		# buries everything else. fmake already knows the unresolved symbols
@@ -11401,7 +11411,7 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 		cache.data.setdefault("links", {})[store_key] = {
 		    "key": key, "size": _file_size(out),
 		}
-	return out, True, r.returncode == 0, no_crate
+	return out, True, r.returncode == 0, no_crate, dup_syms
 
 # ---------------------------------------------------------------------------
 # --explain
@@ -15758,14 +15768,12 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 
 	for t in wanted:
 		res = resolutions.get(t)
-		out, did, ok, no_crate = link_target(t, closures[t], cfg, outdir,
-		                                     args.dry_run,
-		                                     res["ldflags"] if res else [],
-		                                     cache, root,
-		                                     quiet=args.quiet)
+		out, did, ok, no_crate, dup_syms = link_target(
+		    t, closures[t], cfg, outdir, args.dry_run,
+		    res["ldflags"] if res else [], cache, root, quiet=args.quiet)
 		changed = changed or did
 		(built if ok else failed).append((t.filename, closures[t], res,
-		                                  no_crate))
+		                                  no_crate, dup_syms))
 		# Outside `if did', like the version-fallback note further down
 		# and for the same reason: this is a claim about the artifact,
 		# which does not stop being true because nothing was rebuilt.
@@ -16185,7 +16193,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# configuration does not compile at all -- advice about a program
 		# that was never built, which is a worse kind of wrong than being
 		# unhelpful, because acting on it changes a build that was right.
-		in_artifact = {u.rel for _n, cl, _r, _c in built for u in cl.link}
+		in_artifact = {u.rel for _n, cl, _r, _c, _d in built
+		               for u in cl.link}
 		fallen = [(rel, name) for rel, name in version_fallen
 		          if rel in in_artifact]
 		_fhead, _frest = capped(fallen, 3)
@@ -16243,7 +16252,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			note(f"... and {_grest} more built and not installed "
 			     f"(-v for all)")
 
-		names = ", ".join(n for n, _, _, _ in built)
+		names = ", ".join(n for n, _, _, _, _ in built)
 		if built:
 			info(f"built {names}" if changed else f"{names} up to date")
 
@@ -16333,7 +16342,18 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	if failed:
 		say()
 		hidden_moc = set()
-		for name, cl, res, no_crate in failed:
+		# {symbol: [files]} over the failures, from the link sets fmake
+		# chose: the linker names objects under .fmake/obj/<hash>/, and a
+		# reader needs the sources. Strong definitions only, since a weak
+		# one is a legitimate duplicate and section 3 already allows it.
+		_dup_here = {}
+		for _n, _cl, _r, _c, _dups in failed:
+			for _sym in _dups:
+				_who = sorted(u.rel for u in _cl.link
+				              if _sym in (u.strong or ()))
+				if _who:
+					_dup_here.setdefault(_sym, _who)
+		for name, cl, res, no_crate, dup_syms in failed:
 			# "did not link" is the wrong phase for a crate, and the
 			# phase is what a reader acts on: rustc compiles and links
 			# in one command, so `let async = 1' under edition 2021 --
@@ -16541,10 +16561,10 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     "through another macro: moc's preprocessor finds it either "
 			     "way, but what decides to run moc is a token search")
 		elif any(u.rel in moc_unreachable
-		         for _n, c, _r, _x in failed for u in c.link):
+		         for _n, c, _r, _x, _y in failed for u in c.link):
 			note('add the missing #include of the .moc file above; if that '
 			     "is not it, name the missing libraries with --ldflags")
-		elif all(c.root.crate_exe for _n, c, _r, _x in failed):
+		elif all(c.root.crate_exe for _n, c, _r, _x, _y in failed):
 			# Every failure here was rustc's, and rustc has already said
 			# what was wrong in its own words.
 			pass
@@ -16632,6 +16652,26 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     f"symbol closure decide the membership: what is "
 			     f"undefined is defined in this tree, so no library will "
 			     f"supply it")
+		elif _dup_here:
+			# Nothing is missing, so `--ldflags' is the wrong ending --
+			# the section 489 shape, where advice is keyed on "a link failed"
+			# rather than on what failed. fmake's own ambiguity check
+			# cannot see this one: `cl.ambiguous' holds the symbols the
+			# closure had to RESOLVE, and a name nobody needs never
+			# reaches a choice, so both definers are linked and ld is the
+			# first to object. Measured with two situ schemas whose
+			# generated code shares a helper: `multiple definition of
+			# common_check', and then an offer to name a library.
+			for _sym, _who in sorted(_dup_here.items()):
+				note(f"{_sym} is defined by "
+				     + ", ".join(_who[:3])
+				     + (f" and {len(_who) - 3} more" if len(_who) > 3
+				        else "")
+				     + ", and both are in this program")
+			note("nothing is missing here, so --ldflags is not the "
+			     "remedy: keep one definition out of this link -- "
+			     f"[project] exclude in {CONF_FILE}, a target's sources, "
+			     f"or a prefix if the files are generated")
 		else:
 			note("name the missing libraries with --ldflags, or build only "
 			     "the targets you want")

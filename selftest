@@ -12652,6 +12652,78 @@ def this_trees_schema_outranks_a_vendored_projects(t):
 
 
 @case
+def a_duplicate_definition_is_not_a_missing_library(t):
+	"""Two definitions and an offer to install something.
+
+    fmake\'s own ambiguity check cannot see this one. `cl.ambiguous\' holds
+    the symbols the closure had to RESOLVE, and a name nobody needs never
+    reaches a choice -- so both definers go into the link set and ld is
+    the first to object. The ending was then the generic one:
+
+        * m did not link
+          name the missing libraries with --ldflags, or build only the
+          targets you want
+
+    Nothing was missing. Measured with two situ schemas whose generated
+    code shares a helper, which is the stand-in compiler\'s
+    `common_check\' and, in a real tree, what a per-schema `--prefix\'
+    exists to keep apart -- section 494 found it while testing that key.
+
+    Two arms, because the remedy differs and the old ending was right
+    for the other one: a duplicate names the files and says --ldflags is
+    not it, and an ordinary unresolved symbol still gets --ldflags."""
+	situc = t.write("bin/situc", FAKE_SITUC % {"stream": "stdout",
+	                                           "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write("a.situ", "// one\n")
+	t.write("b.situ", "// two\n")
+	t.write("m.c", '#include "a.h"\n#include "b.h"\n#include <stdio.h>\n'
+	        'int main(void){ printf("%d\\n", a_check() + b_check()); '
+	        "return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"two definitions cannot link: {out}")
+	check("common_check is defined by" in out
+	      and "both are in this program" in out,
+	      f"the duplicate was not named, so the reader has the linker's "
+	      f"object paths and nothing else: {out}")
+	check("nothing is missing here" in out
+	      and "--ldflags is not the remedy" in out,
+	      f"and the ending still offered a library for a symbol that is "
+	      f"defined twice: {out}")
+	check("a prefix if the files are generated" in out,
+	      f"the remedy that fits generated code was not among them: "
+	      f"{out}")
+
+	# The control: an ordinary unresolved symbol, where naming a library
+	# IS the remedy and the generic ending is right.
+	u = Tree("really-missing")
+	try:
+		u.write("m.c", "int nowhere_at_all(void);\n"
+		        "int main(void){ return nowhere_at_all(); }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"this cannot link either: {out}")
+		# `--ldflags' loosely, and the discriminating arm is the next
+		# one. Two attempts got this wrong: "--ldflags" alone is also a
+		# substring of the duplicate branch's "--ldflags is not the
+		# remedy", and the whole sentence "name the missing libraries
+		# with --ldflags" belongs to the generic ending, which this
+		# fixture does not reach -- an unresolved symbol nothing in the
+		# tree defines has an ending of its own, about a library or a
+		# generator that never ran. So this says only that the advice is
+		# still about libraries, and "nothing is missing here" below is
+		# what fails if the duplicate branch takes this case.
+		check("--ldflags" in out,
+		      f"a symbol nothing defines is what --ldflags is for, and "
+		      f"the branch above must not take that ending away: {out}")
+		check("nothing is missing here" not in out,
+		      f"and it must not claim nothing is missing: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_schema_can_carry_its_own_situc_flags(t):
 	"""Section 430's ask, and the spelling it left open.
 
