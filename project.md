@@ -37805,7 +37805,43 @@ the C library's `<string.h>` -- and §484 is a change to which include
 paths a proposal contributes. Four programs, exit 0.
 
 It is also the first fmake build of beerssh this file records; §466's
-table left it out. Its README asks for the vterm step first, because the
+table left it out.
+
+### And the other seven, so the set is finished
+
+`working-practice.md` asks for a lens set to be finished rather than
+stopped once some of it has paid, and §466 measured nine trees at
+`76d2d8f`. Seven had not been re-measured since the fourteen commits
+above, so they were, the same way -- `git archive` of HEAD plus one
+archive per submodule at its gitlink, `fmake -j8`:
+
+| tree | now | §466 recorded |
+|---|---|---|
+| softkeys | the static library, and `fmake test` 16 passed | the same |
+| hembygd | 1 program | 1 program |
+| openmlx4 | 1 program | 1 program |
+| bbq-predictor | 1 program | 1 program |
+| fuzznet | `fuzznetd`, `consumer_check` | builds |
+| raidcfgd | refuses: `situ_msg_init` defined by more than one file | refuses, same symbol |
+| anti-avx | `function_sweep`, `icache_bench` | not in the table |
+
+**raidcfgd refusing is the pass**, as §466 says: its README records the
+expected refusal and fmake still declines to guess which of two
+`situ_msg_init` belongs in each program. anti-avx was never in that
+table and is new rather than unchanged.
+
+fuzznet now builds from its **own** committed `fmake.toml` rather than
+the twelve-line config §465 derived by hand, which is what their reply
+through the inbox said they had taken.
+
+One reading artefact worth naming so nobody takes it for a change: a
+target is named after its directory, and these were extracted into
+`rs-<tree>/`, so the artifacts come out `rs-openmlx4` and
+`librs-softkeys.a`. The names follow the scratch directory, not a
+different decision.
+
+With the five above, twelve trees are measured at this head and none
+moved. Its README asks for the vterm step first, because the
 patches in `vterm-patch/` are not committed into the submodule, so the
 reconstruction applied all seven from the pristine gitlink commit
 (`934bc2f`) before building. They applied in order with nothing
