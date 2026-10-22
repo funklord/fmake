@@ -38202,3 +38202,68 @@ One caller, so `link_target` returning what rustc could not find costs
 one signature and four returns. The alternative was deriving the name
 from the source, which would have been a second authority on a question
 rustc had already answered.
+
+
+## 490. hembygd builds, and the one flag that does not come with it
+
+**Signalled from hembygd on 2026-10-22, not fixed from there.** It is
+the caller, so it has the reproduction; fmake has the reasons.
+
+### Plain `fmake` builds it, with no flags
+
+hembygd is a Qt 6 program built `-fno-exceptions -fno-rtti`, moc-free by
+design, linking sqlite3, curl and Qt Widgets, with a `-DHEMBYGD_VERSION`
+its Makefile injects from a `VERSION` file. `fmake` with no arguments,
+in a copy of the tree:
+
+    18 sources, then 2, then LD hembygd -- `* built hembygd`
+
+and the binary works: `--version` prints the version AND the copyright
+line, so the define arrived; `--help` answers; and
+`--screenshot --ticks 5 --no-brain` renders a frame and advances the
+world. Nothing was passed to make that happen, deliberately -- the
+project-attribution skill forbids papering a gap over with `--cflags`,
+because a line needing four options is a workaround with a README entry
+rather than an alternative build. **None was needed.** hembygd's README
+now carries the plain `fmake` line beside its `make game` line.
+
+### The finding: `-ffp-contract=off` does not come with it
+
+hembygd's Makefile carries that flag via `override`, for invariant 1 --
+same seed and same inputs give a bit-identical `world_hash`, which is
+what makes a save or a replay portable between machines. The sim is full
+of `pos + vel * dt`, which a compiler may fuse into one FMA with
+different rounding.
+
+The fmake build passes it nowhere: **zero occurrences in the build log**.
+
+### Why the obvious check does not settle it
+
+Both binaries hashed the same over 40 ticks, `0c22b4901ca113ac`. That is
+NOT evidence the flag is unnecessary, and hembygd's own record says why:
+the machine both were built on is a Westmere Xeon with **no FMA**, and
+gcc emits zero `fma` instructions for `a*b+c` on it. **The CPU cannot
+produce the disagreement**, so two binaries agreeing on it are one
+witness rather than two. On a machine with FMA an fmake-built hembygd
+could hash differently, and nothing in that comparison would have caught
+it.
+
+So this is reported as a flag that is absent, measured, rather than as a
+difference observed -- and the half fmake may care about is whether a
+consumer's determinism-critical flag has any route into an fmake build
+that is not a `--cflags` workaround. **That is fmake's call, not
+hembygd's**, which is why this is written here and nothing was changed
+there.
+
+### A second, smaller one: an include directory on the link line
+
+Every compile in that run printed
+
+    c++: warning: /usr/include/mit-krb5: linker input file unused
+         because linking not done
+
+once per source, 20 times. Cosmetic rather than wrong -- the build
+succeeded -- but it is an include path reaching a position where the
+driver reads it as a linker input, and it is the kind of thing that
+stops being cosmetic when somebody is reading a build log for a real
+fault.
