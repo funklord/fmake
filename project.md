@@ -37980,6 +37980,28 @@ fuzzypickles' `gui/moc_*.cpp`, which qmake left beside its sources. Its
 *"a tree anybody has run `make` in refuses with `fzp_base58_decode is
 defined by more than one file`"*.
 
+**A second consumer writes the same sentence**, which is worth knowing
+because it makes this two trees' question rather than one's.
+bbq-predictor: *"Both are untracked build products; fmake reads them
+because it has no reason to know git was told to ignore them, and then
+refuses to guess which metaobject is the real one."*
+
+**And the benefit is smaller than it looks, which is the part that
+changes the decision.** bbq-predictor's `exclude = ["build-*"]` would
+*not* become droppable: all four of its build directories are gitignored
+and the existing directory rule already covers them, so that entry is
+redundant in a checkout today -- and it is the only protection in a
+release tarball, where there is no repository for git to answer from.
+hydra's config states the argument already: *"Kept rather than pruned,
+because an exclude written here does not depend on a tool continuing to
+read a file it is not obliged to read."*
+
+So a file-level rule would not let fuzzypickles drop its entries either.
+What it would buy is not a shorter config but **one fewer failure mode in
+a checkout** -- a tree that somebody has run `make` in building rather
+than refusing. That is a smaller claim than "two trees stop needing
+three entries", and it is the true one.
+
 ### The archive half reaches a case the directory rule never did
 
 `find_archives` walks for itself, so `[project] exclude` was its only
