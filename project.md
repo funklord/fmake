@@ -555,7 +555,8 @@ that had been green about nothing for five commits ·
 [502. beerssh confirms the moc exclude fix, and names the residue](#502-beerssh-confirms-the-moc-exclude-fix-and-names-the-residue) ·
 [503. The wide-set lens, swept to the end, and the warning that lied](#503-the-wide-set-lens-swept-to-the-end-and-the-warning-that-lied) ·
 [504. The same lens in a planner, where it breaks the build](#504-the-same-lens-in-a-planner-where-it-breaks-the-build) ·
-[505. A comment that named the class and fixed one member](#505-a-comment-that-named-the-class-and-fixed-one-member)
+[505. A comment that named the class and fixed one member](#505-a-comment-that-named-the-class-and-fixed-one-member) ·
+[506. Where a generator's input sits in git's authority, measured not guessed](#506-where-a-generators-input-sits-in-gits-authority-measured-not-guessed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39811,3 +39812,62 @@ that reads the source rather than the behaviour is the only kind that
 can see a diagnostic nothing exercises** -- and both of this session's
 new `-v` lines were exactly that, since no case in the suite had a
 reason to print them.
+
+## 506. Where a generator's input sits in git's authority, measured not guessed
+
+§493 made git an authority over what is source, and scoped itself in as
+many words: **sources are dropped, headers are kept**. A header is kept
+because a build tree is also where a configure step writes the
+`config.h` somebody includes -- ignored, untracked, and needed.
+
+That left a third category the rule never named: a **generator's input**
+-- a `.qrc`, a `.ui`, a `.situ`. Measured, they behave like sources
+rather than headers today:
+
+    .gitignore holds gen.qrc, nothing tracks it
+    ->  rcc --name gen gen.qrc -o .fmake/qrc/qrc_gen.cpp
+
+So rcc reads a file git says is not source, which reads like §493's
+fault for a fourth input type, and the sweep in §505 had just finished
+carrying two other filters to exactly this planner. The instinct was to
+drop it.
+
+**The instinct was wrong, and one experiment settles it.** Put the
+`.qrc` behind a `[generate]` rule, where git ignores it *because* it is
+output, and the build needs it:
+
+    [generate.res]
+    inputs  = ["icon.txt"]
+    outputs = ["gen.qrc"]
+    ->  [1/2] CXX .fmake/qrc/qrc_gen.cpp
+        * built genq
+
+A generated resource list is ignored, untracked, and an input -- which is
+the `config.h` argument word for word. **Generator inputs belong with
+headers, not with sources**, and the behaviour was already right.
+
+Worth a section because of how close the other answer came. §505 had
+just carried two filters to `rcc_plan`, so a third looked like
+completing the set rather than breaking a feature, and the test that
+would have caught it does not exist: no case in the suite generates a
+`.qrc`. hull drives five schemas through `[generate]`, so the tree most
+likely to notice is a consumer rather than this one.
+
+**The general shape is the one `working-practice.md` names and it earned
+its place here.** A sweep that has been paying out teaches you to expect
+the next site to be another instance, and that expectation is what makes
+the fifth one dangerous: four confirmations in a row are not evidence
+about the fifth. Naming the experiment that would refute the pattern --
+rather than the one that would confirm it again -- is what stopped this,
+and it cost one fixture.
+
+What the rule says now, completely:
+
+    source      ignored and untracked  ->  dropped (section 493)
+    header      ignored and untracked  ->  kept, it may be generated
+    .qrc/.ui/.situ                     ->  kept, for the same reason
+    archive     ignored and untracked  ->  dropped (section 493)
+
+An archive sits with sources rather than with headers because nothing
+generates one as a build step here, and fuzzypickles named the harm of
+reading the ones `make` leaves behind.
