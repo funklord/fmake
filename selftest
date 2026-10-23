@@ -27876,6 +27876,193 @@ def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
 
 
 @case
+def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
+	"""The `.ui' walk, which is a second fault in the function whose
+	HEADER set was the first.
+
+	`uic_plan' already handled a same-stem `.ui' in a declared submodule
+	-- section 404's rule, the tree's own wins, with a note saying so.
+	The exclusion half was never asked, and the walk is the whole tree, so
+	two things went wrong and only one of them is loud.
+
+	Loud: with a `.ui' of this tree's own beside an excluded one of the
+	same stem, the ambiguity refusal fired -- "panel.ui and
+	vendor/panel.ui would both produce it ... so rename one" -- across an
+	exclusion, where the rename is not the reader's to make and the
+	ambiguity was never real.
+
+	Quiet, and worse: with ONLY the excluded one, fmake ran `uic
+	vendor/panel.ui' and generated a header from a file it had been told
+	to skip. Nothing said so, and the build succeeded.
+
+	Three arms. The ambiguity goes and the tree builds; the excluded `.ui'
+	is not generated from, and fmake says why rather than leaving the
+	compiler to name a missing header; and two `.ui' files BOTH in the
+	build are still ambiguous, because there the refusal is right and its
+	remedy is actionable."""
+	if not (shutil.which("uic") or glob.glob("/usr/lib/qt6/libexec/uic")):
+		raise Skip("no uic to run")
+	ui = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+	      '<ui version="4.0"><class>Panel</class>\n'
+	      '<widget class="QWidget" name="Panel"/>\n'
+	      "<resources/><connections/></ui>\n")
+	user = '#include "ui_panel.h"\nint main(void){ return 0; }\n'
+
+	t.write("panel.ui", ui)
+	t.write("vendor/panel.ui", ui)
+	t.write("main.cpp", user)
+	t.write("fmake.toml", '[project]\nexclude = ["vendor"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"an excluded .ui made this tree's own ambiguous: {out}")
+	# "would both produce it" rather than "ambiguous": the suite
+	# names each tree after its case, so the artifact in this
+	# output is called ...neither_ambiguous_nor_generated and the
+	# looser check matched the fixture's own name. Section 504,
+	# by a new route -- case name to tree name to artifact name.
+	check("would both produce it" not in out,
+	      f"fmake asked for a rename across an exclusion: {out}")
+
+	# Only the excluded one: nothing may be generated from it.
+	u = Tree("ui_only_excluded")
+	try:
+		u.write("vendor/panel.ui", ui)
+		u.write("main.cpp", user)
+		u.write("fmake.toml", '[project]\nexclude = ["vendor"]\n')
+		r = u.fmake("-v", "-n")
+		out = r.stdout + r.stderr
+		check("vendor/panel.ui" not in out.replace(
+		          "(vendor/panel.ui)", ""),
+		      f"uic was run on a .ui this build excludes: {out}")
+		check("is not in this build" in out,
+		      f"fmake generated nothing and said nothing, leaving the "
+		      f"compiler to name a header whose only source it had "
+		      f"deliberately skipped: {out}")
+	finally:
+		u.cleanup()
+
+	# Both in the build: the refusal is right and must stay.
+	v = Tree("ui_both_ours")
+	try:
+		v.write("panel.ui", ui)
+		v.write("sub/panel.ui", ui)
+		v.write("main.cpp", user)
+		r = v.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "would both produce it" in out,
+		      f"two .ui files both in the build must still be refused, "
+		      f"since there the rename is the reader's to make: {out}")
+	finally:
+		v.cleanup()
+
+
+@case
+def a_qrc_outside_this_build_is_not_a_resource_to_rename(t):
+	"""The third planner, and the one `uic_plan' predicted in a comment.
+
+	That comment says sections 404 and 414 settled two filters for
+	schemas "and nothing carried either to uic" -- so uic was fixed.
+	Nothing carried either to rcc, whose candidates come from a raw
+	`find_ext(root, ".qrc")' walk. A `.qrc' in an excluded subtree or in a
+	declared submodule was therefore compiled, and then collided with this
+	tree's own:
+
+	    !!! links resources that would define the same symbols:
+	        app.qrc / vendor/dep/app.qrc
+	    rcc names them after the file, so each defines
+	    qInitResources_app(). Rename one so the stems differ.
+
+	Which is the advice `uic_plan' and `situ_plan' each record that the
+	reader must not take, because one of the two is not theirs to rename.
+	The collision was spurious: one file was never in the build.
+
+	Four arms, and the last two are what make this a filter rather than a
+	hole. Both skipped shapes build; two same-stem resources that are BOTH
+	in the build still refuse, because there the advice is actionable and
+	the refusal is right; and a `.qrc' nobody refers to is still reported
+	unused, which is the report whose own sentence -- "no source names a
+	path it declares" -- would have become false for a skipped file had
+	only rcc's candidates been filtered."""
+	if not (shutil.which("rcc") or glob.glob("/usr/lib/qt6/libexec/rcc")):
+		raise Skip("no rcc to run")
+	qrc = ('<RCC><qresource prefix="/"><file>icon.txt</file>'
+	       "</qresource></RCC>\n")
+	user = ("#include <QFile>\n"
+	        'int main(void){ QFile f(":/icon.txt"); return f.exists()?0:1; }\n')
+
+	# An excluded subtree carrying a same-stem resource.
+	t.write("icon.txt", "bytes\n")
+	t.write("app.qrc", qrc)
+	t.write("main.cpp", user)
+	t.write("vendor/icon.txt", "bytes\n")
+	t.write("vendor/app.qrc", qrc)
+	t.write("fmake.toml", '[project]\nexclude = ["vendor"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"an excluded .qrc collided with this tree's own: {out}")
+	check("Rename one" not in out,
+	      f"fmake asked for a rename across an exclusion: {out}")
+	check("no source names a path it declares" not in out,
+	      f"the skipped .qrc was reported as unreferenced, which is false "
+	      f"-- main.cpp names a path it declares: {out}")
+
+	# A declared submodule carrying one, where the file is not the
+	# reader's to rename at all.
+	u = Tree("qrc_submodule")
+	try:
+		u.write("icon.txt", "bytes\n")
+		u.write("app.qrc", qrc)
+		u.write("main.cpp", user)
+		u.write("vendor/dep/icon.txt", "bytes\n")
+		u.write("vendor/dep/app.qrc", qrc)
+		u.write(".gitmodules",
+		        '[submodule "vendor/dep"]\n\tpath = vendor/dep\n'
+		        "\turl = git@example.invalid:dep.git\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0,
+		      f"a submodule's .qrc collided with this tree's own: {out}")
+		check("Rename one" not in out,
+		      f"fmake asked for a rename inside somebody else's "
+		      f"checkout: {out}")
+	finally:
+		u.cleanup()
+
+	# The refusal is right where both files are the reader's.
+	v = Tree("qrc_both_ours")
+	try:
+		v.write("icon.txt", "bytes\n")
+		v.write("app.qrc", qrc)
+		v.write("sub/icon.txt", "bytes\n")
+		v.write("sub/app.qrc", qrc)
+		v.write("main.cpp", user)
+		r = v.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "Rename one" in out,
+		      f"two same-stem resources both in the build must still be "
+		      f"refused, since there the rename is the reader's to "
+		      f"make: {out}")
+	finally:
+		v.cleanup()
+
+	# And a resource nobody refers to is still named as unused.
+	w = Tree("qrc_unused")
+	try:
+		w.write("icon.txt", "bytes\n")
+		w.write("spare.qrc", qrc)
+		w.write("main.c", "int main(void){ return 0; }\n")
+		r = w.fmake()
+		out = r.stdout + r.stderr
+		check("spare.qrc" in out and "no source names" in out,
+		      f"an unused .qrc in the build is no longer reported, so the "
+		      f"filter reached a list it should not have: {out}")
+	finally:
+		w.cleanup()
+
+
+@case
 def an_excluded_header_does_not_satisfy_an_include_uic_must_generate(t):
 	"""Section 503's shape in a PLANNER, so it broke the build.
 

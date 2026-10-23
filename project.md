@@ -554,7 +554,8 @@ that had been green about nothing for five commits ·
 [501. The unfired-refusal lens, run again, and the seam it found](#501-the-unfired-refusal-lens-run-again-and-the-seam-it-found) ·
 [502. beerssh confirms the moc exclude fix, and names the residue](#502-beerssh-confirms-the-moc-exclude-fix-and-names-the-residue) ·
 [503. The wide-set lens, swept to the end, and the warning that lied](#503-the-wide-set-lens-swept-to-the-end-and-the-warning-that-lied) ·
-[504. The same lens in a planner, where it breaks the build](#504-the-same-lens-in-a-planner-where-it-breaks-the-build)
+[504. The same lens in a planner, where it breaks the build](#504-the-same-lens-in-a-planner-where-it-breaks-the-build) ·
+[505. A comment that named the class and fixed one member](#505-a-comment-that-named-the-class-and-fixed-one-member)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39693,3 +39694,120 @@ Re-measured by asking for the invocation rather than the word, which is
 what gave the three clean states above. The fixture's own name was the
 confounder, which is an argument for naming scratch trees after nothing
 in particular.
+
+## 505. A comment that named the class and fixed one member
+
+The best lead of this sweep was already written in the file. `uic_plan`
+carries it:
+
+> Sections 404 and 414 settled both of these for schemas, and nothing
+> carried either to uic.
+
+Two filters -- exclusion, and a declared submodule -- settled for schemas
+and then carried to uic. **Nobody carried them to rcc**, and uic's own
+`.ui` walk got only one of the two. So that sentence is a complete bug
+report for the members it does not name, sitting in the source, unacted
+on.
+
+**The transferable thing is the shape of the sentence, not the sites.** A
+comment saying a fix *was* carried somewhere is a list of places it was
+carried to, and therefore a list of places it was not. `git grep` for
+"nothing carried" or "and not to" is a cheap lens over any tree that
+writes comments like these -- and this tree does, deliberately.
+
+### rcc never had either filter
+
+`rcc_plan`'s candidates come from a raw `find_ext(root, ".qrc")` walk.
+Both shapes reproduce, and both end the same way:
+
+    !!! links resources that would define the same symbols:
+        app.qrc
+        vendor/dep/app.qrc
+    rcc names them after the file, so each defines
+    qInitResources_app(). Rename one so the stems differ.
+
+Measured with an excluded subtree and, separately, with a declared
+submodule. **That is the advice `uic_plan` and `situ_plan` each record
+that the reader must not take**, because one of the two files is not
+theirs to rename -- and in the submodule case it is in another
+repository. The collision was spurious either way: one file was never in
+the build. Both objects were compiled before the refusal.
+
+**And the first fix would have moved the fault rather than removing
+it.** `qrc_unused` is a *second* raw `find_ext` walk, so a `.qrc` skipped
+by the new filter fell straight into a report reading *"not built: no
+source names a path it declares"* -- false of it, since `main.cpp` names
+a path it declares; the real reason is that the file is not in the build.
+A true refusal would have become a false note. Caught by reading the
+output of my own verification rather than its exit code, which is the
+only reason it is not in this commit.
+
+### uic's `.ui` walk had the submodule half and not the other
+
+The header set was §504. This is the same function's *input* walk, and
+the asymmetry is what made it findable: §404's rule for a submodule is
+implemented a dozen lines below the walk, and exclusion is not asked at
+all. Two faults, and only one is loud.
+
+    own panel.ui + excluded vendor/panel.ui
+        -> !!! ... would both produce it ... so rename one
+
+    ONLY vendor/panel.ui, excluded, main.cpp asking for it
+        -> uic vendor/panel.ui -o .fmake/ui/ui_panel.h
+
+The second is the worse one and says nothing: fmake generated a header
+from a file it had been told to skip, and the build succeeded. It now
+declines and explains, which the submodule branch beside it already did.
+
+### All four planners ask both questions now
+
+    moc     d3388fd, from beerssh's report
+    situ    sections 404 and 414
+    uic     header set in 504, input walk here
+    rcc     both filters, here
+
+With a control at every site: two same-stem inputs that are **both** in
+the build still refuse, because there the remedy is actionable and the
+refusal is right. A filter that swallowed those too would pass every
+other arm, which is why each case carries one.
+
+### My own §504 lesson, by a new route
+
+§504 closed by saying a count had inherited its detector, because a
+fixture directory was called `uicp` and the probe matched the word `uic`.
+It happened again here, one section later, and the route is worth having:
+the new case asserted `"ambiguous" not in out`, and **the suite names
+each tree after its case**, so the artifact in the output was called
+`...neither_ambiguous_nor_generated` and the check matched the fixture's
+own name.
+
+The §504 remedy -- name scratch trees after nothing in particular -- does
+not reach this, because the name is derived from the case name and a case
+name should describe the case. **So the rule is about the assertion
+rather than the fixture: match a distinctive phrase from the message,
+never a single word that could appear anywhere in the output.** The
+assertions now read `"would both produce it"`, which no tree will ever be
+called.
+
+### And the suite caught a regression in the fix, by reading the source
+
+The first version of rcc's new note truncated its list of users, with a
+`[:2]`, and `make check` refused it:
+
+    a -v line truncates, and -v is where a reader goes when they want
+    all of it
+
+**That case reads fmake's own source for the shape** rather than running
+anything, which is why it could see a message no fixture in the suite
+produces. Section 298's rule is that a truncated list says so; this is
+the stricter half of it, and the reason is in the sentence -- `-v` is
+where a reader goes precisely when the first few are not enough, so
+capping a verbose line defeats the flag.
+
+Worth recording for what it says about the two kinds of gate. Every
+other fault in sections 502 through 505 was found by a lens somebody
+pointed, and this one was caught by a check already standing. **A gate
+that reads the source rather than the behaviour is the only kind that
+can see a diagnostic nothing exercises** -- and both of this session's
+new `-v` lines were exactly that, since no case in the suite had a
+reason to print them.

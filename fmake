@@ -3703,7 +3703,7 @@ def moc_cflags(root, hdrs, conf):
 	return out
 
 
-def uic_plan(files, hdrs, scans, root):
+def uic_plan(files, hdrs, scans, root, skip=None):
 	"""Which .ui files the source actually asks for.
 
     The trigger is the include, not the file extension. `#include
@@ -3755,9 +3755,23 @@ def uic_plan(files, hdrs, scans, root):
 	if not wanted:
 		return []
 
-	by_stem = {}
+	by_stem, _skipped = {}, {}
+	# The walk is the whole tree, so the exclusion has to be asked
+	# here and not only of the headers. Two faults without it,
+	# both measured: with a `.ui' of this tree's own beside an
+	# excluded one of the same stem, the ambiguity below refused
+	# the build and told the reader to rename one -- across an
+	# exclusion, so the rename is not theirs to make and the
+	# ambiguity was not real. And with ONLY the excluded one,
+	# fmake ran `uic vendor/panel.ui' and generated from a file it
+	# had been told to skip. The submodule half of exactly this
+	# was already handled below, which is what made the gap
+	# findable: one filter carried, its sibling not.
 	for rel in find_ext(root, ".ui"):
 		stem = os.path.splitext(os.path.basename(rel))[0]
+		if skip is not None and skip(rel):
+			_skipped.setdefault(stem, []).append(rel)
+			continue
 		by_stem.setdefault(stem, []).append(rel)
 	# The tree's own wins, which is section 404's rule for a schema
 	# colliding with a vendored one: the ambiguity below is real between
@@ -3781,6 +3795,11 @@ def uic_plan(files, hdrs, scans, root):
 	for stem, (rel, line) in sorted(wanted.items()):
 		found = by_stem.get(stem)
 		if not found:
+			if _skipped.get(stem):
+				vinfo(f"ui_{stem}.h is wanted by {rel}, and the only "
+				      f"{'.ui'} that would produce it "
+				      f"({', '.join(_skipped[stem])}) is not in this "
+				      f"build, so uic is not run for it")
 			# Not ours. Some other generator may produce it, or it is simply
 			# missing -- either way the compiler names it better than a guess
 			# here would.
@@ -3847,7 +3866,7 @@ def qrc_used_by(scan, paths, stem):
 	return None
 
 
-def rcc_plan(files, scans, root):
+def rcc_plan(files, scans, root, skip=None):
 	"""Which .qrc files this tree's code actually refers to.
 
     A resource is the one piece of Qt's tooling with no reliable symbol: it
@@ -3857,6 +3876,22 @@ def rcc_plan(files, scans, root):
     is why this returns the users and not just the file.
     """
 	jobs = []
+	# `find_ext' walks the whole tree, so the two filters sections
+	# 404 and 414 settled for schemas have to be asked here as
+	# well. They were asked for schemas, then carried to uic, and
+	# never to rcc -- which is how a `.qrc' in an excluded subtree
+	# or in somebody else's submodule became a candidate, got
+	# compiled, and then collided with this tree's own:
+	#
+	#     !!! links resources that would define the same symbols:
+	#         app.qrc / vendor/dep/app.qrc
+	#     ... Rename one so the stems differ.
+	#
+	# Which is the advice uic_plan and situ_plan both record that
+	# the reader must not take, because one of the two is not
+	# theirs to rename. The collision was spurious: one of the
+	# files was never in the build.
+	theirs = tuple(s + os.sep for s in declared_submodules(root))
 	for rel in find_ext(root, ".qrc"):
 		hit = os.path.join(root, rel)
 		stem = os.path.splitext(os.path.basename(rel))[0]
@@ -3867,6 +3902,21 @@ def rcc_plan(files, scans, root):
 			if why:
 				users[f] = why
 		if not users:
+			continue
+		# Said rather than dropped silently, and only here, where
+		# this tree's own source really did refer to a resource in a
+		# tree that is not this build's. uic_plan reports its
+		# equivalent at the same level and for the same reason.
+		if rel.startswith(theirs) or (skip is not None
+		                              and skip(rel)):
+			# Every user, not the first few: this is a `-v' line, and
+			# -v is where a reader goes when they want all of it.
+			# Section 298's rule, and the suite reads this source for
+			# the shape -- it caught a `[:2]' here.
+			vinfo(f"{rel} is not in this build, so rcc is not run "
+			      f"for it, although "
+			      f"{', '.join(sorted(users))} refers to a "
+			      f"resource it declares")
 			continue
 		jobs.append({
 		    # The embedded files, read once here so the live build and the
@@ -12520,7 +12570,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# it. Section 503's shape, in a planner rather than a
 	# diagnostic, which is why it changes the outcome instead of
 	# the output.
-	ui_jobs = uic_plan(srcs + gen_hdrs, gen_hdrs, scans, root)
+	ui_jobs = uic_plan(srcs + gen_hdrs, gen_hdrs, scans, root,
+	                   skip=_not_compiled_here)
 	if not args.dry_run:
 		prune_generated(root, UI_DIR, [j["out"] for j in ui_jobs])
 	if ui_jobs:
@@ -12545,7 +12596,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# linking every resource into every binary.
 	qrc_jobs, qrc_outs = [], []
 	rcc_exe = None
-	qrc_jobs = rcc_plan(srcs + gen_hdrs, scans, root)
+	qrc_jobs = rcc_plan(srcs + gen_hdrs, scans, root,
+	                    skip=_not_compiled_here)
 	# A .qrc that nothing names is dropped, and unlike every other omission
 	# here that one is invisible twice over: the link succeeds, and the
 	# program only finds out when it asks for the file. An unreferenced
@@ -12556,8 +12608,18 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# returns the work to do and a list of what it declined is a different
 	# question asked of the same glob.
 	_qrc_named = {j["src"] for j in qrc_jobs}
+	# The same two filters, because this list's own sentence is
+	# "no source names a path it declares" -- which is false of a
+	# `.qrc' that was skipped for not being in the build, and a
+	# source may well name it. Filtering rcc's candidates without
+	# filtering this would have moved the fault rather than fixed
+	# it: a true refusal replaced by a false note.
+	_qrc_theirs = tuple(s + os.sep
+	                    for s in declared_submodules(root))
 	qrc_unused = [rel for rel in find_ext(root, ".qrc")
-	              if rel not in _qrc_named]
+	              if rel not in _qrc_named
+	              and not rel.startswith(_qrc_theirs)
+	              and not _not_compiled_here(rel)]
 	# A source that defines a version macro for itself when the build did
 	# not is not a compile failure, and that is the whole problem: the tree
 	# builds, the program links, it runs, and it reports a version it made
