@@ -4332,7 +4332,12 @@ def situ_plan(root, hdrs, scans, skip=None, declared=()):
 			continue
 		for _kind, name, _line in scans[rel]["incs"]:
 			wanted.setdefault(os.path.basename(name), []).append(rel)
-	have = {os.path.basename(h) for h in hdrs}
+	# Asked through `skip', because a header this build does not
+	# compile cannot satisfy an include -- the same fault uic had,
+	# and this one holds the predicate rather than needing its
+	# caller to pre-filter, so `@os' and a pattern are both covered.
+	have = {os.path.basename(h) for h in hdrs
+	        if not (skip is not None and skip(h))}
 
 	# A collision between this tree's schema and a vendored project's is
 	# not a tie, and was refused as one. Reported from hull, which vendors
@@ -12504,7 +12509,18 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# -- but it costs nothing to be right about the order.
 	ui_jobs, ui_outs = [], []
 	uic_exe = None
-	ui_jobs = uic_plan(srcs + gen_hdrs, hdrs, scans, root)
+	# `gen_hdrs' for the second argument too, which is where uic's
+	# `have' set comes from. A header in an excluded subtree counted
+	# as already provided, by BASENAME, so a vendored `ui_panel.h'
+	# stopped uic running for this tree's own `panel.ui' -- and the
+	# excluded copy is not on the include path, so the build then
+	# failed on a header nothing generated. Measured: with the
+	# vendored file present, "main.cpp did not compile" and "no
+	# target could be built"; removing that one excluded file built
+	# it. Section 503's shape, in a planner rather than a
+	# diagnostic, which is why it changes the outcome instead of
+	# the output.
+	ui_jobs = uic_plan(srcs + gen_hdrs, gen_hdrs, scans, root)
 	if not args.dry_run:
 		prune_generated(root, UI_DIR, [j["out"] for j in ui_jobs])
 	if ui_jobs:

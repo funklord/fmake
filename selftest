@@ -27876,6 +27876,116 @@ def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
 
 
 @case
+def an_excluded_header_does_not_satisfy_an_include_uic_must_generate(t):
+	"""Section 503's shape in a PLANNER, so it broke the build.
+
+	`uic_plan' keeps a `have' set of header basenames and does not run uic
+	where the header already exists -- which the docstring promises: "a
+	ui_foo.h someone checked in is left alone rather than overwritten".
+	That set was built from the whole header list, by BASENAME, so a
+	`ui_panel.h' anywhere counted, including inside a subtree
+	`[project] exclude' had removed from the build.
+
+	The excluded copy is not on the include path, so nothing generated the
+	header and nothing provided it. Measured before the fix: "main.cpp did
+	not compile", "no target could be built" -- and removing that one
+	vendored file built the tree. A file fmake was told to ignore broke a
+	target that had nothing to do with it, which is the worst way for this
+	class to present, because the error names the compile and not the
+	cause.
+
+	Three states, since the fix has to leave the promise standing. A
+	checked-in header at the root still suppresses uic; an excluded one
+	behaves exactly as if it were absent; and absent is the baseline the
+	middle one has to match."""
+	if not (shutil.which("uic") or glob.glob("/usr/lib/qt6/libexec/uic")):
+		raise Skip("no uic to run")
+	t.write("panel.ui",
+	        '<?xml version="1.0" encoding="UTF-8"?>\n'
+	        "<ui version=\"4.0\"><class>Panel</class>\n"
+	        '<widget class="QWidget" name="Panel"/>\n'
+	        "<resources/><connections/></ui>\n")
+	t.write("main.cpp", '#include "ui_panel.h"\nint main(void){ return 0; }\n')
+	t.write("fmake.toml", '[project]\nexclude = ["vendor"]\n')
+
+	def uic_runs():
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake("-n")
+		return len([l for l in (r.stdout + r.stderr).splitlines()
+		            if re.search(r"(^|/)uic ", l)])
+
+	absent = uic_runs()
+	check(absent > 0,
+	      "uic did not run with no header anywhere, so this fixture never "
+	      "reached the question")
+
+	t.write("vendor/ui_panel.h", "// unrelated, and excluded\n")
+	check(uic_runs() == absent,
+	      "a header in an excluded subtree changed uic's plan, so it "
+	      "counted as provided while not being on the include path")
+
+	# And the build itself, because the planner's output is the point.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"an excluded header broke the build: {r.stdout}{r.stderr}")
+
+	# The promise the fix must not break.
+	generated = os.path.join(t.dir, ".fmake", "ui", "ui_panel.h")
+	check(os.path.isfile(generated),
+	      f"uic wrote nothing to {generated}")
+	shutil.copyfile(generated, os.path.join(t.dir, "ui_panel.h"))
+	check(uic_runs() == 0,
+	      "a ui_panel.h checked in at the root no longer suppresses uic, "
+	      "so this gated nothing and the docstring's promise is gone")
+
+
+@case
+def an_excluded_header_does_not_satisfy_a_schemas_include(t):
+	"""The same fault as uic's, in `situ_plan', found by sweeping the pair
+	rather than by waiting for it.
+
+	`situ_plan' holds its own `skip' -- the predicate for everything this
+	build does not compile, patterns and `@os' alike -- and used it for the
+	sources it walks while building `have' from the unfiltered header list.
+	So an excluded `msg.h' counted as satisfying `#include "msg.h"' and
+	the schema was never compiled.
+
+	Measured with the fix reverted: nothing planned at all, against two
+	situc invocations with it. Three states as above, because suppressing
+	on a header that IS in the build is the behaviour being kept."""
+	situc = t.write("bin/situc", FAKE_SITUC % {"stream": "stdout",
+	                                           "extra": ""})
+	os.chmod(situc, 0o755)
+	t.write("msg.situ", "// a schema\n")
+	t.write("main.c", '#include "msg.h"\n'
+	        "int main(void){ return msg_check(); }\n")
+	t.write("fmake.toml", '[project]\nexclude = ["vendor"]\n'
+	        f'\n[toolchain]\nsituc = {situc!r}\n')
+
+	def situc_runs():
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake("-n")
+		return len([l for l in (r.stdout + r.stderr).splitlines()
+		            if "situc" in l and ".situ" in l])
+
+	absent = situc_runs()
+	check(absent > 0,
+	      "no situc was planned with no header anywhere, so this fixture "
+	      "never reached the question")
+
+	t.write("vendor/msg.h", "// unrelated, and excluded\n")
+	check(situc_runs() == absent,
+	      "a header in an excluded subtree stopped the schema being "
+	      "compiled, while not being on the include path")
+
+	t.write("msg.h", "int msg_check(void);\n")
+	check(situc_runs() == 0,
+	      "a msg.h in the build no longer suppresses the schema, so this "
+	      "gated nothing")
+
+
+@case
 def a_shadowed_moc_include_is_reported_only_where_it_is_compiled(t):
 	"""The same shape as the directive lint, and this one lies.
 

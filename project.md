@@ -553,7 +553,8 @@ that had been green about nothing for five commits ·
 [500. The lens §499 handed over, and what a control found instead](#500-the-lens-499-handed-over-and-what-a-control-found-instead) ·
 [501. The unfired-refusal lens, run again, and the seam it found](#501-the-unfired-refusal-lens-run-again-and-the-seam-it-found) ·
 [502. beerssh confirms the moc exclude fix, and names the residue](#502-beerssh-confirms-the-moc-exclude-fix-and-names-the-residue) ·
-[503. The wide-set lens, swept to the end, and the warning that lied](#503-the-wide-set-lens-swept-to-the-end-and-the-warning-that-lied)
+[503. The wide-set lens, swept to the end, and the warning that lied](#503-the-wide-set-lens-swept-to-the-end-and-the-warning-that-lied) ·
+[504. The same lens in a planner, where it breaks the build](#504-the-same-lens-in-a-planner-where-it-breaks-the-build)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39599,3 +39600,96 @@ far more than it builds, by design, and every place that reports on what
 it read is a place the two sets can be confused. The sweep is finished
 for `scans`; the class is not, because the next wide set will be a
 different variable.
+
+## 504. The same lens in a planner, where it breaks the build
+
+§503 closed by saying the sweep was finished for `scans` and the class
+was not, "because the next wide set will be a different variable". The
+next one was `hdrs` against `gen_hdrs` -- the pair `d3388fd` had already
+paid out on once, from beerssh's report about moc's include path.
+
+**Two sites, and both are planners rather than diagnostics**, which is
+why this entry matters more than the two before it: a diagnostic that
+reads the wrong set says something untrue, and a planner that reads the
+wrong set *builds something different*.
+
+### uic: an excluded header stopped the build
+
+`uic_plan` keeps a `have` set and does not run uic where the header
+already exists -- which its docstring promises outright: *"a ui_foo.h
+someone checked in is left alone rather than overwritten."* The set was
+built from the unfiltered header list, **and keyed by basename**, so a
+`ui_panel.h` anywhere in the tree counted, including inside a subtree
+`[project] exclude` had removed from the build.
+
+The excluded copy is not on the include path. So nothing generated the
+header and nothing provided it:
+
+    vendor/ui_panel.h present   ->  main.cpp did not compile
+                                    !!! no target could be built
+    vendor/ui_panel.h removed   ->  * built uicp
+
+**A file fmake was told to ignore broke a target that had nothing to do
+with it**, and the basename key is what makes the blast radius the whole
+tree rather than one directory. The error names the compile and not the
+cause, which is the expensive part: nothing in "main.cpp did not
+compile" points at a vendored header three directories away.
+
+### situ: the same fault, found by sweeping rather than by waiting
+
+`situ_plan` holds its own `skip` -- the predicate for everything this
+build does not compile, patterns and `@os` alike -- and used it for the
+sources it walks while building `have` from the unfiltered header list.
+An excluded `msg.h` therefore satisfied `#include "msg.h"` and the
+schema was never compiled. Measured with the fix reverted: **0 situc
+invocations planned, against 2 with it.**
+
+This one had no report behind it and no symptom anybody had hit. It came
+from asking the same question of the sibling planner, which is the whole
+argument for finishing a lens set rather than stopping at the instance.
+
+### Fixed with whatever filter each one already has
+
+Not one mechanism, deliberately. `uic_plan` has no predicate, so its
+caller passes `gen_hdrs` -- `d3388fd`'s precedent, and its comment there
+says the same thing: *"`gen_hdrs', not `hdrs': the same filter the moc
+PLAN takes."* `situ_plan` is handed `skip`, which is broader than a
+pattern, so it asks that instead of making its caller pre-filter. Each
+site uses the better information available to it rather than a uniform
+answer that would have been worse in one of them.
+
+Three states each, because the promise has to survive the fix: a
+checked-in header in the build still suppresses generation, an excluded
+one behaves exactly as if absent, and absent is the baseline the middle
+case must match. Sabotaged separately, each failing its own case.
+
+### The severity rose as the sweep went on, which is backwards
+
+    §305        an exclude did not reach the include path
+    d3388fd     ... nor moc's flags                      (beerssh)
+    §502        a lint said things about excluded code    (beerssh)
+    §503        a warning made a false claim and prescribed a deletion
+    §504        two planners changed what gets built
+
+Five instances of one mismatch, and **the worst was found last**. The
+natural expectation is the opposite -- that a sweep finds the loud faults
+first and tapers into pedantry -- and the reason it went the other way is
+worth keeping: the early instances were found by *noticing output*, which
+only ever surfaces the sites that talk. The planners are silent. Nobody
+reports a build that fails for the wrong reason as an exclusion bug,
+because the error arrives as a compiler error about their own file.
+
+So the transferable rule is not "sweep the class", which §503 already
+said. It is: **the sites that cannot be noticed are the ones worth
+sweeping for, and they are exactly the ones a consumer will never report.**
+
+### A method error of my own, in the probe for this
+
+The first measurement of uic's behaviour counted lines matching `uic` in
+a fixture directory called `uicp`, so every path in the output matched
+and a suppressed run read as two invocations. **A count inherited its
+detector** -- in a probe written to investigate a detector problem.
+Re-measured by asking for the invocation rather than the word, which is
+what gave the three clean states above. The fixture's own name was the
+confounder, which is an argument for naming scratch trees after nothing
+in particular.
