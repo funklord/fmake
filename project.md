@@ -40337,3 +40337,30 @@ messages. Here, an arm would have passed because the thing it named --
 the order -- was never varied. **A sabotage set has to perturb the
 quantity the docstring says is under test**, not merely some code the
 case runs through.
+
+### And the new case wrote into the repository, for the reason fmake documents
+
+The probe that decides whether to skip compiles a trivial `.cppm` with
+`subprocess.run`, and the first version passed no `cwd`. So it inherited
+the suite's working directory -- **this repository** -- and gcc wrote
+`gcm.cache/probe.gcm` into the source tree on every run. The cleanup
+beside it looked under `t.dir`, where the directory had never been.
+
+`git status --porcelain` before the commit is what caught it, which is
+the one check `CLAUDE.md` says will be the whole warning you get.
+
+**fmake's own source explains this exact behaviour**, a few lines from
+the cycle refusal the case was written for: *"gcc writes its BMIs
+relative to the working directory, which is why this exists."* The tool
+handles it; the test for the tool did not. A comment that names a hazard
+is only as good as the next person's habit of reading the code they are
+testing rather than the code under test.
+
+Fixed with `cwd=t.dir`, so the probe's artifacts land in the tree that
+gets removed. Verified by re-running the case and asking git again,
+rather than by assuming the cleanup now matches.
+
+Worth adding to §507's rule about fixtures. There the name a fixture
+carries was an input; here the **directory a subprocess inherits** is
+one. Both are properties of the test that nobody declares, and both
+decide what the measurement does.
