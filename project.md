@@ -40183,6 +40183,50 @@ Devuan paths, C++20 module cycles -- for refusals that are probably
 sound. The list stays worth having as a record of untested behaviour;
 what has stopped paying is probing it in batches.
 
+### The packaging cluster, probed on one fixture, is sound throughout
+
+The expensive end of the list, taken on the reasoning that one fixture
+reaches several entries. It does -- `[project] name`, `VERSION`, a
+licence text, a maintainer and an extended description get a tree to the
+point where `--eject deb` runs, and from there each refusal is one
+config variant away. Seven more, all reachable, all with a message that
+names the remedy:
+
+- `[debian.Bad_Name]`, refused for a name Debian will not take;
+- a `[package] description` of one line, refused for having no extended
+  paragraph;
+- a `shared` target with no `@version`, refused because a runtime
+  package needs one;
+- `[service.X]` naming no init file, which lists the four keys that
+  would give it one;
+- `[service.X] package` naming something the tree does not build;
+- `[debian.X] postinst` naming a file that is not there;
+- the same naming a file with no `#DEBHELPER#` token -- **with a
+  control**, since a check that refused every script would pass that arm
+  too: adding the token builds.
+
+**No defect in the cluster.** Worth recording as a positive statement
+rather than an absence: the packaging path is the one a reader reaches
+while trying to ship, when they are least able to debug fmake, and every
+message there was found to name what to do about it.
+
+### What is left, and why it is not probed
+
+Thirty-odd entries, in three groups:
+
+- **IO and environment failures** -- `dpkg-buildpackage` failing, `git
+  archive` failing, `uic` or `rcc` not running, `-i` unable to read or
+  write the config, a file that cannot be removed. Reaching these means
+  breaking a toolchain on purpose, and each is a one-line `except` that
+  reports what the exception said.
+- **A platform this machine is not** -- the Devuan `libsystemd` path.
+- **The SPDX and licence-matching refusals, deliberately not probed.**
+  `CLAUDE.md` puts licensing outside what a session raises or works on
+  short of a blocker, and a sweep that went looking there would be
+  spending effort on the one subject the holder has reserved. They stay
+  on the list, unprobed and marked as such, rather than being quietly
+  counted as sound.
+
 ## 510. Two consumers answering, and a claim of mine they corrected
 
 Two messages arrived, the `20261023T0731Z` and `20261023T1505Z` ones.
