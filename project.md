@@ -40473,3 +40473,52 @@ delimiter closed the outer one. The suite caught the resulting empty run
 outright -- *"no case matches ...; this reads as a clean run and is an
 empty one"* -- which is §298's rule working on the suite's own behaviour
 rather than on fmake's.
+
+### Two more, and a second correction of the same kind
+
+`dbusdir` and `service.restart-on-upgrade` are closed too, so the gap is
+**14 to 5**. Both were cheap, and both had been written off:
+
+- the first correction said the Alpine and Gentoo fields needed a faked
+  platform -- nine closed without one;
+- the second said five of the remaining seven needed it -- two of those
+  five did not.
+
+`dbusdir` is furniture like `udevdir` and moves
+`share/dbus-1/system.d/probe.conf` to wherever it says.
+`restart-on-upgrade = false` adds `--no-restart-after-upgrade` to the
+`dh_installsystemd` and `dh_installinit` calls in `debian/rules`, so it
+shows there or nowhere -- which is why the arm asserts the **flag**
+rather than the presence of the calls, the default emitting the same
+calls without it.
+
+**The honest remainder is five**, and these do need the platform: the
+four init-specific directories, placed only for the init the machine
+runs, and `target.test-group`, whose selection mechanism was not reached
+by the probe that tried.
+
+The lesson is about the estimate rather than the features. Twice a
+"needs a platform" reading came from looking at what a key is *about*
+rather than where it is *read*, and a key read while emitting a file is
+testable anywhere. **Ask what consumes it, not what it describes.**
+
+### A chain of sound refusals shaped the fixture
+
+Adding a service to the shared fixture produced two refusals in
+sequence, both correct and both teaching:
+
+    a deb needs systemd AND sysvinit -- the unit starts it on Debian
+      and Ubuntu, the script on Devuan
+    an ebuild needs openrc -- Gentoo's default init
+
+So one fixture serving three emitters carries all three scripts, because
+**each emitter asks for the init its own distribution runs.** That is
+not a quirk to work around; it is the feature, and a case that declared
+only a unit would have been testing a tree no distribution would accept.
+
+**And the first of those refusals was hidden by my own
+`2>/dev/null`** -- the third time in this session that redirecting
+stderr in a probe turned a refusal into a silent nothing, after §498's
+sweep driver and §507's packaging probes. The pattern is stable enough
+to name: a probe that discards stderr is a probe that cannot see the
+tool working correctly.

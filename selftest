@@ -28076,6 +28076,17 @@ def the_packaging_keys_reach_the_file_they_are_for(t):
 	shutil.copyfile(gpl, os.path.join(t.dir, "LICENSE"))
 	for s in ("preinst", "prerm", "postrm"):
 		t.write(f"{s}.sh", f"#!/bin/sh\necho {s}-ran\n#DEBHELPER#\n")
+	# A service for a deb carries BOTH a unit and an init script, which
+	# fmake refuses without: the unit starts it on Debian and Ubuntu and
+	# the script on Devuan. Found by a probe whose own 2>/dev/null had
+	# hidden that refusal.
+	t.write("probe.service", "a unit\n")
+	t.write("probe.init", "#!/bin/sh\n### BEGIN INIT INFO\n### END INIT INFO\n")
+	# And an openrc script, because Gentoo's default init is OpenRC and
+	# an ebuild shipping a daemon without one is refused. Each emitter
+	# asks for the init its distribution runs, which is why one fixture
+	# serving three of them carries all three scripts.
+	t.write("probe.initd", "#!/sbin/openrc-run\ncommand=/usr/bin/probe\n")
 	t.write("fmake.toml", "\n".join([
 	    '[project]', 'name = "probe"', '',
 	    '[package]',
@@ -28090,7 +28101,10 @@ def the_packaging_keys_reach_the_file_they_are_for(t):
 	    '', '[alpine]', 'makedepends = ["ninja"]',
 	    'checkdepends = ["bash"]', 'subpackages = ["probe-doc"]',
 	    '', '[debian.probe]', 'preinst = "preinst.sh"',
-	    'prerm = "prerm.sh"', 'postrm = "postrm.sh"', '']))
+	    'prerm = "prerm.sh"', 'postrm = "postrm.sh"',
+	    '', '[service.probe]', 'systemd = ["probe.service"]',
+	    'sysvinit = "probe.init"', 'openrc = "probe.initd"',
+	    'restart-on-upgrade = false', '']))
 
 	def eject(kind):
 		for d in ("debian", "gentoo", "alpine"):
@@ -28126,6 +28140,17 @@ def the_packaging_keys_reach_the_file_they_are_for(t):
 		      f"APKBUILD: {apkbuild}")
 
 	eject("deb")
+	# `restart-on-upgrade = false' is a flag on the dh call, so it shows
+	# in debian/rules or nowhere. The default emits the same calls
+	# WITHOUT it, which is why the value asserted is the flag and not the
+	# presence of the lines.
+	rules = body("debian/rules")
+	check("dh_install" in rules,
+	      f"no service calls were emitted, so this arm never reached "
+	      f"the question: {rules}")
+	check("--no-restart-after-upgrade" in rules,
+	      f"[service.*] restart-on-upgrade = false was accepted and did "
+	      f"not reach debian/rules: {rules}")
 	for s in ("preinst", "prerm", "postrm"):
 		script = body(f"debian/probe.{s}")
 		check(f"echo {s}-ran" in script,
@@ -28157,8 +28182,12 @@ def an_install_directory_override_is_honoured(t):
 	the override moving it, in one tree."""
 	t.write("main.c", "int main(void){ return 0; }\n")
 	t.write("probe.rules", "a rule\n")
+	t.write("probe.conf", "<busconfig/>\n")
 	name = os.path.basename(t.dir)
-	t.write("fmake.toml", f'[target.{name}]\nudev = ["probe.rules"]\n')
+	# Two directories, because one honoured override does not say the
+	# others are read -- each is its own entry in the defaults table.
+	t.write("fmake.toml", f'[target.{name}]\nudev = ["probe.rules"]\n'
+	        'dbus = ["probe.conf"]\n')
 
 	def staged():
 		stage = os.path.join(t.dir, "stage")
@@ -28182,11 +28211,15 @@ def an_install_directory_override_is_honoured(t):
 
 	t.write("fmake.toml",
 	        f'[target.{name}]\nudev = ["probe.rules"]\n'
-	        '\n[install]\nudevdir = "custom/udev"\n')
+	        'dbus = ["probe.conf"]\n'
+	        '\n[install]\nudevdir = "custom/udev"\n'
+	        'dbusdir = "custom/dbus"\n')
 	after = staged()
 	check("custom/udev/probe.rules" in after,
 	      f"[install] udevdir was accepted and ignored: the rule is still "
 	      f"at {default!r} and the override moved nothing: {after}")
+	check("custom/dbus/probe.conf" in after,
+	      f"[install] dbusdir was accepted and ignored: {after}")
 
 
 @case
