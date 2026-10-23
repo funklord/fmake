@@ -550,7 +550,8 @@ that had been green about nothing for five commits ·
 [497. The root that had to agree](#497-the-root-that-had-to-agree) ·
 [498. Fourteen trees at this head, and the two that were not fmake](#498-fourteen-trees-at-this-head-and-the-two-that-were-not-fmake) ·
 [499. A module a loader opens by name, and a premise narrower than its kind](#499-a-module-a-loader-opens-by-name-and-a-premise-narrower-than-its-kind) ·
-[500. The lens §499 handed over, and what a control found instead](#500-the-lens-499-handed-over-and-what-a-control-found-instead)
+[500. The lens §499 handed over, and what a control found instead](#500-the-lens-499-handed-over-and-what-a-control-found-instead) ·
+[501. The unfired-refusal lens, run again, and the seam it found](#501-the-unfired-refusal-lens-run-again-and-the-seam-it-found)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39369,3 +39370,83 @@ So: **run the control arms even when the fix is obviously right, and read
 a control's failure as a finding rather than as noise in the fixture.**
 The instinct when a control fails is to fix the fixture, and here that
 would have cost the better of the two defects.
+
+## 501. The unfired-refusal lens, run again, and the seam it found
+
+§496 left this open: instrument `die()`, run the suite, and read the
+refusals that never fire as a lens. Re-run at this head.
+
+    real call sites      232   (§496 measured 228; four are mine since)
+    fired in one run     173   from 376 refusals
+    never fired           59
+
+Fifty-nine, the same count §496 got from a smaller tree -- coverage and
+the tree grew together, which is a coincidence rather than a finding.
+
+**The instrument was validated before its output was trusted**, which
+matters more than it sounds: `sys._getframe(1).f_lineno` reports the line
+a multi-line call *starts* on, and if that had been the last line instead,
+every entry would have missed its site and the unfired set would have
+been mostly noise. Checked two ways -- a deliberate refusal logged the
+line `grep` names, and every one of the 173 fired lines is a known `die`
+site, with none left over. It is removed again, for §496's reason: a
+`die()` that writes a file is a `die()` somebody will one day ship.
+
+### The seam: two of this tree's own changes, and nobody checked between them
+
+The one real defect was at the catch-all branch of `check_root`.
+
+§493 made git an authority -- an ignored source nothing tracks is dropped
+before the closure runs, and the run says so at the top. §497 lifted the
+`root` validation into `check_root`, whose argument is that four causes
+reach four remedies, and whose `excluded` lookup says of itself that it
+is *read rather than re-derived, so this cannot drift from what the build
+says about the same file somewhere else.*
+
+It drifted, because §493 reported its reason through the skip summary and
+never put it in `excluded`:
+
+    * 1 source file(s) not built: git is told to ignore generated.c
+    !!! root = 'generated.c' is not a source file in this tree
+
+The second sentence is the branch whose comment says fmake "does not know
+why", one line below the run naming the cause. **The branch was not
+wrong when it was written; §493 made its premise false** by adding a
+reason a file is not source, and the lifting in §497 moved the validation
+without the two meeting.
+
+Fixed where the structure already pointed -- the reason goes into
+`excluded`, so the existing `elif why:` branch names it and the catch-all
+stays a genuine catch-all rather than gaining a fifth arm.
+
+**Both drop sites, because §493 drops on two tests and only one is
+obvious**: a file git ignores by name, and a file inside a directory git
+ignores entirely. Sabotaged three ways -- no merge at all, per-file only,
+directory only -- and the second and third are the ones worth having,
+since a fix keyed on either drop alone passes the other's arm and fails
+this case.
+
+### Two honest negatives, and one entry I could not reach
+
+- **`do_clean`'s path guard cannot fire for any input.** It asks whether
+  `os.path.basename(state)` is `STATE_DIR` where `state` is
+  `os.path.join(root, STATE_DIR)`, so it compares a constant with itself.
+  Its docstring says a clean eats something because "a variable did not
+  contain what everyone assumed", and the variable there is `root` --
+  which it does not check. **But the operation is safe by construction
+  anyway**: `root` is `os.path.abspath` of a path already refused unless
+  it is a directory, and a `join` onto it cannot escape it. So the guard
+  is vacuous rather than wrong, it would fire if somebody put a separator
+  in `STATE_DIR`, and the `islink` guard beside it does fire in the
+  suite. Left alone.
+- **The eject-overwrite guard was not reached.** `--eject deb` refuses
+  earlier for a missing `VERSION`, and a fixture that gets past that
+  wants several more pieces of packaging metadata. That is an unprobed
+  entry, not a negative, and saying so is the difference.
+
+**And the list goes stale the moment you fix anything in it.** The fix
+above added lines around 12115, so every entry below that shifted and the
+tail of the list no longer points where it did. A second pass must
+re-derive the line numbers or match on the refusal's text -- which is
+this file's own rule about a fact recorded without its method, met from
+the one direction that catches you mid-task rather than months later.

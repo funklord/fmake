@@ -27876,6 +27876,84 @@ def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
 
 
 @case
+def a_root_git_ignores_is_refused_by_the_reason_not_the_catch_all(t):
+	"""Two of this tree's own changes met and nobody checked the seam.
+
+	Section 493 made git an authority: an ignored source nothing tracks
+	is dropped before the closure runs, and the run says so at the top.
+	Section 497 lifted the `[target.*] root' validation into `check_root',
+	whose whole argument is that four causes reach four remedies -- and
+	whose `excluded' lookup is, in its own words, "read rather than
+	re-derived, so this cannot drift from what the build says about the
+	same file somewhere else."
+
+	It drifted. Section 493 reported its reason through the skip summary
+	and never put it in `excluded', so a target rooted at an ignored file
+	fell through to the catch-all branch -- whose comment says fmake "does
+	not know why" -- one line after the run had printed the cause:
+
+	    * 1 source file(s) not built: git is told to ignore generated.c
+	    !!! root = 'generated.c' is not a source file in this tree
+
+	Both arms, because section 493 drops on two different tests and only
+	one of them was obvious: a file git ignores by name, and a file inside
+	a directory git ignores entirely. A fix keyed on the per-file drop
+	alone would leave the directory case saying fmake does not know.
+
+	Asserted on the reason rather than on the branch, since which branch
+	answers is an implementation detail and the reader's complaint is that
+	the sentence contradicted the line above it.
+	"""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+
+	def repo(tree, ignore, extra):
+		tree.write("main.c", "int main(void){ return 0; }\n")
+		tree.write(".gitignore", ignore)
+		for path, text in extra:
+			tree.write(path, text)
+		check(subprocess.run(["git", "init", "-q", tree.dir],
+		                     capture_output=True).returncode == 0,
+		      "could not make a repository")
+		for args in (["add", "main.c", ".gitignore"],
+		             ["-c", "user.email=a@b", "-c", "user.name=c",
+		              "commit", "-qm", "init"]):
+			check(subprocess.run(["git", "-C", tree.dir] + args,
+			                     capture_output=True).returncode == 0,
+			      f"git {args[0]} failed")
+
+	# A file git ignores by name.
+	repo(t, "generated.c\n", [("generated.c", "int g(void){ return 1; }\n")])
+	t.write("fmake.toml",
+	        '[target.gen]\nkind = "static"\nroot = "generated.c"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"an ignored root must be refused: {out}")
+	check("git is told to ignore" in out,
+	      f"the refusal does not name git as the cause, so it contradicts "
+	      f"the skip line above it: {out}")
+	check("is not a source file in this tree" not in out,
+	      f"the refusal fell through to the catch-all: {out}")
+
+	# A file inside a directory git ignores entirely -- the other drop.
+	u = Tree("ignored_dir_root")
+	try:
+		repo(u, "gen/\n", [("gen/g.c", "int g(void){ return 1; }\n")])
+		u.write("fmake.toml",
+		        '[target.g]\nkind = "static"\nroot = "gen/g.c"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a root in an ignored directory must be refused: {out}")
+		check("git is told to ignore" in out,
+		      f"the directory drop does not name its reason either: {out}")
+		check("is not a source file in this tree" not in out,
+		      f"the directory case fell through to the catch-all: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_source_git_ignores_is_not_source(t):
 	"""git is a build authority here, not a diagnostic.
 

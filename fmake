@@ -12110,6 +12110,16 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# take the "it is in this tree, at ..." message with it.
 	ignored_dirs = ignored_source_dirs(root, srcs)
 	ignored_srcs = [r for r in srcs if os.path.dirname(r) in ignored_dirs]
+	# The reason, per file, for `check_root' -- which reads `excluded'
+	# rather than re-deriving why a file is not source, so that a
+	# refusal cannot drift from what the run said about the same
+	# file. Section 493 dropped these and reported them only in the
+	# skip summary, so a target rooted at one was refused with the
+	# catch-all sentence a line after the run had named the cause.
+	ignored_why = {r: f"git is told to ignore "
+	               f"{os.path.dirname(r) or '.'}/, and nothing "
+	               f"tracks what is in it"
+	               for r in ignored_srcs}
 	srcs = [r for r in srcs if os.path.dirname(r) not in ignored_dirs]
 	# A `.asm' inside a directory git is told to ignore is covered by the
 	# line below about that directory, and saying it twice would make a
@@ -12160,6 +12170,9 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	ignored_files = sorted(git_ignored(root, srcs) if srcs else set())
 	if ignored_files:
 		_gone = set(ignored_files)
+		ignored_why.update({r: "git is told to ignore it, and "
+		                    "nothing tracks it"
+		                    for r in ignored_files})
 		srcs = [r for r in srcs if r not in _gone]
 		unbuilt = {r: w for r, w in unbuilt.items() if r not in _gone}
 		# Named rather than counted, because section 439 is what silence
@@ -12324,6 +12337,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		     "this")
 
 	excluded = dict(unreadable)
+	for _r, _w in ignored_why.items():
+		excluded.setdefault(_r, _w)
 	by_name = []
 	for rel in list(srcs):
 		pat = exclude_pattern(rel)
