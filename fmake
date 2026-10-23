@@ -12667,6 +12667,22 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	moc_jobs, moc_unreachable = moc_plan(srcs, gen_hdrs, scans)
 	for rel, line, spell, sib, job in shadowed_generated(root, moc_jobs,
 	                                                     scans):
+		# Only for an includer this build compiles. The warning's own
+		# claim is that the sibling "is what the compiler reads" and
+		# its remedy is to delete that sibling -- both false where the
+		# includer is in a subtree fmake was told to skip, since no
+		# compiler opens it at all. Measured on a fixture: the warning
+		# named a vendored file while the compile lines carried only
+		# the tree's own main.cpp, and it asked the reader to remove a
+		# file from somebody else's library to fix nothing.
+		#
+		# `includers' is built from the whole scan record rather than
+		# from the built sources -- section 502's shape, and the
+		# second instance of it in one pass. Both tests for the reason
+		# that section gives: `excluded' holds sources, and a header
+		# that includes generated output answers only to the pattern.
+		if rel in excluded or exclude_pattern(rel):
+			continue
 		warn(f'{rel}:{line} includes "{spell}", and {sib} exists beside '
 		     f'it -- so that file is what the compiler reads.\n'
 		     f'    A quoted include is resolved in the including file\'s '

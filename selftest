@@ -27876,6 +27876,59 @@ def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
 
 
 @case
+def a_shadowed_moc_include_is_reported_only_where_it_is_compiled(t):
+	"""The same shape as the directive lint, and this one lies.
+
+	`shadowed_generated' warns that a quoted `#include "moc_x.cpp"' is
+	resolved in the including file's own directory, so a stale copy
+	sitting there is what the compiler reads rather than the file fmake
+	generates. True, useful, and its remedy is to delete that copy --
+	"excluding it, or having git ignore it, changes nothing, because the
+	include is resolved by the compiler and not by fmake".
+
+	That argument is about the SIBLING. It says nothing about the
+	INCLUDER, and `includers' is built by walking the whole scan record
+	rather than the built sources, so an includer in an excluded subtree
+	reached the warning too. Measured on this fixture: fmake named the
+	vendored file while its own compile lines carried only `main.cpp'.
+
+	So the warning was wrong rather than merely noisy. No compiler opens
+	that file, nothing is shadowed, and the remedy asks the reader to
+	delete a file out of somebody else's library to fix nothing.
+
+	Two arms. The excluded includer is silent, and a kept one beside it
+	is still warned about -- which is the control, because the cheap way
+	to pass the first is to stop warning at all. Both copies are real
+	files on disk, since the warning exists only when the sibling is
+	there to be read."""
+	if not shutil.which("moc") and not glob.glob("/usr/lib/qt6/libexec/moc"):
+		raise Skip("no moc to run")
+	t.write("thing.h", "#pragma once\n#include <QObject>\n"
+	        "class Thing : public QObject { Q_OBJECT\n"
+	        "public:\n\tThing() {}\n};\n")
+	t.write("main.cpp", '#include "thing.h"\n'
+	        "int main(){ Thing t; (void)t; return 0; }\n")
+	# In the excluded subtree: an includer and a stale copy beside it.
+	t.write("vendor/other.cpp", '#include "moc_thing.cpp"\n'
+	        "int other(void){ return 1; }\n")
+	t.write("vendor/moc_thing.cpp", "// a stale copy\n")
+	# And the same pair where nothing excluded it.
+	t.write("kept_other.cpp", '#include "moc_thing.cpp"\n'
+	        "int kept(void){ return 2; }\n")
+	t.write("moc_thing.cpp", "// a stale copy\n")
+	t.write("fmake.toml", '[project]\nexclude = ["vendor"]\n')
+
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check("vendor/other.cpp" not in out,
+	      f"the warning named an includer in an excluded subtree, which "
+	      f"no compiler opens: {out}")
+	check("kept_other.cpp" in out and "what the compiler reads" in out,
+	      f"the warning stopped firing for an includer this build does "
+	      f"compile, so this switched it off rather than gating it: {out}")
+
+
+@case
 def the_directive_lint_says_nothing_about_an_excluded_subtree(t):
 	"""Reported from beerssh, 2026-10-23, with the reproduction.
 

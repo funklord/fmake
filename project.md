@@ -552,7 +552,8 @@ that had been green about nothing for five commits ·
 [499. A module a loader opens by name, and a premise narrower than its kind](#499-a-module-a-loader-opens-by-name-and-a-premise-narrower-than-its-kind) ·
 [500. The lens §499 handed over, and what a control found instead](#500-the-lens-499-handed-over-and-what-a-control-found-instead) ·
 [501. The unfired-refusal lens, run again, and the seam it found](#501-the-unfired-refusal-lens-run-again-and-the-seam-it-found) ·
-[502. beerssh confirms the moc exclude fix, and names the residue](#502-beerssh-confirms-the-moc-exclude-fix-and-names-the-residue)
+[502. beerssh confirms the moc exclude fix, and names the residue](#502-beerssh-confirms-the-moc-exclude-fix-and-names-the-residue) ·
+[503. The wide-set lens, swept to the end, and the warning that lied](#503-the-wide-set-lens-swept-to-the-end-and-the-warning-that-lied)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39520,3 +39521,81 @@ third payment. Worth stating plainly because the direction of traffic is
 the opposite of what a tool's own test suite can arrange: the suite
 tests what its author thought of, and a consumer tests what they
 happened to have.
+
+## 503. The wide-set lens, swept to the end, and the warning that lied
+
+§502's cause was not a missing check but a **set-membership mismatch**:
+the directive lint walked `scans`, which holds every file that was
+*read*, while exclusion removes from `srcs`. That is a lens, so it was
+run over every iteration of `scans` in the tree rather than left at the
+one site beerssh happened to stand on.
+
+**Five sites. One was already fixed, one was already right, one was
+right for a better reason, and one was lying.**
+
+### The one that lied
+
+`shadowed_generated` warns that a quoted `#include "moc_x.cpp"` resolves
+in the including file's own directory, so a stale copy sitting there is
+what the compiler reads rather than what fmake generates. Its remedy is
+to delete that copy, and it says so firmly: *"excluding it, or having git
+ignore it, changes nothing, because the include is resolved by the
+compiler and not by fmake."*
+
+**That argument is about the sibling. It says nothing about the
+includer** -- and `includers` is built by walking the whole scan record,
+so an includer inside an excluded subtree reached the warning too.
+Measured on a fixture:
+
+    * vendor/other.cpp:1 includes "moc_thing.cpp", and
+      vendor/moc_thing.cpp exists beside it -- so that file is what the
+      compiler reads.
+    ...
+    c++ -c .../main.cpp -o ...        <- the only compile line
+
+No compiler opens `vendor/other.cpp`. Nothing is shadowed. **So this one
+was wrong rather than merely noisy**, and its remedy asked the reader to
+delete a file out of somebody else's vendored library to fix nothing.
+
+That is the difference worth keeping between the two instances. A noisy
+diagnostic spends attention; **a confident diagnostic about a file the
+build never opens spends trust, and prescribes damage.** Both came from
+one mismatch, and only reading the compile lines beside the warning
+separated them.
+
+Gated on the same two tests as §502, and for its reason: `excluded` holds
+the sources, and a header that includes generated output answers only to
+the pattern. Sabotaged both ways -- removing the gate fails the excluded
+arm, inverting it fails the control -- which is the symmetric pair, since
+the cheap way to pass the first arm is to stop warning at all.
+
+### The other three, and why two are negatives
+
+- **The `wanted`/`theirs_only`/`skipped_only` split already does this**,
+  with three buckets rather than a skip. **And its comment names the
+  lens as §305's**: *"that filter reached one consumer of the exclusion
+  and not another, so the question was which other consumers there
+  are."* So this is not a new lens. It is §305's, run a third time.
+- **The version-fallback finding filters at the point of use**, on
+  `in_artifact` -- strictly narrower than exclusion, since a file can be
+  built and still reach no artifact. A negative, and **the better
+  pattern wherever that information exists**: collect wide, and put the
+  filter with the *claim* rather than with the data. The directive lint
+  cannot do this, because it runs before artifacts are known, which is
+  why its gate is where it is rather than by preference.
+- **`includers` itself is left wide, deliberately.** It is the producer
+  of the defect above, and it also feeds moc planning, where knowing
+  every includer is correct. Fixing the producer would have narrowed a
+  map two consumers read differently; the fix belongs at the consumer
+  making the claim.
+
+### What the count is worth
+
+This lens has now paid out in four separate passes -- §305, `d3388fd`
+(moc's include path, from beerssh's earlier report), §502 and this -- and
+twice it was a consumer who noticed, not a sweep here. **A lens that
+keeps paying is a statement about the shape of the program**: fmake reads
+far more than it builds, by design, and every place that reports on what
+it read is a place the two sets can be confused. The sweep is finished
+for `scans`; the class is not, because the next wide set will be a
+different variable.
