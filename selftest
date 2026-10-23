@@ -27876,6 +27876,61 @@ def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
 
 
 @case
+def the_directive_lint_says_nothing_about_an_excluded_subtree(t):
+	"""Reported from beerssh, 2026-10-23, with the reproduction.
+
+	Its vendored openssl produced six of these a run -- three lines, twice
+	over for two Android ABIs -- about a subtree `[project] exclude` had
+	already removed from the build:
+
+	    build-deps-android/.../statem_lib.c:1978: @version is in an
+	    ordinary comment and does nothing; ...
+
+	Diagnostics about code fmake does not compile, which the reader cannot
+	act on without editing somebody else's library. The lint walked
+	`scans`, which still holds every file that was read, while exclusion
+	removes from `srcs`. `exclude_pattern`'s own docstring promises an
+	excluded subtree has no work done on it -- no moc, no uic -- and
+	saying things about it is that promise read one step further.
+
+	Four arms, and three of them are there because the gate needs two
+	tests that cover different files. `excluded` holds the SOURCES this
+	build set aside, with a reason for each; a header is in neither it nor
+	`srcs`, so an excluded subtree's headers answer only to the pattern;
+	and a source set aside by `@os` rather than by a pattern answers only
+	to `excluded`. Drop either test and one of these arms comes back.
+
+	The fourth is the control, and it is the point of the exercise: a file
+	nobody excluded is still linted, so this is a gate rather than the
+	lint being switched off."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("vendor/dep.h", "/* @target thing in an ordinary comment */\n"
+	                        "int h(void);\n")
+	t.write("vendor/dep.c", '#include "dep.h"\n'
+	                        "/* @version 1.0 in an ordinary comment */\n"
+	                        "int v(void){ return 1; }\n")
+	# Set aside by platform rather than by pattern, so it is in
+	# `excluded' and matches no exclude pattern.
+	t.write("elsewhere.c", "/*! @os plan9 */\n"
+	                       "/* @version 1.0 in an ordinary comment */\n"
+	                       "int e(void){ return 1; }\n")
+	t.write("kept.c", "/* @version 1.0 in an ordinary comment */\n"
+	                  "int k(void){ return 1; }\n")
+	t.write("fmake.toml", '[project]\nexclude = ["vendor"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"build failed: {out}")
+	for quiet in ("vendor/dep.c", "vendor/dep.h", "elsewhere.c"):
+		check(quiet not in out,
+		      f"the lint spoke about {quiet}, which this build set "
+		      f"aside: {out}")
+	check("kept.c" in out and "@version" in out,
+	      f"the lint stopped warning about a file nobody excluded, so "
+	      f"this gated nothing and switched it off: {out}")
+
+
+@case
 def a_root_git_ignores_is_refused_by_the_reason_not_the_catch_all(t):
 	"""Two of this tree's own changes met and nobody checked the seam.
 

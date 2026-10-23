@@ -12583,6 +12583,21 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# survives the scan cache -- and sorted, so the order is the tree's
 	# rather than the walk's.
 	for rel in sorted(scans):
+		# Not for a subtree this build was told to skip. Reported
+		# from beerssh 2026-10-23, whose vendored openssl produced
+		# six of these per run, twice over for two Android ABIs:
+		# diagnostics about code fmake does not compile, which the
+		# reader cannot act on without editing somebody else's
+		# library. `exclude_pattern' promises that an excluded
+		# subtree has no work done on it; saying things about it is
+		# the same promise read one step further.
+		#
+		# Both tests, because they cover different files: `excluded'
+		# holds the SOURCES this build set aside and the reason for
+		# each, while a header is in neither it nor `srcs', so an
+		# excluded subtree's headers answer only to the pattern.
+		if rel in excluded or exclude_pattern(rel):
+			continue
 		for line, written, meant in scans[rel].get("typos", []):
 			warn(f"{rel}:{line}: @{written} is not a directive; "
 			     f"did you mean @{meant}?")

@@ -551,7 +551,8 @@ that had been green about nothing for five commits ·
 [498. Fourteen trees at this head, and the two that were not fmake](#498-fourteen-trees-at-this-head-and-the-two-that-were-not-fmake) ·
 [499. A module a loader opens by name, and a premise narrower than its kind](#499-a-module-a-loader-opens-by-name-and-a-premise-narrower-than-its-kind) ·
 [500. The lens §499 handed over, and what a control found instead](#500-the-lens-499-handed-over-and-what-a-control-found-instead) ·
-[501. The unfired-refusal lens, run again, and the seam it found](#501-the-unfired-refusal-lens-run-again-and-the-seam-it-found)
+[501. The unfired-refusal lens, run again, and the seam it found](#501-the-unfired-refusal-lens-run-again-and-the-seam-it-found) ·
+[502. beerssh confirms the moc exclude fix, and names the residue](#502-beerssh-confirms-the-moc-exclude-fix-and-names-the-residue)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39450,3 +39451,72 @@ tail of the list no longer points where it did. A second pass must
 re-derive the line numbers or match on the refusal's text -- which is
 this file's own rule about a fact recorded without its method, met from
 the one direction that catches you mid-task rather than months later.
+
+## 502. beerssh confirms the moc exclude fix, and names the residue
+
+A message arrived in this tree's inbox, the `20261022T2351Z` one, from
+beerssh. Two halves: a measurement of a fix, and a defect of the same
+shape in what fmake *says* rather than what it runs.
+
+**Theirs, in their voice.** `fmake -n -v` in beerssh with
+`build-deps-android` present for both ABIs gives **73 moc lines, none
+naming `build-deps-android`, where it was 73 of 73 before** `d3388fd`
+(*core: keep an excluded subtree off moc's include path too*), and there
+are still no compile lines naming it. Recorded on their side as
+`815998e`. Both commits were checked here before being quoted, since a
+claim about another tree is a measurement this one did not take.
+
+**The residue, reproduced here rather than taken on trust.** Their
+report:
+
+    build-deps-android/arm64-v8a/openssl-3.5.4/ssl/statem/statem_lib.c:1978:
+    @version is in an ordinary comment and does nothing; ...
+
+Three lines, twice over for two ABIs, so six a run. Reproduced on a
+four-file fixture in seconds: `exclude = ["vendor"]` and a `@version` in
+an ordinary comment inside `vendor/` still warned.
+
+The cause is a set-membership mismatch rather than a missing check. The
+lint walks `scans`, which holds **every file that was read**, while
+exclusion removes from **`srcs`**. Nothing was wrong with either; they
+are simply different sets, and the lint was reading the wider one.
+
+**Their argument for the fix is the one I took**, and it is better than
+"it is noise": `exclude_pattern`'s own docstring promises an excluded
+subtree has no work done on it -- no moc, no generated `.ui` -- and
+saying things about it is that promise read one step further. What makes
+it more than tidiness is who can act: a reader cannot fix a doxygen
+comment in vendored openssl without editing somebody else's library, so
+the warning asks for something it is not possible to do.
+
+**Two tests, because they cover different files**, which is the part a
+one-line fix would have got half right:
+
+- `excluded` holds the **sources** this build set aside, with a reason
+  for each -- so it catches a source removed by `@os` or `@arch`, which
+  matches no exclude pattern at all;
+- a **header** is in neither `excluded` nor `srcs`, so an excluded
+  subtree's headers answer only to the pattern -- and beerssh's own
+  reproduction is a vendored C library, whose headers are exactly where
+  a stray directive would sit.
+
+Sabotaged three ways, and two of them are the interesting ones: gating
+on `excluded` alone brings the header arm back, and on the pattern alone
+brings the `@os` arm back. The fourth arm of the case is the control --
+a file nobody excluded is still linted -- because the cheap way to pass
+the first three is to switch the lint off.
+
+### What the exchange is worth beyond the fix
+
+This is the second finding this week that arrived from a consumer rather
+than from a lens here, after hull's static-agent note in §498. The shape
+repeats: **both are things fmake cannot see about itself, because both
+need a tree fmake did not grow up in** -- an initrd's init, and 75,000
+lines of vendored openssl with its own comment conventions.
+
+The `project-attribution` rule that a README showing `make` shows
+`fmake` beside it was argued for on those grounds, and this is now its
+third payment. Worth stating plainly because the direction of traffic is
+the opposite of what a tool's own test suite can arrange: the suite
+tests what its author thought of, and a consumer tests what they
+happened to have.
