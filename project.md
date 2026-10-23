@@ -40426,3 +40426,50 @@ nothing and the case passed. §511 had just finished saying a sabotage
 set has to perturb the quantity under test. Reading `install_dirs`
 instead gives the two lines that matter, and dropping either one fails
 the case: the `[install]` update, and the `--prefix` application.
+
+### Nine of the fourteen needed no platform at all
+
+**A correction to what was said when §512 was written**: that the Alpine
+and Gentoo fields would need a faked platform to test, and so would be a
+larger piece of work. They do not. They are config keys **emitted into a
+file** -- an ebuild, an APKBUILD, a `debian/` script -- so ejecting and
+reading the output answers the question on any machine. The platform
+would only matter for building the package, which is not what the keys
+are about.
+
+Nine verified honoured, one fixture serving three emitters:
+
+    [gentoo]  keywords -> KEYWORDS, bdepend -> BDEPEND,
+              rdepend  -> RDEPEND
+    [alpine]  makedepends, checkdepends, subpackages, each to its
+              own APKBUILD line
+    [debian.*] preinst, prerm, postrm, each landing as
+              debian/<pkg>.<script> with its contents
+
+`bdepend` is merged into fmake's own `BDEPEND` rather than replacing it,
+which is worth knowing: a case asserting the whole line would have been
+wrong where one asserting the value is right.
+
+Every value in the fixture is deliberately distinctive -- `sys-libs/zlib`,
+`probe-doc`, `~arm64` -- so no assertion can pass by matching something
+fmake emits anyway, and **the Debian arms assert the scripts' contents
+rather than their presence**, since fmake writes a `postinst` of its own
+and a presence check would have proved nothing about the key.
+
+Sabotaged per family, at the one line each is read from: emptying
+`conf.gentoo`, `conf.alpine` or `conf.debian` fails that family's arms
+and only those.
+
+**Five of the fourteen are left and genuinely do need the platform**:
+the init-specific directories -- `unitdir`, `sysvinitdir`, `openrcdir`,
+`procddir` -- and `service.restart-on-upgrade`, because a unit is placed
+only for the init the machine runs. That is the one place hull would add
+something, and it is a separate piece of work.
+
+**A note on the fixture, which took two attempts.** The generator script
+building this case used `'''` for its own string while the TOML it
+emitted needed `"""` for a multi-line description, and the inner
+delimiter closed the outer one. The suite caught the resulting empty run
+outright -- *"no case matches ...; this reads as a clean run and is an
+empty one"* -- which is §298's rule working on the suite's own behaviour
+rather than on fmake's.

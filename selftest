@@ -28049,6 +28049,91 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 
 
 @case
+def the_packaging_keys_reach_the_file_they_are_for(t):
+	"""Nine config keys no case had ever set.
+
+	Found by section 512's listing: of 190 features, fourteen tokens never
+	appear in the suite. Nine are packaging fields -- three Gentoo, three
+	Alpine, three Debian maintainer scripts -- and the failure mode is the
+	one sections 499 and 500 both found, a key the schema accepts and
+	nothing reads. That shape is invisible from outside: the packaging is
+	emitted, it looks complete, and the field the reader set is not in it.
+
+	One fixture serves all three emitters, which is why these are one case
+	rather than nine. Each value is deliberately distinctive --
+	`sys-libs/zlib', `probe-doc', `~arm64' -- so an assertion cannot pass
+	by matching something fmake emits of its own accord, which sections 507
+	and 509 are both about.
+
+	The Debian arms assert the scripts' CONTENT rather than their
+	presence, since a file fmake wrote itself at the same path would
+	satisfy a presence check and prove nothing about the key."""
+	gpl = "/usr/share/common-licenses/GPL-3"
+	if not os.path.isfile(gpl):
+		raise Skip("no GPL-3 text to use as a fixture licence")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("VERSION", "1.0\n")
+	shutil.copyfile(gpl, os.path.join(t.dir, "LICENSE"))
+	for s in ("preinst", "prerm", "postrm"):
+		t.write(f"{s}.sh", f"#!/bin/sh\necho {s}-ran\n#DEBHELPER#\n")
+	t.write("fmake.toml", "\n".join([
+	    '[project]', 'name = "probe"', '',
+	    '[package]',
+	    'maintainer = "A Probe <probe@example.invalid>"',
+	    'description = ' + '"""' + "a probe",
+	    '', "An extended paragraph for the packaging." + '"""',
+	    '', '[gentoo]', 'category = "app-misc"',
+	    'src-uri = "https://example.invalid/probe-${PV}.tar.gz"',
+	    'keywords = ["~amd64", "~arm64"]',
+	    'bdepend = ["dev-util/ninja"]',
+	    'rdepend = ["sys-libs/zlib"]',
+	    '', '[alpine]', 'makedepends = ["ninja"]',
+	    'checkdepends = ["bash"]', 'subpackages = ["probe-doc"]',
+	    '', '[debian.probe]', 'preinst = "preinst.sh"',
+	    'prerm = "prerm.sh"', 'postrm = "postrm.sh"', '']))
+
+	def eject(kind):
+		for d in ("debian", "gentoo", "alpine"):
+			shutil.rmtree(os.path.join(t.dir, d), ignore_errors=True)
+		mk = os.path.join(t.dir, "Makefile")
+		if os.path.exists(mk):
+			os.remove(mk)
+		r = t.fmake("--eject", kind)
+		check(r.returncode == 0,
+		      f"--eject {kind} failed: {r.stdout}{r.stderr}")
+
+	def body(path):
+		full = os.path.join(t.dir, path)
+		check(os.path.isfile(full), f"{path} was not written")
+		return open(full, encoding="utf-8").read()
+
+	eject("ebuild")
+	ebuild = body("gentoo/app-misc/probe/probe-1.0.ebuild")
+	for key, want in (("keywords", "~arm64"),
+	                  ("bdepend", "dev-util/ninja"),
+	                  ("rdepend", "sys-libs/zlib")):
+		check(want in ebuild,
+		      f"[gentoo] {key} was accepted and did not reach the "
+		      f"ebuild: {ebuild}")
+
+	eject("apk")
+	apkbuild = body("alpine/APKBUILD")
+	for key, want in (("makedepends", "ninja"),
+	                  ("checkdepends", "bash"),
+	                  ("subpackages", "probe-doc")):
+		check(key + '="' in apkbuild and want in apkbuild,
+		      f"[alpine] {key} was accepted and did not reach the "
+		      f"APKBUILD: {apkbuild}")
+
+	eject("deb")
+	for s in ("preinst", "prerm", "postrm"):
+		script = body(f"debian/probe.{s}")
+		check(f"echo {s}-ran" in script,
+		      f"[debian.probe] {s} named a file whose contents did not "
+		      f"reach debian/probe.{s}: {script}")
+
+
+@case
 def an_install_directory_override_is_honoured(t):
 	"""Seventeen `[install]` directories, and no case set one.
 
