@@ -40152,6 +40152,37 @@ rather than its source, so a `[target.main]` section matched nothing and
 a `[target.pr]` one matched. A probe that does not reach the refusal
 looks exactly like a refusal that does not work.
 
+### Seven more probed sound, and the lens is past its cheap yield
+
+Recorded so the next pass does not re-probe them. All reachable, all
+with a correct message:
+
+- the three missing-Qt-tool refusals (`uic`, `rcc`, `moc`), which are
+  consistently worded and each gated on its own plan, so a tree needing
+  only moc gets the moc sentence rather than whichever check runs first;
+- a vendored submodule declared in `.gitmodules` with git absent -- the
+  message beerssh's sweep hit when a driver swallowed a
+  dubious-ownership error, and it reads correctly;
+- two `[target.*]` sections rooting one Rust crate, which explains that
+  rustc takes no defines so a second program would be a copy;
+- `--force-link` naming a `.o` that is not there, refused, and one that
+  is, built.
+
+**A fourth fixture error, and the same shape as the three in §509.**
+The prebuilt-object refusal was probed through `sources`, which refuses
+first with "matched no source file" -- the entry belongs to
+`--force-link` and the probe used the wrong door. So of roughly sixteen
+entries probed across this session, four of the probes were wrong before
+any of them said anything about the code, and each wrong probe looked
+like a shadowed refusal.
+
+**The lens is past its cheap yield.** Two real defects out of sixteen
+probed (§501's git-ignore reason, §509's shadowed `@install`), and what
+remains needs expensive fixtures -- packaging metadata, systemd and
+Devuan paths, C++20 module cycles -- for refusals that are probably
+sound. The list stays worth having as a record of untested behaviour;
+what has stopped paying is probing it in batches.
+
 ## 510. Two consumers answering, and a claim of mine they corrected
 
 Two messages arrived, the `20261023T0731Z` and `20261023T1505Z` ones.
