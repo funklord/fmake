@@ -561,7 +561,8 @@ that had been green about nothing for five commits ·
 [508. hull as a third tier under the declared interpreter](#508-hull-as-a-third-tier-under-the-declared-interpreter) ·
 [509. A refusal shadowed by a worse one, and a control that proved nothing](#509-a-refusal-shadowed-by-a-worse-one-and-a-control-that-proved-nothing) ·
 [510. Two consumers answering, and a claim of mine they corrected](#510-two-consumers-answering-and-a-claim-of-mine-they-corrected) ·
-[511. The only ordering in the build had no test at all](#511-the-only-ordering-in-the-build-had-no-test-at-all)
+[511. The only ordering in the build had no test at all](#511-the-only-ordering-in-the-build-had-no-test-at-all) ·
+[512. Which features the suite never touches, asked of --features](#512-which-features-the-suite-never-touches-asked-of---features)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -40364,3 +40365,64 @@ Worth adding to §507's rule about fixtures. There the name a fixture
 carries was an input; here the **directory a subprocess inherits** is
 one. Both are properties of the test that nobody declares, and both
 decide what the measurement does.
+
+## 512. Which features the suite never touches, asked of `--features`
+
+§511 found C++20 modules untested by accident, which asks the general
+question: **what else?** `--features` exists for exactly this -- it
+prints every directive, kind and config key, derived from the tables
+rather than written by hand -- so the question is mechanical.
+
+**Two detectors were wrong before one was trustworthy.** A
+form-aware regex reported 27 untested features including `completion`,
+`aliases` and `polkit`, which appear in `selftest` 30, 24 and 14 times.
+Plain substring absence is the instrument that answers: a token that
+never appears cannot be exercised, and that direction is reliable where
+the regex was not. Third detector fault of the session, and the same
+remedy each time -- ask the simplest question that cannot be wrong.
+
+    190 features, 14 whose own token never appears in selftest
+
+Six are `install.*dir` overrides. One, `service.restart-on-upgrade`;
+three are `debian` maintainer scripts beside the `postinst` already
+probed; the rest are Alpine and Gentoo dependency fields.
+
+### `udevdir` is honoured, and now asserted
+
+The override class is where §499's and §500's fault would hide -- a key
+the schema accepts and nothing reads, installing to the default while
+the reader believes otherwise. Measured: `lib/udev/rules.d/probe.rules`
+becomes `custom/udev/probe.rules`.
+
+The case asserts both halves in one tree, because an override honoured
+and an override ignored are indistinguishable from one measurement, and
+it checks that the default is **not already** the overridden path --
+otherwise the second arm would pass without the override doing anything.
+
+`unitdir` cannot be reached here: a unit is placed only for the init the
+machine runs, and fmake says so rather than installing glue the host
+cannot use.
+
+### A suspicion of mine, checked and wrong
+
+fmake announced *"this machine runs openrc"*, while pid 1 is `init [2]`,
+`/run/systemd/system` is absent and **no openrc tools are installed at
+all**. That looked like a mis-detection, and the consequence would have
+been real: the wrong init glue in a package is a service that never
+starts.
+
+`/run/openrc` exists on this machine. `detect_init()` returns openrc by
+its own documented test, which is the right answer to the question it
+asks, and the shell and Python forms are one spelling precisely so the
+live install and both emitters cannot disagree. **The detection is
+sound and the suspicion was mine.** Recorded because it was checkable
+and checking it was cheap.
+
+### And a sabotage that proved nothing, one section after writing the rule
+
+The first sabotage of the new case guessed at a string -- a
+`conf.data.get("install", {})` that does not exist -- so it changed
+nothing and the case passed. §511 had just finished saying a sabotage
+set has to perturb the quantity under test. Reading `install_dirs`
+instead gives the two lines that matter, and dropping either one fails
+the case: the `[install]` update, and the `--prefix` application.

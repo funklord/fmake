@@ -28049,6 +28049,62 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 
 
 @case
+def an_install_directory_override_is_honoured(t):
+	"""Seventeen `[install]` directories, and no case set one.
+
+	Found by listing `--features' and asking which tokens never appear in
+	the suite at all: fourteen of a hundred and ninety, six of them
+	`install.*dir' overrides. These are what a distribution reaches for
+	when its layout differs from the default, and the failure mode is the
+	one §499 and §500 both found elsewhere -- a key accepted by the schema
+	and then read by nothing, which installs to the default while the
+	reader believes otherwise.
+
+	`udevdir' is the one asserted here because it can be reached without a
+	particular init system: a rule file is furniture like any other and
+	lands wherever the directory says. The unit directory cannot be
+	reached on a machine that is not running systemd, and fmake says so
+	outright rather than installing glue the host cannot use -- "this
+	machine runs openrc, so that is the init glue placed".
+
+	Both halves, because an override honoured and an override ignored look
+	identical if only one is measured: the default location first, then
+	the override moving it, in one tree."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("probe.rules", "a rule\n")
+	name = os.path.basename(t.dir)
+	t.write("fmake.toml", f'[target.{name}]\nudev = ["probe.rules"]\n')
+
+	def staged():
+		stage = os.path.join(t.dir, "stage")
+		shutil.rmtree(stage, ignore_errors=True)
+		r = t.fmake("--install", "--prefix", stage)
+		check(r.returncode == 0, f"install failed: {r.stdout}{r.stderr}")
+		out = []
+		for base, _dirs, files in os.walk(stage):
+			out += [os.path.relpath(os.path.join(base, f), stage)
+			        for f in files]
+		return sorted(out)
+
+	before = staged()
+	check(any(f.endswith("probe.rules") for f in before),
+	      f"the rule was not installed at all, so this fixture never "
+	      f"reached the question: {before}")
+	default = [f for f in before if f.endswith("probe.rules")][0]
+	check(default != "custom/udev/probe.rules",
+	      f"the default is already the overridden path, so the arm below "
+	      f"would pass without the override doing anything: {default}")
+
+	t.write("fmake.toml",
+	        f'[target.{name}]\nudev = ["probe.rules"]\n'
+	        '\n[install]\nudevdir = "custom/udev"\n')
+	after = staged()
+	check("custom/udev/probe.rules" in after,
+	      f"[install] udevdir was accepted and ignored: the rule is still "
+	      f"at {default!r} and the override moved nothing: {after}")
+
+
+@case
 def module_interfaces_are_ordered_and_a_cycle_is_refused(t):
 	"""C++20 modules had no case at all, and they are the one place this
 	build has a shape.
