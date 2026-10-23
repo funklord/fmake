@@ -16761,6 +16761,97 @@ int main(void){ printf("%d\\n", dep_value() + BONUS); return 0; }
 	t.write("fmake.toml", '[project]\ninclude-dirs = ["include"]\n')
 
 
+# hull, if it is here. Set by the copyright holder 2026-10-23: integrate
+# it where it is needed and do not make it mandatory. So it is a THIRD
+# tier under the interpreter this project declares, never a dependency --
+# fmake itself is one file needing nothing but the standard library, and
+# that is the claim its README opens with.
+#
+# Found on PATH, or named by FMAKE_HULL for a developer who has built it
+# without installing. Deliberately not a path to a sibling checkout: a
+# live sibling is whatever its session left it as, and baking one
+# machine's layout into the suite would be worse than skipping.
+HULL = os.environ.get("FMAKE_HULL") or shutil.which("hull")
+HULL_PY_IMAGE = "python:3.11-slim"
+
+# A sentinel rather than a path, so a caller cannot accidentally
+# name the host's copy in a command that runs inside a machine.
+FMAKE_UNDER_TEST = object()
+
+
+def _hull_image_present(ref):
+	"""Whether hull's store already holds a ref, asked without network.
+
+    `hull pull' would fetch it, and a suite that reaches the network is one
+    that fails on a train. So the tier is available only when somebody has
+    already pulled the image, and says how to when they have not.
+    """
+	if not HULL:
+		return False
+	r = subprocess.run([HULL, "images"], capture_output=True, text=True)
+	if r.returncode != 0:
+		return False
+	return any(line.split()[:1] == [ref] for line in r.stdout.splitlines())
+
+
+def _floor_python(floor, argv, want_version=True):
+	"""Run a command under the interpreter `debian/control' declares.
+
+    Three tiers, and the third is the whole reason hull is optional:
+
+      1. `pythonX.Y' installed here, run directly;
+      2. the same interpreter inside a hull machine, where hull and its
+         image are both already present;
+      3. neither -- returns None, and the caller says what went unchecked.
+
+    The machine is a chroot one: as the user, no root, no Docker, and
+    `(network none)' because nothing here needs it. The tree is mounted
+    read-only, so a case cannot write into the repository through it.
+
+    The version is CHECKED rather than assumed. An image tag is somebody
+    else's moving target, and a `python:3.11-slim' that had drifted would
+    otherwise report this project's floor as tested while running
+    something else -- a false pass on exactly the question the tier
+    exists to answer.
+    """
+	want = f"{floor[0]}.{floor[1]}"
+	# `FMAKE' stands in for the file, because the two tiers reach it by
+	# different paths -- its own here, and /mnt/fmake inside the machine.
+	local = shutil.which("python" + want)
+	if local:
+		argv = [FMAKE if a is FMAKE_UNDER_TEST else a for a in argv]
+		return subprocess.run([local] + list(argv),
+		                      capture_output=True, text=True)
+	if not _hull_image_present(HULL_PY_IMAGE):
+		return None
+	py = "/usr/local/bin/python3"
+	if want_version:
+		got = _hull_python(py, ["-c", "import sys; print(sys.version)"])
+		if got is None or not got.stdout.strip().startswith(want):
+			return None
+	rel = os.path.relpath(FMAKE, REPO)
+	return _hull_python(py, [f"/mnt/{rel}" if a is FMAKE_UNDER_TEST else a
+	                         for a in argv])
+
+
+def _hull_python(py, argv):
+	"""One `hull run' of `py' with the tree mounted read-only at /mnt."""
+	spec = ["(machine", f'  (source "{HULL_PY_IMAGE}")', "  (backend chroot)",
+	        "  (mutable overlay)", "  (network none)",
+	        f'  (volumes (volume (host "{REPO}") (guest "/mnt") (mode ro)))',
+	        "  (command " + " ".join(
+	            '"' + str(a).replace("\\", "\\\\").replace('"', '\\"') + '"'
+	            for a in [py] + [str(a) for a in argv]) + "))"]
+	with tempfile.TemporaryDirectory(prefix="fmake-hull-") as d:
+		with open(os.path.join(d, "hull.conf"), "w", encoding="utf-8") as fh:
+			fh.write("\n".join(spec) + "\n")
+		try:
+			return subprocess.run([HULL, "run"], cwd=d, capture_output=True,
+			                      text=True, timeout=600)
+		except (OSError, subprocess.TimeoutExpired):
+			return None
+
+
 def _run_in(cwd, *cmd, env=None):
 	"""Run a command in a tree, with the outer build system's flags removed.
 
@@ -32250,18 +32341,22 @@ def the_source_runs_on_the_python_it_declares(t):
 	# than the one that bit us. The first version of the check above passed
 	# on a file 3.11 could not parse, so the inference has already been
 	# wrong once.
-	old_python = shutil.which(f"python{floor[0]}.{floor[1]}")
-	if not old_python:
-		raise Skip(f"python{floor[0]}.{floor[1]} is not installed, so only "
-		           f"the token check ran")
-	r = subprocess.run([old_python, FMAKE, "--version"],
-	                   capture_output=True, text=True)
-	check(r.returncode == 0,
-	      f"python{floor[0]}.{floor[1]} cannot run fmake: {r.stderr}")
-	r = subprocess.run([old_python, FMAKE, "--help"],
-	                   capture_output=True, text=True)
-	check(r.returncode == 0,
-	      f"python{floor[0]}.{floor[1]} cannot run fmake --help: {r.stderr}")
+	# Three tiers -- the interpreter here, else the same one in a hull
+	# machine, else nothing and this says so. The second exists because
+	# Debian 13 ships 3.13 and has no 3.11 to install, so on this
+	# workspace's own machines the half below ran NOWHERE: there is no
+	# CI either, by the holder's standing decision, which makes a
+	# declared floor that nothing anywhere can check.
+	want = f"python{floor[0]}.{floor[1]}"
+	for args, what in ((["--version"], "--version"), (["--help"], "--help")):
+		r = _floor_python(floor, [FMAKE_UNDER_TEST] + args)
+		if r is None:
+			raise Skip(
+			    f"{want} is not installed and hull has no "
+			    f"{HULL_PY_IMAGE}, so only the token check ran; "
+			    f"`hull pull {HULL_PY_IMAGE}' enables the rest")
+		check(r.returncode == 0,
+		      f"{want} cannot run fmake {what}: {r.stdout}{r.stderr}")
 
 
 @case
@@ -32301,15 +32396,24 @@ def the_source_imports_only_the_standard_library(t):
 	floor = re.search(r"python3 \(>= (\d+)\.(\d+)\)",
 	                  open(os.path.join(REPO, "debian/control")).read())
 	if floor:
-		old = shutil.which(f"python{floor.group(1)}.{floor.group(2)}")
-		if old:
-			got = subprocess.run(
-			    [old, "-c", "import sys; print(' '.join("
-			           "sys.stdlib_module_names))"],
-			    capture_output=True, text=True)
-			if got.returncode == 0:
-				names = set(got.stdout.split())
-				where = f"python{floor.group(1)}.{floor.group(2)}"
+		# The declared interpreter's own answer, from wherever it can be
+		# had -- installed here, or a hull machine. Falling back to the
+		# running python is the documented soft edge: a module added to
+		# the standard library after the floor would pass here and fail
+		# there, so this tier is the difference between asking and
+		# inferring.
+		want = (int(floor.group(1)), int(floor.group(2)))
+		got = _floor_python(
+		    want, ["-c", "import sys; print(' '.join("
+		                 "sys.stdlib_module_names))"])
+		if got is not None and got.returncode == 0:
+			# `hull run' prefixes its own notices, so take the line that
+			# actually carries the names rather than the whole stream.
+			for line in got.stdout.splitlines():
+				if "sys" in line.split() and len(line.split()) > 10:
+					names = set(line.split())
+					where = f"python{want[0]}.{want[1]}"
+					break
 
 	outside = sorted(m for m in tops if m not in names)
 	check(not outside,

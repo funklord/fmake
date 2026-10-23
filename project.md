@@ -557,7 +557,8 @@ that had been green about nothing for five commits ·
 [504. The same lens in a planner, where it breaks the build](#504-the-same-lens-in-a-planner-where-it-breaks-the-build) ·
 [505. A comment that named the class and fixed one member](#505-a-comment-that-named-the-class-and-fixed-one-member) ·
 [506. Where a generator's input sits in git's authority, measured not guessed](#506-where-a-generators-input-sits-in-gits-authority-measured-not-guessed) ·
-[507. An untested refusal, closed as sound, and a fixture's name as data](#507-an-untested-refusal-closed-as-sound-and-a-fixtures-name-as-data)
+[507. An untested refusal, closed as sound, and a fixture's name as data](#507-an-untested-refusal-closed-as-sound-and-a-fixtures-name-as-data) ·
+[508. hull as a third tier under the declared interpreter](#508-hull-as-a-third-tier-under-the-declared-interpreter)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39939,3 +39940,139 @@ and the fixture is an input**. So the rule that covers all three:
 anything derived from a name you chose for readability is data in the
 measurement, and the question to ask of a fixture is not only what it
 contains but what it is *called*.
+
+## 508. hull as a third tier under the declared interpreter
+
+**Settled by the copyright holder 2026-10-23: integrate hull where it is
+needed, and do not make it mandatory.** §498 reported the evaluation and
+left this as the decision it was.
+
+The gap was real and narrow. `debian/control` declares
+`python3 (>= 3.11)`; this workspace's machines run Debian 13, which
+ships 3.13 and has no 3.11 to install; and there is no CI, by the
+holder's standing decision. So the half of
+`the_source_runs_on_the_python_it_declares` that runs the declared
+interpreter ran **nowhere** -- not here, not anywhere -- while the
+package went on promising it.
+
+### Three tiers, and the third is why hull is not a dependency
+
+    1. pythonX.Y installed here        -> run it
+    2. the same interpreter in hull    -> where hull and its image are
+                                          already present
+    3. neither                         -> Skip, saying what went
+                                          unchecked and how to enable it
+
+fmake itself is untouched: one file, standard library only, which is the
+claim its README opens with. Only the suite knows about hull, and only
+for this question.
+
+**Found on `PATH`, or named by `FMAKE_HULL`** for somebody who has built
+hull without installing it -- deliberately **not** a path to a sibling
+checkout. `harmonization.md` is explicit that a live sibling is whatever
+its session left it as, and baking one machine's layout into the suite
+would be worse than skipping.
+
+**Offline by construction.** The tier asks `hull images` rather than
+running `hull pull`, so a suite that would otherwise reach the network
+instead skips and names the one command that enables it. A check that
+needs the network is a check that fails on a train.
+
+The machine is hull's `chroot` engine: as the user, no root, no Docker,
+`(network none)`, and the tree mounted **read-only**, so a case cannot
+write into the repository through it.
+
+**The image's version is checked rather than assumed.** A tag is
+somebody else's moving target, and a `python:3.11-slim` that had drifted
+would report this project's floor as tested while running something
+else -- a false pass on precisely the question the tier exists to answer.
+
+`debian:12` was the obvious choice and is wrong: its base image ships no
+Python at all. `python:3.11-slim` carries 3.11.17.
+
+### The first proof was worthless, and that is the part to keep
+
+The obvious sabotage was a PEP 701 f-string spanning a line break. It
+failed the case, and proved nothing: **the token check catches exactly
+that and runs first**, so the failure never reached the new tier. A
+sabotage that does not isolate the arm under test measures whatever runs
+earliest.
+
+PEP 695 isolates it -- `type _DieArg = str`, new in 3.12 and a *grammar*
+change, so a tokeniser cannot see it:
+
+    3.13 parses it                     -> a local run passes
+    token check                        -> blind to it, case SKIPS
+    hull tier                          -> python3.11 cannot run fmake
+
+That is the whole class the case was written for: a package that
+installs, satisfies its dependency, configures, and then dies before
+reaching main.
+
+**And the stdlib half needed a discriminating control**, because "passed
+with hull" is consistent with silently falling back to the running
+interpreter. `cgi` is in 3.11's standard library and was removed in
+3.13, so the two tiers give **opposite** answers on one input:
+
+    import cgi, without hull   ->  FAIL   (3.13 has no cgi)
+    import cgi, with hull      ->  ok     (3.11 does)
+
+A pass on its own could not say which interpreter answered. A pair that
+disagrees can only have come from the one that disagrees.
+
+### What it costs, and what it does not
+
+One pull of about 120 MB into hull's store, once, and a few seconds per
+run to materialise the image. `make check` on a machine with no hull
+behaves exactly as it did: the same skip, now with a sentence saying how
+to lift it.
+
+### The interrupt case is load-flaky, and that is now a decision
+
+`an_interrupted_build_takes_its_compilers_with_it` has blocked three of
+six full runs in one session. Measured rather than grumbled about:
+
+    standalone, load ~52-55     5 of 5 pass
+    in a full run, load >90     0 of 3 pass
+    in a full run, load ~210    1 pass  (so it is not a threshold)
+
+Its own docstring records a fourth failure, historically, "on a machine
+carrying several suites". Each failure named a different pid and once
+the link rather than a compiler.
+
+**It is not a badly written case**, which is the first thing checked and
+the thing a reader will assume. It already does the right thing: a
+bounded poll on a 30-second deadline, not a fixed sleep, and a stand-in
+compiler whose 120-second life dwarfs the window so that a pass cannot
+come from the shim merely finishing. Its author wrote a paragraph about
+exactly that trade.
+
+**And it was mechanically unable to be any of this session's faults**,
+established three times rather than assumed: its fixture writes
+`cc-slow`, six `f*.c`/`f*.h` pairs and `main.c` -- no `.ui`, `.qrc`,
+`.situ`, no header any planner consults, and nothing that reaches a
+diagnostic that was changed.
+
+What I could not do is say *why* a recorded shim pid outlives a
+30-second deadline on a loaded machine. Reading the shim suggests
+candidates -- a `sh` whose foreground `sleep` is the thing holding it,
+signal delivery against the process group -- and none of them is a
+conclusion. **Reproducing it needs the load, which cannot be summoned on
+demand and should not be manufactured**, so this is recorded open rather
+than attributed.
+
+The three answers, and why none is mine to take:
+
+- **widen the window.** The shim lives 120s against a 30s window, so
+  widening thins a margin somebody chose deliberately, and the docstring
+  says in as many words that widening alone can pass for the wrong
+  reason.
+- **skip above some load.** Honest in that a timing assertion at load
+  200 measures nothing, and it turns a real assertion into a silent
+  non-measurement -- `evidence.md`'s weakest kind of gate.
+- **investigate the mechanism.** The only one that ends the question,
+  and the one that needs a reproduction nobody has on demand.
+
+It costs roughly half an hour per occurrence in re-runs, and a gate that
+fails for reasons unrelated to the change is how a red suite stops being
+read. That is the cost worth weighing against the three above.
