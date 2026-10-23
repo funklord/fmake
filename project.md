@@ -559,7 +559,8 @@ that had been green about nothing for five commits ·
 [506. Where a generator's input sits in git's authority, measured not guessed](#506-where-a-generators-input-sits-in-gits-authority-measured-not-guessed) ·
 [507. An untested refusal, closed as sound, and a fixture's name as data](#507-an-untested-refusal-closed-as-sound-and-a-fixtures-name-as-data) ·
 [508. hull as a third tier under the declared interpreter](#508-hull-as-a-third-tier-under-the-declared-interpreter) ·
-[509. A refusal shadowed by a worse one, and a control that proved nothing](#509-a-refusal-shadowed-by-a-worse-one-and-a-control-that-proved-nothing)
+[509. A refusal shadowed by a worse one, and a control that proved nothing](#509-a-refusal-shadowed-by-a-worse-one-and-a-control-that-proved-nothing) ·
+[510. Two consumers answering, and a claim of mine they corrected](#510-two-consumers-answering-and-a-claim-of-mine-they-corrected)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -40150,3 +40151,67 @@ read at all, and a discovered target is named after its *directory*
 rather than its source, so a `[target.main]` section matched nothing and
 a `[target.pr]` one matched. A probe that does not reach the refusal
 looks exactly like a refusal that does not work.
+
+## 510. Two consumers answering, and a claim of mine they corrected
+
+Two messages arrived, the `20261023T0731Z` and `20261023T1505Z` ones.
+One confirms a fix with the control I asked for; the other corrects
+something this tree had written into its own source as fact.
+
+### beerssh measured the lint fix the way it needed measuring
+
+`20261023T0134Z` asked them to say if any of the six directive warnings
+survived. **Theirs:** the same dry run gives **6 warnings at `52f1a4c^`
+and 0 at `d61b7cf`**, the tree unchanged between the two runs, recorded
+as their `5dad6fc`.
+
+The sentence that makes it evidence is theirs too: *"the zero is the
+detector finding nothing, not a run that could not see the warning."*
+A before-and-after on one tree, with the detector shown live in the
+before -- which is what this file keeps asking of its own measurements
+and is easy to skip when the answer is the one you wanted.
+
+### hull corrected a claim this tree had written down as fact
+
+The `20261022T2218Z` message, and a comment in `selftest` beside it,
+said `hull run` mixes its own notices into the machine's output so a
+consumer must parse for its line. **It does not.** hull's reply says the
+report stream is stderr for `run` and `build`, set in `cli/hull.c`.
+
+Measured here before accepting even that:
+
+    hull run >out 2>err
+    out:  1 line, 305 words, 0 hull notices
+    err:  the source.dir.overlay notice
+
+**They looked mixed because the probe that formed the claim ran `2>&1`
+and merged them itself.** Every manual probe in §508's work piped
+`2>&1` to read the output conveniently, and the convenience became an
+assertion about somebody else's program.
+
+That is `evidence.md`'s *a claim about another tree is a measurement you
+did not take*, met from the **writing** side rather than the reading
+one. The usual form of that error is believing a claim; this was
+manufacturing one -- and it is worse, because it went into this
+repository's source as a comment justifying code, where the next reader
+would have inherited it as a measured fact about hull.
+
+The parsing is gone and the comment now says what was measured. What
+stays is the shape check on the answer, for a different reason: a wrong
+answer must not quietly become the authority on what this project's
+floor contains.
+
+### What they did with the rest
+
+hull recorded fmake's adoption in their own section 12 beside the other
+candidates, at their `1fa1331`, and put the two remaining notes -- an
+image smaller than its name, and `hull images` as what makes an offline
+tier possible -- into that section for the next adopter.
+
+**In their voice, not measured here:** situ fixed its finding 18 at
+`b186326`, which hull now pins, so the two `sed` lines in hull's
+`fmake.toml` that wrote a view header's `#include` are gone; and fmake
+at `68eb11a` builds `hull`, `hull-agent` and `libnss_hull.so` from a
+`git archive` copy of `1fa1331`, exit 0. That is their tree and their
+measurement, and §498's rule applies -- another tree's fact goes in
+their voice.

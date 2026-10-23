@@ -32480,13 +32480,20 @@ def the_source_imports_only_the_standard_library(t):
 		    want, ["-c", "import sys; print(' '.join("
 		                 "sys.stdlib_module_names))"])
 		if got is not None and got.returncode == 0:
-			# `hull run' prefixes its own notices, so take the line that
-			# actually carries the names rather than the whole stream.
-			for line in got.stdout.splitlines():
-				if "sys" in line.split() and len(line.split()) > 10:
-					names = set(line.split())
-					where = f"python{want[0]}.{want[1]}"
-					break
+			# stdout carries the machine's output and nothing else --
+			# `hull run' puts its own notices on stderr, measured after
+			# hull corrected this very comment, which had claimed they
+			# were mixed. They looked mixed because the probe that formed
+			# the claim ran `2>&1' and merged them itself. A claim about
+			# another tree's behaviour is a measurement you did not take.
+			#
+			# The shape is still checked, which is not defensiveness about
+			# hull: a wrong answer must not quietly become the authority
+			# on what this project's floor contains.
+			got_names = set(got.stdout.split())
+			if "sys" in got_names and len(got_names) > 10:
+				names = got_names
+				where = f"python{want[0]}.{want[1]}"
 
 	outside = sorted(m for m in tops if m not in names)
 	check(not outside,
