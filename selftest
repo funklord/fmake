@@ -28049,6 +28049,79 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 
 
 @case
+def a_directive_with_its_own_refusal_gets_to_give_it(t):
+	"""A refusal that could never fire, found by instrumenting `die'.
+
+	Two directives carry their own multi-word refusal, `@test' and
+	`@install', and a generic loop refuses any scalar directive given more
+	than one word. The loop runs FIRST -- `_ann_install' is called a few
+	lines below it -- so `test' was excluded from the loop to let its own
+	message through and `install' was not, leaving `@install''s message
+	unreachable.
+
+	It is also the better message, which is what makes this more than
+	tidiness. The generic one says "put each directive on its own line",
+	true for `@kind static @target chosen' and **wrong** for `@install yes
+	no', where the fault is a bad value rather than two directives sharing
+	a line -- so the reader was told to fix something that was not the
+	problem.
+
+	Three arms, two of them controls: `@install' gets its own words,
+	`@test' still gets its own, and a genuine two-directives-on-one-line
+	still gets the generic advice. Without the controls, deleting the
+	generic loop would pass the first arm.
+
+	Asserted on distinctive phrases rather than single words -- section
+	507, because the suite names each tree after its case and a loose
+	match reads the fixture's own name."""
+	def refusal(body):
+		"""The output AND the status, because the status is what tells the
+		two mechanisms apart.
+
+		The same sentence -- "Put each directive on its own line" --
+		appears in a REFUSAL, for a file that roots a target, and in a
+		WARNING for one that does not, which says so in as many words.
+		An arm matching only the sentence passes whichever answered, and
+		this one did: deleting the generic refusal left the warning
+		carrying the phrase, rc=0, and the arm green. Section 507 said to
+		match a distinctive phrase; the sharper rule is that the phrase
+		has to be unique to the message under test, and where it is not,
+		the exit status is what separates them.
+		"""
+		u = Tree("directive_refusal")
+		try:
+			u.write("main.c", body)
+			r = u.fmake()
+			return r.returncode, r.stdout + r.stderr
+		finally:
+			u.cleanup()
+
+	rc, out = refusal("/*! @file\n *  @install yes no\n */\n"
+	                  "int main(void){ return 0; }\n")
+	check(rc != 0, f"@install yes no was not refused at all: {out}")
+	check("`no`, or `yes` to say so outright" in out,
+	      f"@install did not get its own refusal, so the generic one "
+	      f"answered and told the reader to split a line that holds one "
+	      f"directive: {out}")
+
+	rc, out = refusal("/*! @file\n *  @test a b\n */\n"
+	                  "int main(void){ return 0; }\n")
+	check(rc != 0, f"@test a b was not refused at all: {out}")
+	check("a group name, or `no`" in out,
+	      f"@test lost its own refusal: {out}")
+
+	rc, out = refusal("/*! @file\n *  @kind static @target chosen\n */\n"
+	                  "int fn(void){ return 0; }\n")
+	check(rc != 0,
+	      f"two directives on one line were only WARNED about, so the\n"
+	      f"      refusal is gone and the warning's copy of the same\n"
+	      f"      sentence answered instead: {out}")
+	check("Put each directive on its own line" in out,
+	      f"two directives on one line no longer get the generic advice, "
+	      f"which is the case that advice is right for: {out}")
+
+
+@case
 def an_ejected_packaging_will_not_overwrite_a_makefile_that_differs(t):
 	"""A sound refusal the suite had never fired -- section 496's list is
 	untested behaviour, not a list of bugs, and this is one of the ones

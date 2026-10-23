@@ -11200,7 +11200,16 @@ class Target:
 		# swallowed the target, silently, producing an archive named after
 		# the file. Two directives on one line is a reasonable thing to
 		# try; being wrong about it should not be quiet.
-		for name in sorted(DIRECTIVE_SCALAR - {"test"}):
+		# `install' joins `test' for the reason `test' is already here:
+		# both carry their own multi-word refusal, and the generic one
+		# runs FIRST -- `_ann_install' is called a few lines below -- so
+		# the specific message was unreachable. It is also the better
+		# one: this loop says "put each directive on its own line",
+		# which is right for `@kind static @target chosen' and wrong
+		# for `@install yes no', where the fault is a value rather than
+		# two directives. Found by instrumenting `die' -- section 501's
+		# lens -- as a refusal the suite could never fire.
+		for name in sorted(DIRECTIVE_SCALAR - {"test", "install"}):
 			entries = ann.raw.get(name) or []
 			for line, words in entries:
 				if len(words) > 1:

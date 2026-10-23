@@ -558,7 +558,8 @@ that had been green about nothing for five commits ·
 [505. A comment that named the class and fixed one member](#505-a-comment-that-named-the-class-and-fixed-one-member) ·
 [506. Where a generator's input sits in git's authority, measured not guessed](#506-where-a-generators-input-sits-in-gits-authority-measured-not-guessed) ·
 [507. An untested refusal, closed as sound, and a fixture's name as data](#507-an-untested-refusal-closed-as-sound-and-a-fixtures-name-as-data) ·
-[508. hull as a third tier under the declared interpreter](#508-hull-as-a-third-tier-under-the-declared-interpreter)
+[508. hull as a third tier under the declared interpreter](#508-hull-as-a-third-tier-under-the-declared-interpreter) ·
+[509. A refusal shadowed by a worse one, and a control that proved nothing](#509-a-refusal-shadowed-by-a-worse-one-and-a-control-that-proved-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -40076,3 +40077,76 @@ The three answers, and why none is mine to take:
 It costs roughly half an hour per occurrence in re-runs, and a gate that
 fails for reasons unrelated to the change is how a red suite stops being
 read. That is the cost worth weighing against the three above.
+
+## 509. A refusal shadowed by a worse one, and a control that proved nothing
+
+§501's lens re-run at this head, the list re-derived because this
+session's own fixes shifted every line below ~12100:
+
+    real call sites      232
+    fired in one run     174   from 381 refusals
+    never fired           58
+
+One fewer than §501's 59, and the one that left is the
+Makefile-overwrite guard -- §507 gave it a case, so the list is doing
+what it is for.
+
+### The find: `@install` could never give its own refusal
+
+Two directives carry a multi-word refusal of their own, `@test` and
+`@install`, and a generic loop refuses any scalar directive handed more
+than one word. **The loop runs first** -- `_ann_install` is called a few
+lines below it -- so `test` was excluded from the loop to let its own
+message through, and `install` was not.
+
+It is also the better message, which is what lifts this above tidiness:
+
+    reached:      @install yes no takes one word. Put each directive
+                  on its own line.
+    unreachable:  @install yes no takes one word: `no`, or `yes` to say
+                  so outright
+
+The generic advice is right for `@kind static @target chosen` and
+**wrong here** -- `@install yes no` is one directive with a bad value,
+not two sharing a line, so the reader was told to fix something that was
+not the problem. `install` joins `test` in the exclusion, which is the
+precedent that already existed and had been missed once.
+
+### The control that proved nothing, and how it surfaced
+
+The case has two control arms so that deleting the generic loop cannot
+pass it. Sabotaging the loop **passed anyway**, and the reason is worth
+more than the fix:
+
+**The same sentence appears in two messages of different severity.**
+"Put each directive on its own line" is in the refusal, for a file that
+roots a target, and in a *warning* for a file that does not -- which
+says so itself: *"A file that roots a target is refused outright for
+this."* With the refusal gone the warning answered, carried the phrase,
+exited 0, and the arm stayed green.
+
+§507's rule was to match a distinctive phrase rather than a word.
+**The sharper one: the phrase has to be unique to the message under
+test, and where it is not, the exit status is what separates them.**
+Every arm checks the status now.
+
+**And the sabotage that caught it was not testing the fix.** It was
+testing a control -- an arm written only so the fix could not pass for
+the wrong reason. The habit that found this is sabotaging *every* arm
+rather than the one belonging to the change, because a control is
+exactly the arm nobody re-reads.
+
+### Four probed sound, and three fixture errors that looked like findings
+
+Sound, with the instrument naming the line each time: `--run` with no
+argument and with a missing file, `@completion` naming a file that is not
+there, and `[generate.*] uses` pointing at a tool being built from its
+own output -- that last reachable only while bootstrapping, which is a
+deliberate guard against infinite regress rather than an untested path.
+
+Three of the first five probes failed because **my fixtures were wrong,
+and each read like a finding**: an annotation needs a `@file` block to be
+read at all, and a discovered target is named after its *directory*
+rather than its source, so a `[target.main]` section matched nothing and
+a `[target.pr]` one matched. A probe that does not reach the refusal
+looks exactly like a refusal that does not work.
