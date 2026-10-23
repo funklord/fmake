@@ -560,7 +560,8 @@ that had been green about nothing for five commits ·
 [507. An untested refusal, closed as sound, and a fixture's name as data](#507-an-untested-refusal-closed-as-sound-and-a-fixtures-name-as-data) ·
 [508. hull as a third tier under the declared interpreter](#508-hull-as-a-third-tier-under-the-declared-interpreter) ·
 [509. A refusal shadowed by a worse one, and a control that proved nothing](#509-a-refusal-shadowed-by-a-worse-one-and-a-control-that-proved-nothing) ·
-[510. Two consumers answering, and a claim of mine they corrected](#510-two-consumers-answering-and-a-claim-of-mine-they-corrected)
+[510. Two consumers answering, and a claim of mine they corrected](#510-two-consumers-answering-and-a-claim-of-mine-they-corrected) ·
+[511. The only ordering in the build had no test at all](#511-the-only-ordering-in-the-build-had-no-test-at-all)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -40290,3 +40291,49 @@ at `68eb11a` builds `hull`, `hull-agent` and `libnss_hull.so` from a
 `git archive` copy of `1fa1331`, exit 0. That is their tree and their
 measurement, and §498's rule applies -- another tree's fact goes in
 their voice.
+
+## 511. The only ordering in the build had no test at all
+
+The last unprobed entry worth reaching was the import-cycle refusal, and
+probing it found something larger: **no case in the suite wrote a
+`.cppm` at all.** C++20 module support -- `_module_levels`, the BMI
+handling, the `-x c++` the driver needs because it knows neither `.cppm`
+nor `.ixx`, the `gcm.cache` working-directory care -- was entirely
+untested, and the suite would have passed with the whole mechanism
+broken.
+
+**It is also the one place this build has a shape.** Everything else is
+order-free by construction: §3 decides membership from symbols and
+compiles in whatever order the pool hands back. An importer has to be
+compiled *after* the interface it imports, because the BMI does not
+exist until then, so `_module_levels` is the only ordering logic in the
+tool.
+
+The refusal itself is sound -- `a` importing `b` importing `a` is
+refused, naming both, and breaking the cycle builds.
+
+### Running the program is the assertion, not compiling it
+
+The legal-chain arm builds a chain and then **runs** it, and the reason
+is the difference between a right order and a lucky one. A wrong order
+fails at compile time today. An order that merely *happens* to be right
+-- one the pool handed back in a workable sequence by accident -- passes
+a compile-only assertion and breaks the day the pool changes. The
+program returns `fa() - 3` where `fa()` is `fb() + 1` and `fb()` is 2,
+so a zero exit says the interfaces were genuinely usable rather than
+merely present.
+
+**Three sabotages, and the third is the one that proves the arm.**
+Making the cycle check never fire fails the cycle arm; making it always
+fire fails the chain arm; and **reversing the computed order** fails the
+chain arm too. Without that third one, the case would have been a test
+of cycle detection wearing an ordering test's clothes -- which is what
+the first draft of the docstring claimed it was, before the sabotage
+decided it.
+
+That is the same trap as §509's vacuous control, from the other
+direction. There, an arm passed because a phrase appeared in two
+messages. Here, an arm would have passed because the thing it named --
+the order -- was never varied. **A sabotage set has to perturb the
+quantity the docstring says is under test**, not merely some code the
+case runs through.

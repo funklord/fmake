@@ -28049,6 +28049,82 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 
 
 @case
+def module_interfaces_are_ordered_and_a_cycle_is_refused(t):
+	"""C++20 modules had no case at all, and they are the one place this
+	build has a shape.
+
+	Everything else in fmake is order-free by construction -- section 3
+	decides membership from symbols and compiles in whatever order the
+	pool hands back. An importer, though, has to be compiled after the
+	interface it imports, because the BMI does not exist until then. So
+	`_module_levels' is the only ordering logic in the tool, and nothing
+	exercised it: no case wrote a `.cppm', and the suite would have passed
+	with the whole mechanism broken.
+
+	Two arms, and the first is the one that catches a regression.
+
+	A legal chain is built AND RUN. Compiling is not enough: an order that
+	is wrong fails at compile time today, but an order that is merely
+	*lucky* -- one the pool happened to hand back correctly -- passes a
+	compile-only assertion and would break the day the pool changed.
+	Running the program is what shows the interfaces were usable.
+
+	A cycle is refused, naming both modules, because there is no order
+	that would build it. The control matters as much: if the cycle check
+	regressed to refusing every module tree, the first arm catches it,
+	and if it regressed to accepting everything, the second does."""
+	probe = os.path.join(t.dir, "probe.cppm")
+	with open(probe, "w", encoding="utf-8") as fh:
+		fh.write("export module probe;\nexport int p(){ return 1; }\n")
+	ok = subprocess.run(["c++", "-x", "c++", "-std=c++20", "-fmodules-ts",
+	                     "-c", probe, "-o", probe + ".o"],
+	                    capture_output=True, text=True)
+	for leftover in (probe, probe + ".o", os.path.join(t.dir, "gcm.cache")):
+		if os.path.isdir(leftover):
+			shutil.rmtree(leftover, ignore_errors=True)
+		elif os.path.exists(leftover):
+			os.remove(leftover)
+	if ok.returncode != 0:
+		raise Skip("this c++ does not compile a module interface")
+
+	# A legal chain: a imports b, b imports nothing.
+	t.write("b.cppm", "export module b;\nexport int fb(){ return 2; }\n")
+	t.write("a.cppm", "export module a;\nimport b;\n"
+	        "export int fa(){ return fb() + 1; }\n")
+	t.write("main.cpp", "import a;\nint main(void){ return fa() - 3; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"a legal module chain did not build: {out}")
+	prog = os.path.basename(t.dir)
+	check(os.path.isfile(os.path.join(t.dir, prog)),
+	      f"no program was produced: {os.listdir(t.dir)}")
+	ran = t.run(prog)
+	check(ran.returncode == 0,
+	      f"the program built from a module chain exited "
+	      f"{ran.returncode}, so fa() did not return 3 and the "
+	      f"interfaces were compiled in an order that does not work")
+
+	# And the cycle, which no order can satisfy.
+	u = Tree("module_cycle")
+	try:
+		u.write("b.cppm", "export module b;\nimport a;\n"
+		        "export int fb(){ return 2; }\n")
+		u.write("a.cppm", "export module a;\nimport b;\n"
+		        "export int fa(){ return 1; }\n")
+		u.write("main.cpp", "import a;\nint main(void){ return fa() - 1; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"an import cycle was not refused: {out}")
+		check("import cycle between module interfaces" in out,
+		      f"it refused for some other reason: {out}")
+		check("a" in out and "b" in out,
+		      f"the refusal does not name the modules in the cycle: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_directive_with_its_own_refusal_gets_to_give_it(t):
 	"""A refusal that could never fire, found by instrumenting `die'.
 
