@@ -556,7 +556,8 @@ that had been green about nothing for five commits ·
 [503. The wide-set lens, swept to the end, and the warning that lied](#503-the-wide-set-lens-swept-to-the-end-and-the-warning-that-lied) ·
 [504. The same lens in a planner, where it breaks the build](#504-the-same-lens-in-a-planner-where-it-breaks-the-build) ·
 [505. A comment that named the class and fixed one member](#505-a-comment-that-named-the-class-and-fixed-one-member) ·
-[506. Where a generator's input sits in git's authority, measured not guessed](#506-where-a-generators-input-sits-in-gits-authority-measured-not-guessed)
+[506. Where a generator's input sits in git's authority, measured not guessed](#506-where-a-generators-input-sits-in-gits-authority-measured-not-guessed) ·
+[507. An untested refusal, closed as sound, and a fixture's name as data](#507-an-untested-refusal-closed-as-sound-and-a-fixtures-name-as-data)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -39871,3 +39872,70 @@ What the rule says now, completely:
 An archive sits with sources rather than with headers because nothing
 generates one as a build step here, and fuzzypickles named the harm of
 reading the ones `make` leaves behind.
+
+## 507. An untested refusal, closed as sound, and a fixture's name as data
+
+§496's list is **untested behaviour, not a list of bugs**, and §501 left
+one entry explicitly unprobed because the fixture to reach it wanted
+several pieces of packaging metadata. Reached now, and it is sound:
+`refuse_to_overwrite` declines to replace a `Makefile` whose contents
+differ from what would be written.
+
+Both halves are asserted, because the docstring makes a promise that is
+the reason the guard is usable rather than merely safe: `debian/` and
+`gentoo/` are never overwritten, while an existing `Makefile` is refused
+**only** when it differs, so a tree wanting both packagings need not
+remove it between the two ejects. Refusing every existing Makefile would
+pass the refusal arm and break the case the guard exists for, which is
+why the sabotage runs both ways -- removing the guard, and making it
+refuse always.
+
+### The ordering trap, which cost four probes
+
+**The packaging guard fires before the Makefile one.** So a probe run
+with `debian/` still present refuses for *that* reason and says nothing
+about the Makefile -- and reads exactly like the Makefile guard being
+absent. Every arm clears the packaging directory first; a reading that
+does not is measuring the other guard.
+
+Three vacuous passes came out of that before the arms were right, and
+each looked like a result:
+
+- `--eject ebuild` reported the Makefile unchanged, because it had
+  aborted earlier on a missing `[gentoo] category` and never reached the
+  file.
+- A count of Makefile refusals came back `0` with the guard working,
+  because `gentoo/` existed by then and the first guard answered.
+- The same count came back `0` a second time for the same reason in the
+  other packaging.
+
+None of them was wrong about what it measured. All three were measuring
+something else, which is `evidence.md`'s vacuous pass in a form that
+arrives three times in one afternoon.
+
+### A fixture's name is data, and this is the third instance
+
+The case would not run at all until the fixture got a `[project] name`:
+the suite names each tree after its case, the name carries underscores,
+and **Debian will not accept an underscore in a source package name**.
+That refusal was right and firing correctly -- it was my fixture that
+was wrong.
+
+Three times in one session, a name derived from something I chose for
+readability became part of what was being measured:
+
+- §504: a probe counted lines matching `uic` in a directory called
+  `uicp`, so a suppressed run read as two invocations.
+- §505: a case asserted `"ambiguous" not in out` while the artifact was
+  called `...neither_ambiguous_nor_generated`.
+- here: a case name with underscores produced a tree name Debian
+  refuses.
+
+§504 drew the lesson as "name scratch trees after nothing in
+particular", and §505 corrected it to "assert on a distinctive phrase".
+Neither reaches this one, because the fault is not in the assertion or
+the directory -- it is that **the case name propagates into the fixture,
+and the fixture is an input**. So the rule that covers all three:
+anything derived from a name you chose for readability is data in the
+measurement, and the question to ask of a fixture is not only what it
+contains but what it is *called*.

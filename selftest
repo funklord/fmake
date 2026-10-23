@@ -27958,6 +27958,86 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 
 
 @case
+def an_ejected_packaging_will_not_overwrite_a_makefile_that_differs(t):
+	"""A sound refusal the suite had never fired -- section 496's list is
+	untested behaviour, not a list of bugs, and this is one of the ones
+	that turned out to be right.
+
+	`refuse_to_overwrite' has two guards and its docstring makes a promise
+	about the second: `debian/' and `gentoo/' are never overwritten, while
+	an existing `Makefile' is refused *only* when its contents differ from
+	what would be written, so a tree wanting both packagings need not
+	remove it between the two ejects.
+
+	Both halves asserted, because the promise is what makes the guard
+	usable rather than merely safe: refusing every existing Makefile would
+	pass the first arm and break the case the docstring exists for.
+
+	**The order matters and it cost four probes to see.** The packaging
+	guard fires before the Makefile one, so a run with `debian/' still
+	present refuses for that reason and says nothing about the Makefile --
+	which reads exactly like the Makefile guard being absent. Every arm
+	here therefore clears the packaging directory first, and a reading
+	that does not is measuring the other guard."""
+	gpl = "/usr/share/common-licenses/GPL-3"
+	if not os.path.isfile(gpl):
+		raise Skip("no GPL-3 text to use as a fixture licence")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("VERSION", "1.0\n")
+	shutil.copyfile(gpl, os.path.join(t.dir, "LICENSE"))
+	# `[project] name' because the suite names each tree after its
+	# case and Debian will not take an underscore in a source
+	# package name -- the third time in this session a derived
+	# fixture name has interfered with what it was measuring.
+	t.write("fmake.toml",
+	        '[project]\nname = "probe"\n\n'
+	        '[package]\n'
+	        'maintainer = "A Probe <probe@example.invalid>"\n'
+	        'description = """a probe\n\n'
+	        "A longer description, which Debian wants as an extended\n"
+	        'paragraph rather than one line."""\n'
+	        '\n[gentoo]\ncategory = "app-misc"\n'
+	        'src-uri = "https://example.invalid/probe-${PV}.tar.gz"\n')
+
+	mk = os.path.join(t.dir, "Makefile")
+	deb = os.path.join(t.dir, "debian")
+
+	r = t.fmake("--eject", "deb")
+	check(r.returncode == 0, f"--eject deb failed: {r.stdout}{r.stderr}")
+	check(os.path.isdir(deb) and os.path.isfile(mk),
+	      f"--eject deb wrote no packaging: {os.listdir(t.dir)}")
+
+	# The guard that had never fired. debian/ out of the way first, or the
+	# packaging guard answers instead and this proves nothing.
+	shutil.move(deb, deb + ".aside")
+	with open(mk, "a", encoding="utf-8") as fh:
+		fh.write("# somebody's own line\n")
+	r = t.fmake("--eject", "deb")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a changed Makefile was overwritten: {out}")
+	check("is not the one this would write" in out,
+	      f"it refused for some other reason: {out}")
+
+	# The promise: an identical Makefile is left alone, so the second
+	# packaging can be ejected beside the first.
+	os.remove(mk)
+	shutil.rmtree(deb + ".aside")
+	r = t.fmake("--eject", "deb")
+	check(r.returncode == 0, f"--eject deb failed on retry: {r.stderr}")
+	before = open(mk, encoding="utf-8").read()
+	shutil.move(deb, deb + ".kept")
+	r = t.fmake("--eject", "ebuild")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"an identical Makefile was refused, so a tree cannot have both "
+	      f"packagings without removing it between ejects: {out}")
+	check(os.path.isdir(os.path.join(t.dir, "gentoo")),
+	      f"--eject ebuild wrote no gentoo/: {os.listdir(t.dir)}")
+	check(open(mk, encoding="utf-8").read() == before,
+	      "the second eject rewrote the Makefile it was meant to leave")
+
+
+@case
 def a_qrc_outside_this_build_is_not_a_resource_to_rename(t):
 	"""The third planner, and the one `uic_plan' predicted in a comment.
 
