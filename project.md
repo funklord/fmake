@@ -40562,3 +40562,50 @@ cannot be sabotaged one line at a time, and that is robustness in the
 code rather than weakness in the test.** The thing to avoid is
 concluding from a passing sabotage that the case is vacuous -- the
 question is whether anything *else* still enforces the property.
+
+### The last four, and exactly what blocks them
+
+The four remaining are `unitdir`, `sysvinitdir`, `openrcdir` and
+`procddir`. They are placed only for the init the machine runs, so
+reaching them means being on that init -- and **fmake has no seam for
+choosing it**: `detect_init()` takes no argument and is read from no
+flag or environment variable, measured at both its call sites.
+
+But it reads **only filesystem paths** -- `/sbin/procd`, `/run/openrc`,
+`/run/systemd/system` -- which means a machine can supply any of them,
+and all four become reachable from one host:
+
+    no marker at all          -> sysvinit   (the documented fallback)
+    /run/systemd/system       -> systemd
+    /run/openrc               -> openrc     (this host's own answer)
+    /sbin/procd executable    -> procd
+
+A hull chroot machine with the tree mounted and `mkdir -p` in its
+command is enough to set each, and `--install --dry-run` is enough to
+read the placement back, so no compiler is needed for the assertion
+itself.
+
+**What blocks it is the image, and the measurement is exact.** Run
+inside `python:3.11-slim`, fmake stops at
+
+    !!! no nm found. fmake reads object symbol tables to work out the
+        link set; install binutils or llvm, or set $NM.
+
+which is correct, is one of §496's own unfired entries seen firing for
+real, and names the remedy. So the route needs an image carrying a
+Python **and** binutils -- `hull build` adding binutils to the slim
+image, or an image that already has both. That is a pull or a build
+step, and it is the whole of what stands between here and those four.
+
+Recorded rather than attempted, because starting it with three points of
+weekly budget left would land it half-made. The next session has the
+design, the blocker and the remedy, which is what
+`working-practice.md` asks of a fold.
+
+**And the probe hid its own error twice.** The first run piped hull's
+stderr to `/dev/null` and the second grepped the output for two words,
+so a clean-looking empty result was a refusal both times. Fourth
+instance this session, after §498, §507 and §512's service probe. The
+rule has earned being stated without the incident attached: **a probe
+redirects nothing and filters nothing until it has been seen to say
+something.**
