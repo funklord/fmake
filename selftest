@@ -28049,6 +28049,58 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 
 
 @case
+def a_test_group_is_run_by_its_own_name(t):
+	"""The last of section 512's fourteen that needed no platform.
+
+	A target's `test-group' names the word that runs it: the default
+	group is `test', and fmake's own message for a held-back program says
+	"`fmake <group>` builds and runs it". Nothing set the key, so neither
+	half was exercised -- a group that ran everything, or one that ran
+	nothing, would both have passed the suite.
+
+	The arms are a discriminating pair rather than two assertions. Each
+	command must run its own program AND NOT the other's, because a
+	filter that ignored the group entirely would satisfy "the fast test
+	ran" and "the slow test ran" separately while being broken. The
+	programs print distinct words so the output says which one ran, and
+	the exit status alone could not.
+
+	This is the third feature in a row written off as needing a faked
+	platform and then closed without one -- the estimate came from what
+	the key is about rather than from where it is read."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("test_fast.c",
+	        '#include <stdio.h>\nint main(void){ puts("FAST-RAN"); '
+	        "return 0; }\n")
+	t.write("test_slow.c",
+	        '#include <stdio.h>\nint main(void){ puts("SLOW-RAN"); '
+	        "return 0; }\n")
+	t.write("fmake.toml", '[target.test_slow]\ntest-group = "slow"\n')
+
+	def ran(word, *args):
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake(*args)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"fmake {args} failed: {out}")
+		return out
+
+	out = ran("default", "test")
+	check("FAST-RAN" in out,
+	      f"`fmake test' did not run the default group's test: {out}")
+	check("SLOW-RAN" not in out,
+	      f"`fmake test' ran the `slow' group too, so the group is not "
+	      f"filtering anything: {out}")
+
+	out = ran("slow", "slow")
+	check("SLOW-RAN" in out,
+	      f"`fmake slow' did not run the group named by test-group, so "
+	      f"the key was accepted and the word it names does nothing: "
+	      f"{out}")
+	check("FAST-RAN" not in out,
+	      f"`fmake slow' ran the default group as well: {out}")
+
+
+@case
 def the_packaging_keys_reach_the_file_they_are_for(t):
 	"""Nine config keys no case had ever set.
 

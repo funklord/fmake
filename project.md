@@ -40522,3 +40522,43 @@ stderr in a probe turned a refusal into a silent nothing, after §498's
 sweep driver and §507's packaging probes. The pattern is stable enough
 to name: a probe that discards stderr is a probe that cannot see the
 tool working correctly.
+
+### `test-group` closed, and a behaviour no single sabotage can reach
+
+The gap is **14 to 4**, and the four left are the init-specific
+directories -- the only ones that genuinely need the platform.
+`test-group` did not: fmake's own message for a held-back program says
+*"`fmake <group>` builds and runs it"*, so the word is the mechanism and
+a local tree is enough. **Third estimate in a row corrected the same
+way**, and the cause each time was reading what a key is about rather
+than where it is read.
+
+The case is a discriminating pair: `fmake test` must run the default
+group's program **and not** the other's, and `fmake slow` the reverse.
+The two programs print distinct words, because an exit status cannot say
+which one ran.
+
+**Three sabotages missed before one landed, and the reason is a property
+of the code.** The group is enforced at two independent points -- once
+choosing what to BUILD, once choosing what to RUN -- so for this fixture
+each is redundant:
+
+    build-selection broken alone  ->  case passes: the run filter still
+                                      restricts to the group
+    run-selection broken alone    ->  case passes: the unselected test
+                                      was never built, so running
+                                      everything built runs only one
+    both broken together          ->  case FAILS
+
+(A fourth sabotage, of `picked` at the explicitly-named path, changed
+nothing because the fixture names no target -- that one was simply the
+wrong line.)
+
+So the case is sabotage-proved **against the pair and not against either
+line**, and saying so is the honest form. §509 said a control must be
+able to fail; §511 that a sabotage must perturb the quantity under test.
+This adds the case neither covers: **a redundantly enforced behaviour
+cannot be sabotaged one line at a time, and that is robustness in the
+code rather than weakness in the test.** The thing to avoid is
+concluding from a passing sabotage that the case is vacuous -- the
+question is whether anything *else* still enforces the property.
