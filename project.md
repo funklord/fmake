@@ -562,7 +562,8 @@ that had been green about nothing for five commits ·
 [509. A refusal shadowed by a worse one, and a control that proved nothing](#509-a-refusal-shadowed-by-a-worse-one-and-a-control-that-proved-nothing) ·
 [510. Two consumers answering, and a claim of mine they corrected](#510-two-consumers-answering-and-a-claim-of-mine-they-corrected) ·
 [511. The only ordering in the build had no test at all](#511-the-only-ordering-in-the-build-had-no-test-at-all) ·
-[512. Which features the suite never touches, asked of --features](#512-which-features-the-suite-never-touches-asked-of---features)
+[512. Which features the suite never touches, asked of --features](#512-which-features-the-suite-never-touches-asked-of---features) ·
+[513. The init glue, and a case that asks the host instead of faking one](#513-the-init-glue-and-a-case-that-asks-the-host-instead-of-faking-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -40609,3 +40610,68 @@ instance this session, after §498, §507 and §512's service probe. The
 rule has earned being stated without the incident attached: **a probe
 redirects nothing and filters nothing until it has been seen to say
 something.**
+
+## 513. The init glue, and a case that asks the host instead of faking one
+
+§512 left four keys needing a platform and this closes one of them on
+any machine, which was not the plan it set out with.
+
+**The budget reading was wrong first.** Development stops at 96 per cent
+of the weekly window; 90 only requires a `project.md` commit inside 45
+minutes, which this way of working does every cycle. Three points of
+headroom was read as none, and the holder said to continue.
+
+### The hull route works, and is recorded for the three it still serves
+
+`detect_init()` reads only filesystem paths, so a machine can supply any
+of them. Built with `hull build` from `python:3.11-slim`:
+
+    (step (name "toolchain") (network true)
+          (run "apt-get -o APT::Sandbox::User=root update && apt-get
+                -o APT::Sandbox::User=root install -y
+                --no-install-recommends binutils gcc libc6-dev"))
+
+The sandbox option is hull's own documented workaround for apt in a
+chroot. Two refusals shaped the image, each naming its remedy: **no nm
+found** first, then **C compiler 'cc' not found** -- a dry run reports
+the commands it would run, so the compiler has to exist even though
+nothing is compiled.
+
+Measured in machines from that image, three inits from one host:
+
+    mkdir /run/systemd/system   -> runs systemd, places probe.service
+    no marker                   -> runs sysvinit, places the script
+    executable /sbin/procd      -> runs procd
+    unitdir override            -> /out/custom/units/probe.service
+    sysvinitdir override        -> /out/custom/initd/probe
+
+### But the case that landed needs no hull at all
+
+This host runs OpenRC, so `openrcdir` was reachable natively -- and
+generalising that is better than gating on an image. The case asks the
+host the same question `detect_init()` does, **by the same four tests in
+the same order**, and asserts whichever answer it gets. Here it closes
+`openrcdir`; on a systemd machine the same case closes `unitdir`, and on
+OpenWrt `procddir`. One of the four is always covered, and which one is
+a property of where it runs rather than a skip.
+
+**Declaring all four service keys is what made it a test of placement.**
+With only the host's own key declared, breaking the predicate so that it
+accepts *every* init still passed -- there was nothing else to leak. The
+fixture names a file for each, and the case asserts the other three are
+**not** placed, which is the difference between *places something* and
+*places the right one*. Three sabotages bite now: the override ignored,
+the glue placed for every init, and the glue placed for none.
+
+A unit has to be named `*.service` and fmake refuses otherwise, which is
+the third sound refusal to shape a fixture in this stretch, after a deb
+needing both a unit and a script and an ebuild needing an OpenRC one.
+
+### The default directories are absolute, and that is the point
+
+The default is asserted as well as the override, and the assertion is
+that `--prefix` does **not** move it. These four directories are
+absolute because an init system reads one place; a tree that relocated
+them under a staging prefix would install something nothing starts. A
+`sysvinit` probe that printed nothing under `/out` is what surfaced it,
+and it was the instrument being right rather than a fault.

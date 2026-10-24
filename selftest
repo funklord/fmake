@@ -28049,6 +28049,94 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 
 
 @case
+def the_init_glue_goes_where_this_host_runs_it(t):
+	"""The last four of section 512, and the one the host can answer.
+
+	A unit or init script is placed only for the init the machine runs, so
+	four `[install]` directories -- unitdir, sysvinitdir, openrcdir,
+	procddir -- are each reachable on one kind of host and nowhere else.
+	fmake has no seam for choosing: `detect_init()' takes no argument and
+	is read from no flag or variable.
+
+	So this case asks the host the same question fmake does, by the same
+	filesystem test, and tests whichever answer it gets. On an OpenRC
+	machine it closes openrcdir; on a systemd one the same case closes
+	unitdir. One of the four is always covered, and which one is a
+	property of where it runs rather than something to skip over.
+
+	The default is asserted as well as the override, because an override
+	honoured and an override ignored are indistinguishable from one
+	measurement. And the default is expected NOT to move under
+	`--prefix': these directories are absolute, which is right -- an init
+	system reads one place, and a tree that relocated it would install
+	something nothing starts."""
+	# The same four tests, in the same order, as `detect_init'.
+	if os.access("/sbin/procd", os.X_OK):
+		init, key, directory = "procd", "procd", "procddir"
+	elif os.path.isdir("/run/openrc"):
+		init, key, directory = "openrc", "openrc", "openrcdir"
+	elif os.path.isdir("/run/systemd/system"):
+		init, key, directory = "systemd", "systemd", "unitdir"
+	else:
+		init, key, directory = "sysvinit", "sysvinit", "sysvinitdir"
+
+	t.write("main.c", "int main(void){ return 0; }\n")
+	# All four declared, not just this host's. Declaring only the one
+	# that gets placed cannot tell "places the host's glue" from "places
+	# every init's glue" -- measured: with only one key, breaking the
+	# placement predicate so that it accepts every init still passed,
+	# because there was nothing else to leak.
+	# A unit must be named `*.service', which fmake refuses otherwise --
+	# so each key gets the filename its own init accepts.
+	FILES = {"systemd": "probe.service", "sysvinit": "sysvinit.script",
+	         "openrc": "openrc.script", "procd": "procd.script"}
+	others = []
+	for k, f in FILES.items():
+		t.write(f, f"#!/bin/sh\n# {k}\n")
+		others.append(f"{k} = " + (f'["{f}"]' if k == "systemd"
+		                           else f'"{f}"'))
+
+	def plan(extra):
+		t.write("fmake.toml",
+		        "[service.probe]\n" + "\n".join(others) + f"\n{extra}\n")
+		stage = os.path.join(t.dir, "stage")
+		r = t.fmake("--install", "--prefix", stage, "--dry-run")
+		out = r.stdout + r.stderr
+		check(r.returncode == 0,
+		      f"the dry run failed on a {init} host: {out}")
+		dest = [l.split()[-1] for l in out.splitlines()
+		        if l.strip().startswith("install ")
+		        and FILES[key] in l]
+		check(dest,
+		      f"nothing was planned for the {key} script, so this host's "
+		      f"init glue is not being placed at all: {out}")
+		# And none of the other three, which is what makes this a test
+		# of the placement rather than of placing something.
+		for other in FILES:
+			if other == key:
+				continue
+			check(FILES[other] not in out,
+			      f"this host runs {init}, and {other} glue was placed "
+			      f"too -- an install carrying another init's files: "
+			      f"{out}")
+		return dest[-1]
+
+	default = plan("")
+	check(not default.startswith(os.path.join(t.dir, "stage")),
+	      f"the default {directory} was relocated under --prefix; these "
+	      f"are absolute because an init system reads one place: "
+	      f"{default}")
+
+	moved = plan(f'\n[install]\n{directory} = "custom/glue"\n')
+	check(moved.endswith("custom/glue/probe")
+	      or moved.endswith("custom/glue/probe.script"),
+	      f"[install] {directory} was accepted and ignored on a {init} "
+	      f"host: the script still goes to {moved!r}")
+	check(moved != default,
+	      f"the override changed nothing: both runs planned {moved!r}")
+
+
+@case
 def a_test_group_is_run_by_its_own_name(t):
 	"""The last of section 512's fourteen that needed no platform.
 
