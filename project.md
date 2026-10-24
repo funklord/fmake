@@ -40675,3 +40675,31 @@ absolute because an init system reads one place; a tree that relocated
 them under a staging prefix would install something nothing starts. A
 `sysvinit` probe that printed nothing under `/out` is what surfaced it,
 and it was the instrument being right rather than a fault.
+
+### The detector now says zero, and that is not coverage
+
+Re-running §512's measurement after this case: **0 of 190 tokens
+absent**, down from 14. That number must not be left standing, because
+it is the detector flattering the change.
+
+The case names all four directories as string literals -- it has to, to
+run on any host -- so `unitdir`, `sysvinitdir` and `procddir` now
+*appear* in `selftest` while only `openrcdir` is **exercised** here:
+
+    unitdir       3 occurrences   not exercised on this host
+    sysvinitdir   2               not exercised
+    procddir      2               not exercised
+    openrcdir     3               exercised (this host runs OpenRC)
+
+Substring absence was a sound instrument for the claim §512 made --
+*a token that never appears cannot be exercised* -- and it is worthless
+for the converse. **Presence is not exercise**, which is the same
+asymmetry that made the earlier regex useless when it flagged
+`completion` as untested while thirty occurrences sat in the file.
+
+So the honest statement of coverage is two numbers, not one: **every
+feature is named by some case, and three of the four init directories
+are exercised only on a host that runs their init.** A systemd machine
+running this suite exercises `unitdir` and leaves `openrcdir` unrun, and
+between the two hosts the pair is covered -- which is a property of
+where it runs, recorded here so nobody reads `0 of 190` as finished.
