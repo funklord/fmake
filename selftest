@@ -28195,7 +28195,7 @@ def every_generator_tool_reports_an_unrunnable_tool_alike(t):
 	                     '<widget class="QWidget" name="P"/></ui>\n'),
 	            ("main.cpp", '#include "ui_p.h"\n'
 	                        "int main(){ return 0; }\n")),
-	    # The fourth member, and the one §516's own commit left behind.
+	    # The fourth member, and the one section 516's own commit left behind.
 	    # situ's runner is separate from the Qt three, which is exactly
 	    # how it was missed.
 	    "situc": (("msg.situ", "// a schema\n"),

@@ -40984,6 +40984,33 @@ family. The question to ask is not "where else does this code appear"
 but "what else does this job" -- and the answer is rarely all in one
 place, which is why the first sweep felt finished.
 
+### And that commit was pushed failing the style gate
+
+`6a75004` carried the fix correctly and could not pass `make check`: a
+non-ASCII section sign in a comment I had just written in `selftest`,
+which `code-style.md` allows inside a string literal and not outside
+one. Style runs before test, so the suite never ran at all.
+
+**Two faults, and the second is the one to fix.** The character was the
+third instance in this session, and the first two were caught before
+committing. What changed was the sequencing: the gate was run when
+`fmake` was edited, then `selftest` was edited twice more -- the situc
+fixture, and the rename -- and the commit went out on the strength of a
+check that had measured an earlier tree.
+
+So: **a gate result is a claim about the tree as it stood when the gate
+ran.** Three instances of one character is a habit rather than bad luck,
+and the habit is running the gate first instead of last. Green at 719
+with one skip on the corrected tree, the count unchanged because situc
+joined an existing case rather than adding one.
+
+It is worth noting which half caught it. The gate did; the suite could
+not, having never been reached. A project whose `check` target puts
+style before test gets that ordering for free, and the cost is that a
+style fault hides a test result -- which is the right trade here and
+worth knowing when reading a red `make check`: **look at which target
+failed before concluding anything about the tests.**
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against
