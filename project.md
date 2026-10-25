@@ -41047,6 +41047,11 @@ five share -- rather than the tool's name, which only four use.
 **And the gates were run last this time**, which is the fix the previous
 entry asked for rather than a line about it.
 
+Green at 719 with one skip, status 0, the tree identical to the commit
+and the count unchanged because `cc` joined an existing case. Both style
+modes and both halves of `make check` pass on exactly what was pushed,
+which is what the previous entry's red gate was about.
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against
