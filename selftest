@@ -28156,6 +28156,76 @@ def the_other_inits_glue_is_placed_in_a_machine(t):
 
 
 @case
+def all_three_qt_tools_report_an_unrunnable_tool_alike(t):
+	"""moc was fixed and the fix stopped there -- section 505, third
+	instance.
+
+	A tool that exists, is executable, and cannot start raises an OSError
+	at exec. moc's handler turns that into a sentence naming **where the
+	path came from** and saying **cannot execute**; rcc's and uic's said
+	only "No such file or directory" about a path that is plainly there,
+	which sends the reader to check a path that is correct while the
+	binary is what will not run.
+
+	The lens is this tree's own, and it has now paid out three times: a
+	filter carried to schemas and uic but not rcc (section 505), a
+	multi-word refusal excluded for `test' and not `install'
+	(section 509), and this. So the assertion is the FAMILY property --
+	one loop over all three, each getting the same four things -- rather
+	than three separate cases that could drift apart exactly as the code
+	did."""
+	if not (shutil.which("moc") or glob.glob("/usr/lib/qt6/libexec/moc")):
+		raise Skip("no Qt tools to name")
+	FIXTURE = {
+	    "moc": (("t.h", "#pragma once\n#include <QObject>\n"
+	                    "class T : public QObject { Q_OBJECT\n"
+	                    "public:\n\tT(){}\n};\n"),
+	            ("main.cpp", '#include "t.h"\n'
+	                        "int main(){ T x; (void)x; return 0; }\n")),
+	    "rcc": (("icon.txt", "bytes\n"),
+	            ("app.qrc", '<RCC><qresource prefix="/">'
+	                       "<file>icon.txt</file></qresource></RCC>\n"),
+	            ("main.cpp", "#include <QFile>\n"
+	                        'int main(){ QFile f(":/icon.txt"); '
+	                        "return f.exists()?0:1; }\n")),
+	    "uic": (("p.ui", '<?xml version="1.0"?>\n'
+	                     '<ui version="4.0"><class>P</class>'
+	                     '<widget class="QWidget" name="P"/></ui>\n'),
+	            ("main.cpp", '#include "ui_p.h"\n'
+	                        "int main(){ return 0; }\n")),
+	}
+	for tool, files in FIXTURE.items():
+		u = Tree("unrunnable_" + tool)
+		try:
+			for name, body in files:
+				u.write(name, body)
+			bad = os.path.join(u.dir, "badtool")
+			with open(bad, "w", encoding="utf-8") as fh:
+				fh.write("#!/nonexistent/interp\n")
+			os.chmod(bad, 0o755)
+			u.write("fmake.toml",
+			        f'[toolchain]\n{tool} = "{bad}"\n')
+			r = u.fmake()
+			out = r.stdout + r.stderr
+			check(r.returncode != 0,
+			      f"an unrunnable {tool} was not a failure: {out}")
+			check("Traceback" not in out,
+			      f"{tool}'s OSError reached the reader as a traceback: "
+			      f"{out}")
+			check(f"could not run {tool}" in out,
+			      f"{tool} does not say the tool could not be run: {out}")
+			check("cannot execute" in out,
+			      f"{tool} reads like `not found' for a file that is "
+			      f"there, so the reader checks the path instead of the "
+			      f"binary: {out}")
+			check(f"[toolchain] {tool}" in out,
+			      f"{tool} does not say where the path came from, so the "
+			      f"reader is not told which setting to fix: {out}")
+		finally:
+			u.cleanup()
+
+
+@case
 def a_generator_that_fails_or_produces_nothing_is_named(t):
 	"""Three failure paths a reader meets while writing a rule.
 

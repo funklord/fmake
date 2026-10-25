@@ -565,7 +565,8 @@ that had been green about nothing for five commits ·
 [512. Which features the suite never touches, asked of --features](#512-which-features-the-suite-never-touches-asked-of---features) ·
 [513. The init glue, and a case that asks the host instead of faking one](#513-the-init-glue-and-a-case-that-asks-the-host-instead-of-faking-one) ·
 [514. Three failure paths a reader meets while writing a rule](#514-three-failure-paths-a-reader-meets-while-writing-a-rule) ·
-[515. Fold at 91 per cent](#515-fold-at-91-per-cent)
+[515. Fold at 91 per cent](#515-fold-at-91-per-cent) ·
+[516. The third fix that stopped at one sibling](#516-the-third-fix-that-stopped-at-one-sibling)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -40906,3 +40907,47 @@ redirects nothing and filters nothing until it has been seen to say
 something; and when a probe produces no refusal, suspect the probe
 before the code. Eight fixture errors this session each looked first
 like a defect in fmake.
+
+## 516. The third fix that stopped at one sibling
+
+§514 closed moc's exec-time handler and called the item done. Running
+this tree's own lens over it -- **a fix reaching one member of a family
+and not its siblings** -- found that moc's wording had never been
+carried to rcc or uic.
+
+    moc:  could not run moc (BADTOOL): No such file or directory
+          That moc comes from [toolchain] moc in fmake.toml and
+          cannot execute on this machine.
+
+    rcc:  could not run rcc (BADTOOL): No such file or directory
+    uic:  could not run uic (BADTOOL): No such file or directory
+
+**The missing half is the half that matters.** "No such file or
+directory" about a path that is plainly there reads as *the path is
+wrong*, so the reader checks a path that is correct while the binary is
+what will not start. moc says `cannot execute` precisely to stop that,
+and names the setting that chose the tool so the reader knows which one
+to fix. §514 recorded why moc's message is shaped that way without
+noticing its siblings said neither thing.
+
+Carried: both gain an `origin` parameter, their call sites pass
+`tool_origin(...)` as moc's already did, and the message takes moc's
+shape. The moc-specific cross-build sentence is **not** copied, because
+whether it applies to rcc and uic is a claim nobody here has measured.
+
+### The lens has now paid out three times in this tree
+
+    §505  a filter settled for schemas, carried to uic, never to rcc
+    §509  a multi-word refusal excluded for `test', not for `install'
+    §516  a message improved for moc, not for rcc or uic
+
+Three instances is a property of the codebase rather than three
+accidents: it has families of near-identical call sites, and a fix is
+written where the bug was reported. **So the test asserts the family
+rather than the member** -- one loop over all three tools, each getting
+the same four things. Three separate cases could drift apart exactly as
+the code did.
+
+Sabotaged per tool: reverting any one of the three to the bare message
+fails the case, which is what makes it a family assertion rather than a
+test of whichever one runs first.

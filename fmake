@@ -3954,7 +3954,8 @@ def tool_identity(path):
 	return f"{path}:{st.st_size}:{st.st_mtime_ns}"
 
 
-def run_rcc(root, jobs, rcc, cache, dry_run=False):
+def run_rcc(root, jobs, rcc, cache, dry_run=False,
+            origin=None):
 	"""Compile the resource files. Returns the outputs."""
 	store = cache.data.setdefault("rcc", {})
 	produced = []
@@ -3985,7 +3986,19 @@ def run_rcc(root, jobs, rcc, cache, dry_run=False):
 			                stderr=subprocess.PIPE, text=True,
 			                errors="replace")
 		except OSError as exc:
-			die(f"could not run rcc ({rcc}): {exc.strerror or exc}")
+			# moc's wording, carried. Without the origin and the
+			# words "cannot execute", this read as
+			# "No such file or directory" about a path that IS
+			# there -- sending the reader to check a correct path
+			# while the binary is what cannot start. moc was fixed
+			# for exactly that and the fix stopped there: section
+			# 505's pattern, third instance.
+			if origin:
+				die(f"could not run rcc ({rcc}): {exc.strerror or exc}\n"
+				    f"That rcc comes from {origin} and cannot "
+				    f"execute on this machine.")
+			die(f"could not run rcc ({rcc}): {exc.strerror or exc}\n"
+			    f"That rcc cannot execute on this machine.")
 		if res.stderr.strip():
 			PROGRESS.write(res.stderr)
 		if res.returncode != 0 or not os.path.isfile(abs_out) \
@@ -4158,7 +4171,8 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
 	return produced
 
 
-def run_uic(root, jobs, uic, cache, dry_run=False):
+def run_uic(root, jobs, uic, cache, dry_run=False,
+            origin=None):
 	"""Run uic where its input changed. Returns the outputs.
 
     Simpler than moc in every respect: one .ui produces exactly one header,
@@ -4188,7 +4202,19 @@ def run_uic(root, jobs, uic, cache, dry_run=False):
 			                stderr=subprocess.PIPE, text=True,
 			                errors="replace")
 		except OSError as exc:
-			die(f"could not run uic ({uic}): {exc.strerror or exc}")
+			# moc's wording, carried. Without the origin and the
+			# words "cannot execute", this read as
+			# "No such file or directory" about a path that IS
+			# there -- sending the reader to check a correct path
+			# while the binary is what cannot start. moc was fixed
+			# for exactly that and the fix stopped there: section
+			# 505's pattern, third instance.
+			if origin:
+				die(f"could not run uic ({uic}): {exc.strerror or exc}\n"
+				    f"That uic comes from {origin} and cannot "
+				    f"execute on this machine.")
+			die(f"could not run uic ({uic}): {exc.strerror or exc}\n"
+			    f"That uic cannot execute on this machine.")
 		if res.stderr.strip():
 			PROGRESS.write(res.stderr)
 		if res.returncode != 0 or not os.path.isfile(abs_out) \
@@ -12589,7 +12615,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			die("this tree includes a ui_*.h header generated from a .ui "
 			    "file, which needs Qt's uic.\nInstall the Qt development "
 			    f"package, or name it with [toolchain] uic in {CONF_FILE}.")
-		ui_outs = run_uic(root, ui_jobs, uic_exe, cache, args.dry_run)
+		ui_outs = run_uic(root, ui_jobs, uic_exe, cache,
+		                  args.dry_run, tool_origin("uic", cfg.uic))
 		for rel in ui_outs:
 			if rel not in hdrs:
 				hdrs.append(rel)
@@ -12658,7 +12685,9 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			die("this tree refers to a Qt resource, which needs Qt's rcc.\n"
 			    "Install the Qt development package, or name it with "
 			    f"[toolchain] rcc in {CONF_FILE}.")
-		qrc_outs = run_rcc(root, qrc_jobs, rcc_exe, cache, args.dry_run)
+		qrc_outs = run_rcc(root, qrc_jobs, rcc_exe, cache,
+		                   args.dry_run,
+		                   tool_origin("rcc", cfg.rcc))
 		for rel in qrc_outs:
 			if rel not in srcs:
 				srcs.append(rel)
