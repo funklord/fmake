@@ -41287,7 +41287,21 @@ compiled its C++ with the host compiler, linked with it, wrote an
 x86-64 binary, and printed `built prog`, with nothing wrong anywhere a
 person would look.
 
-**With hull and its two images this host now has no skips at all.**
-Without hull it has three, each naming what it wants. The native case
-stays, because a machine with a cross toolchain installed should test it
-directly rather than through a container.
+**~~With hull and its two images this host now has no skips at all.~~
+Corrected by the run that followed: it still has one.** The native case
+skips by design -- the host has no cross toolchain -- and the machine
+case runs *alongside* it rather than replacing it. 720 passing and 1
+skipped with hull, against 719 and 1 before, so what changed is a case
+gained and not a skip removed.
+
+The claim conflated **the assertion now runs** with **no case skips**,
+which is §513's *presence is not exercise* pointed the other way round:
+there, a token appearing was mistaken for a feature exercised; here, an
+assertion being exercised was mistaken for a skip retired. Both are the
+same error -- reading one measure as though it were another -- and this
+one survived into a commit message because the suite had not run yet
+when it was written.
+
+The native case stays regardless, because a machine with a cross
+toolchain installed should test it directly rather than through a
+container. Without hull the host skips three, each naming what it wants.
