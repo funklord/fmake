@@ -567,7 +567,8 @@ that had been green about nothing for five commits ·
 [514. Three failure paths a reader meets while writing a rule](#514-three-failure-paths-a-reader-meets-while-writing-a-rule) ·
 [515. Fold at 91 per cent](#515-fold-at-91-per-cent) ·
 [516. The third fix that stopped at one sibling](#516-the-third-fix-that-stopped-at-one-sibling) ·
-[517. The last skip, and why the budget let it happen](#517-the-last-skip-and-why-the-budget-let-it-happen)
+[517. The last skip, and why the budget let it happen](#517-the-last-skip-and-why-the-budget-let-it-happen) ·
+[518. A rule the reader cannot follow has not been stated](#518-a-rule-the-reader-cannot-follow-has-not-been-stated)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41240,11 +41241,22 @@ way, and nothing is half-made.
 
 **The weekly window rolled over mid-session**, which is why work resumed
 after §515's fold and the halt at 98 per cent. The holder also added a
-rule the same day: fold and halt are waived within three hours of the
+rule the same day: the **halt** is waived within three hours of the
 reset, because the budget comes back at the rollover and stopping just
 short of it loses working time to protect a record that is not at risk.
-Both figures were read from `~/.claude/run/<session>.usage` -- field 1
-the per cent used, field 2 the reset time, which the hook now reads too.
+
+This entry first said fold was waived with it. It is not. The holder
+rewrote fold on 2026-10-25 as a **state to keep** rather than a point to
+stop at: from 96 per cent work carries on and what changes is that the
+record never lags it, reset or no reset. The waiver covers the halt
+alone, and the distinction is the whole of the difference between the
+two figures.
+
+Both come from `~/.claude/run/<session>.usage`, field 1 the per cent used
+and field 2 the reset epoch -- **separated by US (0x1f) rather than by
+whitespace**, so `awk` with its default splitting reads the entire line
+as field 1 and reports a plausible nonsense percentage. Measured here by
+reading the raw bytes, after doing exactly that.
 
 So this entry exists because the halt lifted, not because it was
 overruled, and the record is noted here so a later reader does not find
@@ -41305,3 +41317,138 @@ when it was written.
 The native case stays regardless, because a machine with a cross
 toolchain installed should test it directly rather than through a
 container. Without hull the host skips three, each naming what it wants.
+
+## 518. A rule the reader cannot follow has not been stated
+
+**The holder set a rule on 2026-10-25: a project stands on its own.**
+Nobody working on these projects needs the guidelines tree they came
+from, and most will not be able to reach it -- so a copy is the project's
+working file rather than a link, and a rule the project depends on is
+stated in the project rather than only cited from elsewhere.
+
+fmake had one real instance. `code-style.md`'s *Ejected build files*
+named three Make conventions in a few words each -- depfiles actually
+`-include`d, `FORCE` on a rule with no prerequisites, `.SECONDARY` named
+rather than bare -- and sent the reader to a global file for the detail.
+Those three govern what `fmake` emits, so they are rules its own output
+obeys, and the pointer was the kind the new rule names: something the
+reader needs and cannot open. They are written out now, each with the
+failure it produces, because what makes them worth obeying is that all
+three fail silently rather than loudly.
+
+**Four other outward references were checked and left.** The `Makefile`
+comment and three `project.md` passages name `~/.claude` paths as the
+provenance of a copied tool or of a measurement, and each states the fact
+inline; `code-style.md`'s header names its source because the rule for
+that file requires it to. A reference a reader never has to follow is not
+a pointer.
+
+### The emitter obeys all three, and the suite did not check it
+
+Measured against `fmake --eject make` for a tree whose test program
+shares a header with the program. `OBJS` carries the test object as well
+as the program's, so the `-include $(OBJS:.o=.d)` built from it covers
+both; `FORCE` guards `$(FLAVOUR_STAMP)`, the one target that has to be
+reconsidered every run, and there are no sibling-library rules to need
+one; `.SECONDARY` is absent deliberately, with its reason in the emitted
+header. No defect -- a recorded negative.
+
+**The gap was in the suite rather than in the output.**
+`an_ejected_makefile_names_its_objects_once` asserts that
+`-include $(OBJS:.o=.d)` appears, and its fixture builds one program and
+no test. So the half of the convention that actually bites was ungated:
+drop test objects from the list and the line is still there, still
+looking right, and nothing rebuilds a test binary when a header it
+shares with the program changes.
+
+`every_object_rule_is_in_the_list_the_depfiles_come_from` asserts the
+relationship instead -- every object rule the file emits is a member of
+the list that `-include` expands. Sabotaging `all_objs` to skip any name
+containing `test` fails it, naming
+`$(BUILD_DIR)/test/width_test.c.o`, and **the older case passes that
+same sabotage**. The pair is what earns the new case its place: one
+control proving it fires, and one proving that what was already there
+could not.
+
+### An hour that produced one line
+
+Verifying the above cost a wasted hour, twice over, and both halves have
+a remedy.
+
+**A reported success described a command that started nothing.** The
+first background run was written as `running ... | tail -2` followed by
+`cd ... && ./selftest`; the newline between them was collapsed, so the
+shell read `tail -2 cd /home/funk/src/fmake`, `tail` failed on a file
+called `cd`, and the `&&` short-circuited. The suite never started. The
+harness reported the task *completed, exit code 0*, because that was the
+wrapper's status and not the suite's -- the second time this session a
+reported success has described something other than the run. The log
+being **empty** is what gave it away, which is the cheapest check
+available: a run that produced no output produced no evidence.
+
+**Then the real run was killed and told us nothing.** It was redirected
+into a file and died on its own `timeout` at 3600s, under a machine load
+of 426 held by another account. Python block-buffers stdout to a file,
+so the kill discarded the buffer: the log held exactly one line, the
+`rc=124` the wrapper appended itself, and nothing about which cases had
+passed before the hour ran out.
+
+**The obvious remedy was `python3 -u`, and it does nothing here.** That
+diagnosis blamed the shape of stdout, by analogy with the inverse case
+`running-code.md` records -- a 1 MB output cap that engaged only when
+stdout was a regular file, so piping the run through `grep` to read it
+turned the cap off. Plausible, and wrong: re-run with `-u` set, killed at
+50 seconds, still produced an empty log.
+
+The buffering was the suite's own. `main` collected every result before
+printing any:
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=JOBS) as pool:
+            results = list(pool.map(run_case, cases))
+
+`pool.map` returns an iterator the `list` drains to completion, so
+nothing reached the terminal until the last case had finished, whatever
+stdout was and whatever the invocation passed. **An interrupted run could
+not report anything, by construction** -- and interrupting is what one
+does most when something is already going wrong, which is when the
+partial result is worth most.
+
+The fix is in the suite rather than in how anybody calls it: submit the
+cases, then walk the futures in submission order, printing and flushing
+each as it lands. Parallelism is unchanged and so is output order, which
+keeps two runs diffable; what changes is that a killed run leaves
+everything up to the first case that has not finished. The flush is
+load-bearing for the same reason `-u` looked attractive -- `print` to a
+file is block-buffered -- and doing it inside the suite means nobody
+invoking it has to know that.
+
+Measured after the fix, with no `-u`: a result on disk at 30 seconds
+**while the run was still alive**, and it survived the kill. Before it,
+an hour of running left a log of zero lines.
+
+The shape worth keeping is not about stdout at all. **A remedy aimed at
+the invocation cannot fix a program that withholds its output**, and the
+first explanation was comfortable because it put the fault outside the
+code I was about to change.
+
+The load is the other half and is not fixable from here. Sustained above
+300, with the suite's own per-case `FMAKE_TIMEOUT = 300`, a case can
+exceed its bound because the machine is busy rather than because fmake
+hung -- so a failure at that load is not evidence of a defect. §508
+records this for one interrupt case; at this load it is true of the
+suite.
+
+It did complete in the end, with the streaming fix in and the load
+between 115 and 290: **718 passed, 4 skipped, no failures**, in a little
+over an hour. All four skips name their own reason and are properties of
+this machine rather than of the tree -- two hull cases with no `hull` on
+`PATH`, the native cross case with no `aarch64-linux-gnu-g++`, and the
+Python floor case with no `python3.11`. The 83 cases matching `eject` and
+`depfile` had been run first, at load 184, to have something before the
+full run was available.
+
+The shape worth keeping: **an assertion that a line exists tests the
+emitter's vocabulary, and an assertion about what the line reaches tests
+the build.** This session's other version of it was *presence is not
+exercise*, about tokens appearing in the suite; this is the same error
+one level down, where the token appeared in the emitted file.

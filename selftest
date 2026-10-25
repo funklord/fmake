@@ -38819,23 +38819,41 @@ def main(argv):
 		return 2
 	failures = skipped = 0
 
+	# Each case is printed as it lands rather than after the last one.
+	# `pool.map' collected every result before printing any, so a run that
+	# was killed -- by a timeout, or by somebody interrupting it -- said
+	# nothing whatever about which cases had passed: one hour of machine
+	# time reported only that it had been an hour. Interrupting is also the
+	# thing one does most when something is already going wrong, which is
+	# when the partial result is worth most.
+	#
+	# The futures are walked in submission order, so the output is still
+	# deterministic and the parallelism is unchanged -- a case that finishes
+	# early waits for its turn to be printed, not for the suite to end.
+	#
+	# The flush is the half that actually survives a kill. `print' to a
+	# terminal is line-buffered and to a file is not, so streaming into a
+	# log without it buffers the whole run and loses it exactly as before;
+	# `python3 -u' fixes that from outside and nobody invoking the suite
+	# should have to know.
 	with concurrent.futures.ThreadPoolExecutor(max_workers=JOBS) as pool:
-		results = list(pool.map(run_case, cases))
-
-	for c, (status, detail) in zip(cases, results):
-		if status == "ok":
-			print(f"{GREEN}ok{OFF}   {c.__name__}"
-			      + (f" {DIM}-- {detail}{OFF}" if detail else ""))
-		elif status == "skip":
-			skipped += 1
-			print(f"{DIM}skip {c.__name__} -- {detail}{OFF}")
-		elif status == "fail":
-			failures += 1
-			print(f"{RED}FAIL{OFF} {c.__name__}")
-			print(f"       {detail}")
-		else:
-			failures += 1
-			print(f"{RED}ERR {OFF} {c.__name__}: {detail}")
+		pending = [pool.submit(run_case, c) for c in cases]
+		for c, fut in zip(cases, pending):
+			status, detail = fut.result()
+			if status == "ok":
+				print(f"{GREEN}ok{OFF}   {c.__name__}"
+				      + (f" {DIM}-- {detail}{OFF}" if detail else ""))
+			elif status == "skip":
+				skipped += 1
+				print(f"{DIM}skip {c.__name__} -- {detail}{OFF}")
+			elif status == "fail":
+				failures += 1
+				print(f"{RED}FAIL{OFF} {c.__name__}")
+				print(f"       {detail}")
+			else:
+				failures += 1
+				print(f"{RED}ERR {OFF} {c.__name__}: {detail}")
+			sys.stdout.flush()
 
 	print()
 	tail = f" ({skipped} skipped)" if skipped else ""
