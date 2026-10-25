@@ -563,7 +563,9 @@ that had been green about nothing for five commits ·
 [510. Two consumers answering, and a claim of mine they corrected](#510-two-consumers-answering-and-a-claim-of-mine-they-corrected) ·
 [511. The only ordering in the build had no test at all](#511-the-only-ordering-in-the-build-had-no-test-at-all) ·
 [512. Which features the suite never touches, asked of --features](#512-which-features-the-suite-never-touches-asked-of---features) ·
-[513. The init glue, and a case that asks the host instead of faking one](#513-the-init-glue-and-a-case-that-asks-the-host-instead-of-faking-one)
+[513. The init glue, and a case that asks the host instead of faking one](#513-the-init-glue-and-a-case-that-asks-the-host-instead-of-faking-one) ·
+[514. Three failure paths a reader meets while writing a rule](#514-three-failure-paths-a-reader-meets-while-writing-a-rule) ·
+[515. Fold at 91 per cent](#515-fold-at-91-per-cent)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -40734,3 +40736,128 @@ toolchain at a size worth fetching.
 
 Sabotaged independently of the host case: the override ignored, and the
 glue placed for every init. Both fail it.
+
+## 514. Three failure paths a reader meets while writing a rule
+
+§496's list files these as environment failures, which undersells them.
+A generator that exits non-zero, or that exits zero and writes nothing,
+is an ordinary mistake in a `[generate]` rule rather than a broken
+toolchain -- and the second is the dangerous one, because a rule that
+"succeeded" and produced no output surfaces much later as a missing
+include.
+
+    command = "false"   ->  [generate.g] failed: false
+    command = "true"    ->  [generate.g] did not produce g.h
+    moc = "/nonexistent/moc"
+                        ->  moc '/nonexistent/moc' (from [toolchain] moc
+                            in fmake.toml) not found
+
+The third is better than the entry that led here. §496 lists *could not
+run moc*, an `OSError` at exec time; what actually happens is that the
+path is checked first and **the message names where the path came
+from**. That matters because the reader set it somewhere, and a bare
+"not found" would not say which setting to fix. The exec-time handler
+remains the last resort for a tool that exists, is executable, and still
+fails to start.
+
+Each arm checks the build **failed** rather than only that a sentence
+appeared, since a warning carrying the same words would satisfy a text
+match -- §509's fault.
+
+### Four sabotages, three bite, and the fourth is the redundancy again
+
+    non-zero exit ignored          -> FAIL
+    missing-output check removed   -> FAIL
+    origin dropped from message    -> FAIL
+    tool path accepted blindly     -> passes
+
+The last is §512's pattern, not a weak arm: accepting the path still
+fails the build, because exec'ing a moc that is not there is caught
+further on. So the arm's exit-status assertion is enforced twice, and
+what it uniquely tests is the **message** -- which dropping the origin
+does fail. Saying which of the two a sabotage proved is the honest form.
+
+### Two more of my own fixtures, and the count is worth keeping
+
+`command = "exit 3"` was refused with *needs 'exit', which is neither
+installed nor an executable* -- `exit` is a shell builtin, and fmake
+checks a rule's command is a real program. Correct, helpful, and not
+what I was probing. And `[toolchain] moc` cannot be reached by a tree
+with no `Q_OBJECT`, because moc is never invoked.
+
+That makes roughly **eight fixture errors across this session**, every
+one of which first looked like a defect in fmake: a wrong target name, a
+directive needing `@file`, the wrong door into a refusal, a name
+matching its own assertion, nested quote delimiters, a sabotage that
+perturbed nothing, a shell builtin, and a tree that could not reach the
+tool. The pattern is stable enough to state as a rule: **when a probe
+produces no refusal, suspect the probe before the code** -- the reverse
+of the gate rule in `evidence.md`, and for the same reason, that the
+instrument is the part nobody has checked.
+
+## 515. Fold at 91 per cent
+
+The `Stop` hook blocked at 91 per cent of the weekly window with no
+`project.md` commit in 45 minutes, which was correct: §514's record was
+sitting in the working tree waiting on a suite run. Folding here rather
+than finishing the run, because the record is what survives.
+
+### What this session did
+
+Twenty-seven commits from `87bcf4d`. Eleven defects fixed, each
+sabotage-proved, and the suite went from 698 to 718 cases.
+
+The defects, in the order they were found:
+
+- **§499** a versioned `@kind module` recorded no soname -- a premise
+  true of an `LD_PRELOAD` shim and false of glibc's NSS.
+- **§500** eleven install keys a module names and `install_plan` never
+  reads; and a one-component `version` that could not be installed at
+  all, found by a control arm.
+- **§501** git never named as the reason a `root` is not source -- a
+  seam between §493 and §497.
+- **§502-§505** one mismatch, five sites: a lint and a warning speaking
+  about excluded code, then **two planners where an excluded header
+  breaks the build**. The severity rose as the sweep went on, because
+  the early sites were found by noticing output and planners are
+  silent.
+- **§509** `@install`'s own refusal was unreachable, shadowed by a
+  generic one whose advice was wrong for it.
+- **§511-§514** C++20 modules, `[install]` overrides, nine packaging
+  keys, `test-group`, the init glue, and three generator failure paths
+  -- all previously untested, now covered.
+
+hull is integrated as an optional third tier (§508), and the
+untested-feature gap went from 14 of 190 to none, with the caveat §513
+records: presence is not exercise.
+
+### What is still open at this fold
+
+- **§508's load-flaky interrupt case.** 5 of 5 standalone at load ~55,
+  0 of 3 in full runs above 90, one pass at 210. Not a badly written
+  case; the mechanism is unexplained because reproducing it needs load
+  that cannot be summoned. Three answers, none of them mine to take.
+- **hull's stray `nss_hull.pc`.** Suppressing a `.pc` on a `shared`
+  target needs a config key, which is not a session's to invent.
+  Routed to them as `20261022T2218Z`.
+- **The remaining unfired refusals** are the licence and SPDX ones,
+  deliberately not probed, and exec-time handlers for a tool that
+  exists and still fails to start.
+
+### What the next session should pick up
+
+`selftest` and `project.md` are committed together here **with a full
+suite run in flight rather than finished**. The new case,
+`a_generator_that_fails_or_produces_nothing_is_named`, passes on its own
+and three of four sabotages bite -- the fourth is §512's redundancy
+pattern, recorded in §514. **Re-run `make check` first**, with
+`FMAKE_HULL` set if hull is wanted: it was green at 717 with hull and
+715 with three skips without it, one commit earlier.
+
+The method lessons are worth more than the remaining work, and they are
+in §507, §509, §511, §512 and §514: assert on a phrase unique to the
+message under test; sabotage the quantity the docstring names; a probe
+redirects nothing and filters nothing until it has been seen to say
+something; and when a probe produces no refusal, suspect the probe
+before the code. Eight fixture errors this session each looked first
+like a defect in fmake.

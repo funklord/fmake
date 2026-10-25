@@ -28156,6 +28156,75 @@ def the_other_inits_glue_is_placed_in_a_machine(t):
 
 
 @case
+def a_generator_that_fails_or_produces_nothing_is_named(t):
+	"""Three failure paths a reader meets while writing a rule.
+
+	Section 496's list calls these environment failures, which undersells
+	them: a generator that exits non-zero, or that exits zero and writes
+	nothing, is an ordinary mistake in a `[generate]` rule rather than a
+	broken toolchain. The second is the dangerous one -- a rule that
+	"succeeded" and produced no output would otherwise surface much later
+	as a missing include.
+
+	The third is the tool path itself. `[toolchain] moc` naming something
+	that is not there is caught before anything runs, and the message
+	names **where the path came from**, which matters because the reader
+	set it somewhere and a bare "not found" would not say where to look.
+
+	Each arm also checks the build FAILED, not merely that a sentence
+	appeared: a warning carrying the same words would satisfy a text
+	match, which is section 509's fault exactly."""
+	t.write("seed.h", "int g(void);\n")
+	t.write("main.c", '#include "g.h"\nint main(void){ return g(); }\n')
+
+	def run(toml):
+		t.write("fmake.toml", toml)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		for stale in ("g.h",):
+			p = os.path.join(t.dir, stale)
+			if os.path.exists(p):
+				os.remove(p)
+		r = t.fmake()
+		return r.returncode, r.stdout + r.stderr
+
+	rc, out = run('[generate.g]\ninputs = ["seed.h"]\n'
+	              'outputs = ["g.h"]\ncommand = "false"\n')
+	check(rc != 0, f"a generator exiting non-zero was not a failure: {out}")
+	check("failed: false" in out,
+	      f"the refusal does not name the command that failed: {out}")
+
+	rc, out = run('[generate.g]\ninputs = ["seed.h"]\n'
+	              'outputs = ["g.h"]\ncommand = "true"\n')
+	check(rc != 0,
+	      f"a generator that exited 0 and wrote nothing was accepted, so "
+	      f"the missing output would surface later as a missing "
+	      f"include: {out}")
+	check("did not produce g.h" in out,
+	      f"the refusal does not name the output that is missing: {out}")
+
+	# The tool path, caught before anything is run.
+	u = Tree("tool_absent")
+	try:
+		u.write("t.h", "#pragma once\n#include <QObject>\n"
+		        "class T : public QObject { Q_OBJECT\npublic:\n"
+		        "\tT(){}\n};\n")
+		u.write("main.cpp", '#include "t.h"\n'
+		        "int main(){ T x; (void)x; return 0; }\n")
+		u.write("fmake.toml", '[toolchain]\nmoc = "/nonexistent/moc"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a moc that is not there was not a failure: {out}")
+		check("/nonexistent/moc" in out,
+		      f"the refusal does not name the path that is missing: {out}")
+		check("[toolchain] moc" in out,
+		      f"the refusal does not say where the path came from, so the "
+		      f"reader is not told which setting to fix: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def the_init_glue_goes_where_this_host_runs_it(t):
 	"""The last four of section 512, and the one the host can answer.
 
