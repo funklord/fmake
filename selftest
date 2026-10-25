@@ -28201,6 +28201,11 @@ def every_generator_tool_reports_an_unrunnable_tool_alike(t):
 	    "situc": (("msg.situ", "// a schema\n"),
 	              ("main.c", '#include "msg.h"\n'
 	                         "int main(void){ return msg_check(); }\n")),
+	    # The fifth, and the one that had no handler at all: a compiler
+	    # that exists and cannot start reached the reader as a
+	    # FileNotFoundError traceback out of subprocess.py. It is the tool
+	    # every build runs and the one a reader actually sets.
+	    "cc": (("main.c", "int main(void){ return 0; }\n"),),
 	}
 	for tool, files in FIXTURE.items():
 		if tool != "situc" and not have_qt:
@@ -28222,15 +28227,30 @@ def every_generator_tool_reports_an_unrunnable_tool_alike(t):
 			check("Traceback" not in out,
 			      f"{tool}'s OSError reached the reader as a traceback: "
 			      f"{out}")
-			check(f"could not run {tool}" in out,
+			# "could not run" and the path, which all five share. The
+			# generators also name the tool; the compiler names the
+			# command instead, because that is what identifies it when
+			# the name could have come from four different routes.
+			check("could not run" in out,
 			      f"{tool} does not say the tool could not be run: {out}")
+			check(bad in out,
+			      f"{tool} does not name the path that will not start, "
+			      f"which is the one thing the reader has to look at: "
+			      f"{out}")
 			check("cannot execute" in out,
 			      f"{tool} reads like `not found' for a file that is "
 			      f"there, so the reader checks the path instead of the "
 			      f"binary: {out}")
-			check(f"[toolchain] {tool}" in out,
-			      f"{tool} does not say where the path came from, so the "
-			      f"reader is not told which setting to fix: {out}")
+			# The generators name the setting that chose them; the
+			# compiler deliberately does not, because it is reached
+			# through $CC, a [toolchain] key, a cross prefix or a
+			# default, and naming one unasked is section 31's advice
+			# fault. So that assertion is for the four, not the five.
+			if tool != "cc":
+				check(f"[toolchain] {tool}" in out,
+				      f"{tool} does not say where the path came from, "
+				      f"so the reader is not told which setting to "
+				      f"fix: {out}")
 		finally:
 			u.cleanup()
 

@@ -41011,6 +41011,42 @@ style fault hides a test result -- which is the right trade here and
 worth knowing when reading a red `make check`: **look at which target
 failed before concluding anything about the tests.**
 
+### The fifth member had no handler at all, and it is the compiler
+
+Asking the sharpened question -- *what else does this job* -- rather than
+*where else does this code appear* found a fifth member immediately, and
+it is the worst of the five:
+
+    [toolchain] cc = a script with a missing interpreter
+
+    FileNotFoundError: [Errno 2] No such file or directory: '.../badcc'
+      File "/usr/lib/python3.13/subprocess.py", line 1801, in _posix_spawn
+
+**A traceback, not a sentence.** moc, rcc, uic and situc each turn an
+`OSError` from their tool into advice; the compiler had no `except` at
+all. It is the tool **every** build runs and the one a reader actually
+sets -- through `$CC`, a `[toolchain]` key, a cross prefix or a default
+-- so it is the likeliest of the five to be wrong in practice and was
+the only one that answered with `subprocess.py` internals.
+
+It is also exactly what this session's own moc case asserts must never
+happen: `check("Traceback" not in out, ...)`. The assertion existed, for
+one member of a family whose most-used member had nothing.
+
+**What the message does not say, deliberately.** The generators name the
+setting that chose them, because one key chose each. A compiler is
+reached four ways, so naming one unasked would be §31's advice fault --
+telling somebody to set a key that is not what they used. The message
+names the command, which is what identifies it however it was reached,
+and the case asserts the setting only for the four.
+
+So the case is five members now, each sabotage-proved on its own, and
+the common assertions are **"could not run" and the path** -- what all
+five share -- rather than the tool's name, which only four use.
+
+**And the gates were run last this time**, which is the fix the previous
+entry asked for rather than a line about it.
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against
