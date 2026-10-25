@@ -40875,8 +40875,20 @@ than finishing the run, because the record is what survives.
 
 ### What this session did
 
-Twenty-seven commits from `87bcf4d`. Eleven defects fixed, each
-sabotage-proved, and the suite went from 698 to 718 cases.
+**Rewritten, because the figures below dated themselves.** This entry
+was written at the fold and the session then continued past it on the
+holder's say-so, so its counts were stale within the hour -- which is
+the shelf-life rule meeting the one document most likely to be read
+first. Current, and derived rather than remembered:
+
+    42 commits from 87bcf4d   12 core:  13 test:  16 doc:  1 tool:
+    suite 698 -> 720 cases    719 passing and 1 skipped on this host
+
+The `tool:` commit is `sync.py`'s own, not this session's. **The count
+of defects is deliberately not given**: `core:` commits are countable
+and defects are not, since §500 carried two and some `core:` commits
+carry a message fix rather than a fault. Twelve `core:` commits is the
+figure that can be checked.
 
 The defects, in the order they were found:
 
