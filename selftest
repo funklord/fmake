@@ -28220,6 +28220,34 @@ def a_generator_that_fails_or_produces_nothing_is_named(t):
 		check("[toolchain] moc" in out,
 		      f"the refusal does not say where the path came from, so the "
 		      f"reader is not told which setting to fix: {out}")
+
+		# And the other tool-path failure: a file that passes the
+		# existence check, is executable, and still cannot start. A
+		# script whose interpreter is missing is the cheap way to one;
+		# section 496 listed it as unreachable environment noise and it
+		# is neither. What must not happen is a traceback -- the handler
+		# turns an OSError into a sentence, and the sentence has to
+		# distinguish this from "not found" or the reader checks the
+		# path they can see is right there.
+		bad = os.path.join(u.dir, "badmoc")
+		with open(bad, "w", encoding="utf-8") as fh:
+			fh.write("#!/nonexistent/interp\n")
+		os.chmod(bad, 0o755)
+		u.write("fmake.toml", f'[toolchain]\nmoc = "{bad}"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a moc that cannot execute was not a failure: {out}")
+		check("Traceback" not in out,
+		      f"an OSError from the tool reached the reader as a "
+		      f"traceback instead of a refusal: {out}")
+		check("could not run moc" in out,
+		      f"the refusal does not say the tool could not be run: "
+		      f"{out}")
+		check("cannot execute" in out,
+		      f"it reads like `not found' for a file that is plainly "
+		      f"there, so the reader checks the path instead of the "
+		      f"binary: {out}")
 	finally:
 		u.cleanup()
 

@@ -40795,6 +40795,39 @@ produces no refusal, suspect the probe before the code** -- the reverse
 of the gate rule in `evidence.md`, and for the same reason, that the
 instrument is the part nobody has checked.
 
+### The exec-time handler, which §496 called unreachable noise
+
+The one item the fold left as real work: a tool that exists, passes the
+existence check, is executable, and still cannot start. A script whose
+interpreter is missing reaches it in one line, so it is neither
+unreachable nor environment noise:
+
+    #!/nonexistent/interp, chmod +x, named as [toolchain] moc
+
+    !!! could not run moc (.../badmoc): [Errno 2] No such file or
+        directory
+        That moc comes from [toolchain] moc in fmake.toml and cannot
+        execute on this machine.
+
+Three things that message gets right, and the case asserts each: it is a
+**sentence rather than a traceback**, it says the tool could not be
+*run*, and it says **cannot execute** rather than *not found* -- which
+matters because the file is plainly there, and a "not found" would send
+the reader to check a path that is correct while the binary is the
+problem.
+
+So the two tool-path failures are now both covered and they are
+genuinely different: the path that is not there, caught before anything
+runs and naming which setting to fix, and the path that is there and
+will not start.
+
+**And the first sabotage of it proved nothing, for the fourth time this
+session.** It changed "this machine" to "this box" while the assertion
+is on "cannot execute" -- a perturbation adjacent to the quantity under
+test rather than of it, which is §511's rule meeting my own hands again.
+Replacing the asserted phrase fails the case, as does removing the
+handler, and those are the two that count.
+
 ## 515. Fold at 91 per cent
 
 The `Stop` hook blocked at 91 per cent of the weekly window with no
