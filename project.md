@@ -40951,3 +40951,14 @@ the code did.
 Sabotaged per tool: reverting any one of the three to the bare message
 fails the case, which is what makes it a family assertion rather than a
 test of whichever one runs first.
+
+Green at 719 with one skip, status 0 -- one more than §514's 718,
+because this is a new case rather than an arm. The run began before this
+addendum, so the four cases that read `project.md` were re-run against
+the commit and pass.
+
+**And this is where development stops.** Weekly usage is 94 per cent,
+two points from the threshold `CLAUDE.md` sets, and the next piece of
+work in this tree is not small enough to finish inside that. The fold
+at §515 stands, with this and §516 added to it: everything is committed,
+pushed, and measured, and nothing is half-made.
