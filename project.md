@@ -40957,8 +40957,16 @@ because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against
 the commit and pass.
 
-**And this is where development stops.** Weekly usage is 94 per cent,
-two points from the threshold `CLAUDE.md` sets, and the next piece of
-work in this tree is not small enough to finish inside that. The fold
-at §515 stands, with this and §516 added to it: everything is committed,
-pushed, and measured, and nothing is half-made.
+**~~And this is where development stops.~~ Corrected: the thresholds
+moved the same day.** That sentence was written against a single figure
+of 96 per cent for both folding and stopping. The copyright holder split
+it on 2026-10-25 -- **fold at 96, stop at 98** -- and moved the `Stop`
+hook from 90 to 96 with it.
+
+So the fold at §515 stands and is the right act, but the stop it claimed
+was two points early under the rule as it now reads. Recorded rather
+than quietly edited, because the stale figure is the kind a later
+session inherits and acts on: a reader finding "development stops at 94"
+would leave four per cent of a week unused and, worse, carry the wrong
+threshold forward. Everything is committed, pushed and measured either
+way, and nothing is half-made.
