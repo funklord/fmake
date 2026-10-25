@@ -41094,6 +41094,48 @@ Green at 719 with one skip, status 0, the tree identical to the commit.
 The count is unchanged throughout because members five, six and seven
 joined an existing case rather than adding cases.
 
+### The audit, done: 33 call sites, and why "unguarded" is not "defective"
+
+The question §516 refused to answer with another sweep. Enumerated
+instead -- every `subprocess.run`, `Popen` and `run_child` in the file:
+
+    33 child-process call sites
+    13 with an OSError handler
+    20 without
+
+**And 20 is not the count of defects.** The family is a tool **the
+reader names**; most of the twenty run something fmake discovers --
+`git`, `dpkg`, `dpkg-buildpackage`, `portageq`, `apk`, `pandoc` -- where
+an absent tool is a different question with its own message. Two more
+are a `--version` probe, whose whole job is to fail when a candidate is
+unusable, and `run_child`'s own `Popen`, which is the primitive the seven
+handlers sit around and deliberately not a handler itself.
+
+Three were worth reading closely, and they classify differently:
+
+- **`fmake:9558` is the eighth member.** A second `cfg.nm` call, with no
+  handler, reading a **prebuilt** archive or shared object rather than an
+  object this build compiled.
+- **`fmake:9617` is a third `cfg.nm` call and is protected by ordering**
+  -- its own docstring says `read_symbols` dies where nm cannot read, so
+  an unrunnable nm never reaches it. Guarded by a precondition rather
+  than by an `except`, which is why reading the comment mattered.
+- **`fmake:9976` runs pkg-config** through a probe whose failure is
+  already a meaningful answer.
+
+**What is NOT established, and is the next session's first question:**
+whether 9558 is reachable with an unrunnable nm, or whether
+`read_symbols` always dies first as at 9617. The two differ in what they
+read -- objects this build made, against archives a tree ships -- so
+ordering may or may not protect it. **Untested, and recorded as
+untested**, because asserting reachability without a fixture is the
+error this file has recorded eight times in one session.
+
+No code change here. At 97 per cent with the halt at 98, a one-line
+handler that the suite could not then verify is precisely what the fold
+rule exists to prevent -- so the finding is located, classified and
+left, which is worth more than an unverified edit.
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against
