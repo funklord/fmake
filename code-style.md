@@ -135,12 +135,45 @@ moment it lands, and it follows the same rule. Make's recipe lines require
 a literal tab in any case, so that half is compliant by construction; the
 rest of the emitted text should be too.
 
-The Make conventions in the global
-`~/.claude/guidelines/build-and-commit.md` -- `.d` files actually
-`-include`d, sibling-library rules carrying `FORCE`, `.SECONDARY` named
-rather than bare -- **apply to ejected Makefiles as well**. An ejected
-Makefile is a Makefile someone will edit, and every one of those rules
-fails silently rather than loudly.
+**Three Make conventions apply to the emitted output, and they are
+written out here rather than cited.** They came from the global
+guidelines, but nobody working on `fmake` can be assumed to reach those,
+so citing them would leave a rule this project's output depends on where
+its reader cannot see it.
+Each of the three fails silently rather than loudly, which is why an
+emitter is held to them at all: an ejected Makefile is a Makefile
+someone will edit.
+
+- **Every depfile the compiler writes must actually be `-include`d, test
+  objects included.** A test object whose `.d` is never read back does not
+  rebuild when a header it includes changes, so a struct that gains a
+  field gets one layout in the program and another in the test binary --
+  which surfaces as a pile of nonsense assertion failures rather than as
+  a build error.
+- **A rule with no prerequisites fires only when its target is missing**,
+  so anything that must be reconsidered on every run carries a `FORCE`
+  prerequisite. Without one, an artifact built once is current forever and
+  a changed input is never noticed.
+- **`.SECONDARY` is named, never bare.** A bare `.SECONDARY:` covers every
+  target any pattern rule matches, and Make does not rebuild a *missing*
+  secondary when the thing depending on it already exists -- so adding a
+  source leaves the library unchanged, every symbol in it undefined at
+  link time, and `make` reporting nothing to do.
+
+Measured 2026-10-25 against `fmake --eject make` for a tree whose test
+program shares a header with the program:
+
+- `OBJS` carries the test object as well as the program's, so the
+  `-include $(OBJS:.o=.d)` built from it covers both. The suite asserts
+  the relationship rather than the line -- every object rule emitted is a
+  member of that list -- because the line's presence says nothing about
+  what it reaches, and the case that checked only the line passes a
+  sabotage that drops the test object from the list.
+- `FORCE` guards `$(FLAVOUR_STAMP)`, the one target here that has to be
+  reconsidered every run. There are no sibling-library rules to carry one.
+- `.SECONDARY` is absent deliberately, with the reason in the emitted
+  header: there are no pattern rules, nothing is an intermediate, and a
+  bare one would reintroduce the hazard the flat output does not have.
 
 ### No autoformatter
 

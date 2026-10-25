@@ -5228,6 +5228,48 @@ def an_ejected_makefile_names_its_objects_once(t):
 
 
 @case
+def every_object_rule_is_in_the_list_the_depfiles_come_from(t):
+	"""The case above proves the `-include' line exists. It cannot prove it
+	reaches everything, because its fixture builds one program and no test.
+
+	A test object whose depfile is never read back does not rebuild when a
+	header it includes changes, so a struct that gains a field gets one
+	layout in the program and another in the test binary -- which surfaces
+	as a pile of nonsense assertion failures rather than as a build error.
+	Nothing about the `-include' line says which objects it covers, so the
+	assertion is the relationship: every object rule the file emits is a
+	member of the list that line expands."""
+	t.write("common.h", "#define WIDTH 1\n")
+	t.write("main.c", '#include "common.h"\nint main(void){ return WIDTH - 1; }\n')
+	# `test/' is enough to make it a test; no directive, so the case cannot
+	# fail on a directive spelled into an ordinary comment.
+	t.write("test/width_test.c",
+	        '#include "common.h"\nint main(void){ return WIDTH - 1; }\n')
+
+	out = t.fmake("--eject").stdout
+	rules = {l.split(":", 1)[0].strip() for l in out.splitlines()
+	         if l.startswith("$(BUILD_DIR)/") and ".o:" in l}
+	listed, inside = set(), False
+	for line in out.splitlines():
+		if line == "OBJS = \\":
+			inside = True
+			continue
+		if inside:
+			item = line.strip().rstrip("\\").strip()
+			if not item:
+				break
+			listed.add(item)
+	check(rules, f"no object rules were emitted at all: {out[:400]}")
+	check("-include $(OBJS:.o=.d)" in out,
+	      f"the depfiles should come from the named list: {out[-400:]}")
+	check(any("width_test" in r for r in rules),
+	      f"the test should have an object rule: {sorted(rules)}")
+	check(rules <= listed,
+	      f"these object rules are outside the -include list, so a header "
+	      f"change will not rebuild them: {sorted(rules - listed)}")
+
+
+@case
 def an_ejected_makefile_warns_off_the_two_helpful_edits(t):
 	"""Both are things a reader would reasonably do, and both are wrong.
 
