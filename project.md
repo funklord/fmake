@@ -41136,6 +41136,42 @@ handler that the suite could not then verify is precisely what the fold
 rule exists to prevent -- so the finding is located, classified and
 left, which is worth more than an unverified edit.
 
+### Tested: there is no eighth member
+
+The entry above called `fmake:9558` the eighth and recorded its
+reachability as untested, naming the fixture that would settle it. The
+fixture settles it: **there is no eighth member.**
+
+A tree shipping a prebuilt `libshipped.a`, with `[toolchain] nm` naming
+a script whose interpreter is missing:
+
+    !!! could not run 'TREE/badtool': No such file or directory
+        That nm cannot execute on this machine; it is there and will
+        not start.
+
+That is `read_symbols`' handler -- the seventh member, added an hour
+earlier -- and the wording is what identifies it. So 9558 is protected
+by ordering exactly as 9617 is, and the reason generalises: nm is read
+for **every** object before anything reads a shipped archive, so an
+unrunnable nm dies at the first object. The only tree that could reach
+9558 first is one with no objects at all, which cannot build anything
+and fails elsewhere.
+
+**So the audit's value was the classification, not a new member.** Seven
+handlers, two sites protected by a precondition, and the rest running
+tools fmake discovers rather than tools a reader names. The count of
+unguarded call sites -- 20 of 33 -- would have been a bad number to act
+on, and acting on it would have meant adding handlers that cannot fire.
+
+**And this is what the untested label was for.** Recording 9558 as a
+located finding with its test named, rather than fixing it, cost one
+probe and avoided a one-line change that would have been unreachable
+code committed as a defect fixed -- and counted, in this file, as an
+eighth instance of a pattern that has seven. Five sweeps in a row
+over-claimed completeness; this is the first time the over-claim went
+the other way, and the fixture caught it because the entry said it had
+not been run.
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against
