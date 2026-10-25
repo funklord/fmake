@@ -40158,6 +40158,38 @@ rather than its source, so a `[target.main]` section matched nothing and
 a `[target.pr]` one matched. A probe that does not reach the refusal
 looks exactly like a refusal that does not work.
 
+### A shadowed refusal is only a defect when the winner is worse
+
+Two more entries closed, and together they sharpen §509 rather than
+repeat it. `-i cannot read fmake.toml` and `-i cannot write fmake.toml`
+are both **unreachable**: an earlier check answers first.
+
+    chmod 000 fmake.toml, fmake -i
+        -> fmake.toml: [Errno 13] Permission denied: '...'
+
+    chmod 555 ., fmake -i
+        -> cannot create .fmake/ in ...
+
+The first is the ordinary config load, the second the state directory.
+Both name the file or the directory and carry the errno, and a reader
+who cannot read their own `fmake.toml` knows what to do about it.
+
+**So these are not defects, and §509's was**, which is the distinction
+worth keeping. There, `@install`'s own refusal was shadowed by a generic
+one whose advice -- *put each directive on its own line* -- was **wrong
+for that input**, so the reader was sent to fix something that was not
+the problem. Here the winners are correct and actionable.
+
+The rule that covers both: **a shadowed refusal costs nothing until the
+message that wins is worse than the one that lost.** Finding the shadow
+is cheap; the work is reading both messages against the input. A sweep
+that treated every shadowed refusal as a defect would have produced two
+edits here that improved nothing and deleted two sound messages.
+
+Three instances of the shape now -- `@install` (a real defect), the
+prebuilt-object entry probed through `sources` (my wrong door, §509),
+and these two (sound) -- and only the first was worth changing.
+
 ### Seven more probed sound, and the lens is past its cheap yield
 
 Recorded so the next pass does not re-probe them. All reachable, all
