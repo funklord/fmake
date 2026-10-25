@@ -40828,6 +40828,11 @@ test rather than of it, which is §511's rule meeting my own hands again.
 Replacing the asserted phrase fails the case, as does removing the
 handler, and those are the two that count.
 
+Green at 718 with one skip, status 0 -- the count unchanged because this
+is an arm on an existing case rather than a new one. The run began
+before this addendum, so the four cases that read `project.md` were
+re-run against the commit and pass, as at §515's fold.
+
 ## 515. Fold at 91 per cent
 
 The `Stop` hook blocked at 91 per cent of the weekly window with no
