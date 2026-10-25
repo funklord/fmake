@@ -40854,6 +40854,13 @@ pattern, recorded in §514. **Re-run `make check` first**, with
 `FMAKE_HULL` set if hull is wanted: it was green at 717 with hull and
 715 with three skips without it, one commit earlier.
 
+**Answered, so the re-run is not needed.** That run finished green:
+718 passed, one skipped, status 0. It began before this fold's own
+edits, so `selftest` is byte-identical to what those 718 measured while
+`project.md` is one edit newer -- the fold entry and a heading rename.
+The four cases that read this file were run against the commit and
+pass, and the docs gate passes on it too.
+
 The method lessons are worth more than the remaining work, and they are
 in §507, §509, §511, §512 and §514: assert on a phrase unique to the
 message under test; sabotage the quantity the docstring names; a probe
