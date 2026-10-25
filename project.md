@@ -41090,6 +41090,10 @@ neighbourhoods. Seven are done and sabotage-proved individually; the
 eighth, if there is one, will be found by asking the list rather than by
 another sweep that feels finished.
 
+Green at 719 with one skip, status 0, the tree identical to the commit.
+The count is unchanged throughout because members five, six and seven
+joined an existing case rather than adding cases.
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against
