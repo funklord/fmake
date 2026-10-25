@@ -16773,6 +16773,12 @@ int main(void){ printf("%d\\n", dep_value() + BONUS); return 0; }
 # machine's layout into the suite would be worse than skipping.
 HULL = os.environ.get("FMAKE_HULL") or shutil.which("hull")
 HULL_PY_IMAGE = "python:3.11-slim"
+# An image carrying a Python AND a toolchain, for the cases that have to
+# run fmake inside a machine rather than only an interpreter. Built
+# rather than pulled, because no published image has both at a size
+# worth fetching; the recipe is in project.md section 513 and is three
+# lines of `hull build'. Absent, the cases that want it skip.
+HULL_TOOLCHAIN_IMAGE = "fmake-nm:2"
 
 # A sentinel rather than a path, so a caller cannot accidentally
 # name the host's copy in a command that runs inside a machine.
@@ -16832,6 +16838,43 @@ def _floor_python(floor, argv, want_version=True):
 	rel = os.path.relpath(FMAKE, REPO)
 	return _hull_python(py, [f"/mnt/{rel}" if a is FMAKE_UNDER_TEST else a
 	                         for a in argv])
+
+
+def _hull_in_machine(tree, prelude, argv, image=None):
+	"""Run fmake inside a machine, with a shell prelude first.
+
+    The prelude is what makes this worth having: `detect_init' reads only
+    filesystem paths, so `mkdir -p /run/systemd/system' in a machine is
+    the whole of becoming a systemd host. Three of fmake's four
+    init-directory keys are reachable no other way on one machine --
+    section 513.
+
+    The tree is mounted writable because the build writes into it; the
+    repository is read-only, so a case cannot damage it through the
+    machine. Returns None where hull or the image is absent, so a caller
+    skips rather than failing.
+    """
+	image = image or HULL_TOOLCHAIN_IMAGE
+	if not _hull_image_present(image):
+		return None
+	quoted = " ".join('"' + str(a).replace('"', '\\"') + '"'
+	                  for a in ["/bin/sh", "-c",
+	                            prelude + " /usr/local/bin/python3 "
+	                            "/fmake/fmake -C /tree " +
+	                            " ".join(str(a) for a in argv) + " 2>&1"])
+	spec = ["(machine", f'  (source "{image}")', "  (backend chroot)",
+	        "  (mutable overlay)", "  (network none)",
+	        f'  (volumes (volume (host "{REPO}") (guest "/fmake") (mode ro))',
+	        f'           (volume (host "{tree}") (guest "/tree")))',
+	        "  (command " + quoted + "))"]
+	with tempfile.TemporaryDirectory(prefix="fmake-hullm-") as d:
+		with open(os.path.join(d, "hull.conf"), "w", encoding="utf-8") as fh:
+			fh.write("\n".join(spec) + "\n")
+		try:
+			return subprocess.run([HULL, "run"], cwd=d, capture_output=True,
+			                      text=True, timeout=900)
+		except (OSError, subprocess.TimeoutExpired):
+			return None
 
 
 def _hull_python(py, argv):
@@ -28046,6 +28089,70 @@ def a_ui_outside_this_build_is_neither_ambiguous_nor_generated(t):
 		      f"since there the rename is the reader's to make: {out}")
 	finally:
 		v.cleanup()
+
+
+@case
+def the_other_inits_glue_is_placed_in_a_machine(t):
+	"""The three init directories this host cannot reach.
+
+	The case above tests whichever init the host runs -- OpenRC here --
+	and names the other three without exercising them, which section 513
+	records rather than counting as coverage. This exercises them, one
+	machine each, because `detect_init' reads only filesystem paths and a
+	machine can therefore BE a systemd host:
+
+	    mkdir -p /run/systemd/system   -> systemd,  unitdir
+	    no marker at all               -> sysvinit, sysvinitdir
+	    an executable /sbin/procd      -> procd,    procddir
+
+	Each asserts the override moves the glue AND that the other inits'
+	files are not placed, which is what makes it a test of the placement
+	rather than of placing something -- the same strengthening the host
+	case needed.
+
+	Skips without hull or the image, which is deliberate: hull is a third
+	tier here and never a dependency, and no published image carries both
+	a Python and a toolchain at a size worth fetching, so the recipe is
+	recorded and the skip names it."""
+	if not HULL:
+		raise Skip("no hull; the other inits cannot be reached from here")
+	FILES = {"systemd": "probe.service", "sysvinit": "sysvinit.script",
+	         "openrc": "openrc.script", "procd": "procd.script"}
+	t.write("main.c", "int main(void){ return 0; }\n")
+	decl = []
+	for k, f in FILES.items():
+		t.write(f, f"#!/bin/sh\n# {k}\n")
+		decl.append(f"{k} = " + (f'["{f}"]' if k == "systemd"
+		                         else f'"{f}"'))
+
+	cases = (("systemd", "unitdir", "mkdir -p /run/systemd/system &&"),
+	         ("sysvinit", "sysvinitdir", "true &&"),
+	         ("procd", "procddir",
+	          "printf '#!/bin/sh\\n' > /sbin/procd && "
+	          "chmod +x /sbin/procd &&"))
+
+	for init, directory, prelude in cases:
+		t.write("fmake.toml",
+		        "[service.probe]\n" + "\n".join(decl) +
+		        f'\n\n[install]\n{directory} = "custom/glue"\n')
+		r = _hull_in_machine(t.dir, prelude,
+		                     ["--install", "--prefix", "/out", "--dry-run"])
+		if r is None:
+			raise Skip(f"hull has no {HULL_TOOLCHAIN_IMAGE}; build it per "
+			           f"project.md section 513 to exercise {directory}")
+		out = r.stdout + r.stderr
+		check(f"runs {init}" in out,
+		      f"the machine was meant to look like a {init} host and "
+		      f"fmake did not say so: {out}")
+		check("/out/custom/glue/" in out,
+		      f"[install] {directory} was accepted and ignored on a {init} "
+		      f"host: {out}")
+		for other in FILES:
+			if other == init:
+				continue
+			check(FILES[other] not in out,
+			      f"a {init} host had {other} glue placed as well, so an "
+			      f"install would carry another init's files: {out}")
 
 
 @case

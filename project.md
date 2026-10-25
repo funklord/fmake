@@ -40703,3 +40703,34 @@ are exercised only on a host that runs their init.** A systemd machine
 running this suite exercises `unitdir` and leaves `openrcdir` unrun, and
 between the two hosts the pair is covered -- which is a property of
 where it runs, recorded here so nobody reads `0 of 190` as finished.
+
+### And the other three, exercised in machines
+
+The note above said three of the four were named without being
+exercised. They are exercised now, one machine each, which is what the
+hull route was recorded for:
+
+    mkdir -p /run/systemd/system   -> systemd,  unitdir
+    no marker at all               -> sysvinit, sysvinitdir
+    executable /sbin/procd         -> procd,    procddir
+
+`detect_init()` reads only filesystem paths, so a machine does not
+simulate a systemd host -- for the purpose of that function it **is**
+one. That is the whole reason this works without an actual systemd
+anywhere.
+
+Each arm asserts three things: that fmake says it runs that init, that
+the override moved the glue, and that the **other** inits' files were
+not placed. The third is what the host case needed too, and without it
+a predicate that accepted every init would pass.
+
+**Coverage now takes two sentences, and both are needed.** With hull and
+the image, all four init directories are exercised on this one host --
+`openrcdir` natively and the other three in machines. Without hull, one
+is exercised and the case skips with the recipe named. The skip is
+deliberate rather than a gap: hull is a third tier here and never a
+dependency, and no published image carries both a Python and a
+toolchain at a size worth fetching.
+
+Sabotaged independently of the host case: the override ignored, and the
+glue placed for every init. Both fail it.
