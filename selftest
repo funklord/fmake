@@ -28156,7 +28156,7 @@ def the_other_inits_glue_is_placed_in_a_machine(t):
 
 
 @case
-def all_three_qt_tools_report_an_unrunnable_tool_alike(t):
+def every_generator_tool_reports_an_unrunnable_tool_alike(t):
 	"""moc was fixed and the fix stopped there -- section 505, third
 	instance.
 
@@ -28174,8 +28174,10 @@ def all_three_qt_tools_report_an_unrunnable_tool_alike(t):
 	one loop over all three, each getting the same four things -- rather
 	than three separate cases that could drift apart exactly as the code
 	did."""
-	if not (shutil.which("moc") or glob.glob("/usr/lib/qt6/libexec/moc")):
-		raise Skip("no Qt tools to name")
+	# situc needs no Qt, so a host without Qt still exercises the fourth
+	# member rather than skipping the whole family.
+	have_qt = bool(shutil.which("moc")
+	               or glob.glob("/usr/lib/qt6/libexec/moc"))
 	FIXTURE = {
 	    "moc": (("t.h", "#pragma once\n#include <QObject>\n"
 	                    "class T : public QObject { Q_OBJECT\n"
@@ -28193,8 +28195,16 @@ def all_three_qt_tools_report_an_unrunnable_tool_alike(t):
 	                     '<widget class="QWidget" name="P"/></ui>\n'),
 	            ("main.cpp", '#include "ui_p.h"\n'
 	                        "int main(){ return 0; }\n")),
+	    # The fourth member, and the one §516's own commit left behind.
+	    # situ's runner is separate from the Qt three, which is exactly
+	    # how it was missed.
+	    "situc": (("msg.situ", "// a schema\n"),
+	              ("main.c", '#include "msg.h"\n'
+	                         "int main(void){ return msg_check(); }\n")),
 	}
 	for tool, files in FIXTURE.items():
+		if tool != "situc" and not have_qt:
+			continue
 		u = Tree("unrunnable_" + tool)
 		try:
 			for name, body in files:

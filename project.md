@@ -40952,6 +40952,38 @@ Sabotaged per tool: reverting any one of the three to the bare message
 fails the case, which is what makes it a family assertion rather than a
 test of whichever one runs first.
 
+### And the family had a fourth member, which that commit left behind
+
+§516 fixed moc, rcc and uic, named the lens, said three instances made
+it a property of the codebase -- and missed `situc`, which has the same
+handler and said the same bare sentence. **Three of four, in the commit
+whose whole subject was a fix that stopped at one sibling.**
+
+    situc:  could not run situc (BADTOOL): No such file or directory
+
+Why it was missed is the useful part, and it is not carelessness: situ's
+runner is **not one of the Qt three**. `run_moc`, `run_rcc` and `run_uic`
+sit together and read alike, so a sweep over them feels complete; `run_situc`
+is four hundred lines away and belongs to a different generator. The
+family is defined by **what the code does** -- turn an `OSError` from a
+tool into advice -- and not by where it lives, and a sweep keyed on
+proximity finds the members that are near each other.
+
+So the case is renamed from *all three Qt tools* to *every generator
+tool*, which is the property actually wanted, and it carries four
+members. It also no longer skips wholesale without Qt: `situc` needs no
+Qt, so a host without it still exercises the fourth member instead of
+reporting a clean run that tested nothing.
+
+Sabotaged per member, all four: reverting any one to the bare message
+fails it.
+
+**The lens's own lesson, sharpened by being got wrong immediately.**
+Finding three instances of a pattern is not the same as finding the
+family. The question to ask is not "where else does this code appear"
+but "what else does this job" -- and the answer is rarely all in one
+place, which is why the first sweep felt finished.
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against

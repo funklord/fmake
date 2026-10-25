@@ -4762,7 +4762,8 @@ def situ_flags(conf, root, srcs):
 	return per, tree_wide
 
 
-def run_situc(root, jobs, situc, cache, dry_run=False):
+def run_situc(root, jobs, situc, cache, dry_run=False,
+              origin=None):
 	"""Run situc where a schema changed. Returns what it wrote, tree-relative.
 
     Keyed on the schema's contents and on the flags, like everything else
@@ -4814,8 +4815,19 @@ def run_situc(root, jobs, situc, cache, dry_run=False):
 				res = subprocess.run(cmd, cwd=root, capture_output=True,
 				                     text=True, errors="replace")
 			except OSError as exc:
+				# The fourth member of the family section 516 is about,
+				# and it was left behind by that very commit: moc said
+				# where the path came from and that the tool cannot
+				# execute, rcc and uic were given it, and situc was not
+				# looked at. Three of four is how a family drifts.
+				if origin:
+					die(f"could not run situc ({situc}): "
+					    f"{exc.strerror or exc}\n"
+					    f"That situc comes from {origin} and cannot "
+					    f"execute on this machine.")
 				die(f"could not run situc ({situc}): "
-				    f"{exc.strerror or exc}")
+				    f"{exc.strerror or exc}\n"
+				    f"That situc cannot execute on this machine.")
 			outs += situc_wrote(res, root, cmd, src)
 		# The header is the file that motivated the run: something included
 		# it. A situc that exits 0 having written no header has produced a
@@ -12569,7 +12581,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				      f"{' '.join(_own) or '(none)'}, instead of the "
 				      f"tree's {' '.join(_situ_all) or '(none)'}")
 		situ_outs = run_situc(root, situ_jobs, situc_exe,
-		                      cache, args.dry_run)
+		                      cache, args.dry_run,
+		                      tool_origin("situc", cfg.situc))
 		if not args.dry_run:
 			prune_generated(root, SITU_DIR, situ_outs, since=situ_started)
 		for rel in situ_outs:
