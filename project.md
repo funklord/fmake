@@ -566,7 +566,8 @@ that had been green about nothing for five commits ·
 [513. The init glue, and a case that asks the host instead of faking one](#513-the-init-glue-and-a-case-that-asks-the-host-instead-of-faking-one) ·
 [514. Three failure paths a reader meets while writing a rule](#514-three-failure-paths-a-reader-meets-while-writing-a-rule) ·
 [515. Fold at 91 per cent](#515-fold-at-91-per-cent) ·
-[516. The third fix that stopped at one sibling](#516-the-third-fix-that-stopped-at-one-sibling)
+[516. The third fix that stopped at one sibling](#516-the-third-fix-that-stopped-at-one-sibling) ·
+[517. The last skip, and why the budget let it happen](#517-the-last-skip-and-why-the-budget-let-it-happen)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41234,3 +41235,59 @@ session inherits and acts on: a reader finding "development stops at 94"
 would leave four per cent of a week unused and, worse, carry the wrong
 threshold forward. Everything is committed, pushed and measured either
 way, and nothing is half-made.
+
+## 517. The last skip, and why the budget let it happen
+
+**The weekly window rolled over mid-session**, which is why work resumed
+after §515's fold and the halt at 98 per cent. The holder also added a
+rule the same day: fold and halt are waived within three hours of the
+reset, because the budget comes back at the rollover and stopping just
+short of it loses working time to protect a record that is not at risk.
+Both figures were read from `~/.claude/run/<session>.usage` -- field 1
+the per cent used, field 2 the reset time, which the hook now reads too.
+
+So this entry exists because the halt lifted, not because it was
+overruled, and the record is noted here so a later reader does not find
+a session apparently working past its own stop.
+
+### The cross build, verified end to end
+
+`a_cross_build_derives_the_cxx_compiler` skips wherever
+`aarch64-linux-gnu-g++` is absent, which is every machine in this
+workspace -- so the one assertion nothing else makes, that a tree
+declaring aarch64 produces an **aarch64 binary**, ran nowhere. §498
+judged hull would add thoroughness rather than value here, and that was
+right at the time: the cost was an image nobody had.
+
+**The judgement changed because the price did, not because the value
+did.** The image recipe from §513 already existed; adding two packages
+to it is three lines:
+
+    (step (name "cross") (network true)
+          (run "apt-get -o APT::Sandbox::User=root install -y
+                --no-install-recommends binutils gcc libc6-dev
+                g++-aarch64-linux-gnu binutils-aarch64-linux-gnu"))
+
+### The tree is mounted writable, and that is the whole trick
+
+Every earlier machine case asserted on a **message**. This one asserts
+on a **file**: the ELF machine of the binary. So the tree goes in
+writable and the repository read-only -- **the machine builds, and the
+host reads what it left behind.** The artifact crosses the boundary
+while the toolchain does not, which is what makes an end-to-end cross
+build testable on a host with no cross compiler at all.
+
+    machine: [1/1] CXX prog.cpp / LD prog / * built prog
+    host:    e_machine = 0xb7   (AARCH64)
+
+Sabotaged at the derivation itself -- dropping `self._prefixed("g++")`
+so a cross build falls back to the host `c++` -- and the case fails.
+That is the historical bug exactly: a tree declaring linux/aarch64
+compiled its C++ with the host compiler, linked with it, wrote an
+x86-64 binary, and printed `built prog`, with nothing wrong anywhere a
+person would look.
+
+**With hull and its two images this host now has no skips at all.**
+Without hull it has three, each naming what it wants. The native case
+stays, because a machine with a cross toolchain installed should test it
+directly rather than through a container.

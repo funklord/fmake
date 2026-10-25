@@ -16113,6 +16113,57 @@ def the_cxx_compiler_is_derived_from_a_cross_cc_anywhere(t):
 
 
 @case
+def a_cross_build_is_verified_in_a_machine(t):
+	"""The end-to-end half of the case below, where no cross toolchain is
+	installed.
+
+	`the_cxx_compiler_is_derived_from_a_cross_cc_anywhere' asserts the
+	derivation with symlink shims and runs everywhere.
+	`a_cross_build_derives_the_cxx_compiler' is the real thing -- it
+	cross-compiles and reads the ELF machine out of the binary -- and it
+	skips wherever `aarch64-linux-gnu-g++' is absent, which is most
+	machines and every machine in this workspace.
+
+	So it runs in a hull machine instead. The tree is mounted **writable**
+	and the repository read-only: the machine builds, and the host reads
+	the artifact it left behind. That split is what makes this possible at
+	all -- the assertion is about a file, not about a message, and the file
+	crosses the boundary while the toolchain does not.
+
+	The bug it defends against is the worst shape a build tool has: a tree
+	declaring linux/aarch64 compiled its C++ with the host compiler, linked
+	with the host compiler, wrote an x86-64 binary, and printed `built
+	prog'. Nothing was wrong anywhere a person would look."""
+	if not HULL:
+		raise Skip("no hull; a cross build cannot be reached from here")
+	t.write("prog.cpp", "#include <string>\n"
+	        'int main(){ std::string s = "x"; return (int)s.size() - 1; }\n')
+	t.write("fmake.toml", '[toolchain]\ncc = "aarch64-linux-gnu-gcc"\n'
+	        'os = "linux"\narch = "aarch64"\n')
+
+	r = _hull_in_machine(t.dir, "true &&", ["-n"],
+	                     image=HULL_CROSS_IMAGE)
+	if r is None:
+		raise Skip(f"hull has no {HULL_CROSS_IMAGE}; build it per "
+		           f"project.md section 517 to exercise a cross build")
+	out = r.stdout + r.stderr
+	line = next((l for l in out.splitlines() if " -c " in l), "")
+	check("g++" in line and "aarch64" in line,
+	      f"the host C++ compiler was chosen for a cross build: {out}")
+
+	r = _hull_in_machine(t.dir, "true &&", [], image=HULL_CROSS_IMAGE)
+	check(r is not None and r.returncode == 0,
+	      f"the cross build failed: {r and (r.stdout + r.stderr)}")
+	prog = os.path.join(t.dir, "prog")
+	check(os.path.exists(prog),
+	      f"the machine built nothing the host can see, so the tree was "
+	      f"not mounted writable: {os.listdir(t.dir)}")
+	check(_elf_machine(prog) == 0xB7,
+	      f"a build declaring aarch64 produced a "
+	      f"0x{_elf_machine(prog):x} binary")
+
+
+@case
 def a_cross_build_derives_the_cxx_compiler(t):
 	"""Naming the compiler is supposed to be enough, and was not for C++.
 
@@ -16779,6 +16830,11 @@ HULL_PY_IMAGE = "python:3.11-slim"
 # worth fetching; the recipe is in project.md section 513 and is three
 # lines of `hull build'. Absent, the cases that want it skip.
 HULL_TOOLCHAIN_IMAGE = "fmake-nm:2"
+# And one carrying an aarch64 cross toolchain, for the end-to-end cross
+# build that is the last case this host cannot run natively. Same recipe
+# as above plus g++-aarch64-linux-gnu and binutils-aarch64-linux-gnu;
+# project.md section 517 has it.
+HULL_CROSS_IMAGE = "fmake-cross:1"
 
 # A sentinel rather than a path, so a caller cannot accidentally
 # name the host's copy in a command that runs inside a machine.
