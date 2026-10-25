@@ -41052,6 +41052,44 @@ and the count unchanged because `cc` joined an existing case. Both style
 modes and both halves of `make check` pass on exactly what was pushed,
 which is what the previous entry's red gate was about.
 
+### Sixth and seventh: `ar` and `nm`, and a claim not made this time
+
+The compile path got a handler and the **link** path did not, because it
+is a different function. `ar` for an archive, and `nm` -- read for every
+object, so the earliest failure a tree can have -- both answered with a
+`FileNotFoundError` traceback.
+
+    ar:  could not run 'TREE/badtool': No such file or directory
+    nm:  could not run 'TREE/badtool': No such file or directory
+
+Both fixed at their own sites rather than inside `run_child`. Wrapping
+there would have caught the OSError before moc, rcc, uic and situc could,
+and **lost the four messages that name which setting chose the tool** --
+a fix that makes six sites consistent by making four of them worse.
+
+### How the family grew, which is the whole lesson
+
+    §516 as committed   moc, then rcc and uic         3
+    the same day        situc, 400 lines away         4
+    then                cc, which had no handler      5
+    then                ar and nm, different sites    7
+
+**Five times a declaration of completeness was wrong.** The reason is
+now clear enough to state: the family is defined by a *behaviour* --
+turn an `OSError` from a tool into advice -- and its members sit in
+seven functions that have nothing else in common. The compile loop, the
+link, the symbol read, and four generators. A sweep keyed on proximity
+finds neighbours; nothing about `read_symbols` resembles `run_moc`.
+
+**So no claim of completeness is made here.** The open question for the
+next session is the one this entry cannot answer: whether *every*
+subprocess call in fmake that runs a user-named tool has the handler.
+That is an audit of the call sites rather than a lens, and it is the
+right shape for the question -- enumerate the calls, not the
+neighbourhoods. Seven are done and sabotage-proved individually; the
+eighth, if there is one, will be found by asking the list rather than by
+another sweep that feels finished.
+
 Green at 719 with one skip, status 0 -- one more than §514's 718,
 because this is a new case rather than an arm. The run began before this
 addendum, so the four cases that read `project.md` were re-run against

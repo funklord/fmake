@@ -8769,8 +8769,17 @@ def plugin_failure(*streams):
 
 def read_symbols(units, cfg, jobs):
 	def one(u):
-		r = subprocess.run([cfg.nm, "--format=posix", u.obj],
-		                   capture_output=True, text=True, errors="replace")
+		# Seventh of the family. nm is read for every object, so an nm
+		# that will not start is the earliest failure a tree can have,
+		# and it had no handler either.
+		try:
+			r = subprocess.run([cfg.nm, "--format=posix", u.obj],
+			                   capture_output=True, text=True,
+			                   errors="replace")
+		except OSError as exc:
+			die(f"could not run {cfg.nm!r}: {exc.strerror or exc}\n"
+			    f"That nm cannot execute on this machine; it is there "
+			    f"and will not start.")
 		# An object nm could not read yields no symbols, and an object with
 		# no symbols is invisible to the closure: it defines nothing so it is
 		# never linked, and needs nothing so it reports no externals. The
@@ -11587,8 +11596,19 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# subprocess.run, so a signal during a big link left it running. The
 	# guard was written for two neighbouring cases and applied to one, which
 	# is the shape section 162 had just recorded about architecture.
-	r = run_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-	              text=True, errors="replace")
+	# Sixth of the family in section 516. The compile path was given a
+	# handler and this one -- the link, and `ar' for an archive -- was
+	# not, because it is a different function: the same proximity trap
+	# that hid situc. An `ar' that exists and will not start reached
+	# the reader as a FileNotFoundError traceback.
+	try:
+		r = run_child(cmd, stdout=subprocess.PIPE,
+		              stderr=subprocess.PIPE,
+		              text=True, errors="replace")
+	except OSError as exc:
+		die(f"could not run {cmd[0]!r}: {exc.strerror or exc}\n"
+		    f"That tool cannot execute on this machine; it is there "
+		    f"and will not start.")
 	# Read here because this is where rustc's words are. The advice they
 	# feed used to be gated on there being a second crate root in the
 	# tree, which is a fact about the layout and not about the failure --

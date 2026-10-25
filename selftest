@@ -28206,7 +28206,14 @@ def every_generator_tool_reports_an_unrunnable_tool_alike(t):
 	    # FileNotFoundError traceback out of subprocess.py. It is the tool
 	    # every build runs and the one a reader actually sets.
 	    "cc": (("main.c", "int main(void){ return 0; }\n"),),
+	    # Sixth and seventh. `ar' runs from the link function and `nm'
+	    # from the symbol read -- both different places from the compile
+	    # path, which is the proximity trap that hid situc. A static
+	    # target reaches both.
+	    "ar": (("lib.c", "int lib_go(void){ return 1; }\n"),),
+	    "nm": (("lib.c", "int lib_go(void){ return 1; }\n"),),
 	}
+	STATIC = {"ar", "nm"}
 	for tool, files in FIXTURE.items():
 		if tool != "situc" and not have_qt:
 			continue
@@ -28219,7 +28226,9 @@ def every_generator_tool_reports_an_unrunnable_tool_alike(t):
 				fh.write("#!/nonexistent/interp\n")
 			os.chmod(bad, 0o755)
 			u.write("fmake.toml",
-			        f'[toolchain]\n{tool} = "{bad}"\n')
+			        (f'[target.lib]\nkind = "static"\n'
+			         f'root = "lib.c"\n\n' if tool in STATIC else "")
+			        + f'[toolchain]\n{tool} = "{bad}"\n')
 			r = u.fmake()
 			out = r.stdout + r.stderr
 			check(r.returncode != 0,
@@ -28246,7 +28255,7 @@ def every_generator_tool_reports_an_unrunnable_tool_alike(t):
 			# through $CC, a [toolchain] key, a cross prefix or a
 			# default, and naming one unasked is section 31's advice
 			# fault. So that assertion is for the four, not the five.
-			if tool != "cc":
+			if tool not in ({"cc"} | STATIC):
 				check(f"[toolchain] {tool}" in out,
 				      f"{tool} does not say where the path came from, "
 				      f"so the reader is not told which setting to "
