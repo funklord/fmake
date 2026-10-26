@@ -480,6 +480,22 @@ VERBOSE = False
 # it becomes stderr, so the data stays clean enough to redirect.
 PROGRESS = sys.stdout
 
+# Line-buffered even when stdout is not a terminal. Python block-buffers a
+# pipe or a file, so a build that is stopped rather than finished -- a
+# timeout, a ^C, a cancelled CI job -- loses everything that had not reached
+# the buffer size, and the one thing anybody wants from a stopped build is
+# which file it had got to.
+#
+# Measured on a 301-file tree that compiles in 4.4s, killed after 2: the
+# redirected log held nothing at all, and the same run under `python3 -u'
+# held 279 progress lines. `die' has flushed PROGRESS since before this,
+# which covers a build that FAILS and not one that is stopped -- the
+# difference being that nothing of ours runs on a kill.
+#
+# The cost is a flush per line, against a compiler invocation per line.
+if hasattr(sys.stdout, "reconfigure"):
+	sys.stdout.reconfigure(line_buffering=True)
+
 def say(m=""):    print(m, file=PROGRESS)
 def info(m):  say(f"{GREEN('*')} {m}")
 def warn(m):  say(f"{YELLOW('*')} {m}")

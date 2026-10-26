@@ -4404,6 +4404,83 @@ exit $rc
 
 
 @case
+def progress_reaches_a_log_while_the_build_is_still_running(t):
+	"""A build that is stopped rather than finished has to have said how
+	far it got, and to a log rather than only to a terminal.
+
+	Python block-buffers stdout to a pipe or a file, so progress sat in an
+	8 KiB buffer and a kill threw it away. Measured on a 301-file tree
+	that compiles in 4.4s and was killed after 2: nothing whatever in the
+	redirected log, where the same run under `python3 -u' held 279 lines.
+	`die' flushes already, which covers a build that fails and not one
+	that is stopped, because on a kill nothing of ours runs at all.
+
+	Deterministic rather than timed: the stand-in compiler blocks on a
+	sentinel from its second invocation, so the build is pinned open with
+	one compile finished and one in progress. The assertion is made while
+	it is pinned, and the sentinel then releases it."""
+	go = os.path.join(t.dir, "go")
+	# Gated by filename rather than by a count of invocations. Counting
+	# pinned the build before it had printed anything, because fmake probes
+	# the compiler several times before compiling and those probes are
+	# invocations too -- so the first real compile was already past the
+	# threshold. f0 is left to compile and print; f1 onwards wait.
+	shim = t.write("cc-gate", f"""#!/bin/sh
+gate=no
+for a in "$@"; do
+  case "$a" in *f1.c|*f2.c|*f3.c) gate=yes ;; esac
+done
+if [ "$gate" = yes ]; then
+  i=0
+  while [ ! -f "{go}" ] && [ "$i" -lt 240 ]; do sleep 0.25; i=$((i+1)); done
+fi
+exec {shutil.which("cc")} "$@"
+""")
+	os.chmod(shim, 0o755)
+	for i in range(4):
+		t.write(f"f{i}.h", f"int f{i}(void);\n")
+		t.write(f"f{i}.c", f"int f{i}(void){{ return {i}; }}\n")
+	t.write("main.c", "".join(f'#include "f{i}.h"\n' for i in range(4))
+	        + "int main(void){ return "
+	        + " + ".join(f"f{i}()" for i in range(4)) + "; }\n")
+
+	env = dict(os.environ, CC=shim)
+	for name in ("CFLAGS", "LDFLAGS", "DEBUG", "SANITIZE"):
+		env.pop(name, None)
+	# A regular file, not a pipe: the buffering this is about is the one
+	# Python applies when stdout is not a terminal, and a test that read
+	# from a pipe it drains would never see it.
+	log = os.path.join(t.dir, "build.log")
+	fh = open(log, "w")
+	proc = subprocess.Popen([sys.executable, FMAKE, "-C", t.dir, "-j1"],
+	                        stdout=fh, stderr=subprocess.DEVNULL, env=env)
+	try:
+		seen = ""
+		for _ in range(240):
+			if os.path.exists(go):
+				break
+			try:
+				seen = open(log).read()
+			except OSError:
+				seen = ""
+			if "] CC" in seen or "CC " in seen:
+				break
+			time.sleep(0.25)
+		check("CC" in seen,
+		      f"the build is pinned with a compile finished and the log "
+		      f"holds nothing, so a stopped build would report no "
+		      f"progress at all: {seen!r}")
+	finally:
+		open(go, "w").close()
+		try:
+			proc.wait(timeout=120)
+		except subprocess.TimeoutExpired:
+			proc.kill()
+			proc.wait(timeout=30)
+		fh.close()
+
+
+@case
 def one_failed_target_does_not_sink_the_rest(t):
 	"""Targets are discovered, not requested, so failures are per-target."""
 	t.write("main.c", "int main(void){ return 0; }\n")

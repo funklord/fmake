@@ -568,7 +568,8 @@ that had been green about nothing for five commits ·
 [515. Fold at 91 per cent](#515-fold-at-91-per-cent) ·
 [516. The third fix that stopped at one sibling](#516-the-third-fix-that-stopped-at-one-sibling) ·
 [517. The last skip, and why the budget let it happen](#517-the-last-skip-and-why-the-budget-let-it-happen) ·
-[518. A rule the reader cannot follow has not been stated](#518-a-rule-the-reader-cannot-follow-has-not-been-stated)
+[518. A rule the reader cannot follow has not been stated](#518-a-rule-the-reader-cannot-follow-has-not-been-stated) ·
+[519. A stopped build said nothing about how far it got](#519-a-stopped-build-said-nothing-about-how-far-it-got)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41452,3 +41453,80 @@ emitter's vocabulary, and an assertion about what the line reaches tests
 the build.** This session's other version of it was *presence is not
 exercise*, about tokens appearing in the suite; this is the same error
 one level down, where the token appeared in the emitted file.
+
+## 519. A stopped build said nothing about how far it got
+
+**The lens came from the two defects before it**, both of which were a
+thing that withholds what it knows until it finishes: a test asserting a
+line exists rather than what it covers, and the suite collecting every
+result before printing any. Pointed at fmake itself, the question was
+whether the build does the same -- and it did.
+
+`say` is `print(m, file=PROGRESS)` and `PROGRESS` is `sys.stdout`.
+**Python block-buffers stdout when it is not a terminal**, so progress
+piped to a log sat in the buffer, and a build that was stopped rather
+than finished lost it. Stopped is the case that matters: a timeout, a
+`^C`, a cancelled CI job. Nothing of ours runs on a kill.
+
+Measured on a 301-file tree that compiles in 4.4 seconds, killed after
+2 and with no `-u`:
+
+| | bytes | lines |
+|---|---|---|
+| before | 0 | 0 |
+| after | 5472 | 264 |
+
+The 264 lines existed in both runs. Only the second kept them, and its
+log ends `[263/300] CC f65.c` -- which is the one thing anybody wants
+from a build that was stopped.
+
+**`die` has flushed `PROGRESS` since long before this**, with the comment
+*keep the error after the build output*. So the hazard was already met
+and already fixed for a build that **fails**, and the gap was a build
+that is **stopped** -- the difference being that `die` is ours and runs,
+and a kill is not and does not. A fix that covers the failing path reads
+as covering this one, which is why it survived.
+
+**The paths somebody had already moved to stderr were safe for free**,
+and the asymmetry is worth keeping. `--eject` and `--run` set
+`PROGRESS = sys.stderr` so that stdout can carry data; measured with
+both redirected to a file, `sys.stderr.line_buffering` is `True` and
+`sys.stdout.line_buffering` is `False`. So the two paths chosen for a
+different reason got the property, and the ordinary build path -- the
+one nearly everybody runs -- was the exposed one.
+
+The fix is one line at the definition rather than a flush in `say`:
+`sys.stdout.reconfigure(line_buffering=True)`, guarded by `hasattr`.
+That covers `PROGRESS.write(err)` for compiler stderr too, which a flush
+inside `say` would have missed. The cost is a flush per line against a
+compiler invocation per line.
+
+### Two fixture errors, and what they cost
+
+Neither was fmake's fault and both looked like evidence at first.
+
+**A tree where nothing reaches the sources.** The first fixture wrote
+`f1.c` to `f8.c` and a `main.c` calling none of them, so fmake compiled
+one file and said so for the other eight. The probe then "showed" an
+empty log, which proved nothing: there was almost no progress to lose.
+**A probe that cannot exhibit the thing it is looking for reports its
+absence**, which is `evidence.md`'s vacuous pass wearing a fixture's
+clothes -- and the reassuring reading was available for a further two
+runs before the fixture was fixed.
+
+**A gate counted invocations where it meant compiles.** The suite case
+first pinned the build by blocking the stand-in compiler from its second
+invocation onwards. It failed with the fix in place, because **fmake
+probes the compiler several times before compiling anything** and a probe
+is an invocation: the threshold was crossed before the first real compile,
+so the build was pinned having printed nothing, and the case could not
+tell that from the defect. Gating on the filename instead -- let `f0`
+through, block `f1` onwards -- pins it with one compile finished, which
+is the state the assertion needs. `evidence.md` has this as asking the
+object you mean rather than something correlated with it; here the
+correlation was invocation against compile.
+
+The case is deterministic for that reason: no sleeps and no timing
+assumption, a sentinel the test writes to release the build, and the
+assertion made while it is pinned. Removing the one-line fix fails it
+with the log still empty.
