@@ -41787,6 +41787,47 @@ Both cases carry the control that §520's rule asks for: a symbol nothing
 ever defined still gets its two guesses, and a header that was never in
 the tree still gets the package remedy.
 
+### And the third: a library that has gone
+
+`scan_providers` caches, per symbol, which library stem exported it and
+where that library was -- `{"providers": {"mine_calc": ["mine"]},
+"paths": {"mine": ".../libs/libmine.so"}}`. Delete the library and the
+link failed with the same two guesses, one of which offers `--ldflags`
+for a library this build had resolved by itself.
+
+    before:  so either a library this build has not been told about
+             -- --ldflags, or @pkg on the file that needs it -- or
+             something that was never generated
+    after:   mine_calc was exported by -lmine in an earlier build, at
+             .../libs/libmine.so, and that file is not there now
+             so a library has been uninstalled, or a search path has
+             changed -- install it again, or name it with --ldflags
+
+The entry is readable at the point of failure because the sweep's key
+includes a stamp of the library directories: the library going away
+changes the key, so the earlier entry stays in the store under the
+previous one rather than being overwritten.
+
+**"an earlier build" and not "last build", deliberately.** The store
+keeps one entry per key, so a cross build's sweep sits beside a native
+one, and a path from the wrong configuration would otherwise be
+presented as this build's own history. What is certain is that something
+here exported the symbol and the file has gone -- enough to stop the
+reader hunting a package they never needed. The remedy is kept rather
+than replaced, since an uninstalled package is the likeliest reading and
+installing it again is then the next step.
+
+### Editing fmake between two builds discards the cache
+
+Worth knowing before probing anything that reads the cache. The first
+attempt at the above showed the branch not firing, and the store held a
+single empty entry -- because `fmake` had been edited between the two
+builds, and the cache carries an identity of the tool, so it was thrown
+away wholesale. That is the right behaviour and it makes the obvious
+probe sequence -- build, fix, build -- unable to exercise any
+cache-reading feature. Build both halves with the tool already in its
+final state.
+
 ### A suite run that spanned two versions is evidence for neither
 
 Worth recording because it was my own slip and it looked harmless. A

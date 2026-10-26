@@ -2746,6 +2746,74 @@ def a_deleted_source_is_named_rather_than_guessed_at(t):
 
 
 @case
+def a_library_that_has_gone_is_named_rather_than_guessed_at(t):
+	"""The third of the same family, after the deleted source and header.
+
+	`scan_providers' caches, per symbol, which library stem exported it
+	and where that library was. Delete the library and the link fails with
+	the two guesses -- "a library this build has not been told about --
+	--ldflags" for one it HAD been told about, and a code generator that
+	was never involved.
+
+	The sweep's cache key includes a stamp of the library directories, so
+	the library going away changes the key and the earlier entry stays in
+	the store under the previous one. That is what makes it readable at
+	the point of failure."""
+	cc = shutil.which("cc")
+	if not cc:
+		raise Skip("no cc to build a library with")
+	libs = os.path.join(t.dir, "libs")
+	os.makedirs(libs, exist_ok=True)
+	src = os.path.join(t.dir, "mine.c")
+	with open(src, "w") as fh:
+		fh.write("int mine_calc(void){ return 5; }\n")
+	so = os.path.join(libs, "libmine.so")
+	made = subprocess.run([cc, "-shared", "-fPIC", "-o", so, src],
+	                      capture_output=True, text=True)
+	# Removed before fmake ever walks the tree: left in place it is a
+	# source fmake compiles, which defines the symbol here and the library
+	# is never consulted at all.
+	os.remove(src)
+	if made.returncode != 0 or not os.path.isfile(so):
+		raise Skip(f"cc cannot build a shared library here: {made.stderr}")
+
+	t.write("main.c", "int mine_calc(void);\n"
+	        "int main(void){ return mine_calc() - 5; }\n")
+	t.write("fmake.toml", f'[toolchain]\nlib-dirs = ["{libs}"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the library should resolve by sweep: {r.stdout}{r.stderr}")
+
+	os.remove(so)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the link should fail: {out}")
+	check("exported by -lmine" in out,
+	      f"the library that exported it is not named: {out}")
+	check("libmine.so" in out,
+	      f"the path it was at is not given, which is what says whether "
+	      f"the file went or the search path did: {out}")
+	check("has not been told about" not in out,
+	      f"still offering --ldflags for a library this build resolved "
+	      f"itself: {out}")
+
+	# Nothing ever exported this one, so the guesses are right.
+	u = Tree("never-exported")
+	try:
+		u.write("main.c", "int nowhere_at_all(void);\n"
+		        "int main(void){ return nowhere_at_all(); }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "appears to define them" in out,
+		      f"the generic ending has to survive: {out}")
+		check("earlier build" not in out,
+		      f"a vanished library is being claimed where there was "
+		      f"none: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_deleted_header_is_named_rather_than_guessed_at(t):
 	"""The same fault as the case above, on the include side.
 

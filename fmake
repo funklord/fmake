@@ -17061,6 +17061,31 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				took = set(ent.get("s") or []) & unprovided
 				if took and not os.path.exists(os.path.join(root, rel)):
 					gone_defs.setdefault(rel, set()).update(took)
+		# And a library that exported one of these in an earlier build and
+		# is not on disk now. `scan_providers' keys its cache by the symbol
+		# set, a stamp of the library directories and the target identity,
+		# so a library going away changes the key and the old entry stays
+		# in the store under the previous one -- which is what makes it
+		# readable here.
+		#
+		# "an earlier build" rather than "last build", deliberately. The
+		# store keeps an entry per key, so a cross build's sweep sits
+		# beside a native one and a path from the wrong configuration could
+		# otherwise be presented as this build's history. What is certain
+		# is that something here exported the symbol and the file has gone,
+		# which is enough to stop the reader looking for a package they
+		# never needed.
+		gone_libs = {}
+		if unprovided:
+			for ent in (cache.data.get("providers") or {}).values():
+				prov = ent.get("providers") or {}
+				paths = ent.get("paths") or {}
+				for sym in unprovided:
+					for stem in prov.get(sym) or ():
+						where = paths.get(stem)
+						if where and not os.path.exists(where):
+							gone_libs.setdefault(sym, set()).add(
+							    (stem, where))
 		# Three endings, because there are three causes and only one of them
 		# is a missing library. Offering --ldflags for a meta-object this
 		# tree was supposed to generate sends the reader to install
@@ -17121,6 +17146,22 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				     f"previous build and is not in this tree now")
 			note("so this is a source that has been deleted or renamed, "
 			     "rather than a library this build was never told about")
+		elif gone_libs:
+			# The fact and the remedy together, unlike `gone_defs' above:
+			# an uninstalled package is the likeliest reading, and
+			# installing it again is then exactly the next step -- so the
+			# advice below would have been right and is kept rather than
+			# replaced.
+			for sym in sorted(gone_libs):
+				told, held = capped(sorted(gone_libs[sym]), 2)
+				for stem, where in told:
+					note(f"{sym} was exported by -l{stem} in an earlier "
+					     f"build, at {where}, and that file is not there "
+					     f"now")
+				if held:
+					note(f"    and {held} more that exported it")
+			note("so a library has been uninstalled, or a search path has "
+			     "changed -- install it again, or name it with --ldflags")
 		elif unprovided:
 			# Both explanations, because fmake has ruled out neither and
 			# saying only the first is what sent one project looking for a
