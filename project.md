@@ -572,7 +572,8 @@ that had been green about nothing for five commits ·
 [519. A stopped build said nothing about how far it got](#519-a-stopped-build-said-nothing-about-how-far-it-got) ·
 [520. Colour was decided about a stream the notices were not on](#520-colour-was-decided-about-a-stream-the-notices-were-not-on) ·
 [521. A named nm was replaced rather than refused](#521-a-named-nm-was-replaced-rather-than-refused) ·
-[522. The same fallthrough in pkg-config, and the rule factored](#522-the-same-fallthrough-in-pkg-config-and-the-rule-factored)
+[522. The same fallthrough in pkg-config, and the rule factored](#522-the-same-fallthrough-in-pkg-config-and-the-rule-factored) ·
+[523. A deleted source was guessed at, and fmake knew the answer](#523-a-deleted-source-was-guessed-at-and-fmake-knew-the-answer)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41710,3 +41711,92 @@ Two sites wanting one rule made it worth factoring rather than copying:
 the two faults and the `tool_origin` call, and `find_nm` and `PkgConfig`
 both call it. Reverting either to its `or` chain fails its case with
 fmake's own `* built ...` line quoted inside the failure.
+
+## 523. A deleted source was guessed at, and fmake knew the answer
+
+Delete a source whose object is cached while something still calls its
+symbols. The link fails, correctly -- the orphaned object is not linked,
+which was checked first and is a recorded negative. What was wrong was
+the advice: the two guesses offered for any undefined symbol,
+`--ldflags` for a library and *"a code generator that has not run leaves
+exactly this"*.
+
+Neither is true, and fmake holds the facts. The cache keeps the strong
+symbols each object defined -- `objects["lib.c"]` reads `{"s":
+["calc"], ...}` -- and the file is plainly not on disk. Measured before
+and after, on the same tree:
+
+    before:  no library here exports them, and nothing in this tree
+             appears to define them either
+    after:   lib.c defined calc in the previous build and is not in
+             this tree now
+
+The entry survives to be read for the reason it is useful: a deleted
+source is no longer a unit, so nothing in the compile loop visits or
+prunes it. The test is `os.path.exists` rather than membership of
+`srcs`, because a file that is present and set aside is a different
+ending with its own branch already.
+
+The branch sits **before** `unprovided`, since that one is a guess and
+this is not. The case's second half is the control: a symbol nothing
+ever defined must still get the two guesses, and must not be blamed on a
+deletion that did not happen. Removing the branch fails the case with
+the old guess quoted inside the failure.
+
+This is section 31's defect once more -- the code printing the advice had
+not asked the code that knows -- and the fourth branch added to that
+chain for the same reason.
+
+### The same thing on the include side
+
+A deleted **header** had it too, and worse, because the remedies were
+positively misleading:
+
+    before:  if it comes from a package, install it or name it with @pkg
+             if lib.c belongs to another platform, @os NAME or @arch NAME
+             keeps it out of this build
+    after:   it was in this tree last build, at lib.h, and is not there
+             now -- a header deleted or renamed rather than a package
+             that is missing
+
+`compile_units` already takes `cache` and `root`, so the fact was one
+lookup away. Matched on the basename as well as the path, since what the
+compiler reported is the include text while a header reached through an
+include dir is cached under its path; fmake's own state is skipped, and
+so is anything still on disk, so a system header of the same name cannot
+be mistaken for the one that went.
+
+**And the first version of this said "in this tree" about things that
+are not in it.** `files` is keyed relative to the root and reaches past
+it: a toolchain header is cached as
+`../../../usr/include/stdc-predef.h`, and a tree sharing headers with a
+sibling through `[project] include-dirs` caches `../shared/api.h`.
+Measured by building exactly that and deleting the shared header -- the
+claim read *"it was in this tree last build, at ../shared/api.h"*,
+which is false.
+
+The first fix skipped those paths, and that was worse than wrong, it was
+quiet: the header **was** on the include path last build and is gone,
+which is the fact the reader wants. So the wording follows the path
+instead -- in the tree, or on the include path and outside it -- and the
+outside case keeps the `@pkg` remedy, since an uninstalled package is
+the likeliest reason an include path stops resolving. Three endings now,
+each with its own assertion.
+
+Both cases carry the control that §520's rule asks for: a symbol nothing
+ever defined still gets its two guesses, and a header that was never in
+the tree still gets the package remedy.
+
+### A suite run that spanned two versions is evidence for neither
+
+Worth recording because it was my own slip and it looked harmless. A
+full run was in flight when `fmake` was edited for the header half, and
+the suite resolves `FMAKE` to the working-tree file when each case runs
+-- so the first 118 cases exercised one version and the rest another. A
+green result would have said nothing about either tree. It was stopped
+and re-run from clean rather than read.
+
+The tree's own rule for this is `running-code.md`'s: establish that the
+artifact under test was whole for the length of the run. It is written
+there about another session's concurrent build, and the session doing
+the editing is just as able to break it.

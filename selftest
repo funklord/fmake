@@ -2700,6 +2700,143 @@ def a_source_that_is_not_a_regular_file_is_named(t):
 
 
 @case
+def a_deleted_source_is_named_rather_than_guessed_at(t):
+	"""fmake knows this and was guessing instead.
+
+	Delete a source whose object is cached and whose symbols something
+	still calls, and the link fails -- correctly: the orphaned object is
+	not linked. But the advice offered the two guesses it offers for any
+	undefined symbol, `--ldflags' for a library and "a code generator that
+	has not run", when the cache holds the strong symbols each object
+	defined and the file is plainly no longer on disk.
+
+	The second half is the control. The guesses are right when fmake
+	really does not know, so the new branch must not swallow them."""
+	t.write("lib.h", "int calc(int);\n")
+	t.write("lib.c", '#include "lib.h"\nint calc(int x){ return x*2; }\n')
+	t.write("main.c", '#include "lib.h"\n'
+	        "int main(void){ return calc(2) - 4; }\n")
+	check(t.fmake().returncode == 0, "the first build should succeed")
+
+	os.remove(os.path.join(t.dir, "lib.c"))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the link should fail: {out}")
+	check("lib.c defined calc" in out,
+	      f"the file that defined it and is now gone is not named: {out}")
+	check("deleted or renamed" in out,
+	      f"the reader is not told which kind of fault this is: {out}")
+	check("code generator that has not run" not in out,
+	      f"a guess is still being offered for something fmake knows: "
+	      f"{out}")
+
+	# Nothing ever defined this one, so the guesses are the right answer.
+	u = Tree("never-defined")
+	try:
+		u.write("main.c", "int nowhere_at_all(void);\n"
+		        "int main(void){ return nowhere_at_all(); }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "appears to define them" in out,
+		      f"the generic ending has to survive: {out}")
+		check("previous build" not in out,
+		      f"a deletion is being claimed where there was none: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
+def a_deleted_header_is_named_rather_than_guessed_at(t):
+	"""The same fault as the case above, on the include side.
+
+	Delete a header both files include and the advice was "if it comes
+	from a package, install it or name it with @pkg" and "if lib.c
+	belongs to another platform, @os NAME ...". Neither is true, and the
+	cache keeps every file it hashed, so fmake can say which header was
+	here last build and is not now.
+
+	The control is a header that never was in this tree: the package and
+	platform remedies are the right answer there and must survive."""
+	t.write("lib.h", "int calc(int);\n")
+	t.write("lib.c", '#include "lib.h"\nint calc(int x){ return x*2; }\n')
+	t.write("main.c", '#include "lib.h"\n'
+	        "int main(void){ return calc(2) - 4; }\n")
+	check(t.fmake().returncode == 0, "the first build should succeed")
+
+	os.remove(os.path.join(t.dir, "lib.h"))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the compile should fail: {out}")
+	check("was in this tree last build" in out,
+	      f"the header that went is not named: {out}")
+	check("comes from a package" not in out,
+	      f"a package is still being suggested for a file this build "
+	      f"compiled against last time: {out}")
+
+	u = Tree("header-never-here")
+	try:
+		u.write("main.c", "#include <no_such_package_header.h>\n"
+		        "int main(void){ return 0; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "comes from a package" in out,
+		      f"the package remedy has to survive: {out}")
+		check("last build" not in out,
+		      f"a deletion is being claimed where there was none: {out}")
+	finally:
+		u.cleanup()
+
+	# A header the build reached OUTSIDE the tree. `files' is keyed
+	# relative to the root and reaches past it, so this one caches as
+	# `../shared/api.h' -- and "it was in this tree" would be false of it
+	# while saying nothing would lose the fact. It gets its own sentence
+	# and keeps the package remedy, because an uninstalled package is the
+	# likeliest reason an include path stops resolving.
+	w = Tree("header-outside")
+	try:
+		proj = os.path.join(w.dir, "proj")
+		shared = os.path.join(w.dir, "shared")
+		os.makedirs(proj, exist_ok=True)
+		os.makedirs(shared, exist_ok=True)
+		api = os.path.join(shared, "api.h")
+		with open(api, "w") as fh:
+			fh.write("int shared_calc(void);\n")
+		with open(os.path.join(proj, "main.c"), "w") as fh:
+			fh.write('#include "api.h"\n'
+			         "int shared_calc(void){ return 7; }\n"
+			         "int main(void){ return shared_calc() - 7; }\n")
+		with open(os.path.join(proj, "fmake.toml"), "w") as fh:
+			fh.write('[project]\ninclude-dirs = ["../shared"]\n')
+		env = dict(os.environ)
+		for name in ("CFLAGS", "LDFLAGS", "DEBUG", "SANITIZE"):
+			env.pop(name, None)
+
+		def run_proj():
+			return subprocess.run(
+				[sys.executable, FMAKE, "-C", proj], env=env,
+				capture_output=True, text=True, errors="replace",
+				timeout=FMAKE_TIMEOUT)
+
+		r = run_proj()
+		check(r.returncode == 0,
+		      f"the shared header should build: {r.stdout}{r.stderr}")
+		os.remove(api)
+		r = run_proj()
+		out = r.stdout + r.stderr
+		check("on this build's include path last build" in out,
+		      f"a header reached outside the tree is not accounted for: "
+		      f"{out}")
+		check("in this tree last build" not in out,
+		      f"a path outside the tree is being called part of it: "
+		      f"{out}")
+		check("comes from a package" in out,
+		      f"the package remedy is what an uninstalled one needs, and "
+		      f"it was dropped: {out}")
+	finally:
+		w.cleanup()
+
+
+@case
 def a_source_whose_extension_is_the_wrong_case_is_named(t):
 	"""`helper.CPP` was in none of the three sets and seen by nobody.
 

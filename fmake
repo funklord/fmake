@@ -8589,31 +8589,86 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					if want not in need_dirs:
 						need_dirs.append(want)
 				else:
-					note(f"if it comes from a package, install it or name "
-					     f"it with @pkg")
-					# `@pkg', `@os' and `@arch' are read from SOURCES, and
-					# fmake warns in as many words when it finds one in a
-					# header. So where the blamed file IS a header -- which
-					# is exactly what section 98's generated-file blame
-					# produces, a moc output blamed on the Q_OBJECT header
-					# it was made from -- both remedies name a file that
-					# cannot carry either. Measured: a Q_OBJECT header
-					# including a package that is not installed printed
-					# "if plat.h belongs to another platform, @os NAME ...
-					# keeps it out of this build", which is advice fmake
-					# itself would have told the reader does nothing.
-					if os.path.splitext(blame)[1] in HDR_EXTS:
-						note(f"{blame} is a header, and a directive in a "
-						     f"header does nothing -- @pkg, @os and @arch "
-						     f"are read from sources, so they go on the "
-						     f"files that include it")
-						note(f"[project] exclude keeps the header itself "
-						     f"from being read, which is what a platform "
-						     f"header needs when moc or a scan reaches it")
+					# A header this build compiled against last time and that
+					# is not on disk now is a fact rather than a package to
+					# install. The cache keeps every file it hashed, so fmake
+					# can name the one that went -- the same defect as the
+					# deleted-source blame on the link side, where the code
+					# printing the advice had not asked the code that knows.
+					#
+					# Matched on the basename as well as on the path, because
+					# what the compiler reported is the include text while a
+					# header reached through an include dir is cached under its
+					# path in the tree. fmake's own state is skipped, and so is
+					# anything still present: a system header of the same name
+					# exists, so it cannot be mistaken for the one deleted.
+					_base = os.path.basename(miss)
+					_gone = sorted(
+					    rel for rel in cache.files
+					    if (rel == miss or os.path.basename(rel) == _base)
+					    and not rel.startswith(STATE_DIR + "/")
+					    and not os.path.exists(os.path.join(root, rel)))
+					# Worded by where it was, not suppressed. `files' is
+					# keyed relative to the root and reaches outside it: a
+					# toolchain header arrives as
+					# `../../../usr/include/stdc-predef.h', and a tree
+					# sharing headers with a sibling through
+					# [project] include-dirs gets `../shared/api.h'.
+					# Measured on the second of those -- saying "in this
+					# tree" about it is false, and saying nothing loses a
+					# fact worth having, so each gets its own sentence.
+					_inside = [rel for rel in _gone
+					           if not rel.startswith("../")
+					           and not os.path.isabs(rel)]
+					_outside = [rel for rel in _gone if rel not in _inside]
+					if _inside:
+						_g_shown, _g_held = capped(_inside, 3)
+						_g_more = f" and {_g_held} more" if _g_held else ""
+						note(f"it was in this tree last build, at "
+						     f"{', '.join(_g_shown)}{_g_more}, and is not "
+						     f"there now -- a header deleted or renamed "
+						     f"rather than a package that is missing")
 					else:
-						note(f"if {blame} belongs to another platform, "
-						     f"@os NAME or @arch NAME keeps it out of "
-						     f"this build")
+						# Said BEFORE the remedies rather than instead of
+						# them: a header that was on the include path and
+						# is gone is most likely a package uninstalled,
+						# and `install it or name it with @pkg' is then
+						# exactly the right next step.
+						if _outside:
+							_g_shown, _g_held = capped(_outside, 3)
+							_g_more = (f" and {_g_held} more"
+							           if _g_held else "")
+							note(f"it was on this build's include path "
+							     f"last build, at "
+							     f"{', '.join(_g_shown)}{_g_more}, and is "
+							     f"not there now -- so something outside "
+							     f"this tree has moved, or a package has "
+							     f"been uninstalled")
+						note(f"if it comes from a package, install it or name "
+						     f"it with @pkg")
+						# `@pkg', `@os' and `@arch' are read from SOURCES, and
+						# fmake warns in as many words when it finds one in a
+						# header. So where the blamed file IS a header -- which
+						# is exactly what section 98's generated-file blame
+						# produces, a moc output blamed on the Q_OBJECT header
+						# it was made from -- both remedies name a file that
+						# cannot carry either. Measured: a Q_OBJECT header
+						# including a package that is not installed printed
+						# "if plat.h belongs to another platform, @os NAME ...
+						# keeps it out of this build", which is advice fmake
+						# itself would have told the reader does nothing.
+						if os.path.splitext(blame)[1] in HDR_EXTS:
+							note(f"{blame} is a header, and a directive in a "
+							     f"header does nothing -- @pkg, @os and @arch "
+							     f"are read from sources, so they go on the "
+							     f"files that include it")
+							note(f"[project] exclude keeps the header itself "
+							     f"from being read, which is what a platform "
+							     f"header needs when moc or a scan reaches it")
+						else:
+							note(f"if {blame} belongs to another platform, "
+							     f"@os NAME or @arch NAME keeps it out of "
+							     f"this build")
 			# `first_err', not `msg': the group key is the diagnostic's
 			# text with the `file:line:col' prefix already stripped, so
 			# the line number this needs is only in the full output. And
@@ -16987,6 +17042,25 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 					note(f"{rel} needs moc -- it spells Q_OBJECT through "
 					     f"another macro, which the scan cannot see, so no "
 					     f"meta-object was generated for it")
+		# A source that defined one of these was in the previous build and
+		# is not in the tree now. That is a fact rather than a guess: the
+		# cache keeps the strong symbols each object defined, so fmake can
+		# name the file and the names that went with it -- and the two
+		# endings below are guesses, so this pre-empts them.
+		#
+		# Asked of the filesystem rather than of `srcs', because a file
+		# that is present and set aside is a different ending with its own
+		# branch. The entry survives to be read for the reason it is
+		# useful: a deleted source is no longer a unit, so nothing in the
+		# compile loop visits or prunes it.
+		gone_defs = {}
+		if unprovided:
+			for ukey, ent in cache.objects.items():
+				# A variant's key carries its target behind a NUL.
+				rel = ukey.split("\0")[0]
+				took = set(ent.get("s") or []) & unprovided
+				if took and not os.path.exists(os.path.join(root, rel)):
+					gone_defs.setdefault(rel, set()).update(took)
 		# Three endings, because there are three causes and only one of them
 		# is a missing library. Offering --ldflags for a meta-object this
 		# tree was supposed to generate sends the reader to install
@@ -17035,6 +17109,18 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     "aside for the reason above, so no library will supply it: "
 			     "make that file part of the build, or define the symbol in "
 			     "one that is")
+		elif gone_defs:
+			# Named rather than guessed at, and before `unprovided' for
+			# that reason: offering --ldflags for a symbol whose definition
+			# this build itself compiled last time sends the reader after a
+			# package that never had it.
+			for rel in sorted(gone_defs):
+				shown, held = capped(sorted(gone_defs[rel]), 3)
+				more = f" and {held} more" if held else ""
+				note(f"{rel} defined {', '.join(shown)}{more} in the "
+				     f"previous build and is not in this tree now")
+			note("so this is a source that has been deleted or renamed, "
+			     "rather than a library this build was never told about")
 		elif unprovided:
 			# Both explanations, because fmake has ruled out neither and
 			# saying only the first is what sent one project looking for a
