@@ -571,7 +571,8 @@ that had been green about nothing for five commits ·
 [518. A rule the reader cannot follow has not been stated](#518-a-rule-the-reader-cannot-follow-has-not-been-stated) ·
 [519. A stopped build said nothing about how far it got](#519-a-stopped-build-said-nothing-about-how-far-it-got) ·
 [520. Colour was decided about a stream the notices were not on](#520-colour-was-decided-about-a-stream-the-notices-were-not-on) ·
-[521. A named nm was replaced rather than refused](#521-a-named-nm-was-replaced-rather-than-refused)
+[521. A named nm was replaced rather than refused](#521-a-named-nm-was-replaced-rather-than-refused) ·
+[522. The same fallthrough in pkg-config, and the rule factored](#522-the-same-fallthrough-in-pkg-config-and-the-rule-factored)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41676,3 +41677,36 @@ it, a fix that refused unconditionally would pass every other
 assertion. Reverting to the `or` chain fails the case with fmake's own
 `* built ...` line quoted back inside the failure, which is the silent
 substitution itself.
+
+## 522. The same fallthrough in pkg-config, and the rule factored
+
+§521's shape asked where else a candidate chain validates with
+`shutil.which`, and `PkgConfig` had it:
+
+    self.exe = (shutil.which(configured) if configured else None) \
+               or shutil.which("pkg-config") or shutil.which("pkgconf")
+
+So a named pkg-config that was mistyped or not executable fell through
+to the host's. **The consequence is dearer than nm's**: pkg-config
+decides the `-I` and `-l` flags, and the comment thirty lines below that
+line already says that left alone it answers for the host -- so a cross
+build whose named pkg-config had a typo resolved host headers and host
+libraries into a foreign binary, and built.
+
+Measured: a mistyped key and a mode 000 file both refuse now, naming the
+key and separating `is not there` from `is not executable`. Naming none
+stays silent, because pkg-config is optional.
+
+**The sweep is complete, so nobody need redo it.** Of the seven tools
+fmake resolves, `cc` already refused, `nm` and `pkg-config` were the two
+with the fallthrough, and `ar` and `situc` take a configured name
+verbatim -- never replaced, and an unusable one is reported by the exec
+handler instead -- while `moc`, `uic` and `rcc` go through
+`find_qt_tool`, which has refused all along. No other candidate chain
+validates with `which`.
+
+Two sites wanting one rule made it worth factoring rather than copying:
+`require_named_tool(name, named, configured, advice)` holds the refusal,
+the two faults and the `tool_origin` call, and `find_nm` and `PkgConfig`
+both call it. Reverting either to its `or` chain fails its case with
+fmake's own `* built ...` line quoted inside the failure.

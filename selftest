@@ -10514,6 +10514,49 @@ def a_named_nm_that_cannot_be_used_is_refused_not_replaced(t):
 
 
 @case
+def a_named_pkg_config_is_refused_not_replaced(t):
+	"""The same fault as the nm case above, with a dearer consequence.
+
+	`PkgConfig' resolved `which(configured) or which("pkg-config") or
+	which("pkgconf")', so a named pkg-config that was mistyped or not
+	executable fell through to the host's. pkg-config decides the -I and
+	-l flags, and the file's own comment on PKG_CONFIG_PATH says that left
+	alone it answers for the host -- so in a cross build the fallthrough
+	resolves host headers and host libraries into a foreign binary.
+
+	Finding none at all stays silent, because pkg-config is optional and a
+	tree with no packages to resolve does not need one."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	gone = os.path.join(t.dir, "pc-typpo")
+	t.write("fmake.toml", f'[toolchain]\npkg-config = "{gone}"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "is not there" in out,
+	      f"a mistyped pkg-config has to be refused, not ignored: {out}")
+	check("[toolchain] pkg-config" in out,
+	      f"the refusal does not say where the name came from: {out}")
+
+	dud = t.write("pc-dud", '#!/bin/sh\nexec pkg-config "$@"\n')
+	os.chmod(dud, 0o000)
+	t.write("fmake.toml", f'[toolchain]\npkg-config = "{dud}"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "is not executable" in out,
+	      f"the refusal does not separate the two faults: {out}")
+
+	# Naming none is not a fault: the tree builds with whatever is there.
+	u = Tree("pc-unnamed")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		r = u.fmake()
+		check(r.returncode == 0,
+		      f"pkg-config is optional and its absence must not refuse: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def the_furniture_keys_work_in_fmake_toml_too(t):
 	"""Six schema keys exercised only through their `@' spelling.
 

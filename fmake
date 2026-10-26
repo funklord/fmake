@@ -3480,6 +3480,28 @@ def tool_origin(name, configured):
 	return None
 
 
+def require_named_tool(name, named, configured, advice):
+	"""Resolve a tool the reader named, refusing rather than substituting.
+
+    `shutil.which' tests the execute bit, so a named tool that is there
+    and not executable fails it exactly as a missing one does -- and in an
+    `or' chain of candidates that turns "this one is broken" into "try the
+    next", which is how a named nm and a named pkg-config were both
+    replaced by the host's in silence. A name the reader supplied is not a
+    hint.
+
+    The two faults are separated because the advice differs: a path to fix
+    against a permission to fix, and `which' answers one question about
+    both.
+    """
+	got = shutil.which(named)
+	if got:
+		return got
+	why = "is not executable" if os.path.isfile(named) else "is not there"
+	die(f"{name} {named!r} (from {tool_origin(name, configured)}) {why}.\n"
+	    f"{advice}")
+
+
 def find_qt_tool(name, configured, pkg):
 	"""Locate one of Qt's generators, matching the Qt about to be linked.
 
@@ -6478,18 +6500,11 @@ def find_nm(configured=None):
     """
 	named = os.environ.get("NM") or configured
 	if named:
-		got = shutil.which(named)
-		if got:
-			return got
-		# Two different faults, and the advice differs: a path to fix
-		# against a permission to fix. `which' cannot tell them apart,
-		# since it answers one question about both.
-		why = ("is not executable" if os.path.isfile(named)
-		       else "is not there")
-		die(f"nm {named!r} (from {tool_origin('nm', configured)}) {why}.\n"
-		    f"fmake reads object symbol tables to work out the link set, "
-		    f"and will not read them with an nm other than the one you "
-		    f"named.")
+		return require_named_tool(
+			"nm", named, configured,
+			"fmake reads object symbol tables to work out the link set, "
+			"and will not read them with an nm other than the one you "
+			"named.")
 	for cand in ("nm", "llvm-nm", "gnm"):
 		got = shutil.which(cand)
 		if got:
@@ -9983,8 +9998,24 @@ class PkgConfig:
 
 	def __init__(self, configured=None, sysroot=None, triplet=None,
 	             sysincs=(), pc_path=()):
-		self.exe = (shutil.which(configured) if configured else None) \
-		           or shutil.which("pkg-config") or shutil.which("pkgconf")
+		# A named pkg-config is refused rather than replaced, for the
+		# reason in `require_named_tool' and because the cost here is
+		# higher than for nm: pkg-config decides -I and -l, and left to
+		# itself it answers for the host, as the comment on PKG_CONFIG_PATH
+		# below says. A cross build whose named pkg-config was mistyped
+		# would quietly resolve host headers and host libraries.
+		#
+		# Finding none at all stays silent: pkg-config is optional, and a
+		# tree with no packages to resolve does not need one.
+		if configured:
+			self.exe = require_named_tool(
+				"pkg-config", configured, configured,
+				"pkg-config decides the -I and -l flags, and the one on "
+				"PATH answers for the host, so fmake will not quietly use "
+				"it in place of the one you named.")
+		else:
+			self.exe = (shutil.which("pkg-config")
+			            or shutil.which("pkgconf"))
 		self._flags = {}
 		self._vars = {}
 		# Every -L a resolved package named. A library under /opt or a home
