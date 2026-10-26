@@ -574,7 +574,8 @@ that had been green about nothing for five commits ·
 [521. A named nm was replaced rather than refused](#521-a-named-nm-was-replaced-rather-than-refused) ·
 [522. The same fallthrough in pkg-config, and the rule factored](#522-the-same-fallthrough-in-pkg-config-and-the-rule-factored) ·
 [523. A deleted source was guessed at, and fmake knew the answer](#523-a-deleted-source-was-guessed-at-and-fmake-knew-the-answer) ·
-[524. pkg-config's `-L` was swept and the project's own was not](#524-pkg-configs--l-was-swept-and-the-projects-own-was-not)
+[524. pkg-config's `-L` was swept and the project's own was not](#524-pkg-configs--l-was-swept-and-the-projects-own-was-not) ·
+[525. A non-ASCII identifier was invisible to the scan](#525-a-non-ascii-identifier-was-invisible-to-the-scan)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41877,3 +41878,53 @@ assertion to learn.
 **Still open and not part of this**: `lib-dirs` has no entry in the
 README's key tables, appearing only in a sentence about an Android kit.
 Documenting it belongs with whatever pass next touches those tables.
+
+## 525. A non-ASCII identifier was invisible to the scan
+
+Found by trying `kconfig_tree` -- the one sibling with no mention in this
+file -- which turned out to be pure Python and to be declined correctly,
+and then by asking what `_unmakeable` admits. Python's `\w` is
+unicode-aware, so a UTF-8 filename passes the Make-safety check; the
+question was whether anything else coped.
+
+It did not. A source defining `café_calc` was never compiled, and the
+run said both of these, two lines apart:
+
+    café.c not compiled: nothing reaches it (--force-link if it is
+    needed anyway)
+    ...
+    no library here exports them, and nothing in this tree appears to
+    define them either
+
+The second is false, about a file the first had just named. A compiler
+accepts the identifier -- GCC since 10, and C23 says so -- and the
+linker error quoted the mangled name back, so the only thing that could
+not see it was the scan: every identifier class here was
+`[A-Za-z_][A-Za-z0-9_]*`.
+
+### The proof, because it is a mechanical change
+
+They are `[^\W\d]\w*` now, 34 sites. **For ASCII input the two classes
+are equal**, so no existing tree can change, and that was proved twice
+rather than argued:
+
+- over every ASCII code point, membership in `[A-Za-z_]` against
+  `[^\W\d]`, and `[A-Za-z0-9_]` against `\w`: no disagreement at any of
+  the 128;
+- by loading the old and the new file side by side, taking the 15
+  compiled patterns whose text changed, and running both over **1789**
+  C, C++ and header files in `ossacli`, `fuzznet` and `raidcfgd`: no
+  disagreement on any pattern in any file.
+
+**`RE_ENV_NAME` is the carve-out, and it was found by reading each site
+rather than by the proof.** It is the *shell's* grammar -- what decides
+whether `NAME=value` is an assignment -- and POSIX shell variable names
+are ASCII, so widening it would emit an accented name as an assignment
+and the shell would look for a command of that name. That is the exact
+failure its own docstring records. Three other classes stay ASCII for
+the same kind of reason: nm's one-letter symbol type, and assembly
+labels, which have their own alphabet including `.` and `$`.
+
+So the rule the change follows is not "widen every identifier" but
+**widen the ones that are C's**, and say at each exception whose
+alphabet it is instead.

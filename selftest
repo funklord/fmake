@@ -2973,6 +2973,59 @@ def a_deleted_header_is_named_rather_than_guessed_at(t):
 
 
 @case
+def a_non_ascii_identifier_is_seen_by_the_scan(t):
+	r"""Every identifier class here was `[A-Za-z_][A-Za-z0-9_]*'.
+
+	A compiler accepts a UTF-8 identifier -- GCC has since 10, and C23
+	says so -- and the scan could not see one, so the file defining it
+	was never reached. Measured: fmake compiled `main.c' alone, printed
+	"cafe.c not compiled: nothing reaches it", and then said "nothing in
+	this tree appears to define them either" about a symbol that file
+	defines, two lines after naming the file.
+
+	The classes are `[^\W\d]\w*' now, which for ASCII input matches
+	exactly what the old ones did -- proved over 1789 C and C++ files in
+	three sibling trees, no disagreement on any pattern -- so this widens
+	what is visible without changing any existing tree. `RE_ENV_NAME' is
+	left ASCII on purpose: it is the shell's grammar, not C's."""
+	cc = shutil.which("cc")
+	if not cc:
+		raise Skip("no cc")
+	# Not every compiler takes one, so ask this one before asserting.
+	probe = os.path.join(t.dir, "probe.c")
+	with open(probe, "w", encoding="utf-8") as fh:
+		fh.write("int caf\u00e9_probe(void){ return 0; }\n")
+	r = subprocess.run([cc, "-c", "-o", os.devnull, probe],
+	                   capture_output=True, text=True)
+	os.remove(probe)
+	if r.returncode != 0:
+		raise Skip("this compiler does not accept a UTF-8 identifier")
+
+	name = "caf\u00e9.c"
+	sym = "caf\u00e9_calc"
+	t.write(name, f"int {sym}(void){{ return 4; }}\n")
+	t.write("main.c", f"int {sym}(void);\n"
+	        f"int main(void){{ return {sym}() - 4; }}\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a definition with a non-ASCII name is invisible to the scan: "
+	      f"{out}")
+	check("not compiled" not in out,
+	      f"the file defining it was set aside: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program does not run, so the definition was not linked")
+
+	# And the ejected build carries it: Make takes a UTF-8 path, which is
+	# why `_unmakeable' admits one -- it refuses whitespace and the
+	# shell's own characters, and a letter is neither.
+	mk = t.fmake("--eject", "make").stdout
+	check(name in mk,
+	      f"the ejected Makefile does not mention the file: {mk[-400:]}")
+
+
+@case
 def a_source_whose_extension_is_the_wrong_case_is_named(t):
 	"""`helper.CPP` was in none of the three sets and seen by nobody.
 
