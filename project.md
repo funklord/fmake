@@ -573,7 +573,8 @@ that had been green about nothing for five commits ·
 [520. Colour was decided about a stream the notices were not on](#520-colour-was-decided-about-a-stream-the-notices-were-not-on) ·
 [521. A named nm was replaced rather than refused](#521-a-named-nm-was-replaced-rather-than-refused) ·
 [522. The same fallthrough in pkg-config, and the rule factored](#522-the-same-fallthrough-in-pkg-config-and-the-rule-factored) ·
-[523. A deleted source was guessed at, and fmake knew the answer](#523-a-deleted-source-was-guessed-at-and-fmake-knew-the-answer)
+[523. A deleted source was guessed at, and fmake knew the answer](#523-a-deleted-source-was-guessed-at-and-fmake-knew-the-answer) ·
+[524. pkg-config's `-L` was swept and the project's own was not](#524-pkg-configs--l-was-swept-and-the-projects-own-was-not)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41841,3 +41842,38 @@ The tree's own rule for this is `running-code.md`'s: establish that the
 artifact under test was whole for the length of the run. It is written
 there about another session's concurrent build, and the session doing
 the editing is just as able to break it.
+
+## 524. pkg-config's `-L` was swept and the project's own was not
+
+Found by getting a fixture wrong in §523: a library was put in a
+directory named through `[project] ldflags = ["-L.../libs"]`, fmake did
+not resolve it, and the failure advised **`--ldflags`** -- the mechanism
+already in use. The same library in the same tree resolved immediately
+through `[toolchain] lib-dirs`.
+
+The asymmetry was internal and unstated. `_note_dirs` already puts every
+`-L` a `.pc` file produces into `extra_libdirs`, which is the list
+`lib_search_dirs` sweeps -- so a directory **pkg-config** named was
+searched for providers, while one the **project** named was not, and the
+project's is the more deliberate statement of the two. Nothing in the
+README or here recorded a reason, so it was a gap rather than a choice.
+
+`Config.__init__` now takes the `-L` directories out of the effective
+ldflags -- `[project] ldflags` and `--ldflags` alike, in both the
+`-Ldir` and `-L dir` spellings -- resolves a relative one against the
+tree, since that is where the linker runs, and appends what exists. Only
+the sweep changes: the flags themselves are untouched, so an ejected
+build file keeps the spelling the project wrote, and the sweep's cache
+key already includes a stamp of the library directories, so adding one
+invalidates it by itself.
+
+Before and after on the same tree: *"no library here exports them"*
+followed by the `--ldflags` advice, against a build that links and runs.
+The case runs the program with the directory on `LD_LIBRARY_PATH`,
+because fmake adds no `-rpath` and is not being asked to -- a private
+`.so` is found at link time and not at run time, which cost one wrong
+assertion to learn.
+
+**Still open and not part of this**: `lib-dirs` has no entry in the
+README's key tables, appearing only in a sentence about an Android kit.
+Documenting it belongs with whatever pass next touches those tables.

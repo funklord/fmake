@@ -6673,6 +6673,32 @@ class Config:
 		self.rcc    = tool.get("rcc")
 		self.situc  = tool.get("situc")
 		self.extra_libdirs = list(tool.get("lib-dirs", []))
+		# A `-L' the project wrote itself is swept for providers too.
+		# pkg-config's own already was -- `_note_dirs' feeds this list --
+		# so a directory a .pc file produced got searched while one named
+		# in `[project] ldflags' or `--ldflags' did not, and nothing stated
+		# the distinction. Measured on one tree and one library: it
+		# resolved through `[toolchain] lib-dirs' and did not through
+		# `ldflags', and the failure then advised `--ldflags', which is the
+		# mechanism the reader had already used.
+		#
+		# Only the sweep changes. The flags themselves are untouched, so
+		# an ejected build file keeps the spelling the project wrote.
+		# `-L dir' as two tokens is accepted because `shell_split' leaves
+		# it that way and the linker takes it.
+		_here = os.path.abspath(args.directory)
+		_ld = list(self.ldflags)
+		for _i, _f in enumerate(_ld):
+			if _f == "-L" and _i + 1 < len(_ld):
+				_d = _ld[_i + 1]
+			elif _f.startswith("-L") and _f[2:]:
+				_d = _f[2:]
+			else:
+				continue
+			if not os.path.isabs(_d):
+				_d = os.path.join(_here, _d)
+			if os.path.isdir(_d) and _d not in self.extra_libdirs:
+				self.extra_libdirs.append(_d)
 		# Extra directories to search for .pc files, prepended to
 		# PKG_CONFIG_PATH. A Qt kit, an /opt install, a foreign-arch
 		# package tree short of a whole sysroot: their .pc files sit

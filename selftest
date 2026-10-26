@@ -2745,6 +2745,74 @@ def a_deleted_source_is_named_rather_than_guessed_at(t):
 		u.cleanup()
 
 
+def _private_lib(where):
+	"""A libmine.so in `where', with its source removed again.
+
+    Left in place the source is one fmake compiles, which defines the
+    symbol in the tree and the library is never consulted at all.
+    """
+	cc = shutil.which("cc")
+	if not cc:
+		raise Skip("no cc to build a library with")
+	os.makedirs(where, exist_ok=True)
+	src = os.path.join(where, os.pardir, "mine.c")
+	with open(src, "w") as fh:
+		fh.write("int mine_calc(void){ return 5; }\n")
+	so = os.path.join(where, "libmine.so")
+	made = subprocess.run([cc, "-shared", "-fPIC", "-o", so, src],
+	                      capture_output=True, text=True)
+	os.remove(src)
+	if made.returncode != 0 or not os.path.isfile(so):
+		raise Skip(f"cc cannot build a shared library here: {made.stderr}")
+	return so
+
+
+@case
+def a_lib_dir_named_in_ldflags_is_swept_for_providers(t):
+	"""pkg-config's own `-L' was swept and the project's own was not.
+
+	`_note_dirs' puts every `-L' a .pc file produces into
+	`extra_libdirs', which is what `lib_search_dirs' sweeps -- so a
+	directory pkg-config named was searched for providers while one the
+	project named in `[project] ldflags' or `--ldflags' was not, and
+	nothing stated the distinction.
+
+	Measured on one tree and one library: it resolved through
+	`[toolchain] lib-dirs' and did not through `ldflags', and the failure
+	then advised `--ldflags', which is the mechanism the reader had
+	already used. Only the sweep changed; the flags are untouched, so an
+	ejected build file keeps the spelling the project wrote."""
+	libs = os.path.join(t.dir, "libs")
+	_private_lib(libs)
+	t.write("main.c", "int mine_calc(void);\n"
+	        "int main(void){ return mine_calc() - 5; }\n")
+	t.write("fmake.toml", f'[project]\nldflags = ["-L{libs}"]\n')
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a -L in [project] ldflags is not swept: {r.stdout}{r.stderr}")
+	# Run with the directory on the loader path: fmake adds no -rpath and
+	# is not being asked to, so a private .so is found at link time and
+	# not at run time. Running it anyway is what proves the link bound to
+	# that library rather than merely succeeding.
+	check(t.run(os.path.basename(t.dir),
+	            env={"LD_LIBRARY_PATH": libs}).returncode == 0,
+	      "the program linked against the private library does not run")
+
+	# The command-line route, and a relative directory -- which is
+	# resolved against the tree, because that is where the linker runs.
+	u = Tree("ldflags-relative")
+	try:
+		_private_lib(os.path.join(u.dir, "libs"))
+		u.write("main.c", "int mine_calc(void);\n"
+		        "int main(void){ return mine_calc() - 5; }\n")
+		r = u.fmake("--ldflags", "-Llibs")
+		check(r.returncode == 0,
+		      f"a relative -L on the command line is not swept: "
+		      f"{r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
 @case
 def a_library_that_has_gone_is_named_rather_than_guessed_at(t):
 	"""The third of the same family, after the deleted source and header.
