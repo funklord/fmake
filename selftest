@@ -3023,6 +3023,26 @@ def a_non_ascii_identifier_is_seen_by_the_scan(t):
 	mk = t.fmake("--eject", "make").stdout
 	check(name in mk,
 	      f"the ejected Makefile does not mention the file: {mk[-400:]}")
+	# The Make variable the target name becomes is sanitised, and two
+	# names that sanitise alike are already refused -- `caf_' against the
+	# accented name is reported as one variable, so widening the classes
+	# opened no hole there. It is the path in a rule that this checks.
+	with open(os.path.join(t.dir, "Makefile.gen"), "w") as fh:
+		fh.write(mk)
+	check(_run_in(t.dir, "make", "-f", "Makefile.gen").returncode == 0,
+	      "the ejected make build failed on a UTF-8 path")
+
+	# ninja escapes differently, so it is the other half rather than a
+	# repetition: `$' and `:' are its specials and a letter is neither.
+	if shutil.which("ninja"):
+		nj = t.fmake("--eject", "ninja").stdout
+		check(name in nj,
+		      f"the ejected ninja file does not mention the file: "
+		      f"{nj[-400:]}")
+		with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+			fh.write(nj)
+		check(_run_in(t.dir, "ninja", "-f", "build.ninja").returncode == 0,
+		      "the ninja build failed on a UTF-8 path")
 
 
 @case

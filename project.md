@@ -41928,3 +41928,26 @@ labels, which have their own alphabet including `.` and `$`.
 So the rule the change follows is not "widen every identifier" but
 **widen the ones that are C's**, and say at each exception whose
 alphabet it is instead.
+
+### What the change reaches, asked rather than assumed
+
+Widening the scan lets a non-ASCII name travel further than before, so
+the three things downstream of it were tried rather than trusted.
+
+- **The Make variable a target name becomes is sanitised, and a
+  collision was already refused.** `café` yields `CAF_` and `caf__`
+  yields `CAF__`, so those two coexist; the colliding partner is `caf_`,
+  and fmake says *"targets 'caf\_' and 'café' are the same Make variable
+  (CAF\_\_...)"* and stops. The check compares sanitised names, so it
+  covered this without being told -- and the same refusal already
+  catches the ASCII pair `foo-bar` against `foo_bar`, which needs no
+  unicode to reach.
+- **The ejected Makefile builds it.** `cc -Os -I. -c café.c -o
+  build/café.c.o` and the program runs.
+- **So does the ejected ninja**, which escapes differently: `$` and `:`
+  are its specials and a letter is neither. `[1/3] CC 'café.c'` through
+  to a program that runs.
+
+Both ejected backends are in the case now, and sabotaging `_unmakeable`
+to refuse a non-ASCII path fails it at the Makefile assertion, so that
+half is not decoration.
