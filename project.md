@@ -569,7 +569,8 @@ that had been green about nothing for five commits ·
 [516. The third fix that stopped at one sibling](#516-the-third-fix-that-stopped-at-one-sibling) ·
 [517. The last skip, and why the budget let it happen](#517-the-last-skip-and-why-the-budget-let-it-happen) ·
 [518. A rule the reader cannot follow has not been stated](#518-a-rule-the-reader-cannot-follow-has-not-been-stated) ·
-[519. A stopped build said nothing about how far it got](#519-a-stopped-build-said-nothing-about-how-far-it-got)
+[519. A stopped build said nothing about how far it got](#519-a-stopped-build-said-nothing-about-how-far-it-got) ·
+[520. Colour was decided about a stream the notices were not on](#520-colour-was-decided-about-a-stream-the-notices-were-not-on)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41530,3 +41531,64 @@ The case is deterministic for that reason: no sleeps and no timing
 assumption, a sentinel the test writes to release the build, and the
 assertion made while it is pinned. Removing the one-line fix fails it
 with the log still empty.
+
+## 520. Colour was decided about a stream the notices were not on
+
+**The lens is the one §519 ended on**, asked of a different property:
+fmake decides whether to paint by calling `sys.stdout.isatty()`, and
+`--eject` and `--run` deliberately put the notices on **stderr** so that
+stdout can carry data. So the question was being asked of a stream the
+output was not going to.
+
+Both directions are wrong, and both were measured with a pty for one
+stream and a file for the other:
+
+| invocation | notices land in | escapes |
+|---|---|---|
+| `--eject` from a terminal, `2> notices.log` | the log | 6 |
+| `--eject > build.mk` with a terminal | the terminal | 0 |
+
+The first writes escape sequences into a file somebody will grep and
+diff. The second is the same mistake facing the other way -- a terminal
+that could have been painted and was not. After the fix the figures swap
+to 0 and 6, and the ejected `build.mk` holds 0 either way, which is the
+property that mattered in the first place.
+
+**The fix decides at the point the stream moves.** `progress_to(stream)`
+sets `PROGRESS`, recomputes `_COLOR` about that stream, and calls
+`_recolour()`. The last step is needed because **`_paint` reads `_COLOR`
+when it builds its lambda**, not when the lambda runs -- so the painters
+have to be made again rather than merely flagged. They are looked up by
+name at every call site, which is what makes rebinding seven globals
+reach all of them -- checked rather than assumed, because a painter
+captured at import time, in a module-level table or a default argument,
+would not be reached and the fix would half work in silence. There is
+none: every use is inside a function body, and `_COLOR` has no reader
+but `_paint`. `main`'s `global PROGRESS` went with it: nothing in
+`main` assigns `PROGRESS` now, and a stale declaration reads as though
+something does.
+
+### Pair every absence assertion with a presence assertion
+
+**The obvious test is one-sided and a wrong fix passes it.** "No escapes
+in the redirected stderr" is satisfied just as well by switching colour
+off altogether, so the case asserts the other direction too -- notices on
+a terminal *are* painted -- and that pair is what distinguishes a fix
+from a removal.
+
+The same shape, one level down, is **the third fixture error of this kind
+in two days**, and it is worth naming as a class now rather than a third
+anecdote. The case calls its helper twice on one tree; the second run had
+nothing left to compile, so the stream was **empty**, and an empty stream
+satisfies *no escapes here* perfectly. `-B` on both runs fixes it.
+
+The other two: a tree whose `main.c` reached none of its sources, so
+there was almost no progress to lose (§519); and a gate that blocked the
+stand-in compiler by counting invocations, where fmake's own probes
+consumed the count before the first real compile (§519).
+
+All three are one rule. **An assertion that something is absent proves
+nothing until something is known to be present on the same stream, in the
+same run.** So each absence check here is paired: `b"\x1b" not in
+captured` sits beside `b"CC" in captured`, and the second is what makes
+the first evidence rather than an observation about an empty buffer.

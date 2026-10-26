@@ -460,8 +460,23 @@ RE_NM_POSIX = re.compile(r"(?P<name>.+?)\s+(?P<type>[A-Za-z?])"
 # Colours & message helpers
 # ---------------------------------------------------------------------------
 
-_COLOR = sys.stdout.isatty() and os.environ.get("TERM") != "dumb" \
-         and "NO_COLOR" not in os.environ
+def _colour_for(stream):
+	"""Whether to paint what goes to `stream'.
+
+    Asked of the stream the notices actually go to, which is not always
+    stdout: `--eject' and `--run' send them to stderr so that stdout can
+    carry data. Deciding from stdout wrote escapes into a redirected
+    stderr -- measured with a pty for stdout and a file for stderr,
+    `fmake --eject make 2> notices.log' put six of them in the log.
+    """
+	try:
+		tty = stream.isatty()
+	except (AttributeError, ValueError):    # not a stream, or closed
+		tty = False
+	return (tty and os.environ.get("TERM") != "dumb"
+	        and "NO_COLOR" not in os.environ)
+
+_COLOR = _colour_for(sys.stdout)
 
 def _paint(code):
 	return (lambda s: f"\033[{code}m{s}\033[0m") if _COLOR else (lambda s: str(s))
@@ -473,6 +488,19 @@ GREEN  = _paint("32;1")
 YELLOW = _paint("33;1")
 BLUE   = _paint("34;1")
 CYAN   = _paint("36")
+
+def _recolour():
+	"""Rebind the painters after PROGRESS has moved.
+
+    `_paint' reads `_COLOR' when it builds its lambda, so the globals have
+    to be made again rather than merely flagged. They are looked up by name
+    at every call site, so rebinding them here reaches all of them.
+    """
+	global BOLD, DIM, RED, GREEN, YELLOW, BLUE, CYAN
+	BOLD, DIM = _paint("1"), _paint("2")
+	RED, GREEN = _paint("31;1"), _paint("32;1")
+	YELLOW, BLUE = _paint("33;1"), _paint("34;1")
+	CYAN = _paint("36")
 
 VERBOSE = False
 
@@ -495,6 +523,13 @@ PROGRESS = sys.stdout
 # The cost is a flush per line, against a compiler invocation per line.
 if hasattr(sys.stdout, "reconfigure"):
 	sys.stdout.reconfigure(line_buffering=True)
+
+def progress_to(stream):
+	"""Send progress to `stream', and decide colour about that stream."""
+	global PROGRESS, _COLOR
+	PROGRESS = stream
+	_COLOR = _colour_for(stream)
+	_recolour()
 
 def say(m=""):    print(m, file=PROGRESS)
 def info(m):  say(f"{GREEN('*')} {m}")
@@ -23457,11 +23492,11 @@ def _locked_build(args):
 
 
 def main(argv):
-	global VERBOSE, PROGRESS
+	global VERBOSE
 	args = parse_args(argv)
 	VERBOSE = args.verbose
 	if args.eject:
-		PROGRESS = sys.stderr
+		progress_to(sys.stderr)
 	if args.features:
 		sys.stdout.write(feature_list())
 		return 0
@@ -23493,7 +23528,7 @@ def main(argv):
 	if args.run:
 		if not os.path.isfile(args.run):
 			die(f"--run: no such file: {args.run}")
-		PROGRESS = sys.stderr
+		progress_to(sys.stderr)
 		rc = _locked_build(args)
 		if rc:
 			return rc

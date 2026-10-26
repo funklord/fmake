@@ -36995,6 +36995,88 @@ def a_named_root_that_roots_no_crate_is_refused(t):
 	      f"the refusal does not say what a crate root is: {out}")
 
 
+def _eject_streams(t, stdout_tty):
+	"""Eject with one of the two streams on a pty, and return both halves.
+
+    `--eject' sends notices to stderr so stdout can carry the build file, so
+    the two streams have different jobs and colour has to be decided about
+    whichever one the notices are on.
+    """
+	import pty
+	env = dict(os.environ, TERM="xterm")
+	for name in ("CFLAGS", "LDFLAGS", "DEBUG", "SANITIZE", "NO_COLOR"):
+		env.pop(name, None)
+	master, slave = pty.openpty()
+	plain = os.path.join(t.dir, "plain.out")
+	fh = open(plain, "wb")
+	if stdout_tty:
+		kw = dict(stdout=slave, stderr=fh)
+	else:
+		kw = dict(stdout=fh, stderr=slave)
+	# `-B' because this helper is called twice on one tree: the second run
+	# would otherwise have nothing to compile and so nothing to paint, and
+	# an empty stream passes a "no escapes here" check for the wrong
+	# reason.
+	proc = subprocess.Popen([sys.executable, FMAKE, "-C", t.dir, "-B",
+	                         "--eject", "make"], env=env, **kw)
+	os.close(slave)
+	# Drained with a deadline rather than to EOF: a pty buffer that fills
+	# while nobody reads it stops the child, and a test that then waits for
+	# the child waits for ever.
+	tty_text, deadline = b"", time.time() + FMAKE_TIMEOUT
+	while time.time() < deadline:
+		ready, _, _ = select.select([master], [], [], deadline - time.time())
+		if not ready:
+			break
+		try:
+			chunk = os.read(master, 4096)
+		except OSError:
+			break
+		if not chunk:
+			break
+		tty_text += chunk
+	try:
+		proc.wait(timeout=30)
+	except subprocess.TimeoutExpired:
+		proc.kill()
+		proc.wait(timeout=30)
+	fh.close()
+	os.close(master)
+	return tty_text, open(plain, "rb").read()
+
+
+@case
+def colour_is_decided_about_the_stream_the_notices_go_to(t):
+	"""`_COLOR` asked stdout whether to paint, and `--eject' and `--run'
+	put the notices on stderr so stdout can carry data.
+
+	So `fmake --eject make 2> notices.log' from a terminal wrote escape
+	sequences into the log -- six of them, measured with a pty for stdout
+	and a file for stderr -- while the same run with stdout redirected and
+	stderr on a terminal painted nothing, which is the same mistake facing
+	the other way.
+
+	Both directions are asserted, because the obvious half passes just as
+	well if colour has been switched off altogether."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+
+	# stdout on the terminal, notices captured: nothing painted in the file.
+	_tty, captured = _eject_streams(t, stdout_tty=True)
+	check(b"\x1b" not in captured,
+	      f"escapes were written to a redirected stderr: {captured[:200]!r}")
+	check(b"CC" in captured,
+	      f"the notices did not reach stderr at all, so the check above "
+	      f"proved nothing: {captured[:200]!r}")
+
+	# The other way: notices on the terminal, build file captured.
+	tty_text, ejected = _eject_streams(t, stdout_tty=False)
+	check(b"\x1b" in tty_text,
+	      f"notices on a terminal were not painted: {tty_text[:200]!r}")
+	check(b"\x1b" not in ejected,
+	      f"the ejected build file is data and must stay clean: "
+	      f"{ejected[:200]!r}")
+
+
 # ---------------------------------------------------------------------------
 # Answering what fmake will not guess
 # ---------------------------------------------------------------------------
