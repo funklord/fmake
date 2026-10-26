@@ -6458,9 +6458,42 @@ def compiler_for_arch(name, chosen):
 
 
 def find_nm(configured=None):
-	for cand in (os.environ.get("NM"), configured, "nm", "llvm-nm", "gnm"):
-		if cand and shutil.which(cand):
-			return shutil.which(cand)
+	"""Locate nm, refusing rather than substituting one nobody asked for.
+
+    The search used to be one `or' chain -- $NM, the configured name, then
+    `nm', `llvm-nm', `gnm' -- each candidate passed through
+    `shutil.which'. `which' tests the execute bit, so a named nm that was
+    there and not executable failed the test and **fell through to the
+    next candidate**: measured with `[toolchain] nm' pointing at a mode
+    000 file, fmake read the objects with the host's nm, built, and said
+    nothing. A typo in that key did the same, which is the commoner case
+    and the one nobody would ever discover.
+
+    A name the reader supplied is not a hint. `find_qt_tool' has refused
+    this way since before it, for the same reason, and a configured `cc'
+    is a refusal too; nm was the one tool whose configuration could be
+    ignored in silence. It matters most where it is most likely to be
+    set, a cross build: reading aarch64 objects with the host nm usually
+    works, and usually working is what this file declines elsewhere.
+    """
+	named = os.environ.get("NM") or configured
+	if named:
+		got = shutil.which(named)
+		if got:
+			return got
+		# Two different faults, and the advice differs: a path to fix
+		# against a permission to fix. `which' cannot tell them apart,
+		# since it answers one question about both.
+		why = ("is not executable" if os.path.isfile(named)
+		       else "is not there")
+		die(f"nm {named!r} (from {tool_origin('nm', configured)}) {why}.\n"
+		    f"fmake reads object symbol tables to work out the link set, "
+		    f"and will not read them with an nm other than the one you "
+		    f"named.")
+	for cand in ("nm", "llvm-nm", "gnm"):
+		got = shutil.which(cand)
+		if got:
+			return got
 	die("no nm found. fmake reads object symbol tables to work out the "
 	    "link set; install binutils or llvm, or set $NM.")
 

@@ -570,7 +570,8 @@ that had been green about nothing for five commits ·
 [517. The last skip, and why the budget let it happen](#517-the-last-skip-and-why-the-budget-let-it-happen) ·
 [518. A rule the reader cannot follow has not been stated](#518-a-rule-the-reader-cannot-follow-has-not-been-stated) ·
 [519. A stopped build said nothing about how far it got](#519-a-stopped-build-said-nothing-about-how-far-it-got) ·
-[520. Colour was decided about a stream the notices were not on](#520-colour-was-decided-about-a-stream-the-notices-were-not-on)
+[520. Colour was decided about a stream the notices were not on](#520-colour-was-decided-about-a-stream-the-notices-were-not-on) ·
+[521. A named nm was replaced rather than refused](#521-a-named-nm-was-replaced-rather-than-refused)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41592,3 +41593,86 @@ nothing until something is known to be present on the same stream, in the
 same run.** So each absence check here is paired: `b"\x1b" not in
 captured` sits beside `b"CC" in captured`, and the second is what makes
 the first evidence rather than an observation about an empty buffer.
+
+## 521. A named nm was replaced rather than refused
+
+**The audit was of the exec sites and the finding was not a missing
+handler.** §519's family had been spent on streams, so the next pass
+enumerated every place fmake starts a process, asking which could meet a
+tool that is missing or will not run and answer with a traceback.
+
+Measured with an `ast` walk rather than a grep, because a grep cannot
+tell whether a call sits inside a handler: visit every `Call` to
+`subprocess.run`, `Popen`, `check_output`, `check_call`, `run_child` or
+`os.exec*`, carry the stack of `Try` nodes the call is in the **body**
+of, and ask whether any of their handlers names `OSError` or an
+ancestor. **34 process-starting calls, 23 guarded, 11 not.**
+
+**The 11 are not 11 defects**, which is the lesson this file already
+carries as *enumerate the calls, not the neighbourhoods*, and the
+re-measurement confirms it from the other side:
+
+- `do_release`'s `dpkg-buildpackage` and `pandoc` are both behind
+  `shutil.which` on the line that reaches them, so the call cannot run
+  with the program absent.
+- `run_phony` and `run_generators` pass `shell=True`, so the program
+  started is `/bin/sh` and a missing command is the shell's exit 127
+  rather than an `OSError`.
+- `module_undefined` argues its own case in its docstring: the same nm
+  read every object a moment earlier, and `read_symbols` dies where it
+  cannot.
+
+So the audit's value was not its count. What it turned up was a
+different fault entirely, in the function that *finds* nm rather than in
+any site that runs it.
+
+### `which` tests the execute bit, and an `or` chain turns that into a fallthrough
+
+`find_nm` searched `$NM`, the configured name, then `nm`, `llvm-nm`,
+`gnm`, passing each through `shutil.which`. `which` tests `X_OK`, so a
+named nm that was **there and not executable** failed the test and the
+chain moved on to the next candidate. Measured with `[toolchain] nm`
+pointing at a mode 000 file: fmake read the objects with the host's nm,
+built the program, exited 0 and said nothing. A typo in the key does the
+same, and that is the commoner fault -- a misspelling nobody would ever
+discover, because the build works.
+
+**The asymmetry is what makes it a defect rather than a choice.**
+Measured the same day, on the same shape of fixture:
+
+| configured tool, present and not executable | what fmake does |
+|---|---|
+| `cc` | refuses, naming the key |
+| nm | silently used a different one and built |
+
+`find_qt_tool` has refused this way since well before, for the reason
+its own docstring gives, and `ar` is taken verbatim so it is never
+replaced either. nm was the one tool whose configuration could be
+ignored in silence, and it matters most exactly where it is most likely
+to be set: in a cross build, reading aarch64 objects with the host's nm
+usually works, and usually working is what this file declines
+everywhere else.
+
+The fix refuses a name the reader supplied and keeps the search for when
+nobody has supplied one. It separates the two faults, because the advice
+differs and `which` answers one question about both -- `is not there`
+against `is not executable` -- and names the origin through the existing
+`tool_origin`, so `$NM` is not blamed on `fmake.toml`.
+
+**Does it refuse a cross prefix fmake worked out for itself?** No, and
+the question is worth answering here because the call is
+`find_nm(tool.get("nm") or self._prefixed("nm"))` -- so `configured` can
+hold a name the reader never typed, and refusing on one while saying
+"the one you named" would be both a regression and a lie. Read rather
+than reasoned about: `_prefixed` is itself `shutil.which(prefix + tool)`
+and returns **None** when there is nothing there, so what reaches the
+refusal branch is either a name out of `fmake.toml` or `$NM`, or nothing
+at all. The branch cannot be entered with a derived name. That is the
+feared cost measured and dissolved rather than argued.
+
+**The last third of the case is the positive control**, per §520's rule:
+a tree with nothing configured must still find an nm and build. Without
+it, a fix that refused unconditionally would pass every other
+assertion. Reverting to the `or` chain fails the case with fmake's own
+`* built ...` line quoted back inside the failure, which is the silent
+substitution itself.

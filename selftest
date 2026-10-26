@@ -10442,6 +10442,78 @@ def the_nm_the_advice_names_is_one_that_works(t):
 
 
 @case
+def a_named_nm_that_cannot_be_used_is_refused_not_replaced(t):
+	"""The search was one `or' chain -- $NM, the configured name, then
+	`nm', `llvm-nm', `gnm' -- with every candidate passed through
+	`shutil.which'.
+
+	`which' tests the execute bit, so a named nm that was there and not
+	executable failed the test and fell through to the next candidate:
+	measured with `[toolchain] nm' on a mode 000 file, fmake read the
+	objects with the host's nm, built, and said nothing at all. A typo in
+	the key did the same, which is the commoner fault and the one nobody
+	would ever find.
+
+	A configured `cc' is a refusal and `find_qt_tool' refuses the same
+	way, so nm was the one tool whose configuration could be ignored in
+	silence. The last part asserts the search still works when nobody has
+	named anything, because a fix that simply always refused would pass
+	every other check here."""
+	def tree(u):
+		u.write("helper.c", "int helper(void){ return 3; }\n")
+		u.write("main.c", "int helper(void);\n"
+		        "int main(void){ return helper() - 3; }\n")
+
+	# There, and not executable.
+	tree(t)
+	dud = t.write("dud-nm", "#!/bin/sh\nexec nm \"$@\"\n")
+	os.chmod(dud, 0o000)
+	t.write("fmake.toml", f'[toolchain]\nnm = "{dud}"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a named nm that cannot run was accepted: {out}")
+	check("is not executable" in out,
+	      f"the refusal does not say which of the two faults it is: {out}")
+	check("[toolchain] nm" in out,
+	      f"the refusal does not say where the name came from: {out}")
+
+	# Named and absent: the same refusal, the other reason.
+	u = Tree("nm-typo")
+	try:
+		tree(u)
+		gone = os.path.join(u.dir, "nm-typpo")
+		u.write("fmake.toml", f'[toolchain]\nnm = "{gone}"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "is not there" in out,
+		      f"a typo in the key has to be refused, not ignored: {out}")
+
+		# $NM is the other way to name one, and says so rather than
+		# pointing at a file the reader has not edited.
+		r = u.fmake(env=dict(os.environ, NM=gone))
+		out = r.stdout + r.stderr
+		check("$NM" in out,
+		      f"the refusal blames fmake.toml for an environment "
+		      f"variable: {out}")
+	finally:
+		u.cleanup()
+
+	# Nobody named one: the search is intact and the tree builds.
+	w = Tree("nm-unnamed")
+	try:
+		tree(w)
+		r = w.fmake()
+		check(r.returncode == 0,
+		      f"an unconfigured nm must still be found: "
+		      f"{r.stdout}{r.stderr}")
+		check(w.run(os.path.basename(w.dir)).returncode == 0,
+		      "the program built with the found nm does not run")
+	finally:
+		w.cleanup()
+
+
+@case
 def the_furniture_keys_work_in_fmake_toml_too(t):
 	"""Six schema keys exercised only through their `@' spelling.
 
