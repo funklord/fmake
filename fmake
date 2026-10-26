@@ -7026,6 +7026,7 @@ class Cache:
 
 	def __init__(self, path):
 		self.path = path
+		self._retired = False
 		# Set for a run that promised to change nothing. `--dry-run' prints
 		# the commands and runs none of them, and it was writing this file
 		# and the lock beside it -- two entries in a tree somebody may only
@@ -7132,9 +7133,59 @@ class Cache:
 		self.files   = self.data["files"]
 		self.objects = self.data["objects"]
 
+	def _retire_ghosts(self):
+		"""Drop entries for files that have gone, one save after they go.
+
+    Nothing removed one, and the stores are keyed by path, so every file
+    renamed or deleted left its entry behind for ever. Measured over ten
+    renames of one source: `files' from 7 entries to 25 and `objects'
+    from 3 to 12, two and one per rename, with the file growing by about
+    560 bytes each time. Slow, and unbounded, which is the part that
+    matters.
+
+    A ghost cannot simply be dropped on sight, because section 523 reads
+    exactly these: the blame that names the source which defined a
+    missing symbol, and the one that names a header that has gone, both
+    look up a path no longer on disk. So an absent entry is marked on
+    one save and removed on the next, which leaves the blame the two
+    builds it needs -- the build that notices the absence, and a rebuild
+    of it -- and bounds the ghosts at one save's worth of deletions.
+
+    The cost is that a reader who ignores the message and keeps building
+    gets the general ending from the third build on. That is recorded
+    rather than defended; the alternative was keeping every ghost for
+    ever.
+
+    Paths outside the tree are left alone. `files' reaches past the root
+    -- a toolchain header arrives as `../../../usr/include/...' -- and a
+    system header coming and going is not this tree's history to prune.
+    """
+		root = os.path.dirname(os.path.dirname(self.path))
+		for store in (self.files, self.objects):
+			for k in list(store):
+				# A variant's object key carries its target behind a NUL.
+				rel = k.split("\0")[0]
+				if (rel.startswith("../") or os.path.isabs(rel)
+				        or not isinstance(store[k], dict)):
+					continue
+				if os.path.exists(os.path.join(root, rel)):
+					store[k].pop("gone", None)
+				elif store[k].get("gone"):
+					del store[k]
+				else:
+					store[k]["gone"] = 1
+
 	def save(self):
 		if self.read_only:
 			return
+		# Once per run, not once per save. A build saves more than once --
+		# six sites call this -- so evaluating it each time marked an entry
+		# on the first save and deleted it on the second, inside one
+		# build, which is no grace at all. Caught by the case asserting
+		# that a mark survives the build that makes it.
+		if not self._retired:
+			self._retired = True
+			self._retire_ghosts()
 		# One string and one write, rather than `json.dump' streaming to the
 		# file object, which issues a write per encoded fragment. Counted
 		# with strace over a no-op build of a 301-source tree: 62 write

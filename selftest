@@ -2768,6 +2768,63 @@ def _private_lib(where):
 
 
 @case
+def a_cache_entry_for_a_vanished_file_is_retired(t):
+	"""The stores are keyed by path and nothing removed an entry.
+
+	Measured over ten renames of one source before this: `objects' from 3
+	entries to 12 and `files' from 7 to 25, with the file growing about
+	560 bytes a rename. Slow, unbounded, and invisible.
+
+	A ghost cannot go on sight, because section 523's blame reads exactly
+	these -- the source that defined a missing symbol, and a header that
+	has gone. So it is marked on one save and removed on the next, which
+	leaves the blame the build that notices the absence and one rebuild
+	of it. Both halves are asserted here, because dropping it too early
+	breaks a message and too late is the leak."""
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+
+	def objects():
+		with open(cache) as fh:
+			return json.load(fh).get("objects", {})
+
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper() - 1; }\n")
+	t.write("h0.c", "int helper(void){ return 1; }\n")
+	check(t.fmake().returncode == 0, "the first build should succeed")
+	live = len(objects())
+
+	# Renamed, not deleted, so the build keeps succeeding and the only
+	# thing accumulating is history.
+	for i in range(1, 7):
+		os.rename(os.path.join(t.dir, f"h{i - 1}.c"),
+		          os.path.join(t.dir, f"h{i}.c"))
+		check(t.fmake().returncode == 0, f"rename {i} should still build")
+	# Bounded at the live count plus one, not at the live count: a save
+	# that notices an absence marks it and the next removes it, so the
+	# most recently vanished source is always still there. That is the
+	# grace, and asserting equality here would be asserting its absence.
+	check(len(objects()) <= live + 1,
+	      f"the object store grew across renames: {len(objects())} "
+	      f"against {live} live and one ghost")
+
+	# The grace itself: marked on the save that notices, gone on the next.
+	os.rename(os.path.join(t.dir, "h6.c"), os.path.join(t.dir, "h7.c"))
+	t.fmake()
+	ghosts = [k for k, v in objects().items()
+	          if isinstance(v, dict) and v.get("gone")]
+	check(ghosts,
+	      f"a vanished source left no marked entry, so the blame in "
+	      f"section 523 has nothing to read: {sorted(objects())}")
+	t.fmake()
+	check(not [k for k, v in objects().items()
+	           if isinstance(v, dict) and v.get("gone")],
+	      f"a marked entry survived a second save: {sorted(objects())}")
+	check(len(objects()) == live,
+	      f"the store did not settle at the live count: "
+	      f"{sorted(objects())}")
+
+
+@case
 def the_provider_cache_does_not_grow_without_a_bound(t):
 	"""Nothing removed an entry from the resolution cache.
 

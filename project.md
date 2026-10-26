@@ -576,7 +576,8 @@ that had been green about nothing for five commits ·
 [523. A deleted source was guessed at, and fmake knew the answer](#523-a-deleted-source-was-guessed-at-and-fmake-knew-the-answer) ·
 [524. pkg-config's `-L` was swept and the project's own was not](#524-pkg-configs--l-was-swept-and-the-projects-own-was-not) ·
 [525. A non-ASCII identifier was invisible to the scan](#525-a-non-ascii-identifier-was-invisible-to-the-scan) ·
-[526. The resolution cache grew without a bound](#526-the-resolution-cache-grew-without-a-bound)
+[526. The resolution cache grew without a bound](#526-the-resolution-cache-grew-without-a-bound) ·
+[527. Dead cache entries retired, and the orphaned objects behind them](#527-dead-cache-entries-retired-and-the-orphaned-objects-behind-them)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41998,3 +41999,60 @@ so adding bare directories to `lib-dirs` changed nothing and the first
 probe sat at one entry for fourteen builds. Adding a real `.so` each
 time is what moves it -- which is also why the symbol-set route was
 abandoned: a build whose new call resolves to libc adds no key.
+
+## 527. Dead cache entries retired, and the orphaned objects behind them
+
+§526's question asked of the other stores. `files` and `objects` are
+keyed by path and nothing removed an entry either, so every source
+renamed or deleted left its history behind for ever. Measured over ten
+renames of one source:
+
+| | before | after |
+|---|---|---|
+| `objects` entries | 3 to 12 | 3, held |
+| `files` entries | 7 to 25 | 7 to 16 |
+
+### A ghost is marked on one save and removed on the next
+
+Dropping an absent entry on sight would break §523, whose two blames
+read exactly these -- the source that defined a missing symbol, and a
+header that has gone. So `_retire_ghosts` marks it `gone` on one save
+and deletes it on the next, which leaves the blame the build that
+notices the absence and one rebuild of it. The steady state is the live
+count **plus one**, since the most recently vanished entry is always
+still there; the case asserts that bound and not equality, because
+equality would be asserting the grace away.
+
+**It was wrong first, and the way it was wrong is worth keeping.** The
+retirement ran from `save`, and a build saves more than once -- six
+sites call it -- so the first save marked an entry and the second
+deleted it, inside one build, which is no grace at all. It runs once per
+run now. The case caught it by asserting that a mark survives the build
+that makes it, which is the half somebody writing this quickly would
+leave out.
+
+### The remaining `files` growth is a disk leak, not a cache one
+
+`files` still gains an entry per rename, and the entries are real: they
+name **object files that still exist**. A renamed or deleted source
+leaves its object in `.fmake/obj/<cfg>/` for ever -- measured, eleven
+orphans and 160 KB in a toy tree after ten renames, where real objects
+are far larger. So the cache entry is not stale; the file it describes
+is.
+
+**Whether to delete them is a decision rather than a defect, and it is
+the holder's.** The two sides are real:
+
+- **Removing them** bounds the state directory, and the directory is
+  fmake's own, which is the one shape `CLAUDE.md` allows a wholesale
+  clear in.
+- **Keeping them** is what makes a branch switch cheap. Check out a
+  branch where the old name is back and its object is there, content
+  hash matching, so nothing recompiles. That is the cache working as
+  intended rather than an accident.
+
+`--clean` already removes them, so there is a remedy today. What there
+is no answer for is the growth between cleans, and the honest options
+are to delete on a rule somebody chooses, or to say how much is sitting
+there and let the reader decide. Both are opinions about how a build
+cache should behave, so neither is taken here.
