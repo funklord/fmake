@@ -190,6 +190,10 @@ def build_identity():
 
 STATE_DIR   = ".fmake"
 CACHE_FILE  = "cache.json"
+# How many provider sweeps to keep. See scan_providers: the store is keyed
+# by the symbol set, the library directories and the target identity, and
+# an unbounded one grew by an entry for every source added or removed.
+PROVIDER_KEYS_KEPT = 8
 CACHE_VER   = 9   # scans record what generated the file, where it says so
 
 class Lang:
@@ -10853,7 +10857,13 @@ def scan_providers(cfg, externals, cache, jobs, want_ident=None):
 	          + "#" + str(want_ident))
 	store = cache.data.setdefault("providers", {})
 	if key in store:
-		return store[key]["providers"], store[key]["paths"]
+		# Moved to the end, so the trim below reads insertion order as
+		# recency. Without this a key that is hit on every build keeps
+		# the position it was first written at and is evicted ahead of
+		# one nobody has used since.
+		ent = store.pop(key)
+		store[key] = ent
+		return ent["providers"], ent["paths"]
 	vinfo(f"resolving {len(want)} external symbol(s) against "
 	      f"{describe_identity(want_ident)} libraries in "
 	      f"{len(cfg.libdirs)} directory(ies)")
@@ -10861,6 +10871,23 @@ def scan_providers(cfg, externals, cache, jobs, want_ident=None):
 	paths = {n: p for n, p in libs.items()
 	         if any(n in v for v in providers.values())}
 	store[key] = {"providers": providers, "paths": paths}
+	# Bounded, because nothing removed an entry and the key changes
+	# whenever the external symbol set, the library directories or the
+	# target identity do -- so every source added or removed left one
+	# behind for ever. Measured over eight builds that each added a call
+	# to a different libc function: 0, 1, 1, 2, 2, 3, 4, 5 entries, and
+	# the file growing with them. An entry is as large as the tree's
+	# external surface, so a Qt program's is not small.
+	#
+	# A miss costs one sweep, which is the expensive half of resolution,
+	# so the cap is for the configurations somebody actually alternates
+	# between -- native against cross, debug against release, each its
+	# own key -- rather than the tightest number that works. The entry
+	# before this one has a second reader: the vanished-library blame in
+	# section 523 finds the library that exported a symbol by looking
+	# through these, and a cap of one would take that with it.
+	while len(store) > PROVIDER_KEYS_KEPT:
+		store.pop(next(iter(store)))
 	return providers, paths
 
 

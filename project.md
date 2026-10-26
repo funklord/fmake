@@ -575,7 +575,8 @@ that had been green about nothing for five commits ·
 [522. The same fallthrough in pkg-config, and the rule factored](#522-the-same-fallthrough-in-pkg-config-and-the-rule-factored) ·
 [523. A deleted source was guessed at, and fmake knew the answer](#523-a-deleted-source-was-guessed-at-and-fmake-knew-the-answer) ·
 [524. pkg-config's `-L` was swept and the project's own was not](#524-pkg-configs--l-was-swept-and-the-projects-own-was-not) ·
-[525. A non-ASCII identifier was invisible to the scan](#525-a-non-ascii-identifier-was-invisible-to-the-scan)
+[525. A non-ASCII identifier was invisible to the scan](#525-a-non-ascii-identifier-was-invisible-to-the-scan) ·
+[526. The resolution cache grew without a bound](#526-the-resolution-cache-grew-without-a-bound)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -41951,3 +41952,49 @@ the three things downstream of it were tried rather than trusted.
 Both ejected backends are in the case now, and sabotaging `_unmakeable`
 to refuse a non-ASCII path fails it at the Makefile assertion, so that
 half is not decoration.
+
+## 526. The resolution cache grew without a bound
+
+Noticed from §523, which reads old entries out of the `providers` store
+on purpose: nothing ever *removed* one. The key is the external symbol
+set, a stamp of the library directories and the target identity, so it
+moves whenever any of those does -- every source added or removed left
+an entry behind for ever, and an entry is as large as the tree's
+external surface, which for a Qt program is not small.
+
+Measured on one tree, adding a library to a `lib-dirs` directory per
+build so that only the signature changes:
+
+| configurations | entries before | entries after |
+|---|---|---|
+| 12 | 12 | 8 |
+
+`PROVIDER_KEYS_KEPT = 8`, trimmed from the front of the store after each
+write. The number is for the configurations somebody alternates between
+-- native against cross, debug against release, each its own key -- not
+the tightest that works, because a miss costs one sweep and the sweep is
+the expensive half of resolution. **A cap of one would have taken §523's
+vanished-library blame with it**, since that walks these entries to find
+which library exported a symbol.
+
+**The hit path moves its entry to the end**, so insertion order reads as
+recency. Without that, the configuration used on *every* build keeps the
+position it was first written at and is evicted ahead of one nobody has
+touched since. Hand-measured by alternating a fixed configuration
+against ten growing ones: with the move, the fixed one sweeps once and
+never again; with it removed, it is evicted and re-sweeps at round 8,
+exactly where the store crosses the cap.
+
+That half is a hand-check and is not in the suite, deliberately:
+distinguishing it needs nineteen builds where the bound needs ten, and
+its failure costs a re-sweep rather than a wrong answer. The bound is
+the gated one -- ten configurations, the count asserted against the cap
+read out of the tool rather than written twice, and removing the trim
+fails it with `[1, 2, ..., 10] against a cap of 8`.
+
+**The fixture had to drive the signature, and an empty directory does
+not move it.** `libdir_signature` stamps the linkable libraries it finds,
+so adding bare directories to `lib-dirs` changed nothing and the first
+probe sat at one entry for fourteen builds. Adding a real `.so` each
+time is what moves it -- which is also why the symbol-set route was
+abandoned: a build whose new call resolves to libc adds no key.

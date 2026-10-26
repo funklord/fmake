@@ -2768,6 +2768,65 @@ def _private_lib(where):
 
 
 @case
+def the_provider_cache_does_not_grow_without_a_bound(t):
+	"""Nothing removed an entry from the resolution cache.
+
+	`scan_providers' keys its store by the external symbol set, a stamp
+	of the library directories and the target identity, so the key moves
+	whenever any of those does -- every source added or removed left an
+	entry behind for ever, and an entry is as large as the tree's
+	external surface. Measured over twelve configurations before the cap:
+	twelve entries. The cap holds it at `PROVIDER_KEYS_KEPT'.
+
+	Driven through the library directories rather than the symbol set,
+	because `libdir_signature' stamps the linkable libraries it finds and
+	that is the one input a fixture can move a step at a time. An empty
+	directory does not move it, which cost one wrong probe."""
+	cc = shutil.which("cc")
+	if not cc:
+		raise Skip("no cc to build libraries with")
+	libs = os.path.join(t.dir, "libs")
+	os.makedirs(libs, exist_ok=True)
+	src = os.path.join(t.dir, "u.c")
+	with open(src, "w") as fh:
+		fh.write("int unused_sym(void){ return 0; }\n")
+	t.write("main.c", "#include <stdio.h>\n"
+	        'int main(void){ return puts("x") < 0; }\n')
+	t.write("fmake.toml", f'[toolchain]\nlib-dirs = ["{libs}"]\n')
+
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+	cap = None
+	counts = []
+	for i in range(1, 11):
+		made = subprocess.run(
+		    [cc, "-shared", "-fPIC", "-o",
+		     os.path.join(libs, f"libcap{i}.so"), src],
+		    capture_output=True, text=True)
+		if made.returncode != 0:
+			raise Skip(f"cc cannot build a shared library: {made.stderr}")
+		r = t.fmake()
+		check(r.returncode == 0, f"build {i} failed: {r.stdout}{r.stderr}")
+		with open(cache) as fh:
+			counts.append(len(json.load(fh).get("providers", {})))
+	# Read from the tool rather than written here, so the two cannot
+	# disagree about what the cap is.
+	cap = int(subprocess.run(
+	    [sys.executable, "-c",
+	     "import re;print(re.search(r'PROVIDER_KEYS_KEPT = (\\d+)',"
+	     f"open({FMAKE!r}).read()).group(1))"],
+	    capture_output=True, text=True).stdout.strip())
+	check(max(counts) <= cap,
+	      f"the provider cache is unbounded: {counts} against a cap of "
+	      f"{cap}")
+	check(max(counts) == cap,
+	      f"the fixture never reached the cap, so the bound was not "
+	      f"tested: {counts} against {cap}")
+	check(counts[-1] == cap and counts[-2] == cap,
+	      f"the count should settle at the cap rather than oscillate: "
+	      f"{counts}")
+
+
+@case
 def a_lib_dir_named_in_ldflags_is_swept_for_providers(t):
 	"""pkg-config's own `-L' was swept and the project's own was not.
 
