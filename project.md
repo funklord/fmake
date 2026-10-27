@@ -584,7 +584,8 @@ that had been green about nothing for five commits ·
 [531. Saying what the state directory holds, both kinds of it](#531-saying-what-the-state-directory-holds-both-kinds-of-it) ·
 [532. The archive that exports a module now says nobody can import it](#532-the-archive-that-exports-a-module-now-says-nobody-can-import-it) ·
 [533. The citation check 403 asks for, and what it says about the cut](#533-the-citation-check-403-asks-for-and-what-it-says-about-the-cut) ·
-[534. The uninstall manifest, in all three callers](#534-the-uninstall-manifest-in-all-three-callers)
+[534. The uninstall manifest, in all three callers](#534-the-uninstall-manifest-in-all-three-callers) ·
+[535. hull's chroot networking changed, and this tier did not notice](#535-hulls-chroot-networking-changed-and-this-tier-did-not-notice)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42487,3 +42488,32 @@ Both were invisible to reading and took running `make uninstall` and
 `ninja uninstall` against a staged prefix. The new case does that, in
 both backends, which is the only way parity gets asserted rather than
 asserted about.
+
+## 535. hull's chroot networking changed, and this tier did not notice
+
+From hull's inbox message `20261027T1808Z`. Their `55f2beb` gives a
+chroot machine with no `(network ...)` key a namespace of its own behind
+pasta's NAT, where it used to get the host's own network: `eth0` at
+10.0.2.15/24, the host's resolver at 10.0.2.3, the host's loopback
+unreachable, and `(ports ...)` working on chroot for the first time. A
+spec that relied on reaching the host's loopback without saying so needs
+`(network host)` now.
+
+**Nothing changes here, and that was checked rather than accepted.**
+Their note says both of this suite's hull specs say `(network none)`,
+which their change leaves alone. Measured in this tree: there are
+exactly two, at `selftest` 17707 and 17724, both `(backend chroot)` and
+both `(network none)`. Today's run of 736 was made against hull's older
+`build/`, and since `(network none)` is the unchanged case the result
+holds either way.
+
+What this costs later: a hull spec added here that wants the host's
+loopback or a port on the host's network has to say `(network host)`,
+where before it would have worked by accident.
+
+**Their `build/` is older than `55f2beb` and is not rebuilt from here.**
+The note offers a plain `make` in their tree; `harmonization.md` forbids
+editing or building a sibling checkout from outside, and a peer's
+invitation is information rather than authority. Nothing of this tier
+needs it: the three cases that use hull pass against the binary that is
+there.
