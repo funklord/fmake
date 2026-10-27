@@ -16690,6 +16690,36 @@ int main(void){ puts("hi"); return 0; }
 
 
 @case
+def a_truncated_object_is_not_an_elf_machine_number(t):
+	"""`_elf_machine' was defined twice and the guarded one was dead.
+
+	The copy with a length check and a docstring arrived in `e26b6ef'
+	(2026-08-07); an earlier one from `1cf5b2f' (2026-07-26) sits further
+	down the file, so Python took the older one and the guard has never
+	run. Nineteen call sites, all comparing against a real machine
+	number, so nothing noticed.
+
+	What the guard is worth, measured on the two shapes a truncated
+	object takes: four bytes of ELF magic gave `IndexError' at `head[5]',
+	and ten bytes gave **0** from an empty slice -- a machine number
+	presented as an answer. Both are `None' now, which is what every
+	caller reads as "not an ELF I can make sense of".
+
+	A truncated object is not exotic here: it is what a compile killed
+	part-way leaves, and this suite kills compiles on purpose."""
+	for name, blob in (("magic-only", b"\x7fELF"),
+	                   ("header-short", b"\x7fELF\x02\x01" + b"\0" * 4),
+	                   ("empty", b""),
+	                   ("not-elf", b"MZ\x90\0" + b"\0" * 32)):
+		path = os.path.join(t.dir, name)
+		with open(path, "wb") as fh:
+			fh.write(blob)
+		check(_elf_machine(path) is None,
+		      f"{name}: a file this short has no machine number, and "
+		      f"reading one gave {_elf_machine(path)!r}")
+
+
+@case
 def every_arch_the_canonicaliser_names_has_an_elf_machine(t):
 	"""The fourth hand-written list, and the one that had no gate.
 
@@ -17014,15 +17044,6 @@ def host_machine():
 	return {"x86_64": 0x3E, "aarch64": 0xB7, "x86": 0x03, "arm": 0x28,
 	        "riscv": 0xF3, "ppc64": 0x15}.get(platform.machine().lower()
 	                                          .replace("amd64", "x86_64"))
-
-
-def _elf_machine(path):
-	with open(path, "rb") as fh:
-		head = fh.read(20)
-	if head[:4] != b"\x7fELF":
-		return None
-	order = "little" if head[5] == 1 else "big"
-	return int.from_bytes(head[18:20], order)
 
 
 @case

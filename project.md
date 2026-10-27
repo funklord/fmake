@@ -579,7 +579,8 @@ that had been green about nothing for five commits ·
 [526. The resolution cache grew without a bound](#526-the-resolution-cache-grew-without-a-bound) ·
 [527. Dead cache entries retired, and the orphaned objects behind them](#527-dead-cache-entries-retired-and-the-orphaned-objects-behind-them) ·
 [528. The skips are not inevitable, and three of four were closable here](#528-the-skips-are-not-inevitable-and-three-of-four-were-closable-here) ·
-[529. The ninja remedy, tested on the half that had no fixture](#529-the-ninja-remedy-tested-on-the-half-that-had-no-fixture)
+[529. The ninja remedy, tested on the half that had no fixture](#529-the-ninja-remedy-tested-on-the-half-that-had-no-fixture) ·
+[530. A helper defined twice, and the guarded copy was the dead one](#530-a-helper-defined-twice-and-the-guarded-copy-was-the-dead-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42133,3 +42134,43 @@ comment above the sentence earns its: replacing `shlex.quote(name)` with
 failed on a path make had refused"*. The uninstall arm matters
 separately, since a rule that quotes differently from its install is a
 file left behind rather than an error.
+
+## 530. A helper defined twice, and the guarded copy was the dead one
+
+Found by the cheapest static check there is: count the top-level
+definitions in each file and look for a name defined more than once.
+`fmake` has 325 and no duplicates; `selftest` has 820 and one --
+`_elf_machine`.
+
+The two differ, and not cosmetically. The copy with a **length check**
+and a docstring saying it reads an ELF header "the way fmake reads it"
+came in `e26b6ef` (2026-08-07). An earlier one from `1cf5b2f`
+(2026-07-26) has no guard and no docstring -- and sits **further down the
+file**, so Python took the older one and the guard has never run since
+the day it was written.
+
+What it is worth, measured on the two shapes a truncated object takes:
+
+| file | guarded | unguarded |
+|---|---|---|
+| 4 bytes of ELF magic | `None` | `IndexError` at `head[5]` |
+| 10 bytes | `None` | `0` |
+
+The second is the worse one: a machine number presented as an answer.
+Nineteen call sites read this, every one comparing against a real
+machine number, so nothing noticed either outcome.
+
+**A truncated object is not exotic in this suite**, which is what makes
+it worth a case rather than a deletion: it is what a compile killed
+part-way leaves, and these cases kill compiles on purpose.
+
+The duplicate is gone, the guarded copy serves all nineteen callers, and
+`a_truncated_object_is_not_an_elf_machine_number` asserts `None` for
+magic-only, short-header, empty and not-ELF files. Removing the length
+check fails it with the `IndexError` that shipped.
+
+**The general lesson is about the check, not the helper.** Two copies of
+a function in one 38,000-line file is invisible to review and to the
+suite alike -- both definitions parse, both are reachable by name, and
+the later one silently wins whichever was written first. Counting
+top-level names is three lines of `ast` and found it immediately.
