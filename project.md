@@ -31335,10 +31335,16 @@ reading fmake looking for bugs.**
 - **fuzzypickles' README claim is false** since their `3f3331d` added
   `FZP_VERSION` to `gui.pro` and not to `fmake.toml`. Theirs, one line;
   signalled, no reply yet.
-- **`tool/style_gate.py` and `tool/test_style_gate.py` are modified and
+- ~~**`tool/style_gate.py` and `tool/test_style_gate.py` are modified and
   uncommitted in this tree**, synced in by somebody else -- the version
   that reports the document's size. Not this session's to commit and not
-  to revert.
+  to revert.~~ **Closed**: committed as `17552bb`, *"tool: take the
+  gate's size report and braceless-body fix"* -- which is that version,
+  so whoever synced it committed it. Both copies now differ from
+  `~/.claude/tool/` only by the provenance header the global rule asks
+  for. Struck 2026-10-27 because an open register is read for orientation
+  and this one told a later session not to touch two files that are
+  nobody's work in progress.
 - **Still with the holder from before today**: §348's `--uninstall`
   manifest, §363's service-name charset, §367's `uses` doc/code
   contradiction, `pkg-optional`'s per-file-versus-per-target semantics,
