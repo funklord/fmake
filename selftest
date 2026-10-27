@@ -16831,7 +16831,9 @@ def a_cross_build_is_verified_in_a_machine(t):
 	with the host compiler, wrote an x86-64 binary, and printed `built
 	prog'. Nothing was wrong anywhere a person would look."""
 	if not HULL:
-		raise Skip("no hull; a cross build cannot be reached from here")
+		raise Skip("no hull; a cross build cannot be reached from here "
+		           "-- FMAKE_HULL=<path> names one that is built but not "
+		           "installed")
 	t.write("prog.cpp", "#include <string>\n"
 	        'int main(){ std::string s = "x"; return (int)s.size() - 1; }\n')
 	t.write("fmake.toml", '[toolchain]\ncc = "aarch64-linux-gnu-gcc"\n'
@@ -28867,7 +28869,9 @@ def the_other_inits_glue_is_placed_in_a_machine(t):
 	a Python and a toolchain at a size worth fetching, so the recipe is
 	recorded and the skip names it."""
 	if not HULL:
-		raise Skip("no hull; the other inits cannot be reached from here")
+		raise Skip("no hull; the other inits cannot be reached from here "
+		           "-- FMAKE_HULL=<path> names one that is built but not "
+		           "installed")
 	FILES = {"systemd": "probe.service", "sysvinit": "sysvinit.script",
 	         "openrc": "openrc.script", "procd": "procd.script"}
 	t.write("main.c", "int main(void){ return 0; }\n")

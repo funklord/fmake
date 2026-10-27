@@ -577,7 +577,8 @@ that had been green about nothing for five commits ·
 [524. pkg-config's `-L` was swept and the project's own was not](#524-pkg-configs--l-was-swept-and-the-projects-own-was-not) ·
 [525. A non-ASCII identifier was invisible to the scan](#525-a-non-ascii-identifier-was-invisible-to-the-scan) ·
 [526. The resolution cache grew without a bound](#526-the-resolution-cache-grew-without-a-bound) ·
-[527. Dead cache entries retired, and the orphaned objects behind them](#527-dead-cache-entries-retired-and-the-orphaned-objects-behind-them)
+[527. Dead cache entries retired, and the orphaned objects behind them](#527-dead-cache-entries-retired-and-the-orphaned-objects-behind-them) ·
+[528. The skips are not inevitable, and three of four were closable here](#528-the-skips-are-not-inevitable-and-three-of-four-were-closable-here)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42056,3 +42057,46 @@ is no answer for is the growth between cleans, and the honest options
 are to delete on a rule somebody chooses, or to say how much is sitting
 there and let the reader decide. Both are opinions about how a build
 cache should behave, so neither is taken here.
+
+## 528. The skips are not inevitable, and three of four were closable here
+
+Four cases skipped in every run of this session, which is the state a
+reader would take as fixed. Three were not: hull is built on this
+machine at a path nothing was looking in, and every image the cases want
+is already in its store.
+
+With `FMAKE_HULL` naming it, they pass -- including
+`a_cross_build_is_verified_in_a_machine`, the end-to-end aarch64 build,
+which is the one assertion this host cannot make natively. That matters
+beyond the three, because the session's changes since they last ran are
+not small: 34 identifier classes widened, the resolution cache bounded,
+dead entries retired, a `-L` added to the sweep and three blame branches
+added. None of it disturbs the paths only a machine reaches.
+
+The fourth, `a_cross_build_derives_the_cxx_compiler`, skips for want of
+`aarch64-linux-gnu-g++` on the host and is **meant to**: it is the
+native half of the pair, and installing a cross toolchain is not a
+session's to do.
+
+So the two hull skips name their remedy now, the way the Python one
+already did: `FMAKE_HULL=<path> names one that is built but not
+installed`. A skip that says only what is missing reads as a wall, and
+this one was a door.
+
+### What the tier costs, measured
+
+- **2.3 GB** under `~/.local/share/hull`, all of it `store` -- the
+  images. That is the price of the tier and it was a deliberate choice.
+- **4 KB** in `machines`, so the nine `exited` records `hull ps` lists
+  hold no disk. They are records, not leaks.
+- `hull core` appears beside a run and **exits by itself**; a count taken
+  while it was alive read as a leak and a later one as zero.
+
+**And the first count of it was wrong in the way this workspace has
+already written down.** `pgrep -af 'hull core'` matched its own shell,
+because the pattern is in the command line doing the matching --
+`running-code.md` records exactly that, and it was quoted in this
+session before being walked into. Counting with `ps` and a field test
+instead gave zero. The lesson that survives is the narrow one: a
+self-matching detector reads as *one more* of whatever it looks for, so
+a leak hunt is the worst place to use one.
