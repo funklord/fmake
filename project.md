@@ -42602,6 +42602,33 @@ invitation is information rather than authority. They rebuilt it
 themselves to `55f2beb`, which is the right division of the work, and
 the three cases were then run against it.
 
+### A third mode, and the first note to arrive about a commit already measured
+
+Their `20261027T1952Z`: `(network bridge)` on chroot, hull's own `hull0`
+made on first use or an existing host bridge named by `(bridge "NAME")`.
+It is **refused unless hull's core runs as root**, which is the part worth
+keeping: this suite runs hull as uid 1001, so the mode is unreachable from
+here rather than merely unused, and a spec written to want it would be
+refused at the gate rather than behaving differently. `hull import`'s
+handling of a compose `network_mode` lands in the same note and reaches
+nothing here, there being no compose file in this tree.
+
+Re-measured after the note: still exactly two hull specs in `selftest`,
+at 17713 and 17730, both `(backend chroot)` and both `(network none)`,
+and still no `(segments ...)`. Their note's own last line says nothing in
+this tree changes, and that agrees -- which is only worth saying because
+the two measurements are independent, theirs from the change and this
+from the specs.
+
+**The order was the other way round this time.** The three previous notes
+arrived before the binary carrying them, so the entries above had to say
+what was inspected and what was run. `(network bridge)` is in `3b83027`,
+which `hull --version` still reports and which the three cases were
+already run against for the follow-ups -- so this note describes a commit
+this tier had measured before being told what was in it. Nothing further
+to run, and saying so is the honest form of a green result rather than a
+re-run dressed as confirmation.
+
 ## 536. A filename is bytes, and printing one crashed the run
 
 Found one question after §534's newline: having asked what the install
