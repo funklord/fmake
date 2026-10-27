@@ -31322,7 +31322,16 @@ reading fmake looking for bugs.**
 
 ### Open, and whose each is
 
-- **This file is 2.02x a context window** -- 31,171 lines, ~403k tokens,
+- ~~**This file is 2.02x a context window**~~ **-- closed 2026-10-27 by
+  the holder: "close 403, 13% isn't worth the churn for now, reopen if
+  this becomes an issue".** §533 computed the precondition this entry
+  named and the answer decided it: the cut the citation check clears is
+  91 sections and 13 per cent, which takes the file from 2.7x a context
+  window to 2.4x rather than under one. So the churn buys a ratio that is
+  still over two, and the reopen condition is the holder's words rather
+  than a threshold anybody here invented. The original reasoning, kept
+  because it is why the question was worth asking: 31,171 lines, ~403k
+  tokens,
   +15,381 in thirty days and 1,290 of those today. Measured with the
   method `claude-guidelines` published, re-derived here rather than
   quoted. **The holder's, raised and not answered.** The shape is now
@@ -32272,13 +32281,14 @@ report. §415 came from walking past the thing §414 was about.
 
 ### Still open at the second fold, and whose each is
 
-- **This file is past two context windows.** The number is not written
+- ~~**This file is past two context windows.**~~ **Closed 2026-10-27; see
+  §403 and §533.** The number is not written
   here, because `make style` prints it on every run -- heading count,
   lines and an estimate in tokens -- and a figure quoted in the
   document it measures is stale by the sentence that quotes it: the
   first draft of this line said 32,078 and was wrong twice before
   this paragraph was finished.
-  **The holder's, raised twice and not answered.** The shape is in
+  ~~**The holder's, raised twice and not answered.**~~ The shape is in
   §403: `claude-guidelines` cut its own by turning closed findings into
   one-line indexes that keep their headings, so every `section N`
   citation still resolves and `the_contents_index_lists_every_section`
@@ -33827,8 +33837,9 @@ which package ships them here"* -- rather than inventing one.
 
 Unchanged from the second fold except where noted:
 
-- **This file is past two context windows**, and `make style` prints the
-  figure on every run. **The holder's, raised three times now.**
+- ~~**This file is past two context windows**, and `make style` prints the
+  figure on every run. **The holder's, raised three times now.**~~
+  **Closed 2026-10-27; see §403 and §533.**
 - **hull's finding 2 is now a per-schema situc flags request**, with
   their reproduction, in section 430. The asking half is done; **the
   spelling is the holder's.**
@@ -34884,8 +34895,9 @@ reached a commit message as a bug in fmake.
 
 ### Still open at the fourth fold, and whose
 
-- **This file is past two context windows** and `make style` prints the
-  figure on every run. **The holder's, raised four times now.**
+- ~~**This file is past two context windows** and `make style` prints the
+  figure on every run. **The holder's, raised four times now.**~~
+  **Closed 2026-10-27; see §403 and §533.**
 - **Whether to prune object directories from other configurations.**
   Section 15's question, and the count is already printed under `-v` --
   measured again today: five configurations leave five object trees and
@@ -42341,6 +42353,16 @@ among two.
 That is the useful half of this measurement: it moves the question from
 *"is a cut safe"* to *"is a 13 per cent cut worth doing on its own"*,
 and the second is answerable.
+
+**It was answered the same day.** The holder: *"close 403, 13% isn't
+worth the churn for now, reopen if this becomes an issue."* So no cut,
+and §403 is closed in the four places that recorded it as open -- it had
+been raised once, twice, three times and four times across as many
+registers, and closing only the first would have left three saying
+nobody had answered. The reopen condition is the holder's words; nothing
+here turns it into a threshold, since the measurement that would matter
+is whether the file costs a session something, not what ratio it
+reaches.
 
 ### Two corrections the count needed
 
