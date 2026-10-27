@@ -42678,6 +42678,22 @@ The second is the one worth having. A case asserting only that the build
 succeeds would pass with `replace` in place and the tree would go stale
 without a word.
 
+### The rule the two halves make, which the file already half-followed
+
+**`replace` for text being read, `surrogateescape` for a path.** They are
+not interchangeable and the difference is what each is for: scanned text
+is wanted for its tokens, so a byte that will not decode can become a
+question mark and nothing is lost that mattered; a path is wanted for
+comparison against the filesystem, so a lossy byte makes it match
+nothing and the loss is total and silent.
+
+fmake already had the first half right in five places -- a source's text,
+`fmake.mk`, the README, a `.pc` -- read with `errors="replace"`, which is
+why an ISO-8859 comment in a `.c` file has always built. Measured on
+`/* Caf\xe9 by Bj\xf6rn */`, which `file(1)` calls ISO-8859 text: it
+compiles and links. What was missing was only the second half, and only
+where paths arrive from outside.
+
 ### What was checked and found already right
 
 The output side's audit asked the same question of every reader in
