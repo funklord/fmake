@@ -11233,6 +11233,88 @@ def the_nm_the_advice_names_is_one_that_works(t):
 
 
 @case
+def a_named_ar_is_refused_and_an_archive_does_not_fail_as_a_link(t):
+	"""The fifth named tool, and the one without a gate.
+
+	`cc', `cxx', `nm' and `pkg-config' each refuse a named tool that
+	cannot be used, naming where it came from. `ar' did not. The
+	mechanism differs from nm's and the remedy does not: the `or' chain
+	short-circuits at the configured value, so a named `ar' that is not
+	there is KEPT rather than substituted, and the first thing to notice
+	is the archive step failing -- `could not run '/nonexistent/ar': No
+	such file or directory' followed by advice asserting the opposite of
+	that errno, "it is there and will not start".
+
+	The second half is section 516's shape. An `ar' that exists and exits
+	non-zero reported `libhelper.a did not link' over advice to name the
+	missing libraries with --ldflags, for a static archive, which has
+	none to name. The crate branch beside it already declines that ending
+	in as many words -- rustc "compiled and linked in one command, so
+	there is no link line fmake assembled and no library it could have
+	failed to find" -- and an `ar' invocation assembles no link line and
+	resolves no library either.
+
+	A genuine link failure is asserted too, because a fix that suppressed
+	the library advice everywhere would pass the two above."""
+	t.write("helper.h", "#pragma once\nint helper(void);\n")
+	t.write("helper.c", "/*! @file\n *  @target  helper\n"
+	        " *  @kind    static\n *  @headers helper.h\n */\n"
+	        '#include "helper.h"\nint helper(void){ return 1; }\n')
+	t.write("main.c", "/*! @file\n *  @target app\n */\n"
+	        '#include "helper.h"\nint main(void){ return helper(); }\n')
+
+	# Not there at all: refused before anything is compiled, naming the
+	# key that named it.
+	t.write("fmake.toml", '[toolchain]\nar = "/nonexistent/ar"\n')
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a missing ar should refuse: {said}")
+	check("/nonexistent/ar" in said and "[toolchain] ar" in said,
+	      f"the refusal should name the tool and where it came from: {said}")
+	check("is not there" in said,
+	      f"the refusal should say it is absent rather than unstartable: "
+	      f"{said}")
+	check("will not start" not in said,
+	      f"a path that does not exist must not be described as present: "
+	      f"{said}")
+
+	# There, and useless. The archive fails, and the phase and the advice
+	# both have to be about archiving.
+	bad = t.write("badar", "#!/bin/sh\nexit 1\n")
+	os.chmod(bad, 0o755)
+	t.write("fmake.toml", f'[toolchain]\nar = "{bad}"\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a failing ar should fail the build: {said}")
+	check("did not archive" in said,
+	      f"an archive that failed is not a link that failed, and the "
+	      f"phase is what a reader acts on: {said}")
+	check("did not link" not in said,
+	      f"the archive failure still calls itself a link: {said}")
+	check("--ldflags is not the remedy" in said,
+	      f"the advice should decline --ldflags for an archive: {said}")
+
+	# The control, in its own tree: a real link failure must still be
+	# told about libraries, or this case passes against a fix that
+	# removed the advice altogether.
+	u = Tree("real-link-failure")
+	try:
+		u.write("main.c", "int missing_thing(void);\n"
+		        "int main(void){ return missing_thing(); }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check(r.returncode != 0, f"an undefined symbol should fail: {said}")
+		check("missing_thing" in said,
+		      f"the link failure should name the symbol: {said}")
+		check("--ldflags" in said and "--ldflags is not the remedy" not in said,
+		      f"a genuine link failure must still be told about libraries: "
+		      f"{said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_named_nm_that_cannot_be_used_is_refused_not_replaced(t):
 	"""The search was one `or' chain -- $NM, the configured name, then
 	`nm', `llvm-nm', `gnm' -- with every candidate passed through

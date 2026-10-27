@@ -6689,9 +6689,28 @@ class Config:
 				    f"alike, which is what a --target needs.")
 			die(f"C compiler {self.cc!r} not found "
 			    f"(set $CC, or [toolchain] cc in {CONF_FILE})")
-		self.ar     = (os.environ.get("AR") or tool.get("ar")
-		               or self._prefixed("ar")
-		               or shutil.which("ar") or shutil.which("llvm-ar"))
+		# Named `ar' goes through the same gate cc, cxx, nm and
+		# pkg-config go through, and it was the one of the five without
+		# one. The mechanism differs from nm's and the remedy does not:
+		# this chain short-circuits at the configured value, so a named
+		# `ar' that is not there is KEPT rather than substituted, and the
+		# first thing to notice is the archive step failing. Measured
+		# with `[toolchain] ar = "/nonexistent/ar"' -- two objects
+		# compiled, then `could not run '/nonexistent/ar': No such file
+		# or directory' followed by advice asserting the opposite of that
+		# errno. A cross build naming aarch64-linux-gnu-ar with a typo is
+		# the case this is written for.
+		# Kept so the archive-failure advice can name where `ar' came
+		# from. `ar_name' is the bare name for an ejected build file and
+		# answers a different question.
+		self.ar_configured = tool.get("ar")
+		_ar_named = os.environ.get("AR") or tool.get("ar")
+		self.ar = (require_named_tool(
+			"ar", _ar_named, tool.get("ar"),
+			"fmake archives a static library with the ar you named, and "
+			"will not substitute another.") if _ar_named
+		           else (self._prefixed("ar")
+		                 or shutil.which("ar") or shutil.which("llvm-ar")))
 		# The bare name in an ejected build file: a resolved absolute path
 		# would not survive being carried to another machine.
 		self.ar_name = (os.environ.get("AR") or tool.get("ar")
@@ -17081,6 +17100,17 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 
 	if failed:
 		say()
+		# What KIND each failed target is, which `cl.root' cannot say: it
+		# is a Unit, so it carries `crate_exe' but not `kind'. Taken from
+		# the targets themselves, the way the build path reads `t.kind'
+		# to choose between the AR and LD tags.
+		#
+		# Keyed by FILENAME, because that is what the failure carries --
+		# `failed.append((t.filename, ...))'. Keyed by `t.name' first,
+		# which looks right and silently matched nothing: the entry says
+		# `libhelper.a' and the target is called `helper', so every
+		# lookup missed and the archive went on being called a link.
+		_kind_of = {t.filename: t.kind for t in wanted}
 		hidden_moc = set()
 		# {symbol: [files]} over the failures, from the link sets fmake
 		# chose: the linker names objects under .fmake/obj/<hash>/, and a
@@ -17101,6 +17131,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# truncation calling rustc's diagnostic linker lines. The C
 			# path says `main.c did not compile' for the same mistake.
 			warn(f"{name} did not build" if cl.root.crate_exe
+			     else f"{name} did not archive"
+			     if _kind_of.get(name) == "static"
 			     else f"{name} did not link")
 			if cl.root.crate_exe:
 				# Nothing below applies. rustc compiled and linked this in
@@ -17484,6 +17516,24 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     "remedy: keep one definition out of this link -- "
 			     f"[project] exclude in {CONF_FILE}, a target's sources, "
 			     f"or a prefix if the files are generated")
+		elif all(_kind_of.get(_n) == "static"
+		         for _n, _cl, _r, _c, _d in failed):
+			# The crate branch above declines this ending because rustc
+			# compiled and linked in one command, so "there is no link
+			# line fmake assembled and no library it could have failed to
+			# find". An `ar' invocation assembles no link line and
+			# resolves no library either, so the argument is the same one
+			# and this is that fix reaching its sibling -- section 516's
+			# shape. Measured before it did: an `ar' that exits non-zero
+			# reported `libhelper.a did not link' over advice to name the
+			# missing libraries with --ldflags, for a static archive,
+			# which has none to name.
+			note(f"an archive names no libraries, so --ldflags is not the "
+			     f"remedy: this is ar itself failing"
+			     + (f" ({_origin})" if (_origin := tool_origin(
+			            "ar", cfg.ar_configured)) else "")
+			     + ", so check that it can write the output and read "
+			       "every object named above")
 		else:
 			note("name the missing libraries with --ldflags, or build only "
 			     "the targets you want")

@@ -590,7 +590,8 @@ that had been green about nothing for five commits ·
 [537. The same byte on the reading side, where the wrong fix is silent](#537-the-same-byte-on-the-reading-side-where-the-wrong-fix-is-silent) ·
 [538. The install comparison could not tell a symlink from a copy](#538-the-install-comparison-could-not-tell-a-symlink-from-a-copy) ·
 [539. The other store keyed by a signature, which the provider fix missed](#539-the-other-store-keyed-by-a-signature-which-the-provider-fix-missed) ·
-[540. A stamp for a path that has gone, in the six stores the sweep skips](#540-a-stamp-for-a-path-that-has-gone-in-the-six-stores-the-sweep-skips)
+[540. A stamp for a path that has gone, in the six stores the sweep skips](#540-a-stamp-for-a-path-that-has-gone-in-the-six-stores-the-sweep-skips) ·
+[541. The fifth named tool, and an archive that failed as a link](#541-the-fifth-named-tool-and-an-archive-that-failed-as-a-link)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43101,3 +43102,101 @@ status reports the absence of an effect it never produced**, and the
 reading it invites is a finding about the code rather than about the
 probe. Section 539's `files` account is unchanged and stands as
 measured.
+
+## 541. The fifth named tool, and an archive that failed as a link
+
+Config accepts nine tool names: `cc`, `cxx`, `ar`, `nm`, `pkg-config`,
+`moc`, `uic`, `rcc`, `situc`. The hunt came from the shape sections 539
+and 540 both had -- a rule enforced in one place and not in its siblings
+-- and `ar` was the sibling.
+
+**What was measured, stated as measured.** Naming a path that does not
+exist: `cc`, `cxx`, `nm` and `moc` each refuse, naming the tool and the
+key that named it; `pkg-config` goes through the same gate as `nm` and has
+its own case from when that gate was written. `uic`, `rcc` and `situc`
+returned zero and built -- **because the fixture had no `.ui`, no `.qrc`
+and no schema, so none of the three was ever invoked.** That is the
+instrument pointed elsewhere, not a result about them, and they share
+`find_qt_tool` with `moc`, which did refuse. `ar` was the one measured
+failing, with a fixture that genuinely needed it.
+
+**The mechanism differs from nm's and the remedy does not.**
+`require_named_tool` was written because an `or` chain of candidates turns
+"this one is broken" into "try the next". `ar`'s chain short-circuits at
+the configured value instead, so a named `ar` that is not there is **kept**
+rather than substituted -- and the first thing anybody notices is the
+archive step failing, two objects later:
+
+    [1/2] CC  helper.c
+    [2/2] CC  main.c
+    AR  libhelper.a
+    !!! could not run '/nonexistent/ar': No such file or directory
+    That tool cannot execute on this machine; it is there and will not start.
+
+**The last line asserts the opposite of the errno above it.** A reader is
+sent to look for a permission or architecture problem on a path that does
+not exist. It is refused up front now, the way the other four are:
+
+    !!! ar '/nonexistent/ar' (from [toolchain] ar in fmake.toml) is not there.
+    fmake archives a static library with the ar you named, and will not
+    substitute another.
+
+**Three of the six handlers in that family assert presence, and only one
+could be wrong.** `cc` and `nm` are checked for existence before the
+handler can be reached -- `cc` answers `C compiler '...' not found (set
+$CC, or [toolchain] cc ...)` and `nm` goes through this same gate -- so
+for those two the sentence is accurate about what remains. `rcc`, `uic`
+and `situc` do not claim presence at all. `ar` was the one with no
+pre-flight check, which is why it was the one reached by `ENOENT`.
+
+### An archive that failed as a link, which is section 516's shape again
+
+An `ar` that exists and exits non-zero reported:
+
+    * libhelper.a did not link
+      name the missing libraries with --ldflags, or build only the targets
+      you want
+
+Both halves wrong. Archiving is not linking, and a static archive names no
+libraries, so the remedy offered cannot apply -- a reader follows it into a
+sysroot or a package that has nothing to do with the failure.
+
+**The argument against it was already in the file, one branch away.** The
+crate case declines the same ending in as many words: rustc "compiled and
+linked in one command, so there is no link line fmake assembled and no
+library it could have failed to find -- and the ending that offers
+--ldflags would send the reader to install something that has nothing to
+do with it." An `ar` invocation assembles no link line and resolves no
+library either. So this is that fix reaching its sibling, which is what
+section 516 is about, and the phase word moves with it for the reason the
+crate branch gives: *the phase is what a reader acts on*.
+
+    * libhelper.a did not archive
+      an archive names no libraries, so --ldflags is not the remedy: this
+      is ar itself failing ([toolchain] ar in fmake.toml), so check that
+      it can write the output and read every object named above
+
+Three sabotages, each caught: the gate removed restores the message
+asserting presence; the phase word reverted calls the archive a link; the
+ending reverted offers `--ldflags` again. And the case asserts a genuine
+link failure still names the symbol and still offers `--ldflags`, because
+a change that suppressed the library advice everywhere would pass the
+other three assertions.
+
+### A lookup keyed on the wrong field is the vacuous assertion's cousin
+
+The first attempt read `cl.root.kind`, and `cl.root` is a `Unit`: it
+carries `crate_exe`, which is why the neighbouring branch works, and no
+`kind`. That raised `AttributeError` and said so.
+
+The second attempt is the instructive one. It built `{t.name: t.kind}` and
+looked up the name the failure carries -- and `failed.append((t.filename,
+...))` carries the FILENAME, so the entry said `libhelper.a` while the
+target is called `helper`. **Every lookup missed, no error was raised, and
+the output was byte-for-byte what it had been before the fix.** The
+symptom of a map keyed on the wrong field is that the change appears not
+to work, which reads as the fix being wrong rather than the key being
+wrong, and the next move it invites is to rewrite a fix that was correct.
+
+Keyed by `t.filename` now, with the reason written at the line, because
+`t.name` is what anybody would key it on.
