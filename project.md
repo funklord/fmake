@@ -43050,6 +43050,37 @@ Said plainly because the alternative sentence -- "six stores leaked and
 were fixed" -- is the one this record would otherwise grow into, and it
 would be wrong in the direction that is hard to catch later.
 
+### Two sections are outside both sweeps, and adding them to the list is wrong
+
+`generated` and `generated_deps` are keyed by RULE NAME -- the key of the
+`rules` mapping, as `_gen_order` iterates it -- so neither sweep reaches
+them: `_retire_ghosts` needs a dict to mark, and the stamp sweep asks
+whether the key names a file that still exists. A generator rule renamed
+or removed therefore leaves its entry behind. The code path is clear and
+there is no reproducer: three fixtures were built trying to move the key
+and all three failed to, two of them because the build itself failed
+once the rule moved.
+
+**The obvious remedy is to add the two names to `STAMP_STORES`, and that
+is actively harmful.** A rule name is not a path, so the existence test
+never passes and every entry is deleted on every save. Measured:
+
+    build 1: generator ran? 2   store=0
+    build 2: generator ran? 1   store=0
+    build 3: generator ran? 1   store=0
+
+The store is empty after every build and the generator runs again on each
+one, which is the freshness record's whole purpose defeated -- and, like
+the `|none` case above, it is a cost that reports itself as nothing worse
+than a slower build.
+
+Pruning them correctly means keeping the entries the current `rules`
+mapping names, which first needs establishing that a run always holds the
+complete rule set rather than the subset a partial build reached. That is
+a design question and the magnitude is one hash per renamed generator
+rule, so it is recorded here rather than answered: the entry exists to
+tell the next reader where to start and which move to avoid.
+
 ### Two probes in this chain reported something they had not measured
 
 Both were caught, and the shape is the probe-side version of what section
