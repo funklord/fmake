@@ -42503,9 +42503,18 @@ spec that relied on reaching the host's loopback without saying so needs
 Their note says both of this suite's hull specs say `(network none)`,
 which their change leaves alone. Measured in this tree: there are
 exactly two, at `selftest` 17707 and 17724, both `(backend chroot)` and
-both `(network none)`. Today's run of 736 was made against hull's older
-`build/`, and since `(network none)` is the unchanged case the result
-holds either way.
+both `(network none)`.
+
+**And then measured against the thing itself rather than left as
+reasoning.** The first version of this entry said the run of 736 had
+used hull's older `build/` and that the result "holds either way",
+which is an argument. hull rebuilt to `55f2beb` an hour later, so the
+three cases were run against it: `a_cross_build_is_verified_in_a_machine`,
+`the_other_inits_glue_is_placed_in_a_machine` and
+`the_source_runs_on_the_python_it_declares`, all three pass. The binary
+was confirmed independently rather than taken from the note -- `hull
+--version` carries `commit 55f2beb1f731`, which is §402's lesson about
+naming the tool that ran, working from the other side.
 
 What this costs later: a hull spec added here that wants the host's
 loopback or a port on the host's network has to say `(network host)`,
