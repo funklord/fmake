@@ -580,7 +580,8 @@ that had been green about nothing for five commits ·
 [527. Dead cache entries retired, and the orphaned objects behind them](#527-dead-cache-entries-retired-and-the-orphaned-objects-behind-them) ·
 [528. The skips are not inevitable, and three of four were closable here](#528-the-skips-are-not-inevitable-and-three-of-four-were-closable-here) ·
 [529. The ninja remedy, tested on the half that had no fixture](#529-the-ninja-remedy-tested-on-the-half-that-had-no-fixture) ·
-[530. A helper defined twice, and the guarded copy was the dead one](#530-a-helper-defined-twice-and-the-guarded-copy-was-the-dead-one)
+[530. A helper defined twice, and the guarded copy was the dead one](#530-a-helper-defined-twice-and-the-guarded-copy-was-the-dead-one) ·
+[531. Saying what the state directory holds, both kinds of it](#531-saying-what-the-state-directory-holds-both-kinds-of-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2439,12 +2440,14 @@ rather than code, and one lesson about testing.
   out of use. A real project held 274M and 14M side by side after a single
   change of default flags, and hydra's `.gitignore` records a cache that
   reached 146M under their `src/` from a trial nobody finished.
-  `--clean` is still the only reclamation. **It is no longer the only
-  moment the trade is visible** -- an ordinary `-v` build says how many
-  object directories belong to other configurations and what they come
-  to, which is the same number at a moment somebody can still act on.
-  See §314. Pruning by age or by size remains a policy nobody has asked
-  for, and reporting the number is deliberately not one.
+  `--clean` is still the only reclamation, **and that is now a decision
+  rather than a gap**: asked on 2026-10-27 whether to delete them, the
+  copyright holder said *"keep them and print how much is sitting
+  there"*. So no prune, and the number is no longer `-v` only -- an
+  ordinary build says what the whole of `.fmake/obj` holds that this
+  build does not use, counting both the configurations nobody builds any
+  more and, since §531, the objects in the live one whose source has
+  gone. See §314 and §531.
 - **A build with a permanently broken file never reaches a fixed point.**
   A file that failed to compile is retried on every build, because the fix
   might be outside it — an installed header, a corrected include path — and a
@@ -42049,8 +42052,9 @@ orphans and 160 KB in a toy tree after ten renames, where real objects
 are far larger. So the cache entry is not stale; the file it describes
 is.
 
-**Whether to delete them is a decision rather than a defect, and it is
-the holder's.** The two sides are real:
+**Whether to delete them was a decision rather than a defect, and it was
+the holder's. Answered 2026-10-27: keep them and print how much is
+sitting there** -- implemented as §531. The two sides were real:
 
 - **Removing them** bounds the state directory, and the directory is
   fmake's own, which is the one shape `CLAUDE.md` allows a wholesale
@@ -42060,11 +42064,10 @@ the holder's.** The two sides are real:
   hash matching, so nothing recompiles. That is the cache working as
   intended rather than an accident.
 
-`--clean` already removes them, so there is a remedy today. What there
-is no answer for is the growth between cleans, and the honest options
-are to delete on a rule somebody chooses, or to say how much is sitting
-there and let the reader decide. Both are opinions about how a build
-cache should behave, so neither is taken here.
+`--clean` already removes them, so there is a remedy today; what had no
+answer was the growth between cleans. Of the two honest options --
+delete on a rule somebody chooses, or say how much is sitting there and
+let the reader decide -- the holder took the second.
 
 ## 528. The skips are not inevitable, and three of four were closable here
 
@@ -42180,3 +42183,61 @@ a function in one 38,000-line file is invisible to review and to the
 suite alike -- both definitions parse, both are reachable by name, and
 the later one silently wins whichever was written first. Counting
 top-level names is three lines of `ast` and found it immediately.
+
+## 531. Saying what the state directory holds, both kinds of it
+
+The holder's answer to §527, on 2026-10-27: **keep them and print how
+much is sitting there.** So nothing is pruned, and the number stops being
+something you have to ask for.
+
+**It had been counted by halves.** `held_objdirs` already reported the
+object directories of configurations nobody builds any more -- §314's
+work, which moved that number off `--clean`, "after somebody has decided
+to delete everything and is therefore too late to inform that
+decision". Nothing counted §527's kind: a renamed or deleted source
+leaves its object inside the **live** configuration, where the directory
+is not stale and the file in it is.
+
+A total that left one out would be the misleading half of a number asked
+for in order to be acted on -- the configurations are the larger side
+(274M beside 14M in a real project) and the orphans are the side that
+grows with ordinary editing. So one line gives the total and a note
+names each component:
+
+    * 10.4K in .fmake/obj that this build does not use; --clean reclaims it
+      1 object dir(s) from other configurations, 6.5K
+      6 object(s) in this one whose source has gone, 3.9K
+
+`stale_objects` asks the **filesystem**, not this build's unit set, so a
+source that exists but is excluded today counts as live: it is not
+orphaned, it is merely not being built. It maps back only the three
+suffixes this tool writes -- `.o`, `.d` and the `.a` a crate leaves --
+and skips anything else rather than guessing, since calling a file whose
+name nobody here understands an orphan would be a claim about somebody
+else's output. A variant is one suffix further back, `main.c.checked.o`
+being `main.c` compiled again with defines of its own.
+
+**What the walk costs, measured** rather than waved at: 20.1 ms over the
+600 files a 300-source tree's object directory holds, a `.o` and a `.d`
+each. That is the same order as the walk `held_objdirs` already does over
+every *other* configuration on every build, so it is a cost this file
+already accepts rather than a new one -- and it sits beside compiler
+invocations. The obvious refinement, if it ever matters, is to memoise
+the source-exists answer per stem, since `f.c.o` and `f.c.d` ask the
+same question twice.
+
+### The loudness was deferred to this question, so it moved with it
+
+§314 made the line `-v` only and said why in its own case: *"how loud
+this should be is the same question as whether to prune, which is why it
+is `-v` -- deciding it while adding a count would be settling an open
+question in passing."* That was right, and the question is answered, so
+the case's two assertions that pinned `-v` are now assertions that it
+prints on an ordinary build.
+
+The argument for `-v` -- that a line on every run is the noise which
+gets a diagnostic ignored -- is answered by when the line appears rather
+than by hiding it: there is nothing to say about a tree nobody has
+reconfigured or renamed in, and the case still asserts the silence for
+that tree. Both halves are gated: making the orphan count always zero
+fails it, and putting the line back behind `vinfo` fails it.

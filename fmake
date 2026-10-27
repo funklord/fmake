@@ -14122,9 +14122,17 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# prune, and that is section 15's open one rather than something to
 	# settle while adding a count.
 	_held = held_objdirs(state, cfg.key)
-	if _held:
-		vinfo(f"{len(_held)} object dir(s) from other configurations, "
-		      f"{_human(sum(b for _n, b in _held))}; --clean reclaims them")
+	_stale, _stale_bytes = stale_objects(objdir, root)
+	_cost = sum(b for _n, b in _held) + _stale_bytes
+	if _held or _stale:
+		info(f"{_human(_cost)} in {STATE_DIR}/obj that this build does not "
+		     f"use; --clean reclaims it")
+		if _held:
+			note(f"{len(_held)} object dir(s) from other configurations, "
+			     f"{_human(sum(b for _n, b in _held))}")
+		if _stale:
+			note(f"{_stale} object(s) in this one whose source has gone, "
+			     f"{_human(_stale_bytes)}")
 
 	# @sources, resolved next to the file that asked for them, then from the
 	# project root. Same semantics as --force-link: the files nothing
@@ -23418,6 +23426,48 @@ def held_objdirs(state, current_key):
 					pass
 		out.append((name, total))
 	return out
+
+
+def stale_objects(objdir, root):
+	"""Objects in THIS configuration whose source has gone, and their size.
+
+    `held_objdirs' counts the configurations nobody builds any more. This
+    counts the other half, which nothing counted: a renamed or deleted
+    source leaves its object behind, and the object is not stale in the
+    sense that directory is -- the configuration is live, the file in it
+    is not. Section 527 measured eleven orphans and 160 KB in a toy tree
+    after ten renames, where a real object is far larger.
+
+    Asked of the filesystem rather than of this build's unit set, so that
+    a source which exists but is excluded today counts as live -- it is
+    not orphaned, it is merely not being built.
+
+    Only the three suffixes this tool writes are mapped back: `.o', `.d'
+    and the `.a' a crate leaves. Anything else under there is skipped
+    rather than guessed at, since counting a file whose name nobody here
+    understands as an orphan would be a claim about somebody else's
+    output.
+    """
+	count = total = 0
+	for base, _sub, files in os.walk(objdir):
+		for f in files:
+			stem, ext = os.path.splitext(f)
+			if ext not in (".o", ".d", ".a"):
+				continue
+			rel = os.path.relpath(os.path.join(base, stem), objdir)
+			# A variant's object carries its target behind a dot, so the
+			# source is one suffix further back: `main.c.checked.o' is
+			# `main.c' compiled again with defines of its own.
+			if (os.path.exists(os.path.join(root, rel))
+			        or os.path.exists(os.path.join(
+			            root, os.path.splitext(rel)[0]))):
+				continue
+			try:
+				total += os.lstat(os.path.join(base, f)).st_size
+			except OSError:
+				continue
+			count += 1
+	return count, total
 
 
 def _human(n):

@@ -19720,9 +19720,21 @@ def a_build_says_what_other_configurations_are_costing(t):
 
 	**Not a prune, and the case pins that.** Pruning by age or by size is
 	a policy nobody has asked for, so the directories are still there
-	afterwards; only the silence goes. How loud this should be is the same
-	question as whether to prune, which is why it is `-v' -- deciding it
-	while adding a count would be settling an open question in passing."""
+	afterwards; only the silence goes.
+
+	**The loudness was deferred here and has been answered.** This case
+	used to assert the line was `-v' only, saying that how loud it should
+	be was the same question as whether to prune. The copyright holder
+	settled both on 2026-10-27 -- *"keep them and print how much is
+	sitting there"* -- so it prints on an ordinary build. The argument for
+	`-v' was that a line on every run is noise; what makes it tolerable is
+	that it appears only once something has been left behind, which is
+	never true of a tree nobody has reconfigured or renamed in.
+
+	Both kinds are counted now, because a total that left one out would
+	be the misleading half of a number asked for in order to be acted on:
+	configurations nobody builds any more, and objects in the live one
+	whose source has gone."""
 	t.write("main.c", "int main(void){ return 0; }\n")
 	check(t.fmake().returncode == 0, "build failed")
 
@@ -19738,19 +19750,24 @@ def a_build_says_what_other_configurations_are_costing(t):
 	check(len(objs) == 3,
 	      f"three configurations should hold three object dirs: {objs}")
 
-	out = t.fmake("-v").stdout
+	# On an ordinary build, not only under -v: the holder settled that
+	# with the prune question it was deferred to.
+	out = t.fmake().stdout
 	check("2 object dir(s) from other configurations" in out,
 	      f"the held configurations were not counted, or not against the "
 	      f"one being built: {out}")
-	check(re.search(r"\d+(\.\d+)?[BKMG]; --clean reclaims them", out),
-	      f"no size, or no pointer to the thing that reclaims it: {out}")
+	check(re.search(r"\d+(\.\d+)?[BKMG] in \S+/obj that this build does "
+	                r"not use; --clean reclaims it", out),
+	      f"no total, or no pointer to the thing that reclaims it: {out}")
 
-	# Quiet without -v: this is a fact about disk, not about the build,
-	# and a line on every ordinary run is the noise that gets a
-	# diagnostic ignored.
+	# And the other half of the same number: a source that has gone
+	# leaves its object in the configuration being built, which the
+	# directory count cannot see.
+	os.rename(os.path.join(t.dir, "main.c"), os.path.join(t.dir, "prog.c"))
+	check(t.fmake().returncode == 0, "the renamed build failed")
 	out = t.fmake().stdout
-	check("object dir(s) from other configurations" not in out,
-	      f"the report reached an ordinary build: {out}")
+	check("whose source has gone" in out,
+	      f"an object whose source was renamed away is in no count: {out}")
 
 	# And it reports rather than reclaims. The directories survive.
 	check(len(os.listdir(os.path.join(t.dir, ".fmake", "obj"))) == 3,
