@@ -2889,6 +2889,137 @@ def the_provider_cache_does_not_grow_without_a_bound(t):
 
 
 @case
+def the_header_cache_does_not_grow_without_a_bound_either(t):
+	"""The other store keyed by a signature, which the first fix missed.
+
+	`PROVIDER_KEYS_KEPT' bounded `providers'. `headers' is keyed by
+	`PkgConfig.signature' -- a stamp of every .pc file on the machine --
+	so it moves whenever a package is installed, removed or has its .pc
+	rewritten in place, and `_retire_ghosts' cannot reach it because
+	these keys are stamps rather than paths. Measured before the cap: a
+	tree naming one package and including two system headers went 3, 6,
+	9, 12 entries over four builds, one complete group of answers per
+	signature, every older group unreadable by construction.
+
+	Counted in GROUPS and not in entries, which is why this is not the
+	case above with another word substituted: a provider key is one per
+	target and a headers key is one per package or header PER signature,
+	so an entry cap would evict the live group of a tree that names
+	enough packages.
+
+	Three assertions, and the third is the one a cap can fail while
+	passing the first two: the group the build actually reads must
+	survive the trim. A no-op build leaves the cache byte-identical
+	(section 8), so a rebuild that rewrote it would be the live group
+	having been evicted and re-resolved."""
+	pc = os.path.join(t.dir, "pc")
+	os.makedirs(pc, exist_ok=True)
+
+	def write_pc(value):
+		with open(os.path.join(pc, "probe.pc"), "w") as fh:
+			fh.write("prefix=/usr\nName: probe\nDescription: a probe\n"
+			         f"Version: 1.0\nCflags: -DPROBE={value}\nLibs:\n")
+
+	t.write("main.c", "/*! @file\n *  @target app\n *  @pkg probe\n */\n"
+	        '#include <stdio.h>\n#include <string.h>\n'
+	        'int main(void){ printf("%d %zu\\n", PROBE, strlen("x"));'
+	        " return 0; }\n")
+	env = dict(os.environ, PKG_CONFIG_PATH=pc)
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+
+	def groups():
+		with open(cache) as fh:
+			store = json.load(fh).get("headers", {})
+		return len({k.split("|", 1)[0] for k in store})
+
+	counts = []
+	for i in range(1, 11):
+		write_pc(i)
+		r = t.fmake(env=env)
+		check(r.returncode == 0, f"build {i} failed: {r.stdout}{r.stderr}")
+		counts.append(groups())
+
+	# From the tool, so the two cannot disagree about what the cap is.
+	cap = int(re.search(r"HEADER_SIGS_KEPT = (\d+)",
+	                    open(FMAKE).read()).group(1))
+	check(max(counts) <= cap,
+	      f"the header cache is unbounded in signature groups: {counts} "
+	      f"against a cap of {cap}")
+	check(max(counts) == cap,
+	      f"the fixture never reached the cap, so the bound was not "
+	      f"tested: {counts} against {cap}")
+	check(counts[-1] == cap and counts[-2] == cap,
+	      f"the count should settle at the cap rather than oscillate: "
+	      f"{counts}")
+
+	# Resolution still tracks the current .pc at all.
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	exe = exe if os.path.exists(exe) else os.path.join(t.dir, "app")
+	got = subprocess.run([exe], capture_output=True, text=True)
+	check(got.stdout.split()[0] == "10",
+	      f"the live .pc says PROBE=10 and the program says "
+	      f"{got.stdout!r}, so resolution stopped tracking it")
+
+	# And now the half a cap can fail while passing everything above: the
+	# group trimmed must be the least recently USED, not the least recently
+	# written. Those coincide above, because each build there invents a
+	# fresh signature -- so that loop cannot tell the two rules apart and a
+	# cap keyed on write order passes it.
+	#
+	# Five directories, each holding one .pc written once, so each has a
+	# signature that does not move. Visit four, revisit the first, then add
+	# the fifth: under a use-ordered cap the first survives and the second
+	# is evicted, and under a write-ordered one the first goes despite
+	# having just been read.
+	dirs = []
+	for i in range(5):
+		d = os.path.join(t.dir, f"pc{i}")
+		os.makedirs(d, exist_ok=True)
+		with open(os.path.join(d, "probe.pc"), "w") as fh:
+			fh.write("prefix=/usr\nName: probe\nDescription: a probe\n"
+			         f"Version: 1.0\nCflags: -DPROBE=5{i}\nLibs:\n")
+		dirs.append(d)
+
+	def build_under(d):
+		r = t.fmake(env=dict(os.environ, PKG_CONFIG_PATH=d))
+		check(r.returncode == 0, f"build under {d} failed: {r.stdout}{r.stderr}")
+
+	def sigs():
+		with open(cache) as fh:
+			return {k.split("|", 1)[0] for k in json.load(fh).get("headers", {})}
+
+	# Which signature the first directory has, taken from the store rather
+	# than recomputed here: the one group present after a build that used
+	# only it.
+	os.remove(cache)
+	build_under(dirs[0])
+	first = sigs()
+	check(len(first) == 1,
+	      f"expected one group after one configuration: {sorted(first)}")
+	sig0 = first.pop()
+
+	for d in dirs[1:4]:
+		build_under(d)
+	build_under(dirs[0])          # a hit, and the thing that reorders
+	build_under(dirs[4])          # the fifth group, so one must go
+
+	# Asserted on the store and not through a proxy. A byte comparison
+	# cannot answer this: repositioning a surviving group rewrites the
+	# cache exactly as re-resolving an evicted one does, so both rules
+	# produce a changed file and the first version of this assertion
+	# passed under either. The first version also read dirs[0] twice,
+	# which let an eviction repair itself before being looked for.
+	after = sigs()
+	check(len(after) == cap,
+	      f"five stable configurations should settle at the cap: "
+	      f"{len(after)}")
+	check(sig0 in after,
+	      f"the configuration used immediately before the fifth one was "
+	      f"evicted, so the trim drops the least recently WRITTEN group "
+	      f"rather than the least recently used")
+
+
+@case
 def a_lib_dir_named_in_ldflags_is_swept_for_providers(t):
 	"""pkg-config's own `-L' was swept and the project's own was not.
 

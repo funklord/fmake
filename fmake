@@ -201,6 +201,15 @@ CACHE_FILE  = "cache.json"
 # by the symbol set, the library directories and the target identity, and
 # an unbounded one grew by an entry for every source added or removed.
 PROVIDER_KEYS_KEPT = 8
+# Pkg-config signature groups kept in the `headers' store. Counted in
+# GROUPS and not in entries, which is the whole difference from the
+# constant above: a provider key is one per target, and a headers key is
+# one per package or system header PER signature -- so a cap on entries
+# would throw away the live group of a tree that names five packages
+# before it threw away a dead one. `PkgConfig.signature' moves whenever a
+# package is installed, removed or has its .pc rewritten in place, and the
+# entries written under the old stamp can never be read again.
+HEADER_SIGS_KEPT = 4
 CACHE_VER   = 9   # scans record what generated the file, where it says so
 
 class Lang:
@@ -7199,6 +7208,46 @@ class Cache:
 				else:
 					store[k]["gone"] = 1
 
+	def _trim_header_sigs(self):
+		"""Keep the `headers' store to HEADER_SIGS_KEPT signature groups.
+
+    `_retire_ghosts' above cannot reach this one, and the reason is the
+    key rather than an oversight: it drops entries for files that have
+    gone, and these are keyed by a stamp of the machine's pkg-config
+    state, not by a path. So every package installed, removed or rebuilt
+    left a complete set of answers behind for ever -- the same defect the
+    provider store had, in the other store that is keyed by a signature.
+
+    Measured with PKG_CONFIG_PATH pointing at a directory holding one
+    .pc, rewritten in place between builds: a tree naming one package and
+    including three system headers went 4, 8, 12, 16 entries over four
+    builds, four groups each holding the identical four answers. Three of
+    them were unreadable by construction -- a signature that no longer
+    describes the machine cannot be matched again unless it is restored
+    exactly.
+
+    Kept rather than cleared to one, because alternating configurations
+    are real: two trees built under different PKG_CONFIG_PATHs, or a
+    sibling reinstalled and reverted, and a miss costs reading every .pc
+    on the machine. That is the provider store's argument and the number
+    is small for the same reason.
+    """
+		store = self.data.get("headers")
+		if not isinstance(store, dict) or not store:
+			return
+		# Where each signature's LAST entry sits. The readers reposition on
+		# a hit, so latest means most recently used rather than most
+		# recently written -- which is the distinction that keeps the group
+		# a no-op build reads from being the one trimmed.
+		last = {}
+		for index, key in enumerate(store):
+			last[key.split("|", 1)[0]] = index
+		keep = {sig for sig, _ in
+		        sorted(last.items(), key=lambda kv: kv[1])[-HEADER_SIGS_KEPT:]}
+		for key in list(store):
+			if key.split("|", 1)[0] not in keep:
+				del store[key]
+
 	def save(self):
 		if self.read_only:
 			return
@@ -7210,6 +7259,7 @@ class Cache:
 		if not self._retired:
 			self._retired = True
 			self._retire_ghosts()
+			self._trim_header_sigs()
 		# One string and one write, rather than `json.dump' streaming to the
 		# file object, which issues a write per encoded fragment. Counted
 		# with strace over a no-op build of a 301-source tree: 62 write
@@ -10421,8 +10471,13 @@ class PkgConfig:
 		"""(module, cflags, libs) for a module named outright by @pkg."""
 		key = sig + "|pkg|" + module
 		if key in store:
-			self._note_dirs((store[key] or [None, None, None, []])[3])
-			return store[key]
+			# Repositioned, not just read: `Cache._trim_header_sigs' keeps
+			# the signature groups that sit latest, and a run whose entries
+			# are all hits would otherwise leave the live group oldest.
+			ent = store.pop(key)
+			store[key] = ent
+			self._note_dirs((ent or [None, None, None, []])[3])
+			return ent
 		got = self.flags(module)
 		store[key] = (None if got is None else
 		              [module, self._consumer_flags(module, got[0]), got[1],
@@ -10451,8 +10506,11 @@ class PkgConfig:
 		key = (sig + "|" + ",".join(self.qt_order) + "|"
 		       + self.incs_sig + "|" + name)
 		if key in store:
-			self._note_dirs((store[key] or [None, None, None, []])[3])
-			return store[key]
+			# Repositioned for the reason `for_module' gives.
+			ent = store.pop(key)
+			store[key] = ent
+			self._note_dirs((ent or [None, None, None, []])[3])
+			return ent
 		module = HEADER_PKG.get(name)
 		if module is None:
 			incdirs = self.by_includedir()

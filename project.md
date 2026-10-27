@@ -588,7 +588,8 @@ that had been green about nothing for five commits ·
 [535. hull's chroot networking changed, and this tier did not notice](#535-hulls-chroot-networking-changed-and-this-tier-did-not-notice) ·
 [536. A filename is bytes, and printing one crashed the run](#536-a-filename-is-bytes-and-printing-one-crashed-the-run) ·
 [537. The same byte on the reading side, where the wrong fix is silent](#537-the-same-byte-on-the-reading-side-where-the-wrong-fix-is-silent) ·
-[538. The install comparison could not tell a symlink from a copy](#538-the-install-comparison-could-not-tell-a-symlink-from-a-copy)
+[538. The install comparison could not tell a symlink from a copy](#538-the-install-comparison-could-not-tell-a-symlink-from-a-copy) ·
+[539. The other store keyed by a signature, which the provider fix missed](#539-the-other-store-keyed-by-a-signature-which-the-provider-fix-missed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42836,3 +42837,137 @@ sweep of `fmake` and `selftest` for a name defined twice at module level
 or within one class found none, positive-controlled with a deliberate
 duplicate so the empty result is a measurement. 740 registered case names,
 no duplicates. Section 530's shadowed helper was a one-off.
+
+## 539. The other store keyed by a signature, which the provider fix missed
+
+`PROVIDER_KEYS_KEPT` bounded the provider store because nothing removed an
+entry from it and the key moved whenever the tree's external surface did.
+The cache has a second store keyed by a signature, and it was left
+unbounded.
+
+`headers` holds what `@pkg` and every system header resolve to, keyed by
+`PkgConfig.signature()` -- a stamp of every `.pc` file on the machine,
+which that function's own docstring says moves when a package is
+installed, removed, or has its `.pc` rewritten in place, "the
+configuration this workspace actually has". So every one of those left a
+complete set of answers behind for ever.
+
+**`_retire_ghosts` cannot reach it, and that is structural rather than an
+oversight.** It drops entries for files that have gone, walking `files`
+and `objects` and asking whether each path still exists. These keys are
+stamps, not paths. Nothing in them to look up on disk, and nothing that
+ever stops being a key.
+
+**Measured before the cap.** A tree naming one package and including
+three system headers, with `PKG_CONFIG_PATH` pointing at a directory
+holding one `.pc` rewritten in place between builds:
+
+    4, 8, 12, 16 entries over four builds
+
+Four groups, each holding the identical four answers, three of them
+unreadable by construction: a signature that no longer describes the
+machine cannot be matched again unless the machine is restored to it
+exactly. With the trim removed afterwards as a control, ten builds gave
+ten groups.
+
+**The bound is counted in groups, not entries, and that is the whole
+difference from the constant it is modelled on.** A provider key is one
+per target; a headers key is one per package or header *per signature*.
+So a cap on entries would throw away the live group of a tree that names
+five packages before it threw away a dead one. `HEADER_SIGS_KEPT = 4`
+keeps four signature groups, sized for the configurations somebody
+alternates between -- two trees under different `PKG_CONFIG_PATH`s, a
+sibling reinstalled and reverted -- because a miss costs reading every
+`.pc` on the machine, which is the provider store's argument unchanged.
+
+**Least recently used, not least recently written.** Both readers
+reposition on a hit, so insertion order means last use. Without that a
+run whose entries are all hits leaves the order alone, and the group a
+build is actually reading can be the oldest one in the store. Traced
+through five stable configurations: visiting the first after the fourth
+moves its group from front to back, and adding a fifth then evicts the
+second rather than the one just used.
+
+### The assertion was vacuous twice, and that is worth more than the fix
+
+Three sabotages, and what each caught:
+
+- **No trim at all**, the original defect: `[1, 2, 3, 4, 5, 6, 7, 8, 9,
+  10]` groups against a cap of 4.
+- **Trim by write order**, the repositioning removed: the group used
+  immediately before the fifth configuration is evicted.
+- **A cap of one**: bounded, and the alternating case destroyed. It
+  satisfies the boundedness assertions exactly -- the cap is read from
+  the tool, so one is the cap and the count settles at it -- and fails
+  only on the group that should have survived.
+
+The second of those passed two earlier versions of the live-group
+assertion, and the reasons are different traps:
+
+- **The first read the configuration twice.** An evicted group is
+  re-resolved on the first read, so the second read is a hit whichever
+  rule was in force. The eviction repaired itself before anything looked
+  for it.
+- **The second compared the cache byte for byte.** That signal is real
+  and is used elsewhere here -- a no-op build leaves the cache
+  byte-identical, so a rebuild that rewrote it is a group having been
+  re-resolved -- and in this sequence it cannot answer the question at
+  all. **Repositioning a surviving group rewrites the cache exactly as
+  re-resolving an evicted one does.** Both outcomes produce a changed
+  file, so the comparison has no discriminating power, and it looked like
+  the most rigorous of the three assertions.
+
+The rule, which is `evidence.md`'s *a control has to be able to fail the
+way the thing it controls for fails*, pointed at a proxy: **a proxy both
+branches produce cannot tell them apart, however sharp it is elsewhere.**
+The question was whether a particular key is in a particular store, and
+the assertion that works reads the store and names the key.
+
+Noted also because the first two versions were written and run and
+reported `ok`, and only the sabotage said otherwise. A case added
+alongside a fix passes for the same reason the fix works; what tells you
+whether it is checking anything is breaking the fix.
+
+### What else was swept, and what the instrument was
+
+Rather than read each cache section for the same shape, the sections were
+counted across builds that each moved one thing a key is made of -- the
+pkg-config signature, then `CFLAGS` -- which answers for every section at
+once and carries its own control, in that the sections which should be
+stable are seen to be stable.
+
+    b0        files=41 headers=4  libc=2 links=1 objects=1 providers=1 units=1
+    pc=2      files=41 headers=8  ...
+    pc=3      files=41 headers=12 ...
+    pc=4      files=41 headers=16 ...
+    cflag -DA=1  files=42 headers=16 ...
+    cflag -DA=2  files=43 headers=16 ...
+    cflag -DA=3  files=44 headers=16 ...
+
+Two things move and only one is a leak:
+
+- **`headers`**, above.
+- **`files`**, one entry per configuration -- and those entries are
+  `.fmake/obj/<flavour>/main.c.o`, real object files in real per-flavour
+  directories. `_retire_ghosts` reclaims them when the directory goes,
+  and section 527's `held_objdirs` and `stale_objects` already report
+  them. Not a leak, and worth recording as not one: the growth is
+  identical in shape to the real finding beside it, and the only thing
+  distinguishing them is what the keys name.
+
+`units` is assigned from the current build rather than appended to, and
+is intersected with the source set on read. `providers` is capped.
+`libc` and `links` held one entry each throughout.
+
+**And the remaining sections were not swept, which is a different
+sentence from "did not grow".** `moc`, `rcc`, `uic`, `situ`, `generated`
+and `generated_deps` are absent from that table because the fixture has
+no Qt, no schema and no generated source, and `nomain` reads `0` at every
+row because nothing in it has a `main()` behind an `#if`. A section with
+nothing in it cannot be seen to grow, so those rows are the instrument
+reporting that it was pointed somewhere else -- not a result about them.
+`nomain` at least is keyed by path and so reachable by a ghost sweep,
+which `_retire_ghosts` does not walk; the others are keyed by content
+hashes and want their own fixture. Recorded as unmeasured rather than
+listed among the clean, because the first draft of this paragraph listed
+them as clean and that is the vacuous pass with a tidy sentence over it.
