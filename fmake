@@ -22649,7 +22649,15 @@ def do_uninstall(targets, closures, root, conf, args):
 	mpath = os.path.join(root, STATE_DIR, INSTALL_MANIFEST)
 	try:
 		with open(mpath) as fh:
-			planned = [l.rstrip("\n") for l in fh if l.strip()]
+			_rec = fh.read()
+		# A NUL-written manifest always carries a separator when it has an
+		# entry, so no-NUL-but-not-empty is the line-based one an earlier
+		# fmake wrote. Read rather than refused: the alternative is an
+		# upgrade between install and uninstall silently removing nothing.
+		if "\0" in _rec:
+			planned = [e for e in _rec.split("\0") if e]
+		else:
+			planned = [l for l in _rec.splitlines() if l.strip()]
 	except FileNotFoundError:
 		die(f"no {STATE_DIR}/{INSTALL_MANIFEST}: this tree has no record "
 		    f"of an install, and removing what a plan merely names is how "
@@ -22906,10 +22914,22 @@ def do_install(targets, closures, root, outdir, conf, args, proj):
 		mpath = os.path.join(root, STATE_DIR, INSTALL_MANIFEST)
 		try:
 			os.makedirs(os.path.dirname(mpath), exist_ok=True)
+			# NUL-separated, because a newline is legal in a filename and
+			# fmake's own install places one: `[target.x] data' naming a
+			# file whose name contains one installed fine and wrote three
+			# lines for two files, after which `--uninstall' removed the
+			# program, said "2 already gone" -- section 348's own tell --
+			# and left the data file behind.
+			#
+			# The ejected builds keep newlines, and that is not a parity
+			# break: `_refuse_unnameable' stops such a path reaching
+			# either backend at all, so each caller's record matches what
+			# that caller can install. Theirs is read by `read -r' in a
+			# shell, which is line-based.
 			tmp = mpath + ".tmp"
 			with open(tmp, "w") as fh:
 				for _src, dst, _mode in planned:
-					fh.write(dst + "\n")
+					fh.write(dst + "\0")
 			os.replace(tmp, mpath)
 		except OSError as exc:
 			# The install itself succeeded, so this is not fatal -- but it

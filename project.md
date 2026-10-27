@@ -42437,11 +42437,13 @@ it did not write" rule out the third option, reporting the hazard and
 living with it. What the aims do not settle is where the record lives,
 and that was the residual question.
 
-**It lives in the build directory, not the prefix.** A manifest under
-`$PREFIX` is shipped inside the `.deb`, and dpkg owns that information;
-ten of these projects build packages. The cost is real and is stated
-rather than hidden: `--clean` and then `--uninstall` has no record and
-refuses. That is the safe direction, and the refusal names the remedy.
+**It lives in the build directory, not the prefix** -- taken as an
+assumption and **ratified by the holder the same day**: *"keep the
+manifest in the build dir"*. A manifest under `$PREFIX` is shipped
+inside the `.deb`, and dpkg owns that information; ten of these projects
+build packages. The cost is real and is stated rather than hidden:
+`--clean` and then `--uninstall` has no record and refuses. That is the
+safe direction, and the refusal names the remedy.
 
 So: `.fmake/install.manifest` for fmake, `$(BUILD_DIR)/install.manifest`
 for the ejected Makefile, `$build_dir/install.manifest` for the ejected
@@ -42488,6 +42490,38 @@ Both were invisible to reading and took running `make uninstall` and
 `ninja uninstall` against a staged prefix. The new case does that, in
 both backends, which is the only way parity gets asserted rather than
 asserted about.
+
+### And a third, in the format, found by asking about my own choice
+
+The record was **line-separated**, which is the obvious choice and the
+wrong one. A newline is legal in a filename and fmake's own install
+places one -- it goes through neither a shell nor a build file, which is
+the same property that lets it install `my file.txt` where make refuses.
+Measured: `[target.x] data` naming a file whose name holds a newline
+installed fine and wrote **three lines for two files**, after which
+`--uninstall` removed the program, reported *"2 already gone"* -- §348's
+own tell, the sentence saying it had not installed there -- and left the
+data file behind.
+
+NUL-separated now, and the line-based form is still read, because a
+NUL-written manifest always carries a separator when it has an entry:
+no-NUL-but-not-empty is unambiguously the older one. The alternative was
+an upgrade between an install and its uninstall silently removing
+nothing.
+
+**The ejected builds keep newlines, and that is not a parity break.**
+`_refuse_unnameable` stops such a path reaching either backend --
+measured on the same tree, `--eject make` says *"no build file can name
+a path containing a newline"* and refuses -- so each caller's record
+matches what that caller can install, and theirs is read by `read -r`
+in a shell, which is line-based.
+
+The lesson is narrow and is about the author rather than the format:
+**the hazard was in the one line of the change that looked like
+boilerplate.** Everything else here was argued over -- where the file
+lives, when it is emptied, which callers write it -- and the separator
+was picked without a thought, in a tool whose own test suite contains a
+case about installing a path with a space in it.
 
 ## 535. hull's chroot networking changed, and this tier did not notice
 

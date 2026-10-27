@@ -18968,6 +18968,52 @@ def every_directory_the_ejected_build_declares_is_a_config_key(t):
 
 
 @case
+def the_install_record_survives_a_newline_in_a_name(t):
+	r"""A newline is legal in a filename and fmake's own install places one.
+
+	The record was line-separated, which is the obvious choice and the
+	wrong one: `[target.x] data' naming a file whose name holds a newline
+	installed fine and wrote **three lines for two files**. The uninstall
+	then removed the program, reported "2 already gone" -- which is
+	section 348's own tell, the sentence saying it had not installed
+	there -- and left the data file behind.
+
+	It is NUL-separated now. The ejected builds keep newlines and that is
+	not a parity break: `_refuse_unnameable' stops such a path reaching
+	either backend, so each caller's record matches what that caller can
+	install, and theirs is read by `read -r' in a shell.
+
+	Asserted through `--install' and `--uninstall' rather than by reading
+	the file, because the property is that the round trip removes what it
+	placed."""
+	name = "we\nird.txt"
+	stage = os.path.join(t.dir, "r", "usr")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	with open(os.path.join(t.dir, name), "w") as fh:
+		fh.write("x\n")
+	target = os.path.basename(t.dir)
+	t.write("fmake.toml", f'[target.{target}]\ndata = ["we\\nird.txt"]\n')
+
+	r = t.fmake("--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"install failed: {out}")
+	placed = sorted(_staged(stage))
+	check(any(k.endswith(name) or "ird.txt" in k for k in placed),
+	      f"the fixture did not install the awkward name, so this case "
+	      f"measures nothing: {placed}")
+
+	r = t.fmake("--uninstall", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"uninstall failed: {out}")
+	left = sorted(_staged(stage))
+	check(not left,
+	      f"the record did not survive the name, so uninstall left: {left}")
+	check("already gone" not in out,
+	      f"uninstall reported files it had installed as missing, which is "
+	      f"what a split record looks like: {out}")
+
+
+@case
 def uninstall_will_not_remove_what_it_has_no_record_of(t):
 	r"""§348's two hazards, and the case above tests neither.
 
