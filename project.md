@@ -581,7 +581,8 @@ that had been green about nothing for five commits ·
 [528. The skips are not inevitable, and three of four were closable here](#528-the-skips-are-not-inevitable-and-three-of-four-were-closable-here) ·
 [529. The ninja remedy, tested on the half that had no fixture](#529-the-ninja-remedy-tested-on-the-half-that-had-no-fixture) ·
 [530. A helper defined twice, and the guarded copy was the dead one](#530-a-helper-defined-twice-and-the-guarded-copy-was-the-dead-one) ·
-[531. Saying what the state directory holds, both kinds of it](#531-saying-what-the-state-directory-holds-both-kinds-of-it)
+[531. Saying what the state directory holds, both kinds of it](#531-saying-what-the-state-directory-holds-both-kinds-of-it) ·
+[532. The archive that exports a module now says nobody can import it](#532-the-archive-that-exports-a-module-now-says-nobody-can-import-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2105,15 +2106,16 @@ rather than code, and one lesson about testing.
   binary, turns out to be the *best* case rather than the worst: 201 sources,
   two compiled. Guarded by a case, since a change loosening the filter to
   mentions would pass every other test here.
-- **A library exporting a module publishes nothing importable, and says
-  so nowhere.** A `@kind static` target whose interface is a module builds
-  and installs its archive and its `.pc`; a consumer then has no way to
-  `import` it. The remedy exists and works -- `@headers m.cppm` publishes
-  the interface source, which is what the ecosystem does, a BMI being
-  compiler- and flag-specific -- so nothing is missing but the sentence.
-  Measured 2026-09-29: the install is silent about it, which is §320's
-  class one step over. Whether fmake should say it is the holder's, since
-  it means fmake having an opinion about how a module library is consumed.
+- ~~**A library exporting a module publishes nothing importable, and says
+  so nowhere.**~~ **Closed; see §532.** A `@kind static` target whose
+  interface is a module built and installed its archive and its `.pc`,
+  and a consumer had no way to `import` it. The remedy exists and works
+  -- `@headers m.cppm` publishes the interface source, which is what the
+  ecosystem does, a BMI being compiler- and flag-specific -- so nothing
+  was missing but the sentence. Measured 2026-09-29, §320's class one
+  step over. Whether fmake should say it was the holder's, since it
+  means fmake having an opinion about how a module library is consumed:
+  answered 2026-10-27, **say it**.
 
 - **The widening filter cannot see header definitions.** It looks for a
   definition in a `.c`/`.cpp`, so a symbol whose definition lives in a header
@@ -42241,3 +42243,55 @@ than by hiding it: there is nothing to say about a tree nobody has
 reconfigured or renamed in, and the case still asserts the silence for
 that tree. Both halves are gated: making the orphan count always zero
 fails it, and putting the line back behind `vinfo` fails it.
+
+## 532. The archive that exports a module now says nobody can import it
+
+§15's entry, answered by the holder on 2026-10-27 with **say it**.
+
+A `@kind static` target whose interface is a module installed its archive
+and said nothing about the one thing a consumer needs to know: there is
+nothing importable in it. A BMI is compiler- and flag-specific, so it
+cannot be installed, and an archive carries no declarations. The remedy
+was already there and already worked -- `@headers m.cppm` publishes the
+interface source, which is what the ecosystem does -- so what was
+missing was the sentence, which is why this was a decision rather than a
+defect.
+
+    * installed 1 file(s) under .../stage/usr
+    * libgreet.a exports module greet, and nothing installed declares it
+      @headers greet.cppm publishes the interface source, which is how a
+      consumer imports it -- a BMI is compiler- and flag-specific, so
+      there is nothing importable to install instead
+
+**After the count rather than before it**, because the install is
+complete and correct: what the line adds is that a consumer cannot reach
+the module inside it.
+
+**Said of the interface, not of the target.** A library may publish a C
+API in headers and keep a module to itself, and this still reports that
+nobody can import the module -- which is true. So the wording states
+what a consumer cannot do rather than calling it a mistake, and the
+condition is the narrow one: an archive, a unit whose `modiface` is
+non-empty, and that unit's source absent from the install plan.
+
+### The remedy is asserted, because two of them have been wrong
+
+This file records a remedy naming a backend that could not express a
+path, and another naming one that could not produce the artifact. So the
+case does not stop at the notice appearing: it takes the advice, checks
+the notice goes **and** that `include/greet.cppm` lands. A third arm
+builds an archive with no module in it and asserts silence, so the notice
+is about modules rather than about archives.
+
+Both halves are gated -- removing the notice fails the case, and making
+the published set empty, so the remedy stops being recognised, fails it
+too.
+
+### One thing it found about itself
+
+The notice reads the install plan to ask what is published, and
+`do_install` had been iterating `install_plan(...)` inline. Binding it to
+a variable was the fix; writing it as though a `plan` already existed was
+a `NameError` waiting in the install path, caught before anything ran by
+the unbound-name detector §530's pass left behind. That detector found
+nothing when it was written, and this is the first thing it caught.

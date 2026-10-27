@@ -20578,6 +20578,42 @@ def pattern_elsewhere(root, pat, dirs, what):
 	return ""
 
 
+def unpublished_modules(targets, closures, plan):
+	"""Archives that export a module whose interface nothing installs.
+
+    A `@kind static` target whose interface is a module builds and
+    installs its archive and its `.pc`, and a consumer then has no way to
+    `import` it: a BMI is compiler- and flag-specific, so there is nothing
+    importable to install and the archive carries no declarations.
+
+    The remedy exists and works -- `@headers m.cppm' publishes the
+    interface source, which is what the ecosystem does -- so what was
+    missing was the sentence. Section 15 recorded it as the holder's,
+    since saying it means fmake having an opinion about how a module
+    library is consumed; answered 2026-10-27, and the answer was to say
+    it.
+
+    Returns [(target, [(rel, [module names])])]. Said of the interface
+    rather than of the target as a whole: a library may publish a C API
+    in headers and keep a module to itself, and this still reports that
+    nobody can import the module -- which is true, and is why the wording
+    states what a consumer cannot do rather than calling it a mistake.
+    """
+	published = {src for _o, src, _d, _n, _m in plan}
+	out = []
+	for t in targets:
+		if t.kind != "static":
+			continue
+		unpublished = []
+		for u in list(closures[t].link) + list(closures[t].modules):
+			names = (u.scan or {}).get("modiface") or []
+			if names and u.rel not in published:
+				unpublished.append((u.rel, list(names)))
+		if unpublished:
+			out.append((t, sorted(unpublished)))
+	return out
+
+
 def install_plan(targets, closures, root):
 	"""What this project installs, and into which of the three directories.
 
@@ -22593,8 +22629,11 @@ def do_install(targets, closures, root, outdir, conf, args, proj):
 		                  if g not in users]
 		                 + [f"adduser --system --group --no-create-home {u}"
 		                    for u in users]))
-	for origin, source, directory, name, mode in install_plan(
-			targets, closures, root):
+	# Bound rather than iterated inline: the module notice below reads the
+	# same plan to ask what it publishes, and asking twice would be two
+	# answers to one question.
+	plan = install_plan(targets, closures, root)
+	for origin, source, directory, name, mode in plan:
 		if not init_places(directory, init):
 			continue
 		dst = os.path.join(paths[directory], name)
@@ -22763,6 +22802,18 @@ def do_install(targets, closures, root, outdir, conf, args, proj):
 	# is what section 295 is about from the other side.
 	info(f"installed {len(planned)} file(s){where}" if not args.dry_run
 	     else f"{len(planned)} file(s) would be installed{where}")
+	# After the count, not before it: the install is complete and correct,
+	# and what this adds is that a consumer cannot reach the module in it.
+	for t, unpublished in unpublished_modules(targets, closures, plan):
+		for rel, names in unpublished:
+			warn(f"{t.filename} exports "
+			     f"{'module' if len(names) == 1 else 'modules'} "
+			     f"{', '.join(names)}, and nothing installed declares "
+			     f"{'it' if len(names) == 1 else 'them'}")
+			note(f"@headers {rel} publishes the interface source, which "
+			     f"is how a consumer imports it -- a BMI is compiler- and "
+			     f"flag-specific, so there is nothing importable to "
+			     f"install instead")
 	return 0
 
 # ---------------------------------------------------------------------------

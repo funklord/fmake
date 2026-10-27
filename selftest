@@ -21744,6 +21744,73 @@ def a_module_is_a_plainly_named_loadable_object(t):
 
 
 @case
+def an_archive_exporting_a_module_says_nothing_can_import_it(t):
+	"""§15's entry, answered by the holder on 2026-10-27 with "say it".
+
+	A `@kind static' target whose interface is a module installs its
+	archive and says nothing about the fact that a consumer cannot reach
+	it: a BMI is compiler- and flag-specific, so there is nothing
+	importable to install, and the archive carries no declarations. The
+	remedy exists and works -- `@headers m.cppm' publishes the interface
+	source, which is what the ecosystem does -- so what was missing was
+	the sentence.
+
+	The second half is the part worth asserting, because this file
+	records remedies that have been wrong twice: taking the advice has to
+	silence the notice AND install the interface. The third half says the
+	notice is about modules rather than about archives, so an ordinary
+	static library stays quiet."""
+	stage = os.path.join(t.dir, "stage", "usr")
+	t.write("greet.cppm",
+	        "/*! @kind static */\n"
+	        "export module greet;\n"
+	        "export int greeting(void) { return 7; }\n")
+	r = t.fmake("--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	if r.returncode != 0 and "module" in out.lower():
+		raise Skip(f"this compiler cannot build a module interface: "
+		           f"{out[-200:]}")
+	check(r.returncode == 0, f"the library should build: {out}")
+	check("exports module greet" in out,
+	      f"the archive installs with nothing importable and says so "
+	      f"nowhere: {out}")
+	check("@headers greet.cppm" in out,
+	      f"the remedy is not named, or not with the path it applies to: "
+	      f"{out}")
+
+	# Taking it: the notice goes and the interface lands.
+	shutil.rmtree(os.path.join(t.dir, "stage"), ignore_errors=True)
+	t.write("greet.cppm",
+	        "/*! @kind static\n"
+	        " *  @headers greet.cppm */\n"
+	        "export module greet;\n"
+	        "export int greeting(void) { return 7; }\n")
+	r = t.fmake("--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the remedy should build: {out}")
+	check("exports module greet" not in out,
+	      f"the remedy does not silence the notice, so it is advice that "
+	      f"does not work: {out}")
+	check(any(k.endswith("greet.cppm") for k in _staged(stage)),
+	      f"the interface source is not installed: {sorted(_staged(stage))}")
+
+	# And an archive with no module in it has nothing to be told.
+	u = Tree("plain-archive")
+	try:
+		u.write("thing.cpp", "/*! @kind static */\n"
+		        "int thing(void) { return 3; }\n")
+		ustage = os.path.join(u.dir, "stage", "usr")
+		r = u.fmake("--install", "--prefix", ustage)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the plain archive should build: {out}")
+		check("nothing installed declares" not in out,
+		      f"the notice is about archives rather than about modules: "
+		      f"{out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_module_naming_install_keys_is_refused_not_ignored(t):
 	"""`install_plan' skips a module before it reads any of them.
 
