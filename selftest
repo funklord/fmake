@@ -6649,6 +6649,73 @@ def a_path_with_a_pipe_is_refused_by_both_backends(t):
 
 
 @case
+def the_ninja_remedy_installs_a_path_make_refused(t):
+	"""`_refuse_whitespace' ends "Use `--eject ninja`, which can express
+	all of them", and its own comment says that sentence has been false
+	twice.
+
+	The case above asks WHO is offered the remedy, with a space in a
+	source name. This asks whether taking it works for the other half of
+	the path set -- an install **destination** -- which is the half
+	`_eject_paths' calls out by name: @headers and @data reach install(1)
+	as arguments and no other part of the emitted build mentions them. No
+	fixture had a space in an installed name, so the claim was unasserted
+	exactly where it is hardest to keep.
+
+	Four things, in the order a reader meets them: fmake itself copes,
+	make refuses and names the destination as well as the source, ninja
+	emits it, and ninja's install and uninstall actually move the file."""
+	if not shutil.which("ninja"):
+		raise Skip("ninja not installed")
+	name = "my file.txt"
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write(name, "hello\n")
+	target = os.path.basename(t.dir)
+	t.write("fmake.toml", f'[target.{target}]\ndata = ["{name}"]\n')
+
+	# fmake's own install, which goes through neither a shell nor a build
+	# file and so has nothing to escape.
+	stage = os.path.join(t.dir, "stage")
+	r = t.fmake("--install", "--prefix", os.path.join(stage, "usr"))
+	check(r.returncode == 0, f"fmake's own install failed: {r.stdout}{r.stderr}")
+	mine = _staged(stage)
+	check(any(name in k for k in mine),
+	      f"fmake did not install the spaced data file: {sorted(mine)}")
+
+	# make refuses, and names the destination rather than only the source.
+	r = t.fmake("--eject", "make")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"--eject make accepted it: {out[:300]}")
+	check(f"{target}/{name}" in out,
+	      f"the refusal names the source but not the path it installs "
+	      f"to, which is the half nothing else in the build mentions: "
+	      f"{out[:400]}")
+	check("Use `--eject ninja`" in out,
+	      f"the remedy is not offered: {out[-200:]}")
+
+	# And taking it works, which is the part that has been false twice.
+	nj = t.fmake("--eject", "ninja")
+	check(nj.returncode == 0, f"--eject ninja refused: {nj.stderr[:300]}")
+	with open(os.path.join(t.dir, "build.ninja"), "w") as fh:
+		fh.write(nj.stdout)
+	check(_run_in(t.dir, "ninja", "-f", "build.ninja").returncode == 0,
+	      "the ninja build failed")
+	nstage = os.path.join(t.dir, "nstage")
+	check(_run_in(t.dir, "ninja", "-f", "build.ninja", "install",
+	              env={"DESTDIR": nstage}).returncode == 0,
+	      "the ninja install failed on a path make had refused")
+	check(any(name in k for k in _staged(nstage)),
+	      f"the spaced file is not in the ninja install: "
+	      f"{sorted(_staged(nstage))}")
+	check(_run_in(t.dir, "ninja", "-f", "build.ninja", "uninstall",
+	              env={"DESTDIR": nstage}).returncode == 0,
+	      "the ninja uninstall failed")
+	check(not any(name in k for k in _staged(nstage)),
+	      f"the uninstall left the spaced file behind, so its rule quotes "
+	      f"differently from the install's: {sorted(_staged(nstage))}")
+
+
+@case
 def a_package_eject_does_not_offer_ninja_as_the_remedy(t):
 	"""The remedy named a backend that cannot produce what was asked for.
 

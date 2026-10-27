@@ -578,7 +578,8 @@ that had been green about nothing for five commits ·
 [525. A non-ASCII identifier was invisible to the scan](#525-a-non-ascii-identifier-was-invisible-to-the-scan) ·
 [526. The resolution cache grew without a bound](#526-the-resolution-cache-grew-without-a-bound) ·
 [527. Dead cache entries retired, and the orphaned objects behind them](#527-dead-cache-entries-retired-and-the-orphaned-objects-behind-them) ·
-[528. The skips are not inevitable, and three of four were closable here](#528-the-skips-are-not-inevitable-and-three-of-four-were-closable-here)
+[528. The skips are not inevitable, and three of four were closable here](#528-the-skips-are-not-inevitable-and-three-of-four-were-closable-here) ·
+[529. The ninja remedy, tested on the half that had no fixture](#529-the-ninja-remedy-tested-on-the-half-that-had-no-fixture)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42100,3 +42101,35 @@ session before being walked into. Counting with `ps` and a field test
 instead gave zero. The lesson that survives is the narrow one: a
 self-matching detector reads as *one more* of whatever it looks for, so
 a leak hunt is the worst place to use one.
+
+## 529. The ninja remedy, tested on the half that had no fixture
+
+`_refuse_whitespace` ends *"Use `--eject ninja`, which can express all of
+them"*, and the comment above it says that sentence has been false twice
+-- once naming a backend that could not express the path, once naming one
+that could not produce the artifact. §355's case asks **who** is offered
+the remedy. Nothing asked whether taking it works.
+
+And the gap was on the half `_eject_paths` singles out: `@headers` and
+`@data` reach `install(1)` as arguments and no other part of the emitted
+build mentions them. **No fixture had a space in an installed name**, so
+the claim was unasserted exactly where it is hardest to keep -- the
+destination goes through a shell, where the source does not.
+
+Measured end to end, all four correct as they stand:
+
+- fmake's own `--install` places `share/<program>/my file.txt`, having
+  gone through neither a shell nor a build file;
+- `--eject make` refuses and names **both** the source and the
+  destination, with the ninja remedy;
+- `--eject ninja` emits it, shell-quoted -- `install -m 644 -- 'my
+  file.txt' "$DESTDIR$DATADIR/"'dataspace/my file.txt'`;
+- `ninja install` lands it and `ninja uninstall` removes it, so the two
+  rules quote alike.
+
+So this is a case rather than a fix, and it earns its place the way the
+comment above the sentence earns its: replacing `shlex.quote(name)` with
+`name` in the ninja install step fails it with *"the ninja install
+failed on a path make had refused"*. The uninstall arm matters
+separately, since a rule that quotes differently from its install is a
+file left behind rather than an error.
