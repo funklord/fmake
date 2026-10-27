@@ -18973,6 +18973,62 @@ def every_directory_the_ejected_build_declares_is_a_config_key(t):
 
 
 @case
+def a_source_whose_name_is_not_utf8_builds_and_stays_tracked(t):
+	r"""Section 536 on the reading side, which is where it bites hardest.
+
+	A depfile lists every path the compiler opened, so a source or header
+	whose name is not valid UTF-8 puts those bytes in a file fmake reads
+	back. `parse_depfile' opened it with the strict default and its guard
+	catches `OSError', which a `UnicodeDecodeError' is not -- so a tree
+	fmake had just compiled ended in a traceback. `sha' was the next
+	layer, hashing a path with `data.encode()'.
+
+	**`surrogateescape' and not `replace', and the third assertion is
+	why.** A lossy decode yields a path that matches nothing in the tree,
+	so the dependency is silently dropped and editing the header rebuilds
+	nothing -- `parse_depfile''s own failure mode, which its docstring
+	calls silent in the direction nobody checks. Only a round trip keeps
+	it, so the case edits the awkward header and insists its includer
+	compiles again."""
+	odd_h = os.path.join(os.fsencode(t.dir), b"help\xff.h")
+	odd_c = os.path.join(os.fsencode(t.dir), b"help\xff.c")
+	try:
+		with open(odd_h, "wb") as fh:
+			fh.write(b"int helper(void);\n")
+		with open(odd_c, "wb") as fh:
+			fh.write(b"int helper(void){ return 5; }\n")
+	except OSError:
+		raise Skip("this filesystem will not take a non-UTF-8 name")
+	if not os.path.exists(odd_h):
+		raise Skip("the name did not survive being created")
+	with open(os.path.join(os.fsencode(t.dir), b"main.c"), "wb") as fh:
+		fh.write(b'#include "help\xff.h"\n'
+		         b"int main(void){ return helper() - 5; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("Traceback" not in out,
+	      f"a tree fmake had just compiled ended in a traceback: "
+	      f"{out[-400:]}")
+	check(r.returncode == 0, f"the build failed: {out[-300:]}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program built from an awkwardly named source does not run")
+
+	# The cache round-tripped the name, or this would compile again.
+	check(compiled(t.fmake()) == [],
+	      "a second build recompiled, so the record did not hold the name")
+
+	# And the dependency survived the depfile, which `replace' would lose.
+	with open(odd_h, "ab") as fh:
+		fh.write(b"/* touched */\n")
+	again = compiled(t.fmake())
+	check(any("main.c" in c for c in again),
+	      f"editing the awkward header did not rebuild the file that "
+	      f"includes it, so the depfile path was corrupted rather than "
+	      f"carried: {again}")
+
+
+@case
 def a_name_that_is_not_utf8_neither_crashes_nor_is_lost(t):
 	"""A filename is bytes and need not be valid UTF-8.
 

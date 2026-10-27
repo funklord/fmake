@@ -6991,7 +6991,12 @@ class TreeLock:
 
 def sha(data):
 	if isinstance(data, str):
-		data = data.encode()
+		# `surrogateescape', because much of what is hashed here is paths
+		# and a filename need not be valid UTF-8 (section 536). The strict
+		# default made a cache key a traceback. Hashing the bytes the
+		# filesystem holds is also the only answer that is stable: any
+		# lossy encoding maps two different names to one digest.
+		data = data.encode(errors="surrogateescape")
 	return hashlib.blake2b(data, digest_size=16).hexdigest()
 
 
@@ -7333,7 +7338,16 @@ def parse_depfile(path):
     checks.
     """
 	try:
-		with open(path) as fh:
+		# `surrogateescape' and not `replace', because every name in here
+		# is a path to be compared against the tree. A filename need not
+		# be valid UTF-8 -- section 536 -- and the strict default made
+		# this a traceback on a depfile the compiler had just written
+		# about a file fmake itself found. `replace' would be worse than
+		# the crash: it corrupts the path into one that matches nothing,
+		# so the dependency is silently lost, which is this function's
+		# own failure mode and the one the docstring above calls silent
+		# in the direction nobody checks.
+		with open(path, errors="surrogateescape") as fh:
 			text = fh.read()
 	except OSError:
 		return []

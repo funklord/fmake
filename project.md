@@ -586,7 +586,8 @@ that had been green about nothing for five commits ·
 [533. The citation check 403 asks for, and what it says about the cut](#533-the-citation-check-403-asks-for-and-what-it-says-about-the-cut) ·
 [534. The uninstall manifest, in all three callers](#534-the-uninstall-manifest-in-all-three-callers) ·
 [535. hull's chroot networking changed, and this tier did not notice](#535-hulls-chroot-networking-changed-and-this-tier-did-not-notice) ·
-[536. A filename is bytes, and printing one crashed the run](#536-a-filename-is-bytes-and-printing-one-crashed-the-run)
+[536. A filename is bytes, and printing one crashed the run](#536-a-filename-is-bytes-and-printing-one-crashed-the-run) ·
+[537. The same byte on the reading side, where the wrong fix is silent](#537-the-same-byte-on-the-reading-side-where-the-wrong-fix-is-silent)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42640,3 +42641,53 @@ moves the problem to its readers.** The suite was the reader within
 reach. Anything else parsing fmake's output -- qtty filters it with
 `sed`, per §295 -- is a reader too, and this is the change that could
 reach them.
+
+## 537. The same byte on the reading side, where the wrong fix is silent
+
+§536 ended by saying a tool that emits what it was given moves the
+problem to its readers, and named the suite as the reader within reach.
+**fmake is a reader too**, and this is that half.
+
+A depfile lists every path the compiler opened, so a source or header
+whose name is not valid UTF-8 puts those bytes into a file fmake reads
+back. `parse_depfile` opened it with the strict default, and its guard
+catches `OSError`, which a `UnicodeDecodeError` is not -- so a tree
+fmake had just compiled ended in a traceback at the read. `sha` was the
+next layer, hashing a path with a bare `data.encode()`. Two layers, two
+one-line changes, and the build then completes.
+
+### The wrong fix would have passed a weaker case
+
+`errors="replace"` is the obvious reflex and it is worse than the crash.
+A lossy decode yields a path matching nothing in the tree, so the
+dependency is dropped and editing the header rebuilds nothing -- which
+is `parse_depfile`'s own failure mode, the one its docstring calls *a
+staleness decision, and a wrong one is silent in the direction nobody
+checks*.
+
+So the case does not stop at "it builds". It edits the awkwardly named
+header and insists its includer compiles again, and the two sabotages
+separate the two mistakes:
+
+| sabotage | what the case reports |
+|---|---|
+| strict read, as shipped | the traceback |
+| `errors="replace"` | *"editing the awkward header did not rebuild the file that includes it, so the depfile path was corrupted rather than carried"* |
+
+The second is the one worth having. A case asserting only that the build
+succeeds would pass with `replace` in place and the tree would go stale
+without a word.
+
+### What was checked and found already right
+
+The output side's audit asked the same question of every reader in
+`fmake`: 9 of 30 textual subprocess reads use the strict default, and
+none of the nine is reachable with an arbitrary path -- `dpkg -a -q`
+returns a triplet, `git log --date=short` a date, `git status
+--porcelain` escapes non-ASCII by default, and the three
+package-ownership queries echo back system paths. `git archive
+--format=tar.gz` looked alarming, capturing with `text=True`, and is
+fine: `-o` sends the tarball to a file, so only git's diagnostics are
+captured. The JSON cache round-trips a surrogate by accident worth
+knowing -- `json.dumps` escapes it as `\udcff` under the default
+`ensure_ascii`, which is why the second build compiles nothing.
