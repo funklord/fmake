@@ -101,8 +101,13 @@ class Tree:
 		e.pop("SANITIZE", None)
 		e.update(env or {})
 		try:
+			# `errors="replace"', because fmake writes a path back as the
+			# bytes the filesystem holds and a name need not be valid
+			# UTF-8 -- a strict decode here turns the tool being honest
+			# into the suite crashing.
 			r = subprocess.run([FMAKE, "-C", self.dir, *args],
-			                   capture_output=True, text=True, env=e,
+			                   capture_output=True, text=True,
+			                   errors="replace", env=e,
 			                   timeout=timeout)
 		except subprocess.TimeoutExpired:
 			# A bound the suite carries itself, rather than one whoever
@@ -18965,6 +18970,58 @@ def every_directory_the_ejected_build_declares_is_a_config_key(t):
 	check("pkgconfigdir" not in accepted,
 	      "pkgconfigdir is a key now; it followed libdir on purpose, so "
 	      "either this exception or that reasoning has changed")
+
+
+@case
+def a_name_that_is_not_utf8_neither_crashes_nor_is_lost(t):
+	"""A filename is bytes and need not be valid UTF-8.
+
+	Python hands such a name back with lone surrogates in it, which the
+	default strict encoder refuses -- so `print' of a path fmake had just
+	installed raised UnicodeEncodeError and ended the run in a traceback.
+	Measured on `data = ["*.txt"]' matching a file named `bad\xff.txt',
+	which is legal and which `ls' prints without complaint. The traceback
+	was in the existing progress line rather than in anything new; it was
+	found by asking what the install record assumed about names, one
+	question after the newline that split it.
+
+	stdout and stderr carry `surrogateescape' now, which writes the bytes
+	back out as every other tool on the system does, and the record is
+	opened the same way -- a path that is not valid UTF-8 is still a path
+	this install placed, and a record that cannot hold it is a record
+	`--uninstall' will act on.
+	"""
+	raw = os.path.join(os.fsencode(t.dir), b"bad\xff.txt")
+	try:
+		with open(raw, "wb") as fh:
+			fh.write(b"x\n")
+	except OSError:
+		raise Skip("this filesystem will not take a non-UTF-8 name")
+	if not os.path.exists(raw):
+		raise Skip("the name did not survive being created")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	target = os.path.basename(t.dir)
+	t.write("fmake.toml", f'[target.{target}]\ndata = ["*.txt"]\n')
+	stage = os.path.join(t.dir, "r", "usr")
+
+	r = t.fmake("--install", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check("Traceback" not in out,
+	      f"installing a file whose name is not UTF-8 ended in a "
+	      f"traceback: {out[-400:]}")
+	check(r.returncode == 0, f"install failed: {out[-300:]}")
+	placed = os.listdir(os.fsencode(os.path.join(stage, "share", target)))
+	check(any(b"\xff" in n for n in placed),
+	      f"the fixture did not install the awkward name, so this case "
+	      f"measures nothing: {placed}")
+
+	r = t.fmake("--uninstall", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"uninstall ended in a traceback: {out[-300:]}")
+	check(r.returncode == 0, f"uninstall failed: {out[-300:]}")
+	check(not _staged(stage),
+	      f"the record did not hold the name, so uninstall left: "
+	      f"{sorted(_staged(stage))}")
 
 
 @case

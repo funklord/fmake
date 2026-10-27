@@ -585,7 +585,8 @@ that had been green about nothing for five commits ·
 [532. The archive that exports a module now says nobody can import it](#532-the-archive-that-exports-a-module-now-says-nobody-can-import-it) ·
 [533. The citation check 403 asks for, and what it says about the cut](#533-the-citation-check-403-asks-for-and-what-it-says-about-the-cut) ·
 [534. The uninstall manifest, in all three callers](#534-the-uninstall-manifest-in-all-three-callers) ·
-[535. hull's chroot networking changed, and this tier did not notice](#535-hulls-chroot-networking-changed-and-this-tier-did-not-notice)
+[535. hull's chroot networking changed, and this tier did not notice](#535-hulls-chroot-networking-changed-and-this-tier-did-not-notice) ·
+[536. A filename is bytes, and printing one crashed the run](#536-a-filename-is-bytes-and-printing-one-crashed-the-run)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42578,3 +42579,43 @@ editing or building a sibling checkout from outside, and a peer's
 invitation is information rather than authority. They rebuilt it
 themselves to `55f2beb`, which is the right division of the work, and
 the three cases were then run against it.
+
+## 536. A filename is bytes, and printing one crashed the run
+
+Found one question after §534's newline: having asked what the install
+record assumed about names, the same question of the code around it.
+
+A filename need not be valid UTF-8. Python hands such a name back with
+lone surrogates in it, and the default strict encoder refuses them -- so
+`print(f"{GREEN('->')} {dst}")`, the progress line of an install that had
+just **succeeded**, raised `UnicodeEncodeError` and ended the run in a
+traceback. Measured on `data = ["*.txt"]` matching a file named
+`bad\xff.txt`, which is legal and which `ls` prints without complaint.
+
+**Pre-existing, and not in the new code.** The traceback is in a line
+that has been there all along; the manifest would have failed next, for
+the same reason, and never got the chance. What the new code did was
+provide the question.
+
+stdout and stderr carry `surrogateescape` now, beside the line buffering
+§519 added, so the bytes go back out as every other tool on the system
+emits them -- the terminal shows whatever it shows and the sequence is
+the filesystem's rather than a guess at what it meant. The record is
+opened the same way, because a path that is not valid UTF-8 is still a
+path this install placed, and a record that cannot hold it is a record
+`--uninstall` will act on. Install and uninstall round-trip the name now.
+
+### Being honest in bytes made the suite the next thing to break
+
+`Tree.fmake` captured with `text=True` and nothing else, which is a
+strict decode, so the first run of the new case died in the harness
+rather than in the tool: *"'utf-8' codec can't decode byte 0xff"*. It
+reads with `errors="replace"` now, which is what a dozen other
+`subprocess.run` calls in that file already do.
+
+Worth stating because the shape generalises past this fix: **a tool that
+starts emitting what it was given, rather than what encodes cleanly,
+moves the problem to its readers.** The suite was the reader within
+reach. Anything else parsing fmake's output -- qtty filters it with
+`sed`, per §295 -- is a reader too, and this is the change that could
+reach them.

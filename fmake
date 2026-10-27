@@ -532,8 +532,20 @@ PROGRESS = sys.stdout
 # difference being that nothing of ours runs on a kill.
 #
 # The cost is a flush per line, against a compiler invocation per line.
+# And `surrogateescape', because a filename is bytes and need not be valid
+# UTF-8. Python hands such a name back with lone surrogates in it, which
+# the default strict encoder refuses -- so printing the path of a file
+# fmake had just installed raised UnicodeEncodeError and ended the run in
+# a traceback. Measured on `data = ["*.txt"]' matching a file named
+# `bad\xff.txt', which is legal and which `ls' prints without complaint.
+#
+# Writing the bytes back out is what every other tool on the system does:
+# the terminal shows whatever it shows, and the sequence is the one the
+# filesystem holds rather than a guess at what it meant.
 if hasattr(sys.stdout, "reconfigure"):
-	sys.stdout.reconfigure(line_buffering=True)
+	sys.stdout.reconfigure(line_buffering=True, errors="surrogateescape")
+if hasattr(sys.stderr, "reconfigure"):
+	sys.stderr.reconfigure(errors="surrogateescape")
 
 def progress_to(stream):
 	"""Send progress to `stream', and decide colour about that stream."""
@@ -22648,7 +22660,7 @@ def do_uninstall(targets, closures, root, conf, args):
 	paths = install_paths(conf, args)
 	mpath = os.path.join(root, STATE_DIR, INSTALL_MANIFEST)
 	try:
-		with open(mpath) as fh:
+		with open(mpath, errors="surrogateescape") as fh:
 			_rec = fh.read()
 		# A NUL-written manifest always carries a separator when it has an
 		# entry, so no-NUL-but-not-empty is the line-based one an earlier
@@ -22927,7 +22939,10 @@ def do_install(targets, closures, root, outdir, conf, args, proj):
 			# that caller can install. Theirs is read by `read -r' in a
 			# shell, which is line-based.
 			tmp = mpath + ".tmp"
-			with open(tmp, "w") as fh:
+			# Same reason as the painters above: a path that is not valid
+			# UTF-8 is still a path this install placed, and a record that
+			# cannot hold it is a record `--uninstall' will act on.
+			with open(tmp, "w", errors="surrogateescape") as fh:
 				for _src, dst, _mode in planned:
 					fh.write(dst + "\0")
 			os.replace(tmp, mpath)
