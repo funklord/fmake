@@ -34898,11 +34898,17 @@ reached a commit message as a bug in fmake.
 - ~~**This file is past two context windows** and `make style` prints the
   figure on every run. **The holder's, raised four times now.**~~
   **Closed 2026-10-27; see §403 and §533.**
-- **Whether to prune object directories from other configurations.**
+- ~~**Whether to prune object directories from other configurations.**
   Section 15's question, and the count is already printed under `-v` --
   measured again today: five configurations leave five object trees and
   nothing reclaims them but `--clean`. The comment at that site says
-  loudness and pruning are one question, which is why it is verbose only.
+  loudness and pruning are one question, which is why it is verbose
+  only.~~ **Closed 2026-10-27; see §531.** The holder answered both
+  halves at once -- *"keep them and print how much is sitting there"* --
+  so there is no prune, and the count is no longer `-v` only: an
+  ordinary build says what the whole of `.fmake/obj` holds that this
+  build does not use. The entry's own observation that loudness and
+  pruning were one question is why one answer settled both.
 - **Whether `build` should leave `SKIP_DIRS`** (section 439), the sysroot
   half of section 432, whether a generated unit should inherit its
   origin's includers' flags (431), and hull's per-schema situc flags
