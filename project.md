@@ -42566,12 +42566,20 @@ chroot machine on `(segments ...)` keep NAT, where it used to need
 Re-checked here: still exactly two specs, both `(network none)`, and no
 `(segments ...)` anywhere in `selftest`. So neither reaches this tier.
 
-**What could not be checked, said rather than glossed.** Their `build/`
-is `55f2beb`, which predates both commits, so these two were verified by
-inspecting this tree's own specs against their description and not by
-running anything. The first note's claim was settled by a run because a
-rebuilt binary existed to run; these two are not, and the difference is
-worth keeping in the record rather than letting three notes read alike.
+**Checked by inspection first, then measured.** When those two notes
+arrived their `build/` was `55f2beb`, which predates both commits, so
+there was nothing to run and the entry said so rather than letting three
+notes read alike. They rebuilt to `3b83027` the same evening -- which
+carries `ccf44b0`, `b198438` and `(network bridge)` -- and the three
+cases were run against it: all pass, as against `55f2beb`.
+
+**One thing still cannot be checked, and it is worth naming.** `hull
+--version` carries `commit 3b83027482c5`, which is what makes verifying
+the thing one line. `build/hull-agent` carries no commit string at all,
+and was deliberately not rebuilt because nothing it is built from moved
+-- so its provenance rests on their word, where `hull`'s rests on the
+binary. That is §402's lesson from both sides at once: the tool that
+names which build it is can be checked, and the one beside it cannot.
 
 **Their `build/` is not rebuilt from here**, at any point. The first
 note offered a plain `make` in their tree; `harmonization.md` forbids
