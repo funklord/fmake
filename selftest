@@ -18609,7 +18609,11 @@ def _install_fixture(t):
 #include "greet.h"
 const char *greet(void){ return "hello"; }
 """)
-	t.write("tool.c", '/*! @file\n *  @target tool\n */\n'
+	# `@aliases' so the plan carries a symlink row as well as a built file
+	# and a file from the tree -- `install_plan' yields exactly those three
+	# origins, and a comparison that reaches two of them is a comparison
+	# that passed while ninja's install recorded no symlinks at all.
+	t.write("tool.c", '/*! @file\n *  @target tool\n *  @aliases toolx\n */\n'
 	        '#include <stdio.h>\n#include "greet.h"\n'
 	        "int main(void){ puts(greet()); return 0; }\n")
 	check(t.fmake().returncode == 0, "build failed")
@@ -18622,16 +18626,44 @@ const char *greet(void){ return "hello"; }
 	for want in ("bin/tool", "lib/libgreet.a", "include/greet.h"):
 		check(any(p.endswith(want) for p in mine),
 		      f"{want} was not installed at all: {sorted(mine)}")
+	# And the symlink, named separately because it is the row `_staged'
+	# used to be unable to see: without this the widening below is a
+	# stricter comparison over a plan that has nothing to be strict about.
+	link = [p for p in mine if p.endswith("bin/toolx")]
+	check(link and isinstance(mine[link[0]], str),
+	      f"the fixture staged no symlink, so a copy where this project "
+	      f"links would still compare equal: {sorted(mine.items())}")
 	return mine
 
 
 def _staged(root):
+	"""What landed under a staging root: {path: mode}, or {path: "-> target"}.
+
+	A symlink gets its target rather than a mode, because `os.stat' follows
+	one and a 0755 link to a 0755 program is then indistinguishable from a
+	0755 copy of it. Measured with the make emitter's `ln -sf' replaced by
+	an `install': the old walker called the two staging trees equal, the
+	difference being a row whose mode matched exactly.
+
+	That matters because this is what `_same_install' compares, and the
+	plan's three origins are "built", "tree" and "symlink" -- so a
+	comparison blind to the third is blind to the one that has actually
+	drifted here, ninja's install having recorded no symlinks at all
+	(section 534). `os.lstat' also stops a dangling link raising out of a
+	comparison that should have reported it."""
 	out = {}
 	for base, _dirs, files in os.walk(root):
 		for f in files:
 			p = os.path.join(base, f)
-			out[os.path.relpath(p, root)] = os.stat(p).st_mode & 0o777
+			out[os.path.relpath(p, root)] = (
+			        "-> " + os.readlink(p) if os.path.islink(p)
+			        else os.lstat(p).st_mode & 0o777)
 	return out
+
+
+def _mode_text(v):
+	"""A mode as octal, a symlink as its target. `oct' refuses a string."""
+	return v if isinstance(v, str) else oct(v)
 
 
 def _same_install(mine, theirs, who):
@@ -18639,7 +18671,8 @@ def _same_install(mine, theirs, who):
 	      f"the {who} install differs from --install:\n"
 	      f"  only --install: {sorted(set(mine) - set(theirs))}\n"
 	      f"  only {who}: {sorted(set(theirs) - set(mine))}\n"
-	      f"  modes: {[(k, oct(mine[k]), oct(theirs[k])) for k in mine
+	      f"  modes: {[(k, _mode_text(mine[k]), _mode_text(theirs[k]))
+	                  for k in mine
 	                  if k in theirs and mine[k] != theirs[k]]}")
 
 

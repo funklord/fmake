@@ -587,7 +587,8 @@ that had been green about nothing for five commits ·
 [534. The uninstall manifest, in all three callers](#534-the-uninstall-manifest-in-all-three-callers) ·
 [535. hull's chroot networking changed, and this tier did not notice](#535-hulls-chroot-networking-changed-and-this-tier-did-not-notice) ·
 [536. A filename is bytes, and printing one crashed the run](#536-a-filename-is-bytes-and-printing-one-crashed-the-run) ·
-[537. The same byte on the reading side, where the wrong fix is silent](#537-the-same-byte-on-the-reading-side-where-the-wrong-fix-is-silent)
+[537. The same byte on the reading side, where the wrong fix is silent](#537-the-same-byte-on-the-reading-side-where-the-wrong-fix-is-silent) ·
+[538. The install comparison could not tell a symlink from a copy](#538-the-install-comparison-could-not-tell-a-symlink-from-a-copy)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42734,3 +42735,104 @@ fine: `-o` sends the tarball to a file, so only git's diagnostics are
 captured. The JSON cache round-trips a surrogate by accident worth
 knowing -- `json.dumps` escapes it as `\udcff` under the default
 `ensure_ascii`, which is why the second build compiles nothing.
+
+## 538. The install comparison could not tell a symlink from a copy
+
+Section 534's defect was the ejected ninja install recording no symlinks,
+found by reading the emitter. The question this section answers is why the
+guard that exists for exactly that failure did not find it, and whether it
+would find the next one.
+
+`_same_install` is that guard: it asserts `--install`, the ejected make
+install and the ejected ninja install place the same set, which is the
+property worth holding because a drifted emitter goes on working and
+surfaces as somebody's package missing a file. It compares what `_staged`
+returns, and `_staged` walked the staging tree building `{path: mode}`
+with `os.stat`.
+
+**`os.stat` follows a symlink.** So a 0755 symlink to a program and a 0755
+copy of that program are the same entry, and an emitter that copied where
+this project links compared equal. `install_plan` yields three origins --
+`built`, `tree` and `symlink` -- and the guard could see two of them.
+
+**The fixture could not reach the row either.** `_install_fixture` is a
+static library, a program and a published header: no `version`, no
+`aliases`, so no symlink row in the plan at all. Both halves had to move,
+and that is the part worth keeping rather than the one-line fix -- a
+link-aware walker over a fixture with no link is a stricter comparison
+over nothing to be strict about, and a fixture with a link under the old
+walker is a row that compares equal either way.
+
+**The control is the evidence, and it was run first.** With the fixture
+widened to carry `@aliases toolx` and the OLD walker still in place,
+replacing the make emitter's `ln -sf` with an `install`:
+
+    old _staged: equal = True
+    new _staged: equal = False
+      differing: {'usr/local/bin/toolx': ('-> tool', 493)}
+
+Note why the old answer is True rather than merely unlucky. The copy's
+mode is 0755 and the link's target's mode is 0755, so the single differing
+row produced identical values. The blindness is structural, not a near
+miss.
+
+**Then both emitters, one at a time, through the suite.** Make's `ln -sf`
+replaced by an `install` fails `an_ejected_makefile_installs_what_fmake_
+installs` and `an_ejected_build_uninstalls_what_it_installed`, reporting
+`('usr/local/bin/toolx', '-> tool', '0o755')`, while the ninja case stays
+green. Ninja's replaced the same way fails the ninja case and the
+uninstall case while make stays green. So the guard says which of the
+three installers drifted, which is what it is for.
+
+`os.lstat` also removes a latent crash: a dangling link in a staging tree
+raised `FileNotFoundError` out of a comparison whose job was to report it.
+
+### A guard's notion of equality is part of the guard
+
+The general shape, because the fix is narrow and the shape is not. A guard
+that compares two artifacts does so through a projection, and the
+projection is as much a part of what is being asserted as the comparison
+is. `{path: mode}` reads as thorough -- it has modes in it, which is more
+than a name comparison -- and it was lossy in exactly the dimension the
+plan's third origin lives in.
+
+Swept the suite's other artifact-reducing helpers for the same shape:
+`_all_files` and `_under` yield relative paths, `_glue_under` yields
+`(path, first line)`. Each projects names, which is honest about being a
+name comparison and is what its callers assert. `_staged` was the only one
+comparing values, and so the only one that could be wrong about which
+values matter.
+
+### Three probes in the same sweep that found nothing, recorded so they are not re-derived
+
+The lens was section 534's shape -- one statement, several emitters, the
+fix going into one of them. Four probes, and only the one above paid:
+
+- **The soname chain through all three installers.** A `shared` target
+  with `version = 1.2.3` stages `libgreet.so.1.2.3` as a real file plus
+  `libgreet.so.1 -> libgreet.so.1.2.3` and `libgreet.so -> libgreet.so.1`.
+  Measured, not read: `--install`, the ejected make install and the
+  ejected ninja install produce the identical chain, including the install
+  under a name the build directory does not use. Nothing holds that
+  agreement, and it is correct today.
+- **A newline in an installed name.** `the_install_record_survives_a_
+  newline_in_a_name` says in its docstring that the ejected records stay
+  line-separated because `_refuse_unnameable` stops such a path reaching
+  either backend. Measured rather than accepted: both `--eject make` and
+  `--eject ninja` refuse, naming the path, saying no build file can name a
+  path containing a newline, and adding that the other backend is not an
+  answer either. The claim holds.
+- **Assembler depfiles through both ejected backends**, which
+  `makefile-hazards` names as a load-bearing class and which the suite
+  asserts for fmake's own build only. A changed `.include` and a changed
+  header the `.S` includes each rebuild under the ejected make and under
+  the ejected ninja. Make writes `-Wa,--MD,$(@:.o=.d)` against
+  `-include $(OBJS:.o=.d)`; ninja's `as` rule carries `depfile = $out.d`
+  with no `deps = gcc`, which reads the depfile on every build rather than
+  folding it into `.ninja_deps` -- correct, and merely unoptimised.
+
+And one before it, from section 530's shape rather than 534's: an AST
+sweep of `fmake` and `selftest` for a name defined twice at module level
+or within one class found none, positive-controlled with a deliberate
+duplicate so the empty result is a measurement. 740 registered case names,
+no duplicates. Section 530's shadowed helper was a one-off.
