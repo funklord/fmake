@@ -42573,13 +42573,26 @@ notes read alike. They rebuilt to `3b83027` the same evening -- which
 carries `ccf44b0`, `b198438` and `(network bridge)` -- and the three
 cases were run against it: all pass, as against `55f2beb`.
 
-**One thing still cannot be checked, and it is worth naming.** `hull
+**A second binary could not be checked, and saying so fixed it.** `hull
 --version` carries `commit 3b83027482c5`, which is what makes verifying
-the thing one line. `build/hull-agent` carries no commit string at all,
-and was deliberately not rebuilt because nothing it is built from moved
--- so its provenance rests on their word, where `hull`'s rests on the
-binary. That is §402's lesson from both sides at once: the tool that
-names which build it is can be checked, and the one beside it cannot.
+the thing one line; `build/hull-agent` carried no commit string at all,
+so its provenance rested on their word where `hull`'s rested on the
+binary. Reported as that rather than as a fault -- §402's lesson pointed
+at the pair, and §402 came from hull in the first place, about two
+`situc` binaries both printing `situc 1.0`. They closed it in `502c050`:
+the agent names its commit now, from the same `commit.h`, with a case
+holding it.
+
+**And it never entered this tier's measurement anyway.** They said the
+chroot tier does not use the agent, which is their claim about their own
+tool, and it corroborates here: running
+`the_other_inits_glue_is_placed_in_a_machine` while polling the process
+table at two-second intervals, no `hull-agent` ever appeared. Sampling
+is not proof -- a short-lived one could pass between polls -- so this is
+their structural fact with an observation beside it, not a replacement
+for it. What it settles is the narrower thing worth settling: the
+agent's provenance was never part of what made these three cases
+evidence.
 
 **Their `build/` is not rebuilt from here**, at any point. The first
 note offered a plain `make` in their tree; `harmonization.md` forbids
