@@ -582,7 +582,8 @@ that had been green about nothing for five commits ·
 [529. The ninja remedy, tested on the half that had no fixture](#529-the-ninja-remedy-tested-on-the-half-that-had-no-fixture) ·
 [530. A helper defined twice, and the guarded copy was the dead one](#530-a-helper-defined-twice-and-the-guarded-copy-was-the-dead-one) ·
 [531. Saying what the state directory holds, both kinds of it](#531-saying-what-the-state-directory-holds-both-kinds-of-it) ·
-[532. The archive that exports a module now says nobody can import it](#532-the-archive-that-exports-a-module-now-says-nobody-can-import-it)
+[532. The archive that exports a module now says nobody can import it](#532-the-archive-that-exports-a-module-now-says-nobody-can-import-it) ·
+[533. The citation check 403 asks for, and what it says about the cut](#533-the-citation-check-403-asks-for-and-what-it-says-about-the-cut)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -31333,7 +31334,10 @@ reading fmake looking for bugs.**
   in commit messages still resolves, and `the_contents_index_lists_every_section`
   is a ready-made proof that no heading was lost. What it needs before
   anybody starts is the citation check that precedent did first: no live
-  section may cite a cut one.
+  section may cite a cut one. **Computed 2026-10-27 -- see §533. It
+  passes for 91 sections and saves 13 per cent, which is not enough to
+  solve this entry**, so the part that would is the judgement this entry
+  defers.
 - **hull refuses on nineteen symbols** from `vendor/situ/example/*.situ`
   alongside its own generated codecs. Theirs to exclude; signalled, no
   reply yet.
@@ -42295,3 +42299,61 @@ a variable was the fix; writing it as though a `plan` already existed was
 a `NameError` waiting in the install path, caught before anything ran by
 the unbound-name detector §530's pass left behind. That detector found
 nothing when it was written, and this is the first thing it caught.
+
+## 533. The citation check §403 asks for, and what it says about the cut
+
+§403 has stood unanswered because cutting this file is the holder's, and
+it names the thing to do first: *"the citation check that precedent did
+first: no live section may cite a cut one."* Nobody had computed it. This
+is that number, and it is not a cut -- nothing here is removed.
+
+**The criterion, from §403's own precedent.** `claude-guidelines`
+compressed CLOSED findings to one-line indexes carrying the lead and the
+closing commit. An index line keeps its heading, so a citation still
+*resolves*; what breaks is a live reader sent to a section for reasoning
+that is no longer there. So a commit message citing a section is safe --
+it wants the heading -- while a citation from another live section or
+from `selftest`/`fmake` is not.
+
+Measured over 532 numbered sections, 41,705 lines of bodies in a
+42,297-line file:
+
+| | sections |
+|---|---|
+| cited by another section | 404 |
+| cited by `selftest` or `fmake` | 170 |
+| cited by a commit message | 252 |
+| **cited by nothing live** | **95** |
+| of those, findings rather than §§1-16 | 91, totalling 5,707 lines |
+
+The median section is 66 lines.
+
+### What it says, which is not what one would hope
+
+Compressing those 91 to one line each saves **5,616 lines, about 72k
+tokens**. The file goes from 2.7x a 200,000-token context window to
+**2.4x**. So the cut the citation check clears **does not solve the
+problem §403 is about.** Doing that would mean compressing sections
+other sections and the suite cite, which is exactly the judgement §403
+defers -- and it is now the only remaining lever rather than one option
+among two.
+
+That is the useful half of this measurement: it moves the question from
+*"is a cut safe"* to *"is a 13 per cent cut worth doing on its own"*,
+and the second is answerable.
+
+### Two corrections the count needed
+
+**The citation check is necessary and not sufficient.** §2, *Design
+principles*, is cited by nothing live and must obviously stay: it is not
+a finding. The table says `>16` for that reason, and the criterion is a
+safety check on a proposed cut rather than a way of choosing one.
+
+**And the first count was wrong by 18 sections.** A citation written as a
+range -- `sections 112 to 116`, five of them across this tree -- is read
+by the obvious regex as naming only its first number, so the interior
+sections looked uncited. §115 is 158 lines and stood third in the
+largest-safe list before ranges were expanded; it is cited, by the
+range. The corrected figure is 95 where the first was 113, and the
+sanity check that catches it is to name three interior sections and
+assert they are no longer called safe.
