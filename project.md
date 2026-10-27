@@ -20090,7 +20090,19 @@ platform, and now this one is.
 Not a design change: whether a header should be allowed to say
 `@pkg_optional` -- hydra's `theme.h` is where the macro matters, after
 all -- is a question about which files fmake reads directives from,
-and it is the holder's; today the answer is sources, uniformly. The
+and it is the holder's; today the answer is sources, uniformly.
+
+**Closed 2026-10-27, as confirmed rather than acted on.** Asked whether
+the project's own aims settle it, they do, three ways: every other
+directive is read from the sources this build compiles, so an exception
+for one would break *one word per concept*; fmake already **warns in as
+many words** when it finds `@pkg`, `@os` or `@arch` in a header, so a
+reader who writes one there is told rather than silently ignored; and
+§1's wording is "the source file that motivated the override". The
+status quo is what the principle implies, so there was nothing to change
+-- which is the answer, not an absence of one.
+
+The
 case asserts that neither the header's nor the excluded file's macro
 is defined and that neither is reported as asking.
 
@@ -31365,7 +31377,8 @@ reading fmake looking for bugs.**
   nobody's work in progress.
 - **Still with the holder from before today**: §348's `--uninstall`
   manifest, §363's service-name charset, §367's `uses` doc/code
-  contradiction, `pkg-optional`'s per-file-versus-per-target semantics,
+  contradiction, ~~`pkg-optional`'s per-file-versus-per-target
+  semantics~~ (closed 2026-10-27, §248),
   §385's compile-scheduling question.
 
 ### hull's three findings, which arrived while this was being written
@@ -32321,7 +32334,8 @@ report. §415 came from walking past the thing §414 was about.
   source commits it carries are named in the commit message.
 - **Still with the holder from before**: §348's `--uninstall` manifest,
   §363's service-name charset, §367's `uses` doc/code contradiction,
-  `pkg-optional`'s per-file-versus-per-target semantics, §385's
+  ~~`pkg-optional`'s per-file-versus-per-target semantics~~ (closed
+  2026-10-27, §248), §385's
   compile-scheduling question.
 
 ### The lens to pick up next
@@ -33856,8 +33870,8 @@ Unchanged from the second fold except where noted:
 - **Whether a generated unit should inherit the flags of the units that
   include its origin**, which section 431 names rather than answers.
 - **Still with the holder from before**: section 348's `--uninstall`
-  manifest, 363, 367, `pkg-optional`'s per-file-versus-per-target
-  semantics, 385.
+  manifest, 363, 367, ~~`pkg-optional`'s per-file-versus-per-target
+  semantics~~ (closed 2026-10-27, 248), 385.
 
 ## 437. Three checks on the day's work, and a case that stopped skipping
 
@@ -34914,7 +34928,8 @@ reached a commit message as a bug in fmake.
   origin's includers' flags (431), and hull's per-schema situc flags
   (430), whose asking half is done.
 - **Still from before**: 348's `--uninstall` manifest, 363, 367,
-  `pkg-optional`'s per-file-versus-per-target semantics, 385, 411.
+  ~~`pkg-optional`'s per-file-versus-per-target semantics~~ (closed
+  2026-10-27, 248), 385, 411.
 
 ### The lens to try next, and the honest state of the others
 
@@ -36135,7 +36150,8 @@ size, raised five times now; whether `build` should leave `SKIP_DIRS`
 origin's includers' flags (431); hull's per-schema situc flags (430),
 which hull's own README names as the reason it builds with make;
 object-directory pruning (15); the `--uninstall` manifest (348); 363;
-367; `pkg-optional` semantics; 385; 411; and whether the ejected builds
+367; ~~`pkg-optional` semantics~~ (closed, 248); 385; 411; and whether
+the ejected builds
 should correct a submodule drifted off its gitlink (460), which costs a
 git process per submodule per invocation and would retire a case that
 asserts the opposite.
