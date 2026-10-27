@@ -7208,6 +7208,52 @@ class Cache:
 				else:
 					store[k]["gone"] = 1
 
+	# Stores whose KEY is a path relative to the tree and whose value is a
+	# stamp rather than a dict. `_retire_ghosts' walks `files' and
+	# `objects' and cannot walk these: it marks a ghost by setting a field
+	# inside the entry, and there is nowhere to put one in a string.
+	#
+	# Measured on a Qt tree with one moc'd header renamed six times:
+	# `files' went 387, 389 and then flat and `objects' 2, 3 and then
+	# flat -- the sweep working -- while `moc' went 1, 2, 3, 4, 5, 6, 7,
+	# one entry per rename and no end to it. The generated outputs
+	# themselves were already gone from disk; only the entries naming them
+	# stayed.
+	STAMP_STORES = ("moc", "rcc", "uic", "situ", "nomain", "links")
+
+	def _retire_stamp_ghosts(self):
+		"""Drop stamp entries whose path has gone, on sight.
+
+    No grace, which is the difference from `_retire_ghosts' above and is
+    a property of the readers rather than a choice. That one leaves a
+    ghost for one extra save because section 523's blame reads exactly
+    these absent entries to name the source that defined a missing symbol.
+    Nothing reads a stamp for blame: the only question asked of one is
+    whether it still matches, so an absent entry means "generate it" and
+    costs one tool run.
+
+    The exception is moc's negative result, `<key>|none', which records
+    that moc read the input and produced nothing. Its output is absent BY
+    CONSTRUCTION, so a sweep keyed on the output existing would delete
+    precisely the entries that exist to stop moc being run every build on
+    a Q_OBJECT the preprocessor never reaches.
+    """
+		root = os.path.dirname(os.path.dirname(self.path))
+		for name in self.STAMP_STORES:
+			store = self.data.get(name)
+			if not isinstance(store, dict):
+				continue
+			for key in list(store):
+				value = store[key]
+				if not isinstance(value, str) or value.endswith("|none"):
+					continue
+				# Left alone for `_retire_ghosts'' reason: a path reaching
+				# outside the tree is not this tree's history to prune.
+				if key.startswith("../") or os.path.isabs(key):
+					continue
+				if not os.path.exists(os.path.join(root, key)):
+					del store[key]
+
 	def _trim_header_sigs(self):
 		"""Keep the `headers' store to HEADER_SIGS_KEPT signature groups.
 
@@ -7259,6 +7305,7 @@ class Cache:
 		if not self._retired:
 			self._retired = True
 			self._retire_ghosts()
+			self._retire_stamp_ghosts()
 			self._trim_header_sigs()
 		# One string and one write, rather than `json.dump' streaming to the
 		# file object, which issues a write per encoded fragment. Counted

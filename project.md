@@ -589,7 +589,8 @@ that had been green about nothing for five commits ·
 [536. A filename is bytes, and printing one crashed the run](#536-a-filename-is-bytes-and-printing-one-crashed-the-run) ·
 [537. The same byte on the reading side, where the wrong fix is silent](#537-the-same-byte-on-the-reading-side-where-the-wrong-fix-is-silent) ·
 [538. The install comparison could not tell a symlink from a copy](#538-the-install-comparison-could-not-tell-a-symlink-from-a-copy) ·
-[539. The other store keyed by a signature, which the provider fix missed](#539-the-other-store-keyed-by-a-signature-which-the-provider-fix-missed)
+[539. The other store keyed by a signature, which the provider fix missed](#539-the-other-store-keyed-by-a-signature-which-the-provider-fix-missed) ·
+[540. A stamp for a path that has gone, in the six stores the sweep skips](#540-a-stamp-for-a-path-that-has-gone-in-the-six-stores-the-sweep-skips)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -42971,3 +42972,101 @@ which `_retire_ghosts` does not walk; the others are keyed by content
 hashes and want their own fixture. Recorded as unmeasured rather than
 listed among the clean, because the first draft of this paragraph listed
 them as clean and that is the vacuous pass with a tidy sentence over it.
+
+## 540. A stamp for a path that has gone, in the six stores the sweep skips
+
+`_retire_ghosts` drops entries for files that have gone, and it walks
+`files` and `objects`. Section 539's sweep of the cache left five sections
+recorded as unmeasured rather than clean; pointing the instrument at them
+found this.
+
+**Six more stores are keyed by a path**, and the sweep cannot walk them
+for a structural reason rather than an oversight: it marks a ghost by
+setting a field inside the entry, and these hold a stamp string with
+nowhere to put one. `moc`, `rcc` and `uic` key by the output they
+generate, `situ` and `nomain` by a source, `links` by the artifact
+produced.
+
+**Measured.** A Qt tree with one moc'd header renamed six times, each
+rename carrying the class name and the include with it:
+
+    b0 (w0)     files=387  objects=2  moc=1
+    rename->w1  files=389  objects=3  moc=2
+    rename->w2  files=389  objects=3  moc=3
+    ...
+    rename->w6  files=389  objects=3  moc=7
+
+`files` and `objects` settle after one rename, which is the existing sweep
+working and is the control this measurement came with. `moc` gains one
+entry per rename with no end to it. The generated outputs were already
+gone from disk -- only `moc_w6.cpp` remained of seven -- so what was left
+behind was the entries naming them and nothing else.
+
+**Dropped on sight, with no grace period**, which is the one difference
+from `_retire_ghosts` and is a property of the readers rather than a
+preference. That sweep leaves a ghost for one extra save because section
+523's blame reads exactly those absent entries, to name the source that
+defined a missing symbol or the header that has gone. Nothing reads a
+stamp for blame: the only question ever asked of one is whether it still
+matches, so an absent entry means "generate it" and costs one tool run.
+
+### The carve-out is the whole difficulty
+
+moc records `<stamp>|none` for an input whose `Q_OBJECT` its preprocessor
+never reaches -- one behind an `#if 0` -- so that it is not re-run on
+every build for a class that is not there. **That entry's output is
+absent by construction.** A sweep keyed on the output existing deletes
+precisely the records that exist to prevent work.
+
+Sabotaged to check it is load-bearing rather than defensive: with the
+carve-out removed, moc runs on every build of a tree with a hidden
+`Q_OBJECT` -- three builds, three runs -- and the store is left empty
+each time. That is a cost nothing would have reported, because the build
+still succeeds and the only symptom is that it got slower.
+
+Three sabotages, each caught by the assertion aimed at it:
+
+- **No stamp sweep**: `[1, 2, 3, 4, 5, 6, 7]`, the measurement above.
+- **Carve-out removed**: the negative record is not in the store, and the
+  message says both of the things that could mean -- moc stopped writing
+  one, or the sweep took it.
+- **A store name the cache does not have**: `STAMP_STORES` is read out of
+  `fmake` and every name in it must be created somewhere in `fmake` as a
+  cache section. A store renamed out from under the sweep would otherwise
+  leave the list quietly covering nothing, which is the vacuous pass in
+  the tool's own source. Both sides of that check read from the tool, so
+  the suite holds no third copy of the names.
+
+### Five of the six are in the list by reading, not by measurement
+
+Only `moc` was measured growing. The other five are covered because the
+rule is uniform -- the key is a tree-relative path and the value is a
+stamp, so the same test answers for all of them -- and not because a
+fixture was written that reaches each. `rcc` wants a `.qrc`, `uic` a
+`.ui`, `situ` a schema, `nomain` a `main()` behind an `#if`, and `links`
+a renamed target.
+
+Said plainly because the alternative sentence -- "six stores leaked and
+were fixed" -- is the one this record would otherwise grow into, and it
+would be wrong in the direction that is hard to catch later.
+
+### Two probes in this chain reported something they had not measured
+
+Both were caught, and the shape is the probe-side version of what section
+539 records about assertions.
+
+- A printer using a walrus inside a generator expression's condition
+  raised `NameError` on every row. That one announced itself.
+- A sweep varying `CFLAGS` over a Qt tree produced six flavour
+  directories of which five held depfiles and no objects, which read as
+  `files` growing in one tree and not another and so as a
+  counter-example to section 539's account of it. It was not: the chosen
+  macro name collided with an identifier in moc's generated output, so
+  those five builds failed, and `>/dev/null 2>&1` had swallowed the exit
+  codes. Nothing grew because nothing compiled.
+
+The second is the one worth keeping. **A probe that discards its exit
+status reports the absence of an effect it never produced**, and the
+reading it invites is a finding about the code rather than about the
+probe. Section 539's `files` account is unchanged and stands as
+measured.

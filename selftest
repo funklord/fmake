@@ -2889,6 +2889,132 @@ def the_provider_cache_does_not_grow_without_a_bound(t):
 
 
 @case
+def a_stamp_for_a_path_that_has_gone_is_retired_too(t):
+	"""`_retire_ghosts' walks two stores and six are keyed by a path.
+
+	It marks a ghost by setting a field inside the entry, so it can only
+	walk a store whose values are dicts -- `files' and `objects'. The
+	generator stores, `nomain' and `links' key by a path too and hold a
+	stamp string, and nothing swept them.
+
+	Measured on this fixture before the sweep existed: `files' went 387,
+	389 and then flat and `objects' 2, 3 and then flat, the sweep working,
+	while `moc' went 1, 2, 3, 4, 5, 6, 7 -- one entry per rename with no
+	end to it. The generated outputs were already gone from disk; only the
+	entries naming them stayed.
+
+	The second half is the one a sweep like this gets wrong. moc records
+	`<stamp>|none' for an input whose Q_OBJECT its preprocessor never
+	reaches, and that entry's output is absent BY CONSTRUCTION -- so a
+	sweep keyed on the output existing deletes exactly the records that
+	stop moc running on every build. Asserted by running moc twice and
+	watching it stay quiet, which is what the record buys; with the
+	carve-out removed it runs every time and the store is left empty."""
+	_need_qt()
+	t.write("main.cpp", "/*! @file\n *  @target app\n *  @pkg Qt6Core\n */\n"
+	        '#include "w0.h"\nint main(void){ return 0; }\n')
+	t.write("w0.h", "#pragma once\n#include <QObject>\n"
+	        "class w0 : public QObject { Q_OBJECT public: w0(){} };\n")
+	cache = os.path.join(t.dir, ".fmake", "cache.json")
+
+	def sections():
+		with open(cache) as fh:
+			d = json.load(fh)
+		return {k: len(d.get(k, {})) for k in ("files", "objects", "moc")}
+
+	r = t.fmake()
+	check(r.returncode == 0, f"the first build failed: {r.stdout}{r.stderr}")
+	counts = [sections()]
+	check(counts[0]["moc"] >= 1,
+	      f"the fixture produced no moc entry, so nothing here is being "
+	      f"measured: {counts[0]}")
+
+	for i in range(1, 7):
+		prev = f"w{i - 1}"
+		name = f"w{i}"
+		os.rename(os.path.join(t.dir, prev + ".h"),
+		          os.path.join(t.dir, name + ".h"))
+		path = os.path.join(t.dir, name + ".h")
+		with open(path) as fh:
+			body = fh.read()
+		with open(path, "w") as fh:
+			fh.write(body.replace("class " + prev, "class " + name)
+			         .replace(prev + "()", name + "()"))
+		t.write("main.cpp",
+		        "/*! @file\n *  @target app\n *  @pkg Qt6Core\n */\n"
+		        f'#include "{name}.h"\nint main(void){{ return 0; }}\n')
+		r = t.fmake()
+		check(r.returncode == 0,
+		      f"the build after renaming to {name} failed: "
+		      f"{r.stdout}{r.stderr}")
+		counts.append(sections())
+
+	moc = [c["moc"] for c in counts]
+	check(max(moc) == moc[0],
+	      f"a renamed input leaves its moc stamp behind for ever: {moc}")
+	# The two stores that were already swept, asserted in the same run so
+	# a regression in either is caught here as well as where it belongs.
+	for store in ("files", "objects"):
+		series = [c[store] for c in counts]
+		check(series[-1] == series[-2] == series[1],
+		      f"{store} is not settling after a rename: {series}")
+
+	# The sweep walks a list of store names, and a store renamed out from
+	# under it would leave the list quietly covering nothing -- a gate over
+	# an empty file list, in fmake's own source. Both sides read from the
+	# tool so the suite holds no third copy of the names.
+	tool = open(FMAKE).read()
+	named = re.search(r"STAMP_STORES = \(([^)]*)\)", tool).group(1)
+	named = re.findall(r'"([a-z_]+)"', named)
+	check(named, "STAMP_STORES could not be read from fmake")
+	for store in named:
+		check(f'setdefault("{store}"' in tool,
+		      f"the stamp sweep names {store!r} and nothing in fmake "
+		      f"creates a cache section by that name, so the sweep walks "
+		      f"a store that does not exist")
+
+	# And the negative record, which the same sweep must not take. Its own
+	# tree, because the fixture above has no hidden Q_OBJECT -- and in a
+	# try/finally, since a Tree made inside a case is the case's to remove.
+	u = Tree("moc-none")
+	try:
+		u.write("hidden.h", "#pragma once\n#include <QObject>\n#if 0\n"
+		        "class hidden : public QObject { Q_OBJECT public: "
+		        "hidden(){} };\n#endif\n")
+		u.write("main.cpp",
+		        "/*! @file\n *  @target app\n *  @pkg Qt6Core\n */\n"
+		        '#include "hidden.h"\nint main(void){ return 0; }\n')
+
+		def moc_ran(res):
+			said = res.stdout + res.stderr
+			return "moc found nothing" in said or "MOC " in said
+
+		first = u.fmake("-v")
+		check(first.returncode == 0,
+		      f"the hidden build failed: {first.stdout}{first.stderr}")
+		check(moc_ran(first),
+		      f"moc did not run on the first build, so there is no "
+		      f"negative record to keep: {first.stdout}{first.stderr}")
+		with open(os.path.join(u.dir, ".fmake", "cache.json")) as fh:
+			kept = json.load(fh).get("moc", {})
+		check(any(str(v).endswith("|none") for v in kept.values()),
+		      f"no negative record is in the store. Either moc stopped "
+		      f"writing one, so this half measures nothing, or the sweep "
+		      f"took it -- which is the carve-out gone and moc about to "
+		      f"run on every build: {kept}")
+
+		second = u.fmake("-v")
+		check(second.returncode == 0,
+		      f"the second build failed: {second.stdout}{second.stderr}")
+		check(not moc_ran(second),
+		      f"moc ran again, so the sweep took the negative record and "
+		      f"every build will re-derive it: "
+		      f"{second.stdout}{second.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def the_header_cache_does_not_grow_without_a_bound_either(t):
 	"""The other store keyed by a signature, which the first fix missed.
 
