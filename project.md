@@ -583,7 +583,8 @@ that had been green about nothing for five commits ·
 [530. A helper defined twice, and the guarded copy was the dead one](#530-a-helper-defined-twice-and-the-guarded-copy-was-the-dead-one) ·
 [531. Saying what the state directory holds, both kinds of it](#531-saying-what-the-state-directory-holds-both-kinds-of-it) ·
 [532. The archive that exports a module now says nobody can import it](#532-the-archive-that-exports-a-module-now-says-nobody-can-import-it) ·
-[533. The citation check 403 asks for, and what it says about the cut](#533-the-citation-check-403-asks-for-and-what-it-says-about-the-cut)
+[533. The citation check 403 asks for, and what it says about the cut](#533-the-citation-check-403-asks-for-and-what-it-says-about-the-cut) ·
+[534. The uninstall manifest, in all three callers](#534-the-uninstall-manifest-in-all-three-callers)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -27125,8 +27126,10 @@ The other negatives are the ones that separate an object from a function:
 
 ## 348. Uninstall removes what it did not install
 
-**Not fixed. The measurement is here and the fix is a decision, for the
-reason at the end.**
+**Fixed 2026-10-27 on the holder's instruction; see §534. The measurement
+below is what it was fixed against, and the decision at the end is the
+one that was taken -- the second option, a manifest both callers write
+and read.**
 
 `--uninstall` computes its list from `install_plan` against the tree as it
 is now, and removes what it finds. Two consequences, measured on 2026-10-01:
@@ -42423,3 +42426,64 @@ largest-safe list before ranges were expanded; it is cited, by the
 range. The corrected figure is 95 where the first was 113, and the
 sanity check that catches it is to name three interior sections and
 assert they are no longer called safe.
+
+## 534. The uninstall manifest, in all three callers
+
+§348's hazard, closed on the holder's word. Asked whether the project's
+aims settled it, they settle most of it: `CLAUDE.md`'s *delete with a
+name, not a pattern* and `do_clean`'s own "must not be able to take one
+it did not write" rule out the third option, reporting the hazard and
+living with it. What the aims do not settle is where the record lives,
+and that was the residual question.
+
+**It lives in the build directory, not the prefix.** A manifest under
+`$PREFIX` is shipped inside the `.deb`, and dpkg owns that information;
+ten of these projects build packages. The cost is real and is stated
+rather than hidden: `--clean` and then `--uninstall` has no record and
+refuses. That is the safe direction, and the refusal names the remedy.
+
+So: `.fmake/install.manifest` for fmake, `$(BUILD_DIR)/install.manifest`
+for the ejected Makefile, `$build_dir/install.manifest` for the ejected
+ninja. The paths differ because each build has its own build directory,
+exactly as objects do; what is identical is the rule.
+
+**Both halves of §348 close.** A header dropped from `@headers` is still
+removed, because the record names it. And an uninstall with no record
+refuses -- measured on the fixture §348 described, another package's
+`shared.h` at a path the plan names survives, where before fmake removed
+it while reporting *"5 already gone"*.
+
+### Emptied, not deleted, and that is the whole of uninstalling twice
+
+The first version removed the manifest after a successful uninstall, and
+the suite caught it at once: *"uninstalling twice should not be an
+error"*, which `do_uninstall`'s own docstring calls an ordinary thing to
+do. An absent manifest and an emptied one are different states --
+**no record of an install** against **installed and then
+uninstalled** -- and only the first is a reason to refuse. Emptying also
+keeps §348 shut, since a manifest still naming the old paths would
+remove whatever is at them next time, which after an uninstall could be
+somebody else's file.
+
+### Two things only running the emitted builds found
+
+**The ninja uninstall truncated the record before reading it.** That
+rule is built by taking the install steps that begin `: ` -- the
+parameter defaults, so uninstall reads the same environment -- and a
+truncation spelled `: > manifest` is picked up by that filter. The
+emitted uninstall removed nothing and reported success. Spelled
+`printf "" > manifest` it is no longer a parameter line.
+
+**And ninja did not record the alias symlinks.** The per-item loop
+`continue`s for `origin == "symlink"` before the append, so
+`@aliases` names went unrecorded and the uninstall left them behind.
+`a_program_installs_under_its_other_names` failed on exactly that --
+and the Makefile never had the gap, because it records per directory
+group from `items`, which includes them. One emitter recording per item
+and the other per group is why a bug could exist in one and not the
+other.
+
+Both were invisible to reading and took running `make uninstall` and
+`ninja uninstall` against a staged prefix. The new case does that, in
+both backends, which is the only way parity gets asserted rather than
+asserted about.

@@ -18968,6 +18968,105 @@ def every_directory_the_ejected_build_declares_is_a_config_key(t):
 
 
 @case
+def uninstall_will_not_remove_what_it_has_no_record_of(t):
+	r"""§348's two hazards, and the case above tests neither.
+
+	That one plants `usr/local/bin/not-ours' -- a *differently named* file
+	in a directory fmake installs into, which survives because its name
+	is not in the plan. The same-path collision is the one a plan cannot
+	tell from its own work, and §348 measured both halves of what that
+	costs:
+
+	  * a header dropped from `@headers' stayed installed, because
+	    nothing in the tree named it any more;
+	  * another package's `shared.h` was **removed** by an uninstall that
+	    had never installed, in the same breath as reporting "5 already
+	    gone" -- the sentence saying it had not installed there.
+
+	An install records what it placed now, and an uninstall removes that
+	and nothing else. No record means no removal, which is the half that
+	has to hold in all three callers, so each is asked."""
+	stage = os.path.join(t.dir, "r", "usr")
+	intruder = os.path.join(stage, "include", "shared.h")
+	os.makedirs(os.path.dirname(intruder), exist_ok=True)
+
+	def plant():
+		with open(intruder, "w") as fh:
+			fh.write("/* another package owns this */\n")
+
+	t.write("lib.c", "/*! @kind static\n *  @headers shared.h two.h */\n"
+	        "int lib(void){ return 1; }\n")
+	t.write("shared.h", "int lib(void);\n")
+	t.write("two.h", "int extra(void);\n")
+
+	# fmake, with no record: it must refuse and leave the file alone.
+	plant()
+	r = t.fmake("--uninstall", "--prefix", stage)
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"uninstalling without a record succeeded: {out}")
+	check("no record of an install" in out,
+	      f"the refusal does not say why it will not remove: {out}")
+	check(open(intruder).read().startswith("/* another"),
+	      "another package's header at a path the plan names was removed")
+
+	# Installed, then the tree stops declaring one header: it still goes,
+	# because the record names it.
+	check(t.fmake("--install", "--prefix", stage).returncode == 0,
+	      "install failed")
+	t.write("lib.c", "/*! @kind static\n *  @headers shared.h */\n"
+	        "int lib(void){ return 1; }\n")
+	check(t.fmake("--uninstall", "--prefix", stage).returncode == 0,
+	      "uninstall failed")
+	left = sorted(_staged(stage))
+	check(not left, f"uninstall left what the tree stopped declaring: {left}")
+
+	# And twice is not an error: an empty record is "installed and
+	# uninstalled", which is a state fmake knows.
+	r = t.fmake("--uninstall", "--prefix", stage)
+	check(r.returncode == 0 and "nothing to uninstall" in r.stdout + r.stderr,
+	      f"uninstalling twice should be ordinary: {r.stdout}{r.stderr}")
+
+	# The two emitted builds carry the same rule against their own build
+	# directory, which is what parity means here.
+	for backend, fname, cmd in (("make", "Makefile.gen", ["make", "-f"]),
+	                            ("ninja", "build.ninja", ["ninja", "-f"])):
+		if backend == "ninja" and not shutil.which("ninja"):
+			continue
+		u = Tree(f"norecord-{backend}")
+		try:
+			u.write("lib.c", "/*! @kind static\n *  @headers shared.h */\n"
+			        "int lib(void){ return 1; }\n")
+			u.write("shared.h", "int lib(void);\n")
+			ustage = os.path.join(u.dir, "r")
+			uintr = os.path.join(ustage, "usr", "include", "shared.h")
+			os.makedirs(os.path.dirname(uintr), exist_ok=True)
+			with open(uintr, "w") as fh:
+				fh.write("/* theirs */\n")
+			text = u.fmake("--eject", backend).stdout
+			with open(os.path.join(u.dir, fname), "w") as fh:
+				fh.write(text)
+			env = {"DESTDIR": ustage, "PREFIX": "/usr"}
+			r = _run_in(u.dir, *cmd, fname, "uninstall", env=env)
+			check(r.returncode != 0,
+			      f"the ejected {backend} uninstalled with no record: "
+			      f"{r.stdout}{r.stderr}")
+			check(open(uintr).read() == "/* theirs */\n",
+			      f"the ejected {backend} removed another package's file")
+			check(_run_in(u.dir, *cmd, fname, "install",
+			              env=env).returncode == 0,
+			      f"the ejected {backend} install failed")
+			check(_run_in(u.dir, *cmd, fname, "uninstall",
+			              env=env).returncode == 0,
+			      f"the ejected {backend} uninstall failed after installing")
+			check(_run_in(u.dir, *cmd, fname, "uninstall",
+			              env=env).returncode == 0,
+			      f"the ejected {backend} refused a second uninstall, which "
+			      f"is the ordinary thing to do")
+		finally:
+			u.cleanup()
+
+
+@case
 def uninstall_removes_exactly_what_install_placed(t):
 	"""The inverse, held to `clean`'s rule rather than to a pattern.
 

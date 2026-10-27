@@ -189,6 +189,13 @@ def build_identity():
 	return _IDENTITY
 
 STATE_DIR   = ".fmake"
+# What an install recorded, read back by `--uninstall'. In the state
+# directory rather than in the prefix: a manifest under $PREFIX is shipped
+# inside the .deb, and dpkg owns that information -- ten of these projects
+# build packages. The cost is that `--clean' then `--uninstall' has no
+# record and refuses, which is the safe direction and is said in as many
+# words. Section 348.
+INSTALL_MANIFEST = "install.manifest"
 CACHE_FILE  = "cache.json"
 # How many provider sweeps to keep. See scan_providers: the store is keyed
 # by the symbol set, the library directories and the target identity, and
@@ -19085,6 +19092,18 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f".PHONY: {rule}")
 		a(f"{rule}: {'fmake-all' if fragment else 'all'}"
 		  + ("".join(f" {t.name}.pc" for t, _x in pcs)))
+		# What this install placed, for the uninstall rule to read back.
+		# section 348: computing the list again at removal time takes files the
+		# tree has stopped declaring and, worse, files another package
+		# put at a path this plan happens to name. Written per directory
+		# group and inside the same `ifeq' as the copies, so what the
+		# manifest says matches what $(INIT) actually installed.
+		#
+		# In BUILD_DIR rather than under the prefix, for the reason the
+		# constant gives: a manifest in $PREFIX ships inside the package.
+		mani = f"$({P}BUILD_DIR)/{INSTALL_MANIFEST}"
+		a(f"\t@mkdir -p $({P}BUILD_DIR)")
+		a(f"\t@: > {mani}")
 		for directory in INSTALL_LANDINGS:
 			items = [p for p in plan if p[2] == directory]
 			if not items:
@@ -19107,6 +19126,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				src = (art(source) if origin == "built"
 				       else _eject_src(source))
 				a(f"\tinstall -m {mode:o} {src} {var}/{name}")
+			a("\t@printf '%s\\n' "
+			  + " ".join(f"{var}/{p[3]}" for p in items)
+			  + f" >> {mani}")
 			if directory in INIT_GLUE:
 				a("endif")
 		a("")
@@ -19118,16 +19140,29 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		undo = "fmake-uninstall" if fragment else "uninstall"
 		a(f".PHONY: {undo}")
 		a(f"{undo}:")
-		for directory in INSTALL_LANDINGS:
-			names = [name for _o, _s, d, name, _m in plan if d == directory]
-			if not names:
-				continue
-			if directory in INIT_GLUE:
-				a(f"ifeq ($(INIT),{INIT_GLUE[directory]})")
-			for name in names:
-				a(f"\trm -f $(DESTDIR)$({install_var(directory)})/{name}")
-			if directory in INIT_GLUE:
-				a("endif")
+		# The manifest and nothing else. The list this rule used to emit
+		# was the install plan over again, which is the pair section 348
+		# measured: a dropped header left installed, and another
+		# package's file removed because the plan named its path.
+		#
+		# No manifest means no removal. A cleaned build directory has no
+		# record, and falling back on the plan there is the hazard
+		# itself, so it refuses and says what to do instead.
+		a(f"\t@test -f {mani} || {{ \\")
+		a(f"\t  printf '%s\\n' 'no {mani}: this build has no record of "
+		  f"an install, and removing what a rule merely names is how "
+		  f"another package'\"'\"'s file gets deleted' >&2; \\")
+		a(f"\t  printf '%s\\n' 'Run {rule} again to make a record, or "
+		  f"remove by hand.' >&2; exit 1; }}")
+		# `IFS= read -r' so a path is taken whole, and quoted on removal
+		# for the same reason -- the whitespace refusal above keeps such
+		# a path out of a Makefile, but $(DESTDIR) is the reader's.
+		a(f"\t@while IFS= read -r f; do rm -f \"$$f\"; done < {mani}")
+		# Emptied, not removed: an absent manifest means no record and
+		# refuses, an empty one means installed-then-uninstalled, which
+		# is what makes uninstalling twice the ordinary thing it looks
+		# like rather than an error.
+		a(f"\t@printf '' > {mani}")
 		a("")
 
 	all_objs = sorted({f"$({P}BUILD_DIR)/{name}.o" for name in every})
@@ -19829,6 +19864,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	plan = install_plan([t for t in targets if not t.test], closures, root)
 	if plan:
 		defaults = install_dirs(conf, prefix)
+		# Where this install's record goes, for the uninstall rule to read
+		# back. In the build directory and not under the prefix, for the
+		# reason the constant gives: a manifest in $PREFIX ships inside
+		# the package. section 348.
+		_nmani = f"$build_dir/{INSTALL_MANIFEST}"
 		steps = ["set -e", f': "$${{PREFIX:={defaults["prefix"]}}}"']
 		for key, _default, base in install_rows_for(plan):
 			sub = defaults[key]
@@ -19839,6 +19879,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# The Makefile's INIT, as an environment variable with the
 			# same default: detected here, `none' from a package build.
 			steps.append(f': "$${{INIT:=$$({INIT_DETECT_SH})}}"')
+		steps.append("mkdir -p $build_dir")
+		# `printf' and not `: >', because the uninstall rule below is
+		# built by taking the steps that start `: ' -- the parameter
+		# defaults -- and a truncation spelled `: > ...' is picked up by
+		# that filter and empties the manifest before uninstall reads it.
+		# Measured: the emitted uninstall removed nothing and said it had
+		# succeeded.
+		steps.append(f'printf "" > {_nmani}')
 		for directory in INSTALL_LANDINGS:
 			items = [p for p in plan if p[2] == directory]
 			if not items:
@@ -19859,6 +19907,15 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 					steps.append(f"ln -sf {shlex.quote(source)} "
 					             f'"$$DESTDIR$${install_var(directory)}/"'
 					             f"{shlex.quote(name)}")
+					# Recorded like any other placed file. Missing it left
+					# the ejected ninja's uninstall leaving the alias names
+					# behind -- `a_program_installs_under_its_other_names'
+					# found it, because the Makefile records per group and
+					# so never had the gap.
+					steps.append(
+					    f"printf '%s\\n' "
+					    f'"$$DESTDIR$${install_var(directory)}/"'
+					    f"{shlex.quote(name)} >> {_nmani}")
 					continue
 				src = (_art_path(source) if origin == "built"
 				       else _eject_src(source))
@@ -19869,6 +19926,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 				             f"{shlex.quote(src)} "
 				             f'"$$DESTDIR$${install_var(directory)}/"'
 				             f"{shlex.quote(name)}")
+				steps.append(
+				    f"{guard}printf '%s\\n' "
+				    f'"$$DESTDIR$${install_var(directory)}/"'
+				    f"{shlex.quote(name)} >> {_nmani}")
 		# Same reason as the Makefile: a clean checkout has no .pc, so
 		# the build has to write one. `$$` for a literal dollar here too,
 		# ninja's escape rather than Make's.
@@ -19944,14 +20005,19 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# defaults -- so uninstall reads the same environment install does.
 		undo = [step for step in steps
 		        if step.startswith((": ", "set -e"))]
-		for directory in INSTALL_LANDINGS:
-			guard = (f'[ "$$INIT" != {INIT_GLUE[directory]} ] || '
-			         if directory in INIT_GLUE else "")
-			for _origin, _source, d, name, _mode in plan:
-				if d == directory:
-					undo.append(f'{guard}rm -f '
-					            f'"$$DESTDIR$${install_var(directory)}/"'
-					            f"{shlex.quote(name)}")
+		# The manifest and nothing else, which is the make rule's reason
+		# and section 348's: a list recomputed at removal time takes what the
+		# tree has stopped declaring and what another package put at a
+		# path this plan names.
+		undo.append(
+		    f'test -f {_nmani} || {{ printf "%s\\n" '
+		    f'"no {_nmani}: this build has no record of an install, and '
+		    f'removing what a rule merely names is how another package\'s '
+		    f'file gets deleted" >&2; exit 1; }}')
+		undo.append(f'while IFS= read -r f; do rm -f "$$f"; done < {_nmani}')
+		# Emptied rather than removed, for the Makefile's reason: it is
+		# what keeps a second uninstall from reading as "no record".
+		undo.append(f'printf "" > {_nmani}')
 		a("")
 		a("rule uninstall")
 		a("  command = " + "; ".join(undo))
@@ -22553,28 +22619,45 @@ def do_uninstall(targets, closures, root, conf, args):
 
     The same rule `clean` follows, for the same reason: a target everybody
     runs without reading must not be able to remove something it did not
-    put there. So there is no manifest and no pattern. The list comes from
-    `install_plan`, which is the same list `--install`, the ejected
-    Makefile and the ejected ninja read -- a fourth caller rather than a
-    fifth idea about what this project publishes.
+    put there.
 
-    That has one consequence worth stating rather than discovering: it
-    removes what the tree says *today*. Rename a target, uninstall, and the
-    old name stays behind, because nothing in the tree names it any more.
-    A manifest would fix that and would be a file recording what a previous
-    run did, which is a different and much larger promise -- and the wrong
-    one to make quietly.
+    **It reads the manifest an install wrote**, and nothing else. The list
+    used to come from `install_plan` against the tree as it is now, which
+    section 348 measured as wrong in both directions: a header dropped from
+    `@headers` stayed installed because nothing named it any more, and a
+    path the plan named was removed although this build had never put it
+    there -- fmake deleting another package's `shared.h` while reporting
+    "5 already gone", which is the sentence saying it had not installed
+    there.
+
+    Recording what a run did is the larger promise that docstring declined
+    to make quietly; the copyright holder asked for it on 2026-10-27,
+    which is what makes it not quiet.
+
+    **No manifest means no removal.** A tree that was never installed
+    from, or whose state directory has been cleaned, has no record -- and
+    the answer there is to refuse and say so, not to fall back on the plan,
+    because the fallback is the hazard. The ejected Makefile and the
+    ejected ninja carry the same rule against their own build directory,
+    so all three callers now agree about what a removal is allowed to be.
 
     Directories are left alone. Removing a directory means removing
     something this list did not name, and `bin` was not ours to begin with.
     """
 	refuse_install_escapes(conf, args)
 	paths = install_paths(conf, args)
-	init = detect_init()
-	planned = [os.path.join(paths[directory], name)
-	           for _origin, _source, directory, name, _mode
-	           in install_plan(targets, closures, root)
-	           if init_places(directory, init)]
+	mpath = os.path.join(root, STATE_DIR, INSTALL_MANIFEST)
+	try:
+		with open(mpath) as fh:
+			planned = [l.rstrip("\n") for l in fh if l.strip()]
+	except FileNotFoundError:
+		die(f"no {STATE_DIR}/{INSTALL_MANIFEST}: this tree has no record "
+		    f"of an install, and removing what a plan merely names is how "
+		    f"another package's file gets deleted.\n"
+		    f"Install again to make a record, or remove by hand.")
+	except OSError as exc:
+		die(f"cannot read {STATE_DIR}/{INSTALL_MANIFEST}: "
+		    f"{exc.strerror or exc}")
 	if not planned:
 		info("nothing to uninstall")
 		return 0
@@ -22599,6 +22682,21 @@ def do_uninstall(targets, closures, root, conf, args):
 		print(f"{GREEN('rm')} {dst}")
 
 	if not args.dry_run:
+		# Emptied, not removed, and the difference is the whole of
+		# whether uninstalling twice is an error. An absent manifest means
+		# "no record of an install" and refuses; an empty one means "this
+		# tree installed and then uninstalled", which is a state fmake
+		# knows and the second run can answer with `nothing to uninstall'.
+		#
+		# Emptying rather than leaving the paths also keeps section 348 shut: a
+		# manifest still naming them would remove whatever is at those
+		# paths next time, which after an uninstall could be another
+		# package's file.
+		try:
+			with open(mpath, "w"):
+				pass
+		except OSError:
+			pass
 		info(f"removed {removed} file(s) from {paths['prefix']}"
 		     + (f", {absent} already gone" if absent else ""))
 	return 0
@@ -22800,6 +22898,26 @@ def do_install(targets, closures, root, outdir, conf, args, proj):
 	# A count at the end is what a `tail' or a `grep "^\*"' can answer,
 	# and it states the population the lines above are drawn from, which
 	# is what section 295 is about from the other side.
+	# What went in, so that `--uninstall' removes this rather than
+	# recomputing a list from a tree that has moved since. Written after
+	# the copies and only on a real install: a dry run has placed nothing
+	# and must not leave a record saying it did.
+	if not args.dry_run:
+		mpath = os.path.join(root, STATE_DIR, INSTALL_MANIFEST)
+		try:
+			os.makedirs(os.path.dirname(mpath), exist_ok=True)
+			tmp = mpath + ".tmp"
+			with open(tmp, "w") as fh:
+				for _src, dst, _mode in planned:
+					fh.write(dst + "\n")
+			os.replace(tmp, mpath)
+		except OSError as exc:
+			# The install itself succeeded, so this is not fatal -- but it
+			# is exactly the record `--uninstall' refuses without, so say
+			# so rather than leaving the next command to discover it.
+			warn(f"installed, but could not write {STATE_DIR}/"
+			     f"{INSTALL_MANIFEST}: {exc.strerror or exc}")
+			note("--uninstall has no record to work from and will refuse")
 	info(f"installed {len(planned)} file(s){where}" if not args.dry_run
 	     else f"{len(planned)} file(s) would be installed{where}")
 	# After the count, not before it: the install is complete and correct,
