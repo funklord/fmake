@@ -42554,9 +42554,27 @@ What this costs later: a hull spec added here that wants the host's
 loopback or a port on the host's network has to say `(network host)`,
 where before it would have worked by accident.
 
-**Their `build/` is older than `55f2beb` and is not rebuilt from here.**
-The note offers a plain `make` in their tree; `harmonization.md` forbids
+### Two follow-ups the same evening, and what could be checked of them
+
+Their `20261027T1848Z`: `ccf44b0` makes `(network nat)` a spec value,
+naming outright what no `(network ...)` key already gives, with `host`,
+`nat` and `none` the values and anything else refused; `b198438` lets a
+chroot machine on `(segments ...)` keep NAT, where it used to need
+`(network none)`.
+
+Re-checked here: still exactly two specs, both `(network none)`, and no
+`(segments ...)` anywhere in `selftest`. So neither reaches this tier.
+
+**What could not be checked, said rather than glossed.** Their `build/`
+is `55f2beb`, which predates both commits, so these two were verified by
+inspecting this tree's own specs against their description and not by
+running anything. The first note's claim was settled by a run because a
+rebuilt binary existed to run; these two are not, and the difference is
+worth keeping in the record rather than letting three notes read alike.
+
+**Their `build/` is not rebuilt from here**, at any point. The first
+note offered a plain `make` in their tree; `harmonization.md` forbids
 editing or building a sibling checkout from outside, and a peer's
-invitation is information rather than authority. Nothing of this tier
-needs it: the three cases that use hull pass against the binary that is
-there.
+invitation is information rather than authority. They rebuilt it
+themselves to `55f2beb`, which is the right division of the work, and
+the three cases were then run against it.
