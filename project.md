@@ -43120,6 +43120,29 @@ instrument pointed elsewhere, not a result about them, and they share
 `find_qt_tool` with `moc`, which did refuse. `ar` was the one measured
 failing, with a fixture that genuinely needed it.
 
+**Measured since, with fixtures that reach all three, and all three
+refuse.** The gap above is closed rather than left named:
+
+- `uic`, with a source including `ui_form.h` so `UIC` genuinely runs:
+  `uic '/nonexistent/uic' (from [toolchain] uic in fmake.toml) not found`.
+- `rcc`, with a `.qrc` and a `Q_INIT_RESOURCE(res)` so `RCC` runs: the
+  same sentence for `rcc`.
+- `situc`, with a `.situ` and a consumer so `SITU` runs. This one has its
+  own handler rather than `find_qt_tool`'s, and it is honest:
+  `could not run situc (/nonexistent/situc): No such file or directory`
+  over `That situc comes from [toolchain] situc in fmake.toml and cannot
+  execute on this machine.`
+
+`situc` differs from the four gated tools in two ways and neither is the
+`ar` defect. It fails after printing `SITU one.situ` rather than before
+any work, and its summary sentence is generic where `nm` says "is not
+executable" in words -- but it prints the errno, so `No such file or
+directory` and `Permission denied` are distinguished where it matters,
+and nothing asserts the opposite of what the errno says. Recorded as
+measured and adequate, so the next reader does not re-open it: what made
+`ar` worth changing was a summary contradicting its own errno, and no
+other member of the family does that.
+
 **The mechanism differs from nm's and the remedy does not.**
 `require_named_tool` was written because an `or` chain of candidates turns
 "this one is broken" into "try the next". `ar`'s chain short-circuits at
