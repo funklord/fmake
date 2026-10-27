@@ -40967,6 +40967,28 @@ records: presence is not exercise.
   0 of 3 in full runs above 90, one pass at 210. Not a badly written
   case; the mechanism is unexplained because reproducing it needs load
   that cannot be summoned. Three answers, none of them mine to take.
+
+  **Still open, and the evidence has changed: 41 of 41.** Measured
+  2026-10-27 over every completed full run in one long session's logs --
+  `an_interrupted_build_takes_its_compilers_with_it` passed in all of
+  them, with no failure, while the machine's load average was repeatedly
+  observed between about 95 and 225. Against the four runs above, that
+  is 42 of 45 rather than 6 of 9.
+
+  **It does not close the entry**, and the reason is this file's own
+  rule: non-reproduction is not evidence against an intermittent fault,
+  it is what intermittent means. What it does retire is the framing --
+  the load the entry calls unsummonable was present for all 41 runs.
+
+  **And there is a candidate nobody should be comfortable with.** The
+  suite's reporting changed in `f990b90` to print each case as it lands
+  rather than collecting every result first, which moves when each case
+  runs relative to the others. A timing-dependent flake is exactly the
+  kind of thing that moves with it. Naming it is not evidence for it:
+  the experiment that would decide is the pre-change suite at this load,
+  and the fault was never reproducible on demand, so a clean run of it
+  would prove nothing either. Recorded so the next reader does not
+  mistake 41 passes for a fix.
 - **hull's stray `nss_hull.pc`.** Suppressing a `.pc` on a `shared`
   target needs a config key, which is not a session's to invent.
   Routed to them as `20261022T2218Z`.
