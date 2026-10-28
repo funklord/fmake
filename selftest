@@ -11233,6 +11233,88 @@ def the_nm_the_advice_names_is_one_that_works(t):
 
 
 @case
+def a_cxx_file_named_c_is_told_so_rather_than_left_to_the_compiler(t):
+	"""Found by building llama.cpp, which vendors C++ in a `.c' file.
+
+	`vendor/hash/sha1/sha1.c' opens `namespace vendor_hash {'. fmake
+	compiles it with the C compiler, from the extension, which is what
+	every build system does -- and the compiler then complains about a
+	keyword rather than about the mismatch, so the reader is left holding
+	`unknown type name 'namespace'' with nowhere to go.
+
+	Keyed on what the compiler SAID, not on scanning the text for C++
+	syntax, which is section 541's crate branch for the same reason:
+	`namespace' in a comment or a string would fire a text heuristic and
+	says nothing about how the file was compiled. Measured on both
+	compilers -- gcc and clang both answer `unknown type name' for
+	`namespace' and `class', gcc quoting curly and clang straight, and
+	gcc's reply to `template' is a generic parse error that is
+	deliberately not matched.
+
+	The remedy was run before being offered: renamed to `.cpp', fmake
+	compiles it as C++ and the program builds and runs. That is asserted
+	here too, because advice nobody has followed is not advice.
+
+	The fixture carries a `main()' so the file is a target root and is
+	therefore compiled. Without one the first version of this case passed
+	by building nothing: section 3 compiles what a program reaches, and a
+	C++ definition nothing references is never handed to a compiler at
+	all -- so the case asserted a failure against a tree that had
+	correctly succeeded."""
+	t.write("sha.c", "namespace vendor_hash {\n"
+	        "static int digest(void){ return 7; }\n}\n"
+	        "int main(void){ return 0; }\n")
+
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode != 0, f"a C++ file compiled as C should fail: {said}")
+	# Not vacuous: the compiler has to have produced the message this note
+	# is keyed on, or the case is asserting against a different failure.
+	check("unknown type name" in said,
+	      f"this compiler does not say `unknown type name' for a C++ "
+	      f"keyword in C, so the note cannot be keyed on it here: {said}")
+	check("sha.c is compiled as C" in said,
+	      f"the mismatch was left to the compiler to express: {said}")
+	check("has no key that overrides it" in said,
+	      f"the note should say there is no language key, so a reader "
+	      f"does not go looking for one: {said}")
+
+	# The remedy, run. `.cpp' and the same contents must build.
+	os.rename(os.path.join(t.dir, "sha.c"), os.path.join(t.dir, "sha.cpp"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	said = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the remedy this note offers does not work: {said}")
+	check("is compiled as C" not in said,
+	      f"the note fired for a file that is now C++: {said}")
+
+	# And the control: a C++ file that fails for its own reasons must not
+	# be told its extension is wrong. Without this, a note that fired on
+	# every failure would pass everything above.
+	u = Tree("cxx-fails-on-its-own")
+	try:
+		u.write("main.cpp", "int main(void){ return nosuch_symbol_xyz; }\n")
+		r = u.fmake()
+		said = r.stdout + r.stderr
+		check(r.returncode != 0, f"that should not compile: {said}")
+		# Absence of the note is not enough, and the first version of this
+		# control proved it: dropping the guard so the note fires for every
+		# failure made `_kw' None while the list was non-empty, so
+		# `_kw.group(1)' raised and the note was absent because fmake had
+		# CRASHED. The control passed on absence-by-traceback, which is the
+		# sabotage it existed to catch walking straight through it.
+		check("Traceback (most recent call last)" not in said,
+		      f"fmake crashed rather than reporting a failed compile, so "
+		      f"the absence of the note below means nothing: {said}")
+		check("compiled as C" not in said,
+		      f"a C++ file failing for its own reasons was told its "
+		      f"extension is wrong: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def the_signal_handler_does_not_block_on_a_lock_it_may_hold(t):
 	"""A Python signal handler runs in the MAIN thread, between bytecodes.
 

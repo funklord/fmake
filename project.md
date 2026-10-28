@@ -592,7 +592,8 @@ that had been green about nothing for five commits ·
 [539. The other store keyed by a signature, which the provider fix missed](#539-the-other-store-keyed-by-a-signature-which-the-provider-fix-missed) ·
 [540. A stamp for a path that has gone, in the six stores the sweep skips](#540-a-stamp-for-a-path-that-has-gone-in-the-six-stores-the-sweep-skips) ·
 [541. The fifth named tool, and an archive that failed as a link](#541-the-fifth-named-tool-and-an-archive-that-failed-as-a-link) ·
-[542. A signal handler blocking on a lock the thread it runs in may hold](#542-a-signal-handler-blocking-on-a-lock-the-thread-it-runs-in-may-hold)
+[542. A signal handler blocking on a lock the thread it runs in may hold](#542-a-signal-handler-blocking-on-a-lock-the-thread-it-runs-in-may-hold) ·
+[543. A C++ file named `.c`, and what two third-party trees said about fmake](#543-a-c-file-named-c-and-what-two-third-party-trees-said-about-fmake)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43380,3 +43381,116 @@ returncode, stderr)` rather than recording anything. The single piece of
 genuinely shared mutable state is `_RUNNING`, and it is locked at all
 three of its sites. The defect above was the one thing that lens found,
 and it was in the locking rather than in the absence of it.
+
+## 543. A C++ file named `.c`, and what two third-party trees said about fmake
+
+The directive in `build-and-commit.md` is that a tree trying to build with
+fmake is how fmake's gaps surface. Two were tried, from copies in a
+scratchpad -- never in place, since fmake writes `.fmake/` into the tree
+it builds.
+
+### mstflint 4.22: no finding, and it got further than expected
+
+196 sources, autotools, zero annotation. fmake planned 157 compiles,
+inferred the include path -- including `/usr/include/libxml2` and
+`/usr/include/python3.13` -- reported four target-versus-directory name
+collisions each with a remedy, and spotted three test programs. 112 of
+157 compiled.
+
+Every one of the 45 failures is the tree's own build system rather than
+fmake: `MSTFLINT_VERSION_STR` and `FLINT_DISPLAY_NAME` come from
+configure, `tools_layouts/*.h` and `cmdif/cib_cif.h` are generated from
+ADB XML at build time, `infiniband/mad.h` wants a dev package that is not
+installed here, and `libmfa/test.c` calls `free` with no `<stdlib.h>`,
+which modern gcc makes an error. A tree needing configure and a code
+generator before any compiler can run is outside "builds from an
+unannotated tree", and that is a fair boundary rather than a gap.
+
+Its diagnosis was right where it counted: *"what is undefined is defined
+in this tree, by a file that did not compile, and no library has it"* --
+not a blind offer of `--ldflags`, which is section 541's lesson already
+working on a tree it was not written for.
+
+**One self-correction, which is the transferable part.** The first reading
+blamed fmake for `mtcr.h: No such file or directory` -- having compiled
+the file by hand with a NARROWER include path than fmake uses. `mtcr.h`
+is at `include/mtcr_ul/mtcr.h` and fmake's own list carries
+`-Iinclude/mtcr_ul`. **Reproducing a failure with different flags is not
+reproducing it**, and the mistake is attractive because the hand-rolled
+command is so much easier to read than the real one.
+
+### llama.cpp: one paste, fifty targets, and the finding
+
+545 sources, CMake, zero annotation. fmake refused up front and
+correctly: two files would both be called `deprecation-warning`, and it
+named both and printed a `[target.NEW_NAME]` stanza to paste. Pasted
+verbatim, it was accepted -- so **the printed remedy works on a
+545-source tree**, which is what the register's reused-class-names entry
+defends when it says one paste per tree, once.
+
+With that one stanza, fmake explained **50 targets**. 76 of 545 files
+failed: the SYCL backend headers (oneAPI not installed),
+`LLAMA_BUILD_NUMBER` from CMake's build-info, `models/models.h` because
+the copy excluded `models/`, and one that was none of those.
+
+**`vendor/hash/sha1/sha1.c` opens `namespace vendor_hash {`.** It is C++
+in a file named `.c`, vendored. fmake compiled it with `cc`, from the
+extension, which is what every build system does -- and the reader is
+then handed
+
+    unknown type name 'namespace'
+
+with nothing saying the extension is the problem. fmake said nothing
+about the mismatch, and there is no key to override a file's language:
+`std` sets the standard, not the language.
+
+So it says it now:
+
+    * unknown type name 'namespace'
+      in r.c
+      r.c is compiled as C, from its extension, and namespace is C++.
+      Give it a C++ extension: fmake reads the language off the name and
+      has no key that overrides it
+
+**Keyed on what the compiler said, not on a scan for C++ syntax**, which
+is section 541's crate branch for the same reason: `namespace` in a
+comment or a string would fire a text heuristic and says nothing about
+how the file was compiled. Measured on both -- gcc and clang both answer
+`unknown type name` for `namespace` and `class`, gcc quoting curly and
+clang straight, so the pattern accepts either; gcc's reply to `template`
+is a generic parse error and is deliberately not matched, since guessing
+a language mismatch from `expected = , ; or __attribute__` is the
+heuristic this avoids.
+
+**And the remedy was run before being offered.** Renamed to `.cpp`, fmake
+compiles it as C++ and the program builds and runs. The case asserts that
+too, because advice nobody has followed is not advice.
+
+### Three times the fixture or the control was the thing at fault
+
+Worth more than the diagnostic, which is four lines.
+
+- **The first fixture passed by building nothing.** A C++ definition in a
+  `.c` file that nothing references is never handed to a compiler at all
+  -- section 3 compiles what a program reaches -- so the case asserted a
+  failure against a tree that had correctly succeeded. The fixture
+  carries a `main()` now, which makes the file a target root.
+- **The first note asked `first_unit`**, whichever group member sorted
+  first, where a group is keyed by the message. Corrected to ask the
+  whole group, and then the comment claiming it was "caught before it
+  shipped" was itself corrected: a C++ compiler does not emit `unknown
+  type name namespace`, so for this message every member is compiled as C
+  and the first one would have done. It is belt and braces and now says
+  so.
+- **The control passed on absence-by-traceback.** Sabotaging the guard so
+  the note fires for every failure left `_kw` as `None` with a non-empty
+  list, so `_kw.group(1)` raised -- and the control, which only checked
+  that the note was *absent*, was satisfied by fmake having crashed. The
+  sabotage walked straight through the control written to catch it. The
+  control asserts no traceback now, and the sabotage fails naming the
+  `AttributeError`.
+
+The shape, which is section 539's from the other end: **a check that
+tests for the absence of a string passes when the program dies before
+reaching the code that would print it.** Assert the clean failure too, or
+the absence means nothing.
