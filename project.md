@@ -593,7 +593,8 @@ that had been green about nothing for five commits ·
 [540. A stamp for a path that has gone, in the six stores the sweep skips](#540-a-stamp-for-a-path-that-has-gone-in-the-six-stores-the-sweep-skips) ·
 [541. The fifth named tool, and an archive that failed as a link](#541-the-fifth-named-tool-and-an-archive-that-failed-as-a-link) ·
 [542. A signal handler blocking on a lock the thread it runs in may hold](#542-a-signal-handler-blocking-on-a-lock-the-thread-it-runs-in-may-hold) ·
-[543. A C++ file named `.c`, and what two third-party trees said about fmake](#543-a-c-file-named-c-and-what-two-third-party-trees-said-about-fmake)
+[543. A C++ file named `.c`, and what two third-party trees said about fmake](#543-a-c-file-named-c-and-what-two-third-party-trees-said-about-fmake) ·
+[544. roc-toolkit: a define whose value varies by directory](#544-roc-toolkit-a-define-whose-value-varies-by-directory)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43494,3 +43495,80 @@ The shape, which is section 539's from the other end: **a check that
 tests for the absence of a string passes when the program dies before
 reaching the code that would print it.** Assert the clean failure too, or
 the absence means nothing.
+
+## 544. roc-toolkit: a define whose value varies by directory
+
+The third tree of section 543's exercise, and the first whose blocker is
+an expressiveness gap rather than a diagnostic one. 169 sources, SCons,
+zero annotation.
+
+### Two things fmake did well, measured
+
+**The submodule refusal.** The copy carried `.gitmodules` and no `.git`,
+which is what an unpacked archive looks like, and fmake said exactly
+that:
+
+    !!! this tree declares 1 submodule(s) in .gitmodules and is not a git
+        checkout, so they cannot be fetched:
+        vendor (not initialised)
+    An unpacked archive is the usual way to be here: `git archive' carries
+    .gitmodules and none of the contents.
+    Clone the repository, or build with --no-submodules and accept that
+    what they contain will be missing.
+
+Named, explained, two remedies, and it refused rather than quietly
+building less -- which is the half of `makefile-hazards`' submodule rule
+that usually gets dropped.
+
+**The include-path remedy, printed and then run.** roc keeps headers in a
+sibling directory and includes them by a path relative to it:
+`roc_packet/address.h` is at
+`src/modules/roc_packet/target_posix/roc_packet/address.h`. fmake had
+added eleven of the twelve `target_*` directories -- the ones holding
+sources -- and not that one, which holds only headers. It then said:
+
+    roc_packet/address.h is on no include path here
+    it is in this tree, at src/modules/roc_packet/target_posix/roc_packet/address.h
+    [project] include-dirs = ['src/modules/roc_packet/target_posix'] would find it
+
+Pasted verbatim, the error is gone.
+
+**And the count did not move, which is not the same as nothing changing.**
+49 of 58 files failed before the paste and 49 after, because the two
+files the header had blocked now get past it and hit the other failure --
+the `#error` group grew from "42 other file(s)" to "44". Checked by
+asking whether the header error was still there (it is not) rather than
+by reading the total, which would have said the remedy did nothing.
+
+### The blocker, and it is fmake's to decide rather than mine
+
+Every one of the remaining failures is one line:
+
+    #error "ROC_MODULE not defined"   in src/lib/src/context.cpp and 44 other file(s)
+
+roc compiles each module directory with its own `-DROC_MODULE=<name>` --
+`roc_core` for the files under `roc_core/`, `roc_packet` under
+`roc_packet/`, and so on. **fmake has `defines` at two scopes and neither
+can say that**: `[project] defines` is tree-wide, so it can carry one
+value, and `[target.*] defines` is per target, which does not help
+because one target spans many module directories. `roc_conv` links files
+from most of them, each wanting a different value.
+
+So the tree cannot be built without an annotation on each of 169 files,
+and the limit is exactly: **a define whose value varies by directory
+within a single target.**
+
+**The option, its cost, and whose decision it is**, because describing a
+mechanism accurately is a way of proposing it and this one is not mine to
+propose. The option would be a directory- or glob-scoped define -- some
+`[sources."src/modules/roc_core/**"] defines = [...]` shape. The cost is
+that it is a new scope in the config interface, and fmake currently has
+exactly two, which is part of why a reader can hold the whole model: a
+fact is tree-wide or it belongs to a target. A third scope keyed on paths
+also reintroduces by the back door the thing `@`-annotations exist to
+avoid, a build file listing paths that goes stale when a file moves.
+**Whether that trade is worth one real tree is the copyright holder's
+call**, and it is recorded here rather than acted on.
+
+What is not in doubt is the measurement: this is a real project, the
+requirement is one macro, and the answer today is 169 annotations.
