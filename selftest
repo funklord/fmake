@@ -11233,6 +11233,74 @@ def the_nm_the_advice_names_is_one_that_works(t):
 
 
 @case
+def the_signal_handler_does_not_block_on_a_lock_it_may_hold(t):
+	"""A Python signal handler runs in the MAIN thread, between bytecodes.
+
+	`stop_children' is registered for SIGINT and SIGTERM and its first act
+	was `with _RUNNING_LOCK'. The main thread is itself a caller of
+	`run_child' -- measured, for the link step, by printing
+	`threading.current_thread().name' from inside that function -- so a
+	signal landing inside `run_child's own locked block reaches the
+	handler with the lock already held BY THAT THREAD, and
+	`threading.Lock' is not reentrant.
+
+	Demonstrated with the window widened in a copy of fmake to make a
+	microsecond race observable: SIGINT during the main thread's locked
+	block left fmake alive six seconds later with the handler stuck, and
+	0.2 seconds with the non-blocking acquire in place. That is precisely
+	the orphaned-compiler outcome this handler exists to prevent, and the
+	comment on `_RUNNING' says what it costs -- two writers on one object
+	path, gcc writing its object in place rather than by rename.
+
+	Asserted deterministically rather than by racing. The window in the
+	shipped code is one set operation, so a case that tried to hit it
+	would be a coin flip; this holds the lock on purpose and sends the
+	signal, which is the same state the race reaches by luck. In a
+	subprocess, because the handler ends by restoring SIG_DFL and
+	re-raising, which in-process would kill the suite.
+	"""
+	probe = t.write("probe.py",
+	                "import importlib.machinery, importlib.util\n"
+	                "import os, signal, sys, threading\n"
+	                "loader = importlib.machinery.SourceFileLoader(\n"
+	                "    'fm_sig', %r)\n"
+	                "spec = importlib.util.spec_from_loader('fm_sig', loader)\n"
+	                "mod = importlib.util.module_from_spec(spec)\n"
+	                "sys.modules['fm_sig'] = mod\n"
+	                "loader.exec_module(mod)\n"
+	                # A watchdog that cannot be mistaken for anything else,
+	                # and os._exit so no exception can be swallowed by the
+	                # frame the handler is stuck in.
+	                "signal.signal(signal.SIGALRM, lambda s, f: os._exit(99))\n"
+	                "signal.alarm(3)\n"
+	                "signal.signal(signal.SIGUSR1, mod.stop_children)\n"
+	                # Exactly the state run_child is in when it registers
+	                # a child it has just started.
+	                "with mod._RUNNING_LOCK:\n"
+	                "    os.kill(os.getpid(), signal.SIGUSR1)\n"
+	                # Unreachable if the handler completed: it restores
+	                # SIG_DFL and re-raises. Reaching it means the signal
+	                # was lost, which this case must not read as a pass.
+	                "    os._exit(98)\n"
+	                "os._exit(97)\n" % (FMAKE,))
+	r = subprocess.run([sys.executable, probe], capture_output=True,
+	                   text=True, timeout=60)
+	check(r.returncode != 99,
+	      f"the handler never completed: it blocked on a lock the thread "
+	      f"it runs in already held, which is a deadlock on SIGINT with "
+	      f"compilers still running. stderr: {r.stderr[-400:]}")
+	check(r.returncode not in (98, 97),
+	      f"the signal never reached the handler, so this case measured "
+	      f"nothing (exit {r.returncode}): {r.stderr[-300:]}")
+	# Death by the signal it was sent, which is the handler's own promise:
+	# die of the same signal, so the status is the signal's rather than one
+	# this code invented.
+	check(r.returncode == -signal.SIGUSR1,
+	      f"expected death by SIGUSR1 once the handler ran, got "
+	      f"{r.returncode}: {r.stderr[-300:]}")
+
+
+@case
 def a_named_ar_is_refused_and_an_archive_does_not_fail_as_a_link(t):
 	"""The fifth named tool, and the one without a gate.
 

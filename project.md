@@ -591,7 +591,8 @@ that had been green about nothing for five commits ·
 [538. The install comparison could not tell a symlink from a copy](#538-the-install-comparison-could-not-tell-a-symlink-from-a-copy) ·
 [539. The other store keyed by a signature, which the provider fix missed](#539-the-other-store-keyed-by-a-signature-which-the-provider-fix-missed) ·
 [540. A stamp for a path that has gone, in the six stores the sweep skips](#540-a-stamp-for-a-path-that-has-gone-in-the-six-stores-the-sweep-skips) ·
-[541. The fifth named tool, and an archive that failed as a link](#541-the-fifth-named-tool-and-an-archive-that-failed-as-a-link)
+[541. The fifth named tool, and an archive that failed as a link](#541-the-fifth-named-tool-and-an-archive-that-failed-as-a-link) ·
+[542. A signal handler blocking on a lock the thread it runs in may hold](#542-a-signal-handler-blocking-on-a-lock-the-thread-it-runs-in-may-hold)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43223,3 +43224,121 @@ wrong, and the next move it invites is to rewrite a fix that was correct.
 
 Keyed by `t.filename` now, with the reason written at the line, because
 `t.name` is what anybody would key it on.
+
+## 542. A signal handler blocking on a lock the thread it runs in may hold
+
+`stop_children` is registered for SIGINT and SIGTERM, and it exists for a
+cost the code states: an orphaned compiler "writing `foo.c.o' while the
+next run compiles the same file to the same path is two writers on one
+output, and gcc writes its object in place rather than by rename." Its
+first act was `with _RUNNING_LOCK`.
+
+**A Python signal handler runs in the main thread, between bytecodes.**
+The main thread is itself a caller of `run_child` -- not a reading of the
+call graph but a measurement, by printing
+`threading.current_thread().name` from inside that function on a two-file
+build:
+
+    run_child on MainThread              for cc     (the link)
+    run_child on ThreadPoolExecutor-0_0  for cc
+    run_child on ThreadPoolExecutor-2_0  for cc
+
+So a signal landing inside `run_child`'s own `with _RUNNING_LOCK` block
+reaches the handler with that lock **already held by that very thread**,
+and `threading.Lock` is not reentrant. It blocks on itself for ever, and
+the failure is exactly the one the handler was written to prevent:
+interrupt hangs, compilers keep running.
+
+### Three measurements, because the Python semantics are not the thing in doubt
+
+The semantics were demonstrated on their own first -- a lock held in the
+main thread, a signal sent, a handler that takes the same lock, a SIGALRM
+watchdog: *"TIMEOUT: handler never completed -- deadlocked"*. That settles
+what Python does and says nothing about fmake.
+
+What was in doubt is whether fmake can be in that state, so the window
+was widened in a **copy** of the file -- 0.6s of sleep inside the locked
+block, main thread only -- to make a microsecond race observable, and the
+same race script run against both versions:
+
+    before    SIGINT sent while main thread held the lock
+              STILL ALIVE 6s after SIGINT -- the handler is stuck
+
+    after     SIGINT sent while main thread held the lock
+              exited after ~0.2s -- handler completed
+
+Same instrumentation, same script, same tree, the fix the only variable.
+The real file was never edited for the probe, and the probe left no
+orphan.
+
+### The fix, and why the fallback is deliberate
+
+A non-blocking acquire, with the snapshot taken either way:
+
+    _held = _RUNNING_LOCK.acquire(blocking=False)
+    try:
+            procs = list(_RUNNING)
+    finally:
+            if _held:
+                    _RUNNING_LOCK.release()
+
+Snapshotting without the lock is safe here rather than merely tolerable:
+`list()` of a set is one C-level operation that does not yield, so it
+cannot observe a half-made mutation. And this handler's contract is
+best-effort by nature -- it is killing children before dying of the same
+signal, and a child missed is a child that was being added at that
+instant.
+
+### The case is deterministic, because the real window is a coin flip
+
+The shipped window is one set operation, so a case that raced for it
+would pass or fail on timing. The case instead puts the process into the
+state the race reaches by luck: it loads fmake in process with the
+suite's own `fmake_in_process` loader, registers `stop_children` for
+SIGUSR1, holds `_RUNNING_LOCK`, and sends itself the signal, under a
+SIGALRM watchdog that `os._exit(99)`s.
+
+In a subprocess, because the handler ends by restoring `SIG_DFL` and
+re-raising -- which in the suite's own process would kill the run.
+
+Three outcomes, each distinguished rather than collapsed into "did it
+work": 99 is the watchdog, so the handler deadlocked; 98 or 97 means the
+signal never reached the handler, so the case measured nothing; and
+`-SIGUSR1` is the handler completing and the process dying of the signal
+it was sent, which is what the handler promises. Sabotaged by restoring
+the blocking acquire: the case fails on the 99 branch, naming the
+deadlock.
+
+### What the sweep that found it returned otherwise, including a dead instrument
+
+This came out of pointing the skill's own bug-hunting order at the tree
+rather than from a derived lens, and the first two strategies are worth
+recording because one of them lied.
+
+**Static analysis.** `mypy` is the only analyser installed. Run plainly it
+reported 13 errors over 23k lines, which reads as a clean bill of health
+and is not one: **mypy does not check the bodies of unannotated
+functions**, and nothing here is annotated, so every one of those 13 was
+a module-level statement. Caught by a positive control -- three
+deliberate faults appended to a copy, none of which it reported. With
+`--check-untyped-defs` the control fails correctly and the real file
+yields 179, of which 80 are annotation noise; of the remaining 99, **54
+are inside `build()` alone** and 9 more in the two eject functions, which
+is inference losing track of a name reused across 5000 lines rather than
+a defect.
+
+Eleven were checked by hand, in the three codes that produce runtime
+`AttributeError`, and all eleven were false positives -- among them
+`RE_LICENSE_FILE.match(name).group(2)` with no guard in sight, which is
+safe because `files` is built by filtering on that same pattern a hundred
+lines earlier, and `fcntl.flock` on a possibly-absent module, which is
+guarded by an early `return self`. So: bucket by enclosing function size
+before reading anything, and expect the yield to be low.
+
+**Concurrency.** Three `ThreadPoolExecutor` pools, which is all of them.
+Every one uses `pool.map` with the results consumed in the caller, and
+the workers write only per-call locals -- `run_one` returns `(unit,
+returncode, stderr)` rather than recording anything. The single piece of
+genuinely shared mutable state is `_RUNNING`, and it is locked at all
+three of its sites. The defect above was the one thing that lens found,
+and it was in the locking rather than in the absence of it.

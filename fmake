@@ -2559,8 +2559,32 @@ def stop_children(signum, _frame):
     The handler is restored to the default before re-raising, so the exit
     status is the signal's own and nothing here has to invent one.
     """
-	with _RUNNING_LOCK:
+	# NOT a blocking acquire, and that is the whole point. A Python signal
+	# handler runs IN THE MAIN THREAD, between bytecodes -- and the main
+	# thread is itself a caller of `run_child', for the link, moc, uic,
+	# rcc, situc and a `[generate]' rule. So a signal landing inside
+	# `run_child's own `with _RUNNING_LOCK' block reaches this line with
+	# that lock already held by this very thread, and `threading.Lock' is
+	# not reentrant: it blocks on itself for ever.
+	#
+	# Measured, with the window widened in a copy of this file to make a
+	# microsecond race observable: SIGINT during the main thread's locked
+	# block left fmake alive six seconds later with the handler stuck,
+	# which is precisely the orphaned-compiler outcome this handler exists
+	# to prevent -- and the comment on `_RUNNING' says what that costs,
+	# two writers on one object path.
+	#
+	# Snapshotting without the lock is safe here and the fallback is
+	# deliberate rather than sloppy: `list()' of a set is one C-level
+	# operation that does not yield, so it cannot observe a half-made
+	# mutation, and this handler's contract is best-effort anyway -- it is
+	# killing children before dying of the same signal.
+	_held = _RUNNING_LOCK.acquire(blocking=False)
+	try:
 		procs = list(_RUNNING)
+	finally:
+		if _held:
+			_RUNNING_LOCK.release()
 	for proc in procs:
 		try:
 			proc.terminate()
