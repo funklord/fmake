@@ -41962,9 +41962,31 @@ because fmake adds no `-rpath` and is not being asked to -- a private
 `.so` is found at link time and not at run time, which cost one wrong
 assertion to learn.
 
-**Still open and not part of this**: `lib-dirs` has no entry in the
-README's key tables, appearing only in a sentence about an Android kit.
-Documenting it belongs with whatever pass next touches those tables.
+**~~Still open and not part of this~~: closed, and the premise was
+wrong.** The note said `lib-dirs` "has no entry in the README's key
+tables" and should be documented by whatever pass next touched them.
+There are no such tables to be missing from: the README documents
+`[toolchain]` with an illustrative example block -- `cc`, `arch`,
+`pkg-config-path` -- and covers the rest in prose, which is a choice
+rather than an omission. The exhaustive statement lives somewhere better.
+
+**The refusal is the reference, and it is generated rather than
+maintained.** An unknown key is refused with `expected one of:` followed
+by `", ".join(sorted(spec))` -- the schema dict the acceptance check
+itself reads. So the published list cannot drift from the accepted one,
+which is the exact opposite of the problem section 462 records for
+`INSTALL_DIRS`, where two separate statements had to be kept in step and
+three rows went missing one at a time.
+
+Measured across every table rather than argued: 13 tables, 149 leaf keys,
+and **every key named in its own table's refusal**, `lib-dirs` among them.
+Controlled, because thirteen zeros is otherwise a claim about the
+harness -- with `sorted(spec)[:-3]` in a copy the same check reports
+exactly three missing per table, naming them.
+
+So `lib-dirs` is discoverable the way every other key is, and the thing
+to keep is the shape: where a list must agree with a schema, generate it
+from the schema and there is nothing left to check.
 
 ## 525. A non-ASCII identifier was invisible to the scan
 
