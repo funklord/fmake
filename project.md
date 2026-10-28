@@ -594,7 +594,8 @@ that had been green about nothing for five commits ·
 [541. The fifth named tool, and an archive that failed as a link](#541-the-fifth-named-tool-and-an-archive-that-failed-as-a-link) ·
 [542. A signal handler blocking on a lock the thread it runs in may hold](#542-a-signal-handler-blocking-on-a-lock-the-thread-it-runs-in-may-hold) ·
 [543. A C++ file named `.c`, and what two third-party trees said about fmake](#543-a-c-file-named-c-and-what-two-third-party-trees-said-about-fmake) ·
-[544. roc-toolkit: a define whose value varies by directory](#544-roc-toolkit-a-define-whose-value-varies-by-directory)
+[544. roc-toolkit: a define whose value varies by directory](#544-roc-toolkit-a-define-whose-value-varies-by-directory) ·
+[545. The ejected Makefile against 545 real sources, and a strip by character](#545-the-ejected-makefile-against-545-real-sources-and-a-strip-by-character)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43572,3 +43573,128 @@ call**, and it is recorded here rather than acted on.
 
 What is not in doubt is the measurement: this is a real project, the
 requirement is one macro, and the answer today is 169 annotations.
+
+## 545. The ejected Makefile against 545 real sources, and a strip by character
+
+Every `--eject` case in the suite uses a small fixture. Section 12 says a
+project that leaves takes the build file with it, which is the exit this
+whole tool is for, and nothing had asked a real tree. llama.cpp was
+ejected and built, from a copy.
+
+### The exit holds, measured
+
+`--eject make` on 545 sources with one `fmake.toml` stanza exits 0 and
+writes a 269,568-byte Makefile: 108 rules, an `all:` naming the binaries,
+and its progress on stderr so stdout is a clean build file.
+
+**The ejected build produces the identical set of artifacts.** A fresh
+copy of the tree with that Makefile and no `.fmake` -- so it cannot pass
+by finding what fmake left -- built exactly
+
+    deprecation-warning  embed  mtmd_deprecation_warning  vulkan-shaders-gen
+
+which is what fmake built, name for name.
+
+**And the first comparison said 4 against 0, which was the measurement
+and not the tool.** `make` halts on the first error and llama.cpp does
+not fully build here -- `GGML_VERSION` comes from CMake's generated
+version header, the same configure-time class mstflint hit in section 543
+-- so make stopped at the `llama` link and never reached the four. With
+`make -k` the sets are identical. Comparing a tool that continues against
+a tool that halts needs `-k`, and without it the honest-looking answer is
+that the eject produces nothing.
+
+**Portability, on a real tree rather than a fixture**: the Makefile
+contains **zero** absolute paths into the tree it was ejected from, and
+none at all except system ones. That is the property that makes ejecting
+mean anything.
+
+### `makefile-hazards` against a real 269 KB file
+
+The skill says its rules apply to an ejected Makefile. All four hold:
+
+- **212 object rules, 212 `OBJS` entries, and zero rules outside the
+  `-include $(OBJS:.o=.d)` list.** That is the hazard whose symptom is a
+  stale object nobody rebuilds.
+- **No bare `.SECONDARY:`** -- and none at all, which is right rather
+  than missing: `TEST_OBJS` is absent too, so there are no test objects
+  to protect from being deleted as intermediates.
+- **No bare `$^` in any recipe**, so no header can reach a command line.
+- **`clean` is `rm -f $(CLEAN)`** over an explicit list of object paths
+  with zero wildcard characters in it -- named targets only, which is
+  what `build-and-commit.md` asks of a clean target.
+
+### The finding: an include name taken off at a character offset
+
+`include_root_for` answers "the `-I` that makes this include text find
+this file", and it did so with
+
+    resolved[: -len(inc_name)] if resolved.endswith(inc_name) else ...
+
+`endswith` is a **string** test, so the cut can fall inside a path
+component. Instrumented in a copy, the whole tree produced exactly one
+such pair:
+
+    left='ggml/src/ggml-'
+    resolved='ggml/src/ggml-sycl/backend.hpp'
+    inc_name='sycl/backend.hpp'
+
+`#include <sycl/backend.hpp>` is oneAPI's header. The basename fallback
+-- a documented guess -- resolved it to the tree's file, whose path ends
+with that text, and sixteen characters came off the end. The result
+reached **143 compile commands and the ejected Makefile**: a build file
+naming a directory nobody can find.
+
+The cut has to fall on a boundary now, and the function's own `else`
+branch -- the containing directory -- takes it from there. On the real
+tree the flag went from 143 occurrences to 0.
+
+**The documented behaviours are asserted beside the fix**, because a
+boundary check bought by breaking the generalisation would be worse than
+the bug: a path-carrying include still strips to the root above it
+(`src/model/profile.h` + `model/profile.h` is `src`), a bare name still
+gives the containing directory, and a name that is the whole path still
+gives `.`.
+
+**A unit case, because neither tree would serve.** llama.cpp cannot be a
+fixture, and three contrived small trees failed to reproduce it -- the
+resolution came through the basename fallback, which declined in every
+one of them. `include_root_for` is module-level precisely so the resolver
+and the diagnostic share one answer, so the case asks it directly.
+
+### A consequence reasoned, then disproved
+
+The bogus root reaches `_INCLUDE_ROOTS`, which decides **where a
+published header lands on install** -- and that code takes the SHORTEST
+matching prefix, so `ggml/src/ggml-` would displace the correct
+`ggml/src/ggml-sycl` and land the header at `$INCLUDEDIR/sycl/...`.
+
+It does not, and the guard is one character: the landing is computed
+against `d.rstrip("/") + "/"`, so the candidate is `ggml/src/ggml-/`,
+which `ggml/src/ggml-sycl/backend.hpp` does not start with. Checked
+rather than claimed, and recorded because the reasoning was good and the
+answer was no.
+
+### Three detectors lied to me in one run, all the same family
+
+Each produced a confident negative about the code that was a fact about
+the query.
+
+- **Grepping make's output for fmake's format.** `grep -cE 'CXX |CC |LD '`
+  over a `make` log reported **0 steps** while 79 objects sat on disk and
+  five compilers were running: make echoes raw command lines, fmake
+  prints tagged progress.
+- **`grep ... | head -4 || echo "none"`.** The `||` binds to `head`,
+  which succeeds on empty input, so the fallback never fires -- and "no
+  matches" became indistinguishable from "the target is not there". Two
+  of the four `makefile-hazards` checks printed nothing at all and I
+  could not tell which.
+- **Two regexes for one question disagreeing** -- a count of 2 and a
+  context listing of 0 for the same string -- until the question was
+  asked with `grep -F` on the literal text.
+
+The shape is `evidence.md`'s and it kept arriving from the same
+direction: **a negative result is about the instrument until the
+instrument has been shown to fire.** The one measurement in this run
+that settled anything -- the probe that named the offending pair -- was
+the one that printed what it found rather than counting what it matched.

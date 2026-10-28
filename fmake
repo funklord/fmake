@@ -3812,8 +3812,26 @@ def include_root_for(resolved, inc_name):
     `math.h` lands here -- the advice named the containing directory, and
     following it exactly did not fix the build.
     """
-	left = (resolved[: -len(inc_name)].rstrip("/")
-	        if resolved.endswith(inc_name) else os.path.dirname(resolved))
+	# `endswith' is a STRING test and the cut has to fall on a path
+	# component. Measured on llama.cpp: `#include <sycl/backend.hpp>' --
+	# oneAPI's header -- was resolved by the basename fallback to the
+	# tree's `ggml/src/ggml-sycl/backend.hpp', which ends with that text,
+	# so taking sixteen characters off the end left `ggml/src/ggml-'. That
+	# is not a directory and cannot be one, and it reached 143 compile
+	# commands and the ejected Makefile.
+	#
+	# Harmless to a compiler, which ignores a missing -I, and checked to
+	# be inert on the install side too rather than assumed: the landing
+	# path is computed against `d.rstrip("/") + "/"', so `ggml/src/ggml-/'
+	# never matches `ggml/src/ggml-sycl/...' and the bogus root cannot
+	# displace the real one. What is left is a build file that names a
+	# directory nobody can find, which is the sort of thing a reader stops
+	# trusting the rest of for.
+	cut = len(resolved) - len(inc_name)
+	on_boundary = (resolved.endswith(inc_name)
+	               and (cut == 0 or resolved[cut - 1] == "/"))
+	left = (resolved[:cut].rstrip("/") if on_boundary
+	        else os.path.dirname(resolved))
 	return left or "."
 
 

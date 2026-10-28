@@ -11233,6 +11233,63 @@ def the_nm_the_advice_names_is_one_that_works(t):
 
 
 @case
+def an_include_name_is_taken_off_at_a_path_boundary(t):
+	"""`include_root_for' stripped by character count, not by component.
+
+	Found by ejecting llama.cpp. `#include <sycl/backend.hpp>' is
+	oneAPI's header; the basename fallback resolved it to the tree's
+	`ggml/src/ggml-sycl/backend.hpp', which ENDS WITH that text as a
+	string, so taking sixteen characters off the end left
+	`ggml/src/ggml-'. That is not a directory and cannot be one, and it
+	reached 143 compile commands and the ejected Makefile -- a build file
+	naming a directory nobody can find.
+
+	Harmless to a compiler, which ignores a missing `-I'. Checked to be
+	inert on the install side too rather than assumed: a header's landing
+	is computed against `d.rstrip("/") + "/"', so `ggml/src/ggml-/' never
+	matches `ggml/src/ggml-sycl/...' and the bogus root cannot displace
+	the real one -- which it otherwise would, that code taking the
+	SHORTEST matching prefix.
+
+	A unit case, because the tree that found it cannot be a fixture and a
+	contrived one did not reproduce: the resolution came through the
+	basename fallback, which declined in every small tree built for it.
+	`include_root_for' is module-level exactly so the diagnostic and the
+	resolver share one answer, so it can be asked directly.
+
+	The three documented behaviours are asserted beside the two fixed
+	ones, so the fix cannot have bought a boundary check by breaking the
+	generalisation the docstring describes."""
+	fm = fmake_in_process()
+
+	# The two the string test got wrong: the cut falls inside a component.
+	for resolved, inc, want in (
+	        ("ggml/src/ggml-sycl/backend.hpp", "sycl/backend.hpp",
+	         "ggml/src/ggml-sycl"),
+	        ("a/b-c/d.h", "c/d.h", "a/b-c")):
+		got = fm.include_root_for(resolved, inc)
+		check(got == want,
+		      f"include_root_for({resolved!r}, {inc!r}) gave {got!r}, "
+		      f"wanted {want!r}: the include name was taken off at a "
+		      f"character offset rather than at a path component, so the "
+		      f"result is a directory that cannot exist")
+
+	# And the behaviours the docstring describes, which must not move: a
+	# path-carrying include strips to the root above it, a bare name gives
+	# the containing directory, and a name that is the whole path gives
+	# the tree root.
+	for resolved, inc, want in (
+	        ("src/model/profile.h", "model/profile.h", "src"),
+	        ("src/model/profile.h", "profile.h", "src/model"),
+	        ("model/profile.h", "model/profile.h", ".")):
+		got = fm.include_root_for(resolved, inc)
+		check(got == want,
+		      f"include_root_for({resolved!r}, {inc!r}) gave {got!r}, "
+		      f"wanted {want!r} -- this is the documented behaviour and "
+		      f"the boundary check must not have cost it")
+
+
+@case
 def a_cxx_file_named_c_is_told_so_rather_than_left_to_the_compiler(t):
 	"""Found by building llama.cpp, which vendors C++ in a `.c' file.
 
