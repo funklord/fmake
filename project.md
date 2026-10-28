@@ -43335,6 +43335,22 @@ lines earlier, and `fcntl.flock` on a possibly-absent module, which is
 guarded by an early `return self`. So: bucket by enclosing function size
 before reading anything, and expect the yield to be low.
 
+**Malformed input.** 30 structurally broken `fmake.toml` and `fmake.mk`
+files -- empty, NUL bytes, binary, 200-deep nesting, a 5000-character key,
+unterminated strings and tables, wrong types, a duplicate table, a BOM,
+CR-only line endings, a 20,000-character list element, a Unicode key, an
+orphan recipe line, a rule with no target, a self-recursive rule.
+**No traceback and no hang**, which is the contract: fmake's whole posture
+is to say what is wrong, and a traceback is not saying it.
+
+Controlled both ways, because 30 clean runs is otherwise a claim about the
+harness. The inputs do reach the parser and are diagnosed where they
+should be -- `fmake.toml: Expected ']' at the end of a table declaration
+(at line 1, column 10)`, `[target.x].sources: expected a list of strings`,
+`Cannot declare ('target', 'x') twice` -- and the detector does fire,
+proved by injecting a deliberate `RuntimeError` into a copy and watching
+every case report `TRACEBACK`.
+
 **Concurrency.** Three `ThreadPoolExecutor` pools, which is all of them.
 Every one uses `pool.map` with the results consumed in the caller, and
 the workers write only per-call locals -- `run_one` returns `(unit,
