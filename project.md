@@ -595,7 +595,8 @@ that had been green about nothing for five commits ·
 [542. A signal handler blocking on a lock the thread it runs in may hold](#542-a-signal-handler-blocking-on-a-lock-the-thread-it-runs-in-may-hold) ·
 [543. A C++ file named `.c`, and what two third-party trees said about fmake](#543-a-c-file-named-c-and-what-two-third-party-trees-said-about-fmake) ·
 [544. roc-toolkit: a define whose value varies by directory](#544-roc-toolkit-a-define-whose-value-varies-by-directory) ·
-[545. The ejected Makefile against 545 real sources, and a strip by character](#545-the-ejected-makefile-against-545-real-sources-and-a-strip-by-character)
+[545. The ejected Makefile against 545 real sources, and a strip by character](#545-the-ejected-makefile-against-545-real-sources-and-a-strip-by-character) ·
+[546. The goal gap, walked against the six principles](#546-the-goal-gap-walked-against-the-six-principles)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43698,3 +43699,87 @@ direction: **a negative result is about the instrument until the
 instrument has been shown to fire.** The one measurement in this run
 that settled anything -- the probe that named the offending pair -- was
 the one that printed what it found rather than counting what it matched.
+
+## 546. The goal gap, walked against the six principles
+
+The `/go` skill gained a named source on 2026-10-28: for each stated aim,
+ask what a user cannot yet do and whether code exists for it, because a
+goal the description states and the code does not serve is work nothing
+in the tree marks as open. Walked against section 2's six principles,
+with three third-party trees from sections 543 to 545 as the evidence.
+
+**Three are served, and measured rather than assumed.**
+
+- **Zero files for the common case.** mstflint needed no config file at
+  all, llama.cpp one stanza and roc-toolkit one -- and both stanzas were
+  printed by fmake, ready to paste, for a real ambiguity in the tree.
+- **Always an exit.** Section 545: the ejected Makefile built the
+  identical artifact set on 545 sources, carrying no absolute path out of
+  the tree it came from.
+- **No dependencies.** Every import checked against
+  `sys.stdlib_module_names`: all stdlib.
+
+### Gap 1: a build fact about a directory has no local home
+
+Principle 2 puts a build fact in the file it is about, so that it
+survives the file being moved or copied. Principle 3 calls every
+annotation the user must write a small failure. **A fact about a
+directory of files satisfies neither today**, because `fmake.toml` and
+`fmake.mk` are both read only at the tree root -- `os.path.join(root,
+CONF_FILE)`, one call site.
+
+roc-toolkit is the measured case (section 544): each module directory
+compiles with its own `-DROC_MODULE=<name>`, and the two available homes
+are 169 per-file annotations, which is 169 small failures for one fact,
+or a root-level stanza keyed on a path glob, which is not local and goes
+stale the moment the directory moves.
+
+**So section 544's sketch was the worse of the two options, and the aims
+say which.** A **per-directory `fmake.toml`** satisfies both principles
+at once: the fact lives with the files it is about, travels with the
+directory when it is moved or copied -- which is principle 2's own
+argument for annotations -- and costs one file rather than 169
+annotations.
+
+**Why it is still the holder's.** It changes what existing trees read: a
+stray `fmake.toml` in a subdirectory is ignored today and would start
+being honoured, so no tree's build is guaranteed unchanged. It also needs
+precedence rules written against section 6, and a decision about which
+keys are legal away from the root. The option is better than the one
+recorded in 544; the change is not one to make while passing through.
+
+### Gap 2: a guess the code names as a guess, reported nowhere
+
+Principle 4 is that there is no magic without an audit trail -- "every
+inference is explainable with `--explain`" and "aggressive assumptions
+are only tolerable if they're inspectable."
+
+`resolve_header`'s basename fallback is an aggressive assumption, and the
+code says so in as many words: *"The basename fallback is a guess, and it
+must not be made about a name the toolchain owns."* **It is reported
+nowhere.** On llama.cpp it silently claimed oneAPI's `<sycl/backend.hpp>`
+for the tree's `ggml/src/ggml-sycl/backend.hpp` -- a header from a
+package the build does not have, matched on a basename -- and section
+545 found it only by instrumenting a copy of fmake, which is the exact
+opposite of inspectable.
+
+fmake does mark guesses elsewhere, which is what makes this an omission
+rather than a policy: the directory convention for a target name "is a
+guess and says so: `--explain'", and the packaging path prints *"That is
+a good guess and it is not proof."*
+
+Two details that bound the fix. `--explain` does **not** imply verbose,
+so a `vinfo` line would not satisfy the principle as written. And the
+remedy is visibility rather than behaviour: the fallback is deliberate
+and useful, and a guess that announces itself is what principle 4 asks
+for.
+
+### A pattern worth naming rather than a gap
+
+All three trees wanted a macro their own build system generates:
+`MSTFLINT_VERSION_STR`, `LLAMA_BUILD_NUMBER` and `GGML_VERSION`, and
+roc's `ROC_MODULE`. Two of the four are a version string, and this
+workspace already keeps the number in one place per project, a `VERSION`
+file. Whether fmake should turn that file into a compile-time macro is
+not something three trees settle -- recorded because the shape recurred
+in every one of them, not as a proposal.
