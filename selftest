@@ -773,8 +773,26 @@ int main(){ printf("%d\\n", engine_tick()); }
 	check(t.run(os.path.basename(t.dir)).stdout == "42\n", "wrong output")
 
 	# And it must not be mistaken for a package to look up.
+	#
+	# The `include path' block is removed before the check, and only
+	# that: section 550 added a row naming each inferred `-I' and the
+	# include that asked for it, so `engine.h' legitimately appears in
+	# this region now as the REASON `-Iinclude' is on the path. Carving
+	# out that one block leaves the region exactly as it was when this
+	# case was written, so whatever it was catching it still catches --
+	# the alternative being to contort the output to satisfy a check that
+	# tests a region rather than the property.
 	e = t.fmake("--explain").stdout
-	check("engine.h" not in before_externals(e).split("link set")[0],
+	region, keep, drop = [], True, False
+	for line in before_externals(e).split("link set")[0].splitlines():
+		if line.startswith("  include path"):
+			drop = True
+			continue
+		if drop and line.startswith("  ") and not line.startswith("    "):
+			drop = False
+		if not drop:
+			region.append(line)
+	check("engine.h" not in "\n".join(region),
 	      f"a project header should not be proposed as a library: {e}")
 
 
@@ -11312,6 +11330,123 @@ def a_directory_carries_a_fact_about_the_files_below_it(t):
 	check(r.returncode != 0 and "nosuchkey" in out and "expected one of" in out,
 	      f"an unknown [directory] key should be refused with the "
 	      f"accepted names: {out}")
+
+
+@case
+def explain_says_why_each_inferred_include_dir_is_there(t):
+	"""Principle 4 on the biggest inference fmake makes.
+
+	Section 545's defect was `include_root_for' producing
+	`ggml/src/ggml-', a directory that cannot exist, and it reached 143
+	compile commands and an ejected Makefile. It was found by
+	instrumenting a copy of fmake -- because the argv named the directory
+	and nothing said where it came from. The `directives' row does that
+	job for an annotation and section 549's row does it for a
+	`[directory]' section; the include path, which is what section 5 is
+	all about, had none.
+
+	Each inferred `-I' now names the include text and the file that first
+	asked for it. First asker wins: the directory is on the path once
+	however many includes want it, and a second identical include adds
+	nothing to the explanation.
+
+	Only the INFERRED ones are listed. A `[project] include-dirs' entry
+	is already written down in the reader's own file, and the generated
+	and system directories are not inferences about this tree -- so a row
+	naming them would be padding, which is how an audit trail stops being
+	read."""
+	t.write("src/engine/engine.h", "#pragma once\nint eng(void);\n")
+	t.write("src/engine/engine.c",
+	        '#include "engine.h"\nint eng(void){ return 1; }\n')
+	t.write("vendor/lib/vend.h", "#pragma once\nint vend(void);\n")
+	t.write("vendor/lib/vend.c",
+	        '#include "vend.h"\nint vend(void){ return 2; }\n')
+	t.write("main.c", '#include "engine/engine.h"\n#include "lib/vend.h"\n'
+	        "int main(void){ return eng() + vend() - 3; }\n")
+
+	r = t.fmake("--explain")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--explain failed: {said}")
+	# Not vacuous: the flags have to be on the command line, or there is
+	# nothing for a provenance row to be about.
+	check("-Isrc" in said and "-Ivendor" in said,
+	      f"the inferred include dirs are not on the command line, so "
+	      f"this case measures nothing: {said}")
+	check("include path" in said,
+	      f"--explain does not say why any -I is there: {said}")
+
+	rows = [l.strip() for l in said.splitlines()
+	        if l.strip().startswith("-I") and " in " in l]
+	by_dir = {l.split()[0]: l for l in rows}
+	check("-Isrc" in by_dir and "-Ivendor" in by_dir,
+	      f"expected a row for each inferred -I: {rows}")
+	check("engine/engine.h" in by_dir["-Isrc"]
+	      and "main.c" in by_dir["-Isrc"],
+	      f"the -Isrc row should name the include and the file that asked "
+	      f"for it: {by_dir['-Isrc']}")
+	check("lib/vend.h" in by_dir["-Ivendor"],
+	      f"the -Ivendor row should name its own include, not another "
+	      f"directory's: {by_dir['-Ivendor']}")
+	# The tree root is always on the path and is not an inference, so it
+	# must not be listed -- the same reason section 524 gives for naming
+	# what a count excludes.
+	check("-I." not in by_dir,
+	      f"the tree root is not inferred and should not be in the row: "
+	      f"{rows}")
+
+
+@case
+def explain_says_which_directory_file_a_flag_came_from(t):
+	"""Principle 4, for the feature section 548 added.
+
+	The argv carries `-DROC_MODULE=roc_core' and nothing said which
+	fmake.toml put it there. The `directives' row does exactly that job
+	for an annotation, down to the file and line, and a `[directory]'
+	flag had no equivalent -- an inference with no audit trail, which is
+	section 547's shape in code one day old.
+
+	The second assertion is the one that caught a real fault. The row
+	first called `dir_flags_for', which ACCUMULATES, so it printed
+	`-DOUTER=1' against `mod/sub/fmake.toml' as well as against the file
+	that declared it. A provenance row that misattributes is worse than
+	none, and the fix was to render one section -- `dir_section_flags',
+	one statement with two callers, which is 548's own lesson applied to
+	what 548 added."""
+	t.write("mod/fmake.toml", '[directory]\ndefines = ["OUTER=1"]\n')
+	t.write("mod/sub/fmake.toml",
+	        '[directory]\ndefines = ["INNER=2"]\ncflags = ["-fno-common"]\n')
+	t.write("mod/sub/main.c", "int main(void){ return OUTER + INNER; }\n")
+
+	r = t.fmake("--explain")
+	said = r.stdout + r.stderr
+	check(r.returncode == 0, f"--explain failed: {said}")
+	check("[directory]" in said,
+	      f"--explain does not say a [directory] section applied, so the "
+	      f"flags in the argv have no provenance: {said}")
+
+	rows = [l.strip() for l in said.splitlines()
+	        if "fmake.toml" in l and "-D" in l]
+	outer = [l for l in rows if "mod/fmake.toml" in l]
+	inner = [l for l in rows if "mod/sub/fmake.toml" in l]
+	check(len(outer) == 1 and len(inner) == 1,
+	      f"expected one row per directory config: {rows}")
+	check("OUTER=1" in outer[0] and "INNER" not in outer[0],
+	      f"the outer row should name what IT declares: {outer[0]}")
+	# The fault this case exists for: the row must not attribute the
+	# outer file's define to the inner file as well.
+	check("INNER=2" in inner[0] and "OUTER" not in inner[0],
+	      f"the inner row claims a define the outer file declared, so the "
+	      f"row is showing accumulated flags rather than provenance: "
+	      f"{inner[0]}")
+
+	# And the build still composes both levels, so the display fix did not
+	# come at the cost of the behaviour.
+	r = t.fmake()
+	check(r.returncode == 0, f"did not build: {r.stdout}{r.stderr}")
+	got = t.run("sub")
+	check(got.returncode == 3,
+	      f"OUTER=1 and INNER=2 should both reach the file: "
+	      f"exit {got.returncode}")
 
 
 @case

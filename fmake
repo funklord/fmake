@@ -2008,6 +2008,25 @@ def load_dir_confs(root):
 	return out
 
 
+def dir_section_flags(section):
+	"""What ONE `[directory]` section declares, in `-std -D -cflags` order.
+
+    Factored out because two readers want it and the second got it wrong:
+    `--explain's provenance row called `dir_flags_for' and so printed the
+    ACCUMULATED flags against each file, attributing `mod/fmake.toml's
+    define to `mod/sub/fmake.toml' as well. A provenance row that
+    misattributes is worse than none. One statement, two callers -- which
+    is section 548's own lesson applied to the thing section 548 added.
+    """
+	out = []
+	if section.get("std"):
+		out.append("-std=" + section["std"])
+	out += ["-D" + d for d in (section.get("define") or [])]
+	out += ["-D" + d for d in (section.get("defines") or [])]
+	out += list(section.get("cflags") or [])
+	return out
+
+
 def dir_flags_for(rel, dir_confs):
 	"""Compile flags the directories above `rel' declared, outermost first.
 
@@ -2027,9 +2046,8 @@ def dir_flags_for(rel, dir_confs):
 			continue
 		if section.get("std"):
 			std = section["std"]
-		out += ["-D" + d for d in (section.get("define") or [])]
-		out += ["-D" + d for d in (section.get("defines") or [])]
-		out += list(section.get("cflags") or [])
+		out += [f for f in dir_section_flags(section)
+		        if not f.startswith("-std=")]
 	return (["-std=" + std] if std else []) + out
 
 
@@ -6310,6 +6328,14 @@ class Project:
 		# a guess; section 546 found it making one silently. Recorded here
 		# and reported once per build.
 		self.guessed = {}
+		# Why each inferred include directory is on the path --
+		# {incdir: (include text, the file that first asked)}. Principle
+		# 4 says every inference is explainable with `--explain', and the
+		# include path is the biggest one fmake makes: section 545's
+		# defect lived in `include_root_for' and was found by
+		# instrumenting a copy of fmake, because `-Iggml/src/ggml-' in
+		# the argv said nothing about where it came from.
+		self.incdir_why = {}
 		# Whether the toolchain owns an include name. None means nobody
 		# asked the compiler, and STANDARD_HEADERS decides alone.
 		self.owns  = owns
@@ -6338,6 +6364,22 @@ class Project:
 	def incdir_for(self, resolved, inc_name):
 		return include_root_for(resolved, inc_name)
 
+	def _note_incdir(self, d, inc_name, from_rel):
+		"""Add an inferred include directory and remember why.
+
+        One helper rather than `incdirs.add' at each of three sites, so a
+        fourth cannot add the directory and forget the reason -- which is
+        exactly how section 548's directory layer came to be missing from
+        widened units.
+
+        First asker wins: the directory is on the path once however many
+        includes want it, and the one that put it there is the one worth
+        naming. A later identical include adds nothing to the
+        explanation.
+        """
+		self.incdirs.add(d)
+		self.incdir_why.setdefault(d, (inc_name, from_rel))
+
 	def resolve_header(self, inc_name, from_rel, kind='"'):
 		"""Resolve an include to a tree-relative header path, or None.
 
@@ -6357,11 +6399,12 @@ class Project:
 		if cand in self.hdr_by_name.get(os.path.basename(cand), []) or \
 		   os.path.isfile(os.path.join(self.root, cand)):
 			if kind == "<":
-				self.incdirs.add(self.incdir_for(cand, inc_name))
+				self._note_incdir(self.incdir_for(cand, inc_name),
+				                  inc_name, from_rel)
 			return cand
 		cand = os.path.normpath(inc_name)
 		if os.path.isfile(os.path.join(self.root, cand)):
-			self.incdirs.add(".")
+			self._note_incdir(".", inc_name, from_rel)
 			return cand
 		# The basename fallback is a guess, and it must not be made about a
 		# name the toolchain owns. See STANDARD_HEADERS.
@@ -6404,7 +6447,8 @@ class Project:
 		if len(matches) > 1 and self.is_excluded:
 			matches = [m for m in matches if not self.is_excluded(m)]
 		if len(matches) == 1:
-			self.incdirs.add(self.incdir_for(matches[0], inc_name))
+			self._note_incdir(self.incdir_for(matches[0], inc_name),
+			                  inc_name, from_rel)
 			# Reported only when the include NAMED A PATH that the answer
 			# does not carry. A bare `#include "foo.h"' matching the one
 			# `foo.h' in the tree is the fallback working as intended and
@@ -12359,7 +12403,7 @@ def units_own(all_units, variant):
 
 def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
             res=None, excluded=None, conf=None, moc=None, uic=None,
-            rcc=None, situ=None):
+            rcc=None, situ=None, dir_confs=None, incdir_why=None):
 	W = 36
 	name = t.filename
 	if t.conf.get("name") or t.conf.get("kind") or t.conf.get("sources"):
@@ -12417,6 +12461,54 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 					head = head[:W - 8] + "..."
 				print(f"    {_col(head, W-4)}"
 				      f"{DIM(rel + ':' + str(ann.line(d)))}")
+
+	# The same provenance for a `[directory]' flag, which the argv shows
+	# and nothing attributed. Principle 4 wants every inference
+	# explainable, and a reader seeing `-DROC_MODULE=roc_core' could not
+	# tell which fmake.toml put it there -- the row above does exactly
+	# that job for an annotation, down to the line.
+	#
+	# Listed per directory rather than per unit: the fact is about the
+	# directory, which is the whole point of section 548, and one line per
+	# file would repeat it for every source under it.
+	# Why each inferred -I is on the path. Principle 4 asks for every
+	# inference to be explainable down to the argv, and the include path
+	# is the biggest one fmake makes -- section 545's bogus
+	# `-Iggml/src/ggml-' was found by instrumenting a copy of fmake
+	# because the argv named a directory and nothing said why.
+	#
+	# Only the inferred ones. A `[project] include-dirs' entry is already
+	# written down in the reader's own file, and the generated and system
+	# directories are not inferences about this tree.
+	if incdir_why:
+		shown = sorted(d for d in incdir_why if d != ".")
+		if shown:
+			print(f"  {CYAN('include path')}")
+			for d in shown:
+				inc, from_rel = incdir_why[d]
+				head = "-I" + d
+				if len(head) > W - 5:
+					head = head[:W - 8] + "..."
+				print(f"    {_col(head, W-4)}"
+				      f"{DIM(f'{inc} in {from_rel}')}")
+
+	if dir_confs:
+		applied = {}
+		for u in cl.link:
+			parts = u.rel.replace(os.sep, "/").split("/")[:-1]
+			for depth in range(len(parts)):
+				key = "/".join(parts[: depth + 1])
+				if key in dir_confs:
+					applied.setdefault(key, dir_confs[key])
+		if applied:
+			print(f"  {CYAN('[directory]')}")
+			for where in sorted(applied):
+				flags = " ".join(dir_section_flags(applied[where]))
+				head = flags or "(no flags)"
+				if len(head) > W - 5:
+					head = head[:W - 8] + "..."
+				print(f"    {_col(head, W-4)}"
+				      f"{DIM(os.path.join(where, CONF_FILE))}")
 
 	if conf:
 		print(f"  {CYAN('configuration')}")
@@ -16733,7 +16825,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			        {"exe": moc_exe, "jobs": moc_jobs} if moc_exe else None,
 			        {"exe": uic_exe, "jobs": ui_jobs} if uic_exe else None,
 			        {"exe": rcc_exe, "jobs": qrc_jobs} if rcc_exe else None,
-			        {"exe": situc_exe, "jobs": situ_jobs}
+			        dir_confs=dir_confs, incdir_why=proj.incdir_why,
+			        situ={"exe": situc_exe, "jobs": situ_jobs}
 			        if situc_exe else None)
 		# How many blocks that was, for the same reason the dry-run
 		# install says how many files it planned. Two trees parse this
