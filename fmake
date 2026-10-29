@@ -8460,10 +8460,57 @@ def _undeclared_version(msg, root):
 		if m:
 			name = m.group(1)
 			break
-	if not name or not name.endswith("VERSION"):
+	if not name or not _looks_like_a_version_macro(name):
 		return None
+	# Both bounds, and the second is deliberate rather than an oversight:
+	# `a_version_the_build_system_injects_is_named_with_its_value' exists
+	# to watch this refuse, and says why -- an undeclared identifier is
+	# nearly always a fault in the source, so advising on every one of
+	# them would be wrong far more often than right, and a heuristic
+	# nobody has watched refuse has not been shown to discriminate.
+	#
+	# Section 552 removed this and was wrong to: the orientation looked
+	# like a half that does not depend on the file, and the file is the
+	# other bound on the heuristic rather than merely the source of the
+	# value. The suite caught it.
 	value, outside = _version_nearby(root)
 	return (name, value, outside) if value else None
+
+
+def _looks_like_a_version_macro(name):
+	"""Is this undeclared name a version a build system injects?
+
+    VERSION must be a COMPONENT and not a substring, which is
+    `version_fallbacks'' rule and was paid for there: *conversion*
+    contains *version*, which is why `JERRY_UNICODE_CASE_CONVERSION' was
+    told it should have come from the build. This function tested
+    `endswith("VERSION")' instead and inherited none of it.
+
+    Measured, both ways round. `FOO_CONVERSION' undeclared in a tree with
+    a VERSION file was told it was an injected version; and
+    `BSSH_VERSION_STRING' -- which this function's own docstring names as
+    one of three cases it answers for, from beerssh -- matched nothing at
+    all, `endswith' being false for it. A third of the documented cases
+    did not fire and a name that is not a version did.
+
+    The component rule alone is not enough either, and the sibling's
+    second test cannot be borrowed: it requires the value to be a string
+    literal, and an UNDECLARED macro has no value to read.
+    `GL_VERSION_1_1' passes the component rule, and if it is undeclared
+    the fault is a missing GL header rather than a version nobody
+    injected. What separates it is the numeric tail -- a version macro's
+    name continues in words (`_STRING', `_STR') where a feature-test
+    macro continues in digits.
+
+    So: VERSION as a component, and nothing after it that is a number.
+    Derived from eight names met in five projects rather than from a
+    principle, and that is the honest standing of it.
+    """
+	parts = name.split("_")
+	if "VERSION" not in parts:
+		return False
+	tail = parts[parts.index("VERSION") + 1:]
+	return not any(p.isdigit() for p in tail)
 
 
 def _headers_in_tree(name, headers):

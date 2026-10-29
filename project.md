@@ -600,7 +600,8 @@ that had been green about nothing for five commits ·
 [547. The basename fallback says it guessed](#547-the-basename-fallback-says-it-guessed) ·
 [548. A fact about a directory, and where it goes](#548-a-fact-about-a-directory-and-where-it-goes) ·
 [550. Why each inferred `-I` is there](#550-why-each-inferred--i-is-there) ·
-[551. A window is not a row, and a hatch that names no file](#551-a-window-is-not-a-row-and-a-hatch-that-names-no-file)
+[551. A window is not a row, and a hatch that names no file](#551-a-window-is-not-a-row-and-a-hatch-that-names-no-file) ·
+[552. A version macro, tested one way by one function and another by its sibling](#552-a-version-macro-tested-one-way-by-one-function-and-another-by-its-sibling)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44332,3 +44333,104 @@ narrowed check being vacuous.
 invalidates it.** The same shape as the stale-process-table hazard in
 `running-code.md`: an identifier enumerated once and acted on after the
 thing moved. Re-grep for the text, not the line.
+
+## 552. A version macro, tested one way by one function and another by its sibling
+
+Sections 543 to 545 noted, as a shape rather than a finding, that all
+three third-party trees wanted a macro their own build system generates
+and that two of the four were a version string. Walking the aims for it
+found the feature already built -- and then found it testing for its
+subject with a rule its sibling had already paid to replace. One real
+fault, and one claim of mine that the suite refused; both are below.
+
+**The feature exists and is more complete than a walk would have
+proposed.** `version_fallbacks` reports a macro a file guards for itself
+(`#ifndef MYPROJ_VERSION`) and `_undeclared_version` answers the
+unguarded case, offering
+
+    [project] defines = ['MYPROJ_VERSION="$file(VERSION)"']
+
+so the number stays in one place rather than being pasted. That is the
+"already decided, under another name" case, and following it is what
+stopped a redundant and worse version of it being written.
+
+### Two faults in the name test, measured both ways round
+
+`version_fallbacks` requires VERSION to be a **component**, and its
+docstring says what that cost: *conversion* contains *version*, which is
+why `JERRY_UNICODE_CASE_CONVERSION` was once told it should have come
+from the build. `_undeclared_version` tested `endswith("VERSION")` and
+inherited none of it.
+
+- **It fired on a name that is not a version.** `FOO_CONVERSION`
+  undeclared, in a tree with a VERSION file, was told it "is defined by
+  no file in this tree, which is what a build system injecting a version
+  looks like" and offered the file's contents.
+- **It did not fire on a case its own docstring names.**
+  `BSSH_VERSION_STRING`, from beerssh, is one of three the docstring
+  says it answers for -- and `endswith("VERSION")` is false for it, so
+  it matched nothing. A third of the documented cases were dead.
+
+**The component rule alone does not finish it, and the sibling's second
+test cannot be borrowed.** That one requires the value to be a string
+literal, which is how `GL_VERSION_1_1` is excluded there -- and an
+UNDECLARED macro has no value to read. What separates them is the tail:
+a version macro's name continues in words (`_STRING`, `_STR`) and a
+feature-test macro's in digits. So VERSION as a component, and nothing
+after it that is a number.
+
+Checked against every name met so far, which is the honest standing of
+the rule -- derived from eight names in five projects rather than from a
+principle:
+
+    FOO_CONVERSION        out      GL_VERSION_1_1       out
+    MYPROJ_VERSION        in       BSSH_VERSION_STRING  in
+    MSTFLINT_VERSION_STR  in       OMLX4_VERSION        in
+    GGML_VERSION          in       LLAMA_BUILD_NUMBER   out
+
+`LLAMA_BUILD_NUMBER` being out is correct and is a limit worth stating:
+llama.cpp wants that macro from CMake and its name does not say version,
+so nothing here can know what it is. The advice reaches the trees whose
+macro is named for what it holds.
+
+### The gate is not too wide, and claiming it was cost a suite run
+
+This section first said the block's second bound -- answering only where
+the tree carries a VERSION file -- was an oversight, on the grounds that
+the orientation sentence does not depend on the file. The gate was
+removed, the orientation printed for a tree with no VERSION, and the
+full suite failed one case:
+
+    FAIL a_version_the_build_system_injects_is_named_with_its_value
+         a tree with no VERSION file was told what its version is
+
+**That case exists to watch this refuse, and says why.** Its own words:
+*"The bound is the point. An undeclared identifier is nearly always a
+fault in the source, and answering all of them with 'define it on the
+command line' would be advice that is wrong far more often than right.
+So it answers only where the name ends in VERSION and the tree carries a
+VERSION file, and this checks both halves of that as well as the help
+itself -- a heuristic nobody has watched refuse is one that has not been
+shown to discriminate."*
+
+So the file is the second BOUND on a heuristic and not merely the source
+of a value. Reverted, and the case removed that had been written to
+assert the wrong behaviour.
+
+**What the mistake actually was.** The "already decided" check was run
+for the feature and not for the bound: `version_fallbacks` and
+`_undeclared_version` were both read, and the case holding the bound was
+not. A decision can be recorded in a case rather than in prose, and a
+test is where this project keeps the ones that have been watched
+refusing -- so a search that reads the implementation and not the suite
+is a search that will find the mechanism and miss the judgement.
+
+The three trees of sections 543 to 545 therefore still get the raw
+`undeclared`, and that is the intended answer: none of them carries a
+VERSION file, so there is nothing for fmake to read and the second bound
+is doing its job. What 543 recorded was correct after all.
+
+Both compilers' wordings reach it, checked rather than assumed: gcc's
+`undeclared`, gcc's C++ `was not declared in this scope` -- which is how
+both trees in 543 spell it -- and clang's `use of undeclared
+identifier`.

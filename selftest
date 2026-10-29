@@ -11540,6 +11540,63 @@ def a_vendored_projects_own_config_stays_inert(t):
 
 
 @case
+def a_version_macro_is_recognised_by_component_not_by_suffix(t):
+	"""`_undeclared_version' tested `endswith("VERSION")' and failed both ways.
+
+	`version_fallbacks' beside it uses the COMPONENT rule and its
+	docstring says what that cost: *conversion* contains *version*,
+	which is why `JERRY_UNICODE_CASE_CONVERSION' was once told it should
+	have come from the build. This function inherited none of it.
+
+	Measured both ways round. `FOO_CONVERSION' undeclared in a tree with
+	a VERSION file was told it was an injected version. And
+	`BSSH_VERSION_STRING' -- which this function's own docstring names as
+	one of three cases it answers for, from beerssh -- matched nothing,
+	`endswith' being false for it. A third of the documented cases did
+	not fire, and a name that is not a version did.
+
+	The component rule alone is not enough and the sibling's second test
+	cannot be borrowed: it requires the value to be a string literal, and
+	an undeclared macro has no value. `GL_VERSION_1_1' passes the
+	component rule, and if it is undeclared the fault is a missing GL
+	header. The numeric tail is what separates them -- a version macro
+	continues in words, a feature-test macro in digits."""
+	t.write("VERSION", "1.2.3\n")
+
+	def advice_for(macro, lang="c"):
+		src = ("main.c" if lang == "c" else "main.cpp")
+		for other in ("main.c", "main.cpp"):
+			p = os.path.join(t.dir, other)
+			if os.path.exists(p):
+				os.remove(p)
+		t.write(src, f"int main(void){{ return {macro}; }}\n"
+		        if lang == "c" else
+		        f"int main(){{ return {macro}; }}\n")
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake()
+		return "injecting a version" in (r.stdout + r.stderr)
+
+	# Not a version, and must not be told it is.
+	check(not advice_for("FOO_CONVERSION"),
+	      "FOO_CONVERSION was told it looks like an injected version, "
+	      "which is the misfire the sibling function records")
+	# A feature-test macro: VERSION is a component, and the tail is digits.
+	check(not advice_for("GL_VERSION_1_1"),
+	      "GL_VERSION_1_1 was told it looks like an injected version; if "
+	      "it is undeclared the fault is a missing GL header")
+	# The three the docstring names, one of which never fired.
+	for macro in ("MYPROJ_VERSION", "OMLX4_VERSION", "BSSH_VERSION_STRING"):
+		check(advice_for(macro),
+		      f"{macro} got no version advice, and the docstring names "
+		      f"this shape as one it answers for")
+	# C++ wording reaches it too, which is how both trees in section 543
+	# spell the failure.
+	check(advice_for("MSTFLINT_VERSION_STR", lang="cpp"),
+	      "the C++ `was not declared in this scope' wording does not "
+	      "reach the advice, which is the wording the real trees produce")
+
+
+@case
 def a_basename_only_resolution_says_it_guessed(t):
 	"""Principle 4: no magic without an audit trail.
 
