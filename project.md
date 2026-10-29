@@ -602,7 +602,8 @@ that had been green about nothing for five commits ·
 [550. Why each inferred `-I` is there](#550-why-each-inferred--i-is-there) ·
 [551. A window is not a row, and a hatch that names no file](#551-a-window-is-not-a-row-and-a-hatch-that-names-no-file) ·
 [552. A version macro, tested one way by one function and another by its sibling](#552-a-version-macro-tested-one-way-by-one-function-and-another-by-its-sibling) ·
-[553. Which fmake a report was measured against, and how to date it](#553-which-fmake-a-report-was-measured-against-and-how-to-date-it)
+[553. Which fmake a report was measured against, and how to date it](#553-which-fmake-a-report-was-measured-against-and-how-to-date-it) ·
+[554. The clean that cleans one of its two lists -- open](#554-the-clean-that-cleans-one-of-its-two-lists----open)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44495,3 +44496,86 @@ and whether that commit is in this tree. The exposure grows rather than
 shrinks, because *a README that shows `make` shows `fmake` beside it*
 sends every private tree to try it, each against whatever it happens to
 have installed.
+
+## 554. The clean that cleans one of its two lists -- open
+
+`--clean` removes `.fmake/` and the generated sources and leaves the
+built artifacts in the tree. The ejected Makefile's clean rule removes
+them: `art(t.filename) for t in targets` is in its `CLEAN` list.
+Measured on a `@kind library` with a version, where `--clean` emptied the
+state directory and `libgreet.a`, `libgreet.so` and `greet.pc` were all
+still in the tree afterwards.
+
+Reported from respec 2026-10-29, with a concrete cost rather than a tidy
+one: a plain `fmake` writes the binaries to the project root, so a clean
+that leaves them makes every invocation respec's README documents into an
+untracked file somebody has to gitignore, which is what they did.
+
+**It was implemented and the suite refused it. Both refusals are
+substantive and neither is fixture noise**, which is the part worth
+writing down.
+
+- `output_directory_and_clean` states the contract as its own purpose:
+  *`-o` puts the artifacts elsewhere; `--clean` removes only fmake's
+  state*, with `check(os.path.exists(prog), "--clean removed an artifact
+  it did not create")` enforcing it. It builds with `-o dist` and cleans
+  without `-o`, so it is specifically about a clean reaching into an
+  output directory this invocation was not told about.
+- `a_file_the_build_did_not_write_is_not_overwritten` needs the old
+  behaviour to build its control, and its comment says why: *fmake
+  replaces what fmake wrote, including after --clean, which removes the
+  state and leaves the binary in the tree.* That is how the case reaches
+  "a binary is present and no cache records it", which is the condition
+  that makes the overwrite guard key on what is AT the path -- ELF, PE,
+  Mach-O, `ar` -- rather than on the path existing. Removing the binary
+  on clean takes away the cheap way to produce that condition.
+
+**And the premise the change was built on does not say what it was read
+as saying.** The grep line was
+
+    # build artifact -- `--clean` should take it and git should not see it
+
+which reads as a statement about artifacts and is the comment on
+`MOC_DIR = os.path.join(STATE_DIR, "moc")` -- about generating moc output
+under the state directory instead of beside the source. In context it
+argues for a *location*, and `--clean` taking it follows from the location
+rather than the other way round. **A grep line is not a comment**: it has
+been cut from the thing that gives it its subject, and the sentence that
+survives is the one most likely to sound general.
+
+So the balance is one real report and one measured asymmetry against a
+stated and tested contract, with the supporting evidence withdrawn. That
+is not a gap to close while passing through, and the change is stashed
+rather than discarded (`git stash list`, "clean removes built artifacts").
+
+**The third answer, which neither branch contains, is the one to decide
+between.** `-o` is part of a build's identity and `--clean` has no `-o`,
+so the question is not whether a clean removes artifacts but *which
+build's* artifacts it removes. A clean that cleans the configuration it
+was given would satisfy both cases: a bare `fmake --clean` takes what a
+bare `fmake` would have written, `fmake --clean -o dist` takes what
+`-o dist` wrote, and neither reaches the other's directory. The ejected
+clean then agrees with `--clean` for the same configuration, which is the
+right unit for them to agree on.
+
+**`greet.pc` is the same question with an extra turn**, and it is why the
+whole of this is open rather than half-settled. The ejected clean removes
+`t.name + ".pc"`; `--clean` does not; and the code that writes it says, at
+the write, *byte-stable for the same reason the ejected build is: this is
+a file somebody may commit*. A file somebody may commit is not a file a
+clean should delete -- and the nearest thing to it in this tree settles
+that by example, since the ejected `Makefile` is also generated, also
+byte-stable, also committable, and no clean removes it. For the `.pc` the
+likely answer is therefore the opposite of the artifacts': that the
+ejected rule should stop removing it. That is a change to output somebody
+may already have ejected and committed.
+
+Everything else in the ejected `CLEAN` is accounted for: objects, depfiles
+and crate archives are under the build directory, `MOC_DIR` and `UI_DIR`
+are under `.fmake/`, the flavour stamp is under the build directory, and
+generated outputs inside the tree are already removed by name.
+
+**Whose decision: the holder's.** Three ways to make the two cleans
+agree -- artifacts removed unconditionally, removed per configuration, or
+the ejected rule narrowed -- and they differ in what a user loses by
+running the one command everybody runs without reading.
