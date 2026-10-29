@@ -43853,6 +43853,41 @@ say, is a claim about the output.** The whole point of principle 4 is
 that an inference nobody can see gets reasoned about instead of read,
 and the first thing this notice did was catch its own author doing that.
 
+### How often it fires: three trees, 7 and 0 and 0
+
+Measured the day it landed, so the next reader has a denominator rather
+than one anecdote. llama.cpp: 7. mstflint 4.22: none. roc-toolkit: none.
+Both zeroes are from runs that did explain their targets -- 656 and 249
+lines of output, 3 and 2 targets -- rather than from a command that
+failed quietly.
+
+So the shape is rare, which cuts both ways: a tree that meets it meets it
+several times, and two trees of 196 and 169 sources never did.
+
+**And it raises the obvious next question, which is deliberately not
+answered here: should the fallback DECLINE in exactly this case?** The
+argument for is structural and does not depend on the count. If the
+include names a path and the answer does not carry it, then **no `-I` can
+ever make the compiler find that file** -- so the resolution cannot help
+a compile, and its only remaining effects are a dependency edge and (
+before section 545) a bogus include directory. On the one tree that
+exercises it, all seven edges are wrong in the same way: a third-party
+package's header answered by a tree file, in a tree that has neither
+package installed.
+
+The argument against is sequencing. This notice is what makes the
+behaviour visible at all, and it is one day old on one tree. Changing the
+behaviour in the same breath as adding the report would mean the report
+never did its job -- nobody would have seen the data the decision should
+rest on. There is also a cost that was nearly missed: the *"it is in this
+tree, at X"* advice that section 544 praised on roc-toolkit depends on
+the resolver finding the header. It happens to be safe -- roc's case is
+an honoured match, the answer carrying the path -- but it is the sort of
+thing that makes a resolver-wide change worth more than one tree.
+
+So: reported now, decided later, with the count above as the start of the
+evidence.
+
 ### A guard that was doing none of the filtering it claimed
 
 The recording began `if "/" in inc_name:` before the boundary test,
