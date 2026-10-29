@@ -1,7 +1,21 @@
 # fmake
 
-A build tool for C, C++, assembly and Rust programs that shouldn't need a
-build file.
+**Source in, program out.**
+
+Building a C or C++ program means first describing the build: which source
+files make up which program, which libraries the result has to be linked
+against, and in what order. That description lives in a file beside the
+code — a `Makefile`, a `CMakeLists.txt`, a `meson.build` — it has to
+exist before anything can compile, and it has to be corrected every time a
+file is added, renamed or moved. For most programs it states nothing a
+careful reader of the source could not have worked out, and keeping it
+correct is overhead that falls hardest on the smallest programs: a one-file
+tool, a scratch reproduction of a bug, a directory of twenty test drivers
+over one library.
+
+fmake works it out instead. Run it in a directory of C, C++, assembly or
+Rust and it finds the programs, compiles them and links them, with no build
+file of any kind:
 
 ```sh
 $ ls
@@ -12,8 +26,105 @@ LD  hello
 * built hello
 ```
 
-One file, no dependencies beyond the Python 3.11 standard library. Copy it
-into `$PATH` and run it in a directory containing source.
+It reads the source for what each file needs, and the compiled objects'
+symbol tables for what satisfies those needs — so the link set is what the
+code actually calls rather than what somebody remembered to list. Every
+decision it makes, `fmake --explain` prints with the evidence for it, down
+to the command line. And when you want it gone, `fmake --eject` writes a
+standalone `Makefile` or `build.ninja` with nothing in it referring back to
+fmake. It is one Python file, with no dependencies beyond the 3.11 standard
+library.
+
+---
+
+## What it does that other build systems do not
+
+`make` has you write the rules. Autoconf and Automake have you write
+`configure.ac` and `Makefile.am`, and ship a generated `configure` nobody
+reads. CMake, Meson and Bazel have you list the sources and name the
+libraries — in `CMakeLists.txt`, `meson.build` or `BUILD` — and then run
+a generate step. Cargo and `go build` come closest, needing a manifest
+rather than rules, but each serves one language and draws its freedom from
+a directory layout its ecosystem agreed on in advance. C and C++ never
+agreed on one, which is the gap fmake is built for.
+
+- **No build file, rather than a short one.** The common case needs
+  nothing: no `fmake.toml`, no init step, no scaffold, no generated file
+  left in the tree. `file(GLOB SRC *.c)` in a `CMakeLists.txt` removes the
+  source list and leaves you naming every library by hand; fmake removes
+  both halves.
+- **The link set comes from symbol tables, not from the `#include`
+  graph.** `nm` says which object defines a symbol and which one still
+  needs it, so one header implemented across three files, a `util.h`
+  implemented by `util_posix.c`, and code with no header at all all
+  resolve exactly. An undefined `SDL_Init` proves SDL is used, where
+  `#include <SDL.h>` only proves a declaration was wanted — so a header
+  whose library nothing calls is reported rather than linked. This is what
+  the tools that glob a directory get wrong.
+- **One compile per translation unit, across every program.** Twenty test
+  drivers over one library compile that library once and link twenty
+  closures. Twenty `add_executable` calls over the same sources compile it
+  twenty times unless somebody remembers to make it a library first.
+- **A build fact lives in the source file it is about.** `@libs`, `@cflags`
+  and the rest are comments in the file that motivated them, so they
+  survive it being moved, copied into another project, or deleted. A
+  `CMakeLists.txt` entry for a file that has gone is dead text that
+  nothing reports.
+- **Every inference is explainable.** The others have little to explain
+  because they infer little; fmake infers a great deal, and is held to
+  showing its work — which flag won and which directory file set it, where
+  an `-I` came from, why a library was linked, and the exact argv.
+- **Mixed languages with no build file at all.** A `lib.rs` becomes a
+  static library and a `main.c` that calls into it links against it,
+  because membership is decided from symbols rather than from
+  declarations. Cargo will not build the C; CMake wants a custom command.
+- **Leaving is a supported operation, not an escape hatch.** `--eject`
+  output is byte-stable and meant to be committed and maintained by hand.
+  CMake's and Meson's generated build files are disposable intermediates,
+  and Autoconf's `configure` is committed but unmaintainable.
+
+The target is desktop applications and tools, and the intent is that they
+build with no build file even when they are awkward ones: Qt programs,
+where `Q_OBJECT`, `#include "ui_*.h"` and the resource paths you open are
+the declarations and moc, uic and rcc follow from them; trees that ship
+prebuilt `.a` archives; libraries that have to be installed with a `SONAME`
+that still resolves afterwards. Those work today.
+
+The one question it cannot reach is *what do I compile*. Symbol inference
+answers what to link, and when a library is absent there is no call to
+infer from — so a project whose feature detection decides whether code
+exists at all has to be told those `-D`s. It is not a package manager and
+fetches nothing, it does not do C++20 modules, and its symbol scan is
+ELF-shaped, which means Linux and the Unixes rather than macOS or Windows.
+
+---
+
+## Contents
+
+[What it does that other build systems do not](#what-it-does-that-other-build-systems-do-not) ·
+[Installing](#installing) ·
+[What it works out on its own](#what-it-works-out-on-its-own) ·
+[What it finds, and what you have to say](#what-it-finds-and-what-you-have-to-say) ·
+[Three ways to use it](#three-ways-to-use-it) ·
+[Two things generated from the parser](#two-things-generated-from-the-parser) ·
+[Libraries, programs and tests](#libraries-programs-and-tests) ·
+[Saying the things it cannot know](#saying-the-things-it-cannot-know) ·
+[Rust](#rust) ·
+[Qt](#qt) ·
+[situ schemas](#situ-schemas) ·
+[Commands](#commands) ·
+[The exit](#the-exit) ·
+[Why you might keep your Makefile](#why-you-might-keep-your-makefile) ·
+[Where it fits](#where-it-fits) ·
+[Pitfalls](#pitfalls) ·
+[Licence](#licence) ·
+[Design notes](#design-notes)
+
+---
+
+## Installing
+
+Copy it into `$PATH` and run it in a directory containing source:
 
 ```sh
 curl -o ~/.local/bin/fmake https://.../fmake && chmod +x ~/.local/bin/fmake
@@ -40,27 +151,6 @@ settable with `BUILD_DIR=`; the build refuses to run if `fmake` and
 `make lint` builds the package and then checks it with `lintian`, which
 passes clean. It is a separate target because the one that says it checks
 should not be the one doing the building.
-
----
-
-## Contents
-
-[What it works out on its own](#what-it-works-out-on-its-own) ·
-[What it finds, and what you have to say](#what-it-finds-and-what-you-have-to-say) ·
-[Three ways to use it](#three-ways-to-use-it) ·
-[Two things generated from the parser](#two-things-generated-from-the-parser) ·
-[Libraries, programs and tests](#libraries-programs-and-tests) ·
-[Saying the things it cannot know](#saying-the-things-it-cannot-know) ·
-[Rust](#rust) ·
-[Qt](#qt) ·
-[situ schemas](#situ-schemas) ·
-[Commands](#commands) ·
-[The exit](#the-exit) ·
-[Why you might keep your Makefile](#why-you-might-keep-your-makefile) ·
-[Where it fits](#where-it-fits) ·
-[Pitfalls](#pitfalls) ·
-[Licence](#licence) ·
-[Design notes](#design-notes)
 
 ---
 
@@ -361,9 +451,9 @@ loads from is the project's to say. ossacli's `ossa-sgshim.so` is the shape
 of one, and also the case this cannot express yet: a module whose own
 sources need a symbol from the library beside it has no way to say so, and
 links with it
-undefined. fmake says so at the link -- naming the symbol, the file in
+undefined. fmake says so at the link — naming the symbol, the file in
 this tree that defines it, and whether naming that file in `sources`
-would take it out of another target -- and cannot resolve it for you. A module's sources are its own — a shim that defines `close()` is not pulled into a program
+would take it out of another target — and cannot resolve it for you. A module's sources are its own — a shim that defines `close()` is not pulled into a program
 that calls the real one, the way nothing links a module.
 
 **Tests are not built by the default build.** A `main()` under `test/` or
@@ -395,7 +485,7 @@ A test helper that defines the project's *own* symbols is an ordinary
 dependency, built and linked wherever it is used.
 
 `@test live` puts a test in a group of its own, which `fmake test` does not
-run and `fmake live` does -- for the tests that differ in what they *need*
+run and `fmake live` does — for the tests that differ in what they *need*
 rather than in what they check, like the ones wanting a network. A `live/`
 directory under a test directory says the same thing for everything in it,
 so `tests/live/fetch_test.c` is in the `live` group without the annotation;
@@ -404,7 +494,7 @@ Ejected build files get a rule per group, and `all` depends on none of them.
 
 `fmake test NAME...` runs only the tests named, which is what re-running one
 out of sixty-six wants. Each test gets sixty seconds, because one that hangs
-should not suspend the suite -- `test-timeout` under `[project]` or `[target.NAME]` changes it, and
+should not suspend the suite — `test-timeout` under `[project]` or `[target.NAME]` changes it, and
 `0` removes the limit. A test that times out is reported as having timed
 out, which is a different finding from one that returned non-zero and from
 one that crashed. The deadline reaches whatever the test started, not just
@@ -415,17 +505,17 @@ being keyed on the configuration — otherwise "build only what you asked for"
 is how a stale binary gets tested. `@test` and `@test no` in the source, or
 `test = true` / `false` under `[target.NAME]`, override the guess;
 `test-args` under `[target.NAME]` gives a test its arguments, after any
-under `[project]` that every test takes -- raidcfgd hands each suite its
+under `[project]` that every test takes — raidcfgd hands each suite its
 fixture directory that way; `test-cwd`
-under either names the directory, inside the tree, it runs from -- for a
-suite written to run from `test/`, opening `fixture/<name>` -- and the
+under either names the directory, inside the tree, it runs from — for a
+suite written to run from `test/`, opening `fixture/<name>` — and the
 ejected builds `cd` there for the run; `test-env`
 under either takes `KEY=VALUE` settings for the environment it runs in --
 added to what fmake inherited rather than replacing it, with the target's
 setting winning over the project's. Because it adds, **an inherited
 variable can be blanked but not unset**: `KEY=` is accepted and arrives
 set and empty, which is what a reader wanting it gone has to write.
-`QT_QPA_PLATFORMTHEME=` is the case that earns the sentence -- a Qt test
+`QT_QPA_PLATFORMTHEME=` is the case that earns the sentence — a Qt test
 run with `QT_QPA_PLATFORM=offscreen` still opens a display if a theme
 plugin is named, and the plugin is named by the desktop rather than by
 the tree. A value may say `$bin(NAME)` for where
@@ -658,8 +748,8 @@ which carries compile flags for the files in that directory and below:
 defines = ["ROC_MODULE=roc_core"]
 ```
 
-It takes `cflags`, `define`, `defines` and `std` -- `[project]`'s
-compile-flag keys -- and applies them between `[project]` and the file's
+It takes `cflags`, `define`, `defines` and `std` — `[project]`'s
+compile-flag keys — and applies them between `[project]` and the file's
 own annotations, so an `@define` on a file still wins. Levels accumulate
 from the outer directory inwards. Every other section of a non-root file
 is ignored, which is what keeps a vendored project's own root `fmake.toml`
@@ -696,7 +786,7 @@ the search path outright, as it always did.
 
 **A header on a `[project] include-dirs` path is resolved, not
 proposed.** When a tree puts a directory on the include path itself --
-a Qt kit's `include/`, a cross prefix -- a `<header>` found there is
+a Qt kit's `include/`, a cross prefix — a `<header>` found there is
 treated the way a header in the tree is: no package is asked for it, so
 no package's `-I` joins the line. Without this a cross build resolved
 `<QApplication>` through the host's pkg-config and put the host Qt's
@@ -704,9 +794,9 @@ headers beside the kit's, which does not compile. It is what lets fmake
 cross-compile a Qt application for Android from ordinary keys --
 `[toolchain] cc`/`cxx` pointing at the NDK, `os = "android"`,
 `include-dirs` and `lib-dirs` at the kit, `moc` at the host Qt of the
-kit's version -- with the kit's `libQt6*_arm64-v8a.so` resolved by
-symbol like any other library. The APK itself -- `androiddeployqt`,
-Gradle, signing -- is not fmake's; the cross build of the code is.
+kit's version — with the kit's `libQt6*_arm64-v8a.so` resolved by
+symbol like any other library. The APK itself — `androiddeployqt`,
+Gradle, signing — is not fmake's; the cross build of the code is.
 
 **And those flags reach the questions.** `[project] cflags` are on the
 command line when fmake asks `-print-multiarch` and `-print-search-dirs`,
@@ -1285,21 +1375,8 @@ both were reasonable ones.
 
 ## Where it fits
 
-### What it is good at
+### Two strengths that are easy to miss
 
-- **Trees it should not be able to work out.** The link set comes from object
-  symbol tables, not the `#include` graph, so one header implemented across
-  three files, a `util.h` implemented by `util_posix.c`, and code with no
-  header at all all resolve exactly. This is the thing most zero-config build
-  tools get wrong.
-- **Many small programs over one shared body of code.** Each translation unit
-  is compiled once and each program links its own closure, so a tree of
-  twenty test drivers over one library does not compile that library twenty
-  times. This is where it beats a hand-written CMake setup rather than merely
-  matching one.
-- **Linking what is actually called.** An undefined `SDL_Init` proves SDL is
-  used; `#include <SDL.h>` only proves a declaration was wanted. A header
-  whose library nothing calls is reported and not linked.
 - **Installing a library that works afterwards.** `--install` places the
   artifact and its `@headers`, and shared libraries carry a `SONAME`, so a
   consumer that links yours by path — which is what CMake does by default —
@@ -1309,13 +1386,6 @@ both were reasonable ones.
   and leaves it alone if nothing does, and it is placed after every object
   where a static archive has to go. Two or more get a group, so a cycle
   between them resolves without naming one twice.
-- **Qt without a build file.** `Q_OBJECT`, `#include "ui_*.h"` and the
-  resource paths you open are the declarations; moc, uic and rcc follow from
-  them.
-- **Leaving.** `fmake --eject` writes a standalone Makefile or `build.ninja`
-  with nothing referring back to fmake, byte-stable and safe to commit.
-- **Explaining itself.** `fmake --explain` shows every decision and the
-  evidence for it, down to the command line.
 
 ### What it is not for
 
@@ -1328,7 +1398,7 @@ both were reasonable ones.
   already installed. It is not a package manager.
 - **C++20 modules**, `import std;` and friends.
 - **macOS and Windows.** The symbol scan is ELF-shaped.
-- **Languages other than C, C++ and assembly.** `.s` and `.S` are built;
+- **Languages other than C, C++, assembly and Rust.** `.s` and `.S` are built;
   `.asm` is not, being nasm or masm syntax rather than another suffix for
   this assembler.
 - **Logic.** There is deliberately no `fmake.py` and nowhere to put code. If
