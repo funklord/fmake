@@ -601,7 +601,8 @@ that had been green about nothing for five commits ·
 [548. A fact about a directory, and where it goes](#548-a-fact-about-a-directory-and-where-it-goes) ·
 [550. Why each inferred `-I` is there](#550-why-each-inferred--i-is-there) ·
 [551. A window is not a row, and a hatch that names no file](#551-a-window-is-not-a-row-and-a-hatch-that-names-no-file) ·
-[552. A version macro, tested one way by one function and another by its sibling](#552-a-version-macro-tested-one-way-by-one-function-and-another-by-its-sibling)
+[552. A version macro, tested one way by one function and another by its sibling](#552-a-version-macro-tested-one-way-by-one-function-and-another-by-its-sibling) ·
+[553. Which fmake a report was measured against, and how to date it](#553-which-fmake-a-report-was-measured-against-and-how-to-date-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44434,3 +44435,63 @@ Both compilers' wordings reach it, checked rather than assumed: gcc's
 `undeclared`, gcc's C++ `was not declared in this scope` -- which is how
 both trees in 543 spell it -- and clang's `use of undeclared
 identifier`.
+
+## 553. Which fmake a report was measured against, and how to date it
+
+respec reported on 2026-10-29 that fmake builds it with one declared
+define -- the first Qt GUI in this workspace built by fmake outside its own
+suite. One `Q_OBJECT` header found through pkg-config, moc run and its
+output compiled; `platform/apple2/woz2.situ` correctly declined because
+nothing includes the header it would write; and the verification worth
+having, which is that the fmake-built binary passes respec's own selftest
+and the fmake-built evaluator passes all 105 checks of their differential
+suite against the PicoLisp implementation.
+
+They raised two observations, and **the first was fixed here five weeks
+before they reported it.** The diagnostic for an undeclared version macro,
+they said, suggests the literal number --
+
+    [project] cflags = ['-DRESPEC_VERSION="0.2"'] would define it
+
+-- which in a project whose rule is that the number lives in one place
+creates the second place. That is section 307's finding exactly, and
+section 307 acted on it: the advice reads
+`defines = ['...="$file(VERSION)"']` now, which is the remedy they asked
+for.
+
+So the report was accurate about an fmake and not about this one, and
+**dating the copy it was accurate about is the part worth keeping.** Two
+instruments that look authoritative both failed.
+
+- **The file's mtime is not an install date.** `/usr/bin/fmake` is dated
+  2026-08-04 16:20, and `debian/changelog`'s only entry is
+  `Tue, 04 Aug 2026 16:20:53 +0200`. They agree to the minute because a
+  reproducible build clamps mtimes to the changelog, so that timestamp
+  dates the changelog entry and nothing else. Read as an install date it
+  says the copy predates the code it demonstrably contains.
+- **The build id does not resolve.** It reports `1.0 (5af02348)`, and
+  `5af02348` is not an object in this repository -- so the one field
+  written to identify a build cannot be placed in this history at all.
+
+What dated it was its own behaviour. On one fixture -- a `VERSION` saying
+0.2 and a source using an undeclared `RESPEC_VERSION` -- `/usr/bin/fmake`
+printed the literal form and this tree printed the `$file(VERSION)` form.
+The literal string arrived in `eeaa081` on 2026-08-26 and went in
+`9f9fd1f` on 2026-09-21, so the installed copy is from that window and is
+at least five weeks behind. **The artifact answered the question its own
+version string could not**, which is the rule about believing an artifact
+over a measurement of where it came from, arriving somewhere unexpected:
+the artifact was the only witness of its own age.
+
+This is the third instance of the class, and `feature_list` was the
+answer to the first two: ossacli and fuzzypickles each built a scratch
+tree to find out what the packaged fmake knows, which is why `--features`
+exists. respec's case is the one it cannot answer, and deliberately -- the
+feature list carries names and values and not behaviour, so a changed
+*diagnostic* is invisible to it, and a feature list that tried would be
+the changelog with a grep interface its own docstring declines to be. For
+that class the question has to be asked rather than probed: which fmake,
+and whether that commit is in this tree. The exposure grows rather than
+shrinks, because *a README that shows `make` shows `fmake` beside it*
+sends every private tree to try it, each against whatever it happens to
+have installed.
