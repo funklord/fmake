@@ -650,6 +650,21 @@ pkg-config-path = ["/opt/kit/lib/pkgconfig"]  # a .pc set off the default
 cc = "cc"
 ```
 
+An `fmake.toml` **below the root** is read for one section, `[directory]`,
+which carries compile flags for the files in that directory and below:
+
+```toml
+[directory]                     # in src/modules/roc_core/fmake.toml
+defines = ["ROC_MODULE=roc_core"]
+```
+
+It takes `cflags`, `define`, `defines` and `std` -- `[project]`'s
+compile-flag keys -- and applies them between `[project]` and the file's
+own annotations, so an `@define` on a file still wins. Levels accumulate
+from the outer directory inwards. Every other section of a non-root file
+is ignored, which is what keeps a vendored project's own root `fmake.toml`
+from reaching the build that vendors it.
+
 **`cc` is a program, not a command line.** A toolchain that targets by flag
 rather than by name — clang's `--target`, and any unprefixed cross compiler
 — puts the flag in `[project] cflags`, which reaches the compile and the

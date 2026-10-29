@@ -597,7 +597,8 @@ that had been green about nothing for five commits ·
 [544. roc-toolkit: a define whose value varies by directory](#544-roc-toolkit-a-define-whose-value-varies-by-directory) ·
 [545. The ejected Makefile against 545 real sources, and a strip by character](#545-the-ejected-makefile-against-545-real-sources-and-a-strip-by-character) ·
 [546. The goal gap, walked against the six principles](#546-the-goal-gap-walked-against-the-six-principles) ·
-[547. The basename fallback says it guessed](#547-the-basename-fallback-says-it-guessed)
+[547. The basename fallback says it guessed](#547-the-basename-fallback-says-it-guessed) ·
+[548. A fact about a directory, and where it goes](#548-a-fact-about-a-directory-and-where-it-goes)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -1199,8 +1200,14 @@ inference  <  source annotations  <  fmake.toml  <  CLI / env
 and then the command line overrides everything as an override should:
 
 ```
-defaults / [project] / [profile]  <  source annotations  <  CLI / env
+defaults / [project] / [profile]  <  [directory]  <  source annotations  <  CLI / env
 ```
+
+`[directory]` is a `[directory]` section in an `fmake.toml` below the root
+(§7), and it sits where it does because a directory is more specific than
+the project and less specific than a file. Levels of it accumulate outer
+to inner, by the additive rule below; a scalar like `std` is replaced by
+the nearest.
 
 Additive directives (`@libs`, `@cflags`, `@define`) accumulate across levels
 rather than replacing; scalar ones (`@target`, `@kind`) replace. Both are
@@ -1248,6 +1255,42 @@ prefix = "/usr/local"
 cc   = "aarch64-linux-gnu-gcc"
 arch = "aarch64"
 ```
+
+#### Below the root: `[directory]` only
+
+The description above -- "facts that are neither inferable nor properties
+of a single file" -- has a third case that had nowhere to live: a fact
+about **one directory** of files. §544's roc-toolkit is the measured one,
+where every module directory compiles with its own
+`-DROC_MODULE=<module>`.
+
+An `fmake.toml` anywhere below the root is read for a `[directory]`
+section and nothing else:
+
+```toml
+[directory]
+defines = ["ROC_MODULE=roc_core"]
+```
+
+It applies to the files in that directory and below it. The accepted keys
+are exactly `[project]`'s compile-flag ones -- `cflags`, `define`,
+`defines`, `std` -- and an unknown one is refused with the list, as
+`[project]` does. No identity, no install paths, no toolchain: a target's
+name, kind and membership are project-level decisions, which is §6's
+first chain.
+
+**Every other section of a non-root file is ignored, and that is what
+makes this backward compatible rather than a hope.** Measured before it
+was written: seven of the fifteen trees here that use fmake carry a
+vendored sibling whose own root `fmake.toml` is a subdirectory file from
+the consuming tree's point of view -- `beerssh/softkeys`,
+`raidcfgd/ossacli`, `netcfgd/fuzznet/qtty`, `hull/vendor/situ` and more.
+Honouring a non-root file wholesale would pull all of their targets,
+install paths and toolchains into the consuming build. They carry
+`[project]` and `[target.*]` and no `[directory]`, so they are inert --
+and a vendored project that does add a `[directory]` section gets its own
+files built with it, wherever it is vendored, which is the locality
+principle working rather than an exception to it.
 
 **`[target.*]` carries link-side keys only** — `name`, `kind`, `root`,
 `sources`, `libs`, `pkg`, `ldflags`, `headers`. No `cflags`, no `defines`, no
@@ -43931,3 +43974,115 @@ path with `if True:` left the case passing, which says the guard filtered
 nothing. One test now, and sabotaging that one does fail the case --
 specifically the control half, the bare include being reported, which is
 the notice going from useful to present on every tree.
+
+## 548. A fact about a directory, and where it goes
+
+Section 546's goal-gap walk found this and left it for the holder; the
+holder asked for it. It is the first gap that walk produced, and the
+record of the decision is here because the aims decided it and section
+544 had sketched the worse of the two options.
+
+### What the aims decided, and against what
+
+Section 7 says `fmake.toml` holds "the facts that are neither inferable
+nor properties of a single file". A fact about one DIRECTORY of files is
+exactly that, and the file existed only at the root, so it had nowhere to
+live. Section 544's roc-toolkit is the measured case: every module
+directory compiles with its own `-DROC_MODULE=<module>`, and the two
+available homes were
+
+- **169 per-file annotations**, which principle 3 calls 169 small
+  failures, and
+- **a root stanza keyed on a path glob**, which principle 2 rules out:
+  it is not local, and it goes stale the moment the directory moves.
+
+Section 544 sketched the glob. The aims point the other way, and a
+per-directory `fmake.toml` satisfies both principles at once -- the fact
+travels with the code it is about, for one file instead of 169
+annotations.
+
+### Precedence was not a new rule to invent
+
+Section 6 already has two chains, and the compile-flag one runs general
+to specific. A directory is more specific than the project and less
+specific than a file, so it slots in:
+
+    [project]/[profile]  <  [directory]  <  source annotations  <  CLI/env
+
+That is not a choice recorded here, it is section 6 read out. It also
+landed without a new mechanism: the command line is already assembled as
+`cfg.cflags + u.own + cfg.override`, so the whole integration is the
+directory's flags going in front of the file's own inside `own_flags`.
+Levels accumulate outer to inner, which is section 6's sentence about
+additive directives; `std`, being scalar, is replaced by the nearest.
+
+### The measurement that chose the shape
+
+The fear recorded in 546 was that honouring a non-root `fmake.toml` would
+change what existing trees read. Measured rather than deliberated, and it
+was worse than stated: **seven of the fifteen trees here that use fmake
+carry a vendored sibling whose own root config is a subdirectory file**
+from the consuming tree's point of view -- `beerssh/softkeys`,
+`raidcfgd/ossacli`, `netcfgd/fuzznet/qtty`, `fuzzypickles/fuzznet`,
+`hull/vendor/situ` and more. Reading them wholesale would pull every one
+of those projects' targets, install paths and toolchains into the
+consuming build.
+
+So only `[directory]` is read from a non-root file, and the accepted keys
+are exactly `[project]`'s compile-flag subset. No existing config carries
+that section -- checked across all of them -- so every one of those
+vendored files is inert. And a vendored project that chooses to add one
+gets its own files built with it wherever it is vendored, which is
+locality working rather than an exception to it.
+
+**The cost measurement did not merely inform the decision, it chose the
+design.** The naive version was ruled out by a `find`.
+
+### The bug I made while fixing it, which is this project's own shape
+
+The directory layer went in at the CALL SITE that assigns `.own` --
+`units[rel].own = dir_flags_for(rel) + own_flags(u)` -- and
+`softkeys/keyboard.c`, reached by widening, came out with no directory
+flags at all. Two later lines reassign `.own` from `own_flags` and
+dropped the layer: three call sites, one of them wired, which is section
+516's shape exactly.
+
+`own_flags`'s own docstring says why, and said it before the edit: the
+flags are *"wanted wherever a Unit enters the pool, not just here: a Unit
+is created with no flags of its own, and widening adds units after
+this"*. The layer belongs inside that function, and does now.
+
+Both halves are sabotage-proved. Moving the layer back to the call site
+fails the vendored case, because its source is reached by widening --
+chosen for the fixture deliberately, after the bug. Honouring `[project]`
+as well as `[directory]` fails it the other way, the vendored flags
+reaching the consuming build.
+
+### Verified
+
+A define in `mod/fmake.toml` reaches a file in `mod/sub/` and does not
+reach a sibling directory; two levels accumulate; an `@define` on the
+file beats the directory's; an unknown key is refused with the accepted
+names; and the ejected Makefile carries the flags, so principle 5 holds.
+
+### And on the tree it was written for
+
+roc-toolkit, from a copy, with one `[directory]` per module directory --
+**13 files against the 169 annotations section 544 priced it at**:
+
+    before   58 compile steps planned, 49 failed, every one of them
+             `#error "ROC_MODULE not defined"'
+    after    107 compile steps, and that error gone from the main build
+
+The step count nearly doubles because the files that now compile let the
+closure reach further. What the build hits instead is a different and
+diagnosed thing -- `roc::core::print_emergency_backtrace` defined more
+than once across the `target_*` platform variants, which fmake reports
+with the three ways to settle it.
+
+The honest remainder: `src/tests/*` still wants `ROC_MODULE` because no
+`[directory]` was written for those directories, and `roc_conv/cmdline.h`
+is generated by gengetopt, which is the configure-time class section 543
+recorded for mstflint and is outside "builds from an unannotated tree".
+Neither is this feature's to fix. What it was for -- a per-directory
+define with a local home -- is done.

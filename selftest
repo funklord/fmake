@@ -11233,6 +11233,146 @@ def the_nm_the_advice_names_is_one_that_works(t):
 
 
 @case
+def a_directory_carries_a_fact_about_the_files_below_it(t):
+	"""Section 7 says fmake.toml is for facts that are "neither inferable
+	nor properties of a single file" -- and the file existed only at the
+	root, so a fact about ONE DIRECTORY of files had nowhere to live.
+	Section 2's locality wants it to travel with the code it is about.
+
+	The measured case is section 544's roc-toolkit: every module directory
+	compiles with its own `-DROC_MODULE=<name>', and the only homes were
+	169 annotations, which principle 3 calls 169 small failures, or a root
+	stanza keyed on a glob, which is not local and goes stale the moment
+	the directory moves.
+
+	Precedence is section 6's and not a new rule. Chain 2 runs general to
+	specific -- `[project]/[profile] < source annotations < CLI/env' --
+	and a directory sits between the project and the file, so its flags
+	are emitted before the file's own and an annotation still wins.
+	Levels accumulate, which is section 6's sentence about additive
+	directives."""
+	t.write("mod/fmake.toml", '[directory]\ndefines = ["OUTER=1"]\n')
+	t.write("mod/sub/fmake.toml", '[directory]\ndefines = ["INNER=1"]\n')
+	t.write("mod/sub/main.c",
+	        "int main(void){\n"
+	        "#if defined(OUTER) && defined(INNER)\n\treturn 7;\n"
+	        "#else\n\treturn 1;\n#endif\n}\n")
+	# A sibling directory, to catch a flag that leaks tree-wide. Named
+	# `peer/other.c' and not `peer/main.c': a `main.c' is named after its
+	# directory, the directory already exists, and fmake renames the
+	# target around the collision -- so the binary is not where this case
+	# would look for it.
+	t.write("peer/other.c",
+	        "int main(void){\n#ifdef OUTER\n\treturn 9;\n"
+	        "#else\n\treturn 0;\n#endif\n}\n")
+
+	r = t.fmake()
+	check(r.returncode == 0, f"did not build: {r.stdout}{r.stderr}")
+	got = t.run("sub")
+	check(got.returncode == 7,
+	      f"a file under mod/sub should carry OUTER from mod/ and INNER "
+	      f"from mod/sub/, accumulated: exit {got.returncode}")
+	got = t.run("other")
+	check(got.returncode == 0,
+	      f"OUTER reached a sibling directory, so it is not a fact about "
+	      f"mod/ at all: exit {got.returncode}")
+
+	# Section 6: the file's own annotation overrides the directory's.
+	t.write("mod/sub/main.c",
+	        "/*! @file\n *  @define OUTER=3\n */\n"
+	        "int main(void){ return OUTER; }\n")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"did not rebuild: {r.stdout}{r.stderr}")
+	got = t.run("sub")
+	check(got.returncode == 3,
+	      f"an @define on the file must beat the directory's, which is "
+	      f"section 6's chain 2: exit {got.returncode}")
+
+	# And the exit carries it, which is principle 5.
+	if shutil.which("make"):
+		e = t.fmake("--eject", "make")
+		check(e.returncode == 0, f"--eject failed: {e.stderr}")
+		t.write("Makefile", e.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		os.remove(os.path.join(t.dir, "sub"))
+		b = _run_in(t.dir, "make", "-s")
+		check(b.returncode == 0,
+		      f"the ejected build failed: {b.stdout}{b.stderr}")
+		got = t.run("sub")
+		check(got.returncode == 3,
+		      f"the ejected Makefile dropped the directory's flags: "
+		      f"exit {got.returncode}")
+
+	# An unknown key is refused with the list, the way [project] is.
+	t.write("mod/fmake.toml", "[directory]\nnosuchkey = 1\n")
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "nosuchkey" in out and "expected one of" in out,
+	      f"an unknown [directory] key should be refused with the "
+	      f"accepted names: {out}")
+
+
+@case
+def a_vendored_projects_own_config_stays_inert(t):
+	"""The reason only `[directory]` is read from a non-root fmake.toml.
+
+	Measured before the feature was written, which is what chose its
+	shape: seven of the fifteen trees here that use fmake carry a
+	vendored sibling whose own ROOT fmake.toml is a subdirectory file
+	from the consuming tree's point of view -- beerssh/softkeys,
+	raidcfgd/ossacli, netcfgd/fuzznet/qtty, hull/vendor/situ and more.
+	Honouring a non-root file wholesale would pull every one of those
+	projects' targets, install paths and toolchains into the build.
+
+	They carry `[project]' and `[target.*]' and no `[directory]', so they
+	are inert. Asserted with a positive control, because a case that only
+	checked for absence would pass against a loader that never read any
+	non-root file at all -- which is the behaviour this feature replaced.
+
+	The vendored source is reached by widening, deliberately: that is
+	where the first version of this leaked. `own_flags' is the one place
+	every Unit's flags are assembled and the directory layer was put at a
+	CALL SITE instead, so a unit widening added later had its `.own'
+	reassigned without it. The function's own docstring says it is
+	"wanted wherever a Unit enters the pool, not just here"."""
+	t.write("main.c", "int softkey(void);\n"
+	        "int main(void){ return softkey(); }\n")
+	t.write("softkeys/keyboard.c",
+	        "int softkey(void){\n#ifdef VENDOR_LEAKED\n\treturn 5;\n"
+	        "#else\n\treturn 0;\n#endif\n}\n")
+
+	# Exactly the shape a vendored project's root config has.
+	t.write("softkeys/fmake.toml",
+	        '[project]\ncflags = ["-DVENDOR_LEAKED=1"]\n\n'
+	        '[target.keyboard]\nkind = "static"\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"did not build: {r.stdout}{r.stderr}")
+	got = t.run(os.path.basename(t.dir))
+	check(got.returncode == 0,
+	      f"a vendored project's [project] cflags reached the consuming "
+	      f"build: exit {got.returncode}")
+	said = r.stdout + r.stderr
+	check("libkeyboard" not in said,
+	      f"a vendored project's [target.*] created a target here: {said}")
+
+	# The control: the SAME file as [directory] must take effect, or the
+	# assertion above passes against a loader that reads nothing.
+	t.write("softkeys/fmake.toml",
+	        '[directory]\ncflags = ["-DVENDOR_LEAKED=1"]\n')
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	check(r.returncode == 0, f"did not rebuild: {r.stdout}{r.stderr}")
+	got = t.run(os.path.basename(t.dir))
+	check(got.returncode == 5,
+	      f"[directory] in the vendored directory did not reach its own "
+	      f"source, so the inertness check above measured nothing -- and "
+	      f"this source is reached by WIDENING, which is where the first "
+	      f"version of this leaked: exit {got.returncode}")
+
+
+@case
 def a_basename_only_resolution_says_it_guessed(t):
 	"""Principle 4: no magic without an audit trail.
 

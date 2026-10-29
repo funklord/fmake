@@ -1944,6 +1944,95 @@ def _refuse_unexpanded(data):
 		      "this is refused rather than passed through.")
 
 
+# What a non-root `fmake.toml' may say, and it is deliberately the
+# compile-flag subset of `[project]' and nothing more. No identity (a
+# target's name, kind or membership is a project-level decision -- section
+# 6's first chain), no install paths, no toolchain.
+#
+# That subset is also what makes the whole feature backward compatible,
+# measured rather than hoped: seven of the fifteen trees here that use
+# fmake carry a VENDORED sibling whose own root `fmake.toml' sits in a
+# subdirectory -- beerssh/softkeys, raidcfgd/ossacli,
+# netcfgd/fuzznet/qtty and more. Honouring a non-root file wholesale
+# would pull every one of those projects' targets, install paths and
+# toolchains into the consuming build. They carry `[project]' and
+# `[target.*]' and no `[directory]', so they stay inert.
+CONF_DIR_KEYS = {"cflags": L, "define": L, "defines": L, "std": S}
+
+
+def load_dir_confs(root):
+	"""Per-directory `[directory]` sections, as {reldir: section}.
+
+    Section 7 says `fmake.toml' is for "the facts that are neither
+    inferable nor properties of a single file" -- and until now the file
+    existed only at the root, so a fact about ONE DIRECTORY of files had
+    nowhere to live. Section 2's locality principle wants it to travel
+    with the code it is about; section 544's roc-toolkit is the measured
+    case, where `-DROC_MODULE=<module>' differs per module directory and
+    the only homes were 169 annotations or a root stanza keyed on a glob
+    that goes stale when the directory moves.
+
+    Only `[directory]' is read from a non-root file. Everything else in
+    one is ignored, deliberately and silently: a vendored project's root
+    config is a non-root file from here, and refusing or warning about
+    its `[target.*]' would be noise on seven trees. `--explain' names the
+    files that applied, which is where principle 4 wants it.
+    """
+	out = {}
+	for dirpath, _dirnames, filenames in _walk(root):
+		if CONF_FILE not in filenames:
+			continue
+		rel = os.path.relpath(dirpath, root)
+		if rel == ".":
+			continue                  # the root file is `load_conf's
+		path = os.path.join(dirpath, CONF_FILE)
+		try:
+			with open(path, "rb") as fh:
+				data = tomllib.load(fh)
+		except tomllib.TOMLDecodeError as exc:
+			die(f"{os.path.join(rel, CONF_FILE)}: {exc}")
+		except OSError as exc:
+			die(f"{os.path.join(rel, CONF_FILE)}: {exc}")
+		section = data.get("directory")
+		if section is None:
+			continue
+		where = os.path.join(rel, CONF_FILE)
+		if not isinstance(section, dict):
+			die(f"{where}: [directory] must be a table")
+		problems = []
+		_conf_check(section, CONF_DIR_KEYS, f"{where}: [directory]",
+		            problems)
+		if problems:
+			die("\n".join(problems))
+		out[rel.replace(os.sep, "/")] = section
+	return out
+
+
+def dir_flags_for(rel, dir_confs):
+	"""Compile flags the directories above `rel' declared, outermost first.
+
+    Accumulated rather than replaced, which is section 6's own rule for
+    additive directives: "@libs, @cflags, @define accumulate across levels
+    rather than replacing". So a `[directory]' nearer the file adds to one
+    further up instead of silencing it, and `std' -- a scalar -- is
+    replaced by the nearest, which is the other half of that sentence.
+    """
+	if not dir_confs:
+		return []
+	parts = rel.replace(os.sep, "/").split("/")[:-1]
+	std, out = None, []
+	for depth in range(len(parts)):
+		section = dir_confs.get("/".join(parts[: depth + 1]))
+		if not section:
+			continue
+		if section.get("std"):
+			std = section["std"]
+		out += ["-D" + d for d in (section.get("define") or [])]
+		out += ["-D" + d for d in (section.get("defines") or [])]
+		out += list(section.get("cflags") or [])
+	return (["-std=" + std] if std else []) + out
+
+
 def load_conf(root):
 	"""Read and validate fmake.toml. Returns {} when there is no file."""
 	path = os.path.join(root, CONF_FILE)
@@ -13511,6 +13600,14 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		srcs.sort()
 		scan_all(srcs)
 
+	# Per-directory `[directory]' sections, which section 7's "neither
+	# inferable nor properties of a single file" had no home for below the
+	# root. Loaded once; `dir_flags_for' picks the chain for each unit.
+	dir_confs = load_dir_confs(root)
+	if dir_confs and VERBOSE:
+		note(f"[directory] in {len(dir_confs)} subdirector"
+		     + ("y" if len(dir_confs) == 1 else "ies") + ": "
+		     + ", ".join(sorted(dir_confs)))
 	proj = Project(root, srcs, hdrs, scans,
 	               owns=lambda n: toolchain_owns_header(cfg, n),
 	               excluded=exclude_pattern)
@@ -14709,6 +14806,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	def own_flags(u):
 		"""The compile flags a TU asked for, plus any fmake owes it.
 
+        The `[directory]' layer is added HERE and not at the call sites,
+        because this docstring's next paragraph is exactly why: a Unit is
+        created with no flags and widening adds units after the first
+        pass. Written at one call site first, and `softkeys/keyboard.c'
+        -- reached by widening -- came out with no directory flags at
+        all, because two later lines reassign `.own' from `own_flags'
+        and dropped the layer. Three call sites, one of them wired: the
+        shape section 516 is about, made while closing a gap.
+
         Wanted wherever a Unit enters the pool, not just here: a Unit is
         created with no flags of its own, and widening adds units after this
         point. A file the include graph missed would otherwise be compiled
@@ -14738,7 +14844,17 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				die(f"{u.rel}:{u.ann.line('pkg_optional')}: @pkg_optional "
 				    f"{' '.join(group)} is not "
 				    f"'@pkg_optional NAME defines MACRO'")
-		return unit_cflags(u, pkg, hdr_store, pkg_sig) + moc_own.get(u.rel, [])
+		# Prepended, which is section 6 rather than a preference: chain 2
+		# runs general to specific -- `[project]/[profile] < source
+		# annotations < CLI/env' -- and the command line is assembled in
+		# that order at `cfg.cflags + u.own + cfg.override'. A directory
+		# is more specific than the project and less than the file, so
+		# its flags sit in front of the file's own. For `-D' and
+		# `-std=' the later wins, so an annotation still overrides a
+		# directory, which is what locality asks for.
+		return (dir_flags_for(u.rel, dir_confs)
+		        + unit_cflags(u, pkg, hdr_store, pkg_sig)
+		        + moc_own.get(u.rel, []))
 
 	for rel in sorted(units):
 		units[rel].own = own_flags(units[rel])
