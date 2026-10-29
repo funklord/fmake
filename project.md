@@ -43792,6 +43792,37 @@ remedy is visibility rather than behaviour: the fallback is deliberate
 and useful, and a guess that announces itself is what principle 4 asks
 for.
 
+### Re-walked 2026-10-29: is every inference overridable FROM THE FILE?
+
+Section 1 says fmake lets you "override any of them from inside the
+source file that motivated the override", and principle 2 wants a fact to
+survive the file being moved or copied into another project. So the
+checkable question is whether anything can be overridden only from
+`fmake.toml`. Asked by comparing two of fmake's own statements -- the
+directive set against the `[target.*]` schema -- rather than by keeping a
+list.
+
+Six keys came back, then four, and the arithmetic is the interesting
+part. `version-script` was a false positive from the spelling: the
+annotation is `version_script` and the comparison had not normalised the
+hyphen. `test-group` was another: `@test live` names a group from the
+file, which the code says in as many words.
+
+**The remaining four are settled, and by this project's own precedent
+rather than by a judgement made here.** `description` is in the same
+position and the code already explains why: *"`description` is a config
+key rather than an annotation -- the directive set is deliberately small
+and does not carry one -- so it is written where the tool reads it."*
+`test-args`, `test-cwd`, `test-env` and `test-timeout` are the same kind
+of thing, knobs for how a test is RUN rather than facts about what a file
+is, and the same reason applies: principle 3 wants annotations rare, and
+a directive per test-running knob is four more.
+
+So no gap. Recorded because a walk of this aim will be run again and
+would otherwise re-derive the same six, and because the two false
+positives are the sort a list-free comparison is supposed to avoid and
+did not.
+
 ### A pattern worth naming rather than a gap
 
 All three trees wanted a macro their own build system generates:
