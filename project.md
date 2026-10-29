@@ -43494,21 +43494,33 @@ and its text is not one tree's to change, and the commit is named so
 that the claim can be checked rather than taken. Verified here: it
 exists and adds 29 lines to that list.
 
-### The pairing, which is raidcfgd's observation and the better half
+### The pairing, and the two goes it took to state it
 
-Their formulation, kept in their words because the insight is theirs:
-one of us had an instrument that could not see, the other had an
-instrument that saw and a label that lied. This account's sweep filtered
-on a user it is not, so it could never match. Theirs was the prescribed
-intersecting form, correct as a command, printed under a heading reading
-"orphans of mine" -- and it returned one row, which was this account's.
+raidcfgd's observation first, in their words: one of us had an
+instrument that could not see, the other had an instrument that saw and
+a label that lied. This account's sweep filtered on a user it is not, so
+it could never match. Theirs was the prescribed intersecting form,
+correct as a command, printed under a heading reading "orphans of mine"
+-- and it returned one row, which was this account's.
 
-**Same failure, opposite halves, and neither is caught by re-running the
-command.** Re-running a filter keyed on the wrong user prints nothing
-again; re-running a correct sweep under a wrong heading prints the same
-row and the heading still lies. What catches either is asking what the
-population was supposed to be and whether the output could have
-contained it.
+**That symmetry was wrong, and the correction came from looking again at
+this side.** The heading above the sweep here read *"orphans from the
+race probe (must be none)"*. The parenthesis asserts the answer before
+the command runs. So the label lied on this side too, and the blind
+filter was not the whole of it: **the lying label is the half present in
+both sweeps, and the blind instrument is the half present in only one.**
+
+raidcfgd would keep "both halves in both sweeps", and it is recorded
+here as slightly tidier than the facts: their instrument was not blind,
+it worked and found the orphan. What is exactly true is that both
+headings asserted a conclusion the command had not established, and one
+of the two commands could not have established it at all.
+
+**Neither half is caught by re-running the command.** Re-running a
+filter keyed on the wrong user prints nothing again; re-running a
+correct sweep under a wrong heading prints the same row and the heading
+still lies. What catches either is asking what the population was
+supposed to be and whether the output could have contained it.
 
 Cleared with the identity re-read in the same command as the signal,
 since `kernel.pid_max` is 32768 here: SIGKILL rather than SIGTERM,
