@@ -6214,6 +6214,13 @@ wordexp.h
 class Project:
 	def __init__(self, root, srcs, hdrs, scans, owns=None, excluded=None):
 		self.root  = root
+		# Includes resolved by basename ALONE, where the include carried a
+		# path that the file found does not honour -- {inc_name: resolved}.
+		# Principle 4 of section 2 is that there is no magic without an
+		# audit trail, and the basename fallback's own comment calls itself
+		# a guess; section 546 found it making one silently. Recorded here
+		# and reported once per build.
+		self.guessed = {}
 		# Whether the toolchain owns an include name. None means nobody
 		# asked the compiler, and STANDARD_HEADERS decides alone.
 		self.owns  = owns
@@ -6309,6 +6316,27 @@ class Project:
 			matches = [m for m in matches if not self.is_excluded(m)]
 		if len(matches) == 1:
 			self.incdirs.add(self.incdir_for(matches[0], inc_name))
+			# Reported only when the include NAMED A PATH that the answer
+			# does not carry. A bare `#include "foo.h"' matching the one
+			# `foo.h' in the tree is the fallback working as intended and
+			# saying so every time would be noise nobody reads -- but
+			# `<sycl/backend.hpp>' answered by
+			# `ggml/src/ggml-sycl/backend.hpp' is fmake overriding what the
+			# source asked for, on a basename, and that is the case
+			# principle 4 exists for. Same boundary test `include_root_for'
+			# uses, for the same reason.
+			# One test, and it is the boundary one. A `"/" in inc_name'
+			# fast path stood here and was REDUNDANT: a bare `helper.h'
+			# answered by `src/other/helper.h' already satisfies
+			# `honoured', the answer ending with the include name at a
+			# separator. Found by sabotaging the fast path and watching
+			# the case pass -- a guard whose removal changes nothing was
+			# doing none of the filtering its comment claimed.
+			cut = len(matches[0]) - len(inc_name)
+			honoured = (matches[0].endswith(inc_name)
+			            and (cut == 0 or matches[0][cut - 1] == "/"))
+			if not honoured:
+				self.guessed.setdefault(inc_name, matches[0])
 			return matches[0]
 		return None
 
@@ -14611,6 +14639,32 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	vinfo(f"{len(inferred)} inferred include dir(s) kept besides the "
 	      f"tree root"
 	      + (": " + ", ".join(inferred) if inferred else ""))
+	# Principle 4: no magic without an audit trail. The basename fallback
+	# is an aggressive assumption -- its own comment says "the basename
+	# fallback is a guess" -- and until section 546 walked the aims it made
+	# one in silence. Measured on llama.cpp, where `#include
+	# <sycl/backend.hpp>' is oneAPI's header and nothing had it installed:
+	# fmake answered with the tree's `ggml/src/ggml-sycl/backend.hpp' on
+	# the basename alone, and the only way to see that was to instrument a
+	# copy of fmake, which is the opposite of inspectable.
+	#
+	# A `note' rather than a `vinfo', because `--explain' does not imply
+	# verbose and the principle names `--explain'. It reaches an ordinary
+	# build too, which is strictly better: the reader who needs this is
+	# the one whose build just behaved oddly, not the one already
+	# auditing it.
+	#
+	# Capped like every other list here. The count is the part that
+	# survives truncation, and a tree with many of these is a tree whose
+	# include paths want looking at.
+	if proj.guessed:
+		head, rest = capped(sorted(proj.guessed))
+		note(f"{len(proj.guessed)} include(s) resolved on the basename "
+		     f"alone, to a file that does not carry the path they name")
+		for inc in head:
+			note(f"  {inc} -> {proj.guessed[inc]}")
+		if rest:
+			note(f"  ... and {rest} more (-v for all)")
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in kept_incdirs]
 	# The same set `install_subpath' reads, recorded where it is known --

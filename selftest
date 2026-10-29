@@ -11233,6 +11233,70 @@ def the_nm_the_advice_names_is_one_that_works(t):
 
 
 @case
+def a_basename_only_resolution_says_it_guessed(t):
+	"""Principle 4: no magic without an audit trail.
+
+	`resolve_header's basename fallback says of itself that it is a
+	guess, and it made them in silence. Section 546's goal-gap walk
+	called that an omission rather than a policy, because fmake marks
+	guesses elsewhere -- a target name taken from a directory convention
+	"is a guess and says so: `--explain'".
+
+	Measured on llama.cpp: `#include <sycl/backend.hpp>' is oneAPI's
+	header, nothing had it installed, and fmake answered with the tree's
+	`ggml/src/ggml-sycl/backend.hpp' on the basename alone. The only way
+	to see that was to instrument a copy of fmake.
+
+	Reported only where the include NAMED A PATH the answer does not
+	carry. A bare `#include "foo.h"' matching the one `foo.h' in the tree
+	is the fallback working as intended, and saying so every time would
+	be noise -- which the second half of this case holds it to, because a
+	notice that fired on every tree would pass the first half and be
+	worthless.
+
+	A `note' and not a `vinfo': `--explain' does not imply verbose, and
+	the principle names `--explain'. It reaches an ordinary build too,
+	where the reader who needs it actually is."""
+	t.write("src/other/helper.h", "#pragma once\nint helper(void);\n")
+	t.write("src/other/helper.c",
+	        '#include "helper.h"\nint helper(void){ return 1; }\n')
+	# An include that names a path no -I can satisfy: the answer fmake
+	# finds does not live at `nowhere/helper.h'.
+	t.write("main.c", "#include <nowhere/helper.h>\n"
+	        "int main(void){ return helper() - 1; }\n")
+
+	r = t.fmake("--explain")
+	said = r.stdout + r.stderr
+	check("resolved on the basename alone" in said,
+	      f"a basename-only resolution against a path the answer does not "
+	      f"carry was not reported, so the guess is invisible: {said}")
+	check("nowhere/helper.h -> src/other/helper.h" in said,
+	      f"the notice should name the include and the file it chose: "
+	      f"{said}")
+
+	# The control, and the thing that keeps this from being noise: a bare
+	# name resolved by basename is the fallback working, and must be
+	# silent. Its own tree, so the include above cannot satisfy it.
+	u = Tree("bare-basename")
+	try:
+		u.write("src/other/helper.h", "#pragma once\nint helper(void);\n")
+		u.write("src/other/helper.c",
+		        '#include "helper.h"\nint helper(void){ return 1; }\n')
+		u.write("main.c", '#include <helper.h>\n'
+		        "int main(void){ return helper() - 1; }\n")
+		r = u.fmake("--explain")
+		said = r.stdout + r.stderr
+		check("Traceback (most recent call last)" not in said,
+		      f"fmake crashed, so the silence below means nothing: {said}")
+		check("resolved on the basename alone" not in said,
+		      f"a bare include resolved by basename was reported as a "
+		      f"path-contradicting guess, which would put this notice on "
+		      f"every tree that has one: {said}")
+	finally:
+		u.cleanup()
+
+
+@case
 def an_include_name_is_taken_off_at_a_path_boundary(t):
 	"""`include_root_for' stripped by character count, not by component.
 

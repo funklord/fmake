@@ -596,7 +596,8 @@ that had been green about nothing for five commits ·
 [543. A C++ file named `.c`, and what two third-party trees said about fmake](#543-a-c-file-named-c-and-what-two-third-party-trees-said-about-fmake) ·
 [544. roc-toolkit: a define whose value varies by directory](#544-roc-toolkit-a-define-whose-value-varies-by-directory) ·
 [545. The ejected Makefile against 545 real sources, and a strip by character](#545-the-ejected-makefile-against-545-real-sources-and-a-strip-by-character) ·
-[546. The goal gap, walked against the six principles](#546-the-goal-gap-walked-against-the-six-principles)
+[546. The goal gap, walked against the six principles](#546-the-goal-gap-walked-against-the-six-principles) ·
+[547. The basename fallback says it guessed](#547-the-basename-fallback-says-it-guessed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43658,10 +43659,27 @@ gives the containing directory, and a name that is the whole path still
 gives `.`.
 
 **A unit case, because neither tree would serve.** llama.cpp cannot be a
-fixture, and three contrived small trees failed to reproduce it -- the
-resolution came through the basename fallback, which declined in every
-one of them. `include_root_for` is module-level precisely so the resolver
-and the diagnostic share one answer, so the case asks it directly.
+fixture, and three contrived small trees failed to reproduce the bogus
+`-I`. `include_root_for` is module-level precisely so the resolver and
+the diagnostic share one answer, so the case asks it directly.
+
+**~~the resolution came through the basename fallback, which declined in
+every one of them~~ -- that was wrong, and section 547's notice is what
+caught it.** The fallback did not decline in those trees: it resolved
+`nowhere/helper.h` to `src/other/helper.h` every time. What was visible
+was the COMPILE failing, because no `-I` can make a named path findable
+when the answer does not carry it, and that was read as the resolver
+having declined. What the small trees actually failed to reproduce is
+narrower and is the thing this section is about: the mid-component
+coincidence, which needs a directory whose name ends with the first
+component of the include text -- `ggml-` meeting `sycl/...`. The
+resolution is common and the bad strip is rare.
+
+Worth keeping because of how it was found. The audit-trail notice
+section 547 added printed `nowhere/helper.h -> src/other/helper.h` on
+the first fixture it was pointed at, which falsified a sentence already
+committed twice over. **A claim about what a tool did, written from what
+its output did not say, is a claim about the output.**
 
 ### A consequence reasoned, then disproved
 
@@ -43783,3 +43801,67 @@ workspace already keeps the number in one place per project, a `VERSION`
 file. Whether fmake should turn that file into a compile-time macro is
 not something three trees settle -- recorded because the shape recurred
 in every one of them, not as a proposal.
+
+## 547. The basename fallback says it guessed
+
+Section 546's goal-gap walk found principle 4 unserved in one place:
+there is no magic without an audit trail, "aggressive assumptions are
+only tolerable if they're inspectable", and `resolve_header`'s basename
+fallback -- which its own comment calls a guess -- made them in silence.
+
+It says so now, and the report is narrow on purpose: **only where the
+include NAMED A PATH that the answer does not carry.** A bare `#include
+"foo.h"` matched to the one `foo.h` in the tree is the fallback working
+as intended, and a line for each would be noise nobody reads. The
+boundary test is `include_root_for`'s, for the same reason.
+
+A `note` rather than a `vinfo`, because `--explain` does not imply
+verbose and the principle names `--explain` -- and a note reaches an
+ordinary build too, where the reader who needs it actually is.
+
+### It paid on the first real tree, and not with the case that motivated it
+
+llama.cpp, seven of them:
+
+    7 include(s) resolved on the basename alone, to a file that does not
+    carry the path they name
+      android/log.h    -> common/log.h
+      mbedtls/sha1.h   -> vendor/hash/sha1/sha1.h
+      mbedtls/sha256.h -> vendor/hash/sha256/sha256.h
+
+Those are not near-misses. Android's logging header is answered with
+llama's own `log.h`, and mbedTLS's SHA-1 and SHA-256 with the vendored
+implementations -- third-party package headers claimed by tree files on
+a basename, in a tree that has neither package installed. Section 545
+found `sycl/backend.hpp` by instrumenting a copy of fmake and reported
+it as one pair; there were seven, and six of them nothing had looked at.
+
+### What it caught first was a sentence in this document
+
+Pointed at the smallest fixture available it printed
+
+    nowhere/helper.h -> src/other/helper.h
+
+which falsifies section 545's claim that the fallback "declined in every
+one of them". It had not declined in any of them. What was visible there
+was the compile failing -- no `-I` can make a named path findable when
+the answer does not carry it -- and that was read as the resolver
+declining. Section 545 is corrected.
+
+**A claim about what a tool did, written from what its output did not
+say, is a claim about the output.** The whole point of principle 4 is
+that an inference nobody can see gets reasoned about instead of read,
+and the first thing this notice did was catch its own author doing that.
+
+### A guard that was doing none of the filtering it claimed
+
+The recording began `if "/" in inc_name:` before the boundary test,
+documented as the thing that kept bare includes out of the report. It
+was redundant: `src/other/helper.h` ends with `helper.h` at a separator,
+so a bare name already satisfies `honoured` and is already skipped.
+
+Found by sabotage, and by the sabotage NOT failing. Replacing the fast
+path with `if True:` left the case passing, which says the guard filtered
+nothing. One test now, and sabotaging that one does fail the case --
+specifically the control half, the bare include being reported, which is
+the notice going from useful to present on every tree.
