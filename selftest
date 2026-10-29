@@ -200,6 +200,32 @@ def links(text, flag):
 	return re.search(r"(?<![\w.-])" + re.escape(flag) + r"(?![\w.-])",
 	                 text) is not None
 
+def explain_block(explain_out, row):
+	"""The entries under one `--explain` row, and nothing after it.
+
+    Two cases asserted a file's ABSENCE over a character window after a
+    row heading -- `ex.split("excluded here")[-1][:400]' -- and a window
+    does not stop at the row. Measured: 400 characters past `excluded
+    here' reaches into `link set', so a file named there satisfies the
+    negation. That is a check which can fail BECAUSE the property holds:
+    `ios_utils.cpp' is not excluded, so it IS linked, so it appears in
+    the link set, which the window sees.
+
+    It passed on where the bytes landed. A sibling case asserting over a
+    region rather than a property did fail when section 550 added a row,
+    which is the same class arriving by the other door.
+    """
+	after = explain_out.split("  " + row, 1)
+	if len(after) == 1:
+		return ""
+	out = []
+	for line in after[1].splitlines()[1:]:
+		if line.startswith("  ") and not line.startswith("    "):
+			break
+		out.append(line)
+	return "\n".join(out)
+
+
 def before_externals(explain_out):
 	"""The part of --explain above the external-symbol list.
 
@@ -716,8 +742,14 @@ int main(void){ banner(); printf("%g %g\\n", circle_area(2), square_area(3)); re
 	for want in ("main.c", "circle.c", "square.c", "util_posix.c"):
 		check(want in before_externals(e),
 		      f"{want} missing from the link set")
+	# `or "not linked" in e' stood here and named no file, so any output
+	# mentioning an unlinked file at all would have satisfied it whatever
+	# scratch.c did. Measured inert today -- fmake prints nothing of the
+	# sort for this tree -- and scoped to the file rather than left as a
+	# hatch that opens on a string.
 	check("scratch.c" not in before_externals(e)
-	      or "not linked" in e, "scratch.c should not be in the link set")
+	      or "scratch.c" in explain_block(e, "compiled, not linked"),
+	      f"scratch.c should not be in the link set: {e}")
 	check(t.run(os.path.basename(t.dir)).stdout == "hi\n12 9\n",
 	      "wrong output")
 
@@ -1302,7 +1334,7 @@ def a_platform_word_in_front_counts_too(t):
 	for name in ("android_view.cpp", "windows_shell.cpp"):
 		check(name in ex and "named for" in ex,
 		      f"{name} should be excluded by its prefix: {ex}")
-	check("ios_utils.cpp" not in ex.split("excluded here")[-1][:400],
+	check("ios_utils.cpp" not in explain_block(ex, "excluded here"),
 	      f"ios_ is not a platform prefix: {ex}")
 
 

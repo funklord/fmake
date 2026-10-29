@@ -599,7 +599,8 @@ that had been green about nothing for five commits ·
 [546. The goal gap, walked against the six principles](#546-the-goal-gap-walked-against-the-six-principles) ·
 [547. The basename fallback says it guessed](#547-the-basename-fallback-says-it-guessed) ·
 [548. A fact about a directory, and where it goes](#548-a-fact-about-a-directory-and-where-it-goes) ·
-[550. Why each inferred `-I` is there](#550-why-each-inferred--i-is-there)
+[550. Why each inferred `-I` is there](#550-why-each-inferred--i-is-there) ·
+[551. A window is not a row, and a hatch that names no file](#551-a-window-is-not-a-row-and-a-hatch-that-names-no-file)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -43430,6 +43431,92 @@ genuinely shared mutable state is `_RUNNING`, and it is locked at all
 three of its sites. The defect above was the one thing that lens found,
 and it was in the locking rather than in the absence of it.
 
+### The demonstration left the deadlock running for 33 hours
+
+Reported by raidcfgd's session on 2026-10-29, found in an after-run
+sweep there and reported rather than touched, which is the only way it
+could have been found: only the session that started something can say
+it was theirs.
+
+    pid 8011, ppid 1, state S, etime 1-09:52, rss 57648 kB
+    python3 .../scratchpad/fm_probe
+    fd 3 -> .../sigtree/.fmake/lock (deleted)
+    one child: pid 8236 [cc] <defunct>, unreaped
+
+**It was the deadlock itself, still deadlocked.** The widened-window race
+above was run against a copy of fmake, the handler wedged on the lock it
+already held, and the script then killed `$BUILD` -- the wrapper -- not
+the interpreter stuck inside the handler. The outer `timeout -s KILL 25`
+bounded the wrapper too. Both died and the deadlocked python outlived
+them, reparented to init.
+
+The unreaped `[cc] <defunct>` is the same fact from the other side: the
+handler never reached its `proc.wait()`, so a compiler it had started was
+never collected -- which is exactly the orphaned-compiler outcome this
+section says the handler exists to prevent, demonstrated and then left
+standing for a day and a half.
+
+**And the sweep run at the time could not have found it.** It was
+
+    ps -eo pid=,ppid=,user=,etime=,args= | awk '$3=="funk" && /fm_probe/'
+
+against an account that is `claude`. It printed nothing and the nothing
+was read as clean. That is `running-code.md`'s rule about a name-keyed
+filter being unable to see what you did not think to name, pointed at the
+USER field rather than the command -- and the same account confusion
+appeared twice more in that session, calling this account's own
+`/tmp/fmake-*` leftovers "the other account's".
+
+Two instrument notes, because both were got wrong while clearing it:
+
+- **`[ -s /proc/<pid>/cmdline ]` INVERTS, rather than merely failing to
+  distinguish.** That was the first wording here and raidcfgd sharpened
+  it, re-measured independently on this account's own live shell: `stat
+  -c %s` says 0 while reading the same file gives 779 bytes, so `[ -s ]`
+  answers "empty" -- which `running-code.md`'s own sentence reads as
+  "zombie" -- for a process that is plainly alive. A liveness check
+  written that way calls **every** live process dead. The distinction
+  matters because it flips the conclusion rather than withholding it.
+  Read the content; do not stat it.
+- **The corrected sweep matches itself.** `awk '$3=="claude" &&
+  /fm_probe/'` finds its own shell and its own awk, the pattern being in
+  their command lines. Measured there with `fm_probe` already gone: two
+  rows against a true population of zero, so the sweep invents a leak.
+  The `pgrep` trap inside the form the document prescribes as its
+  remedy, and inverted -- there the loop never exits, here the sweep
+  reports a leak that is not there. The pid-based form is the one that
+  holds.
+
+**Both are signalled rather than fixed, as `claude-guidelines` c2fe37a**
+-- *"doc: signal that two prescribed sweep forms answer wrongly"*, in the
+*Signals from the projects* list. `running-code.md` binds every project
+and its text is not one tree's to change, and the commit is named so
+that the claim can be checked rather than taken. Verified here: it
+exists and adds 29 lines to that list.
+
+### The pairing, which is raidcfgd's observation and the better half
+
+Their formulation, kept in their words because the insight is theirs:
+one of us had an instrument that could not see, the other had an
+instrument that saw and a label that lied. This account's sweep filtered
+on a user it is not, so it could never match. Theirs was the prescribed
+intersecting form, correct as a command, printed under a heading reading
+"orphans of mine" -- and it returned one row, which was this account's.
+
+**Same failure, opposite halves, and neither is caught by re-running the
+command.** Re-running a filter keyed on the wrong user prints nothing
+again; re-running a correct sweep under a wrong heading prints the same
+row and the heading still lies. What catches either is asking what the
+population was supposed to be and whether the output could have
+contained it.
+
+Cleared with the identity re-read in the same command as the signal,
+since `kernel.pid_max` is 32768 here: SIGKILL rather than SIGTERM,
+the handler being already stuck inside the lock and in no position to
+run another one. 8011 gone, 8236 reaped with it, no other orphan on the
+account, and the deleted lock was zero bytes so nothing was charged to
+it.
+
 ## 543. A C++ file named `.c`, and what two third-party trees said about fmake
 
 The directive in `build-and-commit.md` is that a tree trying to build with
@@ -44176,3 +44263,60 @@ tree whose every target fails gets the diagnostics instead. That is the
 right order -- a reader with nothing built wants the failure, not the
 provenance -- and it is why 545's tree showed the gap and a small
 fixture reproducing only the bad resolution does not.
+
+## 551. A window is not a row, and a hatch that names no file
+
+Section 550's row broke one case and the narrowing of it raised the
+question this section answers: how many of the suite's absence
+assertions test a property, and how many test a region that happens to
+hold it? 467 of them say `not in`. Most slice narrowly -- one line after
+a key, forty characters -- and a narrow slice IS the property. Two did
+not.
+
+### The window reaches past the row it names
+
+    check("ios_utils.cpp" not in ex.split("excluded here")[-1][:400], ...)
+
+The property is that `ios_` is not a platform prefix, so
+`ios_utils.cpp` must not be excluded. Measured: 400 characters past
+`excluded here` runs out of that row and into `link set`.
+
+**So the check can fail BECAUSE the property holds.** A file that is not
+excluded is linked; a linked file is named in the link set; the window
+sees the link set. It passed on where the bytes landed, and section 550
+adding a row above is exactly the sort of thing that moves them -- the
+sibling case asserting over a region did fail that way, which is the
+same class arriving by the other door.
+
+`explain_block(out, row)` returns the entries under one row and stops at
+the next, so the assertion is about the row it names. Sabotage-proved:
+with `ios` taken out of `PLATFORM_PREFIX_UNSAFE` -- the table that holds
+the property -- the case fails.
+
+### A hatch that names no file opens on a string
+
+    check("scratch.c" not in before_externals(e) or "not linked" in e, ...)
+
+The second branch mentions no file, so any output mentioning an unlinked
+file at all would have satisfied it whatever `scratch.c` did. Measured
+inert today: fmake prints nothing of the sort for that tree, so the
+property carried the check. Scoped to `scratch.c` in the
+`compiled, not linked` block now. Correct by construction rather than by
+sabotage: a wrongly linked `scratch.c` is in `before_externals` and
+absent from the not-linked block, so both branches are false -- stated
+as construction because no small change to fmake links an unreferenced
+file.
+
+### The mistake in finding it, which cost two wrong conclusions
+
+The assertion's line number was read from a grep taken BEFORE
+`explain_block` was inserted, and the file was read after -- 33 lines
+later. So the wrong case was identified as the owner, the wrong fixture
+was read against the assertion, and the sabotage ran a case that has
+nothing to do with `ios_`. It passed, and was briefly taken for the
+narrowed check being vacuous.
+
+**A line number is a measurement of a file, and editing the file
+invalidates it.** The same shape as the stale-process-table hazard in
+`running-code.md`: an identifier enumerated once and acted on after the
+thing moved. Re-grep for the text, not the line.
