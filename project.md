@@ -2372,6 +2372,25 @@ rather than code, and one lesson about testing.
 - **The symbol scan is Linux/ELF-shaped.** `libNAME.so`, ld scripts, and
   `ldconfig`-style layout. macOS (`.dylib`, two-level namespaces) and Windows
   are unhandled.
+
+  **Two halves of it are not, which is worth knowing before anybody starts.**
+  `symbol_tokens` already offers both the ELF and the Mach-O spelling of a C
+  identifier, because Mach-O prefixes an underscore and ELF does not, and
+  `_looks_built` already recognises the four Mach-O magics, the fat header
+  and `MZ` beside `\x7fELF`. So the formats are not foreign to the source;
+  what is ELF-shaped is library *resolution* -- the file naming, the ld
+  scripts and the search layout.
+
+  **What it waits for is an `nm` that reads Mach-O, not a Mac.** Measured
+  2026-11-03 on this machine: `clang -target x86_64-apple-macos11 -c`
+  produces a real Mach-O object here (magic `cffaedfe`), and binutils `nm`
+  answers `file format not recognized`. Since the whole provider model is
+  `nm` output, the first step cannot be exercised at all -- not for want of
+  a platform, but because the instrument is not built with Mach-O support
+  and no `llvm-nm` is installed. That is a cheaper blocker than it looks:
+  the `llvm` package carries one, and with it the symbol half becomes
+  testable on this machine without a Mac anywhere. Whether to install it is
+  the copyright holder's.
 - ~~**The default build builds tests too.**~~ Closed; see §49. The directory
   convention is `test`/`tests` and the two filename shapes, nothing else, and
   it decides only what the *default* target builds rather than what exists —
