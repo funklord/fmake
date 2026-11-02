@@ -15618,8 +15618,32 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		_read = [u for u in units.values()
 		         if u.compiled and u.obj and u.key not in broken
 		         and not u.prebuilt and not u.archive]
-		if len(_read) > 1 and not any(u.undef or u.strong or u.weak
-		                              for u in _read):
+		# Not on a dry run, which is the condition this check cannot
+		# tell from the fault it exists for. A dry run marks every
+		# planned unit compiled with EMPTY symbol tables a few thousand
+		# lines above -- `if dry_run: u.undef, u.strong, u.weak = set(),
+		# set(), set()' -- so every object reads as defining nothing for
+		# the same reason a silent nm makes them read that way, and this
+		# fires on emptiness it created itself. What it then prints is a
+		# toolchain fault that is not there: set [toolchain] nm, check it
+		# is not a wrapper exiting 0 having printed nothing. It even says
+		# the objects are of unknown identity, because there is no object
+		# to identify.
+		#
+		# Reported from raidcfgd 2026-11-02, which spent a minute
+		# checking its nm before noticing that the next paragraph of the
+		# same output says "nothing was compiled, so there are no symbols
+		# to resolve". Two lines of one report disagreeing about whether
+		# a dry run compiles, with the louder one wrong.
+		#
+		# It needs two units the include graph REACHES, which is why no
+		# case caught it: a dry run plans only what the graph reaches, so
+		# a two-file tree whose second file joins through widening gives
+		# one object and the check wants more than one. A header-paired
+		# pair is the smallest tree that reaches it.
+		if (not args.dry_run and len(_read) > 1
+		        and not any(u.undef or u.strong or u.weak
+		                    for u in _read)):
 			warn_once(
 			    f"{cfg.nm} read no symbols from any of the {len(_read)} "
 			    f"object(s) this build compiled, and exited 0 for each.\n"

@@ -34369,6 +34369,68 @@ int main(void){ return shared_thing() == 5 ? 0 : 1; }
 
 
 @case
+def a_dry_run_is_not_told_its_nm_is_broken(t):
+	"""The silent-nm check fired on a dry run's own emptiness.
+
+	A dry run marks every planned unit compiled with empty symbol tables --
+	`if dry_run: u.undef, u.strong, u.weak = set(), set(), set()' -- which
+	is right, since nothing has been compiled and nothing can be claimed
+	about its symbols. Nothing between there and the check branched on it,
+	so every object read as defining nothing for the same reason a silent
+	`nm' makes them read that way, and the two were indistinguishable.
+
+	What it printed was a toolchain fault that was not there: 128 objects
+	"this build compiled", and advice to set [toolchain] nm to one that
+	reads unknown objects -- unknown because `elf_identity' was asked about
+	a file that does not exist. Reported from raidcfgd 2026-11-02, which
+	checked its nm before noticing that the next paragraph of the same
+	output says nothing was compiled.
+
+	The fixture is a header-paired pair rather than two loose files, and
+	that is the whole reason no case caught this: the check wants more than
+	one empty object, and a dry run plans only what the include graph
+	reaches. `main.c' plus an `f.c' it merely declares gives ONE planned
+	object, because the second joins through widening -- so every tree here
+	small enough to be a fixture was below the threshold by one.
+
+	The control is the half that matters. Suppressing the warning
+	altogether would pass the first assertion, so a real build with an `nm'
+	that exits 0 saying nothing must still be told."""
+	t.write("helper.h", "int helper(void);\n")
+	t.write("helper.c", '#include "helper.h"\nint helper(void){ return 3; }\n')
+	t.write("main.c", '#include "helper.h"\n'
+	        "int main(void){ return helper() - 3; }\n")
+
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the dry run failed: {out}")
+	check("read no symbols" not in out,
+	      f"a dry run was told its nm reads no symbols, about objects it "
+	      f"did not compile: {out}")
+	# The honest explanation stays: one line was removed, not the reason.
+	check("nothing was compiled" in out,
+	      f"the dry run no longer says why it resolves no libraries: {out}")
+	# And the threshold really is reached here, so the assertion above is
+	# not passing because the tree is too small to ask the question.
+	check(out.count(" -c ") > 1,
+	      f"the fixture plans fewer than two compiles, so it cannot reach "
+	      f"the check at all: {out}")
+
+	# The control: a real build whose nm says nothing is still told.
+	shim = os.path.join(t.dir, "shim")
+	os.makedirs(shim, exist_ok=True)
+	with open(os.path.join(shim, "nm"), "w") as fh:
+		fh.write("#!/bin/sh\nexit 0\n")
+	os.chmod(os.path.join(shim, "nm"), 0o755)
+	if not shutil.which("nm"):
+		raise Skip("no nm to shadow")
+	r = t.fmake(env={"PATH": shim + os.pathsep + os.environ.get("PATH", "")})
+	out = r.stdout + r.stderr
+	check("read no symbols" in out,
+	      f"a real build with a silent nm is no longer told: {out}")
+
+
+@case
 def a_silent_nm_is_named_rather_than_the_source(t):
 	"""Section 223 left this half, with the discriminator worked out.
 

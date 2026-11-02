@@ -605,7 +605,8 @@ that had been green about nothing for five commits ·
 [553. Which fmake a report was measured against, and how to date it](#553-which-fmake-a-report-was-measured-against-and-how-to-date-it) ·
 [554. The clean that cleans one of its two lists -- open](#554-the-clean-that-cleans-one-of-its-two-lists----open) ·
 [555. A "not for" list is where a README goes stale first](#555-a-not-for-list-is-where-a-readme-goes-stale-first) ·
-[556. The section that exists and was called unknown](#556-the-section-that-exists-and-was-called-unknown)
+[556. The section that exists and was called unknown](#556-the-section-that-exists-and-was-called-unknown) ·
+[557. The silent-nm check fired on a dry run's own emptiness](#557-the-silent-nm-check-fired-on-a-dry-runs-own-emptiness)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44709,3 +44710,58 @@ not obviously worth it: the one real instance now has a case, and the
 hazard it guards against is a future section added outside `CONF_SCHEMA`,
 which is rare and which that case would not catch either. Recorded as
 considered rather than left as an absence somebody should wonder about.
+
+## 557. The silent-nm check fired on a dry run's own emptiness
+
+Reported from raidcfgd 2026-11-02. A dry run of a real tree printed
+
+    * /usr/bin/nm read no symbols from any of the 128 object(s) this
+      build compiled, and exited 0 for each.
+      ... Set [toolchain] nm in fmake.toml, or $NM, to one that reads
+      unknown objects, and check it is not a wrapper that exits 0 having
+      printed nothing.
+
+while the next paragraph of the same output said *nothing was compiled,
+so there are no symbols to resolve*. **Two lines of one report
+disagreeing about whether a dry run compiles, and the louder one wrong**
+-- it names a toolchain fault, the reader goes and checks their `nm`, and
+their `nm` is fine. That minute is the whole cost, and it is paid by
+somebody who was already looking at an unfamiliar output.
+
+The cause is that a dry run manufactures the exact condition the check
+exists to detect:
+
+    if dry_run:
+        for u in todo:
+            u.undef, u.strong, u.weak = set(), set(), set()
+            u.compiled = True
+
+Every planned unit is marked compiled with empty tables, which is right
+-- nothing has been compiled, so nothing can be claimed about its
+symbols -- and nothing between there and the check branches on
+`dry_run`. So every object reads as defining nothing for the same reason
+a silent `nm` makes them read that way, and the two are indistinguishable
+at the check. It even advises an `nm` that reads *unknown* objects,
+because `elf_identity` was asked about a file that does not exist.
+
+The fix is the guard the next statement already has, and the statement
+after it confirms `main()` only `if not args.dry_run`. One condition.
+
+**Why no case caught it is the half worth keeping.** The check wants more
+than one empty object -- a single one is ordinary, which its own comment
+argues -- and **a dry run plans only what the include graph reaches**. So
+a two-file tree whose second file joins the link set through widening
+gives exactly one planned object, and the check never fires. Measured:
+`main.c` plus `f.c` with a declaration gives `_read=1`; three files the
+same way still gives 1; a header-paired `helper.h`/`helper.c`/`main.c`
+gives 2 and fires it. The smallest tree that reaches this is not the
+smallest tree, and every fixture here that could have met it was below
+the threshold by one object.
+
+That is the dry run's documented limitation -- *a source that joins a
+link set only through widening is missing from the lists above
+altogether* -- acting as an accidental shield over a bug in the same
+code path. A limitation that hides a defect is worth noting wherever the
+limitation is already written down.
+
+It fires at `ab07209` too, so it is long-standing rather than new.
