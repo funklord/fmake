@@ -34577,6 +34577,67 @@ def a_symlink_does_not_switch_off_the_gitignore_rule(t):
 
 
 @case
+def a_schema_git_ignores_is_not_read_as_source(t):
+	"""situ could not be built at all, over two files nobody wrote.
+
+	`dh_install` leaves a copy of a schema in each package staging tree, so
+	`debian/situc/.../bmp.situ` and `debian/tmp/.../bmp.situ` both generate
+	`bmp.h` and section 3 refuses to choose. situ's own .gitignore names
+	both directories and `git check-ignore` confirms them, so fmake had the
+	answer and read the files anyway.
+
+	One collection was not asking the question its neighbour asks:
+	`find_archives` hands its list to `git_ignored` and drops what git
+	ignores -- nobody can check such a file out, so it cannot be what this
+	tree builds against -- and `find_ext`, which collects schemas, walked
+	for itself and asked nothing.
+
+	Asked of git rather than of `ignored_source_dirs`, and that is the trap
+	this fixture also pins: that set is derived from the SOURCE set, so a
+	directory holding a schema and no C source is not in it at all. `staged/`
+	here holds exactly one schema and nothing else.
+
+	The second half is the control: two TRACKED schemas that collide must
+	still refuse, or the fix has turned off the ambiguity check rather than
+	narrowing what reaches it."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	t.write("thing.situ", "struct s { u8 x; };\n")
+	t.write("staged/thing.situ", "struct s { u8 x; };\n")
+	t.write("main.c", '#include "thing.h"\nint main(void){ return 0; }\n')
+	t.write(".gitignore", "staged/\n")
+	check(subprocess.run(["git", "init", "-q", t.dir],
+	                     capture_output=True).returncode == 0,
+	      "could not make a repository")
+	for args in (["add", "main.c", "thing.situ", ".gitignore"],
+	             ["-c", "user.email=a@b", "-c", "user.name=c",
+	              "commit", "-qm", "init"]):
+		check(subprocess.run(["git", "-C", t.dir] + args,
+		                     capture_output=True).returncode == 0,
+		      f"git {args[0]} failed")
+
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check("both generate" not in out,
+	      f"a schema git ignores collided with the tracked one, so the walk "
+	      f"that collects schemas is still not asking git: {out}")
+
+	# The control: tracked copies still collide.
+	u = Tree("schema-tracked")
+	try:
+		u.write("a/dup.situ", "struct s { u8 x; };\n")
+		u.write("b/dup.situ", "struct s { u8 x; };\n")
+		u.write("main.c", '#include "dup.h"\nint main(void){ return 0; }\n')
+		r = u.fmake("-n")
+		out = r.stdout + r.stderr
+		check("both generate" in out,
+		      f"two schemas this tree tracks no longer collide, so the "
+		      f"ambiguity check was turned off rather than narrowed: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_silent_nm_is_named_rather_than_the_source(t):
 	"""Section 223 left this half, with the discriminator worked out.
 

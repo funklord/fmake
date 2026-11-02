@@ -608,7 +608,8 @@ that had been green about nothing for five commits ·
 [556. The section that exists and was called unknown](#556-the-section-that-exists-and-was-called-unknown) ·
 [557. The silent-nm check fired on a dry run's own emptiness](#557-the-silent-nm-check-fired-on-a-dry-runs-own-emptiness) ·
 [559. Refusing a build over a directive it had already discarded](#559-refusing-a-build-over-a-directive-it-had-already-discarded) ·
-[560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide)
+[560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide) ·
+[562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44892,3 +44893,40 @@ asks about a thousand paths at once -- so the safe answer for one path
 became the wrong answer for the rest. **A fail-safe default is only as
 local as the call it guards**, and the thing to check is not whether the
 default is cautious but how many answers it is standing in for.
+
+## 562. The archive walk asked git; the schema walk never did
+
+situ cannot be built by fmake, and the refusal names two files its author
+never wrote:
+
+    !!! debian/situc/usr/share/situc/example/bmp/bmp.situ and
+        debian/tmp/usr/share/situc/example/bmp/bmp.situ both generate
+        bmp.h, and the source that includes it cannot say which it meant.
+
+`dh_install` leaves a copy of `example/bmp/bmp.situ` in each package
+staging tree. situ's own `.gitignore` names both directories -- lines 13
+and 14, `debian/tmp/` and `debian/situc/` -- and `git check-ignore`
+confirms both. So fmake had the answer and read the files anyway.
+
+**The cause is one collection that does not ask the question its
+neighbour asks.** `find_archives` hands its list to `git_ignored` and
+drops what git ignores, with the argument spelled out there: nobody can
+check such a file out, so it cannot be what this tree builds against.
+`find_ext(root, SITU_EXT)` walks for itself and asked nothing.
+
+So the fix is to copy the pattern already in the file rather than invent
+one -- `git_ignored(root, found)` right after the walk. Measured: situ
+goes from *cannot be built* to exit 0 with no refusals, reporting its
+twelve test programs as not built by default.
+
+**Asked of git rather than of `ignored_source_dirs`, and that distinction
+is the trap.** The cheaper-looking test is the ignored-directory set the
+source filter already computes -- and it is derived from the SOURCE set,
+so a directory holding a schema and no C source is not in it at all.
+`debian/tmp/usr/share/situc/example/bmp/` is exactly such a directory.
+The instrument that looks like the one to reuse could not have answered
+this question.
+
+The control is what keeps it honest: two *tracked* schemas that genuinely
+collide, `a/dup.situ` and `b/dup.situ`, still refuse. The ambiguity check
+is unchanged; what changed is which files reach it.

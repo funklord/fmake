@@ -4728,6 +4728,26 @@ def situ_plan(root, hdrs, scans, skip=None, declared=()):
 	# code, so the declaration is what makes the question answerable at
 	# all.
 	found = list(find_ext(root, SITU_EXT))
+	# The same question the archive walk already asks, at the collection
+	# that did not ask it. `find_archives' hands its list to
+	# `git_ignored' and drops what git ignores, with the argument written
+	# out there: nobody can check such a file out, so it cannot be what
+	# this tree builds against. `find_ext' walks for itself and asked
+	# nothing, so a schema git ignores was read as source.
+	#
+	# situ is the tree that found it, and it could not be built at all:
+	# `dh_install' leaves a copy of `example/bmp/bmp.situ' in
+	# `debian/tmp/' and another in `debian/situc/', its .gitignore names
+	# both, and the two collide generating `bmp.h' -- a refusal naming
+	# two files its author never wrote, in directories the build created.
+	#
+	# Asked of git rather than of `ignored_source_dirs', which is derived
+	# from the SOURCE set: a directory holding a schema and no C source
+	# is not in it, so the cheaper-looking test would not have fired here.
+	if found:
+		_ignored = git_ignored(root, found)
+		if _ignored:
+			found = [r for r in found if r not in _ignored]
 	if theirs:
 		by_base, drop = {}, set()
 		for rel in found:
