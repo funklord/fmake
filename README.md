@@ -1444,11 +1444,15 @@ both were reasonable ones.
 
 ### What it is not for
 
-- **Anything that needs a configure step.** Symbol inference answers *what do
-  I link*; it cannot answer *what do I compile*. A project with
-  feature-detection — `#ifdef HAVE_SODIUM` deciding whether code exists at
-  all — needs those `-D`s supplied, because when the library is absent there
-  is no call to infer from.
+- **Working out a configure step for itself.** Symbol inference answers
+  *what do I link*; it cannot answer *what do I compile*, because when a
+  library is absent there is no call to infer from. The commonest shape is
+  declared rather than inferred: `@pkg_optional sodium defines HAVE_SODIUM`
+  defines the macro for the whole tree when pkg-config finds the library and
+  leaves it undefined when it does not, which is the answer a `configure`
+  run would have reached. What has no equivalent here is a probe with no
+  package behind it — compiling a snippet to see whether a function exists
+  or what size a type is.
 - **Fetching dependencies.** It builds what is there and finds libraries
   already installed. It is not a package manager.
 - **C++20 header units and `import std;`.** Named modules are built --

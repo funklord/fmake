@@ -44632,15 +44632,26 @@ place to another carries its claims with it, and the only thing that
 checks them is running the tool.
 
 So the check worth repeating is cheap and mechanical: **for each bullet in
-a "not for" list, ask the tool.** Of the six here, two were capability
-claims the tool could be asked about and both were wrong -- Rust in
-October, modules now. The other four are not the same kind of sentence:
-a configure step, fetching dependencies and having nowhere to put logic
-are things fmake declines by design and states why, and macOS and Windows
-cannot be checked from this machine at all. That is the honest scope of
-the lens rather than a clean sweep -- it finds bullets that deny a
-capability, and a bullet declaring an intention is not stale merely
-because nobody re-ran it.
+a "not for" list, ask the tool.** Of the six here, two were flat
+capability claims and both were wrong -- Rust in October, modules now --
+and **a third was understating, which this entry first got wrong.** It
+said the configure-step bullet was something fmake declines by design and
+states why. Half of that is right: inference cannot answer what to
+compile. But the commonest feature-detection shape is served, by
+`@pkg_optional NAME defines MACRO`, which defines a macro tree-wide when
+pkg-config finds the package -- so the bullet read as *fmake cannot help*
+over a tree where one annotation does it, and the directive appears
+nowhere but the directive table. Found by proposing that very mechanism
+as a goal-gap item and then looking for where the project had settled it
+under another name, which is what the `/go` skill asks before treating
+anything as open.
+
+So the classification above was the error this entry warns about, made
+while writing the warning: **a bullet declaring an intention and a bullet
+understating a capability read the same**, and only asking the tool
+separates them. Of the remaining three, fetching dependencies and having
+nowhere to put logic are genuine design statements, and macOS and Windows
+cannot be checked from this machine at all.
 
 ## 556. The section that exists and was called unknown
 
