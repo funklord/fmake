@@ -609,7 +609,8 @@ that had been green about nothing for five commits ·
 [557. The silent-nm check fired on a dry run's own emptiness](#557-the-silent-nm-check-fired-on-a-dry-runs-own-emptiness) ·
 [558. Two generated runtimes, and what provenance could decide](#558-two-generated-runtimes-and-what-provenance-could-decide)
 [559. Refusing a build over a directive it had already discarded](#559-refusing-a-build-over-a-directive-it-had-already-discarded) ·
-[560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide) ·
+[560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide) · ·
+[561. Another project's tests, compiled and then counted against us](#561-another-projects-tests-compiled-and-then-counted-against-us)
 [562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did)
 
 If you read one section, read §3: everything else follows from it. If you read
@@ -45046,3 +45047,101 @@ files, and section 15 reserves the direction in as many words. A project
 may vendor a dependency precisely in order to link its copy. So the
 option, its cost and its owner -- which is what this file asks of a
 record describing something not its author's to decide.
+
+## 561. Another project's tests, compiled and then counted against us
+
+fmake already declines to build a separate checkout's programs, and says
+so: *fuzznet is a separate checkout; leaving its own 189 programs to it*.
+**That decision was applied to programs and not to units.** Those files
+were still compiled as candidate providers, and every one that failed
+counted against the build.
+
+raidcfgd measured it. With the duplicate-schema exclude of section 558 in
+place it builds twelve of its own programs and refuses nothing -- and
+exits 1 anyway, on exactly five files:
+
+    fuzznet/node/test/peer_persist_test.c
+    fuzznet/qtty/test/suite_backend.cpp
+    fuzznet/qtty/test/suite_render.cpp
+    fuzznet/qtty/test/suite_widgets.cpp
+    fuzznet/quirc/tests/inspect_opencv.cxx
+
+Every one belongs to a project this build had already disclaimed. Every
+one fails for a reason only that project's own build can supply -- an
+`-I` it passes to its tests, or OpenCV. And all twelve programs linked
+without them, so nothing needed any of them. What the reader is told is
+that five files they do not own and cannot fix did not compile; fmake
+even groups them by owner while reporting them.
+
+All three of the includes raidcfgd reported as the cause of its failure
+are in these files.
+
+**And the five were the visible part of 263.** With the rule in place
+that tree reports
+
+    * 263 test source(s) not compiled: they are fuzznet, fuzznet/flog
+      and 4 more's own tests, and this build does not build that
+      project's programs either
+
+so the cost was not five confusing messages but 263 files compiled on
+behalf of six other projects, five of which happened to fail. The
+failures were what made it visible; the waste was always there.
+
+The same run still says *34 test programs not built by default
+(gui_icons, ...); `fmake test` builds and runs them* -- this tree's own
+tests, recognised and still reachable. That is the line to watch, because
+it is what `looks_like_a_test`'s narrowness exists to protect.
+
+**End to end it finishes the tree.** raidcfgd's three states, measured:
+
+    as found                  exit 1, no binaries   (duplicate runtime)
+    + one exclude line        exit 1, 12 binaries   (five foreign tests)
+    + this rule               exit 0, 12 binaries
+
+So with section 562's exclude named by section 558's message and this
+rule in place, fmake builds raidcfgd completely.
+
+### Two attempts, and what each one cost to learn
+
+**The first filtered `srcs` where `vendored` was computed, and did not
+work.** It measured well on the real tree -- 263 files skipped, raidcfgd
+at exit 0 -- and a fixture built to reach the hazard disagreed. With
+`main.c` including `vendor/test/suite.h`, the header's companion
+`suite.c` is reached from a program root and compiled and nothing needs
+its symbol, which is raidcfgd's shape; the patched build printed *1 test
+source(s) not compiled* and then compiled it, fatal error. The cause was
+placement: `Project` settles membership and is built 64 lines above
+where the filter sat, so `proj.candidates` walked to the file anyway.
+
+**The second moved the filter above `Project`, passed its case, rebuilt
+raidcfgd cold to exit 0 with twelve binaries -- and the suite refused
+it, three ways.** All three say the same thing, which is that removing
+the file from `srcs` removes it from mechanisms that still need to see
+it:
+
+- `a_submodules_own_programs_are_left_to_it` -- the *"leaving its own N
+  programs to it"* report cannot name a file that is no longer there.
+- `a_vendored_program_can_be_asked_for` -- `[target.flogtest] root =
+  'flog/tests/test.c'` becomes *is not a source file in this tree*. A
+  vendored program can be asked for on purpose, and that is a capability
+  rather than an accident.
+- `a_separate_checkouts_own_program_does_not_ask_for_a_schema` -- whose
+  own self-check fired: *the fixture did not pass the vendored program
+  over, so this case is not testing what it says.* The filter pre-empted
+  the mechanism that case's fixture depends on.
+
+So the rule is right and `srcs` is the wrong place to apply it twice
+over: it has to act where candidate membership is decided, leaving the
+file present for the program-level pass-over and for an explicit
+request. Stashed, not discarded.
+
+### What the sequence is worth keeping for
+
+Each layer of evidence passed the version the next one refused. The
+real-tree measurement passed a patch that did not work; a case asserting
+the message passed it too; a purpose-built fixture caught that one and
+then passed a patch that breaks three supported behaviours; and only the
+whole suite caught those. **The evidence that is cheapest to gather is
+the evidence that agrees with you**, and the order here was: real tree,
+own case, adversarial fixture, suite -- each one strictly more
+expensive, each one finding what the one before could not.
