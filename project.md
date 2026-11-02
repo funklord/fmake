@@ -611,7 +611,8 @@ that had been green about nothing for five commits ·
 [559. Refusing a build over a directive it had already discarded](#559-refusing-a-build-over-a-directive-it-had-already-discarded) ·
 [560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide) · ·
 [561. Another project's tests, compiled and then counted against us](#561-another-projects-tests-compiled-and-then-counted-against-us)
-[562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did)
+[562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did) ·
+[563. What fmake costs on the big trees, and what the load was](#563-what-fmake-costs-on-the-big-trees-and-what-the-load-was)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -45215,3 +45216,52 @@ Four attempts: below `Project` it never bites, on `srcs` it bites too
 hard, on `candidates` it bites in the wrong half, and on both at once it
 bites exactly where the file stops being a guess.
 
+
+## 563. What fmake costs on the big trees, and what the load was
+
+Section 8 states the one measurable aim fmake has about itself --
+*compilation dominates wall time; fmake's job is to not add to it* -- and
+rests it on two reference projects of 6 and 152 files going cold to zero.
+Those are small. The private trees are an order of magnitude bigger, and
+nothing had asked them.
+
+Measured on 2026-11-03 at load average 7, with `/usr/bin/time -f` around
+`fmake -C <tree> -n`, and the source count from a `find` for `*.c`,
+`*.cpp` and `*.rs`:
+
+    raidcfgd    568 sources   cold dry run 10.3s   62 MB
+    netcfgd    1401 sources   cold dry run 45.2s  108 MB
+    beerssh    4391 sources   cold dry run 78.5s  131 MB
+
+**Not superlinear, which is the property worth having.** About 18 ms a
+source at 568 and the same at 4391; netcfgd's 32 ms is its own shape --
+a staged rootfs full of headers to scan, and Rust. Resident memory grows
+sublinearly across an eightfold range of tree size.
+
+**And the fixed point holds at 568 sources**, where the record had it at
+152. On a copy of raidcfgd with a warm cache, two consecutive real builds
+compiled nothing: 0 compile lines, 0 links, 1.23s, 72 MB. That is section
+8's *building twice compiles nothing the second time*, at four times the
+scale it was checked at.
+
+So the aim is served and the numbers are now on record for a size that
+matters.
+
+### The figure the load invented
+
+The same three trees, swept on 2026-11-02 while another account held the
+machine at load 70 to 90, read very differently: netcfgd appeared to
+**time out at 180s** and beerssh at 300s. Both were re-measured then --
+netcfgd finished in about 240s, beerssh inside 1200s -- and both now run
+in 45s and 78s.
+
+So one of those figures was about fmake and the other three were about
+the machine. **A timing taken on a loaded machine is a measurement of the
+load**, and the only thing that distinguished them was re-running with
+the load written down. `running-code.md` says the elapsed count beside
+the estimate is what separates slow from hung; this is the same point one
+step further -- it also separates slow from somebody else's build.
+
+Worth keeping because the cheap conclusion was available and wrong twice:
+a dry run that does not finish inside a bound looks exactly like a hang,
+and twice it was neither.
