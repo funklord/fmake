@@ -4748,6 +4748,19 @@ def situ_plan(root, hdrs, scans, skip=None, declared=()):
 		_ignored = git_ignored(root, found)
 		if _ignored:
 			found = [r for r in found if r not in _ignored]
+			# Said, for the reason the archive walk says it: principle 4
+			# asks that a decision be inspectable, and this one changes
+			# what gets generated. The first version of this filter was
+			# silent, which left the two walks asymmetric -- an ignored
+			# archive announced itself and an ignored schema did not --
+			# so a reader whose schema is in a staging tree and whose
+			# header never appears had nothing to read. Section 565.
+			_named = sorted(_ignored)
+			info(f"{len(_named)} schema(s) not read: git is told to "
+			     f"ignore {', '.join(_named[:3])}"
+			     f"{f' and {len(_named) - 3} more' if len(_named) > 3 else ''}"
+			     f", so they are output rather than something this tree "
+			     f"maintains")
 	if theirs:
 		by_base, drop = {}, set()
 		for rel in found:

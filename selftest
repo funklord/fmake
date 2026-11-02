@@ -34621,6 +34621,15 @@ def a_schema_git_ignores_is_not_read_as_source(t):
 	check("both generate" not in out,
 	      f"a schema git ignores collided with the tracked one, so the walk "
 	      f"that collects schemas is still not asking git: {out}")
+	# And it says so, which principle 4 asks of a decision that changes
+	# what gets generated. The first version of this filter was silent,
+	# leaving the two walks asymmetric: an ignored archive announced
+	# itself and an ignored schema did not. On situ that silence covered
+	# 70 files rather than the two that collided.
+	check("schema(s) not read" in out and "git is told to ignore" in out,
+	      f"the skip is silent, so a reader whose schema is in a staging "
+	      f"tree and whose header never appears has nothing to read: "
+	      f"{out}")
 
 	# The control: tracked copies still collide.
 	u = Tree("schema-tracked")

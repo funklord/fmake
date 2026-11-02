@@ -613,7 +613,8 @@ that had been green about nothing for five commits ·
 [561. Another project's tests, compiled and then counted against us](#561-another-projects-tests-compiled-and-then-counted-against-us)
 [562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did) ·
 [563. What fmake costs on the big trees, and what the load was](#563-what-fmake-costs-on-the-big-trees-and-what-the-load-was) ·
-[564. A gate over the error paths nothing else reaches](#564-a-gate-over-the-error-paths-nothing-else-reaches)
+[564. A gate over the error paths nothing else reaches](#564-a-gate-over-the-error-paths-nothing-else-reaches) ·
+[565. The aims, asked rather than assumed](#565-the-aims-asked-rather-than-assumed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -45396,3 +45397,83 @@ block this project's commits over another tree's source;
 `harmonization.md` asks that a fault in a spread copy be signalled to its
 owner instead. The walk is pointed at this project's two files and
 nothing else.
+
+## 565. The aims, asked rather than assumed
+
+A pass over section 2's principles and section 1's own worked examples,
+asking each one as a question with a measurement rather than reading the
+code and agreeing with it. Five came back yes and the sixth found
+something, which is roughly the yield to expect and is why the five are
+recorded too: a pass whose answers are all yes is the kind nobody
+repeats, so the next reader needs to know what was asked and by what
+method, in order to ask something else.
+
+**Section 1's second example had never been run here.** The premise says
+*a file that does `#include <SDL2/SDL.h>` wants `sdl2` linked*, and SDL2
+was not installed on this machine until recently -- section 13 recorded
+its absence. It is 2.32.4 now, so: one file calling `SDL_Init` and
+`SDL_Quit`, no annotation and no config file, builds and links `-lSDL2`.
+The headline claim, measured, for the first time.
+
+**Principle 5 holds for the newest layer.** `[directory]` arrived days
+ago, and a layer the exit does not carry would make `--eject` lossy --
+the same shape as a rule reaching one of two collections. It carries it:
+the ejected Makefile puts `-DFROM_SUB=1` on `sub/sub.c.o`'s rule and not
+on `main.c.o`'s, and `make -f` reproduces both command lines.
+
+**A gitignored copy of a `Q_OBJECT` header is not moc'd twice.** Asked
+because gitignore deliberately spares HEADERS -- a configure step's
+`config.h` has to stay resolvable -- and moc works from headers, which
+looked like the same rule reaching one collection of two. It is not: moc
+runs on headers the include graph REACHES, and nothing includes the copy
+in the ignored directory. One `MOC w.h`, not two.
+
+**237 of 245 refusals name what they are about.** Asked of section 196's
+other half: it established that unproduced wording is unwatched, so the
+cheap question is how many refusals interpolate nothing at all and
+therefore name nothing. Eight, and reading them, each is either properly
+context-free -- `no nm found`, `--run needs a file` -- or has its detail
+printed immediately above it, which `no target could be built` does. No
+finding, and the ratio is the useful number.
+
+**No resource leak.** `mkdtemp` appears zero times, `TemporaryDirectory`
+once, and three `open()` calls sit outside a `with`: two are
+read-and-compare expressions closed by refcounting, and the third is
+`TreeLock`'s lock file, which is a context manager that unlocks and
+closes in its exit path.
+
+**And the sixth question found something, in this week's own code.**
+Principle 4 asks that every inference be inspectable, so: do the two
+declines added this week appear in `--explain`? The vendored-tests one
+does. The gitignored-schema one did not -- it filtered silently, while
+the archive walk it was modelled on announces its skip by name. That is
+the same asymmetry the schema filter exists to fix, inside the fix.
+
+The silence covered more than the fault it was written for: on situ it is
+**70 schemas**, not the two that collided, and a reader whose schema sits
+in a staging tree and whose header never appears had nothing to read. It
+says so now.
+
+It names three and then a count, which is the archive walk's shape rather
+than a choice made fresh -- and on situ those three are long staging
+paths, so the line runs wide. Kept anyway: the defect being fixed is that
+the two walks did not behave alike, and a message that announces the same
+kind of skip in a different shape is a smaller version of the same
+complaint.
+
+### What this pass is worth
+
+Six questions, five answered yes and the sixth a finding -- and the value
+is in which questions were asked, because four of them were shaped by the
+week's defects rather than chosen from a list. A rule reaching one
+collection of two produced the moc question and the `--eject` question;
+an unproduced diagnostic produced the wording count; the audit trail
+produced the sixth. **The lens from the last bug keeps paying even when
+it comes back empty**, because an empty answer about the right question
+is worth more than a full one about the wrong question -- and a dry hunt
+is only cheap if somebody writes down that it was dry.
+
+The sixth is the argument's other half, and the sharper half: the lens
+found a gap in the patch written for the defect that shaped it. Which is
+as close as this file gets to a rule about where to look next -- at what
+you have just changed, with the question the change itself taught you.
