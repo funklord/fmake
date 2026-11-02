@@ -44946,8 +44946,25 @@ check such a file out, so it cannot be what this tree builds against.
 
 So the fix is to copy the pattern already in the file rather than invent
 one -- `git_ignored(root, found)` right after the walk. Measured: situ
-goes from *cannot be built* to exit 0 with no refusals, reporting its
-twelve test programs as not built by default.
+goes from *cannot be built* to planning its build with no refusals at
+all, reporting its twelve test programs as not built by default.
+
+**And "exit 0" is a claim about a dry run, which this entry first made
+without saying so.** `fmake -C situ -n` exits 0; a real build or an
+`--eject`, both of which compile, exit 1 -- on
+`test/generated/test_runtime.c` and ten of its siblings, with
+*incompatible type for argument 1 of `situ_view_check`*. Those are situ's
+own committed generated tests, and fmake regenerates the runtime from the
+schemas, so the two were produced by different situc versions and their
+signatures disagree. That is situ's tree rather than fmake's inference,
+and it is unchanged by this fix: HEAD before it exits 1 the same way.
+
+The distinction matters because it is the one this file keeps paying for.
+A dry run closes no link sets and compiles nothing, which section 8 says
+and fmake's own dry-run caveat repeats -- so an exit code from `-n` is a
+claim about planning, and writing "exit 0" without the `-n` invites the
+reader to hear "it builds". The refusal this section removed is genuinely
+gone; what stands behind it is somebody else's.
 
 **Asked of git rather than of `ignored_source_dirs`, and that distinction
 is the trap.** The cheaper-looking test is the ignored-directory set the
