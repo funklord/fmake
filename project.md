@@ -603,7 +603,8 @@ that had been green about nothing for five commits ·
 [551. A window is not a row, and a hatch that names no file](#551-a-window-is-not-a-row-and-a-hatch-that-names-no-file) ·
 [552. A version macro, tested one way by one function and another by its sibling](#552-a-version-macro-tested-one-way-by-one-function-and-another-by-its-sibling) ·
 [553. Which fmake a report was measured against, and how to date it](#553-which-fmake-a-report-was-measured-against-and-how-to-date-it) ·
-[554. The clean that cleans one of its two lists -- open](#554-the-clean-that-cleans-one-of-its-two-lists----open)
+[554. The clean that cleans one of its two lists -- open](#554-the-clean-that-cleans-one-of-its-two-lists----open) ·
+[555. A "not for" list is where a README goes stale first](#555-a-not-for-list-is-where-a-readme-goes-stale-first)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44579,3 +44580,58 @@ generated outputs inside the tree are already removed by name.
 agree -- artifacts removed unconditionally, removed per configuration, or
 the ejected rule narrowed -- and they differ in what a user loses by
 running the one command everybody runs without reading.
+
+## 555. A "not for" list is where a README goes stale first
+
+The README said in two places that fmake does not build C++20 modules,
+documented them in none, and section 15 has recorded the opposite since
+section 317 landed: *named modules are built now, gcc and clang, both
+`--eject` backends build a module tree.* Measured 2026-11-02 rather than
+read -- a two-file tree, `m.cppm` and a `main.cpp` that imports it, with
+no config file:
+
+    [1/2] CXXM m.cppm
+    [2/2] CXX main.cpp
+    LD  mod
+    * built mod
+
+The binary runs and returns what the module computed. Both ejected
+backends carry the order as an ordinary dependency -- make gets
+`main.cpp.o: main.cpp $(BUILD_DIR)/m.cppm.o`, ninja gets the same as an
+implicit `|` edge -- and `make -f` on the ejected file rebuilds the tree.
+Header units and `import std;` genuinely do not work, both checked: one
+fails to compile and the other finds no standard library module.
+
+**The shape, which is the reason this has an entry.** A capability
+arriving is a reason to write a feature section and is nothing that
+prompts anybody to revisit the list of things the project does not do. So
+a "not for" list decays in one direction only -- it accumulates denials of
+things that have since started working -- and it is read by exactly the
+person deciding whether to try the tool.
+
+This is the second instance in this file in five days, and the first is
+what made the second findable. On 2026-10-29 the same list said languages
+other than C, C++ and assembly were not built, contradicting both the
+README's own title and its `## Rust` section; that was found by accident
+while rewriting the opening. The modules entry was then found on purpose,
+by taking "a bullet the tree has outgrown" as a lens and asking the tool
+about each remaining bullet rather than reading them.
+
+**And the rewrite propagated the error rather than catching it.** The
+opening written on 2026-10-29 to state what fmake is worth says "it does
+not do C++20 modules", because the sentence was composed from the "not
+for" list on the assumption that a list of limits is the one part of a
+README nobody gets wrong. A rewrite is not an audit: prose moved from one
+place to another carries its claims with it, and the only thing that
+checks them is running the tool.
+
+So the check worth repeating is cheap and mechanical: **for each bullet in
+a "not for" list, ask the tool.** Of the six here, two were capability
+claims the tool could be asked about and both were wrong -- Rust in
+October, modules now. The other four are not the same kind of sentence:
+a configure step, fetching dependencies and having nowhere to put logic
+are things fmake declines by design and states why, and macOS and Windows
+cannot be checked from this machine at all. That is the honest scope of
+the lens rather than a clean sweep -- it finds bullets that deny a
+capability, and a bullet declaring an intention is not stale merely
+because nobody re-ran it.

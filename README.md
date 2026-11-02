@@ -78,6 +78,13 @@ agreed on one, which is the gap fmake is built for.
   static library and a `main.c` that calls into it links against it,
   because membership is decided from symbols rather than from
   declarations. Cargo will not build the C; CMake wants a custom command.
+- **C++20 modules in the order they have to be built, from no build
+  file.** `import` is an edge the `#include` graph cannot see, so the
+  compile order is a levelisation nothing in the sources states. CMake
+  wants a `FILE_SET CXX_MODULES` and a recent generator; a hand-written
+  `Makefile` wants the module dependency order written out and kept
+  correct. fmake reads the `import` edges and builds the interfaces
+  first.
 - **Leaving is a supported operation, not an escape hatch.** `--eject`
   output is byte-stable and meant to be committed and maintained by hand.
   CMake's and Meson's generated build files are disposable intermediates,
@@ -88,14 +95,17 @@ build with no build file even when they are awkward ones: Qt programs,
 where `Q_OBJECT`, `#include "ui_*.h"` and the resource paths you open are
 the declarations and moc, uic and rcc follow from them; trees that ship
 prebuilt `.a` archives; libraries that have to be installed with a `SONAME`
-that still resolves afterwards. Those work today.
+that still resolves afterwards; C++20 named modules, where the compile
+order is a levelisation of the `import` graph and no build file states it.
+Those work today.
 
 The one question it cannot reach is *what do I compile*. Symbol inference
 answers what to link, and when a library is absent there is no call to
 infer from — so a project whose feature detection decides whether code
 exists at all has to be told those `-D`s. It is not a package manager and
-fetches nothing, it does not do C++20 modules, and its symbol scan is
-ELF-shaped, which means Linux and the Unixes rather than macOS or Windows.
+fetches nothing, it does not do header units or `import std;`, and its
+symbol scan is ELF-shaped, which means Linux and the Unixes rather than
+macOS or Windows.
 
 ---
 
@@ -109,6 +119,7 @@ ELF-shaped, which means Linux and the Unixes rather than macOS or Windows.
 [Two things generated from the parser](#two-things-generated-from-the-parser) ·
 [Libraries, programs and tests](#libraries-programs-and-tests) ·
 [Saying the things it cannot know](#saying-the-things-it-cannot-know) ·
+[C++20 modules](#c20-modules) ·
 [Rust](#rust) ·
 [Qt](#qt) ·
 [situ schemas](#situ-schemas) ·
@@ -898,6 +909,50 @@ Unknown keys are an error, with the valid ones named.
 
 ---
 
+## C++20 modules
+
+A `.cppm` or `.ixx` is a module interface. It is compiled before anything
+that imports it, and nothing in the tree has to say so:
+
+```sh
+$ ls
+main.cpp  m.cppm
+$ fmake
+[1/2] CXXM m.cppm
+[2/2] CXX main.cpp
+LD  demo
+* built demo
+```
+
+`import` is an edge the `#include` graph cannot see, so the build order is
+a levelisation of the import graph and not something a scan of includes can
+produce. That is why a hand-written Makefile for a module tree has to state
+the order and keep it right as the tree changes.
+
+An ejected build states it as an ordinary dependency, so make and ninja get
+the order without knowing anything about modules:
+
+```make
+$(BUILD_DIR)/main.cpp.o: main.cpp $(BUILD_DIR)/m.cppm.o
+```
+
+```
+build $build_dir/main.cpp.o: cxx main.cpp | $build_dir/m.cppm.o
+```
+
+gcc and clang both work. The compiler driver recognises neither suffix --
+`g++ -c greet.cppm` warns about a linker input and produces nothing -- so
+the compile passes `-x c++`.
+
+A library can publish its interface with `@headers m.cppm`, which installs
+the interface *source*. That is what the ecosystem does: a BMI is specific
+to one compiler and one set of flags, so it is not a thing to ship.
+
+**Header units and `import std;` are not built.** `import "a.hpp";` does
+not compile, and a standard library shipped as a module is not found.
+
+---
+
 ## Rust
 
 A `lib.rs` becomes a static library the link set can reach, and a `main.rs`
@@ -1396,7 +1451,9 @@ both were reasonable ones.
   is no call to infer from.
 - **Fetching dependencies.** It builds what is there and finds libraries
   already installed. It is not a package manager.
-- **C++20 modules**, `import std;` and friends.
+- **C++20 header units and `import std;`.** Named modules are built --
+  see [C++20 modules](#c20-modules) -- but `import "a.hpp";` and a
+  standard library shipped as a module are not.
 - **macOS and Windows.** The symbol scan is ELF-shaped.
 - **Languages other than C, C++, assembly and Rust.** `.s` and `.S` are built;
   `.asm` is not, being nasm or masm syntax rather than another suffix for
