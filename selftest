@@ -11482,6 +11482,65 @@ def explain_says_which_directory_file_a_flag_came_from(t):
 
 
 @case
+def a_directory_section_in_the_root_says_it_belongs_lower(t):
+	"""`[directory]` in the root fmake.toml said the section was unknown.
+
+	The root validator refuses anything outside `CONF_SCHEMA`, and
+	`[directory]` is deliberately outside it -- it is read from a
+	subdirectory's file by `load_dir_confs`. So the generic refusal fired,
+	and what it says is that the section does not exist, beside a list of
+	sections that excludes it.
+
+	That is the wrong sentence for the likeliest reader: somebody who found
+	`[directory]` in the README and wrote it into the file they already
+	have. Told it is unknown, the only conclusion available is that their
+	fmake is too old to know it -- which is section 553's question, *which
+	fmake am I running*, manufactured by a diagnostic rather than by a
+	stale install.
+
+	Same shape as `a_file_where_the_state_directory_goes_says_so`: one
+	handler, several causes, and advice that fits only one of them.
+
+	The second half is the control. A special case for one name must not
+	become a special case for every name -- a genuinely unknown section
+	still has to be told it is unknown, and get the list."""
+	t.write("main.c", "int sub_f(void);\nint main(void){ return sub_f(); }\n")
+	t.write("sub/sub.c", "int sub_f(void){ return 0; }\n")
+	t.write("fmake.toml", '[directory]\ncflags = ["-DFROM_ROOT=1"]\n')
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a root [directory] was accepted: {out}")
+	check("subdirector" in out,
+	      f"the refusal does not say where the section is read from: {out}")
+	check("[project]" in out,
+	      f"the refusal names no remedy for a whole-tree flag: {out}")
+	check("unknown section" not in out,
+	      f"the refusal still says the section does not exist, which is the "
+	      f"sentence that sends a reader to check their fmake version: "
+	      f"{out}")
+
+	# The control: an actually unknown section keeps the generic message,
+	# so the carve-out above cannot grow into "every refusal claims the
+	# section belongs somewhere else".
+	t.write("fmake.toml", '[nosuchthing]\ncflags = ["-DX=1"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"an unknown section was accepted: {out}")
+	check("unknown section [nosuchthing]" in out,
+	      f"an unknown section is no longer called unknown: {out}")
+	check("subdirector" not in out,
+	      f"an unknown section is told it belongs in a subdirectory: {out}")
+
+	# And the form that is legal still works, so the refusal above is about
+	# where the section is and not about the section.
+	os.remove(os.path.join(t.dir, "fmake.toml"))
+	t.write("sub/fmake.toml", '[directory]\ncflags = ["-DFROM_SUB=1"]\n')
+	check(t.fmake().returncode == 0,
+	      "a subdirectory [directory] stopped working")
+
+
+@case
 def a_vendored_projects_own_config_stays_inert(t):
 	"""The reason only `[directory]` is read from a non-root fmake.toml.
 

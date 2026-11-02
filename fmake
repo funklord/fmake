@@ -1957,6 +1957,16 @@ def _refuse_unexpanded(data):
 # would pull every one of those projects' targets, install paths and
 # toolchains into the consuming build. They carry `[project]' and
 # `[target.*]' and no `[directory]', so they stay inert.
+# The one section a per-directory `fmake.toml' may carry, and the set of
+# such sections. Both, because they answer different questions from one
+# name: the loader below reads this section, and `load_conf' needs to tell
+# "exists, and is not legal in the root" from "does not exist" -- the root
+# validator refuses everything outside CONF_SCHEMA, and this section is
+# deliberately outside it. Spelling the name twice is how the refusal
+# starts disagreeing with what the loader reads.
+CONF_DIR_SECTION = "directory"
+CONF_DIR_SECTIONS = (CONF_DIR_SECTION,)
+
 CONF_DIR_KEYS = {"cflags": L, "define": L, "defines": L, "std": S}
 
 
@@ -1993,7 +2003,7 @@ def load_dir_confs(root):
 			die(f"{os.path.join(rel, CONF_FILE)}: {exc}")
 		except OSError as exc:
 			die(f"{os.path.join(rel, CONF_FILE)}: {exc}")
-		section = data.get("directory")
+		section = data.get(CONF_DIR_SECTION)
 		if section is None:
 			continue
 		where = os.path.join(rel, CONF_FILE)
@@ -2068,6 +2078,24 @@ def load_conf(root):
 	for section, value in data.items():
 		spec = CONF_SCHEMA.get(section)
 		if spec is None:
+			# `[directory]' exists and is not legal HERE, which is a
+			# different thing from not existing -- and the generic
+			# message says the second. A reader who found the section in
+			# the README and wrote it into the file they already have is
+			# told it is unknown, beside a list of sections that excludes
+			# it, and the only conclusion available is that their fmake
+			# is too old to know it. That is section 553's question --
+			# which fmake am I running -- manufactured by a diagnostic.
+			#
+			# Same shape as the `.fmake'-is-a-file message: one handler,
+			# several causes, and advice that fits only one of them.
+			if section in CONF_DIR_SECTIONS:
+				problems.append(
+				    f"{CONF_FILE}: [{section}] is read from a "
+				    f"subdirectory's {CONF_FILE}, not the root one -- it "
+				    f"carries a fact about the files below it. "
+				    f"[project] is where a flag for the whole tree goes")
+				continue
 			problems.append(f"{CONF_FILE}: unknown section [{section}] "
 			                f"(expected one of: "
 			                f"{', '.join(sorted(CONF_SCHEMA))})")

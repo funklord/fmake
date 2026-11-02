@@ -604,7 +604,8 @@ that had been green about nothing for five commits ·
 [552. A version macro, tested one way by one function and another by its sibling](#552-a-version-macro-tested-one-way-by-one-function-and-another-by-its-sibling) ·
 [553. Which fmake a report was measured against, and how to date it](#553-which-fmake-a-report-was-measured-against-and-how-to-date-it) ·
 [554. The clean that cleans one of its two lists -- open](#554-the-clean-that-cleans-one-of-its-two-lists----open) ·
-[555. A "not for" list is where a README goes stale first](#555-a-not-for-list-is-where-a-readme-goes-stale-first)
+[555. A "not for" list is where a README goes stale first](#555-a-not-for-list-is-where-a-readme-goes-stale-first) ·
+[556. The section that exists and was called unknown](#556-the-section-that-exists-and-was-called-unknown)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44635,3 +44636,76 @@ cannot be checked from this machine at all. That is the honest scope of
 the lens rather than a clean sweep -- it finds bullets that deny a
 capability, and a bullet declaring an intention is not stale merely
 because nobody re-ran it.
+
+## 556. The section that exists and was called unknown
+
+`[directory]` is read from a subdirectory's `fmake.toml` by
+`load_dir_confs`, so it is deliberately **not** in `CONF_SCHEMA` -- and
+the root validator refuses everything outside `CONF_SCHEMA` with one
+message. Put `[directory]` in the root file and fmake said:
+
+    fmake.toml: unknown section [directory] (expected one of: alpine,
+    build-toolchain, debian, generate, gentoo, install, package,
+    profile, service, situ, target, toolchain)
+
+The section exists. It is not legal *there*, which is a different fact,
+and the message states the second one: the section does not exist, beside
+a list that excludes it. **For the likeliest reader the only conclusion
+available is that their fmake is too old** -- which is section 553's
+question, *which fmake am I running*, manufactured by a diagnostic
+instead of by a stale install. Section 553 is about the cost of that
+question being hard to answer; this is fmake asking it of somebody
+unprompted.
+
+**The README is right, and that is what makes this worth an entry rather
+than a line.** It says, in bold, that an `fmake.toml` *below the root* is
+read for one section, and its example carries the comment
+`# in src/modules/roc_core/fmake.toml`. So the documentation and the
+diagnostic disagreed, and the one a person meets while something is
+already not working is the diagnostic. A reader whose model was correct
+was told by the tool that it was wrong.
+
+Same shape as `a_file_where_the_state_directory_goes_says_so`: one
+handler, several causes, and advice that fits only one of them.
+
+**The carve-out carries its own control**, because a special case for one
+name is one edit away from being a special case for every name. A
+genuinely unknown section still has to be called unknown and still has to
+get the list. Both halves sabotaged, and each fails on its own assertion:
+forcing the carve-out off gives *the refusal does not say where the
+section is read from*, over the old message; forcing it on for everything
+gives *an unknown section is no longer called unknown*, over
+`[nosuchthing]` being told it belongs in a subdirectory.
+
+**And the name is spelled once now.** The loader read `data.get("directory")`
+and the validator needed the same name, which is the two-lists-by-hand
+shape this file keeps meeting -- so `CONF_DIR_SECTION` is the name and
+`CONF_DIR_SECTIONS` the set, and the refusal cannot start disagreeing
+with what the loader reads.
+
+### How it was found, and the detector's precision
+
+By sweeping every string literal in `fmake` for `[section] key` and
+`@name`, and checking each against `CONF_SCHEMA` and `DIRECTIVES` with
+the module imported rather than the tables re-typed.
+
+**The sweep's precision was poor and the figure is worth keeping for
+that reason.** It reported 25 config keys the schema lacks; 23 were the
+regex matching the ordinary English word after a bracket -- *[generate.*]
+rules*, *[target.*] settles*, *[project] reaches* -- and the `@name` arm
+reported `@vibes`, out of the copyright line's email address, beside
+`@echo` and `@printf` out of quoted Makefile recipes. Two of twenty-five
+were real and both were this one finding.
+
+So the detector is reusable and is not a gate: keyed on punctuation
+rather than on grammar, it cannot tell a key from the next word, and a
+gate with that precision would be turned off within a week. **A count
+inherits its detector**, and what makes this one worth running by hand is
+that a human reads twenty-five lines in a minute.
+
+A precise version is possible -- extract only from the arguments of
+`die`, `note` and `info` calls, and only tokens in backticks -- and is
+not obviously worth it: the one real instance now has a case, and the
+hazard it guards against is a future section added outside `CONF_SCHEMA`,
+which is rare and which that case would not catch either. Recorded as
+considered rather than left as an absence somebody should wonder about.
