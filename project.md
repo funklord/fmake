@@ -45135,6 +45135,26 @@ over: it has to act where candidate membership is decided, leaving the
 file present for the program-level pass-over and for an explicit
 request. Stashed, not discarded.
 
+**The third attempt filtered `candidates` instead, and it is the most
+informative failure of the three.** `_asked` exempts anything somebody
+named -- a target's root, a declared member -- because a request outranks
+the rule, and with that it passes its own case **and all three cases the
+second attempt broke**. It still does not fix raidcfgd: the same five
+files compile and the build still exits 1.
+
+So the route is now localised rather than guessed at. `candidates` is
+settled before widening, and widening draws from `srcs` to find a
+provider for an undefined symbol -- which is exactly what reaches these
+files in a tree the size of raidcfgd's, and exactly what the first
+attempt's `srcs` filter caught by accident while breaking three
+behaviours. **The rule has to reach candidates and widening both, and
+leave `srcs` alone.** That is a fourth place, and it is where the next
+attempt goes.
+
+Three attempts, three different failures, and each one narrowed the
+answer: below `Project` it never bites; on `srcs` it bites too hard; on
+`candidates` it bites in the wrong half.
+
 ### What the sequence is worth keeping for
 
 Each layer of evidence passed the version the next one refused. The
