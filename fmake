@@ -23890,6 +23890,43 @@ def git_ignored(root, paths):
     """
 	if not git_dir(root):
 		return set()
+
+	# A path beyond a symlink is one git refuses outright -- "fatal:
+	# pathspec ... is beyond a symbolic link" -- and `check-ignore
+	# --stdin' abandons the WHOLE batch when one path in it is. So the
+	# "every failure returns the empty set" rule above, which is per-path
+	# safe, became tree-wide: one symlinked directory switched this
+	# authority off for everything, and said nothing.
+	#
+	# Measured in an eight-file fixture. With a `rootfs/lib -> usr/lib'
+	# present, a run reported no ignored anything; with the link removed
+	# and nothing else changed, the same run said `1 archive(s) not read:
+	# git is told to ignore rootfs/usr/lib/libx.a'. And `_walk' follows
+	# symlinked directories on purpose -- `src/common -> ../shared' is how
+	# two sibling projects share code -- so this is not a rare shape.
+	#
+	# netcfgd is the tree that found it: a rootfs staged under `dist/',
+	# which its own .gitignore names, carries the usual `lib -> usr/lib',
+	# so every ignored archive in the tree was read and the build refused
+	# on an `nm' that could not read a glibc `libm.a'.
+	#
+	# Asked instead about the deepest ancestor git CAN answer about: the
+	# path truncated at its first symlinked component. That is not a guess
+	# standing in for an answer -- an ignored directory ignores everything
+	# beneath it, so an answer about `dist/' IS the answer for every path
+	# under it. Directory components only, because git answers about a
+	# symlink itself perfectly well; it is traversing one that it refuses.
+	def _answerable(rel):
+		parts = rel.split("/")
+		for i in range(1, len(parts)):
+			if os.path.islink(os.path.join(root, *parts[:i])):
+				return "/".join(parts[:i])
+		return rel
+
+	asked = {}
+	for _p in paths:
+		asked.setdefault(_answerable(_p), []).append(_p)
+	paths = list(asked)
 	try:
 		# -z on both halves. Without it git quotes any path that is not
 		# plain ASCII -- a directory whose name carries an accent comes
@@ -23912,7 +23949,14 @@ def git_ignored(root, paths):
 	# silence.
 	if r.returncode not in (0, 1):
 		return set()
-	return {p for p in r.stdout.split("\0") if p}
+	hit = {p for p in r.stdout.split("\0") if p}
+	# Back to what the caller asked about: an answer about an ancestor
+	# stands for every path that was folded into it.
+	out = set()
+	for _a, _originals in asked.items():
+		if _a in hit:
+			out.update(_originals)
+	return out
 
 
 def skipped_source_dirs(root, pruned):

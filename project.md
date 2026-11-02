@@ -607,7 +607,8 @@ that had been green about nothing for five commits ·
 [555. A "not for" list is where a README goes stale first](#555-a-not-for-list-is-where-a-readme-goes-stale-first) ·
 [556. The section that exists and was called unknown](#556-the-section-that-exists-and-was-called-unknown) ·
 [557. The silent-nm check fired on a dry run's own emptiness](#557-the-silent-nm-check-fired-on-a-dry-runs-own-emptiness) ·
-[559. Refusing a build over a directive it had already discarded](#559-refusing-a-build-over-a-directive-it-had-already-discarded)
+[559. Refusing a build over a directive it had already discarded](#559-refusing-a-build-over-a-directive-it-had-already-discarded) ·
+[560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44824,3 +44825,70 @@ source.
 
 Minimal reproduction is two files: a `main.c`, and a `q.h` holding
 `@data:` and a tab and any prose with an apostrophe in it.
+
+## 560. One symlink switched the gitignore authority off, tree-wide
+
+`git_ignored` is a build authority: section 493 made it one, so an
+ignored source and an ignored archive are not read at all rather than
+reported. Its docstring states the failure policy, and the policy is
+right as far as it goes:
+
+> An empty answer is the safe one and every failure returns it: no git,
+> no repository, a git that could not answer. Nothing is skipped on a
+> guess.
+
+**What it did not account for is that the question is asked in one
+batch.** `git check-ignore -z --stdin` abandons the whole batch when any
+one path is unanswerable, and the unanswerable case is ordinary:
+
+    fatal: pathspec 'dist/hull/hwsim-rootfs/lib/x86_64-linux-gnu/libm.a'
+    is beyond a symbolic link
+
+git refuses to traverse a symlink. So per-path safety became tree-wide
+silence: `returncode not in (0, 1)` returns the empty set, and every
+ignored file in the tree is read as input.
+
+**Measured in an eight-file fixture, with the link as the only
+variable.** A git repository, a `.gitignore` naming `build/` and
+`rootfs/`, an ignored `rootfs/usr/lib/libx.a`, and `rootfs/lib ->
+usr/lib`:
+
+    link present   no ignored anything reported
+    link removed   1 archive(s) not read: git is told to ignore
+                   rootfs/usr/lib/libx.a
+
+Nothing else changed between the two runs.
+
+**And the shape is not rare, because fmake follows symlinks on
+purpose.** `_walk` does it with a cycle guard and its docstring gives the
+reason: a tree laid out as `src/common -> ../shared` is how a pair of
+sibling projects usually share code, and not following it loses the
+subtree silently. So the walker's deliberate reach and git's refusal to
+traverse meet, and the authority in between fails quietly.
+
+netcfgd is the tree that found it. A rootfs staged under `dist/` -- which
+its own `.gitignore` names -- carries the usual `lib -> usr/lib`, so
+every ignored archive in that tree was read and the build refused on an
+`nm` that could not read a glibc `libm.a`.
+
+### The fix is an answer, not a guess
+
+Ask about **the deepest ancestor git can answer about**: the path
+truncated at its first symlinked component, with the answer mapped back
+to every path folded into it. That is not a substitute for the answer --
+an ignored directory ignores everything beneath it, so an answer about
+`dist/` *is* the answer for every path under it. Directory components
+only, since git answers about a symlink itself perfectly well; it is
+traversing one that it refuses.
+
+So one unanswerable path now costs itself at most, and usually not even
+that.
+
+### What it says about the first policy
+
+The docstring's rule was sound and its scope was assumed. *Every failure
+returns the empty set* is a statement about one question, and the code
+asks about a thousand paths at once -- so the safe answer for one path
+became the wrong answer for the rest. **A fail-safe default is only as
+local as the call it guards**, and the thing to check is not whether the
+default is cautious but how many answers it is standing in for.

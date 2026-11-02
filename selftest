@@ -34511,6 +34511,72 @@ def a_kernel_doc_field_is_not_a_directive(t):
 
 
 @case
+def a_symlink_does_not_switch_off_the_gitignore_rule(t):
+	"""One unanswerable path took the whole tree's answer with it.
+
+	`git_ignored` is a build authority since section 493: an ignored source
+	and an ignored archive are not read at all. Its failure policy is right
+	per question -- *every failure returns the empty set, nothing is skipped
+	on a guess* -- and the question is asked in one batch, which is what the
+	policy did not account for.
+
+	`git check-ignore -z --stdin` abandons the WHOLE batch when any one path
+	is unanswerable, and the ordinary unanswerable case is a path git will
+	not traverse:
+
+	    fatal: pathspec '.../lib/x86_64-linux-gnu/libm.a' is beyond a
+	    symbolic link
+
+	So per-path safety became tree-wide silence, and every ignored file in
+	the tree was read as input. Not a rare shape either: `_walk` follows
+	symlinked directories on purpose, because `src/common -> ../shared` is
+	how two sibling projects share code.
+
+	netcfgd found it. A rootfs staged under `dist/`, which its own
+	.gitignore names, carries the usual `lib -> usr/lib`; every ignored
+	archive in that tree was read and the build refused on an `nm` that
+	could not read a glibc `libm.a`.
+
+	The link is the only variable between the two halves below, which is
+	what makes this a measurement rather than an assertion. The first half
+	is also the control: it fails if the rule stops working for an ordinary
+	tree, which a fix that simply returned everything would cause."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write(".gitignore", "rootfs/\n")
+	os.makedirs(os.path.join(t.dir, "rootfs", "usr", "lib"), exist_ok=True)
+	open(os.path.join(t.dir, "rootfs", "usr", "lib", "libx.a"), "w").close()
+	check(subprocess.run(["git", "init", "-q", t.dir],
+	                     capture_output=True).returncode == 0,
+	      "could not make a repository")
+	for args in (["add", "main.c", ".gitignore"],
+	             ["-c", "user.email=a@b", "-c", "user.name=c",
+	              "commit", "-qm", "init"]):
+		check(subprocess.run(["git", "-C", t.dir] + args,
+		                     capture_output=True).returncode == 0,
+		      f"git {args[0]} failed")
+
+	# No symlink yet: the rule has to work, or the second half proves
+	# nothing and a fix that answered "ignored" to everything would pass.
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check("git is told to ignore" in out,
+	      f"the gitignore rule does not work on an ordinary tree, so this "
+	      f"case cannot test what a symlink does to it: {out}")
+
+	# The only change.
+	os.symlink("usr/lib", os.path.join(t.dir, "rootfs", "lib"))
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check("git is told to ignore" in out,
+	      f"a symlinked directory switched the gitignore rule off for the "
+	      f"whole tree -- git refuses a path beyond a symlink and "
+	      f"check-ignore abandons the batch, so nothing was filtered: "
+	      f"{out}")
+
+
+@case
 def a_silent_nm_is_named_rather_than_the_source(t):
 	"""Section 223 left this half, with the discriminator worked out.
 
