@@ -45165,3 +45165,53 @@ whole suite caught those. **The evidence that is cheapest to gather is
 the evidence that agrees with you**, and the order here was: real tree,
 own case, adversarial fixture, suite -- each one strictly more
 expensive, each one finding what the one before could not.
+### The fourth attempt, and the hole it turned out to be closing
+
+**One predicate, applied at both places a file can become a speculative
+provider.** `_their_test(rel)` is `vendor_of(rel, vendored) and
+looks_like_a_test(rel)`, and it is consulted at the candidate set and at
+the widening pool. The candidate site keeps an `_asked` exemption -- a
+target's root or a declared member was named by somebody rather than
+guessed at -- and the widening site needs none, because a named file is
+already a unit and `pool` excludes units.
+
+Measured. raidcfgd cold builds to **exit 0, twelve binaries, 54 real
+compiles**, reporting 22 vendored test sources declined. And the two
+sites are not redundant: **in raidcfgd only the widening site fires**,
+while the candidate site is what the minimal fixture reaches, where
+`main.c` includes the vendored test's header. Each case covers one and
+neither covers the other, which is this entry's own lesson applied
+before shipping rather than after.
+
+**And the hole was worse than the one being chased.** The five failures
+were the symptom that made it visible; the fixture shows what happens
+when there is no failure. Two files, `main.c` calling `thing()` and
+`vendor/test/t_test.c` defining it:
+
+    without the rule   [1/1] CC main.c
+                       [1/1] CC vendor/test/t_test.c
+                       * built wid2
+    with it            declined, named, and the link fails on `thing'
+
+So fmake was **linking another project's test unit into this tree's
+program and reporting success.** That is section 15's own argument about
+a wrong link -- it builds cleanly, misbehaves and says nothing -- reached
+by a route nobody had pointed it at. Failing is the right answer and
+`widen_candidates`' docstring had the evidence all along: *another
+compiled three of a vendored project's test units that nothing then
+linked.* The site knew the shape and was reporting it rather than
+declining it.
+
+**Failing loudly needed one more clause.** The consequence of declining
+is a bare `undefined reference` from the linker with nothing joining it
+to the decision, so the message names the remedy -- `@sources` in the
+file that needs it, or a `[target.*]` section -- and the case **runs**
+that remedy rather than asserting it: with `@sources` naming the file,
+the vendored test is compiled, linked, and the build succeeds. Advice
+printed without being run is the thing this tree keeps finding in its
+own output.
+
+Four attempts: below `Project` it never bites, on `srcs` it bites too
+hard, on `candidates` it bites in the wrong half, and on both at once it
+bites exactly where the file stops being a guess.
+

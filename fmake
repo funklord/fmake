@@ -13895,6 +13895,21 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# anyone who does want it, which is the only way to ask, and vendored
 	# code cannot be annotated by a project that treats it as read-only.
 	vendored = vendored_dirs(root, srcs)
+
+	def _their_test(rel):
+		"""A separate checkout's own test source.
+
+        One predicate for the two places a file can become a speculative
+        provider -- the candidate set and the widening pool -- because
+        this rule has already been written three times into one of them
+        and missed the other. Section 561 has the three attempts.
+
+        `looks_like_a_test' rather than a new rule, and its net is
+        deliberately narrow: a `test/' or `tests/' directory, or a
+        `foo_test.c' name, nothing else, because a wrong guess costs a
+        program its place in the default build.
+        """
+		return bool(vendor_of(rel, vendored) and looks_like_a_test(rel))
 	passed_over = []
 
 	targets, claimed = [], set()
@@ -14794,6 +14809,29 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# this.
 		if t.kind != "exe" and t.rel in proj.src_set:
 			proj.reachable_headers([t.rel])
+	# A separate checkout's tests are its own, by the same argument that
+	# already leaves its PROGRAMS to it. `_asked' is the exemption that
+	# makes an explicit request outrank the rule: a target's root or a
+	# declared member was named by somebody rather than guessed at, and
+	# `a_vendored_program_can_be_asked_for' is the case that says so.
+	#
+	# Not on `srcs', which is where two earlier attempts put it: the file
+	# has to stay there for the pass-over report to name it, for an
+	# explicit `[target.*] root' to resolve, and for one case's fixture
+	# to pass the vendored program over at all.
+	_asked = ({t.rel for t in wanted}
+	          | {m for t in wanted if t.members for m in t.members})
+	_theirs_tests = sorted(r for r in candidates
+	                       if r not in _asked and _their_test(r))
+	if _theirs_tests:
+		candidates -= set(_theirs_tests)
+		_owners = sorted({vendor_of(r, vendored) for r in _theirs_tests})
+		info(f"{len(_theirs_tests)} test source(s) not compiled: they are "
+		     f"{', '.join(_owners[:2])}"
+		     f"{f' and {len(_owners) - 2} more' if len(_owners) > 2 else ''}"
+		     f"'s own tests, and this build does not build that "
+		     f"project's programs either")
+
 	# A named .o is a prebuilt object rather than something to compile, so
 	# it is taken out here and linked as a unit of its own further down.
 	forced_objs = [r for r in forced_rels if r.endswith(".o")]
@@ -16136,10 +16174,49 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		        if rel not in units and rel not in crate_members]
 		theirs = [rel for rel in pool if scans[rel].get("genby")
 		          and not rel.startswith(STATE_DIR + os.sep)]
-		mine = set(pool) - set(theirs)
+		# And the second route, which is the one the candidate filter
+		# does not close: widening draws from `srcs' after candidates
+		# are settled, so a vendored test excluded there arrives here
+		# instead. `widen_candidates'' own docstring records this
+		# happening -- "another compiled three of a vendored project's
+		# test units that nothing then linked" -- so the site knew the
+		# shape and was reporting it rather than declining it.
+		#
+		# No `_asked' exemption needed here: a file somebody named is a
+		# target root, so it is already a unit, and `pool' excludes
+		# units.
+		theirs_tests = [rel for rel in pool if _their_test(rel)]
+		mine = set(pool) - set(theirs) - set(theirs_tests)
 		rest = [Unit(rel, root, objdir, scans[rel])
 		        for rel in pool if rel in mine]
 		extra = widen_candidates(fresh, rest)
+		# Said only where it changed the answer, which is this section's
+		# own rule for the generated-file case below.
+		if theirs_tests:
+			_would = [u for u, _n in widen_candidates(
+			    fresh, [Unit(rel, root, objdir, scans[rel])
+			            for rel in theirs_tests])]
+			if _would:
+				_owners = sorted({vendor_of(u.rel, vendored)
+				                  for u in _would})
+				# The remedy, because the consequence of declining is
+				# a bare `undefined reference' from the linker a few
+				# lines down and nothing joining the two. Measured on a
+				# two-file tree: without this rule fmake compiled a
+				# vendored test and LINKED it into this tree's program,
+				# reporting success -- which is section 15's own
+				# argument about a wrong link that builds cleanly and
+				# says nothing. Failing is right; failing without the
+				# remedy is the half that would send somebody hunting.
+				info(f"{len(_would)} of {', '.join(_owners[:2])}"
+				     f"{f' and {len(_owners) - 2} more' if len(_owners) > 2 else ''}"
+				     f"'s own test source(s) would have been compiled to "
+				     f"look for a definition and are not: a separate "
+				     f"checkout's tests are its own, as its programs "
+				     f"are.\n    If this tree genuinely needs one, name "
+				     f"it -- @sources in the file that needs it, or a "
+				     f"[target.*] section with its own sources -- since a "
+				     f"file somebody names is not a guess.")
 		# Said only where it changed the answer. A tree with leftover
 		# generated code that nothing was going to propose anyway does not
 		# need a line about it.

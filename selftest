@@ -34725,6 +34725,160 @@ def a_duplicate_in_a_vendored_checkout_names_the_exclude(t):
 
 
 @case
+def another_projects_tests_are_left_to_it_like_its_programs(t):
+	"""Their programs were left to them and their test units were not.
+
+	fmake says "fuzznet is a separate checkout; leaving its own 189
+	programs to it", and then compiled that checkout's test sources anyway
+	as candidate providers -- so every one that failed counted against
+	this build.
+
+	raidcfgd measured it: twelve of its own programs built, nothing
+	refused, and exit 1 from five files in fuzznet, fuzznet/qtty and
+	fuzznet/quirc. Each fails for a reason only its own project's build
+	can supply -- an -I it passes to its tests, or OpenCV -- and all
+	twelve linked without them. The five were the visible part of 263.
+
+	**The fixture reaches the hazard, and an easier one does not.** main.c
+	includes the vendored test's header, so the header's COMPANION source
+	is reached from a program root and compiled, and nothing calls what it
+	defines. A fixture whose vendored test merely defines main() does not
+	reach this at all: such a file is a separate checkout's program,
+	nothing reaches it, it is never compiled either way, and the case
+	would pass with the rule absent.
+
+	**The second assertion is about placement, which is what the first
+	attempt got wrong.** Filtering srcs where `vendored' used to be
+	computed left Project already built from the unfiltered list, so
+	proj.candidates walked to the file through its header and compiled it
+	after the message had said it did not. Membership is settled by
+	Project, so the filter precedes it.
+
+	`looks_like_a_test' rather than a new rule, and its narrowness is the
+	thing to respect: a test directory or a foo_test.c name, nothing else,
+	because a wrong guess costs a program its place in the default build.
+	The control holds the line -- the same shape in THIS tree is still
+	ours to hear about."""
+	t.write(".gitmodules", '[submodule "vendor"]\n\tpath = vendor\n'
+	        '\turl = https://example.invalid/vendor.git\n')
+	t.write("vendor/test/suite.h", "int suite_run(void);\n")
+	t.write("vendor/test/suite.c",
+	        '#include "a_header_only_their_build_has.h"\n'
+	        '#include "suite.h"\n'
+	        "int suite_run(void){ return 1; }\n")
+	t.write("main.c", '#include "vendor/test/suite.h"\n'
+	        "int main(void){ return 0; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"another project's broken test failed this build: {out}")
+	check("CC  vendor/test/suite.c" not in out,
+	      f"another project's test was compiled anyway, which is what a "
+	      f"filter placed after Project does -- the message says the file "
+	      f"was left out and proj.candidates compiles it: {out}")
+	check("not compiled" in out and "own tests" in out,
+	      f"nothing says the vendored test was left alone, so a reader "
+	      f"cannot tell this from fmake missing it: {out}")
+
+	u = Tree("our-own-test")
+	try:
+		u.write("test/suite.h", "int suite_run(void);\n")
+		u.write("test/suite.c",
+		        '#include "nope_not_here.h"\n'
+		        '#include "suite.h"\n'
+		        "int suite_run(void){ return 1; }\n")
+		u.write("main.c", '#include "test/suite.h"\n'
+		        "int main(void){ return 0; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check("suite.c" in out,
+		      f"this tree's own failing test went unreported, so the rule "
+		      f"grew from 'their tests' into 'every test': {out}")
+	finally:
+		u.cleanup()
+
+
+@case
+def widening_does_not_reach_another_projects_tests(t):
+	"""Widening linked a vendored project's test unit into this program.
+
+	This is the second route a separate checkout's test becomes a
+	speculative provider, and the one a filter on the candidate set does
+	not close: widening draws from `srcs` after candidates are settled.
+	`widen_candidates`' own docstring had recorded it happening --
+	"another compiled three of a vendored project's test units that
+	nothing then linked" -- so the site knew the shape and reported it
+	rather than declining it.
+
+	What it cost is worse than a wasted compile, and this fixture is the
+	measurement: with the rule absent fmake compiles `vendor/test` and
+	**links another project's test unit into this tree's program**, then
+	reports success. That is section 15's own argument about a wrong link
+	-- it builds cleanly, misbehaves and says nothing -- arriving by a
+	route nobody had pointed it at.
+
+	So failing is right, and failing silently is not: the consequence of
+	declining is a bare `undefined reference` from the linker, so the
+	message names the remedy. The third part asserts the remedy WORKS,
+	because advice printed without being run is the thing this tree keeps
+	finding in its own output.
+
+	raidcfgd is where it was found. Twenty-two of its vendored test
+	sources were being compiled to look for a definition, and five of
+	them failed, which is how it surfaced: the build exited 1 over files
+	the author does not own. Only the widening site fires there -- the
+	candidate site fires on the fixture in
+	`another_projects_tests_are_left_to_it_like_its_programs` -- so both
+	cases are needed and neither covers the other."""
+	t.write(".gitmodules", '[submodule "vendor"]\n\tpath = vendor\n'
+	        '\turl = https://example.invalid/vendor.git\n')
+	t.write("main.c", "int thing(void);\nint main(void){ return thing(); }\n")
+	t.write("vendor/test/t_test.c", "int thing(void){ return 0; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("CC  vendor/test/t_test.c" not in out,
+	      f"widening compiled another project's test, which is how a "
+	      f"vendored test unit gets linked into this tree's program: "
+	      f"{out}")
+	check("would have been compiled" in out,
+	      f"nothing says a vendored test was declined, so the link error "
+	      f"below it has no explanation: {out}")
+	check("@sources" in out and "[target.*]" in out,
+	      f"the refusal names no remedy, and the consequence of declining "
+	      f"is a bare undefined reference: {out}")
+	check(r.returncode != 0,
+	      f"the build succeeded, so something still provided the symbol "
+	      f"and this fixture is not testing what it says: {out}")
+
+	# The remedy, run rather than asserted. A file somebody names is not
+	# a guess, so naming it puts it back in the build.
+	t.write("main.c", "/*! @sources vendor/test/t_test.c */\n"
+	        "int thing(void);\nint main(void){ return thing(); }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"the remedy the message prints does not work: {out}")
+	check("CC  vendor/test/t_test.c" in out,
+	      f"@sources did not put the named file back in the build: {out}")
+
+	# The control: the same shape in THIS tree is still widened into, so
+	# the rule is about whose the file is and not about tests.
+	u = Tree("widen-our-test")
+	try:
+		u.write("main.c", "int thing(void);\nint main(void){ return thing(); }\n")
+		u.write("test/t_test.c", "int thing(void){ return 0; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0 and "CC  test/t_test.c" in out,
+		      f"widening stopped reaching this tree's own test, so the "
+		      f"rule grew from 'their tests' into 'every test': {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_silent_nm_is_named_rather_than_the_source(t):
 	"""Section 223 left this half, with the discriminator worked out.
 
