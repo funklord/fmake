@@ -1797,8 +1797,24 @@ The build still does not complete, because none of its dependencies — SDL2,
 fmt, gsl, cppunit — are installed here and this environment cannot install
 them. What was exercised is everything up to and including compilation: target
 discovery, the include graph, candidate selection, per-file flags, and error
-reporting. Linking and library resolution against a project of that size remain
-unverified.
+reporting.
+
+**~~Linking and library resolution against a project of that size remain
+unverified.~~ Settled since, elsewhere.** dunelegacy itself cannot be
+re-run -- the tree is no longer on this machine, and although SDL2 is
+installed now (2.32.4, where this entry recorded it absent), fmt, gsl and
+cppunit still are not. What settles the general claim is raidcfgd: 568
+sources, twelve programs linked, and library resolution done the way
+section 3 says -- by symbol closure against what is installed. Six of
+those twelve link `-lQt6Core`, and one each `-lQt6Widgets`, `-lQt6Gui`
+and `-lQt6DBus`, none of them named by anybody. Section 545 adds the
+other half at a comparable size: an ejected Makefile produced the
+identical artifact set over 545 sources.
+
+So what this entry is still evidence for is the first-guess layer at 50x
+the reference size, which is what it found. The part it called unverified
+was verified by other trees arriving, and nothing here would have told a
+reader that.
 
 Worth noting what did *not* need changing: the symbol closure, the widening
 filter, the caching, and the annotation layer all behaved as designed at 50x
