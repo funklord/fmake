@@ -607,6 +607,7 @@ that had been green about nothing for five commits ·
 [555. A "not for" list is where a README goes stale first](#555-a-not-for-list-is-where-a-readme-goes-stale-first) ·
 [556. The section that exists and was called unknown](#556-the-section-that-exists-and-was-called-unknown) ·
 [557. The silent-nm check fired on a dry run's own emptiness](#557-the-silent-nm-check-fired-on-a-dry-runs-own-emptiness) ·
+[558. Two generated runtimes, and what provenance could decide](#558-two-generated-runtimes-and-what-provenance-could-decide)
 [559. Refusing a build over a directive it had already discarded](#559-refusing-a-build-over-a-directive-it-had-already-discarded) ·
 [560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide) ·
 [562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did)
@@ -44930,3 +44931,107 @@ this question.
 The control is what keeps it honest: two *tracked* schemas that genuinely
 collide, `a/dup.situ` and `b/dup.situ`, still refuse. The ambiguity check
 is unchanged; what changed is which files reach it.
+
+## 558. Two generated runtimes, and what provenance could decide
+
+raidcfgd reported on 2026-11-02 that fmake plans twelve of its programs
+and builds none, and read the cause as three includes it could not
+resolve. **Neither half survived measurement, and the A/B is the useful
+part**: their comparison rested on raidcfgd's README, measured against
+`ab07209` on 2026-10-13, rather than on a run anybody made at
+`ab07209`. Two fresh copies of their working tree, same excludes, one
+per fmake, each with no `.fmake`:
+
+    fmake 2b215fa   exit 1, 77 compile lines, 0 binaries
+    fmake ab07209   exit 1, 77 compile lines, 0 binaries
+
+Identical, down to the refusal and its four symbols. **Nothing regressed**
+-- the README's claim and today's figures describe different tree states,
+not different fmakes. Removing `.git` from the copies did more than keep
+them small: it takes submodule fetching out as a variable, so both
+versions read byte-identical files. A claim about an old commit is worth
+re-running rather than quoting, which is this file's own rule about a
+fact recorded without its method, pointed at somebody else's document.
+
+The three includes are warnings on vendored and transitive sources, each
+naming where the file is -- *it is in this tree, at
+fuzznet/node/peer_persist.h* -- and the build continues past all three.
+The refusal is:
+
+    !!! symbol 'situ_msg_init' is defined by more than one file:
+        fuzznet/wire/generated/situ.c  -- in fuzznet, a checkout of
+                                          another project
+        wire/generated/situ.c
+
+raidcfgd generates its own situ runtime and the fuzznet submodule it
+vendors carries another. Four symbols collide, fmake declines to pick,
+and section 15's decision is why: the include graph keeps suggesting and
+does not start deciding, because a wrong pick links another program's
+implementation, builds cleanly, misbehaves silently and survives into an
+ejected build file.
+
+**The remedy works, and running it is what found the sentence the remedy
+needs.** Excluding the directory -- `fuzznet/wire/generated/**` -- resolved
+the collision and built eleven binaries, then failed on
+`situ_fzn_frame_validate`, because the same generated directory holds a
+frame runtime this tree does need. fmake named the pattern that had
+removed it, which is the audit trail doing its job. Excluding the
+colliding file alone is the remedy, and it is worth what it costs:
+**no refusal at all and twelve of raidcfgd's own programs built** --
+bridge_main, ciss_probe, four fuzz targets, raidcfgd, raidtray and all
+four helpers, which is everything that tree's README claimed at
+`ab07209`. The run still exits 1, on five files that do not compile, and
+fmake attributes every one of them: *1 of them are in fuzznet, 3 in
+fuzznet/qtty, 1 in fuzznet/quirc, which is another project's checkout
+rather than this tree's source.* So the exit code is 1 while every
+program asked for exists, and the failures belong to the projects
+raidcfgd vendors.
+
+**A remedy printed without being run would have carried the directory
+trap**, which is the second time in two days that writing advice down
+turned out to require trying it.
+
+### The goal gap this exposes, which is not the include graph's question
+
+Principle 3 calls every annotation the user has to write a small failure,
+and section 546 measured the aim met on three third-party trees -- zero
+files, one stanza, one stanza. **A private sibling needs hand-written
+stanzas to build at all**, and the fact that forces them is not a
+property of raidcfgd's code: it is that a vendored checkout of another
+project contains a second copy of a generated runtime.
+
+So there may be a discriminator here that is not a guess about include
+graphs. fmake **already** distinguishes these two files by provenance, in
+the refusal itself, and already declines to build a vendored checkout's
+own programs -- *fuzznet is a separate checkout; leaving its own 189
+programs to it*. If the vendored project's programs are its own, its copy
+of a runtime is arguably its own too, and a collision between this
+project's file and a vendored one is not an ambiguity for this project's
+programs. Section 15 records provenance already settling a neighbouring
+question: once companions were owned by provenance, all nine Qt painting
+examples built.
+
+**What is being added is the advice, and what stays parked is the
+deciding.** fmake now recognises the shape -- exactly two providers,
+exactly one of them in a vendored checkout -- and prints the line:
+
+        One of them is in fuzznet, a checkout of another project --
+        whose own programs fmake already leaves to it.
+        If this tree's copy is the one it wants, keep the other out:
+            [project] exclude = ['fuzznet/wire/generated/situ.c']
+        Name the file rather than its directory: a generated directory
+        usually holds other runtimes this tree does need.
+
+That is section 307's rule -- name the exact line, not the class of
+problem -- arriving at a site that had the fact and not the sentence. It
+is deliberately narrow: with more than two providers, or more than one
+vendored, "this tree's copy is the one it wants" stops being well defined
+and the three generic remedies are the honest answer.
+
+**Choosing for the user stays the holder's**, and the reason is not doubt
+about the rule: it changes link-set membership, which is the most
+load-bearing decision here and the one that survives into ejected build
+files, and section 15 reserves the direction in as many words. A project
+may vendor a dependency precisely in order to link its copy. So the
+option, its cost and its owner -- which is what this file asks of a
+record describing something not its author's to decide.

@@ -34638,6 +34638,93 @@ def a_schema_git_ignores_is_not_read_as_source(t):
 
 
 @case
+def a_duplicate_in_a_vendored_checkout_names_the_exclude(t):
+	"""The refusal knew whose file it was and still offered three remedies.
+
+	A symbol defined once in this tree and once in a vendored checkout is
+	the commonest shape of this ambiguity in this workspace: a project
+	generates a runtime from a schema and the sibling it vendors generates
+	another. fmake already labels the provider -- *in vendor, a checkout of
+	another project* -- and already declines to build that checkout's own
+	programs, so the fact was there; what was missing was the sentence
+	turning it into a remedy.
+
+	Reported from raidcfgd 2026-11-02, where the cost is measured rather
+	than supposed: its own session read this refusal and reported the build
+	as having failed on three unresolved includes, which were warnings
+	forty lines earlier. The clause naming the owner had itself been added
+	for those very files, so more information was not what was needed.
+
+	Still advice. Section 15 reserves DECIDING, because a wrong pick links
+	another program's implementation, builds cleanly and says nothing -- and
+	a project may vendor a dependency precisely to link its copy.
+
+	The directory warning is measured too: excluding
+	`fuzznet/wire/generated/**` in raidcfgd resolved this collision and
+	broke the build on `situ_fzn_frame_validate`, because the same
+	generated directory held a runtime the tree did need. Naming the file
+	built eleven binaries where naming the directory built none."""
+	t.write(".gitmodules", '[submodule "vendor"]\n\tpath = vendor\n'
+	        '\turl = https://example.invalid/vendor.git\n')
+	t.write("rt.h", "int rt_init(void);\n")
+	t.write("rt.c", '#include "rt.h"\nint rt_init(void){ return 1; }\n')
+	# Deliberately different bytes: byte-identical copies have their own
+	# cause, and it would fire first and say something else.
+	t.write("vendor/rt.h", "int rt_init(void);\n")
+	t.write("vendor/rt.c", '#include "rt.h"\nint rt_init(void){ return 2; }\n')
+	# BOTH headers, because reachability runs from a program's root
+	# through its includes to each header's companion source. The first
+	# version of this fixture included only `rt.h' and reported
+	# `vendor/rt.c not compiled: nothing reaches it' -- one provider, no
+	# collision, and a case that could never have passed.
+	t.write("main.c", '#include "rt.h"\n#include "vendor/rt.h"\n'
+	        "int main(void){ return rt_init() - 1; }\n")
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"the ambiguity was not refused: {out}")
+	check("a checkout of another project" in out,
+	      f"the refusal does not say whose the other file is: {out}")
+	check("exclude = ['vendor/rt.c']" in out,
+	      f"the refusal names no exact line to write, which is section "
+	      f"307's rule at a site that did not follow it: {out}")
+	check("rather than its directory" in out,
+	      f"nothing warns against excluding the whole generated directory, "
+	      f"which is how this remedy trades one refusal for a missing "
+	      f"symbol: {out}")
+
+	# And the remedy works, which is what makes printing it honest.
+	t.write("fmake.toml", "[project]\nexclude = ['vendor/rt.c']\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the line the refusal prints does not build the tree: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "the program built with the suggested exclude does not run")
+
+	# The control: two copies that are both this tree's get the generic
+	# remedies, so the branch cannot grow into every ambiguity.
+	u = Tree("dup-both-ours")
+	try:
+		u.write("rt.h", "int rt_init(void);\n")
+		u.write("rt.c", '#include "rt.h"\nint rt_init(void){ return 1; }\n')
+		u.write("other/rt.h", "int rt_init(void);\n")
+		u.write("other/rt.c", '#include "rt.h"\nint rt_init(void){ return 2; }\n')
+		u.write("main.c", '#include "rt.h"\n#include "other/rt.h"\n'
+		        "int main(void){ return rt_init() - 1; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"the control was not refused: {out}")
+		check("a checkout of another project" not in out,
+		      f"a file this tree owns was called another project's: {out}")
+		check("exclude = ['other/rt.c']" not in out,
+		      f"the vendored remedy was offered where neither file is "
+		      f"vendored: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_silent_nm_is_named_rather_than_the_source(t):
 	"""Section 223 left this half, with the discriminator worked out.
 

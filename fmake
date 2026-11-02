@@ -16488,6 +16488,48 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			whole = (f"{cause}\nKeep one of them out with [project] "
 			         f"exclude in {CONF_FILE}; @os cannot tell two copies "
 			         f"of one file apart.")
+		elif (len(first_providers) == 2
+		      and len([r for r in first_providers
+		               if vendor_of(r, vendored)]) == 1):
+			# One copy is this tree's and one is a vendored checkout's.
+			# fmake already knows this -- the listing above labels the
+			# provider "in {owner}, a checkout of another project" -- and
+			# already declines to build that checkout's own programs. What
+			# it did not do was turn the fact into the remedy, so the
+			# reader got all three generic options over a collision with
+			# an obvious answer.
+			#
+			# Reported from raidcfgd 2026-11-02, whose own session read
+			# this output and concluded the build had failed on three
+			# unresolved includes -- warnings, forty lines further up.
+			# That is the cost being paid: the refusal names the files and
+			# the reader still has to work out the shape, and one did not.
+			# The clause labelling the owner was itself added for these
+			# very files, which says the information was never the
+			# missing part.
+			#
+			# Deliberately narrow: exactly two providers, exactly one of
+			# them vendored. With more of either, "this tree's copy is the
+			# one it wants" stops being well defined and the generic
+			# remedies are the honest answer.
+			#
+			# Still advice and not a decision -- section 15 reserves
+			# deciding, because a wrong pick links another program's
+			# implementation, builds cleanly and says nothing. A project
+			# may vendor a dependency precisely to link its copy.
+			theirs = next(r for r in first_providers
+			              if vendor_of(r, vendored))
+			owner = vendor_of(theirs, vendored)
+			cause = (f"One of them is in {owner}, a checkout of another "
+			         f"project -- whose own programs fmake already leaves "
+			         f"to it.")
+			whole = (f"{cause}\nIf this tree's copy is the one it wants, "
+			         f"keep the other out in {CONF_FILE}:\n"
+			         f"    [project] exclude = ['{theirs}']\n"
+			         f"Name the file rather than its directory: a generated "
+			         f"directory usually holds other runtimes this tree does "
+			         f"need, and excluding all of them trades this refusal "
+			         f"for a missing symbol.")
 		else:
 			cause = ""
 			# No cause to name, so all three remedies are live and the
