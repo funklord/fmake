@@ -612,7 +612,8 @@ that had been green about nothing for five commits ·
 [560. One symlink switched the gitignore authority off, tree-wide](#560-one-symlink-switched-the-gitignore-authority-off-tree-wide) · ·
 [561. Another project's tests, compiled and then counted against us](#561-another-projects-tests-compiled-and-then-counted-against-us)
 [562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did) ·
-[563. What fmake costs on the big trees, and what the load was](#563-what-fmake-costs-on-the-big-trees-and-what-the-load-was)
+[563. What fmake costs on the big trees, and what the load was](#563-what-fmake-costs-on-the-big-trees-and-what-the-load-was) ·
+[564. A gate over the error paths nothing else reaches](#564-a-gate-over-the-error-paths-nothing-else-reaches)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -45298,3 +45299,100 @@ step further -- it also separates slow from somebody else's build.
 Worth keeping because the cheap conclusion was available and wrong twice:
 a dry run that does not finish inside a bound looks exactly like a hang,
 and twice it was neither.
+
+## 564. A gate over the error paths nothing else reaches
+
+Section 196 found a class by measuring which refusals the suite never
+produces -- 128 `die()` sites then, **245 now**, and most of their wording
+quoted by no case. It drew the right conclusion about wording: *that is
+what an unproduced diagnostic costs -- not the refusal, which works, but
+the wording, which nothing was watching.*
+
+**A misspelled NAME in one costs more than the wording.** It raises
+`NameError` from inside the handler written to explain a failure, so the
+user gets a traceback at the moment they were owed a sentence. That is
+section 32's class -- a fault in the code written to explain a fault --
+and nothing here could see it: the refusal is unreached by construction,
+the style gate reads whitespace, and `py_compile` accepts an undefined
+name happily, a name lookup being a runtime event.
+
+So the suite now does a scope-aware walk of **both of this project's
+own Python files** for name loads with no visible binding. Deliberately
+simple where Python is subtle: a nested def or class contributes only
+its own name outward, a lambda is not descended into, and a
+comprehension's targets are recorded so they are not flagged.
+
+selftest is included because a `NameError` is worse there than in fmake:
+it crashes the case rather than failing it, so the suite reports an error
+about itself where it owed a verdict about the tree.
+
+**Measured: zero in 67,000 lines** -- fmake's 25,000 and selftest's
+42,000. Which is a result only because the
+controls make it one.
+
+### The controls run on the file's own text
+
+An analysis that reports nothing looks identical whether the file is
+clean or the analysis is broken, which is `evidence.md`'s first rule
+pointed at a new instrument. So the case appends a function carrying a
+known-bad name to the source it has just read and requires the walk to
+find it -- in each of **three** shapes, because a scope walk can be right
+about one and wrong about the next:
+
+    a plain function          def p(): return _no_such_name
+    a nested function         def p(): def inner(): return _no_such_name
+    an except handler         except OSError: return _no_such_name
+
+All three caught. And the case was sabotaged from outside as well, by
+putting `die(f"no repo here: {no_such_local}")` on `git_ignored`'s
+no-repository path: it fails naming `fmake:24031: no_such_local`, which
+is the file and line a reader needs and the shape the entry is about --
+an undefined name inside a refusal that almost nothing reaches.
+
+**Why a home-made walk rather than a linter.** None is installed, and
+installing one is neither this session's to do nor fmake's to depend on:
+principle 6 is one script, stdlib only. The suite already parses fmake
+with `ast` for two other cases, so this is the same technique at the same
+file.
+
+**What it costs, and the figure this entry got wrong twice.** The walk
+is 1.27s over fmake's 25,000 lines and 3.51s over selftest's 42,000, and
+the case as a whole is about 5.4 seconds: both files, four controls on
+three lines of synthetic source each, and one control appended to fmake
+itself.
+
+The first draft of this paragraph guessed *well under a second*. The
+second replaced the guess with a measurement of **six seconds a pass**,
+and built an argument on it: four passes, twenty-four seconds, a plan to
+move the probes onto synthetic sources to halve it, and a decision not to
+bother. Every number in that was wrong, because the measurement was taken
+while the suite was running at `-j8` on the same machine.
+
+Which is section 563, written and committed an hour earlier in the same
+session, being wrong about the same thing in the same way: *a timing
+taken on a loaded machine is a measurement of the load.* Knowing the rule
+and having just written it down did not help; what helped was re-running
+it when a later figure disagreed -- the case measured 5.4 seconds in
+total where the parts were supposed to sum past twenty.
+
+So the probes do run on synthetic source, because that is the better
+design for a control on an instrument, and not for the twelve seconds
+that reasoning was about.
+
+### Two neighbouring counts, while the parser was open
+
+Both came back clean and are worth a line each, because the next reader
+should not have to re-ask them.
+
+**3,984 `check()` calls in the suite, none without a message.** A bare
+assertion fails saying nothing, which is the same fault as an unproduced
+diagnostic one layer up -- the suite's own diagnostics watched by the
+same argument it applies to fmake's.
+
+**Zero undefined names in `tool/style_gate.py` either**, which is not
+gated here on purpose. That file is a copy spread from
+`claude-guidelines`, and a gate in this suite that failed on it would
+block this project's commits over another tree's source;
+`harmonization.md` asks that a fault in a spread copy be signalled to its
+owner instead. The walk is pointed at this project's two files and
+nothing else.

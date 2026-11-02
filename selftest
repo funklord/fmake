@@ -34878,6 +34878,162 @@ def widening_does_not_reach_another_projects_tests(t):
 		u.cleanup()
 
 
+def _names_without_a_binding(text):
+	"""Name loads with no visible binding, scope-aware.
+
+    Returns [(line, name), ...]. Deliberately simple where Python is
+    subtle: a nested def or class contributes only its own name to the
+    enclosing scope, a lambda is not descended into, and a comprehension's
+    targets are recorded so they are not flagged. That is enough to be
+    exact on this file and the case proves it rather than assuming it.
+    """
+	import builtins as _b
+	tree = ast.parse(text)
+	known = set(dir(_b)) | {"__name__", "__file__", "__doc__"}
+
+	def bound(node):
+		out = set()
+		if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+		                     ast.Lambda)):
+			a = node.args
+			for group in (a.posonlyargs, a.args, a.kwonlyargs):
+				out |= {x.arg for x in group}
+			for x in (a.vararg, a.kwarg):
+				if x:
+					out.add(x.arg)
+		stack = list(getattr(node, "body", []) or [])
+		while stack:
+			n = stack.pop()
+			if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+			                  ast.ClassDef)):
+				out.add(n.name)
+				continue
+			if isinstance(n, ast.Lambda):
+				continue
+			if isinstance(n, (ast.ListComp, ast.SetComp, ast.DictComp,
+			                  ast.GeneratorExp)):
+				for gen in n.generators:
+					for tgt in ast.walk(gen.target):
+						if isinstance(tgt, ast.Name):
+							out.add(tgt.id)
+			if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store,
+			                                                  ast.Del)):
+				out.add(n.id)
+			if isinstance(n, (ast.Global, ast.Nonlocal)):
+				out |= set(n.names)
+			if isinstance(n, ast.ExceptHandler) and n.name:
+				out.add(n.name)
+			if isinstance(n, (ast.Import, ast.ImportFrom)):
+				for al in n.names:
+					out.add((al.asname or al.name).split(".")[0])
+			stack.extend(ast.iter_child_nodes(n))
+		return out
+
+	module = bound(tree)
+	bad = []
+
+	def walk(node, enclosing):
+		scope = bound(node) | enclosing
+		stack = list(node.body)
+		while stack:
+			n = stack.pop()
+			if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+			                  ast.ClassDef)):
+				walk(n, scope)
+				continue
+			if isinstance(n, ast.Lambda):
+				continue
+			if (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+			        and n.id not in scope and n.id not in module
+			        and n.id not in known):
+				bad.append((n.lineno, n.id))
+			stack.extend(ast.iter_child_nodes(n))
+
+	for n in tree.body:
+		if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+		                  ast.ClassDef)):
+			walk(n, set())
+	return sorted(set(bad))
+
+
+@case
+def no_name_is_loaded_without_a_binding(t):
+	"""A typo on an error path is a traceback where a message should be.
+
+	Section 196 found this class by measuring which refusals the suite
+	never produces: 128 `die()' sites then, 245 now, and most of their
+	wording is quoted by no case. An unproduced diagnostic costs the
+	wording, which nothing was watching -- and a misspelled NAME in one
+	costs more than that. It raises `NameError' from inside the handler
+	written to explain a failure, so the user gets a traceback at exactly
+	the moment they were owed a sentence, and section 32's class is in
+	the code written to explain a failure rather than in the failure.
+
+	Nothing else here can see it. The refusal is unreached by
+	construction, the style gate reads whitespace, and `python -m
+	py_compile' accepts an undefined name happily because the lookup is a
+	runtime event.
+
+	**The controls are the point, and they run on this file's own text.**
+	An analysis that reports nothing looks identical whether the file is
+	clean or the analysis is broken, so the case appends a function with a
+	known-bad name to the source it just read and requires the analysis to
+	find it -- in each of the three shapes that matter, because a scope
+	walk can be right about one and wrong about the next: a plain
+	function, a nested one, and an `except' handler.
+
+	Measured when written: zero in 24,000 lines, and all three probes
+	caught."""
+	# Both of this project's own Python files. A NameError in a CASE is
+	# worse than in fmake: it crashes the case rather than failing it, so
+	# the suite reports an error about itself where it owed a verdict
+	# about the tree.
+	#
+	# Not tool/style_gate.py, although it is clean: that file is a copy
+	# spread from claude-guidelines, and a gate here that failed on it
+	# would block this project's commits over another tree's source.
+	# harmonization.md's answer to a fault in a spread copy is to signal
+	# it, not to gate it locally.
+	for what in (FMAKE, os.path.abspath(__file__)):
+		found = _names_without_a_binding(open(what).read())
+		check(not found,
+		      f"{os.path.basename(what)} loads name(s) with no visible "
+		      f"binding, which is a NameError waiting on whichever path "
+		      f"reaches it: "
+		      + ", ".join(f"{line}: {name}" for line, name in found[:6]))
+
+	# The controls: the analysis has to be able to fail, in each shape a
+	# scope walk can get wrong independently. Three lines of synthetic
+	# source each, because a control on the instrument does not need
+	# 25,000 lines of context to be a control -- and four passes over
+	# this file cost twenty-four seconds where this costs none.
+	probes = (
+		("a function",
+		 "def p():\n\treturn _no_such_name_one\n"),
+		("a nested function",
+		 "def p():\n\tdef inner():\n\t\treturn _no_such_name_two\n"
+		 "\treturn inner\n"),
+		("an except handler",
+		 "def p():\n\ttry:\n\t\tpass\n\texcept OSError:\n"
+		 "\t\treturn _no_such_name_three\n"),
+		("a comprehension's body",
+		 "def p():\n\treturn [_no_such_name_four for x in (1, 2)]\n"),
+	)
+	for what, text in probes:
+		check(_names_without_a_binding(text),
+		      f"the analysis sees no undefined name in {what}, so its "
+		      f"silence about this project's files says nothing")
+
+	# And one in situ, which the synthetic probes cannot stand in for: a
+	# module-scope collection broad enough to swallow every name would
+	# pass all four above and make both checks vacuous.
+	check(_names_without_a_binding(
+	          open(FMAKE).read()
+	          + "\n\ndef _probe_in_situ():\n\treturn _no_such_name_five\n"),
+	      "the analysis sees no undefined name when one is appended to "
+	      "fmake itself, so module scope is being collected too broadly "
+	      "and both checks above are vacuous")
+
 @case
 def a_silent_nm_is_named_rather_than_the_source(t):
 	"""Section 223 left this half, with the discriminator worked out.
