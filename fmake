@@ -5323,6 +5323,41 @@ def parse_directives(comments, where=""):
 				    [lineno + offset, ["\n".join(block)]])
 				continue
 
+			# `@name:' is kernel-doc describing a struct field, and not
+			# a directive of ours however much the name agrees. Every
+			# directive in the README's table takes its arguments with a
+			# space -- `@data PATH...', `@libs NAME...' -- and kernel-doc
+			# always writes the colon, so the colon separates them with
+			# no overlap to trade off.
+			#
+			# It cost a whole project. netcfgd could not be built at all:
+			#
+			#     !!! firewire-cdev.h:946: @data ":\tPointer into
+			#         mmap()'ed payload buffer" cannot be read: No
+			#         closing quotation.
+			#
+			# `data' is one of ours, so the rest of a kernel-doc line
+			# went to `shlex', which objected to the apostrophe in
+			# `mmap()'ed'. One apostrophe in a Linux UAPI header's prose,
+			# and the build stops -- in a file that project does not even
+			# track, inside a rootfs its own `.gitignore' declares is not
+			# source.
+			#
+			# Skipped silently, which is the consistent answer rather
+			# than a quiet one: the same block's `@packets:', `@size:'
+			# and `@handle:' have always been ignored without a word for
+			# not being directive names, and a colon makes this one not a
+			# directive either. It also retires a warning that was wrong
+			# -- fmake used to call that line a directive in a header
+			# doing nothing, when it was never addressed to fmake.
+			#
+			# Found by running fmake against trees nobody had tried.
+			# Every tree whose directives it had read was one whose
+			# comments this workspace wrote, in a house style with no
+			# kernel-doc anywhere in it, and so are the fixtures.
+			if rest.startswith(":"):
+				continue
+
 			# A directive line is a command line: quotes group and a
 			# backslash escapes, which is what anybody writing `@cflags'
 			# assumes. Where that cannot be parsed the old fallback split

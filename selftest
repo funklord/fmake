@@ -34431,6 +34431,86 @@ def a_dry_run_is_not_told_its_nm_is_broken(t):
 
 
 @case
+def a_kernel_doc_field_is_not_a_directive(t):
+	"""An apostrophe in a Linux header's prose stopped a whole build.
+
+	netcfgd could not be built by fmake at all:
+
+	    !!! firewire-cdev.h:946: @data ":\\tPointer into mmap()'ed payload
+	        buffer" cannot be read: No closing quotation.
+
+	The line is kernel-doc describing a struct field -- `@data:' and a tab
+	and a description -- and `data` is one of fmake's thirty directives, so
+	the rest of the line went to `shlex', which objected to `mmap()'ed'.
+	The file is a Linux UAPI header inside a rootfs that project stages for
+	its own tests, and its `.gitignore' already says `dist/' is not source.
+
+	The colon is what separates the two vocabularies with nothing to trade
+	off: every directive in the README's table takes its arguments after a
+	space, and kernel-doc always writes the colon.
+
+	Skipped silently, because that is the consistent answer rather than a
+	quiet one -- `@packets:', `@size:' and `@handle:' in the same block have
+	always been ignored without a word for not being directive names. It
+	also retires a warning that was wrong, which the second assertion
+	pins: fmake used to call that line a directive in a header doing
+	nothing, when it was never addressed to fmake at all.
+
+	The third and fourth assertions are the controls, and they matter more
+	than the first: a real directive must still be read, and a directive
+	whose quoting is genuinely broken must still refuse. Making every lex
+	failure silent would pass the first assertion and lose both."""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("q.h",
+	        "/**\n"
+	        " * struct fw_cdev_queue_iso - Queue isochronous packets\n"
+	        " * @packets:\tUserspace pointer to an array\n"
+	        " * @data:\tPointer into mmap()'ed payload buffer\n"
+	        " * @size:\tSize of the @packets array, in bytes\n"
+	        " */\n"
+	        "struct q { int x; };\n")
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"kernel-doc prose refused the build: {out}")
+	check("cannot be read" not in out,
+	      f"a kernel-doc field was lexed as a directive argument: {out}")
+	check("@data" not in out,
+	      f"a kernel-doc field is still reported as a directive that does "
+	      f"nothing, which is a sentence about a line nobody addressed to "
+	      f"fmake: {out}")
+
+	# Control one: a real directive, no colon, still read.
+	u = Tree("kdoc-real")
+	try:
+		u.write("thing.dat", "data\n")
+		u.write("main.c", "/*! @data thing.dat */\n"
+		        "int main(void){ return 0; }\n")
+		r = u.fmake("-n", "--install", "--destdir", os.path.join(u.dir, "stage"),
+		            "--prefix", "/usr")
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"a real @data was refused: {out}")
+		check("thing.dat" in out,
+		      f"@data without a colon stopped being read: {out}")
+	finally:
+		u.cleanup()
+
+	# Control two: broken quoting in a real directive still refuses.
+	v = Tree("kdoc-broken")
+	try:
+		v.write("main.c", '/*! @cflags "-DX=1 */\n'
+		        "int main(void){ return 0; }\n")
+		r = v.fmake("-n")
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a directive whose quoting is broken was accepted: {out}")
+		check("cannot be read" in out,
+		      f"the refusal no longer says what shlex objected to: {out}")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_silent_nm_is_named_rather_than_the_source(t):
 	"""Section 223 left this half, with the discriminator worked out.
 

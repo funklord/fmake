@@ -606,7 +606,8 @@ that had been green about nothing for five commits ·
 [554. The clean that cleans one of its two lists -- open](#554-the-clean-that-cleans-one-of-its-two-lists----open) ·
 [555. A "not for" list is where a README goes stale first](#555-a-not-for-list-is-where-a-readme-goes-stale-first) ·
 [556. The section that exists and was called unknown](#556-the-section-that-exists-and-was-called-unknown) ·
-[557. The silent-nm check fired on a dry run's own emptiness](#557-the-silent-nm-check-fired-on-a-dry-runs-own-emptiness)
+[557. The silent-nm check fired on a dry run's own emptiness](#557-the-silent-nm-check-fired-on-a-dry-runs-own-emptiness) ·
+[559. Refusing a build over a directive it had already discarded](#559-refusing-a-build-over-a-directive-it-had-already-discarded)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -44765,3 +44766,61 @@ code path. A limitation that hides a defect is worth noting wherever the
 limitation is already written down.
 
 It fires at `ab07209` too, so it is long-standing rather than new.
+
+## 559. Refusing a build over a directive it had already discarded
+
+netcfgd cannot be built by fmake, and the cause is an apostrophe in a
+Linux UAPI header's prose:
+
+    !!! firewire-cdev.h:946: @data ":\tPointer into mmap()'ed payload
+        buffer" cannot be read: No closing quotation.
+
+The line is kernel-doc, documenting a struct field:
+
+     * @data:\tPointer into mmap()'ed payload buffer
+
+`data` is one of fmake's thirty directives, so the scanner takes the rest
+of the line and hands it to `shlex`, which objects to the unbalanced
+quote in `mmap()'ed` -- and the scanner dies. One project, stopped by
+prose nobody in this workspace wrote.
+
+**The sharpest statement of the fault is not the collision with
+kernel-doc.** On the same fixture with the apostrophe removed, fmake says
+
+    q.h:2: @data is in a header and does nothing; directives are read
+    from sources, so put it in a .c or .cpp that includes this file
+
+So a directive in a header is inert **by design**, fmake knows it, and
+says so -- at line 13598, as a `warn`. The scanner refuses the whole
+build at collection time, before the caller can reach that judgement. It
+is dying while validating the argument of a directive it is about to
+throw away.
+
+That also says where the fix belongs, and it needs no new heuristic: the
+scanner already returns `typos` and `misplaced` for the caller to report,
+so an argument that will not lex is a third thing of that kind rather
+than a reason to stop. Then the only directives whose quoting can refuse
+a build are the ones that would have done something.
+
+**Two further guards, each worth having on its own.**
+
+- **A directive name followed immediately by a colon is kernel-doc.**
+  fmake's own directives never take one -- the README's table is
+  `@data PATH…`, `@libs NAME…`, `@target NAME` throughout -- and
+  kernel-doc always does. Unlike the rule above, this protects a
+  *tracked* vendored kernel header, and one in a `.c` where directives
+  are not inert.
+- **Do not read directives out of a file git is told to ignore.** This
+  is the root both this and section 560's situ refusal grow from.
+
+**Why it went unseen, which is the part that generalises.** Every tree
+whose directives fmake has read is one whose comments this workspace
+wrote, to a house style with no kernel-doc in it. The fixtures are the
+same. What found it was running fmake against trees nobody had tried --
+and the file is not even netcfgd's: it is a Linux UAPI header inside
+`dist/hull/hwsim-rootfs/usr/include/`, a rootfs that project stages for
+its own tests, which `dist/` in its `.gitignore` already declares is not
+source.
+
+Minimal reproduction is two files: a `main.c`, and a `q.h` holding
+`@data:` and a tab and any prose with an apostrophe in it.
