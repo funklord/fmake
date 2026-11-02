@@ -35,6 +35,7 @@ nobody diffs.
 """
 
 import ast
+import atexit
 import concurrent.futures
 import glob
 import hashlib
@@ -64,6 +65,17 @@ if not sys.stdout.isatty():
 
 CASES = []
 KEEP = False
+
+# Every scratch tree this process made and has not removed yet. A run that
+# finishes cleans each one in the runner's finally, so this is empty at the
+# end -- and that is asserted rather than assumed, because the shape that
+# leaks is the one nobody watches: an INTERRUPTED run. Measured 2026-11-02,
+# 336 directories under /tmp from three weeks of killed runs, the oldest
+# nineteen days old. 31 MB between them, so the cost is not the disk: it is
+# that nobody reading /tmp can tell a live fixture from old litter, which is
+# what makes a sweep by prefix dangerous while a suite is running.
+_TREES = set()
+
 # No single fmake invocation legitimately takes this long -- the slowest
 # whole case measured 77s with the pool saturated. It exists so that a
 # hang fails the case instead of stopping the suite.
@@ -82,6 +94,7 @@ class Tree:
 	def __init__(self, name):
 		self.name = name
 		self.dir = tempfile.mkdtemp(prefix=f"fmake-{name}-")
+		_TREES.add(self.dir)
 
 	def write(self, rel, text):
 		path = os.path.join(self.dir, rel)
@@ -150,6 +163,45 @@ class Tree:
 	def cleanup(self):
 		if not KEEP:
 			shutil.rmtree(self.dir, ignore_errors=True)
+			_TREES.discard(self.dir)
+
+
+def _sweep_trees():
+	"""Remove the trees this process made and still holds.
+
+	By the set rather than by the `fmake-*' prefix: several suites and
+	several sessions share /tmp here, so a prefix sweep deletes a
+	concurrent run's live fixtures. That is the delete-with-a-name rule
+	met from the cleanup side.
+
+	`-k' keeps the trees on purpose, so this keeps them too. A sweep that
+	ignored the flag would delete exactly what somebody asked to look at,
+	at the one moment they are not watching.
+	"""
+	if KEEP:
+		return
+	for d in list(_TREES):
+		shutil.rmtree(d, ignore_errors=True)
+		_TREES.discard(d)
+
+
+def _die_cleanly(sig, _frame):
+	"""Clean up, then die of the signal rather than of a handler.
+
+	`atexit' does not run for a signal, and a signal is how a suite
+	actually ends when somebody stops it -- which is the run that leaks.
+	Re-raising with the default disposition keeps the exit status honest:
+	a run stopped by SIGTERM must not look like one that chose to stop.
+	SIGKILL cannot be caught and is the one shape still left behind.
+	"""
+	_sweep_trees()
+	signal.signal(sig, signal.SIG_DFL)
+	os.kill(os.getpid(), sig)
+
+
+atexit.register(_sweep_trees)
+for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+	signal.signal(_sig, _die_cleanly)
 
 
 class Failure(Exception):
@@ -41860,6 +41912,15 @@ def main(argv):
 		print(f"{RED}{failures} of {len(cases)} failed{OFF}{tail}")
 	else:
 		print(f"{GREEN}all {len(cases) - skipped} passed{OFF}{tail}")
+	# The cleanup is proved by counting what it left, not by having called
+	# rmtree. A leak here is the suite's own fault and reads as a failure,
+	# because a green summary above a filling /tmp is the pair this check
+	# exists to break up. `-k' keeps them on purpose and is not a leak.
+	if _TREES and not KEEP:
+		print(f"{RED}{len(_TREES)} scratch tree(s) left behind{OFF}")
+		for left in sorted(_TREES)[:5]:
+			print(f"       {left}")
+		failures += 1
 	return 1 if failures else 0
 
 

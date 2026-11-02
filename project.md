@@ -615,7 +615,8 @@ that had been green about nothing for five commits ·
 [563. What fmake costs on the big trees, and what the load was](#563-what-fmake-costs-on-the-big-trees-and-what-the-load-was) ·
 [564. A gate over the error paths nothing else reaches](#564-a-gate-over-the-error-paths-nothing-else-reaches) ·
 [565. The aims, asked rather than assumed](#565-the-aims-asked-rather-than-assumed) ·
-[566. A published header under no include root, and the census that found it](#566-a-published-header-under-no-include-root-and-the-census-that-found-it)
+[566. A published header under no include root, and the census that found it](#566-a-published-header-under-no-include-root-and-the-census-that-found-it) ·
+[567. The suite leaked a scratch tree every time somebody stopped it](#567-the-suite-leaked-a-scratch-tree-every-time-somebody-stopped-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2910,6 +2911,30 @@ run should be.
 Cases needing something absent from the machine skip rather than fail — a
 cross toolchain, `ninja`, a library, Qt. A skip is not a pass; check the
 count.
+
+**Do not edit `fmake` while its suite is running.** The cache records
+fmake's own identity -- `build_identity()`, a hash of the file -- and
+discards itself when that changes, which is what it is for. So a case that
+builds twice and expects the second run to reuse the cache fails with *a
+cache fmake wrote itself was discarded*, and the failure is about the
+editor rather than about the code. Measured 2026-11-02: a comment rewrap,
+provably behaviour-neutral (identical AST, identical bytecode), applied
+during a full run, and `a_damaged_cache_is_rebuilt_not_a_traceback` was the
+one case whose two invocations straddled it. Freeze both files' checksums
+before a run and compare them after -- and if they differ, the run is
+evidence about nothing, whatever it reported.
+
+**The scratch trees must not live anywhere a git repository ignores.**
+`TMPDIR` looks like the way to run the suite on a filesystem with room, and
+the obvious place -- a directory inside this tree -- is the one place it
+cannot go: `.gitignore` has `.fmake/`, so every fixture source under it is
+a file git is told to ignore, and fmake skips those by design. Measured
+2026-11-02 with `TMPDIR=.fmake/selftest-tmp`: 95 of the first 107 cases
+failed, starting with `hello_needs_no_files`. The suite was right, fmake
+was right, and the relocation was wrong. A fixture belongs outside any
+repository that ignores it -- which in practice means `/tmp`, and a full
+`/` is therefore a blocker on running the suite at all rather than an
+inconvenience.
 
 Mutations go through a script reading before-and-after text from files, not
 through a shell heredoc. Three separate incidents came from `\n` collapsing or
@@ -45639,3 +45664,66 @@ Three branches, each sabotaged, each failing its own assertion:
 | `written_incdirs` emptied into the root set | the generated header |
 
 Guarded by `a_header_with_no_include_root_says_so_before_flattening`.
+
+## 567. The suite leaked a scratch tree every time somebody stopped it
+
+371 directories named `fmake-<case>-*` under `/tmp`, from three weeks of
+runs, the oldest nineteen days old; 336 an hour later, because the figure
+moves with whatever is running. Counted 2026-11-02 while checking whether
+the machine's disk was at risk: it was not, about 31 MB between them, and
+the number is worth keeping only because it is the one that makes this easy
+to ignore.
+
+**The cleanup was never missing.** `run_case` removes its tree in a
+`finally`, and every case that makes a second tree removes it the same way,
+so a run that finishes -- passing or failing -- leaves nothing. What leaks
+is the shape nobody watches: an **interrupted** run. The dates say so,
+57 of them from this session's own killed runs and 142 from one day in
+October.
+
+That is the trap `running-code.md` names and it is worth restating from
+this instance, because the instance is the softest version of it: the
+suite's green line and a filling `/tmp` are not in each other's view.
+Nothing in the ordinary course of work brings the two together -- `df` in
+the source tree answers for the filesystem the sources are on, the
+directories are somewhere else, and the run that produced them was stopped
+precisely because something was already going wrong, which is the moment
+nobody is auditing anything.
+
+**So the cleanup now carries a proof rather than an intention.** Three
+pieces, and the third is the one that would have found this:
+
+- the trees this process made are registered as they are made, and
+  removed from the set as they are cleaned;
+- `SIGINT`, `SIGTERM` and `SIGHUP` clean the set and then re-raise with the
+  default disposition, so a stopped run tidies up and still reports the
+  signal rather than a chosen exit. `atexit` cannot do this and a signal
+  is how a suite actually ends when somebody stops it;
+- **the count of what was left is an assertion.** A non-empty set at the
+  end of a run is a failure of the run, printed with the first five paths.
+  A green summary above a growing `/tmp` is the pair this breaks up.
+
+**The sweep is by the set and never by the `fmake-*` prefix.** Several
+suites and several sessions share `/tmp` here, so a prefix sweep deletes a
+concurrent run's live fixtures -- the same rule `CLAUDE.md` states for
+deletion, met from the cleanup side. `-k` keeps trees deliberately and is
+excluded from all three pieces: a sweep that ignored the flag would delete
+exactly what somebody asked to look at, at the one moment they are not
+watching.
+
+**The signal sweep races with the cases still starting**, which is worth
+stating rather than rounding off. Measured on the run that proved it: a
+`SIGTERM` to a `-j8` run swept the set and three trees remained, each
+created by a case that got its `mkdtemp` in after the sweep had passed and
+before the process died. Three rather than ninety-odd is the point; a
+handler cannot hold a pool still while it tidies, and pretending otherwise
+would be a worse record than the number.
+
+`SIGKILL` is still left behind, and so is the harness's own way of stopping
+a background task where that is not a signal the process gets to catch.
+That is the residue rather than the common case, and naming it is cheaper
+than pretending otherwise.
+
+**What this does not do is remove the ones already there.** They are other runs' --
+several of them other sessions' -- and the rule that makes the sweep above
+safe is the rule that says these are not mine to delete by pattern.
