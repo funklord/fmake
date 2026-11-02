@@ -15054,11 +15054,24 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# uic output is flat and its includes are unqualified, so one -I covers
 	# it. Added explicitly rather than left to the include graph to discover,
 	# because a header nothing has walked to yet still has to be findable.
-	for d in (gen_dirs + ([UI_DIR] if ui_outs else [])
-	          + ([SITU_DIR] if situ_outs else [])):
+	written_incdirs = (gen_dirs + ([UI_DIR] if ui_outs else [])
+	                   + ([SITU_DIR] if situ_outs else []))
+	for d in written_incdirs:
 		flag = "-I" + os.path.join(root, d) if d else "-I" + root
 		if flag not in base_incflags:
 			base_incflags.append(flag)
+	# One list, both collections. These directories are include roots of
+	# fmake's own making -- it puts the -I there itself, for a header
+	# nothing has walked to yet -- and the include graph never sees them
+	# unless something includes what they hold. `install_subpath' reads
+	# this set only, so without them a generated header published for
+	# consumers falls under no root at all, and the message added there
+	# would tell a reader that nothing puts it on an include path while
+	# fmake is putting it on one. Measured with the two apart: `@headers
+	# gen/pkg/api.h' warned, although `api.h' is exactly the spelling
+	# `-Igen/pkg' makes available and exactly what it installed.
+	_INCLUDE_ROOTS.update(d for d in written_incdirs
+	                      if d not in ("", "."))
 	for flag in moc_incflags:
 		if flag not in base_incflags:
 			base_incflags.append(flag)
@@ -21292,7 +21305,9 @@ def install_subpath(h):
     reach it, which is the same directory fmake put on the compile line --
     so the installed layout is the one the code's own include text names.
     A header under no include root keeps its basename, which is what a
-    flat library has always got.
+    flat library has always got -- and says so when it has a directory
+    to lose, since for one published out of a subdirectory that is a
+    spelling nobody chose rather than a layout anybody wanted.
 
     **The SHORTEST matching root wins**, which is the most qualified
     spelling of the include. A tree can reach one header two ways --
@@ -21311,7 +21326,25 @@ def install_subpath(h):
 		pre = d.rstrip("/") + "/"
 		if h.startswith(pre) and (best is None or len(pre) < len(best)):
 			best = pre
-	return h[len(best):] if best else os.path.basename(h)
+	if best:
+		return h[len(best):]
+	# Under no include root at all. For a flat library -- the header
+	# beside its source -- the basename IS the path and there is nothing
+	# to say. For one published out of a directory there is: nothing in
+	# the tree includes it, so no include path was ever taken to reach
+	# it, and the spelling the author means is not recoverable from the
+	# layout. Guessing `include' from the name is the shape of exception
+	# section 5 keeps refusing, so say it instead. Flattening in silence
+	# is what that costs: the consumer who writes the include the
+	# library's own layout names cannot compile against what was
+	# installed, and the build that installed it exited 0 saying nothing.
+	if os.path.dirname(h):
+		warn_once(f"{h} publishes as {os.path.basename(h)}: "
+		          f"nothing here includes it, so there is no "
+		          f"include path to take it relative to -- name "
+		          f"one with [project] include-dirs to publish "
+		          f"it under a path")
+	return os.path.basename(h)
 
 
 def _png_size(path):

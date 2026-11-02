@@ -614,7 +614,8 @@ that had been green about nothing for five commits ·
 [562. The archive walk asked git; the schema walk never did](#562-the-archive-walk-asked-git-the-schema-walk-never-did) ·
 [563. What fmake costs on the big trees, and what the load was](#563-what-fmake-costs-on-the-big-trees-and-what-the-load-was) ·
 [564. A gate over the error paths nothing else reaches](#564-a-gate-over-the-error-paths-nothing-else-reaches) ·
-[565. The aims, asked rather than assumed](#565-the-aims-asked-rather-than-assumed)
+[565. The aims, asked rather than assumed](#565-the-aims-asked-rather-than-assumed) ·
+[566. A published header under no include root, and the census that found it](#566-a-published-header-under-no-include-root-and-the-census-that-found-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2525,6 +2526,22 @@ rather than code, and one lesson about testing.
   three flags in hembygd's case were also genuinely inert, so a naive diff
   would have led with noise and buried the one that mattered. Whether that
   trade is worth making is the copyright holder's, not a session's.
+
+- **A program in a subdirectory is named after that directory, and nine
+  overrides in this workspace say the directory is too generic.** Measured
+  2026-11-02 across the sixteen `fmake.toml` files here: `name` is the
+  most-declared key, 19 settings, every one a `[target.*]`. Nine of them
+  spell `<something>-<directory>`, and `gui` is four of those -- `netcfgd`,
+  `respec` and `fuzzypickles` would each install a `/usr/bin/gui` without
+  the line, and qtty renames `inspect`, `replay` and `negotiate` the same
+  way. Prefixing the project's name where a program is not at the tree root
+  would retire nine of the nineteen.
+
+  **The cost is that it changes section 1's headline claim** -- a directory
+  with a `main.c` becomes a program called after the directory -- for every
+  tree that builds a program out of a subdirectory, and the change is
+  visible in `$bindir` rather than in a build directory. **Whose decision:
+  the copyright holder's.** See section 566 for the census it came out of.
 
 - **Object directories are never reclaimed.** One is kept per
   configuration on purpose, so switching profiles, toolchains or `$DEBUG`
@@ -45477,3 +45494,126 @@ The sixth is the argument's other half, and the sharper half: the lens
 found a gap in the patch written for the defect that shaped it. Which is
 as close as this file gets to a rule about where to look next -- at what
 you have just changed, with the question the change itself taught you.
+
+## 566. A published header under no include root, and the census that found it
+
+Principle 3 says every annotation a user writes is a small failure, and
+`@libs` should be rare rather than routine. That is a measurable claim and
+nothing here had measured it, so: every `fmake.toml` in this workspace,
+counted by key. Sixteen trees carry one and 93 settings between them, and
+four keys are more than half of that -- `name` 19 settings in ten trees,
+`include-dirs` 10 in ten, `exclude` 10 in ten, `defines` 10 in ten.
+
+Counted with `tomllib` over the parsed documents, which is worth saying
+because the first count was 96 and was taken with a regular expression per
+line: a multi-line `defines` array has `=` inside its own strings, so the
+line-based count read `'THORVG_VERSION_STRING` as a key and three others
+like it. The shape it reported was right and the total was not, which is
+the more dangerous way for a count to be wrong.
+
+**Ten of sixteen declaring an include path is the number worth reading.**
+Each was read rather than counted. Four kinds: a directory holding generated
+output (anti-avx, hull); a public header reached by a prefix the tree's own
+sources use (`softkeys/x.h` from `include/`, ossacli the same); a test tree
+compiling from the repository root (hydra, raidcfgd); and a vendored
+dependency's own include directory (beerssh, fuzznet, fuzzypickles,
+raidcfgd). Only the second and third are candidates for inference, and both
+are already answered in the code: fmake finds the header, names the exact
+`[project] include-dirs` line, and declines to apply it -- with beerssh's
+case recorded beside the message as the reason, where taking that remedy
+puts libssh's `string.h` in front of the C library's for every file in the
+build. So the residual annotation burden is four documented small failures
+and no gap.
+
+**`defines` is the second-biggest key and is not a failure at all.** Ten
+trees, and eight of them are one line injecting a version string from the
+`VERSION` file -- `$file(VERSION)` already exists for exactly that. What
+cannot be inferred is the macro's name: `BBQ_VERSION_STRING`,
+`BSSH_VERSION_STRING`, `HEMBYGD_VERSION`, `HULL_VERSION`, `OMLX4_VERSION`,
+`RAIDTRAY_VERSION`, `RESPEC_VERSION` -- two suffixes and seven prefixes,
+none of them derivable from the project's directory name, and three of them
+not derivable from the project's name either. A tool cannot name somebody
+else's macro, and guessing one is the shape of exception section 5 keeps
+refusing. One line per tree is the minimum this can cost.
+
+**`name` is the biggest key, with 19 settings, and every one of them is a
+`[target.*]` rather than a `[project]`.** Nothing renames a project; what
+gets renamed is a program whose directory is not what its binary should be
+called. `sshd` -> `beersshd`, `agent` -> `hull-agent`, `nss` ->
+`libnss_hull`, `cli` -> `fzp`, `test` -> `softkeys-tests`. That is a
+decision rather than an inference and the premise in section 1 gives the
+right default for the common case, so this is the key the census expected
+to find and the one with least in it.
+
+**There is one question inside it, and it is the holder's.** Nine of the
+19 spell `<something>-<directory>`, and four are the same directory:
+`gui` becomes `netcfgd-gui`, `respec-gui` and `fzp-gui`, while `inspect`,
+`replay` and `negotiate` become `qtty-inspect`, `qtty-replay` and
+`qtty-negotiate`. The shape is a program in a subdirectory whose name is
+too generic to install -- three of these trees would each put a
+`/usr/bin/gui` on the system -- and the override says so in nine places.
+fmake could prefix the project's name where a program is not at the root,
+which would retire nine of the 19. The cost is that it changes the name of
+every program fmake builds out of a subdirectory, which is section 1's
+headline claim and is visible in `$bindir` rather than in a build
+directory. Not a session's to take: recorded here, and in section 15's
+register, as the copyright holder's.
+
+**`exclude` in ten trees reads the same way, and one quarter of it is
+belt-and-braces.** Four causes: a vendored subtree's own tests and the
+engines of it nobody builds (fuzzypickles with eighteen entries, fuzznet,
+beerssh); platform translation units for an Android build on a desktop one
+(beerssh's five); a workspace's crate directories (netcfgd); and build or
+staging directories. The last is the only one fmake could answer itself,
+and it already does: of the entries that exist on disk, six are paths git
+is told to ignore -- softkeys' `build` and `build-test`, beerssh's `deps`
+and `build-deps-android`, ossacli's `libossa.a`. Measured with a fixture
+rather than inferred from theirs: a gitignored `build/` holding a copy of a
+tree source, which would otherwise be a second provider and a refusal, is
+skipped, and the tree builds with no `exclude` at all. So those lines cost
+their authors a line and fmake nothing, and there is no gap behind them.
+
+**What the census did find was in the other direction.** Chasing the first
+kind, `gen_dirs` turned out to be wired into `base_incflags` and not into
+`_INCLUDE_ROOTS`, which `install_subpath` reads and nothing else does --
+the value-with-two-consumers shape that section 15 records as this tree's
+most productive lens. A fixture confirmed the symptom immediately:
+`@headers gen/pkg/api.h` on a static library installed `$includedir/api.h`,
+flat, which is exactly the defect `install_subpath`'s docstring was written
+to fix.
+
+**And the comfortable explanation was wrong, which is the half worth
+keeping.** `gen_dirs` holds the directory of each generated *header*, so
+for `gen/pkg/api.h` it is `gen/pkg` and not `gen`: fmake puts `-Igen/pkg`
+on the compile line, the header is reachable as `<api.h>`, and `api.h` is
+the right published path. Flat was correct. The control said so --
+re-running with the fix in place changed nothing -- and a second fixture
+narrowed it further: with any source including the header, the include
+graph supplies the root and the install was never wrong.
+
+What is left is real and is smaller than the story it arrived in. **A
+published header that nothing in the tree includes has no include root, and
+published flat in silence.** Nothing took an include path to reach it, so
+there is none to make the path relative to; the spelling the author means is
+not recoverable from the layout, and guessing `include` from the name is the
+shape of exception section 5 keeps refusing. So the answer stays and the
+silence goes: `include/pkg/api.h publishes as api.h: nothing here includes
+it, so there is no include path to take it relative to -- name one with
+[project] include-dirs to publish it under a path`.
+
+**The two edits are one change, and apart the second is a false alarm.**
+A generated header published for consumers only falls under no root either,
+so the message fired on `gen/pkg/api.h` -- telling a reader that nothing put
+it on an include path while fmake was putting it on one. The directories
+fmake writes into are include roots of its own making, so they go into both
+collections from one list, which is what the first edit now is.
+
+Three branches, each sabotaged, each failing its own assertion:
+
+| sabotage | branch that failed |
+|---|---|
+| the `warn_once` call removed | the published header in a directory |
+| the `os.path.dirname(h)` guard always true | a flat library's own header |
+| `written_incdirs` emptied into the root set | the generated header |
+
+Guarded by `a_header_with_no_include_root_says_so_before_flattening`.
