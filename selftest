@@ -163,7 +163,17 @@ class Tree:
 	def cleanup(self):
 		if not KEEP:
 			shutil.rmtree(self.dir, ignore_errors=True)
-			_TREES.discard(self.dir)
+			# Only once it is really gone. `ignore_errors' is what keeps a
+			# half-removable tree from failing a case that otherwise
+			# passed, and it is also what would make the count at the end
+			# of the run a count of intentions: a tree whose root a case
+			# left at 0o555 cannot have its children unlinked, rmtree says
+			# nothing, and an unconditional discard would report a clean
+			# run over a directory still on the disk. Sixty-nine `chmod'
+			# calls in this file, several of them 0o555 on a tree root, so
+			# the shape is one keystroke away rather than hypothetical.
+			if not os.path.isdir(self.dir):
+				_TREES.discard(self.dir)
 
 
 def _sweep_trees():
@@ -182,7 +192,8 @@ def _sweep_trees():
 		return
 	for d in list(_TREES):
 		shutil.rmtree(d, ignore_errors=True)
-		_TREES.discard(d)
+		if not os.path.isdir(d):
+			_TREES.discard(d)
 
 
 def _die_cleanly(sig, _frame):

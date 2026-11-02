@@ -45727,3 +45727,29 @@ than pretending otherwise.
 **What this does not do is remove the ones already there.** They are other runs' --
 several of them other sessions' -- and the rule that makes the sweep above
 safe is the rule that says these are not mine to delete by pattern.
+
+### The count was of the registry, and now it is of the disk
+
+Caught an hour after the section above was committed, by asking what the
+assertion would do if `rmtree` did not work. `ignore_errors=True` is what
+keeps a half-removable tree from failing a case that otherwise passed --
+and it is also what would turn the count into a count of intentions: the
+discard ran whether or not the directory went away.
+
+Not hypothetical by much. There are 69 `chmod` calls in the suite and
+several set a tree root to `0o555`; a root that mode cannot have its
+children unlinked, `rmtree` says nothing about it, and the run would have
+reported itself clean over a directory still on the disk. Every leftover
+root under `/tmp` measured `700` or `775`, so no case leaves one that way
+today -- which is why this was a hole rather than a leak.
+
+The discard is conditional on the directory being gone now, and the pair
+either side of that one line is the whole argument:
+
+| shape | rmtree made to fail | verdict |
+|---|---|---|
+| unconditional discard | yes | `all 1 passed`, exit 0, tree on disk |
+| conditional discard | yes | `1 scratch tree(s) left behind`, exit 1 |
+
+Which is this file's own rule about a check that cannot fail, met inside
+the check written to enforce it.
