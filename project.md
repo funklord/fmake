@@ -628,7 +628,8 @@ that had been green about nothing for five commits ·
 [576. Advice that could not work, on two code paths](#576-advice-that-could-not-work-on-two-code-paths) ·
 [577. A GNU linker script handed to a linker that has no such thing](#577-a-gnu-linker-script-handed-to-a-linker-that-has-no-such-thing) ·
 [578. A module no loader on that platform would open](#578-a-module-no-loader-on-that-platform-would-open) ·
-[579. What the identity work cost, which is nothing](#579-what-the-identity-work-cost-which-is-nothing)
+[579. What the identity work cost, which is nothing](#579-what-the-identity-work-cost-which-is-nothing) ·
+[580. Eighteen trees swept, and the two that refuse](#580-eighteen-trees-swept-and-the-two-that-refuse)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46666,3 +46667,59 @@ Alternating two versions therefore measures a cold build every time.
 The fix is to let each version run twice and compare the warm figures,
 which is the same discipline as timing anything on a loaded machine: the
 first number is about the apparatus.
+
+## 580. Eighteen trees swept, and the two that refuse
+
+Section 13's surface, re-walked 2026-11-03 at load 5 after a run that
+routed three name properties through new helpers. A dry run per tree,
+bounded, writing nothing into any of them.
+
+**Sixteen of eighteen plan cleanly**, from 4 compile lines to 207:
+anti-avx 5, bbq-predictor 50, beerssh 87, fuzznet 207, fuzzypickles 188,
+hembygd 20, hull 38, hydra 108, netcfgd 88, openmlx4 16, ossacli 9,
+qtty 25, raidcfgd 143, respec 5, situ 4, softkeys 11. No regression from
+the platform work, which is what a sweep can say and a suite cannot.
+
+Two refuse, and **two of these trees had never been swept before** --
+neither `tde` nor `kconfig_tree` appears anywhere else in this file, so
+this is new ground rather than a change.
+
+- **kconfig_tree**: *no C, C++, assembly or Rust source files found
+  here*. Correct; it is not that kind of project.
+- **tde**: a real refusal, below.
+
+### tde cannot be planned, and the remedy is a decision this file parks
+
+    !!! 2 targets are called 'probe':
+        test/dbus-signal-delivery/probe.cpp
+        test/docked-detect/probe.cpp
+
+Two test probes, one per feature directory, each sensibly called
+`probe.cpp`. The target name comes from the file's stem when the file is
+not `main.c`, so both are `probe` and the whole tree stops.
+
+**The refusal is right and its remedy is complete** -- it names every
+colliding file, says "all but one of each" so a three-way clash is not
+fixed serially, and prints the `[target.NEW_NAME]` form to paste. What it
+cannot do is choose the new name.
+
+**And fmake's existing qualifier cannot resolve this shape.** The rule it
+already has -- *a name nobody chose gets qualified rather than refused* --
+qualifies with the project's name, which here produces `tde-probe` twice.
+What distinguishes these two is their **directory**, which is exactly the
+naming policy section 566 reserves for the copyright holder: nine of the
+19 `name` overrides in this workspace spell `<project>-<dir>`, and the
+question of whether fmake should do that itself is open.
+
+So this is not a new question but a **materially stronger case for the
+open one**. Section 566 asked it from nine lines of convenience; tde
+answers with a tree that cannot be built at all without the decision.
+Either spelling would fix it -- `<dir>` gives `dbus-signal-delivery` and
+`docked-detect`, `<project>-<dir>` gives those with `tde-` in front -- and
+choosing is the holder's.
+
+Deliberately not done here: suggesting a name in the refusal. It looks
+like a free improvement and is not, because a good suggestion has to skip
+the directory names that name nothing -- `src`, `test` -- which is the
+qualifier's own policy, and writing it into a message is deciding the
+policy by the back door.
