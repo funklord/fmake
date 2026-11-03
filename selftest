@@ -33834,6 +33834,40 @@ def a_library_of_the_wrong_architecture_is_not_offered_on_mach_o(t):
 			      f"which is the whole point of the filter: {out}")
 	finally:
 		shutil.rmtree(outside, ignore_errors=True)
+
+
+@case
+def a_mach_o_collision_of_two_mains_is_still_reported(t):
+	"""section 568: the same check, inert on the other format.
+
+	`one_program_pulled_into_another_is_reported' covers this on ELF and
+	says why it matters: without it the reader gets the linker's multiple
+	definition of main under the advice offering to name missing
+	libraries, which points at the opposite of the problem. That check
+	asked `"main" in u.strong', so on Mach-O it never fired and the
+	diagnosis simply vanished.
+
+	Short because the ELF case carries the argument; what is asserted
+	here is that the other format reaches the same refusal. The link is
+	not reached on either, so the return code is the refusal's.
+	"""
+	_mach_o_or_skip(t)
+	t.write("a.c", "extern int shared(void);\n"
+	        "int main(void){ return shared(); }\n")
+	t.write("b.c", "int shared(void){ return 3; }\n"
+	        "int main(void){ return 0; }\n")
+	t.write("fmake.toml", MACH_O_CONF)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"two mains in one link set cannot build: {out}")
+	check("pulled into another program" in out,
+	      f"and the collision has to be named on Mach-O too, not left "
+	      f"to a linker nobody here has: {out}")
+	check("missing libraries" not in out,
+	      f"and not under the advice that points the wrong way: {out}")
+
+
 @case
 def a_named_sources_list_that_went_stale_says_so(t):
 	"""section 378: the predictable cost of fmake's own advice.

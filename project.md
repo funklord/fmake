@@ -45854,6 +45854,35 @@ Guarded by `mach_o_spells_main_with_an_underscore`, which skips unless this
 machine can both produce and read a Mach-O object -- and asserts the probe
 object really is Mach-O, so it cannot pass by measuring an ELF file.
 
+### The second site, found by the lens the first one left
+
+The fault was "a literal identifier compared against `nm` output", so the
+question after fixing it was where else fmake does that. Three sites, found
+mechanically: `exports_main`'s own two lines, and one more.
+
+**The collision check that catches a program's own file pulled into another
+program asked `"main" in u.strong` too**, and was therefore inert on Mach-O.
+Its purpose is stated in the comment above it: to replace the linker's
+multiple-definition error, which arrives "under the advice this check exists
+to replace" -- the one offering to name missing libraries when nothing is
+missing.
+
+Measured, with the ELF run as the control. Two files, each with a `main()`,
+where one defines a function the other needs:
+
+    ELF       !!! a program's own file was pulled into another program:
+              Both define main(), so this cannot link. What is shared
+              belongs in a file of its own:
+              move it out of b.c and both programs can reach it.
+
+    Mach-O    (nothing about the collision; straight to the link)
+
+So the diagnosis simply vanished on the other format, and the same
+`exports_main` closes it. Worth separating from the first site: that one
+produced a wrong artifact, a library where a program was asked for, and this
+one produces a worse error message. Both come from one spelling and neither
+was reachable before `llvm-nm` arrived.
+
 ## 569. A declared architecture that could not be checked, in silence
 
 The architecture check reads an ELF header and compares its machine against

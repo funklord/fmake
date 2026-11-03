@@ -16939,8 +16939,13 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			# perfectly safe, because there is no second main() to collide
 			# with. Reading every root rather than only the wanted ones
 			# reinstated exactly those false roots, which the suite caught.
+			# `exports_main' for the same reason the root check uses it:
+			# Mach-O spells the entry point `_main', so asking for the
+			# literal name made this check inert there and the collision
+			# reached the linker -- under exactly the advice the comment
+			# above says this exists to replace. Section 568.
 			if (u.rel != t.rel and u.rel in roots
-			        and "main" in u.strong):
+			        and exports_main(u)):
 				sym, by = cl.why.get(u.rel, ("", ""))
 				intruders.append((t.name, u.rel, roots[u.rel], sym, by))
 	if intruders:
