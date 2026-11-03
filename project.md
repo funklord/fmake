@@ -625,7 +625,8 @@ that had been green about nothing for five commits ·
 [573. A dylib the search path held and nothing read, and the probe that said it could not exist](#573-a-dylib-the-search-path-held-and-nothing-read-and-the-probe-that-said-it-could-not-exist) ·
 [574. A shared library for macOS could not be linked at all](#574-a-shared-library-for-macos-could-not-be-linked-at-all) ·
 [575. A Windows program fmake named and the driver renamed](#575-a-windows-program-fmake-named-and-the-driver-renamed) ·
-[576. Advice that could not work, on two code paths](#576-advice-that-could-not-work-on-two-code-paths)
+[576. Advice that could not work, on two code paths](#576-advice-that-could-not-work-on-two-code-paths) ·
+[577. A GNU linker script handed to a linker that has no such thing](#577-a-gnu-linker-script-handed-to-a-linker-that-has-no-such-thing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46469,3 +46470,52 @@ platform does not have would be noise on all of it. Loosening the guard to
 fire on any identity fails that control.
 
 Guarded by `a_symbol_the_linker_provides_is_not_a_missing_library`.
+
+## 577. A GNU linker script handed to a linker that has no such thing
+
+    ld64.lld-19: error: unknown argument '--version-script'
+
+So `@version_script` could not work at all for a darwin target, and the way
+it failed is the part worth fixing: at the **link**, after compiling
+everything, as a flag error. The loop that validates a version script
+already refuses a wrong kind and a missing map, and its own comment says
+why -- *before anything compiles, so a wrong kind or a missing map is a
+message rather than a link that fails naming a file nobody set*. This is
+the third thing in that class and now sits with them.
+
+**It is not a flag to rename, and the message says so in as many words.**
+ld64's counterpart is `-exported_symbols_list`, which takes a plain list of
+symbol names, one per line and underscore-prefixed. A version script is a
+grammar: version nodes, `global:` and `local:` blocks, wildcards. Turning
+one into the other is a real conversion and a lossy one -- `local: *;` has
+no expression in a list of names, it is the *absence* of names -- so fmake
+names the shape and leaves the file to whoever wants it:
+
+    v.c: @version_script is a GNU linker script and this tree builds for
+    darwin, whose linker refuses the flag outright
+        ld64 takes -exported_symbols_list instead, which is a plain list
+        of symbol names rather than a script -- not the same file
+        write that list and name it with @ldflags
+        -Wl,-exported_symbols_list,<file>
+
+The middle line exists because renaming the flag is what a reader would try
+first, and it would produce a linker error about the file's contents one
+step later.
+
+### The sabotage pair says what each half guards
+
+| the condition, bent | what fails |
+|---|---|
+| never refuse | only the new case -- the three ELF version-script cases pass, so nothing else was watching this |
+| always refuse | all four, the three ELF ones included |
+
+That is the useful shape of a platform guard: one direction shows the new
+behaviour is tested, the other shows the *condition* is, by the cases that
+were already there. A guard keyed on something broader than `darwin` would
+have been caught by the second row rather than by review.
+
+**Keyed on `[toolchain] os`**, with the same reasoning section 574 records
+for a dylib's name: nothing can read the linker's opinion before the link,
+and the OS is what the tree declares. A different linker that also refuses
+the flag gives its own error, which is where this started -- no worse than
+before and not silently wrong.

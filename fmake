@@ -14658,6 +14658,26 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			die(f"{t.rel}: @version_script controls what a shared library "
 			    f"exports, but {t.name} has kind {t.kind} -- for a program's "
 			    f"own exported symbols use @ldflags -Wl,--dynamic-list")
+		# The third thing that makes this unbuildable, and it belongs with
+		# the other two for the reason the comment above gives: before
+		# anything compiles, rather than as a link that fails on a flag.
+		# Measured 2026-11-03 -- `ld64.lld-19: error: unknown argument
+		# '--version-script'' -- so the directive cannot work at all for
+		# this target, and it is NOT a flag to rename: ld64's
+		# `-exported_symbols_list' takes a plain list of symbol names,
+		# one per line and underscore-prefixed, where a version script is
+		# a grammar with nodes and wildcards. Translating one into the
+		# other is a real conversion and a lossy one, so fmake says what
+		# the shape is and leaves the file to whoever wants it.
+		if cfg.os == "darwin":
+			die(f"{t.rel}: @version_script is a GNU linker script and this "
+			    f"tree builds for darwin, whose linker refuses the flag "
+			    f"outright\n"
+			    f"    ld64 takes -exported_symbols_list instead, which is "
+			    f"a plain list of symbol names rather than a script -- not "
+			    f"the same file\n"
+			    f"    write that list and name it with @ldflags "
+			    f"-Wl,-exported_symbols_list,<file>")
 		if not os.path.isfile(os.path.join(root, t.version_script)):
 			# The fourth site, and the one that already knew who named it:
 			# this message leads with `t.rel'. A map written beside the

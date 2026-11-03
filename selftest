@@ -33879,6 +33879,56 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 
 
 @case
+def a_version_script_is_refused_for_darwin_before_anything_compiles(t):
+	"""section 577: a GNU linker script handed to a linker without one.
+
+	`ld64.lld-19: error: unknown argument '--version-script'`, measured.
+	So `@version_script` could not work at all for a darwin target, and
+	the failure arrived at the link -- after compiling everything -- as a
+	flag error, which is the shape the validation loop above it exists to
+	prevent for a wrong kind and a missing file.
+
+	**It is not a flag to rename**, which is why the message says so:
+	ld64's `-exported_symbols_list` takes a plain list of symbol names,
+	one per line, where a version script is a grammar with nodes and
+	wildcards. Translating one into the other is a real conversion and a
+	lossy one, so fmake names the shape and leaves the file to whoever
+	wants it.
+
+	The control is the same tree without the darwin line: a version
+	script is an ordinary thing to have and must keep working.
+	"""
+	if not shutil.which("clang"):
+		raise Skip("clang not installed")
+	t.write("v.h", "#pragma once\nint v_pub(void);\n")
+	t.write("v.c", '#include "v.h"\n//! @kind shared\n//! @version 1.0\n'
+	        "//! @version_script v.map\n"
+	        "int v_pub(void){ return 1; }\nint v_priv(void){ return 2; }\n")
+	t.write("v.map", "{ global: v_pub; local: *; };\n")
+	t.write("fmake.toml", '[toolchain]\ncc = "clang"\nos = "darwin"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0,
+	      f"a directive this target cannot use has to be refused: {out}")
+	check("exported_symbols_list" in out,
+	      f"and the counterpart named: {out}")
+	check("not the same file" in out,
+	      f"and said to be a different file, since renaming the flag is "
+	      f"what a reader would try first: {out}")
+	check("CC " not in out,
+	      f"refused before anything compiles, like the other two checks "
+	      f"in that loop: {out}")
+
+	# The control: the same tree, built for this machine.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("fmake.toml", "")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a version script on an ELF build is ordinary and has to keep "
+	      f"working: {r.stdout}{r.stderr}")
+
+
+@case
 def a_symbol_the_linker_provides_is_not_a_missing_library(t):
 	"""section 576: advice that cannot work, on two code paths.
 
