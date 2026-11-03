@@ -2423,11 +2423,16 @@ rather than code, and one lesson about testing.
   `ldconfig` layout and wants measuring on a Mac. The linker-provided symbol
   list is ELF's and cannot be judged without an SDK, since a genuine
   "nothing provides `_memcpy`" is indistinguishable here from this machine
-  having no Mach-O libc. And a Windows program is named `win` rather than
-  `win.exe`, in the live build and in the ejected Makefile alike -- measured
-  2026-11-03; fixing it reaches the artifact name, `--clean`, `--install`,
-  `--run` and both eject backends, and none of it can be checked past a link
-  this machine cannot perform.
+  having no Mach-O libc. ~~And a Windows program is named `win`
+  rather than `win.exe` ... none of it can be checked past a link this
+  machine cannot perform.~~ **Wrong for the third time in the same way, and
+  done -- see section 575.** A freestanding PE links here with `-nostdlib`
+  and an entry point, the host `ld` doing the PE work its own error message
+  advertises by listing `i386pep` among its emulations. So the item needed
+  no mingw runtime at all; what it needed was trying it. Sections 575 to
+  578 then took the whole naming family: the program suffix, a module's
+  `.dll`, and a version script refused rather than passed to a linker that
+  has no such flag.
 
   So the symbol half of both formats works and is under test; the rest waits
   on a linker, and the one piece that waits on nothing but a decision is
