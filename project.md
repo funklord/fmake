@@ -627,7 +627,8 @@ that had been green about nothing for five commits ·
 [575. A Windows program fmake named and the driver renamed](#575-a-windows-program-fmake-named-and-the-driver-renamed) ·
 [576. Advice that could not work, on two code paths](#576-advice-that-could-not-work-on-two-code-paths) ·
 [577. A GNU linker script handed to a linker that has no such thing](#577-a-gnu-linker-script-handed-to-a-linker-that-has-no-such-thing) ·
-[578. A module no loader on that platform would open](#578-a-module-no-loader-on-that-platform-would-open)
+[578. A module no loader on that platform would open](#578-a-module-no-loader-on-that-platform-would-open) ·
+[579. What the identity work cost, which is nothing](#579-what-the-identity-work-cost-which-is-nothing)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46626,3 +46627,42 @@ measurement and leaves it with the holder.
 platforms; `-shared` is accepted by ld64 as well as by GNU ld; and the one
 flag that is not portable at all, `--version-script`, is refused rather
 than renamed -- section 577.
+
+## 579. What the identity work cost, which is nothing
+
+Sections 570 to 578 put new per-file reads into the hottest scan fmake
+has. `object_identity` tries ELF, then Mach-O, then COFF -- and the COFF
+branch walks an archive's member headers -- where `elf_identity` read one
+header and stopped. The library scan calls it **once per candidate
+library**, and section 8 says fmake's job is not to add to compilation
+wall time. So the figure is owed.
+
+**Measured 2026-11-03 at load 4.7**, on a tree needing zlib, libm and
+pthread, against the 1510 `lib*.so` and `lib*.a` files in this machine's
+five search directories:
+
+| | cold build, three rounds | incremental, best of five |
+|---|---|---|
+| before (`59110b7`) | 7.40s, 7.07s, 7.46s | 0.472s |
+| after (`8db0e5c`) | 7.12s, 7.12s, 7.47s | 0.475s, and 0.419s re-run |
+
+Indistinguishable, and the re-run of *after* being the fastest of all is
+the clearest sign the spread is load rather than code.
+
+**The mechanism is why, and it is worth stating so nobody re-measures.**
+`object_identity` returns as soon as `elf_identity` answers, so on an ELF
+machine the second and third branches are never reached: of those 1510
+files, **6 are not ELF** -- the GNU ld scripts -- so the extra opens apply
+to six files and cost at most eighteen reads per cold scan.
+
+### The version switch is not a regression, and it looked like one
+
+The first attempt interleaved the two binaries and produced 9.79s and
+10.27s "incremental" runs beside 0.49s ones. That is section 16's rule
+arriving as a measurement: **the cache records fmake's own identity**, so
+swapping the binary invalidates it and the next run rebuilds everything.
+Alternating two versions therefore measures a cold build every time.
+
+The fix is to let each version run twice and compare the warm figures,
+which is the same discipline as timing anything on a loaded machine: the
+first number is about the apparatus.
