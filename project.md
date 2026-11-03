@@ -46480,6 +46480,22 @@ whose two sabotages are the two halves: dropping `program_name` brings
 *built nothing to run* back, and pinning the platform comparison to false
 drops both names from the message.
 
+**And this fault class does not reach darwin, which is why section 568's
+weaker assertion was adequate.** That case asserts the link was reached
+rather than that the program exists, and after 575 that looked like the
+same gap -- so it was strengthened to link for real with `ld64.lld` and
+read the magic of what came out. The strengthening was then **reverted**,
+because no one-line change to fmake could make it fail: the renaming that
+575 is about comes from the compiler driver, which appends `.exe` for
+Windows and appends nothing for darwin, so a darwin program's named file
+and produced file cannot differ. An attempt to sabotage it by leaking the
+suffix onto darwin did not even apply, because that fixture declares no
+`[toolchain] os` and so builds under the host's name.
+
+Written down because a dropped item with no reason gets re-opened: the
+rule that a guard must be seen to fail is what decided it, and the thing
+that cannot fail here is the toolchain, not the test.
+
 ## 576. Advice that could not work, on two code paths
 
 A symbol with no provider gets three remedies: a library this build was not
