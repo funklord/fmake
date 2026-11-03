@@ -626,7 +626,8 @@ that had been green about nothing for five commits ·
 [574. A shared library for macOS could not be linked at all](#574-a-shared-library-for-macos-could-not-be-linked-at-all) ·
 [575. A Windows program fmake named and the driver renamed](#575-a-windows-program-fmake-named-and-the-driver-renamed) ·
 [576. Advice that could not work, on two code paths](#576-advice-that-could-not-work-on-two-code-paths) ·
-[577. A GNU linker script handed to a linker that has no such thing](#577-a-gnu-linker-script-handed-to-a-linker-that-has-no-such-thing)
+[577. A GNU linker script handed to a linker that has no such thing](#577-a-gnu-linker-script-handed-to-a-linker-that-has-no-such-thing) ·
+[578. A module no loader on that platform would open](#578-a-module-no-loader-on-that-platform-would-open)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46519,3 +46520,44 @@ for a dylib's name: nothing can read the linker's opinion before the link,
 and the OS is what the tree declares. A different linker that also refuses
 the flag gives its own error, which is where this started -- no worse than
 before and not silently wrong.
+
+## 578. A module no loader on that platform would open
+
+`@kind module` for a Windows target built `plug.so`. A module is opened by
+name at run time -- `dlopen`, `LoadLibrary` -- so the name belongs to the
+loader, and `LoadLibrary("plug.dll")` will not find a `.so`. **There was no
+way to ask for anything else either**: the suffix is appended to the
+target's name, so even `name = "plug.dll"` would have produced
+`plug.dll.so`.
+
+So it is `module_name`, the fourth member of the family sections 574, 575
+and this one are made of -- a string fmake composes that the platform
+spells differently. `.dll` on Windows, `.so` elsewhere, with the case
+carrying its own ELF control rather than leaning on the 38 module cases
+that run here anyway.
+
+**Nothing is said about a module's version**, and that is deliberate:
+`libnss_hull.so.2` is glibc's spelling and section 574 keeps appending it
+on every OS because a module answers to whatever opens it. What changed is
+the suffix of the file, which no Windows loader accepts as `.so`.
+
+### Why this is done and `@kind shared` for Windows is not
+
+They look like the same gap and are not, which is the distinction worth
+recording:
+
+| | artifacts | what is undecided |
+|---|---|---|
+| module | one, nothing links against it | nothing -- it is a name |
+| shared | **two**: `foo.dll` and a `libfoo.dll.a` import library | what `--install` lays down, and where |
+
+A module is one file and the fix is a suffix. A Windows shared library is a
+DLL *plus* an import library, so the install plan, `--clean`, both emitters
+and the `.pc` all gain a say -- and where a DLL belongs is a convention
+this machine cannot verify by running anything. Section 575 has that
+measurement and leaves it with the holder.
+
+**The family is finished otherwise.** `lib%s.a` is right on all three
+platforms; `-shared` is accepted by ld64 as well as by GNU ld; and the one
+flag that is not portable at all, `--version-script`, is refused rather
+than renamed -- section 577.

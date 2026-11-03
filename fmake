@@ -12396,6 +12396,29 @@ def _ann_install(ann, rel=""):
 _TARGET_OS = [None]
 
 
+def module_name(name):
+	"""What this target's OS calls a loadable module.
+
+    A module is opened by name at run time -- `dlopen`, `LoadLibrary' --
+    so the name is the loader's rather than fmake's, and the suffix is
+    the one thing fmake supplies. On Windows that is `.dll`, and a
+    `plug.so` is a file `LoadLibrary("plug.dll")` will not find.
+
+    Measured 2026-11-03: `@kind module` for a Windows target built
+    `plug.so`, and there was no way to ask for anything else -- the
+    suffix is appended to the target's name, so even `name = "plug.dll"'
+    would have produced `plug.dll.so'.
+
+    Nothing is said here about the VERSION a module may carry:
+    `libnss_hull.so.2' is glibc's spelling and section 574 keeps
+    appending it on every OS for that reason. This is the suffix of the
+    file itself, which no loader on Windows will accept as `.so'.
+    """
+	if _TARGET_OS[0] == "windows":
+		return "%s.dll" % name
+	return "%s.so" % name
+
+
 def program_name(name):
 	"""What this target's OS calls an executable.
 
@@ -12600,7 +12623,7 @@ class Target:
 		# libtool spells this `-module' for the same reason: it
 		# is not a library anything links against.
 		if self.kind == "module":
-			return "%s.so" % self.name
+			return module_name(self.name)
 		return program_name(self.name)
 
 	@property
