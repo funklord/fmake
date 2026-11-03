@@ -619,7 +619,8 @@ that had been green about nothing for five commits ·
 [567. The suite leaked a scratch tree every time somebody stopped it](#567-the-suite-leaked-a-scratch-tree-every-time-somebody-stopped-it) ·
 [568. Mach-O, walked with the nm that can read it](#568-mach-o-walked-with-the-nm-that-can-read-it) ·
 [569. A declared architecture that could not be checked, in silence](#569-a-declared-architecture-that-could-not-be-checked-in-silence) ·
-[570. A library of the wrong architecture, offered confidently](#570-a-library-of-the-wrong-architecture-offered-confidently)
+[570. A library of the wrong architecture, offered confidently](#570-a-library-of-the-wrong-architecture-offered-confidently) ·
+[571. COFF had the same hole, on the platform people cross-build to](#571-coff-had-the-same-hole-on-the-platform-people-cross-build-to)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46026,3 +46027,75 @@ taking the target's identity with `elf_identity` again. Both fail, because
 either one alone switches the filter off.
 
 Guarded by `a_library_of_the_wrong_architecture_is_not_offered_on_mach_o`.
+
+## 571. COFF had the same hole, on the platform people cross-build to
+
+Section 570 gave Mach-O an identity so the library filter could compare one.
+COFF had none either, and that matters more: a mingw cross build from Linux
+is a configuration people actually use, where building for macOS from Linux
+is not. The same experiment gave the same wrong answer -- two archives
+exporting one symbol, x86_64 and aarch64, and the x86_64 build offered the
+aarch64 one.
+
+**It was reachable from the same install.** `clang` here emits COFF for
+x86_64 (`0x8664`), aarch64 (`0xaa64`) and i386 (`0x14c`), `llvm-nm` reads
+them, and `llvm-ar` archives them -- so the whole control exists on a Linux
+box with no Windows anywhere.
+
+And fmake got *further* on COFF than it had on Mach-O before section 568: it
+recognised `main`, because x86_64 COFF prefixes no underscore, built a
+program and reached the link. What it printed on the way was
+`no unknown library exports: __main` -- "unknown" being what
+`describe_identity` says of no identity at all, standing where an
+architecture should be.
+
+### COFF is the awkward one to identify, and why that is not a detail
+
+ELF has `\x7fELF` and Mach-O has four magics; **COFF has none.** The file
+opens with its machine field, two bytes, and two bytes are far too weak to
+decide a format on -- this function is asked about every library on the
+search path, so a false positive would give a foreign identity to an
+innocent file and have the filter exclude it, turning a working resolution
+into a missing symbol. That is a worse failure than the one being fixed,
+and it would land on ELF machines, which is everybody.
+
+So `coff_machine` checks that the header is a header: no optional header
+(an object has none), a section count in range, and a symbol table offset
+inside the file. Measured against clang's output, where each object has
+`opthdr` 0, four sections and a symbol table well inside 420 bytes.
+
+**And an archive's member has to be found by walking the archive**, not by
+searching it for a pattern, since there is no pattern to search for.
+`ar_first_member` reads the format -- 60-byte member headers, the "`\n"
+magic, a decimal size, two-byte alignment -- and skips the symbol and
+long-name tables, which are not objects. The other two formats keep their
+magic scan: they have a magic, so the cheaper thing is also the correct one,
+and the asymmetry is the formats' rather than the code's.
+
+Verified across all four formats at once, objects and archives together,
+with two files that must stay unidentified:
+
+| file | identity | described as |
+|---|---|---|
+| COFF object / archive, x86_64 | `("coff", 0x8664)` | `coff/0x8664` |
+| COFF object / archive, aarch64 | `("coff", 0xaa64)` | `coff/0xaa64` |
+| Mach-O object / archive | `("macho", 0x1000007)` | `mach-o/0x1000007` |
+| ELF object / archive | `("elf", 2, 1, 62)` | `x86_64/64le` |
+| a GNU ld script | None | unknown |
+| a C source | None | unknown |
+
+The ELF row is the one that matters most: its description is unchanged, so
+the message every existing reader sees is the same text it was.
+
+### What is still a name and not a number
+
+`coff/0x8664` is a hex machine field, not `x86-64`, for the reason section
+570 gives: naming it is a table, and section 15 has a threshold about
+those. The reader of a refusal needs to know the two sides differ, and the
+hex says that. Putting a name on it -- for COFF, Mach-O and a declared arch
+word alike -- is one decision rather than three, and it is section 569's.
+
+Guarded by `a_coff_library_of_the_wrong_architecture_is_not_offered`, which
+shares its control with the Mach-O case: the second variant's directory is
+listed first in every run and only the target changes, because choosing the
+right archive and choosing the first directory look identical from outside.

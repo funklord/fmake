@@ -33650,6 +33650,69 @@ MACH_O_CONF = ('[project]\ncflags = ["-target", "x86_64-apple-macos11"]\n\n'
                '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n')
 
 
+def _archive_pick(t, variants):
+	"""Two archives of different architectures: is the right one chosen?
+
+	`variants' is (word, triple, arch) twice. One archive is built per
+	variant, each exporting the same symbol, and the tree is built once
+	per variant and must resolve against its own.
+
+	**The second directory order is what makes this a test.** Choosing
+	the right archive and choosing the first directory look identical
+	from outside, so the SECOND variant's directory is listed first in
+	every run and only the target changes. Without that the case would
+	pass against a filter that does nothing, which is how the fault being
+	guarded here survived in the first place.
+
+	Shared between the Mach-O and COFF cases because the control is the
+	subtle part and wants to exist once; what differs between them is
+	only the triples.
+	"""
+	outside = tempfile.mkdtemp(prefix="fmake-archpick-")
+	try:
+		src = os.path.join(outside, "v.c")
+		with open(src, "w") as fh:
+			fh.write("int shared_val(void){ return 1; }\n")
+		built = {}
+		for word, triple, _arch in variants:
+			d = os.path.join(outside, word)
+			os.makedirs(d)
+			got = _run_in(outside, "clang", "-target", triple, "-c", src,
+			              "-o", os.path.join(d, "v.o"))
+			if got.returncode != 0:
+				raise Skip(f"this clang cannot target {triple}")
+			got = _run_in(d, "llvm-ar", "rcs", f"lib{word}only.a", "v.o")
+			check(got.returncode == 0,
+			      f"llvm-ar could not make the {word} archive: "
+			      f"{got.stdout}{got.stderr}")
+			built[word] = d
+
+		t.write("main.c", "extern int shared_val(void);\n"
+		        "int main(void){ return shared_val(); }\n")
+		order = [built[w] for w, _t, _a in reversed(variants)]
+		dirs = "[" + ", ".join(f'"{d}"' for d in order) + "]"
+		for word, triple, arch in variants:
+			want = f"-l{word}only"
+			others = [f"-l{w}only" for w, _t, _a in variants if w != word]
+			shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+			t.write("fmake.toml",
+			        f'[project]\ncflags = ["-target", "{triple}"]\n\n'
+			        f'[toolchain]\ncc = "clang"\nnm = "llvm-nm"\n'
+			        f'ar = "llvm-ar"\narch = "{arch}"\n'
+			        f'lib-dirs = {dirs}\n')
+			r = t.fmake("-v")
+			out = r.stdout + r.stderr
+			check(want in out,
+			      f"a {arch} build has to resolve against its own "
+			      f"architecture's archive: {out}")
+			for other in others:
+				check(other not in out,
+				      f"and must not be offered {other}, which is the "
+				      f"whole point of the filter: {out}")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
+
+
 @case
 def mach_o_spells_main_with_an_underscore(t):
 	"""section 568: a tree with a main() in it built a static library.
@@ -33789,51 +33852,8 @@ def a_library_of_the_wrong_architecture_is_not_offered_on_mach_o(t):
 	against a filter that does nothing.
 	"""
 	_mach_o_or_skip(t)
-	outside = tempfile.mkdtemp(prefix="fmake-archpick-")
-	try:
-		src = os.path.join(outside, "v.c")
-		with open(src, "w") as fh:
-			fh.write("int shared_val(void){ return 1; }\n")
-		built = {}
-		for word, triple in (("x86", "x86_64-apple-macos11"),
-		                     ("arm", "arm64-apple-macos11")):
-			d = os.path.join(outside, word)
-			os.makedirs(d)
-			obj = os.path.join(d, "v.o")
-			got = _run_in(outside, "clang", "-target", triple, "-c", src,
-			              "-o", obj)
-			if got.returncode != 0:
-				raise Skip(f"this clang cannot target {triple}")
-			got = _run_in(d, "llvm-ar", "rcs", f"lib{word}only.a", "v.o")
-			check(got.returncode == 0,
-			      f"llvm-ar could not make the {word} archive: "
-			      f"{got.stdout}{got.stderr}")
-			built[word] = d
-
-		t.write("main.c", "extern int shared_val(void);\n"
-		        "int main(void){ return shared_val(); }\n")
-		# The arm directory first in both runs, so directory order cannot
-		# be what decides.
-		dirs = f'["{built["arm"]}", "{built["x86"]}"]'
-		for triple, arch, want, other in (
-		        ("x86_64-apple-macos11", "x86_64", "-lx86only", "-larmonly"),
-		        ("arm64-apple-macos11", "aarch64", "-larmonly", "-lx86only")):
-			shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
-			t.write("fmake.toml",
-			        f'[project]\ncflags = ["-target", "{triple}"]\n\n'
-			        f'[toolchain]\ncc = "clang"\nnm = "llvm-nm"\n'
-			        f'ar = "llvm-ar"\narch = "{arch}"\n'
-			        f'lib-dirs = {dirs}\n')
-			r = t.fmake("-v")
-			out = r.stdout + r.stderr
-			check(want in out,
-			      f"a {arch} build has to resolve against the {arch} "
-			      f"archive: {out}")
-			check(other not in out,
-			      f"and must not be offered the other architecture's, "
-			      f"which is the whole point of the filter: {out}")
-	finally:
-		shutil.rmtree(outside, ignore_errors=True)
+	_archive_pick(t, (("x86", "x86_64-apple-macos11", "x86_64"),
+	                  ("arm", "arm64-apple-macos11", "aarch64")))
 
 
 @case
@@ -33866,6 +33886,42 @@ def a_mach_o_collision_of_two_mains_is_still_reported(t):
 	      f"to a linker nobody here has: {out}")
 	check("missing libraries" not in out,
 	      f"and not under the advice that points the wrong way: {out}")
+
+
+@case
+def a_coff_library_of_the_wrong_architecture_is_not_offered(t):
+	"""section 571: the same hole, on the platform people cross-build to.
+
+	Section 570 gave Mach-O an identity so the library filter could
+	compare one. COFF had none either, and a mingw cross build from Linux
+	is a configuration people actually use -- so the same two archives
+	exporting one symbol, x86_64 and aarch64, gave the wrong one.
+
+	COFF is the awkward format to identify: it has no magic, beginning
+	with its machine field, which is two bytes too weak to decide a
+	format on. So `coff_machine' checks the header is a header -- no
+	optional header, a plausible section count, a symbol table inside the
+	file -- and an archive's member is found by walking the archive's own
+	structure rather than by searching for a pattern, which is what the
+	other two formats can do and this one cannot.
+
+	Before the identity existed the refusal read `no unknown library
+	exports: __main', which is also measured here: the word that stood in
+	for the architecture was `unknown'.
+	"""
+	if not shutil.which("clang") or not shutil.which("llvm-nm"):
+		raise Skip("clang and llvm-nm are both needed")
+	_archive_pick(t, (("x86", "x86_64-pc-windows-gnu", "x86_64"),
+	                  ("arm", "aarch64-pc-windows-gnu", "aarch64")))
+	# And the identity reaches the message, where "unknown" used to be.
+	# From clean, since the line is printed while resolving and an
+	# incremental run has nothing left to resolve.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("coff/0x" in out,
+	      f"the identity has to reach the line that reports it, where "
+	      f"the word used to be `unknown': {out}")
 
 
 @case

@@ -10264,6 +10264,94 @@ def macho_cputype(path):
 	return int.from_bytes(head[4:8], order)
 
 
+def ar_first_member(path, want=20):
+	"""The first `want' bytes of an archive's first real member.
+
+    `elf_identity' and `macho_cputype' find their member by searching for
+    a magic, which is the cheaper thing to do when you have one. **COFF
+    has no magic** -- an object begins with its machine field, two bytes
+    that are not distinctive -- so for that format the member has to be
+    found by reading the archive's own structure rather than by looking
+    for a pattern inside it.
+
+    The format is fixed: `!<arch>\\n', then 60-byte member headers whose
+    last two bytes are the magic "`\\n", with a decimal size and two-byte
+    alignment between members. The leading members are the symbol table
+    and the long-name table, named `/', `//' or `__.SYMDEF'; those are
+    skipped, since their contents are not an object.
+
+    Returns None rather than raising for anything that does not parse,
+    because every caller reads None as "no opinion" and a malformed
+    archive is not this function's problem to report.
+    """
+	try:
+		with open(path, "rb") as fh:
+			if fh.read(8) != b"!<arch>\n":
+				return None
+			for _ in range(8):             # bounded: the tables come first
+				hdr = fh.read(60)
+				if len(hdr) < 60 or hdr[58:60] != b"`\n":
+					return None
+				name = hdr[:16].decode("latin-1").strip()
+				try:
+					size = int(hdr[48:58].decode("latin-1").strip() or "0")
+				except ValueError:
+					return None
+				if size < 0:
+					return None
+				if name in ("/", "//", "__.SYMDEF", "__.SYMDEF SORTED",
+				            "/SYM64/"):
+					fh.seek(size + (size & 1), os.SEEK_CUR)
+					continue
+				return fh.read(min(want, size))
+	except OSError:
+		return None
+	return None
+
+
+def coff_machine(path):
+	"""The machine field of a COFF object or archive, or None.
+
+    Checked structurally rather than by a magic, because COFF has none:
+    the file opens with the machine field itself. A two-byte value is far
+    too weak to identify a format on, and this function is asked about
+    every library on the search path -- so a false positive would give a
+    foreign identity to an innocent file and have the filter exclude it,
+    turning a working resolution into a missing symbol. The guards are
+    therefore about the header being a header: an object has no optional
+    header, a plausible section count, and a symbol table inside the
+    file.
+
+    Measured 2026-11-03: clang here emits COFF for x86_64 (0x8664),
+    aarch64 (0xaa64) and i386 (0x14c), each with `opthdr' 0, four
+    sections and a symbol table well inside a 420-byte file.
+    """
+	head = ar_first_member(path)
+	if head is None:
+		try:
+			with open(path, "rb") as fh:
+				head = fh.read(20)
+		except OSError:
+			return None
+		size = _file_size(path) or 0
+	else:
+		size = None                        # a member: its own size is not read
+	if len(head) < 20:
+		return None
+	# `int.from_bytes' rather than `struct', which is what `elf_identity'
+	# does and keeps the import list where it is.
+	def le(at, width):
+		return int.from_bytes(head[at:at + width], "little")
+
+	machine, sections = le(0, 2), le(2, 2)
+	symtab, opthdr = le(8, 4), le(16, 2)
+	if not machine or opthdr or not 0 < sections <= 96:
+		return None
+	if size is not None and symtab > size:
+		return None
+	return machine
+
+
 def object_identity(path, unreadable=None):
 	"""What a file was built for, across formats: tagged, and comparable.
 
@@ -10296,7 +10384,10 @@ def object_identity(path, unreadable=None):
 	if ident:
 		return ("elf",) + tuple(ident)
 	cpu = macho_cputype(path)
-	return ("macho", cpu) if cpu is not None else None
+	if cpu is not None:
+		return ("macho", cpu)
+	mach = coff_machine(path)
+	return ("coff", mach) if mach is not None else None
 
 
 def describe_identity(ident):
@@ -10305,13 +10396,13 @@ def describe_identity(ident):
 	# Both shapes: the bare ELF triple `elf_identity' returns, and the
 	# tagged one from `object_identity'. The tag can never collide with a
 	# triple, whose first element is an ELF class byte.
-	if ident[0] == "macho":
-		# A hex cputype rather than a name, because naming it would be a
-		# fifth hand-written table and section 15 has a threshold about
-		# those -- see section 570. It appears in one -v line and in the
-		# "no ... library exports" refusal, where what the reader needs
-		# is that the two sides differ.
-		return f"mach-o/0x{ident[1]:x}"
+	if ident[0] in ("macho", "coff"):
+		# A hex machine number rather than a name, because naming it
+		# would be a fifth hand-written table and section 15 has a
+		# threshold about those -- see sections 570 and 571. It appears
+		# in one -v line and in the "no ... library exports" refusal,
+		# where what the reader needs is that the two sides differ.
+		return f"{'mach-o' if ident[0] == 'macho' else 'coff'}/0x{ident[1]:x}"
 	if ident[0] == "elf":
 		ident = ident[1:]
 	bits = {1: "32", 2: "64"}.get(ident[0], "?")
