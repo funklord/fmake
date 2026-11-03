@@ -10205,22 +10205,49 @@ def macho_object(path):
 	return head in MACHO_MAGIC
 
 
+# The one COFF machine whose C identifiers carry a leading underscore.
+# 32-bit Windows prefixes one and 64-bit Windows does not, measured rather
+# than read: `clang -target i686-pc-windows-gnu' exports `_main' where
+# `x86_64-pc-windows-gnu' exports `main'. A single constant rather than a
+# table, which is the distinction section 15's threshold draws -- the
+# question is not "what is this machine called" but "does this one target
+# prefix", and there is exactly one of those.
+COFF_I386 = 0x14c
+
+
+def underscores_identifiers(obj):
+	"""Does this object spell a C identifier with a leading underscore?
+
+    True for every Mach-O and for 32-bit COFF, false for ELF and for
+    64-bit COFF. Read from the object rather than taken from
+    `[toolchain] os' or a triplet, because what decides the spelling is
+    what the compiler actually produced.
+    """
+	return macho_object(obj) or coff_machine(obj) == COFF_I386
+
+
 def exports_main(unit):
 	"""Does this unit's object define main(), in its format's spelling?
 
     The underscore is only accepted once the object has been read and is
-    really Mach-O. On ELF a symbol spelled `_main' IS the identifier
-    `_main' and is not an entry point, so stripping there would offer a
-    program that cannot link -- the same asymmetry `symbol_tokens'
-    describes, with the opposite answer, because this question is not
-    allowed to be generous.
+    a format that prefixes one. On ELF a symbol spelled `_main' IS the
+    identifier `_main' and is not an entry point, so stripping there
+    would offer a program that cannot link -- the same asymmetry
+    `symbol_tokens' describes, with the opposite answer, because this
+    question is not allowed to be generous.
+
+    Measured twice, because the first version of this accepted the
+    underscore for Mach-O alone and 32-bit Windows has the same
+    convention: a tree with a `main()' compiled for
+    `i686-pc-windows-gnu' built `libwin32.a' and exited 0, which is
+    section 568's fault on another target.
 
     The set is asked first so the file is read only when the answer
     depends on it.
     """
 	if "main" in unit.strong:
 		return True
-	return "_main" in unit.strong and macho_object(unit.obj)
+	return "_main" in unit.strong and underscores_identifiers(unit.obj)
 
 
 # Which end the header is written from, by magic. A thin Mach-O starts with

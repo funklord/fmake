@@ -33925,6 +33925,79 @@ def a_coff_library_of_the_wrong_architecture_is_not_offered(t):
 
 
 @case
+def thirty_two_bit_windows_underscores_main_as_well(t):
+	"""section 572: section 568's fault on a second target.
+
+	`exports_main' accepted the underscore for Mach-O alone, and 32-bit
+	Windows has the same convention: measured, `i686-pc-windows-gnu'
+	exports `_main' where `x86_64-pc-windows-gnu' exports `main'. So a
+	tree with a `main()' compiled for 32-bit Windows built `libwin32.a'
+	and exited 0 -- a program turned into a library, in silence, exactly
+	as on Mach-O.
+
+	Both halves, because the rule is per target and not per format: the
+	32-bit object's underscore is an entry point and the 64-bit object's
+	is an ordinary identifier. The second is reached through
+	`[target.*] root', since the source scan would never propose a file
+	whose only function is called `_main'.
+
+	The link is not asserted -- there is no mingw runtime here -- so what
+	is checked is that the program is not withdrawn and no archive is
+	left in its place.
+	"""
+	if not shutil.which("clang") or not shutil.which("llvm-nm"):
+		raise Skip("clang and llvm-nm are both needed")
+	probe = os.path.join(t.dir, "probe.c")
+	with open(probe, "w") as fh:
+		fh.write("int probe(void){ return 0; }\n")
+	got = _run_in(t.dir, "clang", "-target", "i686-pc-windows-gnu", "-c",
+	              probe, "-o", os.path.join(t.dir, "probe.o"))
+	if got.returncode != 0:
+		raise Skip("this clang cannot target i686-pc-windows-gnu")
+	os.remove(probe)
+	os.remove(os.path.join(t.dir, "probe.o"))
+
+	t.write("helper.h", "#pragma once\nint helper(void);\n")
+	t.write("helper.c", '#include "helper.h"\nint helper(void){ return 7; }\n')
+	t.write("main.c", '#include "helper.h"\nint main(void){ return helper(); }\n')
+	t.write("fmake.toml",
+	        '[project]\ncflags = ["-target", "i686-pc-windows-gnu"]\n\n'
+	        '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("looked like it defined main" not in out,
+	      f"_main is how 32-bit Windows spells it, so the program is not "
+	      f"a mirage: {out}")
+	left = glob.glob(os.path.join(t.dir, "*.a"))
+	check(not left,
+	      f"a tree with a main() must not come out as an archive: "
+	      f"{left}\n{out}")
+	check("LD" in out,
+	      f"and the link has to be reached, whatever this machine then "
+	      f"says about a mingw runtime it does not have: {out}")
+
+	# The other half: on 64-bit Windows `_main' is an ordinary identifier,
+	# so a root named for it still has no entry point.
+	u = Tree("coff64-underscore-main")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("lone.c", "int _main(void){ return 1; }\n")
+		u.write("fmake.toml",
+		        '[project]\ncflags = ["-target", "x86_64-pc-windows-gnu"]\n\n'
+		        '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\n'
+		        'ar = "llvm-ar"\n\n[target.prog]\nroot = "lone.c"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"a 64-bit COFF `_main' is not an entry point, and the "
+		      f"config asserted this target exists: {out}")
+		check("defines no main" in out,
+		      f"and the reason is the object's: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_named_sources_list_that_went_stale_says_so(t):
 	"""section 378: the predictable cost of fmake's own advice.
 

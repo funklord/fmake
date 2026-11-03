@@ -620,7 +620,8 @@ that had been green about nothing for five commits ·
 [568. Mach-O, walked with the nm that can read it](#568-mach-o-walked-with-the-nm-that-can-read-it) ·
 [569. A declared architecture that could not be checked, in silence](#569-a-declared-architecture-that-could-not-be-checked-in-silence) ·
 [570. A library of the wrong architecture, offered confidently](#570-a-library-of-the-wrong-architecture-offered-confidently) ·
-[571. COFF had the same hole, on the platform people cross-build to](#571-coff-had-the-same-hole-on-the-platform-people-cross-build-to)
+[571. COFF had the same hole, on the platform people cross-build to](#571-coff-had-the-same-hole-on-the-platform-people-cross-build-to) ·
+[572. The underscore is a property of the target, not of the format](#572-the-underscore-is-a-property-of-the-target-not-of-the-format)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46099,3 +46100,59 @@ Guarded by `a_coff_library_of_the_wrong_architecture_is_not_offered`, which
 shares its control with the Mach-O case: the second variant's directory is
 listed first in every run and only the target changes, because choosing the
 right archive and choosing the first directory look identical from outside.
+
+## 572. The underscore is a property of the target, not of the format
+
+Section 568 read the fault as "Mach-O prefixes an underscore" and fixed it
+for Mach-O. That was the wrong unit. **32-bit Windows prefixes one and
+64-bit Windows does not** -- measured, not read: `clang -target
+i686-pc-windows-gnu` exports `_main` where `x86_64-pc-windows-gnu` exports
+`main`, from the same source. So the rule is per target, and section 568's
+version of it was right about one format and silent about half of another.
+
+The consequence was identical and so was the silence. A tree with a `main()`
+compiled for 32-bit Windows:
+
+    [1/2] CC  helper.c
+    [2/2] CC  main.c
+    * main.c looked like it defined main() but the object does not export
+      it; skipping
+    AR  libwin32.a
+    * built libwin32.a
+
+A program turned into a library, exit 0, one warning blaming the object.
+
+**`underscores_identifiers` is the predicate now**, asked of the object
+rather than of `[toolchain] os` or a triplet, because what decides the
+spelling is what the compiler produced. True for every Mach-O and for
+32-bit COFF; false for ELF and for 64-bit COFF.
+
+`COFF_I386` is one constant and not the beginning of a table, which is the
+distinction section 15's threshold draws. The question is not "what is this
+machine called", which is what a table answers and what section 569 still
+holds open; it is "does this one target prefix an underscore", and there is
+exactly one such COFF machine.
+
+### Both directions are load-bearing, and the case proves each
+
+| the rule, bent | which half fails |
+|---|---|
+| Mach-O only, as section 568 left it | the 32-bit program is withdrawn as a mirage |
+| every COFF, 64-bit included | a 64-bit `_main' is offered as an entry point |
+
+The second is the half that is easy to leave out. On 64-bit Windows, as on
+ELF, a symbol spelled `_main` is the identifier `_main` and offering a
+program for it would link nothing -- so the fix had to be narrower than
+"not ELF", which is the shape a reader reaches for first. It is reached
+through `[target.*] root`, since the source scan would never propose a file
+whose only function is called `_main`.
+
+**And the lesson is about the first fix rather than this one.** Section 568
+had a measurement for Mach-O and generalised to "the format decides". One
+target later that was wrong in both directions at once: too narrow for
+32-bit Windows, and would have been too wide if it had said "any format
+that is not ELF". A rule written from one measured platform is a rule with
+an untested boundary on every side, which is `working-practice.md`'s point
+about configurations said in the small.
+
+Guarded by `thirty_two_bit_windows_underscores_main_as_well`.
