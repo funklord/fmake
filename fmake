@@ -6930,6 +6930,15 @@ class Config:
 		self.os      = canon_platform("os", tool.get("os") or host_os())
 		self.arch    = (self.arch_named
 		                or canon_platform("arch", tool.get("arch") or host_arch()))
+		# Whether anybody asked for this arch, as opposed to inheriting the
+		# host's. `self.arch' cannot answer that -- it holds the same string
+		# either way -- and the difference decides whether a reader is owed
+		# a word when the architecture check cannot run: somebody who typed
+		# an arch asked for the guard, somebody who did not has nothing to
+		# be told about. Found by a case asserting the quiet half, which
+		# caught the message claiming 'x86_64' had been declared on a tree
+		# whose fmake.toml never mentions it.
+		self.arch_declared = bool(self.arch_named or tool.get("arch"))
 
 		# Three bands, general to specific: defaults and fmake.toml, then
 		# each file's own annotations, then the command line. Later wins at
@@ -8685,6 +8694,25 @@ def check_object_arch(u, cfg):
 		return
 	ident = elf_identity(u.obj)
 	if ident is None:
+		# The non-ELF half of the argument this docstring already makes
+		# about an unknown arch name: an absent line and a passing check
+		# read the same. Here the reader has typed an arch fmake knows
+		# and is getting no check anyway, which is the worse of the two
+		# silences -- they asked for the guard by declaring the arch.
+		# Measured 2026-11-03: `[toolchain] arch = "aarch64"' over
+		# x86_64 Mach-O objects built without a word. Saying it is as
+		# far as this goes; reading a Mach-O cputype so the check can
+		# actually run is section 568's open question, because the
+		# mapping would be a fifth hand-written list and section 15 has
+		# a threshold about those.
+		if not getattr(cfg, "arch_declared", False):
+			return                      # nobody asked for the guard
+		what = "Mach-O" if macho_object(u.obj) else "not ELF"
+		if f"format:{what}" not in _ARCH_UNKNOWN:
+			_ARCH_UNKNOWN.add(f"format:{what}")
+			vinfo(f"{u.rel}'s object is {what}, which the architecture "
+			      f"check reads nothing from, so it is off for this "
+			      f"build although {cfg.arch!r} was declared")
 		return
 	_ARCH_CHECKED.add(want)
 	if ident[2] != want:
@@ -10145,6 +10173,54 @@ def bitcode_object(path):
 	except OSError:
 		return False
 	return head in (b"BC\xc0\xde", b"\xde\xc0\x17\x0b")
+
+
+# Thin and fat, both byte orders, 32- and 64-bit. The same set `_looks_built'
+# carries, named here because asking "is this Mach-O" is now a question the
+# build has to answer rather than a guard against overwriting somebody's
+# script.
+MACHO_MAGIC = (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+               b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
+               b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
+
+
+def macho_object(path):
+	"""True if this object is Mach-O.
+
+    Asked because the format decides how a C identifier is spelled in the
+    symbol table: Mach-O prefixes an underscore to every one, ELF prefixes
+    nothing. `symbol_tokens' has known that for a long time and offers both
+    spellings, which is safe there because a wrong candidate costs one
+    compiled file -- but a question with a yes/no answer cannot offer both,
+    and `main' is one of those.
+
+    Not inferred from `[toolchain] os', which a tree need not set and which
+    says what was asked for rather than what the compiler produced.
+    """
+	try:
+		with open(path, "rb") as fh:
+			head = fh.read(4)
+	except OSError:
+		return False
+	return head in MACHO_MAGIC
+
+
+def exports_main(unit):
+	"""Does this unit's object define main(), in its format's spelling?
+
+    The underscore is only accepted once the object has been read and is
+    really Mach-O. On ELF a symbol spelled `_main' IS the identifier
+    `_main' and is not an entry point, so stripping there would offer a
+    program that cannot link -- the same asymmetry `symbol_tokens'
+    describes, with the opposite answer, because this question is not
+    allowed to be generous.
+
+    The set is asked first so the file is read only when the answer
+    depends on it.
+    """
+	if "main" in unit.strong:
+		return True
+	return "_main" in unit.strong and macho_object(unit.obj)
 
 
 def describe_identity(ident):
@@ -15812,8 +15888,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				# the target's own pool. With a flagged root no longer
 				# compiled plainly, the weaker derivation asked an
 				# uncompiled unit and crashed on None.
+				# `exports_main', not `"main" in strong': on Mach-O the
+				# entry point is `_main', and asking for the literal name
+				# turned a tree with a main() in it into a static library
+				# -- compiled, archived, exit 0, with one warning saying
+				# the object disagreed. Measured 2026-11-03 against
+				# clang -target x86_64-apple-macos11 and llvm-nm; see
+				# section 568.
 				if (t.kind == "exe" and not root_unit.crate_exe
-				        and "main" not in root_unit.strong):
+				        and not exports_main(root_unit)):
 					# A guess and an assertion get different answers.
 					# Where the SCAN proposed this root, skipping is
 					# right: fmake offered a program, the object

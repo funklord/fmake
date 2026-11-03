@@ -33615,6 +33615,155 @@ def a_target_the_config_asks_for_is_not_silently_dropped(t):
 	      f"it: {out}")
 
 
+def _mach_o_or_skip(t):
+	"""Skip unless this machine can make and read a Mach-O object.
+
+	Compiling for Darwin needs no SDK for a source with no includes, but
+	it does need the backend, and reading the result needs an nm that
+	knows the format -- binutils nm answers "file format not recognized".
+	Both are probed rather than assumed, and the probe asserts the object
+	really is Mach-O so the case cannot pass by measuring an ELF file.
+	"""
+	if not shutil.which("clang"):
+		raise Skip("clang not installed")
+	if not shutil.which("llvm-nm"):
+		raise Skip("llvm-nm not installed, and no other nm here reads "
+		           "Mach-O")
+	probe = os.path.join(t.dir, "probe.c")
+	with open(probe, "w") as fh:
+		fh.write("int probe(void){ return 0; }\n")
+	obj = os.path.join(t.dir, "probe.o")
+	got = _run_in(t.dir, "clang", "-target", "x86_64-apple-macos11",
+	              "-c", probe, "-o", obj)
+	if got.returncode != 0:
+		raise Skip("this clang cannot target x86_64-apple-macos11")
+	with open(obj, "rb") as fh:
+		check(fh.read(4) in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+		                     b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe"),
+		      "the probe object is not Mach-O, so the case would be "
+		      "measuring nothing")
+	os.remove(probe)
+	os.remove(obj)
+
+
+MACH_O_CONF = ('[project]\ncflags = ["-target", "x86_64-apple-macos11"]\n\n'
+               '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n')
+
+
+@case
+def mach_o_spells_main_with_an_underscore(t):
+	"""section 568: a tree with a main() in it built a static library.
+
+	Mach-O prefixes an underscore to every C identifier, so the entry
+	point is `_main' there. The check asked for the literal `main', did
+	not find it, withdrew the program as a mirage and archived the
+	objects instead -- compiled, `AR', `* built lib<dir>.a', exit 0, with
+	one warning saying the object disagreed. A build that silently
+	produces less than it was asked for is the shape the guidelines call
+	worse than one that stops, and this one produced a library out of a
+	program.
+
+	`symbol_tokens' has always offered both spellings, which is why the
+	candidate scan never had this fault: there a wrong guess costs one
+	compiled file. A yes/no question cannot be generous the same way, so
+	the underscore is accepted only once the object has been read and is
+	really Mach-O -- and the second half of this case is that guard,
+	because on ELF a symbol spelled `_main' IS the identifier `_main' and
+	offering a program for it would link nothing.
+
+	The link is not asserted. No Mach-O linker exists on a Linux box, so
+	what is checked is that fmake reaches it rather than archiving: the
+	mirage warning gone and no archive in the tree.
+	"""
+	_mach_o_or_skip(t)
+
+	t.write("helper.h", "#pragma once\nint helper(void);\n")
+	t.write("helper.c", '#include "helper.h"\nint helper(void){ return 7; }\n')
+	t.write("main.c", '#include "helper.h"\nint main(void){ return helper(); }\n')
+	t.write("fmake.toml", MACH_O_CONF)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("looked like it defined main" not in out,
+	      f"_main is how Mach-O spells it, so the program is not a "
+	      f"mirage: {out}")
+	left = glob.glob(os.path.join(t.dir, "*.a"))
+	check(not left,
+	      f"a tree with a main() must not come out as an archive: "
+	      f"{left}\n{out}")
+	check("LD" in out,
+	      f"and the link has to be reached, whatever this machine's "
+	      f"linker then says about Mach-O: {out}")
+
+	# The guard. On ELF `_main' is an ordinary identifier, so a root the
+	# config names for it still has no entry point. Reached through the
+	# config because the source scan would never propose it: `_main(' does
+	# not match a word-boundary search for main.
+	u = Tree("elf-underscore-main")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("lone.c", "int _main(void){ return 1; }\n")
+		u.write("fmake.toml", '[target.prog]\nroot = "lone.c"\n')
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"an ELF `_main' is not a main(), and the config asserted "
+		      f"this target exists: {out}")
+		check("defines no main" in out,
+		      f"and the reason is the object's: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
+def a_declared_arch_says_when_it_cannot_be_checked(t):
+	"""section 568: the architecture check is off on Mach-O, in silence.
+
+	`elf_identity' reads nothing from a Mach-O header, and the check
+	treated that as having no opinion. Measured: `[toolchain] arch =
+	"aarch64"' over x86_64 Mach-O objects built without a word -- where
+	the same mismatch on ELF is a refusal naming both machines.
+
+	The check's own docstring argues that an absent line and a passing
+	check read the same, and closes that for an arch name fmake does not
+	know. This is the other half of it, and the worse one: there the
+	reader typed a name fmake cannot verify against, here they typed one
+	it knows and still got no guard.
+
+	Reading a cputype so the check can really run is left open -- the
+	mapping to ELF machine numbers would be a fifth hand-written list and
+	section 15 has a threshold about those. What is asserted here is that
+	a reader who asked for the check is told it did not happen, and that
+	a reader who did not ask is not told anything.
+	"""
+	_mach_o_or_skip(t)
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", MACH_O_CONF + 'arch = "aarch64"\n')
+
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("architecture check" in out and "Mach-O" in out,
+	      f"a declared arch that cannot be checked has to say so: {out}")
+	check("aarch64" in out,
+	      f"and name what was declared, since that is what is not being "
+	      f"honoured: {out}")
+
+	# Not noise. Without -v, and without a declared arch, nothing.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("architecture check" not in out,
+	      f"-v is where this belongs, as it is for an unknown arch "
+	      f"name: {out}")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("fmake.toml", MACH_O_CONF)
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("architecture check" not in out,
+	      f"nobody asked for a check, so there is nothing to report "
+	      f"about it being off: {out}")
+
+
 @case
 def a_named_sources_list_that_went_stale_says_so(t):
 	"""section 378: the predictable cost of fmake's own advice.

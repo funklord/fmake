@@ -616,7 +616,9 @@ that had been green about nothing for five commits ·
 [564. A gate over the error paths nothing else reaches](#564-a-gate-over-the-error-paths-nothing-else-reaches) ·
 [565. The aims, asked rather than assumed](#565-the-aims-asked-rather-than-assumed) ·
 [566. A published header under no include root, and the census that found it](#566-a-published-header-under-no-include-root-and-the-census-that-found-it) ·
-[567. The suite leaked a scratch tree every time somebody stopped it](#567-the-suite-leaked-a-scratch-tree-every-time-somebody-stopped-it)
+[567. The suite leaked a scratch tree every time somebody stopped it](#567-the-suite-leaked-a-scratch-tree-every-time-somebody-stopped-it) ·
+[568. Mach-O, walked with the nm that can read it](#568-mach-o-walked-with-the-nm-that-can-read-it) ·
+[569. A declared architecture that could not be checked, in silence](#569-a-declared-architecture-that-could-not-be-checked-in-silence)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -45772,3 +45774,132 @@ either side of that one line is the whole argument:
 
 Which is this file's own rule about a check that cannot fail, met inside
 the check written to enforce it.
+
+## 568. Mach-O, walked with the nm that can read it
+
+The holder installed `llvm` on 2026-11-03, which is what section 15 said the
+non-ELF gap was waiting for. `llvm-nm` reads a Mach-O object in exactly the
+BSD format fmake already parses (`T _helper`, `U _helper`), `clang` here
+already emits one, and `llvm-ar` makes a Mach-O static archive -- so the
+platform is reachable on a Linux box up to the link, which needs an `ld64`
+that is not here.
+
+What that bought, in the order a tree meets it.
+
+**A tree with a `main()` in it built a static library.** The entry point is
+looked up by the literal name `main`; Mach-O prefixes an underscore to every
+C identifier, so the object exports `_main`; the check did not find it,
+withdrew the program as a mirage and archived the objects instead. `AR`,
+`* built libdarwin.a`, exit 0, and one warning saying the object disagreed
+with the file. A build that silently produces less than it was asked for is
+the shape `running-code.md` calls worse than one that stops, and this one
+turned a program into a library.
+
+`symbol_tokens` has offered both spellings for a long time -- it says so,
+and says why -- which is why the candidate scan never had this fault: there
+a wrong guess costs one compiled file, and section 21 measures that as the
+cheap direction. **A yes/no question cannot be generous the same way**, so
+the fix reads the object and accepts the underscore only for a real Mach-O
+file. On ELF a symbol spelled `_main` IS the identifier `_main`, and
+offering a program for it would link nothing -- that half is the second
+assertion in the case, reached through `[target.*] root` because the source
+scan would never propose such a file.
+
+### What already worked, measured rather than assumed
+
+Three things needed no change, and they are written down so the next session
+does not re-derive them:
+
+- **Platform words.** `[toolchain] os = "darwin"` compiles `plat_darwin.c`
+  and not `plat_linux.c`, and flips when the os falls back to the host's.
+- **A static library.** `@kind static` with `ar = "llvm-ar"` produces
+  `libmlib.a` whose member exports `_mlib_val`.
+- **Library resolution against it.** A separate tree needing that symbol
+  resolved it out of the archive and emitted
+  `-L<dir> -lmlib` -- so resolution is not ELF-shaped in the part that
+  matters here. It reads `nm` output and compares raw names, and
+  `libNAME.a` is the same spelling on both platforms.
+
+### What is still out of reach, and why it is not effort
+
+`libNAME.dylib` is the one concrete remaining gap in resolution: the suffix
+list is `(".so", ".a")`. Adding `.dylib` is one line and **is not being
+added**, because nothing here can produce a dylib -- that needs the Mach-O
+linker -- so the line would be code no fixture exercises, which section 15
+already records as the most expensive kind of wrong. The same goes for
+two-level namespaces and for the dyld shared cache, where since Big Sur the
+system libraries are not files on disk at all: that is a structural
+difference from `ldconfig` layout rather than a missing suffix, and it wants
+measuring on a Mac before anything is written for it.
+
+**And the linker-provided symbol list cannot be judged here either.** Its
+entries are ELF's -- `_GLOBAL_OFFSET_TABLE_`, `_DYNAMIC`, `__dso_handle`
+and the rest -- gated by section 104 against what the host `ld` actually
+provides, which is a GNU `ld`. Mach-O's equivalents are different names, so
+an object needing one would read as unresolvable. Reaching that question
+needs an object graph that touches the system libraries, and there is no
+macOS SDK here: three attempts to make one undefined symbol survive --
+`-fstack-protector-strong`, and a declared `memcpy` -- were each inlined or
+provided inside the tree, and without an SDK a genuine "nothing provides
+`_memcpy`" could not be told apart from this machine simply not having a
+Mach-O libc. So the boundary is the SDK rather than the list, and the list
+is not being extended on a guess.
+
+So the honest state is: **the symbol half of macOS support works and is now
+under test; the shared-library half waits on a Mach-O linker**, which is a
+smaller thing to ask for than a Mac and a larger one than a package.
+
+Guarded by `mach_o_spells_main_with_an_underscore`, which skips unless this
+machine can both produce and read a Mach-O object -- and asserts the probe
+object really is Mach-O, so it cannot pass by measuring an ELF file.
+
+## 569. A declared architecture that could not be checked, in silence
+
+The architecture check reads an ELF header and compares its machine against
+what the tree declared. On a Mach-O object `elf_identity` reads nothing and
+returns None, and the check treated that as having no opinion -- so
+`[toolchain] arch = "aarch64"` over x86_64 Mach-O objects built without a
+word, where the same mismatch on ELF is a refusal naming both machines and
+offering two remedies.
+
+**The function's own docstring had already made the argument against
+this.** It says an absent line and a passing check read the same, and that
+the reader who most needs to know is the one who has just typed a name it
+does not know -- and it closed that half, printing at `-v` when no ELF
+machine is named for the declared arch. It lists "a non-ELF object" among
+the cases it stays silent for. That is the other half of its own argument,
+and the worse one: there the reader typed something fmake cannot verify
+against, here they typed something it knows and got no guard anyway.
+
+So it says so now, at `-v`, once per format, naming the arch that is not
+being honoured.
+
+**The quiet half is the part the case earned.** An arch is declared or
+inherited from the host, and `cfg.arch` holds the same string either way --
+so the first version of the message told a tree whose `fmake.toml` never
+mentions an arch that `'x86_64' was declared`. That is the false-premise
+fault section 377 is about, in a new place: a message that sends the reader
+to a line they did not write. `arch_declared` is a separate fact now, and
+somebody who did not ask for the guard is told nothing about it being off.
+
+It was caught by the assertion written for the quiet half rather than by
+reading the message, which is the argument for writing that assertion: the
+noisy half is the one anybody tests.
+
+### What is not being done, and whose question it is
+
+**Reading the Mach-O cputype so the check can really run is left open.** The
+header carries one at a fixed offset and it is four lines to read; what it
+costs is a mapping from cputype to the ELF machine numbers the rest of the
+check compares against -- `0x01000007` to `EM_X86_64`, `0x0100000c` to
+`EM_AARCH64`, and so on. **That would be a fifth hand-written list**, and
+section 15 states a threshold about exactly this: the fourth was the signal
+that the model wanted a predicate rather than another list, and when it
+fired twice one list was gated and the other replaced. A fifth is therefore
+a decision rather than a patch.
+
+The alternative to a table is asking a tool -- `llvm-objdump -f` names the
+architecture -- which costs a subprocess per object and makes a second
+binary a requirement of the Mach-O path. Which of those is right is the
+copyright holder's, and the measurement above is what the question needs:
+the check is off either way today, and now it says so.
