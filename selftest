@@ -33844,6 +33844,90 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 
 
 @case
+def a_shared_library_for_darwin_is_a_dylib(t):
+	"""section 574: fmake could not link one at all.
+
+	It named a darwin shared library `libfoo.so` and passed
+	`-Wl,-soname`, which is a GNU ld option: `ld64.lld` refuses it by
+	name -- *unknown argument '-soname'* -- so the link failed and the
+	toolchain was not what stood in the way.
+
+	The two conventions differ in where the version goes, not only in the
+	suffix. ELF appends (`libfoo.so.1.2.3`); Mach-O puts it before the
+	extension (`libfoo.1.2.3.dylib`). A suffix constant would have
+	produced `libfoo.dylib.1.2.3`, which nothing loads, so one composer
+	spells all three names -- the file, the soname and the versioned file
+	an install lays down.
+
+	Asserted end to end: the artifact, the name recorded inside it, the
+	three-name install chain, and a consumer resolving against it.
+	"""
+	_mach_o_or_skip(t)
+	linker = _macho_linker()
+	if not linker:
+		raise Skip("no ld64.lld on this machine, so no dylib can be linked")
+	conf = ('[project]\ncflags = ["-target", "x86_64-apple-macos11"]\n'
+	        f'ldflags = ["-fuse-ld={linker}", "-nostdlib",\n'
+	        '           "-Wl,-platform_version,macos,11.0,11.0"]\n\n'
+	        '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n'
+	        'os = "darwin"\n')
+	t.write("sh.h", "#pragma once\nint sh_val(void);\n")
+	t.write("sh.c", '#include "sh.h"\n//! @kind shared\n//! @version 1.0\n'
+	        "int sh_val(void){ return 5; }\n")
+	t.write("fmake.toml", conf)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the darwin shared link failed: {out}")
+	built = os.path.join(t.dir, "libsh.dylib")
+	check(os.path.exists(built),
+	      f"a darwin shared library is a .dylib: "
+	      f"{sorted(os.listdir(t.dir))}\n{out}")
+	check(not os.path.exists(os.path.join(t.dir, "libsh.so")),
+	      "and must not also be spelled the ELF way")
+	with open(built, "rb") as fh:
+		check(fh.read(4) in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"),
+		      "what was linked is not Mach-O")
+	with open(built, "rb") as fh:
+		blob = fh.read()
+	check(b"@rpath/libsh.1.dylib" in blob,
+	      "the install_name has to carry the major, the way a soname "
+	      "does, and be relocatable")
+
+	outside = tempfile.mkdtemp(prefix="fmake-dylibinst-")
+	try:
+		r = t.fmake("--install", "--prefix", "/usr", "--destdir", outside)
+		check(r.returncode == 0,
+		      f"the install failed: {r.stdout}{r.stderr}")
+		lib = os.path.join(outside, "usr", "lib")
+		names = sorted(os.listdir(lib))
+		# The chain every macOS library ships, with the version before
+		# the extension at each step.
+		check("libsh.1.0.dylib" in names,
+		      f"the real file carries the full version: {names}")
+		check(os.path.islink(os.path.join(lib, "libsh.1.dylib")),
+		      f"the major is a link to it: {names}")
+		check(os.path.islink(os.path.join(lib, "libsh.dylib")),
+		      f"and the plain name is a link: {names}")
+		check(not [n for n in names if ".so" in n],
+		      f"nothing in the chain is spelled the ELF way: {names}")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
+
+	# And it is a library a consumer can actually be pointed at.
+	u = Tree("dylib-consumer")
+	try:
+		u.write("main.c", "extern int sh_val(void);\n"
+		        "int main(void){ return sh_val(); }\n")
+		u.write("fmake.toml", MACH_O_CONF + f'lib-dirs = ["{t.dir}"]\n')
+		r = u.fmake("-v")
+		out = r.stdout + r.stderr
+		check("-lsh" in out,
+		      f"the dylib fmake just built has to be resolvable: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_dylib_on_the_search_path_is_read(t):
 	"""section 573: three ELF-shaped gates, each enough to hide it.
 

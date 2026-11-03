@@ -12354,6 +12354,54 @@ def _ann_install(ann, rel=""):
 	die(f"{rel}:{line}: @install {value} is not yes or no")
 
 
+# The OS the artifacts are named for, set once the configuration exists.
+# A module-level fact for the same reason `_INCLUDE_ROOTS' is one: a Target
+# has `__slots__' and no configuration, and three separate names -- the
+# file, the soname and the versioned file an install lays down -- have to
+# spell a shared library the same way. Threading the configuration through
+# three properties would touch every caller of each.
+#
+# Unset it reads as ELF, which is what every one of these did before, so a
+# path that reaches a Target before the configuration exists is unchanged.
+_TARGET_OS = [None]
+
+
+def soname_flag(soname):
+	"""How this target's OS records the name consumers will look for.
+
+    `-soname' is a GNU ld option and `ld64' refuses it by name, so the
+    equivalent is `-install_name'. The `@rpath/' prefix is what makes the
+    result relocatable, which is the normal thing to record on macOS and
+    the nearest thing to what a soname means on ELF: a name the loader
+    resolves rather than a path baked in at link time.
+    """
+	if _TARGET_OS[0] == "darwin":
+		return "-Wl,-install_name,@rpath/" + soname
+	return "-Wl,-soname," + soname
+
+
+def shared_lib_name(stem, version=None):
+	"""How this target's OS spells a shared library.
+
+    The two conventions differ in **where the version goes**, not only in
+    the suffix: ELF appends it (`libfoo.so.1.2.3`) and Mach-O puts it
+    before the extension (`libfoo.1.2.3.dylib`). That is why this is one
+    composer rather than a suffix constant -- a suffix alone would produce
+    `libfoo.dylib.1.2.3`, which nothing loads.
+
+    Measured 2026-11-03: fmake named a darwin shared library `libfoo.so`
+    and passed `-Wl,-soname`, which `ld64.lld` refuses outright with
+    `unknown argument '-soname'`. So a shared library for macOS could not
+    be linked at all, and the toolchain was not what stood in the way.
+    """
+	dylib = _TARGET_OS[0] == "darwin"
+	if version is None:
+		return "lib%s.%s" % (stem, "dylib" if dylib else "so")
+	if dylib:
+		return "lib%s.%s.dylib" % (stem, version)
+	return "lib%s.so.%s" % (stem, version)
+
+
 class Target:
 	"""One artifact: what roots it, what it is called, and what kind it is."""
 
@@ -12493,7 +12541,7 @@ class Target:
 	@property
 	def filename(self):
 		if self.kind == "shared":
-			return "lib%s.so" % (self.stem or self.name)
+			return shared_lib_name(self.stem or self.name)
 		if self.kind == "static":
 			return "lib%s.a" % (self.stem or self.name)
 		# A module is a loadable object -- an LD_PRELOAD shim, a dlopen
@@ -12540,7 +12588,26 @@ class Target:
         """
 		if not self.records_soname or not self.version:
 			return self.filename
-		return "%s.%s" % (self.filename, self.version.split(".")[0])
+		major = self.version.split(".")[0]
+		if self.kind == "shared":
+			return shared_lib_name(self.stem or self.name, major)
+		# A module answers to exactly what loads it, so its name is not
+		# the platform's to spell -- `libnss_hull.so.2' is glibc's
+		# choice, and appending is right for it on any OS.
+		return "%s.%s" % (self.filename, major)
+
+	@property
+	def versioned_name(self):
+		"""The file a versioned shared library really is.
+
+        The install chain lays this down and links the soname and the
+        plain name at it. Composed here rather than at the plan, because
+        `libfoo.so.1.2.3' and `libfoo.1.2.3.dylib' put the version in
+        different places and the plan should not know that.
+        """
+		if self.kind != "shared" or not self.version:
+			return self.filename
+		return shared_lib_name(self.stem or self.name, self.version)
 
 
 def link_cmd(t, cl, cfg, outdir, libflags=(), root=None):
@@ -12593,9 +12660,9 @@ def link_cmd(t, cl, cfg, outdir, libflags=(), root=None):
 		# the name its loader builds.
 		shared = ["-shared"]
 		if t.records_soname:
-			shared += ["-Wl,-soname," + t.soname]
+			shared += [soname_flag(t.soname)]
 	if t.kind == "shared":
-		shared = ["-shared", "-Wl,-soname," + t.soname]
+		shared = ["-shared", soname_flag(t.soname)]
 		# The version script is placed before the objects, where ld reads
 		# its options. Named by an absolute path like the objects are: the
 		# link runs from wherever fmake was invoked, not from the tree root,
@@ -13251,6 +13318,10 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		conf.project.update(kept)
 		conf.profile = {}
 	cfg    = Config(args, conf)
+	# Immediately, because a Target's `filename' is asked for during
+	# discovery and has to spell a shared library the platform's way from
+	# the first question. See `shared_lib_name'.
+	_TARGET_OS[0] = cfg.os
 	# Built here rather than where the -I flags are worked out, because moc
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.
@@ -21921,7 +21992,7 @@ def install_plan(targets, closures, root):
 			# versioned name. The tree does not need the chain, and renaming
 			# the artifact would mean teaching clean, the link rules and both
 			# emitters a second name for one thing.
-			real = "%s.%s" % (t.filename, t.version)
+			real = t.versioned_name
 			planned.append(("built", t.filename, where, real, mode))
 			# A one-component version collapses the chain, because the
 			# soname IS the major and the real file carries the full

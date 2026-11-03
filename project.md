@@ -622,7 +622,8 @@ that had been green about nothing for five commits ·
 [570. A library of the wrong architecture, offered confidently](#570-a-library-of-the-wrong-architecture-offered-confidently) ·
 [571. COFF had the same hole, on the platform people cross-build to](#571-coff-had-the-same-hole-on-the-platform-people-cross-build-to) ·
 [572. The underscore is a property of the target, not of the format](#572-the-underscore-is-a-property-of-the-target-not-of-the-format) ·
-[573. A dylib the search path held and nothing read, and the probe that said it could not exist](#573-a-dylib-the-search-path-held-and-nothing-read-and-the-probe-that-said-it-could-not-exist)
+[573. A dylib the search path held and nothing read, and the probe that said it could not exist](#573-a-dylib-the-search-path-held-and-nothing-read-and-the-probe-that-said-it-could-not-exist) ·
+[574. A shared library for macOS could not be linked at all](#574-a-shared-library-for-macos-could-not-be-linked-at-all)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46294,3 +46295,70 @@ is.**
 
 What this run can say is the measurement: the name, the probe, and that no
 SDK is involved.
+
+## 574. A shared library for macOS could not be linked at all
+
+Section 573 made fmake read a dylib somebody else built. This is the other
+half: fmake could not build one. It named the artifact `libfoo.so` and
+passed `-Wl,-soname`, and `ld64` has no such option --
+
+    ld64.lld-19: error: unknown argument '-soname'
+
+-- so `@kind shared` on a darwin target failed at the link, every time, and
+**the toolchain was not what stood in the way**. That is worth separating
+from the four items section 15 listed as waiting on something: this one was
+waiting on nothing.
+
+### The version does not go where a suffix would put it
+
+The two conventions differ in **where the version sits**, not only in the
+extension:
+
+| | plain | soname | real file |
+|---|---|---|---|
+| ELF | `libfoo.so` | `libfoo.so.1` | `libfoo.so.1.2.3` |
+| Mach-O | `libfoo.dylib` | `libfoo.1.dylib` | `libfoo.1.2.3.dylib` |
+
+A suffix constant -- the obvious shape, and the one the earlier estimate in
+section 568 implied -- produces `libfoo.dylib.1.2.3`, which nothing loads.
+So `shared_lib_name` composes all three names, and the install plan asks for
+`versioned_name` rather than appending a version itself: the plan should not
+know where the version goes.
+
+`-install_name @rpath/libfoo.1.dylib` is the soname's counterpart, carrying
+the major for the same reason -- it is the name a consumer records and the
+loader resolves -- with `@rpath` so the result is relocatable rather than
+baked to the build directory.
+
+**A module keeps appending**, and that is not an oversight: a module answers
+to exactly what loads it, so `libnss_hull.so.2` is glibc's spelling and not
+the platform's to change.
+
+### How the OS reaches a name
+
+`Target` has `__slots__` and no configuration, and three properties need the
+answer. `_TARGET_OS` is a module-level fact set the moment the configuration
+exists, which is the same device and the same justification `_INCLUDE_ROOTS`
+carries: threading the configuration through three properties would touch
+every caller of each. Unset it reads as ELF, which is what all three did
+before, so any path that reaches a `Target` before the configuration exists
+behaves exactly as it did.
+
+It is `[toolchain] os` that decides, and it has to be: nothing can read the
+format of an artifact that does not exist yet. Section 15 records that `os`
+is never checked against the objects and defaults to the host -- so a cross
+build to darwin must say so, which is the documented way to say it.
+
+### Verified end to end, which this is the first of these to manage
+
+Measured with `ld64.lld` supplied through `[project] ldflags`: fmake builds
+`libsh.dylib`, 8248 bytes, Mach-O, exporting `_sh_val`, with
+`@rpath/libsh.1.dylib` recorded inside it. `--install` lays down
+`libsh.1.0.dylib` with `libsh.1.dylib` and `libsh.dylib` linked at it, and
+writes the `.pc`. A separate tree then resolves `-lsh` against it.
+
+Three sabotages, each failing its own assertion: ELF naming leaves a
+`libsh.so` in the tree, the GNU flag fails the link, and appending the
+version after `.dylib` breaks the install chain.
+
+Guarded by `a_shared_library_for_darwin_is_a_dylib`.
