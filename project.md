@@ -46395,9 +46395,10 @@ says `* winexe.exe up to date`.
 **The fixed point is why this is not a cosmetic suffix.** Without the name,
 every Windows build relinks for ever -- fmake looks for a file the driver
 never wrote -- which is section 8's measurable aim broken rather than a
-missing extension. The case asserts all four consumers of the name moved
+missing extension. The case asserted four consumers of the name moved
 together: the artifact, the fixed point, `--install` laying down
 `usr/bin/winexe.exe`, and the ejected rule reading `winexe.exe:`.
+**There was a fifth, and the subsection below is the one it missed.**
 
 `--clean` leaves the program behind, and that is not this change: it removes
 `.fmake/` and keeps built artifacts on ELF too, checked on a native tree
@@ -46430,6 +46431,49 @@ look right and still not link.
 
 So: the pieces are measured, the remaining question is whose layout it is,
 and it is the holder's.
+
+### The fifth consumer, and the errno behind it
+
+`--run` composes the artifact's name a **second** time rather than asking
+the target for it:
+
+    exe = os.path.join(root, RUN_DIR, default_name(stage_run_source(...)))
+
+So the Windows build wrote `s.exe` into the run directory and `--run`
+looked for `s`, dying with *built nothing to run* about a file sitting
+beside the name it checked. The value-with-two-consumers shape, in the
+change that moved four of them, found by walking the gap again rather than
+by anything failing.
+
+Behind it was a second thing worth having. With the artifact found, the
+honest failure arrived as `[Errno 8] Exec format error` -- the kernel
+declining a binary for another machine, which on a cross build is not a
+fault to investigate but what `--run` means there.
+
+**fmake already had that handler, for the test runner**, and its comment
+carries the reasoning this one follows: keyed on the errno *because the
+errno is the fact* -- a native build cannot produce one, so it cannot fire
+on a native tree, and it holds for any target rather than only the ones
+fmake knows by name.
+
+**That existing wording also caught a flaw in the new message**, which is
+the whole value of looking for where the project settled something under
+another name. The first version said *built for `windows` and this machine
+runs `linux`*, naming both sides from the configuration. ENOEXEC does not
+require the OS to differ -- a 32-bit binary on a kernel without support
+reaches it too -- and in those shapes the message would have read *built
+for linux and this machine runs linux*. The existing handler names neither
+side for exactly that reason, so this one names the target only when it
+differs from the host:
+
+    --run: s.exe was built for another machine (windows, where this one
+    runs linux), so it cannot be run here -- a cross build's artifact has
+    to be run on its own target
+
+Guarded by `run_finds_a_cross_built_artifact_and_says_it_cannot_run_it`,
+whose two sabotages are the two halves: dropping `program_name` brings
+*built nothing to run* back, and pinning the platform comparison to false
+drops both names from the message.
 
 ## 576. Advice that could not work, on two code paths
 

@@ -33996,6 +33996,50 @@ def a_symbol_the_linker_provides_is_not_a_missing_library(t):
 
 
 @case
+def run_finds_a_cross_built_artifact_and_says_it_cannot_run_it(t):
+	"""section 575: the fifth consumer of a name, and the errno after it.
+
+	`--run` composes the artifact's name a second time rather than asking
+	the target for it, and the first version of the Windows suffix moved
+	four consumers and left this one: the build wrote `s.exe` into the
+	run directory and `--run` looked for `s`, so it died with *built
+	nothing to run* about a file sitting beside the name it checked.
+
+	Then the honest failure arrived as `[Errno 8] Exec format error`,
+	which is the kernel declining a binary for another machine. On a
+	cross build that is not a fault to investigate, it is what `--run`
+	means there -- and fmake knows both sides, so it says which.
+
+	Two assertions and a control: the message names both platforms, the
+	old wrong one is gone, and `--run` on a native tree still runs.
+	"""
+	_pe_or_skip(t)
+	t.write("s.c", "int main(void){ return 0; }\n")
+	t.write("crt.c", "void __main(void){ }\n")
+	t.write("fmake.toml", WIN_CONF)
+	# `--run' resolves its file against the cwd rather than the tree,
+	# so the fixture names it absolutely.
+	r = t.fmake("--run", os.path.join(t.dir, "s.c"))
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"a PE cannot run on this machine: {out}")
+	check("built nothing to run" not in out,
+	      f"the artifact is there under its own name, so this is not it: "
+	      f"{out}")
+	check("windows" in out and "linux" in out.lower(),
+	      f"and the message has to name both sides rather than relay an "
+	      f"errno: {out}")
+
+	u = Tree("native-run")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		r = u.fmake("--run", os.path.join(u.dir, "main.c"))
+		check(r.returncode == 0,
+		      f"--run on a native tree still runs: {r.stdout}{r.stderr}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_module_for_windows_is_a_dll(t):
 	"""section 578: a module no loader on that platform would open.
 

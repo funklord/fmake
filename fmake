@@ -25477,12 +25477,20 @@ def main(argv):
 		rc = _locked_build(args)
 		if rc:
 			return rc
+		# `program_name', because this composes the artifact's name a
+		# second time rather than asking the target for it -- and the
+		# first version of section 575 moved four consumers of that name
+		# and left this one. A Windows build wrote `s.exe' into the run
+		# directory and `--run' looked for `s', so it died with
+		# `built nothing to run' about a file sitting beside the name it
+		# checked. Measured 2026-11-03; see section 575.
 		exe = os.path.join(root, RUN_DIR,
-		                   default_name(
-		                       stage_run_source(
-		                           root, args.run,
-		                           alone=not args.run_with_siblings),
-		                       root))
+		                   program_name(
+		                       default_name(
+		                           stage_run_source(
+		                               root, args.run,
+		                               alone=not args.run_with_siblings),
+		                           root)))
 		if not os.path.exists(exe):
 			die(f"--run: {args.run} built nothing to run")
 		# exec rather than run: the program inherits this process, so its
@@ -25491,6 +25499,27 @@ def main(argv):
 		try:
 			os.execv(exe, [args.run] + args.run_args)
 		except OSError as exc:
+			# `Exec format error' is the kernel declining a binary for
+			# another machine, and on a cross build that is not a fault
+			# to investigate -- it is what `--run' means there.
+			#
+			# The same handler already existed for the test runner, with
+			# the reasoning this follows: keyed on the errno because the
+			# errno IS the fact, which a native build cannot produce, and
+			# which holds for any target rather than only the ones fmake
+			# knows by name. **That is also why the target is named only
+			# when it differs from the host** -- the first version of this
+			# said "built for linux and this machine runs linux" in the
+			# shapes where ENOEXEC arises without the OS differing at
+			# all. Measured on a Windows build after section 575.
+			if exc.errno == errno.ENOEXEC:
+				differs = _TARGET_OS[0] and _TARGET_OS[0] != host_os()
+				die(f"--run: {os.path.basename(exe)} was built for "
+				    f"another machine"
+				    + (f" ({_TARGET_OS[0]}, where this one runs "
+				       f"{host_os()})" if differs else "")
+				    + ", so it cannot be run here -- a cross build's "
+				      "artifact has to be run on its own target")
 			die(f"--run: {exc}")
 	return _locked_build(args)
 
