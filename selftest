@@ -33765,6 +33765,76 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 
 
 @case
+def a_library_of_the_wrong_architecture_is_not_offered_on_mach_o(t):
+	"""section 570: an x86_64 build resolved against an arm64 archive.
+
+	The filter that keeps a foreign library from contributing symbols
+	allows an identity it cannot read -- `None' is in its accepted tuple,
+	which is right for a linker script -- and `elf_identity' reads
+	nothing from a Mach-O header. So on Mach-O it passed everything, and
+	with one symbol exported by both an x86_64 and an arm64 archive the
+	answer was `-larmonly' for an x86_64 build, with `arch = "x86_64"'
+	declared. Worse than a missing library: fmake says where a symbol
+	came from, so this is a confident wrong answer.
+
+	`object_identity' tags the format and carries a Mach-O cputype, taken
+	from the tree's own compiled object -- so the comparison needs no
+	mapping from an arch word to a cputype, which keeps section 569's
+	question separate.
+
+	**The control is the whole case.** Picking the right archive looks
+	identical to picking the first directory, so the arm directory is
+	listed first in both runs and the target architecture is what
+	changes. If the answer did not follow the target, this would pass
+	against a filter that does nothing.
+	"""
+	_mach_o_or_skip(t)
+	outside = tempfile.mkdtemp(prefix="fmake-archpick-")
+	try:
+		src = os.path.join(outside, "v.c")
+		with open(src, "w") as fh:
+			fh.write("int shared_val(void){ return 1; }\n")
+		built = {}
+		for word, triple in (("x86", "x86_64-apple-macos11"),
+		                     ("arm", "arm64-apple-macos11")):
+			d = os.path.join(outside, word)
+			os.makedirs(d)
+			obj = os.path.join(d, "v.o")
+			got = _run_in(outside, "clang", "-target", triple, "-c", src,
+			              "-o", obj)
+			if got.returncode != 0:
+				raise Skip(f"this clang cannot target {triple}")
+			got = _run_in(d, "llvm-ar", "rcs", f"lib{word}only.a", "v.o")
+			check(got.returncode == 0,
+			      f"llvm-ar could not make the {word} archive: "
+			      f"{got.stdout}{got.stderr}")
+			built[word] = d
+
+		t.write("main.c", "extern int shared_val(void);\n"
+		        "int main(void){ return shared_val(); }\n")
+		# The arm directory first in both runs, so directory order cannot
+		# be what decides.
+		dirs = f'["{built["arm"]}", "{built["x86"]}"]'
+		for triple, arch, want, other in (
+		        ("x86_64-apple-macos11", "x86_64", "-lx86only", "-larmonly"),
+		        ("arm64-apple-macos11", "aarch64", "-larmonly", "-lx86only")):
+			shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+			t.write("fmake.toml",
+			        f'[project]\ncflags = ["-target", "{triple}"]\n\n'
+			        f'[toolchain]\ncc = "clang"\nnm = "llvm-nm"\n'
+			        f'ar = "llvm-ar"\narch = "{arch}"\n'
+			        f'lib-dirs = {dirs}\n')
+			r = t.fmake("-v")
+			out = r.stdout + r.stderr
+			check(want in out,
+			      f"a {arch} build has to resolve against the {arch} "
+			      f"archive: {out}")
+			check(other not in out,
+			      f"and must not be offered the other architecture's, "
+			      f"which is the whole point of the filter: {out}")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
+@case
 def a_named_sources_list_that_went_stale_says_so(t):
 	"""section 378: the predictable cost of fmake's own advice.
 

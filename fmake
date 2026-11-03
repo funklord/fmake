@@ -10223,9 +10223,97 @@ def exports_main(unit):
 	return "_main" in unit.strong and macho_object(unit.obj)
 
 
+# Which end the header is written from, by magic. A thin Mach-O starts with
+# MH_MAGIC or MH_MAGIC_64 in the file's own byte order, so the magic names
+# the order as well as the format; `ca fe ba be' is a fat header carrying
+# several architectures at once and is deliberately not one of these.
+MACHO_ORDER = {b"\xcf\xfa\xed\xfe": "little", b"\xce\xfa\xed\xfe": "little",
+               b"\xfe\xed\xfa\xcf": "big",    b"\xfe\xed\xfa\xce": "big"}
+
+
+def macho_cputype(path):
+	"""The cputype of a thin Mach-O file, or None.
+
+    None for a fat file as well as for anything that is not Mach-O, and
+    deliberately: a universal binary really does provide several
+    architectures, so the honest answer about which one it is is "more
+    than one" rather than whichever slice comes first. Callers read None
+    as no opinion, which for a fat library is correct.
+
+    An archive is identified by its first Mach-O member, which is the
+    same thing `elf_identity' does with `\\x7fELF' and carries the same
+    small exposure: the bytes could occur inside a member's data. Kept
+    the same way rather than invented differently, since a reader who
+    knows one knows the other.
+    """
+	try:
+		with open(path, "rb") as fh:
+			head = fh.read(12)
+			if head[:8] == b"!<arch>\n":
+				blob = head + fh.read(1 << 16)
+				at = min((p for p in (blob.find(m) for m in MACHO_ORDER)
+				          if p >= 0), default=-1)
+				if at < 0:
+					return None
+				head = blob[at:at + 12]
+	except OSError:
+		return None
+	order = MACHO_ORDER.get(head[:4])
+	if order is None or len(head) < 8:
+		return None
+	return int.from_bytes(head[4:8], order)
+
+
+def object_identity(path, unreadable=None):
+	"""What a file was built for, across formats: tagged, and comparable.
+
+    `("elf", class, order, machine)` or `("macho", cputype)`, or None when
+    the file has no opinion to offer -- a linker script, a fat library, a
+    file that is neither format.
+
+    It exists because `elf_identity' reads nothing from a Mach-O header,
+    and two of its callers do not want an ELF fact, they want *the same
+    thing fmake just compiled*. Measured 2026-11-03: an x86_64 Mach-O
+    build with `arch = "x86_64"' declared, and an x86_64 and an arm64
+    archive on the search path exporting one symbol, resolved to the
+    arm64 one -- a confidently wrong `-l', which is worse than a missing
+    one because fmake says where the symbol came from.
+
+    **Tagged, and a separate function, because the other callers compare
+    `ident[2]' against an ELF machine number.** Widening `elf_identity'
+    would hand them a cputype to compare against that table, which is
+    the kind of wrong answer that reads as a right one.
+
+    No name table anywhere in this: the architecture to require comes
+    from the tree's own object, so the comparison never needs to know
+    what a triplet or an arch word means. Mapping a DECLARED arch name to
+    a Mach-O cputype is a different problem and is section 569's open
+    question.
+    """
+	ident = elf_identity(path, unreadable=UNREADABLE)
+	if ident is UNREADABLE:
+		return unreadable
+	if ident:
+		return ("elf",) + tuple(ident)
+	cpu = macho_cputype(path)
+	return ("macho", cpu) if cpu is not None else None
+
+
 def describe_identity(ident):
 	if not ident:
 		return "unknown"
+	# Both shapes: the bare ELF triple `elf_identity' returns, and the
+	# tagged one from `object_identity'. The tag can never collide with a
+	# triple, whose first element is an ELF class byte.
+	if ident[0] == "macho":
+		# A hex cputype rather than a name, because naming it would be a
+		# fifth hand-written table and section 15 has a threshold about
+		# those -- see section 570. It appears in one -v line and in the
+		# "no ... library exports" refusal, where what the reader needs
+		# is that the two sides differ.
+		return f"mach-o/0x{ident[1]:x}"
+	if ident[0] == "elf":
+		ident = ident[1:]
 	bits = {1: "32", 2: "64"}.get(ident[0], "?")
 	end = {1: "le", 2: "be"}.get(ident[1], "?")
 	return f"{ELF_MACHINES.get(ident[2], 'machine-0x%x' % ident[2])}/{bits}{end}"
@@ -10612,7 +10700,7 @@ def find_providers(cfg, wanted, jobs, want_ident=None):
 			# Architecture first: a 20-byte header read is far cheaper than
 			# an nm, and on a cross build most of what is on the machine is
 			# the wrong architecture and must not contribute a single symbol.
-			if want_ident and elf_identity(t, UNREADABLE) not in (
+			if want_ident and object_identity(t, UNREADABLE) not in (
 			        None, want_ident):
 				continue
 			syms |= lib_exports(cfg, t)
@@ -15715,7 +15803,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				# this -- correctly, since rustc chose the architecture.
 				if not u.obj or u.archive:
 					continue
-				target_ident = elf_identity(u.obj)
+				target_ident = object_identity(u.obj)
 				if target_ident:
 					break
 
@@ -15738,7 +15826,15 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			vetted = True
 			keep_a, keep_p = [], []
 			for a in archives + prebuilt:
-				got = elf_identity(a.obj)
+				# `object_identity' on both sides. This read
+				# `elf_identity' while the target's identity became
+				# tagged, so a bare ELF triple stopped equalling the
+				# tagged one and EVERY archive was reported as the wrong
+				# architecture and dropped -- the one-of-two shape, in a
+				# change made while hunting for it. Caught by
+				# `a_source_standing_behind_an_archive_is_named', whose
+				# fixture then reported that nothing was displaced.
+				got = object_identity(a.obj)
 				if target_ident and got and got != target_ident:
 					warn(f"{a.rel} is {describe_identity(got)}, but this "
 					     f"build is {describe_identity(target_ident)}")

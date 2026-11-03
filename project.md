@@ -618,7 +618,8 @@ that had been green about nothing for five commits ·
 [566. A published header under no include root, and the census that found it](#566-a-published-header-under-no-include-root-and-the-census-that-found-it) ·
 [567. The suite leaked a scratch tree every time somebody stopped it](#567-the-suite-leaked-a-scratch-tree-every-time-somebody-stopped-it) ·
 [568. Mach-O, walked with the nm that can read it](#568-mach-o-walked-with-the-nm-that-can-read-it) ·
-[569. A declared architecture that could not be checked, in silence](#569-a-declared-architecture-that-could-not-be-checked-in-silence)
+[569. A declared architecture that could not be checked, in silence](#569-a-declared-architecture-that-could-not-be-checked-in-silence) ·
+[570. A library of the wrong architecture, offered confidently](#570-a-library-of-the-wrong-architecture-offered-confidently)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -45903,3 +45904,96 @@ architecture -- which costs a subprocess per object and makes a second
 binary a requirement of the Mach-O path. Which of those is right is the
 copyright holder's, and the measurement above is what the question needs:
 the check is off either way today, and now it says so.
+
+## 570. A library of the wrong architecture, offered confidently
+
+Section 568 said the symbol half of macOS support worked. It did; this is
+the half that looked like it worked and did not, which is the shape
+`working-practice.md` warns about -- when a second configuration arrives,
+the rules worth re-reading are the ones that still appear to work.
+
+**Measured.** Two static archives exporting one symbol, one built for
+x86_64 and one for arm64, both on the library search path; a tree compiled
+for x86_64 with `[toolchain] arch = "x86_64"` declared. fmake resolved to
+`-L<dir>/arm -larmonly`.
+
+That is worse than failing to find a library, and section 14's linker-script
+entry already says why in its own words: what a bad answer corrupts is not
+the link, which `ld` would refuse anyway, but **what fmake believes is
+available** -- so the reader gets a link error beside fmake's own confident
+claim about where the symbol was.
+
+### Why it was off
+
+Two things had to be true at once, and each is defensible alone.
+
+The filter's accepted set is `(None, want_ident)`, and `None` means "this
+file has no opinion" -- which is right for a GNU ld script, a text file that
+genuinely is not an object. And `elf_identity` returns None for a Mach-O
+header, because it reads `\x7fELF` and finds something else. So every
+Mach-O library read as having no opinion and contributed every symbol it
+had.
+
+`want_ident` was absent as well, by the same route: it is taken from the
+tree's own first compiled object, and that read as None too. So the filter
+was off at both ends.
+
+### The fix needs no table, and that is the point
+
+`object_identity` returns a **tagged** identity -- `("elf", class, order,
+machine)` or `("macho", cputype)` -- and the two callers that want *the same
+thing fmake just compiled* use it. The architecture to require still comes
+from the tree's own object, which the code already calls right by
+construction, so **nothing has to know what an arch word means**: the
+comparison is object against object.
+
+That matters because it keeps section 569's question separate and open.
+Mapping a *declared* name like `x86_64` to a cputype would be a fifth
+hand-written list, and section 15 states a threshold about those. Comparing
+two objects needs no such map, so this fix does not spend that decision.
+
+**Tagged, and a new function rather than a wider `elf_identity`**, because
+three other callers compare `ident[2]` against an ELF machine number. Handed
+a cputype, they would compare it against that table and get a wrong answer
+that reads like a right one. `describe_identity` takes both shapes; the tag
+cannot collide with a bare triple, whose first element is an ELF class byte.
+
+A fat Mach-O library returns None and is therefore still accepted, which is
+correct rather than lazy: a universal binary really does provide the
+architecture asked for, and naming whichever slice comes first would be the
+confident wrong answer again, pointed the other way.
+
+### The fix had the same fault in it, and the suite found it
+
+Worth recording rather than quietly repaired, because it is the sharpest
+instance of this section's own subject. Making the identity tagged changed
+what `target_ident` holds -- and **one consumer was left reading
+`elf_identity`**: the site that vets an archive or a prebuilt object found
+in the tree. A bare ELF triple stopped equalling the tagged one, so every
+archive was reported as the wrong architecture and dropped.
+
+That is the value-with-two-consumers shape, introduced by the change written
+to close an instance of it, within minutes. The lens does not protect the
+person holding it.
+
+What caught it was `a_source_standing_behind_an_archive_is_named`, at case
+206 of a full run, and the way it failed is the part worth keeping: it did
+not say "wrong architecture". It said *the fixture does not reproduce the
+displacement: the source was linked, so there is nothing here to report* --
+a case complaining that its own setup had stopped being interesting. A
+fixture that checks it reached the hazard is what turned a silent behaviour
+change into a failure, which is section 15's rule about fixtures earning its
+place from the other direction.
+
+### The control is the case
+
+Choosing the right archive and choosing the first directory look identical
+from outside, so the case lists the **arm directory first in both runs** and
+changes only the target. x86_64 gets `-lx86only`, arm64 gets `-larmonly`.
+Without that, the case would pass against a filter that does nothing.
+
+Each half is sabotaged: putting `elf_identity` back in the filter, and
+taking the target's identity with `elf_identity` again. Both fail, because
+either one alone switches the filter off.
+
+Guarded by `a_library_of_the_wrong_architecture_is_not_offered_on_mach_o`.
