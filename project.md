@@ -623,7 +623,8 @@ that had been green about nothing for five commits ·
 [571. COFF had the same hole, on the platform people cross-build to](#571-coff-had-the-same-hole-on-the-platform-people-cross-build-to) ·
 [572. The underscore is a property of the target, not of the format](#572-the-underscore-is-a-property-of-the-target-not-of-the-format) ·
 [573. A dylib the search path held and nothing read, and the probe that said it could not exist](#573-a-dylib-the-search-path-held-and-nothing-read-and-the-probe-that-said-it-could-not-exist) ·
-[574. A shared library for macOS could not be linked at all](#574-a-shared-library-for-macos-could-not-be-linked-at-all)
+[574. A shared library for macOS could not be linked at all](#574-a-shared-library-for-macos-could-not-be-linked-at-all) ·
+[575. A Windows program fmake named and the driver renamed](#575-a-windows-program-fmake-named-and-the-driver-renamed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46362,3 +46363,67 @@ Three sabotages, each failing its own assertion: ELF naming leaves a
 version after `.dylib` breaks the install chain.
 
 Guarded by `a_shared_library_for_darwin_is_a_dylib`.
+
+## 575. A Windows program fmake named and the driver renamed
+
+`@kind exe` for a Windows target could not build at all, and the reason is
+one the dylib work did not have: **the compiler driver renames the
+artifact.**
+
+    clang -target x86_64-pc-windows-gnu -o prog   writes prog.exe
+    ld -m i386pep                       -o prog   writes prog
+
+fmake links through the driver, so it asked for `winexe` and the toolchain
+wrote `winexe.exe`. What happened then is the good part:
+
+    LD  winexe
+    !!! clang exited 0 and produced no winexe
+
+That is the guard section 15 added for a *truncated* artifact -- a link
+killed part-way, an OOM, a full disk -- firing on a fault nobody had in
+mind, and firing correctly. A build that cannot find what it just produced
+is exactly what it exists to catch, whatever the cause.
+
+**The fix is the name**, through the same `_TARGET_OS` device section 574
+introduced, because asking for `prog.exe` outright is honoured verbatim.
+Measured after: `LD winexe.exe`, `* built winexe.exe`, and the second run
+says `* winexe.exe up to date`.
+
+**The fixed point is why this is not a cosmetic suffix.** Without the name,
+every Windows build relinks for ever -- fmake looks for a file the driver
+never wrote -- which is section 8's measurable aim broken rather than a
+missing extension. The case asserts all four consumers of the name moved
+together: the artifact, the fixed point, `--install` laying down
+`usr/bin/winexe.exe`, and the ejected rule reading `winexe.exe:`.
+
+`--clean` leaves the program behind, and that is not this change: it removes
+`.fmake/` and keeps built artifacts on ELF too, checked on a native tree
+rather than assumed.
+
+### What it leaves next, measured but not built
+
+**`@kind shared` for a Windows target builds, and builds the wrong thing.**
+fmake names it `libw.so` and the link succeeds -- the driver honours that
+name, so there is no mismatch to catch -- but nothing on Windows looks for
+`libw.so`, and a consumer links an *import library* that fmake does not
+produce at all. Both artifacts are makeable here:
+
+    clang -target x86_64-pc-windows-gnu -shared -nostdlib \
+        -Wl,--out-implib=libw.dll.a -o w.dll d.o
+
+giving `w.dll` (4912 bytes) and `libw.dll.a` (1338), the latter carrying the
+`.idata` sections an import library is, and `llvm-nm` reads the DLL's
+exports directly.
+
+**It is recorded rather than done because it is a model change, not a
+naming one.** A Windows shared target is *two* artifacts, and the install
+plan, `--clean`, both emitters and the `.pc` all enumerate artifacts -- so
+the question is what `--install` lays down and where. The import library
+belongs in `libdir`; a DLL conventionally ships beside the executable
+rather than in `libdir`, and **that is a convention this machine cannot
+verify by running anything.** Naming it `w.dll` without the import library
+would be worse than today's obviously-foreign `libw.so`, because it would
+look right and still not link.
+
+So: the pieces are measured, the remaining question is whose layout it is,
+and it is the holder's.

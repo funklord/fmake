@@ -33666,6 +33666,41 @@ def _macho_linker():
 	return None
 
 
+WIN_CONF = ('[project]\ncflags = ["-target", "x86_64-pc-windows-gnu"]\n'
+            'ldflags = ["-nostdlib", "-Wl,-e,main"]\n\n'
+            '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n'
+            'os = "windows"\n')
+
+
+def _pe_or_skip(t):
+	"""Skip unless this machine can compile AND link a freestanding PE.
+
+	Linking one needs no mingw runtime -- `-nostdlib' with an entry point
+	is enough, and the host GNU `ld' does PE, which its own error message
+	gives away by listing `i386pep' among its emulations. What a mingw
+	target does need is `__main', which the `main' prologue calls on that
+	platform; the caller defines it in the tree.
+
+	Both halves are probed, because a machine with clang's Windows
+	backend and no PE-capable linker would otherwise fail the case
+	rather than skip it.
+	"""
+	if not shutil.which("clang"):
+		raise Skip("clang not installed")
+	if not shutil.which("llvm-nm"):
+		raise Skip("llvm-nm not installed, and no other nm here reads COFF")
+	probe = os.path.join(t.dir, "probe.c")
+	with open(probe, "w") as fh:
+		fh.write("int mainCRTStartup(void){ return 0; }\n")
+	out = os.path.join(t.dir, "probe.exe")
+	got = _run_in(t.dir, "clang", "-target", "x86_64-pc-windows-gnu",
+	              "-nostdlib", "-Wl,-e,mainCRTStartup", "-o", out, probe)
+	if got.returncode != 0 or not os.path.exists(out):
+		raise Skip("this toolchain cannot link a freestanding PE")
+	os.remove(probe)
+	os.remove(out)
+
+
 def _archive_pick(t, variants):
 	"""Two archives of different architectures: is the right one chosen?
 
@@ -33841,6 +33876,78 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 	check("architecture check" not in out,
 	      f"nobody asked for a check, so there is nothing to report "
 	      f"about it being off: {out}")
+
+
+@case
+def a_program_for_windows_is_an_exe(t):
+	"""section 575: fmake asked for one name and the driver wrote another.
+
+	`clang -target x86_64-pc-windows-gnu -o prog` writes `prog.exe`,
+	while the `ld` underneath it writes `prog` when asked for `prog`.
+	fmake links through the driver, so every Windows cross build stopped
+	with
+
+	    !!! clang exited 0 and produced no winexe
+
+	-- the right failure, and still a failure: `@kind exe` for a Windows
+	target could not build at all. The guard that catches it is the one
+	section 15 added for a truncated artifact, earning its keep on a
+	fault nobody had in mind.
+
+	Four assertions, because a naming change is only right if every
+	consumer of the name moved with it: the artifact, the fixed point,
+	the install path and the ejected rule. **The fixed point is the one
+	that matters** -- a build that cannot find what it just produced
+	relinks for ever, which is section 8's measurable aim broken rather
+	than merely a cosmetic suffix.
+	"""
+	_pe_or_skip(t)
+	t.write("helper.h", "#pragma once\nint helper(void);\n")
+	t.write("helper.c", '#include "helper.h"\nint helper(void){ return 7; }\n')
+	t.write("main.c", '#include "helper.h"\nint main(void){ return helper(); }\n')
+	# `__main' is called by the main prologue on this target and lives in
+	# the mingw runtime, which is not here. Defining it in the tree is
+	# what makes the link freestanding.
+	t.write("crt.c", "void __main(void){ }\n")
+	t.write("fmake.toml", WIN_CONF)
+
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the Windows link failed: {out}")
+	# Named after the directory, which is what section 1's premise
+	# says a program is called -- not after the Tree's label.
+	prog = os.path.basename(t.dir)
+	check(os.path.exists(os.path.join(t.dir, prog + ".exe")),
+	      f"a Windows program is a .exe: {sorted(os.listdir(t.dir))}\n{out}")
+	check(not os.path.exists(os.path.join(t.dir, prog)),
+	      "and must not also be spelled without the suffix")
+
+	# The fixed point. Without the suffix fmake looked for a name the
+	# driver never wrote, so this is the assertion that would have caught
+	# the fault even if the guard had not.
+	again = t.fmake()
+	out = again.stdout + again.stderr
+	check(again.returncode == 0, f"the second build failed: {out}")
+	check("up to date" in out,
+	      f"a finished Windows build has to be a fixed point: {out}")
+	check("LD " not in out,
+	      f"and must not relink what is already there: {out}")
+
+	outside = tempfile.mkdtemp(prefix="fmake-wininst-")
+	try:
+		r = t.fmake("--install", "--prefix", "/usr", "--destdir", outside)
+		check(r.returncode == 0, f"the install failed: {r.stdout}{r.stderr}")
+		want = os.path.join(outside, "usr", "bin", prog + ".exe")
+		check(os.path.exists(want),
+		      f"the installed program keeps the suffix: "
+		      f"{sorted(_all_files(outside))}")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
+
+	r = t.fmake("--eject", "make")
+	check(r.returncode == 0, f"eject failed: {r.stderr}")
+	check(f"{prog}.exe:" in r.stdout,
+	      f"the ejected rule has to build the same name fmake does")
 
 
 @case

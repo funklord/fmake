@@ -12366,6 +12366,26 @@ def _ann_install(ann, rel=""):
 _TARGET_OS = [None]
 
 
+def program_name(name):
+	"""What this target's OS calls an executable.
+
+    Windows wants the suffix and the compiler driver enforces it: `clang
+    -target x86_64-pc-windows-gnu -o prog' writes `prog.exe', while the
+    `ld' underneath it writes `prog' when asked for `prog'. fmake links
+    through the driver, so it asked for one name and got another --
+    measured 2026-11-03, and caught by the guard that reads
+
+        !!! clang exited 0 and produced no winexe
+
+    which is the right failure and still a failure: `@kind exe' for a
+    Windows target could not build at all. Asking for `prog.exe'
+    outright is honoured verbatim, so naming it is the whole fix.
+    """
+	if _TARGET_OS[0] == "windows" and not name.lower().endswith(".exe"):
+		return name + ".exe"
+	return name
+
+
 def soname_flag(soname):
 	"""How this target's OS records the name consumers will look for.
 
@@ -12551,7 +12571,7 @@ class Target:
 		# is not a library anything links against.
 		if self.kind == "module":
 			return "%s.so" % self.name
-		return self.name
+		return program_name(self.name)
 
 	@property
 	def records_soname(self):
