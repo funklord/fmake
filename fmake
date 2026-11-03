@@ -10115,6 +10115,21 @@ for _canon, _elf_name in (("riscv64", "riscv"), ("ppc64le", "ppc64"),
 	ARCH_ELF_CODE[_canon] = ARCH_ELF_CODE[_elf_name]
 
 
+# What a linkable library is called, shared forms before the archive.
+#
+# `.dylib' is here because a Mach-O shared library is spelled that way and
+# fmake looked for `.so' only, so a symbol sitting in a `libdy.dylib' on
+# the search path was reported as exported by nothing -- measured
+# 2026-11-03 against a dylib linked here with `ld64.lld'. Scanning for it
+# on a Linux box costs one `endswith' per directory entry and finds
+# nothing; and if it ever did find something, the architecture filter now
+# reads the file's identity and refuses a Mach-O library for an ELF build,
+# which is what makes adding the name safe rather than merely cheap.
+#
+# The ld-script reader keeps the ELF pair deliberately: a GNU linker script
+# is a GNU thing, and a `-l' inside one cannot name a dylib.
+LIB_SUFFIXES = (".so", ".dylib", ".a")
+
 # What an unreadable file is, as distinct from one that is not ELF. Both
 # used to come back as None, and every caller reads None as "no opinion" --
 # which is right for a linker script and wrong for a file that could not be
@@ -10505,7 +10520,8 @@ def linkable_libs(dirs):
 	# considered. Otherwise glibc's own static halves -- libm-2.41.a and
 	# friends -- get offered as link names, and linking one drags in
 	# internals like _dl_x86_cpu_features that no program can resolve.
-	for suffix in (".so", ".a"):
+	# BOTH shared spellings come before the archive, for the same reason.
+	for suffix in LIB_SUFFIXES:
 		for d in dirs:
 			try:
 				entries = sorted(os.listdir(d))
@@ -10546,7 +10562,16 @@ def elf_targets(path, dirs=(), _depth=0):
 			magic = fh.read(8)
 	except OSError:
 		return []
-	if magic[:4] == b"\x7fELF" or magic[:8] == b"!<arch>\n":
+	# Every form that is actually a link input: an ELF shared object, an
+	# `ar' archive -- which covers both a static library and a mingw
+	# import library -- and a Mach-O dylib. Only ELF and `ar' were here,
+	# so a `libdy.dylib' on the search path fell through to the script
+	# reader below, matched no GROUP or INPUT, and yielded no targets at
+	# all: `linkable_libs' found the file and nothing ever read a symbol
+	# out of it, which arrives as "no library exports" about a symbol
+	# sitting in plain sight. Measured 2026-11-03; see section 573.
+	if (magic[:4] == b"\x7fELF" or magic[:8] == b"!<arch>\n"
+	        or magic[:4] in MACHO_MAGIC):
 		return [path]
 	if _depth > 3:
 		return []
@@ -10613,7 +10638,15 @@ def lib_exports(cfg, path):
     `libc.a[dso_handle.o]:` -- and every lost entry was checked to be one
     of those rather than something real.
     """
-	dyn = not path.endswith(".a")
+	# `-D' asks for the DYNAMIC symbol table, which is an ELF structure. A
+	# Mach-O dylib exports from its ordinary table and has no dynamic one,
+	# so llvm-nm refuses the flag -- "File format has no dynamic symbol
+	# table" -- and the library read as exporting nothing at all. Measured
+	# 2026-11-03: without the flag the same file prints `_dy_val T'. The
+	# error went into stderr, which this function does not look at, and a
+	# library that exports nothing is indistinguishable from one fmake
+	# could not read; see section 573.
+	dyn = not path.endswith(".a") and not macho_object(path)
 	cmd = [cfg.nm, "--defined-only", "--format=posix"]
 	if dyn:
 		cmd.append("-D")

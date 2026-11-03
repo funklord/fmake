@@ -621,7 +621,8 @@ that had been green about nothing for five commits ·
 [569. A declared architecture that could not be checked, in silence](#569-a-declared-architecture-that-could-not-be-checked-in-silence) ·
 [570. A library of the wrong architecture, offered confidently](#570-a-library-of-the-wrong-architecture-offered-confidently) ·
 [571. COFF had the same hole, on the platform people cross-build to](#571-coff-had-the-same-hole-on-the-platform-people-cross-build-to) ·
-[572. The underscore is a property of the target, not of the format](#572-the-underscore-is-a-property-of-the-target-not-of-the-format)
+[572. The underscore is a property of the target, not of the format](#572-the-underscore-is-a-property-of-the-target-not-of-the-format) ·
+[573. A dylib the search path held and nothing read, and the probe that said it could not exist](#573-a-dylib-the-search-path-held-and-nothing-read-and-the-probe-that-said-it-could-not-exist)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2407,9 +2408,12 @@ rather than code, and one lesson about testing.
   out of it.
 
   **What remains is no longer "unhandled" but a short list, each item with a
-  reason it is not being written.** `libNAME.dylib` is one line in a suffix
-  list and nothing here can produce a dylib, so the line would be code no
-  fixture exercises. The dyld shared cache, where macOS keeps system
+  reason it is not being written.** ~~`libNAME.dylib` is one line in a
+  suffix list and nothing here can produce a dylib.~~ **Done, and it was
+  three gates rather than one -- see section 573**, which also records that
+  the linker was present under a versioned name the probe never asked for,
+  and that the linker-provided-symbol item below was wrong the same way: it
+  needs a linker, not an SDK. The dyld shared cache, where macOS keeps system
   libraries out of the filesystem entirely, is a structural difference from
   `ldconfig` layout and wants measuring on a Mac. The linker-provided symbol
   list is ELF's and cannot be judged without an SDK, since a genuine
@@ -45852,11 +45856,14 @@ does not re-derive them:
 
 ### What is still out of reach, and why it is not effort
 
-`libNAME.dylib` is the one concrete remaining gap in resolution: the suffix
-list is `(".so", ".a")`. Adding `.dylib` is one line and **is not being
-added**, because nothing here can produce a dylib -- that needs the Mach-O
-linker -- so the line would be code no fixture exercises, which section 15
-already records as the most expensive kind of wrong. The same goes for
+~~`libNAME.dylib` is the one concrete remaining gap in resolution: the
+suffix list is `(".so", ".a")`. Adding `.dylib` is one line and is not being
+added, because nothing here can produce a dylib -- that needs the Mach-O
+linker -- so the line would be code no fixture exercises.~~ **Both halves of
+that were wrong and section 573 has the correction**: `ld64.lld-19` was
+installed and a probe that asked only for unversioned names missed it, and
+the suffix list turned out to be the first of three gates rather than the
+only one. It is done and under test. What still stands is
 two-level namespaces and for the dyld shared cache, where since Big Sur the
 system libraries are not files on disk at all: that is a structural
 difference from `ldconfig` layout rather than a missing suffix, and it wants
@@ -46183,3 +46190,107 @@ an untested boundary on every side, which is `working-practice.md`'s point
 about configurations said in the small.
 
 Guarded by `thirty_two_bit_windows_underscores_main_as_well`.
+
+## 573. A dylib the search path held and nothing read, and the probe that said it could not exist
+
+Sections 568 and 15 both recorded that `libNAME.dylib` was the one concrete
+gap left in resolution, that fixing it was one line in a suffix list, and
+that it was **deliberately not being fixed because nothing here can produce
+a dylib**. Every part of that is wrong, and the way it was wrong is worth
+more than the fix.
+
+**The linker was installed the whole time.** The claim rested on a probe for
+`lld`, `ld.lld` and `ld64.lld`, all absent -- and `/usr/bin/ld64.lld-19`
+present, which the probe never asked about. That is `evidence.md`'s
+manufactured absence by the stem: three spellings of a name, none of them
+the one on disk, and a conclusion written into two documents from it. The
+probe was also run before the holder installed `llvm` and quoted
+afterwards, so it was stale as well as narrow.
+
+    ld64.lld-19 -arch x86_64 -platform_version macos 11.0 11.0 \
+        -dylib -install_name @rpath/libdy.dylib -o libdy.dylib v.o
+
+8248 bytes, magic `cffaedfe`, exporting `_dy_val`. No SDK needed, because
+nothing in it calls libc.
+
+### Three gates, and any one of them hides the library
+
+With a real dylib on the search path, `_dy_val` was reported as exported by
+nothing. The suffix list was the first gate and not the last:
+
+- **the directory scan** looked for `lib*.so` and `lib*.a`. One line, as
+  recorded -- `LIB_SUFFIXES` now carries `.dylib`, both shared spellings
+  ahead of the archive for the reason the comment there already gives.
+- **`elf_targets`** decides whether a file is its own link target by its
+  magic, and knew `\x7fELF` and `!<arch>`. A Mach-O dylib fell through to
+  the linker-script reader, matched no `GROUP` or `INPUT`, and returned an
+  empty list -- so `linkable_libs` found the file and nothing ever opened
+  it. It takes the Mach-O magics now, which also covers the `ar` import
+  library a mingw build links.
+- **`lib_exports`** passes `-D` for anything that is not an `.a`, and `-D`
+  asks for the **dynamic** symbol table, an ELF structure. Mach-O exports
+  from its ordinary table and has none, so llvm-nm refuses outright --
+  *File format has no dynamic symbol table* -- and the function, which
+  reads stdout and not stderr, came back with an empty set.
+
+Each was sabotaged on its own and each alone fails the case. **A library
+that reads as exporting nothing is indistinguishable from one that exports
+nothing**, which is why a chain of three could sit behind a sentence saying
+"one line".
+
+### What this says about the earlier entry
+
+The estimate was not merely too low, it was the wrong shape: a suffix list
+is the part a reader can see from the outside, and the two gates behind it
+are only visible by running the thing. **An estimate written from reading
+code is a guess about the part of the code you happened to read**, and the
+honest version of that entry would have said "unmeasured" rather than "one
+line".
+
+And the decision it justified -- not writing a line because no fixture could
+exercise it -- was right in form and wrong in fact. The rule stands: do not
+write what nothing can test. What failed was the measurement of what could
+be tested, which is cheaper to re-run than to reason about, and was never
+re-run because the first answer was convenient.
+
+Guarded by `a_dylib_on_the_search_path_is_read`, which skips unless this
+machine has both a Mach-O compiler and a Mach-O linker, and asks for the
+linker **by every spelling including the versioned ones** -- `_macho_linker`
+exists so that this mistake has one place to be fixed rather than being
+repeated by the next probe.
+
+### A second claim from the same list, wrong for the same reason
+
+That entry listed four things and said what each waited for. The third was
+the linker-provided symbol list, which it said could not be judged without
+an SDK, because a genuine *nothing provides `_memcpy`* could not be told
+apart from this machine having no Mach-O libc. With a linker in hand that
+is not true either, and the probe that shows it needs no libc at all:
+
+    extern char _mh_execute_header;
+    int main(void){ return (int)(long)&_mh_execute_header; }
+
+`ld64.lld` links that into 8312 bytes. The symbol is **provided by the
+linker**, exactly as `_DYNAMIC` and `__bss_start` are on ELF -- and fmake's
+list of linker-provided names is ELF's, so the build stops with
+
+    no mach-o/0x1000007 library exports: __mh_execute_header
+    so either a library this build has not been told about ... or
+    something that was never generated
+
+three remedies, none of them the answer, about a name no library will ever
+export.
+
+**It is recorded and not fixed, and the reason is the threshold rather than
+the effort.** Adding Mach-O's provided names is another hand-written list,
+and section 15 says a fourth was the signal that this model wants a
+predicate; this would be the sixth. Section 104's answer for ELF -- have
+the suite derive what `ld` provides from its own default script and require
+the list to cover it -- has no counterpart here, because `ld64` has no
+script to read. So the choice is a list that cannot be gated the way the
+ELF one is, or a predicate for the whole family, and that is the same
+decision section 569 is holding: **whose it is matters more than which it
+is.**
+
+What this run can say is the measurement: the name, the probe, and that no
+SDK is involved.

@@ -33650,6 +33650,22 @@ MACH_O_CONF = ('[project]\ncflags = ["-target", "x86_64-apple-macos11"]\n\n'
                '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n')
 
 
+def _macho_linker():
+	"""A linker that emits Mach-O, or None.
+
+	Versioned names included, which is the whole reason this helper
+	exists: a probe for `ld64.lld' alone reports absent on a machine
+	carrying `/usr/bin/ld64.lld-19', and a conclusion was written into
+	project.md from exactly that -- see section 573.
+	"""
+	for name in ("ld64.lld", "ld64.lld-19", "ld64.lld-18", "ld64.lld-17",
+	             "ld64.lld-16", "ld64.lld-15", "ld64.lld-14"):
+		found = shutil.which(name)
+		if found:
+			return found
+	return None
+
+
 def _archive_pick(t, variants):
 	"""Two archives of different architectures: is the right one chosen?
 
@@ -33825,6 +33841,74 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 	check("architecture check" not in out,
 	      f"nobody asked for a check, so there is nothing to report "
 	      f"about it being off: {out}")
+
+
+@case
+def a_dylib_on_the_search_path_is_read(t):
+	"""section 573: three ELF-shaped gates, each enough to hide it.
+
+	A symbol sitting in a `libdy.dylib' on the library search path was
+	reported as exported by nothing. Three separate things had to be
+	fixed, and any one of them alone kept the file invisible:
+
+	  - the directory scan looked for `lib*.so' and `lib*.a' only;
+	  - `elf_targets' treats a file as its own link target when it is ELF
+	    or an `ar' archive, so a Mach-O binary fell through to the
+	    linker-script reader, matched no GROUP or INPUT, and yielded
+	    nothing at all;
+	  - `lib_exports' passes `-D' for anything that is not an archive,
+	    and `-D' asks for the DYNAMIC symbol table, which is an ELF
+	    structure. Mach-O has none, llvm-nm refuses the flag, and the
+	    error goes to stderr where nothing reads it -- so the library
+	    read as exporting nothing, which is indistinguishable from a
+	    library that genuinely does.
+
+	That chain is why this was first recorded as "one line in a suffix
+	list" and was not. The link is not asserted: clang here drives the
+	host `ld' for a darwin target, so what is checked is that the right
+	`-l' was chosen.
+	"""
+	_mach_o_or_skip(t)
+	linker = _macho_linker()
+	if not linker:
+		raise Skip("no ld64.lld on this machine, so no dylib can be made")
+	outside = tempfile.mkdtemp(prefix="fmake-dylib-")
+	try:
+		src = os.path.join(outside, "v.c")
+		with open(src, "w") as fh:
+			fh.write("int dy_val(void){ return 11; }\n")
+		obj = os.path.join(outside, "v.o")
+		got = _run_in(outside, "clang", "-target", "x86_64-apple-macos11",
+		              "-c", src, "-o", obj)
+		check(got.returncode == 0,
+		      f"the dylib source did not compile: {got.stdout}{got.stderr}")
+		libdir = os.path.join(outside, "lib")
+		os.makedirs(libdir)
+		dylib = os.path.join(libdir, "libdy.dylib")
+		got = _run_in(outside, linker, "-arch", "x86_64",
+		              "-platform_version", "macos", "11.0", "11.0",
+		              "-dylib", "-install_name", "@rpath/libdy.dylib",
+		              "-o", dylib, obj)
+		if got.returncode != 0:
+			raise Skip(f"this ld64.lld could not link a dylib: "
+			           f"{got.stderr.strip()[:120]}")
+		with open(dylib, "rb") as fh:
+			check(fh.read(4) in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"),
+			      "what was linked is not Mach-O, so this case would be "
+			      "measuring nothing")
+
+		t.write("main.c", "extern int dy_val(void);\n"
+		        "int main(void){ return dy_val(); }\n")
+		t.write("fmake.toml", MACH_O_CONF + f'lib-dirs = ["{libdir}"]\n')
+		r = t.fmake("-v")
+		out = r.stdout + r.stderr
+		check("-ldy" in out,
+		      f"the symbol is in a dylib on the search path and has to be "
+		      f"resolved against it: {out}")
+		check("library exports: _dy_val" not in out,
+		      f"and must not be reported as exported by nothing: {out}")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
 
 
 @case
