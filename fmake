@@ -10452,6 +10452,36 @@ def describe_identity(ident):
 	return f"{ELF_MACHINES.get(ident[2], 'machine-0x%x' % ident[2])}/{bits}{end}"
 
 
+def linker_provided_aside(target_ident):
+	"""The possibility that only exists off ELF, said at both sites.
+
+    Advice about a symbol with no provider is given in two places -- the
+    build that never reaches a link, and the link that failed -- and this
+    applies to both. **Written once because the first version reached
+    only the first**, and the COFF reproduction went through the second:
+    the value-with-two-consumers shape, inside a note about formats.
+
+    The symbols fmake knows the linker itself provides are ELF's, so a
+    name `ld64` or a mingw `ld` defines reads exactly like a library
+    nobody named. Measured 2026-11-03 on both --
+    `__mh_execute_header`, which ld64 provides and links, and `__main`,
+    which the mingw `main` prologue calls -- each sending the reader to
+    hunt for a library that does not exist.
+
+    Saying so needs no list, which is the point: acquiring one is
+    section 573's open question, and this is about not misleading while
+    it waits.
+    """
+	if not target_ident or target_ident[0] not in ("macho", "coff"):
+		return
+	note(f"and this is a {describe_identity(target_ident)} build, where "
+	     f"there is a third: the linker-provided symbols fmake knows are "
+	     f"ELF's, so a name the linker itself defines -- "
+	     f"__mh_execute_header on Mach-O, the mingw startup symbols on "
+	     f"COFF -- reads exactly like this, and no library will ever "
+	     f"export it")
+
+
 def host_elf_machine():
 	"""The e_machine value this machine runs, or None if it is not known."""
 	want = host_arch()
@@ -18557,6 +18587,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 			     "something that was never generated: a code generator "
 			     "that has not run leaves exactly this, a name with no "
 			     "definition anywhere")
+			linker_provided_aside(target_ident)
 		elif blamed_broken:
 			# Same shape as the .moc ending below it: name the cause that
 			# was actually observed, and keep the library door open for
@@ -18617,6 +18648,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		else:
 			note("name the missing libraries with --ldflags, or build only "
 			     "the targets you want")
+			linker_provided_aside(target_ident)
 		return 1
 	return 1 if broken else 0
 

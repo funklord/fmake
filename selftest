@@ -33879,6 +33879,73 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 
 
 @case
+def a_symbol_the_linker_provides_is_not_a_missing_library(t):
+	"""section 576: advice that cannot work, on two code paths.
+
+	A symbol with no provider gets three remedies -- a library nobody
+	named, `@pkg`, or a generator that has not run. Off ELF there is a
+	fourth, and it is the answer often enough to matter: the symbols
+	fmake knows the LINKER provides are ELF's, so a name `ld64` or a
+	mingw `ld` defines reads exactly like a missing library. Measured on
+	both: `__mh_execute_header`, which ld64 provides and links happily,
+	and `__main`, which the mingw `main` prologue calls.
+
+	**Two sites give that advice** -- the build that never reaches a
+	link, and the link that failed -- and the first version of the note
+	reached only one. The COFF reproduction went through the other, so
+	this case drives both: Mach-O stops before linking, COFF stops at
+	the link.
+
+	Saying it needs no list, which is the point. Acquiring one is
+	section 573's open question; the note is about not sending a reader
+	after a library that cannot exist while that waits.
+	"""
+	want = "linker-provided symbols fmake knows are ELF"
+
+	_mach_o_or_skip(t)
+	t.write("main.c", "extern char _mh_execute_header;\n"
+	        "int main(void){ return (int)(long)&_mh_execute_header; }\n")
+	t.write("fmake.toml", MACH_O_CONF)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"an unresolvable symbol cannot succeed: {out}")
+	check(want in out,
+	      f"a Mach-O build has to name the possibility the other three "
+	      f"remedies cannot reach: {out}")
+
+	# The other site: a link that was attempted and failed.
+	u = Tree("coff-linker-symbol")
+	try:
+		_pe_or_skip(u)
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("fmake.toml", WIN_CONF)
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0,
+		      f"__main is not provided here, so this cannot succeed: {out}")
+		check(want in out,
+		      f"and the link-failure path has to say it too -- it is the "
+		      f"path the COFF reproduction takes: {out}")
+	finally:
+		u.cleanup()
+
+	# The control. On ELF the possibility does not exist and the note
+	# would be noise on the commonest failure there is.
+	v = Tree("elf-linker-symbol")
+	try:
+		v.write("main.c", "extern int nowhere(void);\n"
+		        "int main(void){ return nowhere(); }\n")
+		r = v.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0, f"nowhere() is undefined: {out}")
+		check(want not in out,
+		      f"an ELF build must not be told about a possibility it "
+		      f"does not have: {out}")
+	finally:
+		v.cleanup()
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

@@ -624,7 +624,8 @@ that had been green about nothing for five commits ·
 [572. The underscore is a property of the target, not of the format](#572-the-underscore-is-a-property-of-the-target-not-of-the-format) ·
 [573. A dylib the search path held and nothing read, and the probe that said it could not exist](#573-a-dylib-the-search-path-held-and-nothing-read-and-the-probe-that-said-it-could-not-exist) ·
 [574. A shared library for macOS could not be linked at all](#574-a-shared-library-for-macos-could-not-be-linked-at-all) ·
-[575. A Windows program fmake named and the driver renamed](#575-a-windows-program-fmake-named-and-the-driver-renamed)
+[575. A Windows program fmake named and the driver renamed](#575-a-windows-program-fmake-named-and-the-driver-renamed) ·
+[576. Advice that could not work, on two code paths](#576-advice-that-could-not-work-on-two-code-paths)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46427,3 +46428,44 @@ look right and still not link.
 
 So: the pieces are measured, the remaining question is whose layout it is,
 and it is the holder's.
+
+## 576. Advice that could not work, on two code paths
+
+A symbol with no provider gets three remedies: a library this build was not
+told about, `@pkg` on the file that needs it, or a generator that has not
+run. Off ELF there is a fourth, and twice this week it was the answer --
+**the symbols fmake knows the linker itself provides are ELF's.**
+
+Measured on both formats, each needing no SDK:
+
+| symbol | who provides it | what fmake said |
+|---|---|---|
+| `__mh_execute_header` | `ld64`, which links it happily | `no mach-o/0x1000007 library exports` |
+| `__main` | the mingw runtime, called by `main`'s prologue | `no coff/0x8664 library exports` |
+
+In both cases the reader is sent after a library that cannot exist. Saying
+so costs nothing, and that is the point: **acquiring the names is section
+573's open question**, and this is about not misleading anybody while it
+waits.
+
+### The note had the fault it describes
+
+The advice is given in **two** places -- the build that never reaches a
+link, and the link that was attempted and failed -- and the first version
+of the note reached only the first. The Mach-O reproduction goes through
+that one and looked complete; the COFF reproduction goes through the other
+and printed nothing new. The value-with-two-consumers shape, inside a note
+about formats, found by running the second reproduction rather than by
+reading.
+
+So it is `linker_provided_aside`, called from both, and the case drives
+both deliberately: Mach-O stops before the link, COFF stops at it. Each
+call site is sabotaged on its own and each failure names its own half.
+
+**The ELF control is the third sabotage** and the reason the guard is on
+the identity rather than on an OS name. An undefined symbol is the
+commonest failure there is on ELF, and a note about a possibility that
+platform does not have would be noise on all of it. Loosening the guard to
+fire on any identity fails that control.
+
+Guarded by `a_symbol_the_linker_provides_is_not_a_missing_library`.
