@@ -2396,6 +2396,33 @@ rather than code, and one lesson about testing.
   the `llvm` package carries one, and with it the symbol half becomes
   testable on this machine without a Mac anywhere. Whether to install it is
   the copyright holder's.
+
+  **It was installed on 2026-11-03, and this is where the entry now
+  stands.** Sections 568 to 572 walked both non-ELF formats with it. Three
+  silent faults are closed -- a program archived because `main' was looked
+  up by its ELF spelling, on Mach-O and then on 32-bit Windows; and the
+  library-architecture filter passing every Mach-O and COFF library because
+  it could read no identity from one. Three things were measured working and
+  needed nothing: platform words, a static library, and resolving a symbol
+  out of it.
+
+  **What remains is no longer "unhandled" but a short list, each item with a
+  reason it is not being written.** `libNAME.dylib` is one line in a suffix
+  list and nothing here can produce a dylib, so the line would be code no
+  fixture exercises. The dyld shared cache, where macOS keeps system
+  libraries out of the filesystem entirely, is a structural difference from
+  `ldconfig` layout and wants measuring on a Mac. The linker-provided symbol
+  list is ELF's and cannot be judged without an SDK, since a genuine
+  "nothing provides `_memcpy`" is indistinguishable here from this machine
+  having no Mach-O libc. And a Windows program is named `win` rather than
+  `win.exe`, in the live build and in the ejected Makefile alike -- measured
+  2026-11-03; fixing it reaches the artifact name, `--clean`, `--install`,
+  `--run` and both eject backends, and none of it can be checked past a link
+  this machine cannot perform.
+
+  So the symbol half of both formats works and is under test; the rest waits
+  on a linker, and the one piece that waits on nothing but a decision is
+  section 569's.
 - ~~**The default build builds tests too.**~~ Closed; see §49. The directory
   convention is `test`/`tests` and the two filename shapes, nothing else, and
   it decides only what the *default* target builds rather than what exists —
