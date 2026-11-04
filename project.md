@@ -2625,6 +2625,16 @@ rather than code, and one lesson about testing.
   visible in `$bindir` rather than in a build directory. **Whose decision:
   the copyright holder's.** See section 566 for the census it came out of.
 
+  **And one tree cannot be built at all without it**, which the census
+  could not say because that tree had never been swept. `tde` has
+  `test/dbus-signal-delivery/probe.cpp` and `test/docked-detect/probe.cpp`,
+  so both targets are named `probe` and fmake refuses the whole tree. The
+  qualifier fmake already has cannot resolve it -- qualifying with the
+  project's name gives `tde-probe` twice -- and what distinguishes the two
+  is their directory, which is this bullet's question. Section 580 has the
+  refusal verbatim. So the decision is no longer only about retiring nine
+  lines of convenience.
+
 - **Object directories are never reclaimed.** One is kept per
   configuration on purpose, so switching profiles, toolchains or `$DEBUG`
   costs nothing the second time -- and nothing removes the ones that fall
