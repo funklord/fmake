@@ -46733,3 +46733,24 @@ like a free improvement and is not, because a good suggestion has to skip
 the directory names that name nothing -- `src`, `test` -- which is the
 qualifier's own policy, and writing it into a message is deciding the
 policy by the back door.
+
+### The lens it gave, walked and dry
+
+tde's shape is **a name derived from a path and assumed unique**, so the
+question after it is where else fmake does that. Four places, and the
+answer is already written in all four:
+
+- **target names** -- refused, which is what tde hit;
+- **situ's output directory**, which is flat on purpose: two schemas with
+  one basename are refused, and the remedy distinguishes a vendored
+  schema from one of the tree's own, because only one of them is yours to
+  rename;
+- **uic's output directory**, also flat: *"would both produce it. An
+  unqualified include cannot say which, so rename one."*;
+- **moc's**, which cannot collide -- its output path carries the source's
+  directory, so it is unique by construction rather than by a check.
+
+Written down because a dry hunt is only cheap if somebody records that it
+was dry. The lens found nothing because this file had already applied it
+everywhere, including the one case where the answer was to make collision
+impossible instead of detecting it.
