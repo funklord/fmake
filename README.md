@@ -784,6 +784,14 @@ is a Windows build with no file at all: `-dumpmachine` decides the OS, so
 `hello.exe`. `[toolchain] os` outranks it, for a target a triple cannot
 describe.
 
+**A Windows program starts on Windows.** It links `-static`, because
+nothing a mingw program takes from its toolchain — libstdc++, libgcc,
+winpthread — exists there, so `foo.exe` imports only what the OS ships.
+A library available only as a DLL keeps the program dynamic, and
+`[toolchain] static-runtime = false` is the way out for a tree that wants
+one C++ runtime across a DLL boundary. `@kind shared` builds `libfoo.dll`
+and its import library `libfoo.dll.a`, installed to bindir and libdir.
+
 **`--arch NAME` on the command line is the same thing without the file.**
 The compiler is found rather than derived — `dpkg-architecture` is asked
 for the triplet where it exists, then PATH is read for `<arch>-*-gcc` and

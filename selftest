@@ -34400,6 +34400,103 @@ def an_ejected_darwin_library_states_its_name_the_darwin_way(t):
 
 
 @case
+def a_windows_program_carries_its_toolchains_runtime(t):
+	"""section 585: `built cpp.exe', and it starts nowhere else.
+
+	A mingw program linked the ordinary way imports libstdc++-6.dll,
+	libgcc_s_seh-1.dll and libwinpthread-1.dll, and Windows ships none of
+	them. So the artifact fmake announced exits 53 on any machine but the
+	one with the compiler, which is not a binary in section 1's sense.
+
+	Three halves, because each of the other two is the way the first goes
+	wrong: a library with only a `.dll.a' cannot be found under `-static',
+	so that program stays dynamic; and the key is the exit for a tree that
+	wants one runtime across a DLL boundary. The ELF control is the case
+	that keeps this from being a change to every link.
+	"""
+	t.write("main.c", "void __main(void){ }\nint main(void){ return 0; }\n")
+	conf = _mingw_shim(t)
+	t.write("fmake.toml", conf)
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-static" in out, f"a Windows program links its runtime in: {out}")
+
+	t.write("fmake.toml", conf + "static-runtime = false\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-static" not in out, f"and the key turns it off: {out}")
+
+	# A DLL's import library and no archive beside it.
+	dep = os.path.join(t.dir, "dep")
+	os.makedirs(dep)
+	with open(os.path.join(dep, "d.c"), "w") as fh:
+		fh.write("int d_val(void){ return 0; }\n")
+	got = _run_in(dep, "clang", "-target", "x86_64-pc-windows-gnu", "-shared",
+	              "-nostdlib", "-Wl,-e,d_val", "-Wl,--out-implib,libd.dll.a",
+	              "-o", "d.dll", "d.c")
+	check(got.returncode == 0, f"the DLL fixture: {got.stderr}")
+	os.remove(os.path.join(dep, "d.c"))
+	t.write("main.c", "int d_val(void);\nvoid __main(void){ }\n"
+	        "int main(void){ return d_val(); }\n")
+	t.write("fmake.toml",
+	        conf.replace("[project]\n", '[project]\nexclude = ["dep"]\n')
+	        + f'lib-dirs = ["{dep}"]\n')
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-ld" in out and "-static" not in out,
+	      f"a library with no static form keeps the program dynamic: {out}")
+
+	u = Tree("elf-runtime")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		r = u.fmake("--explain")
+		check("-static" not in r.stdout + r.stderr,
+		      f"and nothing here reaches an ELF link: {r.stdout}")
+	finally:
+		u.cleanup()
+
+
+@case
+def a_dlls_data_is_found_in_its_import_library(t):
+	"""section 585: `std::cout' had no provider in libstdc++.dll.a.
+
+	A DLL's functions are in its import library twice, as `X' and
+	`__imp_X'. Its data is there only as `__imp_X', and an object names
+	plain `X', which the mingw linker binds through auto-import. Read
+	literally the symbol had no provider, so a real C++ `hello' printed
+	*no library exports* about `_ZSt4cout' and a rival, libsupc++, was
+	chosen for the type-info tables beside it.
+	"""
+	conf = _mingw_shim(t)
+	dep = os.path.join(t.dir, "dep")
+	os.makedirs(dep)
+	with open(os.path.join(dep, "d.c"), "w") as fh:
+		fh.write("__declspec(dllexport) int d_data = 1;\n"
+		         "int d_entry(void){ return 0; }\n")
+	got = _run_in(dep, "clang", "-target", "x86_64-pc-windows-gnu", "-shared",
+	              "-nostdlib", "-Wl,-e,d_entry",
+	              "-Wl,--out-implib,libd.dll.a", "-o", "d.dll", "d.c")
+	check(got.returncode == 0, f"the DLL fixture: {got.stderr}")
+	os.remove(os.path.join(dep, "d.c"))
+	got = _run_in(dep, "llvm-nm", "--format=posix", "--defined-only",
+	              "libd.dll.a")
+	names = {line.split()[0] for line in got.stdout.splitlines()
+	         if line.strip() and not line.endswith(":")}
+	if "d_data" in names or "__imp_d_data" not in names:
+		raise Skip(f"this linker's import library does not have the shape "
+		           f"being guarded: {sorted(names)}")
+	t.write("main.c", "extern int d_data;\nvoid __main(void){ }\n"
+	        "int main(void){ return d_data; }\n")
+	t.write("fmake.toml",
+	        conf.replace("[project]\n", '[project]\nexclude = ["dep"]\n')
+	        + f'lib-dirs = ["{dep}"]\n')
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check(re.search(r"-ld\s+d_data", out),
+	      f"an exported variable is resolved by its import library: {out}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

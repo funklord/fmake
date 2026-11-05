@@ -633,7 +633,8 @@ that had been green about nothing for five commits ·
 [581. A real mingw, and what a freestanding PE could not show](#581-a-real-mingw-and-what-a-freestanding-pe-could-not-show) ·
 [582. `--os`, the other half of a target](#582---os-the-other-half-of-a-target) ·
 [583. Three more spellings of main](#583-three-more-spellings-of-main) ·
-[584. A Windows shared library is two files](#584-a-windows-shared-library-is-two-files)
+[584. A Windows shared library is two files](#584-a-windows-shared-library-is-two-files) ·
+[585. A binary that starts somewhere else](#585-a-binary-that-starts-somewhere-else)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46922,3 +46923,52 @@ sites this change had to touch. All three now go through `soname_flags`.
 `libfoo.dll.a` read through the plain `.a` suffix is called `foo.dll`, and
 `-lfoo.dll` even links, so a first version reported *could also come from
 -lw.dll*. `.dll.a` is a suffix of its own, ahead of `.a`.
+
+## 585. A binary that starts somewhere else
+
+`built cpp.exe`, and then, on any machine but this one:
+
+    DLL Name: libstdc++-6.dll
+    DLL Name: libgcc_s_seh-1.dll
+    wine: failed to open "./cpp.exe": c0000135      (exit 53)
+
+Nothing a mingw program takes from its toolchain exists on Windows, and a C
+program calling `pthread_create` is the same with `libwinpthread-1.dll`. So
+what fmake announced as built could not start, which is not a binary in
+section 1's sense. **A Windows executable now links `-static`**: the same
+`cpp.exe` imports `KERNEL32.dll` and `msvcrt.dll` and nothing else, and ran
+under wine with nothing beside it.
+
+Measured, for the decision. The static program is 2.5 MB, 983 kB stripped.
+The dynamic one is 115 kB plus 28 MB of unstripped runtime DLLs that would
+have to travel with it, as shipped by Debian's toolchain.
+
+- **`-static`, and not `-static-libgcc -static-libstdc++`**: those leave
+  winpthread behind on a posix-threads toolchain, which is the default
+  packaged one. It changes only how `-l` searches, so `libkernel32.a`, an
+  import library despite the name, still links as an import.
+- **Copying the DLLs beside the program** was the option rejected. It is
+  what a deployment tool does, it needs a rule in both ejected files and a
+  say in `--install`, and it fills the source tree's root with 28 MB. A
+  link flag reaches every path for free.
+- **Not under a library that exists only as `libfoo.dll.a`**, where
+  `-static` would stop the link and the program has to ship a DLL anyway.
+  Likewise a `-l` fmake cannot place.
+- **The exit is `[toolchain] static-runtime = false`**, for a tree that
+  throws C++ exceptions across a DLL boundary and needs one runtime, not
+  two. A shared library is unaffected, and neither is anything off Windows.
+
+Two faults in the resolver came with it, both from reading the real
+libstdc++:
+
+**`linked_by_driver` asked g++ about C.** `-x c` makes g++ leave libstdc++
+off, so the cover linked it by hand; each driver is now asked in its own
+language.
+
+**A DLL's data has no plain name in its import library.** A function is
+there as `X` and `__imp_X`; a variable only as `__imp_X`, and an object
+still says `X`, which the mingw linker binds through auto-import. Read
+literally, `_ZSt4cout` had no provider, `--explain` said *no library
+exports these* about a program that linked and ran, and libsupc++ was
+chosen for the type-info tables beside it. `lib_exports` offers `X` for
+`__imp_X`. The link line of a C++ hello is now `-static -Os`.

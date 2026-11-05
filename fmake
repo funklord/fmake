@@ -1744,7 +1744,7 @@ CONF_SCHEMA = {
         "moc": S, "uic": S, "rcc": S, "situc": S,
         "rustc": S, "rust-edition": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
-        "pkg-config-path": L,
+        "pkg-config-path": L, "static-runtime": B,
     },
 	# The machine doing the building, as opposed to the one being built for.
 	# Only generators need it: a tool named by `uses` is compiled in order to
@@ -6927,18 +6927,20 @@ def compiler_for_os(os_name, arch_name, chosen):
 	    + "    or name one outright with $CC or [toolchain] cc.")
 
 
-def linked_by_driver(driver):
+def linked_by_driver(driver, lang):
 	"""The -l names `driver' (an argv) puts on a link of its own accord.
 
     `-###' prints the commands rather than running them, on stderr, each
     indented by one space; gcc interleaves `COLLECT_GCC_OPTIONS' lines
-    that quote the options back and are not commands. An empty C input
+    that quote the options back and are not commands. An empty input
     because both drivers refuse a `.o' that is not there, and `-o' into
     the null device so that nothing could be written even by a driver
-    that ignored the flag.
+    that ignored the flag. In the driver's own language: g++ told `-x c'
+    leaves libstdc++ out, and the cover then links it and libsupc++ by
+    hand.
     """
 	try:
-		r = subprocess.run([*driver, "-###", "-x", "c", os.devnull, "-o",
+		r = subprocess.run([*driver, "-###", "-x", lang, os.devnull, "-o",
 		                    os.devnull], capture_output=True, text=True,
 		                   errors="replace")
 	except OSError:
@@ -7191,6 +7193,7 @@ class Config:
 		self.uic    = tool.get("uic")
 		self.rcc    = tool.get("rcc")
 		self.situc  = tool.get("situc")
+		self.static_runtime = tool.get("static-runtime")
 		self.extra_libdirs = list(tool.get("lib-dirs", []))
 		# A `-L' the project wrote itself is swept for providers too.
 		# pkg-config's own already was -- `_note_dirs' feeds this list --
@@ -7384,9 +7387,9 @@ class Config:
 		if self._driver_libs is None:
 			self._driver_libs = set()
 			if self.os in ("windows", "darwin"):
-				for driver in {self.cc, self.cxx}:
+				for driver, lang in ((self.cc, "c"), (self.cxx, "c++")):
 					self._driver_libs |= linked_by_driver(
-						[driver, *self.probe_flags, *self.ldflags])
+						[driver, *self.probe_flags, *self.ldflags], lang)
 		return self._driver_libs
 
 	@property
@@ -10895,7 +10898,14 @@ def lib_exports(cfg, path):
 	for line in r.stdout.splitlines():
 		m = RE_NM_POSIX.match(line)
 		if m:
-			out.add(m.group("name").split("@")[0])
+			name = m.group("name").split("@")[0]
+			out.add(name)
+			# A DLL's DATA is in its import library as `__imp_X' alone,
+			# and an object still names plain `X', which the mingw linker
+			# binds through auto-import. Read literally, `std::cout' had no
+			# provider in libstdc++.dll.a and a rival was hunted for it.
+			if name.startswith("__imp_"):
+				out.add(name[len("__imp_"):])
 	return out
 
 
@@ -12122,6 +12132,44 @@ def compiled_away_includes(cl, opened, incdirs):
 	return out
 
 
+def windows_static_runtime(cfg, libs, paths):
+	"""Whether a Windows program takes its toolchain's runtime inside it.
+
+    Nothing a mingw program depends on from its toolchain exists on the
+    machine it was built for. Measured 2026-11-05: a C++ `hello' linked
+    the ordinary way imports libstdc++-6.dll and libgcc_s_seh-1.dll, and
+    a C one calling pthread_create libwinpthread-1.dll, none of which is
+    in Windows -- so `built cpp.exe' named a file that exits 53 anywhere
+    but the machine that has the compiler. Under `-static' the same
+    program imports KERNEL32.dll and msvcrt.dll and nothing else, in 2.5
+    MB against 28 MB of unstripped runtime it would otherwise need beside
+    it. `I have source, I have a binary' is the premise, and a binary
+    that cannot start is not one.
+
+    `-static' and not `-static-libgcc -static-libstdc++', which leave
+    winpthread behind on a posix-threads toolchain. It only changes how
+    `-l' searches, so a system DLL's import library, which is called
+    libkernel32.a, still links as an import.
+
+    Not where that would stop the link: a library that exists only as
+    `libfoo.dll.a' cannot be found under `-static', and a program
+    with such a dependency has to ship a DLL anyway. A `-l' fmake cannot
+    place is the same answer, since the question is unanswerable.
+    `[toolchain] static-runtime = false' is the exit, for a tree that
+    passes C++ objects across a DLL boundary, which needs one runtime.
+    """
+	if cfg.os != "windows" or cfg.static_runtime is False:
+		return False
+	for lib in libs:
+		path = paths.get(lib)
+		if not path:
+			return False
+		if path.endswith(".dll.a") and not os.path.isfile(
+				os.path.join(os.path.dirname(path), "lib%s.a" % lib)):
+			return False
+	return True
+
+
 def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
                       want_ident=None, proj=None):
 	"""Turn one target's external symbols into link flags."""
@@ -12232,6 +12280,8 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 	extra_ld += t.conf.get("ldflags", [])
 	if t.kind == "exe":
 		extra_ld += WINDOWS_ENTRIES.get(windows_entry(cl.root), [])
+		if windows_static_runtime(cfg, chosen + declared, paths):
+			extra_ld.append("-static")
 	for u in cl.link:
 		for lib in u.ann.items("libs"):
 			if lib not in declared:
