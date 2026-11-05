@@ -6927,8 +6927,8 @@ def compiler_for_os(os_name, arch_name, chosen):
 	    + "    or name one outright with $CC or [toolchain] cc.")
 
 
-def linked_by_driver(driver, lang):
-	"""The -l names `driver' (an argv) puts on a link of its own accord.
+def driver_link_words(driver, lang):
+	"""The words of the commands `driver' (an argv) would run for a link.
 
     `-###' prints the commands rather than running them, on stderr, each
     indented by one space; gcc interleaves `COLLECT_GCC_OPTIONS' lines
@@ -6944,16 +6944,15 @@ def linked_by_driver(driver, lang):
 		                    os.devnull], capture_output=True, text=True,
 		                   errors="replace")
 	except OSError:
-		return set()
-	out = set()
+		return []
+	out = []
 	for line in r.stderr.splitlines():
 		if not line.startswith(" "):
 			continue
 		try:
-			words = shlex.split(line)
+			out += shlex.split(line)
 		except ValueError:
 			continue
-		out |= {w[2:] for w in words if w.startswith("-l") and len(w) > 2}
 	return out
 
 
@@ -7245,6 +7244,7 @@ class Config:
 		# separate object directory rather than invalidating the old one.
 		self._libdirs = None
 		self._driver_libs = None
+		self._sdk_root = None
 		self._sysincdirs = None
 		self._owns_header = {}
 		self.refresh_key()
@@ -7389,9 +7389,43 @@ class Config:
 			self._driver_libs = set()
 			if self.os in ("windows", "darwin"):
 				for driver, lang in ((self.cc, "c"), (self.cxx, "c++")):
-					self._driver_libs |= linked_by_driver(
-						[driver, *self.probe_flags, *self.ldflags], lang)
+					self._driver_libs |= {
+						w[2:] for w in driver_link_words(
+							[driver, *self.probe_flags, *self.ldflags], lang)
+						if w.startswith("-l") and len(w) > 2}
 		return self._driver_libs
+
+	@property
+	def sdk_root(self):
+		"""The macOS SDK this link uses, or None.
+
+        Every library of a macOS target is under it and none is under the
+        machine's own `/usr/lib', so without it the search for providers
+        looks everywhere except where they are. Asked of the driver, whose
+        `-###' states it as `-syslibroot': that is one answer for osxcross
+        wrapping `-isysroot', for $SDKROOT, and for a Mac where `cc' asks
+        xcrun, and nothing here has to know which of them is in use.
+        """
+		if self._sdk_root is None:
+			self._sdk_root = ""
+			if self.os == "darwin":
+				words = driver_link_words(
+					[self.cc, *self.probe_flags, *self.ldflags], "c")
+				if "-syslibroot" in words[:-1]:
+					self._sdk_root = words[words.index("-syslibroot") + 1]
+				elif self.sysroot:
+					self._sdk_root = self.sysroot
+		return self._sdk_root or None
+
+	def framework_dirs(self):
+		"""Where this macOS link finds a framework: the SDK's, then `-F'."""
+		out = [f[2:] for f in self.cflags + self.ldflags
+		       if f.startswith("-F") and len(f) > 2]
+		if self.sdk_root:
+			out += [os.path.join(self.sdk_root, d)
+			        for d in ("System/Library/Frameworks",
+			                  "Library/Frameworks")]
+		return [d for d in out if os.path.isdir(d)]
 
 	@property
 	def libdirs(self):
@@ -10309,7 +10343,9 @@ for _canon, _elf_name in (("riscv64", "riscv"), ("ppc64le", "ppc64"),
 #
 # The ld-script reader keeps the ELF pair deliberately: a GNU linker script
 # is a GNU thing, and a `-l' inside one cannot name a dylib.
-LIB_SUFFIXES = (".so", ".dylib", ".dll.a", ".a")
+# `.tbd' is what a macOS SDK has instead of a dylib: a text stub, because
+# the libraries themselves live in the dyld shared cache and not on disk.
+LIB_SUFFIXES = (".so", ".dylib", ".tbd", ".dll.a", ".a")
 
 # What an unreadable file is, as distinct from one that is not ELF. Both
 # used to come back as None, and every caller reads None as "no opinion" --
@@ -10718,6 +10754,8 @@ def lib_search_dirs(cfg):
 	# project's flags, and -m32 or a --target makes the two disagree.
 	triplet = cfg.triplet if "-" in cfg.triplet else ""
 	cands = list(cfg.extra_libdirs)
+	if cfg.sdk_root:
+		cands.append(os.path.join(cfg.sdk_root, "usr/lib"))
 
 	# A sysroot is the unambiguous statement that the target's filesystem is
 	# elsewhere, so its directories come before anything native.
@@ -10815,7 +10853,7 @@ def elf_targets(path, dirs=(), _depth=0):
 	# out of it, which arrives as "no library exports" about a symbol
 	# sitting in plain sight. Measured 2026-11-03; see section 573.
 	if (magic[:4] == b"\x7fELF" or magic[:8] == b"!<arch>\n"
-	        or magic[:4] in MACHO_MAGIC):
+	        or magic[:4] in MACHO_MAGIC or path.endswith(".tbd")):
 		return [path]
 	if _depth > 3:
 		return []
@@ -10890,7 +10928,7 @@ def lib_exports(cfg, path):
 	# error went into stderr, which this function does not look at, and a
 	# library that exports nothing is indistinguishable from one fmake
 	# could not read; see section 573.
-	dyn = not path.endswith(".a") and not macho_object(path)
+	dyn = not path.endswith((".a", ".tbd")) and not macho_object(path)
 	cmd = [cfg.nm, "--defined-only", "--format=posix"]
 	if dyn:
 		cmd.append("-D")
@@ -11200,6 +11238,10 @@ def default_link_dirs(cfg):
 			for d in line.split(":", 1)[1].lstrip(" =").split(":"):
 				if d:
 					out.add(os.path.realpath(d))
+	# `-syslibroot' is the linker's own search, so naming it again would put
+	# one machine's SDK path into an ejected file for nothing.
+	if cfg.sdk_root:
+		out.add(os.path.realpath(os.path.join(cfg.sdk_root, "usr/lib")))
 	return out
 
 
@@ -12133,6 +12175,42 @@ def compiled_away_includes(cl, opened, incdirs):
 	return out
 
 
+def frameworks_for(cl, cfg, proj):
+	"""The macOS frameworks a target's sources include, name to directory.
+
+    `#include <CoreFoundation/CoreFoundation.h>' names a framework, in the
+    same words the link wants: on macOS a header's first path component IS
+    `-framework CoreFoundation' whenever that directory holds a
+    CoreFoundation.framework. Read from the include rather than from the
+    symbols as everything else here is, for two reasons measured against
+    what an SDK is: an umbrella like Cocoa exports almost nothing itself
+    and re-exports AppKit and Foundation, which `nm' does not follow, and
+    scanning the 250-odd stubs of an SDK to rediscover a word already
+    written in the source spends section 8 on nothing.
+    """
+	dirs = cfg.framework_dirs()
+	if not dirs:
+		return {}
+	spots = [u.scan.get("incs") or [] for u in cl.link]
+	if proj is not None:
+		for hdr in sorted(proj.reachable_headers([u.rel for u in cl.link])):
+			scan = proj.scans.get(hdr)
+			if scan:
+				spots.append(scan.get("incs") or [])
+	found = {}
+	for incs in spots:
+		for kind, name, _line in incs:
+			word = name.split("/")[0]
+			if kind != "<" or word in found:
+				continue
+			for d in dirs:
+				path = os.path.join(d, word + ".framework")
+				if os.path.isdir(path):
+					found[word] = path
+					break
+	return found
+
+
 def target_runner(cfg):
 	"""How a program built for this target gets started on this machine.
 
@@ -12317,6 +12395,15 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			if l[2:] not in declared:
 				declared.append(l[2:])
 	extra_ld += t.conf.get("ldflags", [])
+	for word, path in frameworks_for(cl, cfg, proj).items():
+		extra_ld += ["-framework", word]
+		# Nothing left to say about what it exports. What re-exports leave
+		# unseen stays listed, and the linker, which follows them, decides.
+		stub = os.path.join(path, word + ".tbd")
+		if res["unresolved"] and os.path.isfile(stub):
+			offered = lib_exports(cfg, stub)
+			res["unresolved"] = [s for s in res["unresolved"]
+			                     if s not in offered]
 	if t.kind == "exe":
 		extra_ld += WINDOWS_ENTRIES.get(windows_entry(cl.root), [])
 		if windows_static_runtime(cfg, chosen + declared, paths):

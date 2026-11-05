@@ -805,6 +805,11 @@ refused naming both.
 when they are on PATH. `[toolchain] runner` names another command line,
 and an empty one means nothing here can.
 
+**macOS** builds from an SDK the compiler already knows about, an
+`x86_64-apple-darwin*-clang` from osxcross or a Mac's own `cc`. Libraries
+resolve from the SDK's `.tbd` stubs by symbol, and `#include
+<CoreFoundation/CoreFoundation.h>` is `-framework CoreFoundation`.
+
 **A package set off pkg-config's own path is found by naming it.** A Qt
 kit, a library under `/opt` or a home prefix, a foreign-architecture
 tree that is not a whole sysroot: its `.pc` files are somewhere

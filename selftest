@@ -34552,6 +34552,133 @@ def a_dlls_data_is_found_in_its_import_library(t):
 	      f"an exported variable is resolved by its import library: {out}")
 
 
+def _macos_sdk(t):
+	"""A compiler and an SDK of the shape osxcross gives, for one tree.
+
+	A real SDK cannot be redistributed, and what these cases are about is
+	its SHAPE: no dylib anywhere, `.tbd' text stubs in `usr/lib', frameworks
+	as directories, and a driver whose `-###' states `-syslibroot'. Linked
+	for real with `ld64.lld', so the load commands can be read back.
+	Returns the toml.
+	"""
+	_mach_o_or_skip(t)
+	linker = _macho_linker()
+	if not linker:
+		raise Skip("no ld64.lld here, so nothing can be linked for macOS")
+	sdk = os.path.join(t.dir, "sdk")
+
+	def stub(rel, install_name, *symbols):
+		t.write("sdk/" + rel,
+		        "--- !tapi-tbd\ntbd-version: 4\n"
+		        "targets: [ x86_64-macos ]\n"
+		        f"install-name: '{install_name}'\n"
+		        "exports:\n  - targets: [ x86_64-macos ]\n"
+		        f"    symbols: [ {', '.join(symbols)} ]\n...\n")
+
+	stub("usr/lib/libSystem.tbd", "/usr/lib/libSystem.B.dylib",
+	     "_puts", "dyld_stub_binder")
+	stub("usr/lib/libz.tbd", "/usr/lib/libz.1.dylib", "_zlibVersion")
+	fw = "System/Library/Frameworks/CoreFoundation.framework"
+	stub(f"{fw}/CoreFoundation.tbd",
+	     f"/{fw}/Versions/A/CoreFoundation", "_CFRelease")
+	t.write(f"sdk/{fw}/Headers/CoreFoundation.h",
+	        "void CFRelease(const void *);\n")
+	t.write("sdk/usr/include/zlib.h", "const char *zlibVersion(void);\n")
+	t.write("tc/x86_64-apple-darwin23-clang",
+	        '#!/bin/sh\n'
+	        f'link="-fuse-ld={linker} -Wl,-platform_version,macos,11.0,11.0 '
+	        '-Wl,-arch,x86_64"\n'
+	        'for a in "$@"; do case "$a" in\n'
+	        '-dumpmachine) echo x86_64-apple-darwin23; exit 0;;\n'
+	        '-print-multiarch) exit 0;;\n'
+	        '-c|-E|-M|-MM) link=;;\n'
+	        'esac; done\n'
+	        f'exec clang -target x86_64-apple-macos11 -isysroot {sdk} '
+	        '$link "$@"\n')
+	shim = os.path.join(t.dir, "tc", "x86_64-apple-darwin23-clang")
+	os.chmod(shim, 0o755)
+	return ('[project]\nexclude = ["sdk"]\n\n'
+	        f'[toolchain]\ncc = "{shim}"\nnm = "llvm-nm"\nar = "llvm-ar"\n')
+
+
+def _dylibs_used(path):
+	got = subprocess.run(["llvm-objdump", "--macho", "--dylibs-used", path],
+	                     capture_output=True, text=True)
+	return got.stdout
+
+
+@case
+def a_macos_sdk_is_stubs_and_the_driver_knows_where(t):
+	"""section 587: no library of a real macOS SDK could be found.
+
+	An SDK has no dylibs. Its libraries live in the dyld shared cache, and
+	what the linker reads is a `.tbd' text stub, a suffix fmake did not
+	know, in a directory it did not search: `-lz' was simply not there to
+	offer, from a build that had compiled.
+
+	The directory comes from the driver's own `-###', which is the one
+	answer for osxcross, $SDKROOT and a Mac where `cc' asks xcrun. Read
+	back from the load commands, because a link line naming a library
+	and a program recording it are different claims.
+	"""
+	t.write("fmake.toml", _macos_sdk(t))
+	t.write("main.c", '#include <zlib.h>\nint puts(const char *);\n'
+	        "int main(void){ return puts(zlibVersion()); }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the macOS link failed: {out}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	used = _dylibs_used(prog)
+	check("/usr/lib/libz.1.dylib" in used,
+	      f"the stub's install name is what the program records: {used}")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-lz" in out, f"resolved by symbol from the stub: {out}")
+	check("-L" + os.path.join(t.dir, "sdk") not in out,
+	      f"and the SDK is the linker's own search, so it is not named: {out}")
+
+
+@case
+def an_include_names_its_framework(t):
+	"""section 587: `<CoreFoundation/...>' is `-framework CoreFoundation'.
+
+	On macOS the first word of a framework's include is the word the link
+	wants, so this is locality at its cheapest: the file that uses the
+	framework has already said so. An umbrella exports next to nothing
+	itself, which is why it is read from the include and not the symbols.
+	The control is a directory that happens to share the form: `<zlib/...>'
+	with no framework behind it names nothing.
+	"""
+	t.write("fmake.toml", _macos_sdk(t))
+	t.write("main.c", "#include <CoreFoundation/CoreFoundation.h>\n"
+	        "int main(void){ CFRelease(0); return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the framework link failed: {out}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	check("CoreFoundation.framework" in _dylibs_used(prog),
+	      f"the program has to record it: {_dylibs_used(prog)}")
+	r = t.fmake("--eject")
+	check("-framework CoreFoundation" in r.stdout,
+	      f"and it has to leave with an ejected build: {r.stdout}")
+
+	t.write("sdk/usr/include/thing/thing.h", "int thing(void);\n")
+	t.write("main.c", "#include <thing/thing.h>\n"
+	        "int main(void){ return 0; }\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-framework" not in out,
+	      f"a plain directory of headers is not a framework: {out}")
+
+	t.write("CoreFoundation/local.h", "#define LOCAL 0\n")
+	t.write("main.c", '#include "CoreFoundation/local.h"\n'
+	        "int main(void){ return LOCAL; }\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-framework" not in out,
+	      f"and a quoted include is this tree's own file: {out}")
+
+
 @case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.

@@ -635,7 +635,8 @@ that had been green about nothing for five commits ·
 [583. Three more spellings of main](#583-three-more-spellings-of-main) ·
 [584. A Windows shared library is two files](#584-a-windows-shared-library-is-two-files) ·
 [585. A binary that starts somewhere else](#585-a-binary-that-starts-somewhere-else) ·
-[586. A cross build with somebody to start it](#586-a-cross-build-with-somebody-to-start-it)
+[586. A cross build with somebody to start it](#586-a-cross-build-with-somebody-to-start-it) ·
+[587. What a macOS SDK actually is](#587-what-a-macos-sdk-actually-is)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2426,9 +2427,10 @@ rather than code, and one lesson about testing.
   three gates rather than one -- see section 573**, which also records that
   the linker was present under a versioned name the probe never asked for,
   and that the linker-provided-symbol item below was wrong the same way: it
-  needs a linker, not an SDK. The dyld shared cache, where macOS keeps system
+  needs a linker, not an SDK. ~~The dyld shared cache, where macOS keeps system
   libraries out of the filesystem entirely, is a structural difference from
-  `ldconfig` layout and wants measuring on a Mac. The linker-provided symbol
+  `ldconfig` layout and wants measuring on a Mac.~~ **Its shape needed no Mac
+  -- see section 587.** The linker-provided symbol
   list is ELF's and cannot be judged without an SDK, since a genuine
   "nothing provides `_memcpy`" is indistinguishable here from this machine
   having no Mach-O libc. ~~And a Windows program is named `win`
@@ -47003,3 +47005,44 @@ Nothing here runs at build time. A generator still needs
 `[build-toolchain]`: a build step going through an emulator would be slow
 and would only work where one is installed, and the point of that key is
 that a tool runs here.
+
+## 587. What a macOS SDK actually is
+
+Everything before this reached macOS with `-nostdlib`, and section 15
+said the dyld shared cache "wants measuring on a Mac". **Its shape does
+not.** An SDK is a directory, its layout is public, and `ld64.lld`
+already here links against it, so a few lines of hand-written `.tbd`
+give a real link: a Mach-O program whose load commands read
+`/usr/lib/libSystem.B.dylib`. No SDK content is reproduced, and none is
+needed. The suite builds one per case in `_macos_sdk`. A downloaded
+toolchain was the other route, and running one was refused by this
+session's sandbox rather than tried around.
+
+What that showed: **no library on a real SDK could be found by fmake at
+all.** Plain programs linked, because `-lSystem` is the driver's. `-lz`
+was not there to offer, for two reasons on top of each other:
+
+- **An SDK has no dylibs.** The libraries live in the shared cache, and the
+  linker reads a `.tbd` text stub. `.tbd` is a link suffix now, and
+  `llvm-nm` reads the format, so it resolves by symbol like everything else.
+- **The search looked everywhere but there.** `sdk_root` asks the driver,
+  whose `-###` prints `-syslibroot`: one answer for osxcross, for
+  `$SDKROOT`, and for a Mac where `cc` asks xcrun. It is the linker's own
+  search, so `default_link_dirs` knows it and no `-L` carries one machine's
+  path into an ejected file.
+
+**Frameworks are read from the include, not the symbols**, which is the
+one place in this design that goes that way round, and it is measured
+rather than a shortcut. `#include <CoreFoundation/CoreFoundation.h>` names
+`-framework CoreFoundation` in the same word, so it is locality at its
+cheapest. An umbrella like Cocoa exports next to nothing and re-exports
+AppKit and Foundation, which `nm` does not follow, so a symbol scan would
+find the wrong answer, and it would spend section 8 reading some 250
+stubs to rediscover a word already in the source. What a re-export leaves
+unseen stays listed as unresolved, and the linker, which follows them,
+decides.
+
+Section 15's dyld-cache line is closed by this. **What this cannot say**:
+no program here has run on a Mac, a real SDK's multi-document `.tbd` for
+libSystem has not been read, and a universal binary is not attempted. That
+needs the holder's machine or an SDK.
