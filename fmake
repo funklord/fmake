@@ -8046,7 +8046,14 @@ class Cache:
 		try:
 			if self.nested_wrote:
 				self.adopt_disk()
-			self.save()
+			# A first run refused before it produced anything has nothing
+			# to keep, and writing anyway leaves a .fmake/ in a tree fmake
+			# has just declined, which apt-emerge reported and the tidying
+			# of an empty state directory exists to prevent.
+			if self._on_disk is not None or self.objects or any(
+			        self.data.get(name) for name in
+			        ("generated_outputs", "moc", "uic", "rcc", "situ")):
+				self.save()
 		except OSError as e:
 			vinfo(f"the cache could not be kept: {e.strerror or e}")
 

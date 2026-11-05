@@ -47374,6 +47374,10 @@ forgot. Saving more often is not free, and three things had to be settled:
   on the exception was written for that and removed when sabotaging it changed
   nothing: the outer copy has not moved since it saved, and `save` compares.
 
+A first run refused before producing anything writes nothing at all. The save
+left a `cache.json` in a tree of Python files fmake had just declined, which
+kept the `.fmake/` that apt-emerge had reported, and the suite caught it.
+
 Whether a kept object can go stale was the first fear, and it could not: a
 link is keyed on the content of its inputs, so an object recompiled by a
 refused run relinks on the next good one. A refused run still does not record
