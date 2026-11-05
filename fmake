@@ -9394,7 +9394,8 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		# naming subprocess.py. Measured; it is what the moc case
 		# asserts must never happen.
 		try:
-			r = run_child(cmd, cwd=_compile_cwd, stdout=subprocess.PIPE,
+			r = run_child(cmd, cwd=_compile_cwd or root,
+			              stdout=subprocess.PIPE,
 			              stderr=subprocess.PIPE,
 			              text=True, errors="replace")
 		except OSError as exc:
@@ -13579,8 +13580,14 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# not, because it is a different function: the same proximity trap
 	# that hid situc. An `ar' that exists and will not start reached
 	# the reader as a FileNotFoundError traceback.
+	# In the tree, as a compile is and as every generator and pkg-config
+	# already were. `-Lvendor' in fmake.toml means the tree's, which the
+	# library sweep has always assumed, so under `-C' the plan found the
+	# archive and the linker, run from wherever fmake was started, did not
+	# -- or found the system's, which is how beerssh's patched libssh
+	# calls met an unpatched library.
 	try:
-		r = run_child(cmd, stdout=subprocess.PIPE,
+		r = run_child(cmd, cwd=root, stdout=subprocess.PIPE,
 		              stderr=subprocess.PIPE,
 		              text=True, errors="replace")
 	except OSError as exc:

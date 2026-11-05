@@ -35250,6 +35250,44 @@ def a_failed_guess_is_not_tried_again_until_something_changes(t):
 
 
 @case
+def a_relative_flag_means_the_tree_under_dash_c(t):
+	"""`-Lvendor` was read from wherever fmake happened to be started.
+
+	The library sweep resolves it against the tree, generators and
+	pkg-config run there, and the link did not: the plan found the archive
+	and the linker could not, or found the system's copy instead, which is
+	how beerssh's patched libssh calls failed under `-C` only. `t.fmake`
+	runs with `-C` from the suite's own directory, so this is that route.
+
+	The compile half uses a response file because `-I` and `-include` are
+	rescued by `-I<root>` and by fmake's own search, and a case over those
+	would pass with the bug in place.
+	"""
+	t.write("foo.c", "int foo(void){ return 0; }\n")
+	vendor = os.path.join(t.dir, "vendor")
+	os.makedirs(vendor)
+	obj = os.path.join(t.dir, "foo.o")
+	check(subprocess.run(["cc", "-c", os.path.join(t.dir, "foo.c"), "-o", obj]
+	                     ).returncode == 0, "the archive's object must build")
+	check(subprocess.run(["ar", "rcs", os.path.join(vendor, "libfoo.a"), obj]
+	                     ).returncode == 0, "and the archive")
+	os.remove(obj)
+	os.remove(os.path.join(t.dir, "foo.c"))
+	t.write("flags.rsp", "-DFROM_RSP=0\n")
+	t.write("main.c", "int foo(void);\n"
+	        "int main(void){ return foo() + FROM_RSP; }\n")
+	t.write("fmake.toml", '[project]\nldflags = ["-Lvendor"]\nlibs = ["foo"]\n'
+	        'cflags = ["@flags.rsp"]\n')
+	r = t.fmake("-j4")
+	check(os.path.realpath(os.getcwd()) != os.path.realpath(t.dir),
+	      "the suite has to be standing somewhere else for this to mean "
+	      "anything")
+	check(r.returncode == 0,
+	      f"a relative flag was read from the wrong place: "
+	      f"{r.stdout}{r.stderr}")
+
+
+@case
 def a_real_mingw_builds_what_runs_on_windows(t):
 	"""section 595: the whole of 581 to 592 against the real thing.
 

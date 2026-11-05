@@ -649,7 +649,8 @@ that had been green about nothing for five commits ·
 [597. One record for a directory per configuration](#597-one-record-for-a-directory-per-configuration) ·
 [598. The second walk: an ELF called `rs.exe`](#598-the-second-walk-an-elf-called-rsexe) ·
 [599. A refused build keeps what it compiled](#599-a-refused-build-keeps-what-it-compiled) ·
-[600. A guess that did not compile](#600-a-guess-that-did-not-compile)
+[600. A guess that did not compile](#600-a-guess-that-did-not-compile) ·
+[601. A relative flag under `-C`](#601-a-relative-flag-under--c)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47432,3 +47433,21 @@ that a header appearing later does not retry the file by itself, since no
 depfile exists to name it. That is accepted because the file was not needed,
 and if it comes to be, the unresolved name is new and reopens it. The warning
 prints once, for the run that decided, as the `nomain` memo does.
+
+## 601. A relative flag under `-C`
+
+Reported from the guidelines tree on 2026-11-05, through beerssh's
+`ldflags = ["-Lbuild-libssh/prefix/lib"]`: built from inside the tree it linked
+the patched libssh, and under `-C` it found the system's and failed on the
+patched calls. Generators, pkg-config and the library sweep all read a relative
+path against the root, and the comment in `compile_units` says `-Ivendor` means
+`<root>/vendor`. The compile and the link ran wherever fmake was started, so
+the plan and the command disagreed. Both run in the root now. Output is
+unchanged, because their inputs and outputs were already absolute. `-I` and
+`-include` had hidden the compile half, being rescued by `-I<root>` and fmake's
+include search, so the case uses a `@response` file.
+
+**A relative path on the command line changes with it.** `--ldflags=-Lx` under
+`-C` now means the tree's `x`, not the invoker's. The sweep already read it that
+way, `-o` and `--compile-commands` are root-relative too, and without `-C` the
+two are the same directory.
