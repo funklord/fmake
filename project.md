@@ -629,7 +629,8 @@ that had been green about nothing for five commits ·
 [577. A GNU linker script handed to a linker that has no such thing](#577-a-gnu-linker-script-handed-to-a-linker-that-has-no-such-thing) ·
 [578. A module no loader on that platform would open](#578-a-module-no-loader-on-that-platform-would-open) ·
 [579. What the identity work cost, which is nothing](#579-what-the-identity-work-cost-which-is-nothing) ·
-[580. Eighteen trees swept, and the two that refuse](#580-eighteen-trees-swept-and-the-two-that-refuse)
+[580. Eighteen trees swept, and the two that refuse](#580-eighteen-trees-swept-and-the-two-that-refuse) ·
+[581. A real mingw, and what a freestanding PE could not show](#581-a-real-mingw-and-what-a-freestanding-pe-could-not-show)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46754,3 +46755,56 @@ Written down because a dry hunt is only cheap if somebody records that it
 was dry. The lens found nothing because this file had already applied it
 everywhere, including the one case where the answer was to make collision
 impossible instead of detecting it.
+
+## 581. A real mingw, and what a freestanding PE could not show
+
+The focus this run: fmake should eventually build for Windows and macOS.
+Sections 568 to 578 reached both formats with `clang --target` and
+`-nostdlib`, which proves the format handling and cannot reach anything a
+runtime does. **So the first act was getting a real one.** No root is
+needed: `apt-get download` of the seven mingw-w64 packages and `dpkg-deb
+-x` into scratch give a working `x86_64-w64-mingw32-gcc`, 495 MB unpacked,
+and this machine's `wine` runs what it builds. A Windows program built
+here now really executes, which nothing in the file before this could
+say. The suite does not depend on it; what it found is guarded through a
+shim that answers as mingw does.
+
+The first program found two faults, in the first five minutes.
+
+**`$CC` naming mingw was a Linux build by another name.** The target OS
+came from `[toolchain] os` or the host, so `CC=x86_64-w64-mingw32-gcc
+fmake` compiled `plat_linux.c`, and asked for `hello` from a driver that
+writes `hello.exe`, ending in *exited 0 and produced no hello*. A compiler
+states what it builds for: `-dumpmachine`. `machine_os` reads the triple,
+a declared `os` outranks it, and the host is what is left. That is the
+zero-file case again -- one environment variable is now a whole Windows
+build, and `os = "windows"` is needed only when the triple cannot say.
+
+Asked separately from `cfg.triplet`, because that one prefers
+`-print-multiarch`, a Debian answer about directories: clang refuses it
+and mingw gcc answers nothing.
+
+**`hello.exe` imported two C runtimes and said `hello 5`.**
+
+    DLL Name: msvcrt.dll
+    DLL Name: api-ms-win-crt-stdio-l1-1-0.dll   (and nine more)
+
+The link line carried `-lgcc -lucrt -lmingwex`. fmake resolves externals
+against what the search path offers, `printf` is in both libmsvcrt.a and
+libucrt.a, the driver links msvcrt anyway, and the cover took ucrt on the
+count. Two heaps and two stdios in a program that passes every test a
+person would run: the worst shape there is, and invisible to anything
+short of a real runtime.
+
+`IMPLICIT_LIBS` is ELF's answer to *what does the link have already*, and
+it is one name because on ELF that is the truth. **Off ELF the answer is
+asked for**: `driver_libs` reads the `-l`s the driver prints under `-###`,
+section 319's remedy for the same shape. A list here would be wrong for a
+ucrt-default toolchain, and `-nostdlib` empties the answer without anybody
+handling it. It runs only for windows and darwin, so an ELF link line is
+exactly what the suite has always measured. After: `KERNEL32.dll`,
+`msvcrt.dll`, and a winsock program adds `WS2_32.dll` by symbol alone.
+
+The `-v` guard I wrote first passed with the fault put back -- `-v` prints
+`LD name` and never the line. Moved to `--explain`, with a positive
+control that it is reading the link line.

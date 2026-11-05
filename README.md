@@ -778,6 +778,12 @@ Declare `arch` whenever the compiler targets by flag. Without it the build
 is refused — from fmake's side, a compiler cross-compiling by flag looks
 exactly like the wrong compiler.
 
+**The compiler says what it builds for.** `CC=x86_64-w64-mingw32-gcc fmake`
+is a Windows build with no file at all: `-dumpmachine` decides the OS, so
+`plat_windows.c` is compiled and `plat_linux.c` is not, and the program is
+`hello.exe`. `[toolchain] os` outranks it, for a target a triple cannot
+describe.
+
 **`--arch NAME` on the command line is the same thing without the file.**
 The compiler is found rather than derived — `dpkg-architecture` is asked
 for the triplet where it exists, then PATH is read for `<arch>-*-gcc` and

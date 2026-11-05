@@ -5468,6 +5468,32 @@ def host_os():
 	return p
 
 
+# What a compiler's -dumpmachine says about the OS it builds for, most
+# specific first: `aarch64-linux-android' is Android and `arm64-apple-ios'
+# is not macOS. Only the words a triple actually carries; anything else
+# leaves the answer to [toolchain] os and then the host.
+MACHINE_OS = (("mingw", "windows"), ("windows", "windows"),
+              ("cygwin", "windows"), ("msys", "windows"),
+              ("android", "android"), ("ios", "ios"), ("darwin", "darwin"),
+              ("macos", "darwin"), ("macosx", "darwin"), ("linux", "linux"),
+              ("freebsd", "freebsd"), ("openbsd", "openbsd"),
+              ("netbsd", "netbsd"), ("solaris", "solaris"),
+              ("haiku", "haiku"))
+
+
+def machine_os(machine):
+	"""The OS a target triple names, or None if it names none we know.
+
+    A word of the triple rather than a substring of it, so a vendor field
+    cannot answer: `x86_64-bios-elf' is not iOS.
+    """
+	words = re.split(r"[-_.]|(?<=[a-z])(?=[0-9])", (machine or "").lower())
+	for word, name in MACHINE_OS:
+		if word in words:
+			return name
+	return None
+
+
 # Spellings of one architecture. `platform.machine()' is where these come
 # from -- it is the machine's own word for itself and differs by kernel --
 # but they are equally what a person writes, in a filename, in `@arch' and
@@ -6823,6 +6849,34 @@ def compiler_for_arch(name, chosen):
 	    f"    or name one outright with [toolchain] cc.")
 
 
+def linked_by_driver(driver):
+	"""The -l names `driver' (an argv) puts on a link of its own accord.
+
+    `-###' prints the commands rather than running them, on stderr, each
+    indented by one space; gcc interleaves `COLLECT_GCC_OPTIONS' lines
+    that quote the options back and are not commands. An empty C input
+    because both drivers refuse a `.o' that is not there, and `-o' into
+    the null device so that nothing could be written even by a driver
+    that ignored the flag.
+    """
+	try:
+		r = subprocess.run([*driver, "-###", "-x", "c", os.devnull, "-o",
+		                    os.devnull], capture_output=True, text=True,
+		                   errors="replace")
+	except OSError:
+		return set()
+	out = set()
+	for line in r.stderr.splitlines():
+		if not line.startswith(" "):
+			continue
+		try:
+			words = shlex.split(line)
+		except ValueError:
+			continue
+		out |= {w[2:] for w in words if w.startswith("-l") and len(w) > 2}
+	return out
+
+
 def find_nm(configured=None):
 	"""Locate nm, refusing rather than substituting one nobody asked for.
 
@@ -6904,8 +6958,12 @@ class Config:
 		# falls back to the bare question: worst case is what fmake did
 		# before, rather than a build that stops.
 		self.probe_flags = [f for f in conf.cflags() if f != "-c"]
-		self.triplet = (self._probe("-print-multiarch")
-		                or self._probe("-dumpmachine"))
+		# Asked apart from the triplet, because -print-multiarch is a
+		# Debian answer about library directories: clang refuses it outright
+		# and gcc answers nothing for mingw. -dumpmachine is the compiler
+		# saying what it builds for.
+		self.machine = self._probe("-dumpmachine")
+		self.triplet = self._probe("-print-multiarch") or self.machine
 		self.nm      = find_nm(tool.get("nm")
 		                       or self._prefixed("nm"))
 		self.sysroot = tool.get("sysroot")
@@ -6927,7 +6985,14 @@ class Config:
 		# somebody wrote, and `arch = "amd64"' otherwise matched no entry
 		# in ELF_MACHINES, which switched the architecture check off
 		# without saying anything.
-		self.os      = canon_platform("os", tool.get("os") or host_os())
+		#
+		# The compiler is asked before the host is assumed: `$CC' naming a
+		# mingw gcc is a Windows build whether or not anybody also wrote
+		# `os = "windows"', and the host's name for it linked `hello'
+		# through a driver that wrote `hello.exe'. See `machine_os'.
+		self.os      = canon_platform("os", tool.get("os")
+		                              or machine_os(self.machine)
+		                              or host_os())
 		self.arch    = (self.arch_named
 		                or canon_platform("arch", tool.get("arch") or host_arch()))
 		# Whether anybody asked for this arch, as opposed to inheriting the
@@ -7093,6 +7158,7 @@ class Config:
 		# The profile is in here through cflags, so switching profiles gets a
 		# separate object directory rather than invalidating the old one.
 		self._libdirs = None
+		self._driver_libs = None
 		self._sysincdirs = None
 		self._owns_header = {}
 		self.refresh_key()
@@ -7211,6 +7277,35 @@ class Config:
 
 	def driver(self, cxx):
 		return self.cxx if cxx else self.cc
+
+	def driver_libs(self):
+		"""The libraries this toolchain's link adds without being told.
+
+        ELF's answer is `IMPLICIT_LIBS', one name, and off ELF that is the
+        wrong size. A mingw link carries msvcrt, mingwex, kernel32 and
+        half a dozen more, so a symbol they define is not external in any
+        sense a -l can improve -- and every one of them has rivals in the
+        same directory. Measured 2026-11-05 with a real mingw-w64: `printf'
+        is in libmsvcrt.a and in libucrt.a, the cover chose ucrt on the
+        symbol count, and `hello.exe' imported msvcrt.dll AND
+        api-ms-win-crt-*.dll -- two C runtimes, two heaps, two sets of
+        stdio, in a program that ran and said `hello 5'.
+
+        Asked rather than listed, which is section 319's answer to the same
+        shape: the driver prints its link under `-###', a list here would
+        be wrong for a ucrt-default toolchain, and `-nostdlib' empties the
+        answer correctly without anybody handling it. Both drivers, since
+        a target links through one or the other and libstdc++ has rivals
+        no more than libc does. Only off ELF, where the question is real;
+        the ELF link line stays what the suite measures.
+        """
+		if self._driver_libs is None:
+			self._driver_libs = set()
+			if self.os in ("windows", "darwin"):
+				for driver in {self.cc, self.cxx}:
+					self._driver_libs |= linked_by_driver(
+						[driver, *self.probe_flags, *self.ldflags])
+		return self._driver_libs
 
 	@property
 	def libdirs(self):
@@ -10982,7 +11077,7 @@ def default_link_dirs(cfg):
 	return out
 
 
-def choose_libs(providers, wanted, proposed):
+def choose_libs(providers, wanted, proposed, implicit_libs=IMPLICIT_LIBS):
 	"""Smallest set of -l flags covering the unresolved symbols.
 
     Unlike a header naming two packages, a symbol offered by several
@@ -10993,7 +11088,7 @@ def choose_libs(providers, wanted, proposed):
 	remaining = set(wanted)
 	implicit = set()
 	for s in list(remaining):
-		if IMPLICIT_LIBS.intersection(providers.get(s, ())):
+		if implicit_libs.intersection(providers.get(s, ())):
 			implicit.add(s)
 			remaining.discard(s)
 
@@ -11002,7 +11097,7 @@ def choose_libs(providers, wanted, proposed):
 		counts = {}
 		for s in remaining:
 			for lib in providers.get(s, ()):
-				if lib not in IMPLICIT_LIBS:
+				if lib not in implicit_libs:
 					counts.setdefault(lib, set()).add(s)
 		if not counts:
 			break
@@ -11934,8 +12029,9 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 		                 if (qt_major_of(l) or keep) == keep]
 		             for s, libs in providers.items()}
 
+	owned = IMPLICIT_LIBS | cfg.driver_libs()
 	chosen, why, implicit, unresolved = choose_libs(
-	    providers, want, set(proposed))
+	    providers, want, set(proposed), owned)
 	ident = want_ident
 
 	# A library outside the linker's own search path needs -L, whether it
@@ -11954,7 +12050,7 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			other |= set(providers.get(s, ()))
 		# libm-2.41 beside libm is the same library under a private name,
 		# not a second source worth reporting.
-		alts[lib] = sorted(a for a in other - {lib} - IMPLICIT_LIBS
+		alts[lib] = sorted(a for a in other - {lib} - owned
 		                   if not a.startswith(lib + "-"))
 	res = {
 	    "chosen": chosen, "why": why, "alts": alts, "ldirs": ldirs,

@@ -34087,6 +34087,115 @@ def a_module_for_windows_is_a_dll(t):
 		u.cleanup()
 
 
+def _mingw_shim(t, driver_libs=""):
+	"""A compiler that answers like mingw-w64 and links a freestanding PE.
+
+	`clang --target' alone is not a mingw-shaped toolchain: fmake takes a
+	program rather than a command line, and what these cases are about is
+	what such a program SAYS -- `-dumpmachine', and the libraries `-###'
+	shows the driver adding. So it is a script that gives those answers
+	and hands everything else to clang. Returns the toml naming it.
+	"""
+	_pe_or_skip(t)
+	t.write("tc/x86_64-w64-mingw32-gcc",
+	        '#!/bin/sh\n'
+	        'for a in "$@"; do case "$a" in\n'
+	        '-dumpmachine) echo x86_64-w64-mingw32; exit 0;;\n'
+	        '-print-multiarch) exit 0;;\n'
+	        '-###) echo \' "ld" "-o" "x" %s\' >&2; exit 0;;\n'
+	        'esac; done\n'
+	        'exec clang -target x86_64-pc-windows-gnu "$@"\n'
+	        % " ".join('"-l%s"' % l for l in driver_libs.split()))
+	shim = os.path.join(t.dir, "tc", "x86_64-w64-mingw32-gcc")
+	os.chmod(shim, 0o755)
+	return ('[project]\nldflags = ["-nostdlib", "-Wl,-e,main"]\n\n'
+	        '[toolchain]\ncc = "%s"\nnm = "llvm-nm"\nar = "llvm-ar"\n'
+	        % shim)
+
+
+@case
+def the_compiler_says_what_it_builds_for(t):
+	"""section 581: `$CC' naming mingw was a Linux build by another name.
+
+	The target OS came from `[toolchain] os' or the host. So a compiler
+	that builds for Windows, named and nothing else, was believed to build
+	for Linux: `plat_linux.c' was compiled, and the program was asked for
+	as `hello' from a driver that writes `hello.exe' -- measured with a
+	real mingw-w64 gcc, ending in *exited 0 and produced no hello*.
+
+	`-dumpmachine' is the compiler saying what it builds for. The second
+	half is why a declared os has to stay on top of it: an Android NDK
+	clang says `linux-android' and a tree may mean something narrower
+	than a triple can say.
+	"""
+	t.write("main.c", "const char *plat(void);\n"
+	        "void __main(void){ }\n"
+	        "int main(void){ return plat()[0]; }\n")
+	t.write("plat_windows.c", 'const char *plat(void){ return "w"; }\n')
+	t.write("plat_linux.c", 'const char *plat(void){ return "l"; }\n')
+	conf = _mingw_shim(t)
+	t.write("fmake.toml", conf)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"an undeclared mingw build failed: {out}")
+	prog = os.path.basename(t.dir)
+	check(os.path.exists(os.path.join(t.dir, prog + ".exe")),
+	      f"the compiler's own word made no .exe: "
+	      f"{sorted(os.listdir(t.dir))}\n{out}")
+	check("plat_windows.c" in compiled(r) and "plat_linux.c" not in compiled(r),
+	      f"the platform word has to follow the compiler: {compiled(r)}")
+
+	t.write("fmake.toml", conf + 'os = "freebsd"\n')
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("freebsd" in out,
+	      f"a declared os outranks the compiler's triple: {out}")
+
+
+@case
+def a_library_the_driver_links_is_not_chosen_against(t):
+	"""section 581: a second C runtime, in a program that ran.
+
+	A mingw link already carries msvcrt, and `printf' is equally in
+	libucrt.a beside it. fmake offered the symbol to the cover, which took
+	ucrt on the count, so a real `hello.exe' imported msvcrt.dll and
+	api-ms-win-crt-*.dll at once -- two heaps and two stdios, printing
+	`hello 5' as though nothing had happened.
+
+	Here `zcrt' is what the driver adds, by its own `-###', and `acrt' is
+	the rival a cover would prefer on the alphabet. The program has to link
+	with no `-l' for either: the shim's real link is told about `zcrt' by
+	`ldflags', standing where the driver's own would be.
+	"""
+	conf = _mingw_shim(t, "zcrt")
+	t.write("main.c", "int rt_call(void);\nvoid __main(void){ }\n"
+	        "int main(void){ return rt_call(); }\n")
+	t.write("rt/r.c", "int rt_call(void){ return 0; }\n")
+	got = _run_in(t.dir, "clang", "-target", "x86_64-pc-windows-gnu", "-c",
+	              "-o", "r.obj", "rt/r.c")
+	check(got.returncode == 0, f"the runtime fixture: {got.stderr}")
+	os.remove(os.path.join(t.dir, "rt", "r.c"))
+	for name in ("zcrt", "acrt"):
+		got = _run_in(t.dir, "llvm-ar", "rcs", f"rt/lib{name}.a", "r.obj")
+		check(got.returncode == 0, f"the archive fixture: {got.stderr}")
+	os.remove(os.path.join(t.dir, "r.obj"))
+	rt = os.path.join(t.dir, "rt")
+	t.write("fmake.toml",
+	        conf.replace('"-nostdlib", ', f'"-nostdlib", "-L{rt}", "-lzcrt", ')
+	        .replace("[project]\n", '[project]\nexclude = ["rt"]\n')
+	        + f'lib-dirs = ["{rt}"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the link failed: {out}")
+	# --explain because the link line is printed nowhere else: `-v' stops
+	# at `LD', and a check against it passed with the fault put back.
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-Os -nostdlib" in out, f"this is not the link line: {out}")
+	check("-lacrt" not in out,
+	      f"a rival of the driver's own library was linked: {out}")
+
+
 @case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
