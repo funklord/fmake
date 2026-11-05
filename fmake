@@ -21758,8 +21758,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
 			if t.records_soname:
 				a(f"  soname = {t.soname}")
-			if t.import_lib:
-				a(f"  implib = {art(t.import_lib)}")
+				if t.import_lib:
+					a(f"  implib = {art(t.import_lib)}")
 				if t.version_script:
 					a(f"  version_script = "
 					  f"-Wl,--version-script,{t.version_script}")

@@ -47232,10 +47232,17 @@ failure was an Exec format error out of a rule. It is refused now with the
 sentence the ELF case already had.
 
 **Section 8, measured** against the run's first commit, incremental, CPU
-time, interleaved at load 30: `min` 0.38 s before and 0.42 s with a
+time, interleaved at load 30: `min` 0.38 s before and 0.42 s after, with a
 `-dumpmachine` probe added on every run. That probe was asked apart from
 the triplet for a reason that turned out not to need it: where
 `-print-multiarch` answers, its answer names the OS just as well, and where
 it does not, `-dumpmachine` is what the triplet already falls back to. So
 `machine_os` reads the triplet and the run adds no process on ELF.
-`driver_libs` and `sdk_root` run only for windows and darwin.
+
+**That was not the cost, and the second measurement says so**: 0.42 s and
+0.47 s with the probe gone. What is left is the file. `compile()` of the two
+versions took 0.87 s and 0.94 s under the same load, so the 2.5 percent this
+run added to the script is paid in parsing on every invocation, there being
+no `.pyc` for a file with no `.py`. It is small, it is the price of any
+feature here, and it is worth knowing that a run's real overhead is its
+line count. `driver_libs` and `sdk_root` run only for windows and darwin.
