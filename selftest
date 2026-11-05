@@ -33751,7 +33751,10 @@ def _archive_pick(t, variants):
 			        f'[toolchain]\ncc = "clang"\nnm = "llvm-nm"\n'
 			        f'ar = "llvm-ar"\narch = "{arch}"\n'
 			        f'lib-dirs = {dirs}\n')
-			r = t.fmake("-v")
+			# --explain, not -v: the link line is on -v only when the link
+			# FAILS, so this read a machine with no mingw as a pass and a
+			# machine with one as a fault.
+			r = t.fmake("--explain")
 			out = r.stdout + r.stderr
 			check(want in out,
 			      f"a {arch} build has to resolve against its own "
@@ -34194,6 +34197,47 @@ def a_library_the_driver_links_is_not_chosen_against(t):
 	check("-Os -nostdlib" in out, f"this is not the link line: {out}")
 	check("-lacrt" not in out,
 	      f"a rival of the driver's own library was linked: {out}")
+
+
+@case
+def an_os_on_the_command_line_finds_its_compiler(t):
+	"""section 582: `--os windows' is `--arch' for the other half.
+
+	One tree, several targets, no file: the compiler is found on PATH by
+	what its own name says. The output directory carries both words
+	because `build-x86_64/' is what a Windows build from an x86-64 Linux
+	box would otherwise share with the native one.
+
+	The two refusals are the half that matters most: a compiler named for
+	something else is one of two answers, and a missing one has to say how
+	to get it, since on this OS that is not the obvious apt line.
+	"""
+	conf = _mingw_shim(t)
+	t.write("main.c", "void __main(void){ }\nint main(void){ return 0; }\n")
+	t.write("fmake.toml", re.sub(r'cc = ".*"\n', "", conf))
+	tc = os.path.join(t.dir, "tc")
+	path = tc + os.pathsep + os.environ["PATH"]
+	r = t.fmake("--os", "windows", "--arch", "x86_64", env={"PATH": path})
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"--os windows failed: {out}")
+	prog = os.path.basename(t.dir)
+	check(os.path.exists(os.path.join(t.dir, "build-windows-x86_64",
+	                                  prog + ".exe")),
+	      f"a build named by --os lands under build-<os>-<arch>/: {out}")
+	check(not os.path.exists(os.path.join(t.dir, prog + ".exe")),
+	      "and not in the tree's root")
+
+	r = t.fmake("--os", "windows", "--arch", "x86_64",
+	            env={"PATH": path, "CC": "aarch64-linux-gnu-gcc"})
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "aarch64-linux-gnu-gcc" in out
+	      and "windows/x86_64" in out and "One of them is wrong" in out,
+	      f"a compiler for something else has to be refused by name: {out}")
+
+	r = t.fmake("--os", "macos", "--arch", "x86_64", env={"PATH": path})
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "osxcross" in out,
+	      f"a target with no compiler says how to get one: {out}")
 
 
 @case

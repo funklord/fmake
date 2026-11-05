@@ -1256,6 +1256,7 @@ Every flag the program accepts, which is the same list `--man` and
 | `--cflags 'FLAGS'` | replace the default `-Os`; overrides file directives |
 | `--ldflags 'FLAGS'` | extra link flags |
 | `--arch NAME` | build for an architecture (`aarch64`, `arm64`, `riscv64`…); the cross compiler is found by asking `dpkg-architecture` and reading PATH, and binaries land under `build-<arch>/` unless `-o` says otherwise |
+| `--os NAME` | build for an operating system (`windows`, `macos`, `freebsd`…); the cross compiler is found on PATH by its name, for this machine's architecture unless `--arch` says otherwise, and binaries land under `build-<os>-<arch>/` unless `-o` says otherwise |
 | `--explain` | print every decision and why, and build nothing; the argv block shows the first two compile commands per target and says so, since `--compile-commands` is what answers for a particular file |
 | `--compile-commands [PATH]` | write a clangd compilation database (default `compile_commands.json`) of every compile, and build nothing; the entries are the exact commands fmake compiles with |
 | `--release` | build, then write `release/`: source tarball from git, binary tarball, the `.deb` built from that tarball where `debian/` is committed, the ebuild and the APKBUILD, `SHA256SUMS`, and an `index.html` with the README rendered through pandoc where it is installed |

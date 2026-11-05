@@ -630,7 +630,8 @@ that had been green about nothing for five commits ·
 [578. A module no loader on that platform would open](#578-a-module-no-loader-on-that-platform-would-open) ·
 [579. What the identity work cost, which is nothing](#579-what-the-identity-work-cost-which-is-nothing) ·
 [580. Eighteen trees swept, and the two that refuse](#580-eighteen-trees-swept-and-the-two-that-refuse) ·
-[581. A real mingw, and what a freestanding PE could not show](#581-a-real-mingw-and-what-a-freestanding-pe-could-not-show)
+[581. A real mingw, and what a freestanding PE could not show](#581-a-real-mingw-and-what-a-freestanding-pe-could-not-show) ·
+[582. `--os`, the other half of a target](#582---os-the-other-half-of-a-target)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46808,3 +46809,30 @@ exactly what the suite has always measured. After: `KERNEL32.dll`,
 The `-v` guard I wrote first passed with the fault put back -- `-v` prints
 `LD name` and never the line. Moved to `--explain`, with a positive
 control that it is reading the link line.
+
+## 582. `--os`, the other half of a target
+
+`--arch` names half of what a cross build is for. `fmake --os windows`
+names the rest: the compiler is found on PATH by what its own name says,
+`<arch>-...-gcc` or `-clang` with a triple whose OS word is the one asked
+for, so `x86_64-w64-mingw32-gcc`, `x86_64-apple-darwin23-clang` and
+`x86_64-unknown-freebsd14-gcc` are one rule rather than a table. The
+architecture defaults to this machine's, and `canon_platform` is what
+makes `i686-w64-mingw32-gcc` an answer to `--arch x86`.
+
+Binaries land under `build-<os>-<arch>/`, both words, because
+`build-x86_64/` is exactly the name a Windows build from an x86-64 Linux
+box would otherwise share with the native one.
+
+Two refusals, as `--arch` has: a compiler already named for something else
+is one of two answers, and no compiler says how to get one. **That line is
+the part `--arch`'s could not supply**: for Windows it is a package, and
+for macOS it is not a package at all -- Apple's SDK may not be
+redistributed, so the honest sentence is osxcross and an SDK you bring.
+
+A case that had been passing by accident turned up here, and it is the
+reverse of the usual kind. `_archive_pick` read `-l<word>only` from `-v`,
+where the link line appears only when the link FAILS -- so it passed on a
+machine with no mingw and failed the moment one was on PATH, because clang
+then finds that runtime and the link succeeds. Anybody installing mingw
+would have read it as a regression. It reads `--explain` now.

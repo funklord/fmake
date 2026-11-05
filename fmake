@@ -6849,6 +6849,76 @@ def compiler_for_arch(name, chosen):
 	    f"    or name one outright with [toolchain] cc.")
 
 
+# How another OS's compiler is got, for the refusal that says it is not
+# here. Only what is true of a package a reader can install; the rest is
+# answered by naming a compiler.
+OS_TOOLCHAIN_HINT = {
+    "windows": "Debian: apt install gcc-mingw-w64-{debarch}    "
+               "Arch: pacman -S mingw-w64-gcc",
+    "darwin": "macOS needs Apple's SDK, which nobody may redistribute: "
+              "osxcross builds <arch>-apple-darwin*-clang from one you "
+              "supply",
+}
+
+
+def compiler_for_os(os_name, arch_name, chosen):
+	"""The cross compiler for an OS named on the command line.
+
+    `--os windows' is `--arch' for the other half of a target. One rule
+    rather than a table of triples: a compiler on PATH called
+    `<arch>-...-gcc' or `-clang' whose own name says that OS, which is
+    `x86_64-w64-mingw32-gcc', `x86_64-apple-darwin23-clang' and
+    `x86_64-unknown-freebsd14-gcc' alike. A name carries an architecture
+    in whichever spelling its toolchain uses, so `i686-w64-mingw32-gcc'
+    is x86 and `arm64-apple-darwin23-clang' is aarch64: read through
+    `canon_platform', which is what makes `--arch arm64' and `aarch64'
+    the same question.
+
+    A compiler already named is kept when it agrees and refused when it
+    does not, for `compiler_for_arch's reason. Returns (cc, os, arch).
+    """
+	want_os = canon_platform("os", os_name)
+	want = canon_platform("arch", arch_name or host_arch())
+	if want_os == host_os():
+		cc, arch = (compiler_for_arch(arch_name, chosen) if arch_name
+		            else (chosen, want))
+		return cc, want_os, arch
+	have = _tool_prefix(chosen)
+	if have:
+		its_os = machine_os(have)
+		its = canon_platform("arch", have.split("-")[0])
+		if its_os == want_os and its == want:
+			return chosen, want_os, want
+		die(f"--os {os_name} asks for {want_os}/{want}, and the compiler "
+		    f"already named, {chosen}, is for {its_os or 'another'}/{its}. "
+		    f"One of them is wrong; drop $CC or [toolchain] cc, or drop "
+		    f"--os.")
+	found = []
+	for d in os.environ.get("PATH", "").split(os.pathsep):
+		try:
+			names = os.listdir(d)
+		except OSError:
+			continue
+		for n in names:
+			if not n.endswith(("-gcc", "-clang")):
+				continue
+			triple = n.rsplit("-", 1)[0]
+			if (machine_os(triple) == want_os
+			        and canon_platform("arch", n.split("-")[0]) == want
+			        and os.access(os.path.join(d, n), os.X_OK)):
+				found.append(n)
+	if found:
+		# gcc before clang by the alphabet, and the newest darwin last --
+		# sorted only so that the choice does not depend on PATH's order.
+		return sorted(found)[0], want_os, want
+	hint = OS_TOOLCHAIN_HINT.get(want_os, "")
+	hint = hint.format(debarch={"x86_64": "x86-64", "x86": "i686"}.get(want, want))
+	die(f"no compiler for {want_os}/{want} is installed here; looked on "
+	    f"PATH for {want}-*-gcc and {want}-*-clang naming {want_os}.\n"
+	    + (f"    {hint}\n" if hint else "")
+	    + "    or name one outright with $CC or [toolchain] cc.")
+
+
 def linked_by_driver(driver):
 	"""The -l names `driver' (an argv) puts on a link of its own accord.
 
@@ -6930,7 +7000,11 @@ class Config:
 		# --arch, a compiler chosen by architecture. Not for a tool built
 		# to run here, which is the build machine's business.
 		self.arch_named = None
-		if getattr(args, "arch", None) and not self.for_build_machine:
+		self.os_named = None
+		if getattr(args, "os", None) and not self.for_build_machine:
+			self.cc, self.os_named, self.arch_named = compiler_for_os(
+				args.os, getattr(args, "arch", None), self.cc)
+		elif getattr(args, "arch", None) and not self.for_build_machine:
 			self.cc, self.arch_named = compiler_for_arch(args.arch, self.cc)
 		# aarch64-linux-gnu-gcc implies aarch64-linux-gnu-nm and -ar. Naming
 		# the compiler should be enough; a host nm can often read foreign
@@ -6990,7 +7064,7 @@ class Config:
 		# mingw gcc is a Windows build whether or not anybody also wrote
 		# `os = "windows"', and the host's name for it linked `hello'
 		# through a driver that wrote `hello.exe'. See `machine_os'.
-		self.os      = canon_platform("os", tool.get("os")
+		self.os      = canon_platform("os", self.os_named or tool.get("os")
 		                              or machine_os(self.machine)
 		                              or host_os())
 		self.arch    = (self.arch_named
@@ -13513,7 +13587,14 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# elsewhere. An absolute path is unaffected: os.path.join keeps it.
 	outdir = (os.path.abspath(os.path.join(root, args.output))
 	          if args.output else root)
-	if args.arch and not args.output and cfg.arch != host_arch():
+	if args.os and not args.output and cfg.os != host_os():
+		# Both words, because `build-x86_64/' is taken by the same machine
+		# word on another OS -- which is what a Windows build from an
+		# x86-64 Linux box is.
+		outdir = os.path.join(root, f"build-{cfg.os}-{cfg.arch}")
+		info(f"--os {args.os}: building with {cfg.cc} into "
+		     f"build-{cfg.os}-{cfg.arch}/")
+	elif args.arch and not args.output and cfg.arch != host_arch():
 		# Two architectures built in place would overwrite each other's
 		# binaries under one name. A cross build named by --arch lands
 		# under build-<arch>/ unless -o says otherwise, and says so.
@@ -25325,6 +25406,12 @@ def parse_args(argv):
 	                    "riscv64, amd64 ... The cross compiler is found by "
 	                    "asking dpkg-architecture and reading PATH; binaries "
 	                    "land under build-<arch>/ unless -o says otherwise")
+	p.add_argument("--os", default=None, metavar="NAME",
+	               help="build for an operating system: windows, macos, "
+	                    "freebsd ... The cross compiler is found on PATH by "
+	                    "its name, for this machine's architecture unless "
+	                    "--arch says otherwise; binaries land under "
+	                    "build-<os>-<arch>/ unless -o says otherwise")
 	# "the inferred build" did not tell anybody that the exact compile and
 	# link lines are in it, which is the thing people go looking for.
 	p.add_argument("--explain", action="store_true",
