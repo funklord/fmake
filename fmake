@@ -10305,7 +10305,7 @@ for _canon, _elf_name in (("riscv64", "riscv"), ("ppc64le", "ppc64"),
 #
 # The ld-script reader keeps the ELF pair deliberately: a GNU linker script
 # is a GNU thing, and a `-l' inside one cannot name a dylib.
-LIB_SUFFIXES = (".so", ".dylib", ".a")
+LIB_SUFFIXES = (".so", ".dylib", ".dll.a", ".a")
 
 # What an unreadable file is, as distinct from one that is not ELF. Both
 # used to come back as None, and every caller reads None as "no opinion" --
@@ -10764,6 +10764,11 @@ def linkable_libs(dirs):
 				continue
 			for f in entries:
 				if not f.startswith("lib") or not f.endswith(suffix):
+					continue
+				# Its own suffix took it above, as `foo'. Through `.a' it is
+				# also `foo.dll', which links, and is then offered as a
+				# second library that does not exist.
+				if suffix == ".a" and f.endswith(".dll.a"):
 					continue
 				name = f[3:-len(suffix)]
 				if name and name not in out:
@@ -12647,7 +12652,7 @@ def program_name(name):
 	return name
 
 
-def soname_flag(soname):
+def soname_flags(soname):
 	"""How this target's OS records the name consumers will look for.
 
     `-soname' is a GNU ld option and `ld64' refuses it by name, so the
@@ -12656,9 +12661,11 @@ def soname_flag(soname):
     the nearest thing to what a soname means on ELF: a name the loader
     resolves rather than a path baked in at link time.
     """
+	if _TARGET_OS[0] == "windows":
+		return []
 	if _TARGET_OS[0] == "darwin":
-		return "-Wl,-install_name,@rpath/" + soname
-	return "-Wl,-soname," + soname
+		return ["-Wl,-install_name,@rpath/" + soname]
+	return ["-Wl,-soname," + soname]
 
 
 def shared_lib_name(stem, version=None):
@@ -12675,6 +12682,12 @@ def shared_lib_name(stem, version=None):
     `unknown argument '-soname'`. So a shared library for macOS could not
     be linked at all, and the toolchain was not what stood in the way.
     """
+	if _TARGET_OS[0] == "windows":
+		# A DLL has no soname chain, so the name a consumer's import library
+		# records is the file's own -- and it is the only place an ABI
+		# number can go. `libfoo-1.dll' is libtool's and Meson's spelling.
+		return ("lib%s.dll" % stem if version is None
+		        else "lib%s-%s.dll" % (stem, version.split(".")[0]))
 	dylib = _TARGET_OS[0] == "darwin"
 	if version is None:
 		return "lib%s.%s" % (stem, "dylib" if dylib else "so")
@@ -12822,7 +12835,11 @@ class Target:
 	@property
 	def filename(self):
 		if self.kind == "shared":
-			return shared_lib_name(self.stem or self.name)
+			# Windows has no chain to lay down at install, so what is built
+			# carries the version already: the import library records this
+			# name and the loader will open nothing else.
+			return shared_lib_name(self.stem or self.name,
+			                       self.version if self.import_lib else None)
 		if self.kind == "static":
 			return "lib%s.a" % (self.stem or self.name)
 		# A module is a loadable object -- an LD_PRELOAD shim, a dlopen
@@ -12833,6 +12850,19 @@ class Target:
 		if self.kind == "module":
 			return module_name(self.name)
 		return program_name(self.name)
+
+	@property
+	def import_lib(self):
+		"""The second artifact of a Windows shared library, or None.
+
+        A consumer links `libfoo.dll.a' and runs `libfoo.dll', and there is
+        no linking the DLL itself in any toolchain's normal mode. The name
+        is the one -lfoo finds, with the version left out, as CMake, Meson
+        and libtool all spell it.
+        """
+		if self.kind == "shared" and _TARGET_OS[0] == "windows":
+			return "lib%s.dll.a" % (self.stem or self.name)
+		return None
 
 	@property
 	def records_soname(self):
@@ -12941,9 +12971,12 @@ def link_cmd(t, cl, cfg, outdir, libflags=(), root=None):
 		# the name its loader builds.
 		shared = ["-shared"]
 		if t.records_soname:
-			shared += [soname_flag(t.soname)]
+			shared += soname_flags(t.soname)
 	if t.kind == "shared":
-		shared = ["-shared", soname_flag(t.soname)]
+		shared = ["-shared"] + soname_flags(t.soname)
+		if t.import_lib:
+			shared.append("-Wl,--out-implib,"
+			              + os.path.join(outdir, t.import_lib))
 		# The version script is placed before the objects, where ld reads
 		# its options. Named by an absolute path like the objects are: the
 		# link runs from wherever fmake was invoked, not from the tree root,
@@ -20530,7 +20563,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		elif t.kind == "shared":
 			vs = (f" -Wl,--version-script,{t.version_script}"
 			      if t.version_script else "")
-			a(f"\t$({driver}) -shared -Wl,-soname,{t.soname}{vs} "
+			sn = "".join(" " + f for f in soname_flags(t.soname))
+			if t.import_lib:
+				sn += f" -Wl,--out-implib,$(@D)/{t.import_lib}"
+			a(f"\t$({driver}) -shared{sn}{vs} "
 			  f"-o $@ {objs_txt}{tail}")
 		elif t.kind == "module":
 			# A versioned module states its name, as fmake's own link
@@ -20538,8 +20574,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# one predicate: an ejected build that linked a module
 			# without the soname fmake gives it would produce an
 			# artifact no NSS loader finds, and nothing would say so.
-			sn = (f" -Wl,-soname,{t.soname}" if t.records_soname
-			      else "")
+			sn = ("".join(" " + f for f in soname_flags(t.soname))
+			      if t.records_soname else "")
 			a(f"\t$({driver}) -shared{sn} -o $@ {objs_txt}{tail}")
 		else:
 			a(f"\t$({driver}) -o $@ {objs_txt}{tail}")
@@ -20754,6 +20790,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.d"
 	               for rel in sorted(crate_deps)]
 	            + [art(t.filename) for t in targets]
+	            + [art(t.import_lib) for t in targets if t.import_lib]
 	            + [t.name + ".pc" for t in targets if pc_text(t, conf)]
 	            + [_eject_src(j["out"]) for j in uic_jobs]
 	            + [_eject_src(j["out"]) for j in moc_jobs]
@@ -20968,7 +21005,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("  description = LD $out")
 	a("")
 	a("rule solink")
-	a("  command = $driver -shared -Wl,-soname,$soname $version_script "
+	# The same one fact, spelled by `soname_flags' as the two link paths
+	# spell it. Windows has no name to state and a second output to name.
+	sn = " ".join(soname_flags("$soname")
+	              or ["-Wl,--out-implib,$implib"])
+	a(f"  command = $driver -shared {sn} $version_script "
 	  "-o $out $in $arcs $libs $ldflags")
 	a("  description = LD $out")
 	a("")
@@ -21338,11 +21379,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		if t.version_script:
 			implicit.append(_ninja(t.version_script))
 		after = (" | " + " ".join(implicit)) if implicit else ""
-		a(f"build {art(t.filename)}: {rule} {objs}{after}")
+		also = f" | {art(t.import_lib)}" if t.import_lib else ""
+		a(f"build {art(t.filename)}{also}: {rule} {objs}{after}")
 		if t.kind != "static":
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
 			if t.records_soname:
 				a(f"  soname = {t.soname}")
+			if t.import_lib:
+				a(f"  implib = {art(t.import_lib)}")
 				if t.version_script:
 					a(f"  version_script = "
 					  f"-Wl,--version-script,{t.version_script}")
@@ -22297,7 +22341,16 @@ def install_plan(targets, closures, root):
 			continue
 		where = "bindir" if t.kind == "exe" else "libdir"
 		mode = 0o755 if t.kind != "static" else 0o644
-		if t.kind == "shared" and t.version:
+		if t.import_lib:
+			# The DLL where the loader looks, which on Windows is beside
+			# the program and on PATH rather than any library directory,
+			# and the import library where a linker looks. CMake's RUNTIME
+			# and ARCHIVE destinations, Meson's and libtool's layout, and
+			# what MSYS2 and Fedora's mingw packages ship.
+			planned.append(("built", t.filename, "bindir", t.filename, mode))
+			planned.append(("built", t.import_lib, "libdir", t.import_lib,
+			                0o644))
+		elif t.kind == "shared" and t.version:
 			# The chain every distribution ships. The real file carries the
 			# full version; the soname link is what consumers recorded and
 			# what the loader opens; the plain name is what `-lfoo` finds at

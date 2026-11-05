@@ -34054,10 +34054,9 @@ def a_module_for_windows_is_a_dll(t):
 	appended to the target's name, so even `name = "plug.dll"` would have
 	given `plug.dll.so`.
 
-	Unlike `@kind shared` for Windows -- still open, because a shared
-	library there is a DLL *and* an import library, which is a model
-	change -- a module is one artifact and nothing links against it. So
-	this is only a name, which is why it is done and that is not.
+	Unlike `@kind shared` for Windows -- a DLL *and* an import library,
+	which was a model change, section 584 -- a module is one artifact and
+	nothing links against it. So this is only a name.
 
 	The control is in the case rather than left to the 38 module cases
 	that run on this machine: an ELF module stays `.so`.
@@ -34294,6 +34293,110 @@ def windows_has_three_more_spellings_of_main(t):
 		      f"and a tree of them is a library: {os.listdir(u.dir)}")
 	finally:
 		u.cleanup()
+
+
+@case
+def a_shared_library_for_windows_is_a_dll_and_its_import_library(t):
+	"""section 584: two artifacts, each where its reader looks.
+
+	`@kind shared' for Windows built `libw.so', which the link accepted
+	and nothing on Windows opens, and no import library at all, so nothing
+	could link it either. A consumer links `libw.dll.a' and runs
+	`libw.dll'.
+
+	The version goes in the file's own name, since a DLL has no chain to
+	lay down at install and the import library records what it was built
+	as. Asserted in every place the pair has to agree: the two files, the
+	fixed point, the install layout -- DLL in bindir, import library in
+	libdir, as CMake, Meson and libtool all have it -- both ejected build
+	files, and the ejected clean, which is the consumer that forgets.
+	"""
+	t.write("fmake.toml", _mingw_shim(t).replace(
+		'"-Wl,-e,main"', '"-Wl,-e,w_val"')
+		+ '\n[target.w]\nroot = "w.c"\nsources = ["w.c"]\n')
+	t.write("w.c", "//! @kind shared\n//! @version 2.1\n"
+	        "int w_val(void){ return 5; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the DLL link failed: {out}")
+	for name in ("libw-2.dll", "libw.dll.a"):
+		check(os.path.exists(os.path.join(t.dir, name)),
+		      f"{name} is not here: {sorted(os.listdir(t.dir))}\n{out}")
+	check(not os.path.exists(os.path.join(t.dir, "libw.so")),
+	      "and nothing is spelled the ELF way")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("up to date" in out and "LD " not in out,
+	      f"a finished DLL has to be a fixed point: {out}")
+
+	outside = tempfile.mkdtemp(prefix="fmake-dllinst-")
+	try:
+		r = t.fmake("--install", "--prefix", "/usr", "--destdir", outside)
+		check(r.returncode == 0, f"the install failed: {r.stdout}{r.stderr}")
+		check(os.path.exists(os.path.join(outside, "usr/bin/libw-2.dll")),
+		      f"a DLL goes where the loader looks: {r.stdout}")
+		check(os.path.exists(os.path.join(outside, "usr/lib/libw.dll.a")),
+		      f"and the import library where a linker does: {r.stdout}")
+		check(not os.path.exists(os.path.join(outside, "usr/lib/libw-2.dll")),
+		      "and the DLL does not also land in libdir")
+	finally:
+		shutil.rmtree(outside, ignore_errors=True)
+
+	r = t.fmake("--eject")
+	check(r.returncode == 0, f"the eject failed: {r.stderr}")
+	check("--out-implib,$(@D)/libw.dll.a" in r.stdout,
+	      f"the ejected link has to make the import library: {r.stdout}")
+	check("-soname" not in r.stdout, "a DLL states no soname")
+	clean = r.stdout[r.stdout.index("CLEAN = "):]
+	check("libw.dll.a" in clean[:clean.index("clean:")],
+	      "and the ejected clean has to know the second artifact")
+	r = t.fmake("--eject", "ninja")
+	check(r.returncode == 0, f"the ninja eject failed: {r.stderr}")
+	check("build libw-2.dll | libw.dll.a: solink" in r.stdout,
+	      f"ninja has to be told about the second output: {r.stdout}")
+	check("--out-implib,$implib" in r.stdout and "-soname" not in r.stdout,
+	      f"and the rule has to make it: {r.stdout}")
+
+	# A consumer resolves the import library as -lw. `libw.dll.a' read
+	# through the plain `.a' suffix is called `w.dll', and -lw.dll happens
+	# to link -- so the name, not the link, is what is asserted.
+	u = Tree("dll-consumer")
+	try:
+		conf = _mingw_shim(u).replace("[toolchain]\n", "[toolchain]\n"
+		                              f'lib-dirs = ["{t.dir}"]\n')
+		u.write("fmake.toml", conf)
+		u.write("main.c", "int w_val(void);\nvoid __main(void){ }\n"
+		        "int main(void){ return w_val(); }\n")
+		r = u.fmake("--explain")
+		out = r.stdout + r.stderr
+		check(re.search(r"-lw( |$)", out, re.M) and "-lw.dll" not in out,
+		      f"an import library is -lw: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
+def an_ejected_darwin_library_states_its_name_the_darwin_way(t):
+	"""section 584: three emitters, and two had `-soname' in their text.
+
+	Section 574 taught the link that ld64 refuses `-soname'. The ejected
+	Makefile and build.ninja spelled the flag by hand, so a macOS build
+	that left fmake could not link what fmake had just built.
+	"""
+	_mach_o_or_skip(t)
+	t.write("fmake.toml",
+	        '[project]\ncflags = ["-target", "x86_64-apple-macos11"]\n\n'
+	        '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n'
+	        'os = "darwin"\n\n'
+	        '[target.sh]\nroot = "sh.c"\nsources = ["sh.c"]\n')
+	t.write("sh.c", "//! @kind shared\n//! @version 1.0\n"
+	        "int sh_val(void){ return 5; }\n")
+	for form, want in ((("--eject",), "-install_name,@rpath/libsh.1.dylib"),
+	                   (("--eject", "ninja"), "-install_name,@rpath/$soname")):
+		r = t.fmake(*form)
+		check(r.returncode == 0, f"{form}: {r.stderr}")
+		check(want in r.stdout and "-soname" not in r.stdout,
+		      f"{form} has to speak ld64's flag: {r.stdout}")
 
 
 @case

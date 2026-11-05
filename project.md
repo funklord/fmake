@@ -632,7 +632,8 @@ that had been green about nothing for five commits ·
 [580. Eighteen trees swept, and the two that refuse](#580-eighteen-trees-swept-and-the-two-that-refuse) ·
 [581. A real mingw, and what a freestanding PE could not show](#581-a-real-mingw-and-what-a-freestanding-pe-could-not-show) ·
 [582. `--os`, the other half of a target](#582---os-the-other-half-of-a-target) ·
-[583. Three more spellings of main](#583-three-more-spellings-of-main)
+[583. Three more spellings of main](#583-three-more-spellings-of-main) ·
+[584. A Windows shared library is two files](#584-a-windows-shared-library-is-two-files)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46449,8 +46450,8 @@ verify by running anything.** Naming it `w.dll` without the import library
 would be worse than today's obviously-foreign `libw.so`, because it would
 look right and still not link.
 
-So: the pieces are measured, the remaining question is whose layout it is,
-and it is the holder's.
+So: the pieces are measured, and the remaining question was whose layout
+it is. **Settled in section 584**: the field had already answered it.
 
 ### The fifth consumer, and the errno behind it
 
@@ -46632,10 +46633,8 @@ recording:
 | shared | **two**: `foo.dll` and a `libfoo.dll.a` import library | what `--install` lays down, and where |
 
 A module is one file and the fix is a suffix. A Windows shared library is a
-DLL *plus* an import library, so the install plan, `--clean`, both emitters
-and the `.pc` all gain a say -- and where a DLL belongs is a convention
-this machine cannot verify by running anything. Section 575 has that
-measurement and leaves it with the holder.
+DLL *plus* an import library, so the install plan, both emitters and the
+ejected clean all gain a say. Section 584 did that.
 
 **The family is finished otherwise.** `lib%s.a` is right on all three
 platforms; `-shared` is accepted by ld64 as well as by GNU ld; and the one
@@ -46866,3 +46865,60 @@ as a program and withdrawn with a warning on every native build.
 `scan_all` folds `win_main` into `has_main` for a Windows target, on a copy
 of the entry, since the cached one is answering for a file and not for a
 target.
+
+## 584. A Windows shared library is two files
+
+Sections 575 and 578 left this with the holder on the grounds that where a
+DLL belongs "is a convention this machine cannot verify by running
+anything". **The second half was right and the conclusion did not follow.**
+What a loader does could not be run then -- wine now does it -- and a
+convention is checked by reading who follows it, which needs no machine at
+all:
+
+| who | DLL | import library |
+|---|---|---|
+| CMake | `RUNTIME DESTINATION` = `bin` | `ARCHIVE DESTINATION` = `lib` |
+| Meson, libtool | `bin` | `lib` |
+| MSYS2, Fedora's mingw packages | `bin` | `lib` |
+
+Nobody differs, and the reason is the loader: Windows looks beside the
+program and on PATH, never in a library directory. So `--install` lays
+`libfoo.dll` in bindir and `libfoo.dll.a` in libdir, and it was never
+really a question for the holder; this is the wrongly-deferred shape
+`working-practice.md` warns about.
+
+**The names.** `lib` is kept, as CMake and Meson keep it on mingw, and the
+import library is `libfoo.dll.a` because that is what `-lfoo` finds. A
+version goes in the file's own name, `libfoo-1.dll`, libtool's and Meson's
+spelling and what MSYS2 ships as `libpng16-16.dll`: a DLL has no soname
+chain, the import library records the name it was built as, and the loader
+opens nothing else. So unlike ELF the tree's artifact already carries the
+major, and `install` has nothing to rename. Section 575's sketch said
+`w.dll`; nothing else in the field drops the prefix.
+
+The pair is one new property, `Target.import_lib`, and `None` everywhere
+else, so ELF and Mach-O are unchanged by construction. Consumers: the
+link, `make`, ninja (a real implicit output, `build a | b: solink`), the
+install plan, and the ejected clean -- the last is the one a first pass
+forgets, and the case asserts it.
+
+**Verified end to end with a real runtime.** A library built by fmake,
+installed by fmake, consumed from another tree by symbol alone (`-lbar`,
+against `libbar.dll.a`), and run:
+
+    DLL Name: libbar-2.dll
+    rc=53 without the DLL beside it    (wine: not found)
+    bar 7 with it
+
+Both ejected files built the same pair from a directory with nothing else
+in it.
+
+**The emitters had `-soname` in their text.** Section 574 taught the link
+that `ld64` refuses it; `make` and ninja spelled it by hand, so a macOS
+shared library that left fmake could not link what fmake had just built.
+That was the value-with-two-consumers shape again, found by reading the
+sites this change had to touch. All three now go through `soname_flags`.
+
+`libfoo.dll.a` read through the plain `.a` suffix is called `foo.dll`, and
+`-lfoo.dll` even links, so a first version reported *could also come from
+-lw.dll*. `.dll.a` is a suffix of its own, ahead of `.a`.
