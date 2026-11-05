@@ -47415,3 +47415,20 @@ reason and it stays broken. Section 340's plain-build baseline is that case:
 The refusal path and the ejects are unchanged. `--eject`, `--explain` and
 `--compile-commands` return before any link, so "every target linked" cannot
 be said there, and they keep reporting a failed guess as a failure.
+
+**And it has to stay answered.** hembygd, measured on the pinned 7a1a730 by the
+guidelines session: 41, 24, 24 compiles over three runs of an unchanged tree,
+about 30 seconds and 12 depfiles a run. `close` and `start` stay unresolved
+inside that tree, libc providing the first, so widening runs on every build
+and proposes llama.cpp's server and backend sources again, and a file that
+failed never reaches `units`. That breaks the holder's rule that a second build
+writes nothing.
+
+`bad_guess` remembers a forgiven file against its content, the configuration
+and the names it was tried for. Three things reopen it, each asserted: the
+file or the flags changing, a name it was not tried for, and any target
+failing, which clears the store. `--always-make` clears it too. The cost is
+that a header appearing later does not retry the file by itself, since no
+depfile exists to name it. That is accepted because the file was not needed,
+and if it comes to be, the unresolved name is new and reopens it. The warning
+prints once, for the run that decided, as the `nomain` memo does.

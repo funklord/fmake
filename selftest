@@ -35206,6 +35206,50 @@ def a_guess_that_did_not_compile_fails_only_what_needed_it(t):
 
 
 @case
+def a_failed_guess_is_not_tried_again_until_something_changes(t):
+	"""hembygd recompiled 24 failed guesses on every run of an unchanged tree.
+
+	`close` stays unresolved inside the tree, libc providing it, so widening
+	runs on every build, and a file that failed never reaches `units`. About
+	30 seconds and 12 depfiles a no-op run, against the rule that a second
+	build writes nothing. The memo must not become the way a needed file
+	goes missing, so each thing that reopens the question is asserted: the
+	file changing, a name it was not tried for, and a target failing.
+	"""
+	stray = ('#include "not_on_any_path.h"\n'
+	         "struct s { int close(void) { return 1; } };\n")
+	t.write("main.cpp", "#include <unistd.h>\n"
+	        "int main(void){ return close(0) ? 0 : 0; }\n")
+	t.write("stray.cpp", stray)
+	cold = t.fmake("-j4")
+	check(cold.returncode == 0 and "stray.cpp" in compiled(cold),
+	      f"the file has to be guessed at and forgiven: "
+	      f"{cold.stdout}{cold.stderr}")
+	warm = t.fmake("-j4")
+	check(warm.returncode == 0 and compiled(warm) == [],
+	      f"the same failed guess was compiled again: {compiled(warm)}")
+
+	t.write("stray.cpp", stray + "// changed\n")
+	r = t.fmake("-j4")
+	check(r.returncode == 0 and compiled(r) == ["stray.cpp"],
+	      f"an edited file is a new answer: {compiled(r)}")
+	check(compiled(t.fmake("-j4")) == [], "and settles again")
+
+	# A name it was never tried for, and the link then fails.
+	t.write("stray.cpp", stray.replace("int close", "int helper(void) "
+	                                   "{ return 0; }\n\tint close"))
+	check(t.fmake("-j4").returncode == 0, "the method changes nothing yet")
+	t.write("main.cpp", "#include <unistd.h>\nint helper(void);\n"
+	        "int main(void){ return close(0) + helper(); }\n")
+	r = t.fmake("-j4")
+	check(r.returncode != 0 and "stray.cpp" in compiled(r),
+	      f"a new name has to be tried: {compiled(r)} {r.stdout}{r.stderr}")
+	with open(os.path.join(t.dir, ".fmake", "cache.json")) as fh:
+		held = json.load(fh).get("bad_guess")
+	check(not held, f"a failed target has to clear the memo: {held}")
+
+
+@case
 def a_real_mingw_builds_what_runs_on_windows(t):
 	"""section 595: the whole of 581 to 592 against the real thing.
 

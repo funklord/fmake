@@ -7871,7 +7871,8 @@ class Cache:
 	# one entry per rename and no end to it. The generated outputs
 	# themselves were already gone from disk; only the entries naming them
 	# stayed.
-	STAMP_STORES = ("moc", "rcc", "uic", "situ", "nomain", "links")
+	STAMP_STORES = ("moc", "rcc", "uic", "situ", "nomain", "links",
+	                "bad_guess")
 
 	def _retire_stamp_ghosts(self):
 		"""Drop stamp entries whose path has gone, on sight.
@@ -16518,6 +16519,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# and not what anyone typing --always-make is asking for.
 		cache.objects.clear()
 		cache.data.pop("links", None)
+		bad_guess.clear()
 
 	# ---- vendored archives --------------------------------------------
 	# Anything fmake builds itself is not one of these. A static target
@@ -16601,6 +16603,28 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	tried, broken = set(), set()
 	# What widening compiled, and the names it compiled each one for.
 	tried_for = {}
+	# What failed to compile as a guess and turned out not to be needed.
+	bad_guess = cache.data.setdefault("bad_guess", {})
+
+	def guess_stamp(rel):
+		"""What a failed guess depends on: the file, and how it was built.
+
+        `base_incflags' rather than `incflags', which grows as widening
+        adds units: taken after the link it would not match the one read
+        during widening, and the memo would never hold.
+        """
+		return sha((cache.hash_of(os.path.join(root, rel), rel) or "?")
+		           + cfg.key + " ".join(base_incflags))
+
+	def guess_already_failed(rel, names):
+		"""Whether this proposal is one the tree has already answered.
+
+        Only for the names it failed for. A name it was not tried for is a
+        new question, whatever the file did last time, so it is compiled
+        and may turn out to be the provider.
+        """
+		held, _, stamp = bad_guess.get(rel, "").rpartition("|")
+		return stamp == guess_stamp(rel) and set(names) <= set(held.split())
 	# Generated files widening was offered and turned down. Kept so the
 	# report at the end does not give them a second, wrong reason.
 	declined_generated = set()
@@ -17439,7 +17463,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		mine = set(pool) - set(theirs) - set(theirs_tests)
 		rest = [Unit(rel, root, objdir, scans[rel])
 		        for rel in pool if rel in mine]
-		extra = widen_candidates(fresh, rest)
+		extra = [(u, _names) for u, _names in widen_candidates(fresh, rest)
+		         if not guess_already_failed(u.rel, _names)]
 		# Said only where it changed the answer, which is this section's
 		# own rule for the generated-file case below.
 		if theirs_tests:
@@ -18965,6 +18990,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			rel = key.partition("\0")[0]
 			if rel in tried_for:
 				broken.discard(key)
+				bad_guess[rel] = (" ".join(tried_for[rel]) + "|"
+				                  + guess_stamp(rel))
 				_names, _more = capped(tried_for[rel], 3)
 				warn(f"{rel} did not compile, and every target linked "
 				     f"without it: it was only tried because it looks "
@@ -18972,6 +18999,12 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 				     + (f" and {_more} more" if _more else "")
 				     + f".\n    [project] exclude keeps it out of the "
 				       f"build if it is not meant to be part of this one")
+	# And none of it stands once a target has failed: a file left out on
+	# the strength of an earlier link is the first place to look.
+	elif bad_guess:
+		bad_guess.clear()
+	# Past the save further up, as `not_built' is, and for the same reason.
+	cache.save()
 
 	# After the build, and only if the build produced them. A test binary
 	# that did not relink is a test binary that answers a question about
