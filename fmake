@@ -7704,6 +7704,8 @@ class Cache:
 		# A nested build has written the same file, so this copy is behind
 		# it until `adopt_disk' has run.
 		self.nested_wrote = False
+		# Object entries this run's save has retired; see `_retire_ghosts'.
+		self.retired = {}
 		# Set for a run that promised to change nothing. `--dry-run' prints
 		# the commands and runs none of them, and it was writing this file
 		# and the lock beside it -- two entries in a tree somebody may only
@@ -7848,6 +7850,12 @@ class Cache:
 				if os.path.exists(os.path.join(root, rel)):
 					store[k].pop("gone", None)
 				elif store[k].get("gone"):
+					# Held for this run. A link's failure is reported after
+					# the save that runs this, so the rebuild the grace is
+					# for removed the entry and then looked for it, and got
+					# a guess: the blame lasted one build, not two.
+					if store is self.objects:
+						self.retired[k] = store[k]
 					del store[k]
 				else:
 					store[k]["gone"] = 1
@@ -19210,7 +19218,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# compile loop visits or prunes it.
 		gone_defs = {}
 		if unprovided:
-			for ukey, ent in cache.objects.items():
+			for ukey, ent in itertools.chain(cache.objects.items(),
+			                                 cache.retired.items()):
 				# A variant's key carries its target behind a NUL.
 				rel = ukey.split("\0")[0]
 				took = set(ent.get("s") or []) & unprovided

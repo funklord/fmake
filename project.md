@@ -47383,3 +47383,10 @@ a refusal's evidence used to be recompiled each time and is now read back.
 An interrupt is left as it was. `KeyboardInterrupt` arrives in the middle of a
 sweep with results not yet recorded, so it has less to keep and more that is
 half done; nobody has measured a retry after one as a cost.
+
+Reading those ghosts turned up a second fault of the same age: the grace was
+one build short. `_retire_ghosts` promises the build that notices an absence
+and a rebuild of it, and a link failure is reported after the save, so the
+rebuild removed the entry and then looked for it, measured as blame on the
+first failing build and a guess about code generators on the second. What the
+sweep removes is now held in `Cache.retired` for the rest of the run.

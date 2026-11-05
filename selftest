@@ -35139,6 +35139,31 @@ def a_refusal_does_not_spend_a_ghosts_grace(t):
 
 
 @case
+def a_deleted_sources_blame_lasts_the_rebuild_it_promises(t):
+	"""The grace was one build short of what its docstring said.
+
+	A ghost is kept for the build that notices the absence and a rebuild of
+	it, and a link failure is reported after the save, so the rebuild
+	removed the entry and then looked for it. Somebody retrying was told a
+	code generator had not run, about a file fmake knew they had deleted.
+	The third build gets the general ending, which is the recorded cost.
+	"""
+	t.write("main.c", "int helper(void);\n"
+	        "int main(void){ return helper(); }\n")
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+	check(t.fmake("-j4").returncode == 0, "the tree should build first")
+	os.remove(os.path.join(t.dir, "helper.c"))
+	for attempt in ("noticing", "rebuild"):
+		r = t.fmake("-j4")
+		said = r.stdout + r.stderr
+		check(r.returncode != 0 and "helper.c defined helper" in said,
+		      f"the {attempt} build lost the deleted file's name: {said}")
+	r = t.fmake("-j4")
+	check("helper.c defined helper" not in r.stdout + r.stderr,
+	      "the entry outlived its grace, which is the leak on the other side")
+
+
+@case
 def a_real_mingw_builds_what_runs_on_windows(t):
 	"""section 595: the whole of 581 to 592 against the real thing.
 
