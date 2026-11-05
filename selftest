@@ -35164,6 +35164,48 @@ def a_deleted_sources_blame_lasts_the_rebuild_it_promises(t):
 
 
 @case
+def a_guess_that_did_not_compile_fails_only_what_needed_it(t):
+	"""A fresh clone of qtty exited 1, and every run after it exited 0.
+
+	Widening compiles a file because a name in it matches a symbol still
+	unresolved, and on a cold tree a method or an override sharing a name
+	with the real provider qualifies. qtty's fuzz harness failed on a
+	private header, nothing links it, and its README tells a newcomer to
+	type `fmake`. The warm run closes the link before guessing and says
+	"nothing reaches it", so the exit status depended on what an earlier
+	run left behind.
+
+	The control is the same guess when it was needed: the target cannot
+	link, and the file that failed stays a failure and stays named.
+	"""
+	t.write("main.cpp", "int helper(void);\n"
+	        "int main(void){ return helper(); }\n")
+	t.write("good.cpp", "int helper(void){ return 0; }\n")
+	t.write("stray.cpp", '#include "not_on_any_path.h"\n'
+	        "struct s { int helper(void) { return 1; } };\n")
+	cold = t.fmake("-j4")
+	said = cold.stdout + cold.stderr
+	check("stray.cpp" in compiled(cold),
+	      f"the file has to be guessed at for this to mean anything: {said}")
+	check(cold.returncode == 0,
+	      f"every target linked, so the guess cost nothing: {said}")
+	check("linked without it" in said and "helper" in said,
+	      f"a compile error scrolled past and the run exits 0, so the run "
+	      f"has to say why: {said}")
+	warm = t.fmake("-j4")
+	check(warm.returncode == 0 and compiled(warm) == [],
+	      f"the second run must agree: {warm.stdout}{warm.stderr}")
+
+	os.remove(os.path.join(t.dir, "good.cpp"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"))
+	needed = t.fmake("-j4")
+	said = needed.stdout + needed.stderr
+	check(needed.returncode != 0 and "linked without it" not in said
+	      and "stray.cpp" in said,
+	      f"needed and broken is a failure, and says so: {said}")
+
+
+@case
 def a_real_mingw_builds_what_runs_on_windows(t):
 	"""section 595: the whole of 581 to 592 against the real thing.
 

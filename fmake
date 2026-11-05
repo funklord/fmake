@@ -16599,6 +16599,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 
 	# ---- compile, close, widen ----------------------------------------
 	tried, broken = set(), set()
+	# What widening compiled, and the names it compiled each one for.
+	tried_for = {}
 	# Generated files widening was offered and turned down. Kept so the
 	# report at the end does not give them a second, wrong reason.
 	declined_generated = set()
@@ -17504,6 +17506,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# dead end by construction. Written with one first, and the
 		# suite refused it -- `a -v line truncates, and -v is where a
 		# reader goes when they want all of it'.
+		tried_for.update((u.rel, _names) for u, _names in extra)
 		for u, _names in extra:
 			vinfo(f"widening: {u.rel} may define "
 			      + ", ".join(repr(s) for s in _names))
@@ -18947,6 +18950,28 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			if rc:
 				return rc
 		return 0
+
+	# A guess that failed is not a build that failed, once every target has
+	# linked without it. Section 600: widening compiles a file because a
+	# name in it matches a symbol still unresolved, and on a cold tree that
+	# is any override or method sharing a name with the real provider. qtty
+	# exited 1 from a fresh clone, over a fuzz harness nothing links, and 0
+	# from the second run on, where the cached units close the link before
+	# anything is guessed at. The first answer was the wrong one: a file
+	# that was never needed is what the warm run calls "nothing reaches
+	# it". Where a target failed, the file may be why, and it stays broken.
+	if not failed:
+		for key in sorted(broken):
+			rel = key.partition("\0")[0]
+			if rel in tried_for:
+				broken.discard(key)
+				_names, _more = capped(tried_for[rel], 3)
+				warn(f"{rel} did not compile, and every target linked "
+				     f"without it: it was only tried because it looks "
+				     f"like it defines {', '.join(_names)}"
+				     + (f" and {_more} more" if _more else "")
+				     + f".\n    [project] exclude keeps it out of the "
+				       f"build if it is not meant to be part of this one")
 
 	# After the build, and only if the build produced them. A test binary
 	# that did not relink is a test binary that answers a question about

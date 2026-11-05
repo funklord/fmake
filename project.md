@@ -648,7 +648,8 @@ that had been green about nothing for five commits ·
 [596. A sweep's byproduct, and what the plans said](#596-a-sweeps-byproduct-and-what-the-plans-said) ·
 [597. One record for a directory per configuration](#597-one-record-for-a-directory-per-configuration) ·
 [598. The second walk: an ELF called `rs.exe`](#598-the-second-walk-an-elf-called-rsexe) ·
-[599. A refused build keeps what it compiled](#599-a-refused-build-keeps-what-it-compiled)
+[599. A refused build keeps what it compiled](#599-a-refused-build-keeps-what-it-compiled) ·
+[600. A guess that did not compile](#600-a-guess-that-did-not-compile)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47390,3 +47391,27 @@ and a rebuild of it, and a link failure is reported after the save, so the
 rebuild removed the entry and then looked for it, measured as blame on the
 first failing build and a guess about code generators on the second. What the
 sweep removes is now held in `Cache.retired` for the rest of the run.
+
+## 600. A guess that did not compile
+
+Reported from the guidelines tree on 2026-11-05: a fresh clone of qtty took
+three runs to exit 0, exiting 1 twice first, and `fmake` in a fresh checkout
+is what qtty's README tells a newcomer to type. Section 599 took that to
+`1 0 0`; what was left is this. `tool/fuzz/input_fuzz.cpp` is a libFuzzer
+harness nothing links. It defines methods sharing names with symbols still
+unresolved on a cold tree, so widening compiles it, and it fails on a private
+header. All eight programs link. From the second run the cached units close
+each link before anything is guessed at and the file is "nothing reaches it",
+so **the exit status depended on what an earlier run left in `.fmake/`.**
+
+The warm answer is the right one. A file widening proposed was never asked
+for, and when every target linked without it, it was not needed. So a failed
+guess stops counting as a failure once `failed` is empty. The compile error
+has already scrolled past by then, so the run says which file, why it was
+tried and how to keep it out. Where any target failed, the file may be the
+reason and it stays broken. Section 340's plain-build baseline is that case:
+`helper.c` is the provider, and the link fails.
+
+The refusal path and the ejects are unchanged. `--eject`, `--explain` and
+`--compile-commands` return before any link, so "every target linked" cannot
+be said there, and they keep reporting a failed guess as a failure.
