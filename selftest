@@ -32091,7 +32091,7 @@ def the_header_table_maps_to_the_module_that_ships_the_header(t):
 
 	with open(FMAKE) as fh:
 		src = fh.read()
-	block = src[src.index("HEADER_PKG = {"):src.index("IMPLICIT_LIBS")]
+	block = src[src.index("HEADER_PKG = {"):src.index("IMPLICIT_LIBS = ")]
 	pairs = dict(re.findall(r'"([^"]+)":\s*"([^"]+)"', block))
 	check(len(pairs) > 20, f"only {len(pairs)} entries read out of fmake")
 
