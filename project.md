@@ -643,7 +643,8 @@ that had been green about nothing for five commits ·
 [591. Sibling trees for Windows, and the host's Qt on a mingw line](#591-sibling-trees-for-windows-and-the-hosts-qt-on-a-mingw-line) ·
 [592. A program's icon](#592-a-programs-icon) ·
 [593. The GNU words in the link, walked against ld64](#593-the-gnu-words-in-the-link-walked-against-ld64) ·
-[594. A generator, and what the run cost](#594-a-generator-and-what-the-run-cost)
+[594. A generator, and what the run cost](#594-a-generator-and-what-the-run-cost) ·
+[595. The real toolchain, kept in the suite](#595-the-real-toolchain-kept-in-the-suite)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47246,3 +47247,16 @@ run added to the script is paid in parsing on every invocation, there being
 no `.pyc` for a file with no `.py`. It is small, it is the price of any
 feature here, and it is worth knowing that a run's real overhead is its
 line count. `driver_libs` and `sdk_root` run only for windows and darwin.
+
+## 595. The real toolchain, kept in the suite
+
+Every fault in sections 581 to 592 was found by a real mingw and none by a
+shim, because a shim states what has already been learned. So
+`a_real_mingw_builds_what_runs_on_windows` builds a C++ program with
+threads, winsock and a resource, reads the imports with `objdump -p`, and
+runs it under wine where wine is here. Reverting the driver libraries or
+the static runtime fails it.
+
+**It skips on this machine as installed**, since mingw-w64 lives only in
+this run's scratch: `apt install mingw-w64` is what turns it on, and that
+is the holder's. Seen passing with mingw on PATH and skipping without.
