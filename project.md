@@ -641,7 +641,8 @@ that had been green about nothing for five commits ·
 [589. An `@` that is the name](#589-an--that-is-the-name) ·
 [590. Running on Windows and macOS, as far as can be said from here](#590-running-on-windows-and-macos-as-far-as-can-be-said-from-here) ·
 [591. Sibling trees for Windows, and the host's Qt on a mingw line](#591-sibling-trees-for-windows-and-the-hosts-qt-on-a-mingw-line) ·
-[592. A program's icon](#592-a-programs-icon)
+[592. A program's icon](#592-a-programs-icon) ·
+[593. The GNU words in the link, walked against ld64](#593-the-gnu-words-in-the-link-walked-against-ld64)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46649,8 +46650,8 @@ ejected clean all gain a say. Section 584 did that.
 
 **The family is finished otherwise.** `lib%s.a` is right on all three
 platforms; `-shared` is accepted by ld64 as well as by GNU ld; and the one
-flag that is not portable at all, `--version-script`, is refused rather
-than renamed -- section 577.
+flag that is not portable to ld64, `--version-script`, is refused rather
+than renamed -- section 577. Real mingw honours it: section 593.
 
 ## 579. What the identity work cost, which is nothing
 
@@ -47163,7 +47164,7 @@ at a kit, is what reaches one.
 manifest, so a desktop tool, which is section 1's audience, wants one more
 often than it wants a DLL. windres compiles it to an object with no
 symbols, so **no closure reaches it and a tree with an icon built a program
-without one, saying nothing**. section 19's shape from the other side: not
+without one, saying nothing**. Section 19's shape from the other side: not
 a symbol the scan could not see, but a file with no symbols at all.
 
 It joins `PLATFORM_LANGS` with Objective-C, source only for the target that
@@ -47192,3 +47193,24 @@ ejected files printed the same.
 Not done: an `.rc` in a DLL (`@sources` reaches a program only), and
 `.def` files, which nothing here has asked for and which `@ldflags` can
 already pass.
+
+## 593. The GNU words in the link, walked against ld64
+
+The soname fault in section 584 was a GNU-ld word in a place that assumed
+GNU ld, so the lens is every `-Wl,` fmake writes itself:
+
+| flag | Windows (real ld) | macOS (`ld64.lld`) |
+|---|---|---|
+| `--start-group` | fine | **refused**, fixed here |
+| `--wrap=X` | fine | never fires: a Mach-O `___wrap_X` does not match the scan |
+| `--version-script` | **works**: only `f_pub` exported, read back from the DLL | refused, section 577 |
+| `-soname` | removed, section 584 | `-install_name`, section 574 |
+
+So a macOS tree with two vendored archives could not link: *unknown argument
+--start-group*, at four sites, two of them in the emitters. ld64 keeps every
+archive in view for the whole link, so nothing replaces the flag, and
+`link_group` drops it. The case's two archives need each other, so a link
+that merely tolerated the missing flag could not pass by luck.
+
+The table is the useful half: section 577 had filed version scripts as
+"not portable at all", and on Windows they turn out to work.

@@ -34901,6 +34901,40 @@ def a_resource_script_belongs_to_the_program_beside_it(t):
 
 
 @case
+def macos_archives_need_no_group(t):
+	"""section 593: `--start-group' is a word ld64 refuses.
+
+	Two archives in a tree are grouped, for GNU ld's left-to-right reading,
+	and `ld64.lld' stopped on *unknown argument --start-group*: a macOS
+	tree with two vendored libraries could not link. ld64 keeps every
+	archive in view for the whole link, so nothing replaces the flag.
+	The archives need each other, so a link that merely ignored the order
+	would not be enough to pass. The ejected Makefile spells the same
+	fact, and was the second of four sites.
+	"""
+	t.write("fmake.toml", _macos_sdk(t))
+	shim = os.path.join(t.dir, "tc", "x86_64-apple-darwin23-clang")
+	t.write("v/a.c", "int b_val(void); int a_val(void){ return b_val(); }\n")
+	t.write("v/b.c", "int a_val(void); int b_val(void){ return 1; }\n")
+	v = os.path.join(t.dir, "v")
+	for name in ("a", "b"):
+		got = _run_in(v, shim, "-c", f"{name}.c", "-o", f"{name}.o")
+		check(got.returncode == 0, f"the fixture: {got.stderr}")
+		got = _run_in(v, "llvm-ar", "rcs", f"lib{name}.a", f"{name}.o")
+		check(got.returncode == 0, f"the fixture: {got.stderr}")
+		os.remove(os.path.join(v, f"{name}.c"))
+		os.remove(os.path.join(v, f"{name}.o"))
+	t.write("main.c", "int a_val(void);\n"
+	        "int main(void){ return a_val(); }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"two archives have to link on macOS: {out}")
+	r = t.fmake("--eject")
+	check("--start-group" not in r.stdout,
+	      f"and the ejected link is ld64's too: {r.stdout}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

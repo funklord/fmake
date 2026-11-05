@@ -12666,7 +12666,7 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 	# archive has nothing it could be on the wrong side of.
 	found = ["-l" + l for l in res["chosen"]]
 	if len(res.get("archives", [])) > 1:
-		found = ["-Wl,--start-group"] + found + ["-Wl,--end-group"]
+		found = link_group(found)
 	res["ldflags"] = (["-Wl,--wrap=" + w for w in res["wrap"]]
 	                  + ["-L" + d for d in res.get("ldirs", [])]
 	                  + found
@@ -13310,6 +13310,20 @@ def link_cmd(t, cl, cfg, outdir, libflags=(), root=None):
 	        + list(libflags) + cfg.link_flags())
 
 
+def link_group(items):
+	"""Archives that may need each other, in this linker's terms.
+
+    GNU ld reads left to right and needs telling to go round again. ld64
+    has no such flag and refuses this one, and has no need of it: it keeps
+    every archive on the line in view for the whole link. Measured with
+    two archives each needing the other, `unknown argument
+    --start-group' from `ld64.lld'; bare, they resolve.
+    """
+	if _TARGET_OS[0] == "darwin":
+		return list(items)
+	return ["-Wl,--start-group"] + list(items) + ["-Wl,--end-group"]
+
+
 def archive_flags(cl):
 	"""Vendored archives, placed where a static archive has to go.
 
@@ -13322,7 +13336,7 @@ def archive_flags(cl):
 	arcs = [u.obj for u in cl.link if u.archive]
 	if len(arcs) < 2:
 		return arcs
-	return ["-Wl,--start-group"] + arcs + ["-Wl,--end-group"]
+	return link_group(arcs)
 
 
 def _link_key(cmd, inputs, cache, root):
@@ -20863,7 +20877,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		    " " + " ".join(blobs) if blobs else "")
 		arcs_txt = " ".join(arcs)
 		if len(arcs) > 1:
-			arcs_txt = f"-Wl,--start-group {arcs_txt} -Wl,--end-group"
+			arcs_txt = " ".join(link_group([arcs_txt]))
 		tail = ((f" {arcs_txt}" if arcs_txt else "")
 		        + (f" {libs}" if libs else "") + f" $({P}LDFLAGS)")
 		a(f"{art(t.filename)}: $({P}{ident}_OBJS)"
@@ -21740,7 +21754,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			if arcs:
 				txt = " ".join(arcs)
 				if len(arcs) > 1:
-					txt = f"-Wl,--start-group {txt} -Wl,--end-group"
+					txt = " ".join(link_group([txt]))
 				a(f"  arcs = {txt}")
 			res = resolutions.get(t)
 			if res and res["ldflags"]:
