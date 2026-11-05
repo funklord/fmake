@@ -631,7 +631,8 @@ that had been green about nothing for five commits ·
 [579. What the identity work cost, which is nothing](#579-what-the-identity-work-cost-which-is-nothing) ·
 [580. Eighteen trees swept, and the two that refuse](#580-eighteen-trees-swept-and-the-two-that-refuse) ·
 [581. A real mingw, and what a freestanding PE could not show](#581-a-real-mingw-and-what-a-freestanding-pe-could-not-show) ·
-[582. `--os`, the other half of a target](#582---os-the-other-half-of-a-target)
+[582. `--os`, the other half of a target](#582---os-the-other-half-of-a-target) ·
+[583. Three more spellings of main](#583-three-more-spellings-of-main)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46836,3 +46837,32 @@ where the link line appears only when the link FAILS -- so it passed on a
 machine with no mingw and failed the moment one was on PATH, because clang
 then finds that runtime and the link succeeds. Anybody installing mingw
 would have read it as a regression. It reads `--explain` now.
+
+## 583. Three more spellings of main
+
+`WinMain` is how a Windows GUI program starts, `wmain` a wide-character one
+and `wWinMain` both. None is `main`, so a tree holding one had no program:
+`AR libgui.a`, exit 0, section 568's fault on another spelling. Found by
+building `int WINAPI WinMain(...)` with the real mingw.
+
+Each also asks something of the link, and fmake is the only party that
+can see the source and the link together:
+
+| entry | flags | without them |
+|---|---|---|
+| `WinMain` | `-mwindows` | links, and opens a console behind the window on every start |
+| `wmain` | `-municode` | `undefined reference to WinMain`, with a `wmain` in plain view |
+| `wWinMain` | both | the same |
+
+Read from the object rather than the source, because `_tWinMain` and
+`_tmain` are tchar.h macros and only the compiler knows what they became.
+Verified with `objdump -p`: `Subsystem 00000002 (Windows GUI)` for
+`WinMain`, and `3 (Windows CUI)` for `wmain`, which printed under wine.
+
+**The scan is separate from `has_main` on purpose.** On Linux `WinMain` is
+an ordinary function, and a scan is cached by content, knowing no OS, so
+`RE_MAIN` cannot carry it: a guarded `#ifdef _WIN32` file would be offered
+as a program and withdrawn with a warning on every native build.
+`scan_all` folds `win_main` into `has_main` for a Windows target, on a copy
+of the entry, since the cached one is answering for a file and not for a
+target.

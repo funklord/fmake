@@ -34241,6 +34241,62 @@ def an_os_on_the_command_line_finds_its_compiler(t):
 
 
 @case
+def windows_has_three_more_spellings_of_main(t):
+	"""section 583: a GUI program was archived into a static library.
+
+	`WinMain' is how a Windows GUI program starts and `wmain' how a
+	wide-character one does, and neither is `main'. So a tree holding one
+	had no program in it: `AR libgui.a', exit 0, section 568's fault on
+	another spelling.
+
+	Each also asks something of the link, read from the object:
+	`-mwindows' for the GUI subsystem and `-municode' for the wide
+	startup. The ELF half is why the word has its own scan: `WinMain' on
+	Linux is an ordinary function, and offering a program for it would
+	link nothing.
+	"""
+	conf = _mingw_shim(t).replace("-Wl,-e,main", "-Wl,-e,WinMain")
+	t.write("fmake.toml", conf)
+	t.write("gui.c", "void __main(void){ }\n"
+	        "int WinMain(void *a, void *b, char *c, int d){ return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the WinMain tree failed: {out}")
+	check(os.path.exists(os.path.join(t.dir, "gui.exe")),
+	      f"WinMain is a program: {sorted(os.listdir(t.dir))}\n{out}")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-mwindows" in out and "-municode" not in out,
+	      f"WinMain asks for the GUI subsystem and nothing else: {out}")
+
+	os.remove(os.path.join(t.dir, "gui.c"))
+	os.remove(os.path.join(t.dir, "gui.exe"))
+	t.write("fmake.toml", conf.replace("-Wl,-e,WinMain", "-Wl,-e,wmain"))
+	t.write("wide.c", "void __main(void){ }\n"
+	        "int wmain(int c, unsigned short **v){ return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the wmain tree failed: {out}")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-municode" in out and "-mwindows" not in out,
+	      f"wmain asks for the wide startup and nothing else: {out}")
+
+	u = Tree("elf-winmain")
+	try:
+		u.write("gui.c", "int WinMain(int x){ return x; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the ELF tree failed: {out}")
+		check("looked like it defined main()" not in out,
+		      f"on ELF it is an ordinary function: {out}")
+		check(any(n.endswith(".a") for n in os.listdir(u.dir)),
+		      f"and a tree of them is a library: {os.listdir(u.dir)}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

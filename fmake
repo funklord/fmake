@@ -1155,6 +1155,13 @@ RE_MAIN = re.compile(r'(?:^|[;}\s])main[ \t\n]*\([^;{)]*\)'
                      r'(?:[ \t\n]*->[ \t\n]*[^\W\d][\w:<>, \t]*)?'
                      r'(?:[ \t\n]*try)?[ \t\n]*\{', re.M)
 
+# Windows has three more spellings of main(), and `_tmain' and `_tWinMain'
+# are tchar.h's macros for them. A scan of its own rather than more words in
+# RE_MAIN: on every other OS these are ordinary names, so the OS has to be
+# able to decline them, and a scan is cached by content and knows no OS.
+RE_WIN_MAIN = re.compile(r'(?:^|[;}\s])(?:w?WinMain|wmain|_tmain|_tWinMain)'
+                         r'[ \t\n]*\([^;{)]*\)[ \t\n]*\{', re.M)
+
 # Qt writes a test's entry point with a macro, so a QtTest translation unit
 # has no main() in its text at all -- which made it root nothing, and then
 # nothing reached it, and fmake reported it as defining nothing reachable
@@ -1531,6 +1538,7 @@ def scan_source(path):
 	    "has_main": rust_main if lang.unit == "crate" else
 	                bool(RE_MAIN.search(code)
 	                     or RE_MACRO_MAIN.search(code)),
+	    "win_main": bool(RE_WIN_MAIN.search(code)),
 	    # The crate's `mod' declarations: [name, explicit path or None].
 	    # Empty for every other language, and the reason a crate root can
 	    # be told from a module file before rustc has run.
@@ -10429,9 +10437,37 @@ def exports_main(unit):
     The set is asked first so the file is read only when the answer
     depends on it.
     """
-	if "main" in unit.strong:
+	if "main" in unit.strong or windows_entry(unit):
 		return True
 	return "_main" in unit.strong and underscores_identifiers(unit.obj)
+
+
+# What each of Windows's other entry points asks of the link. `-mwindows'
+# is the GUI subsystem: without it a WinMain program links, and opens a
+# console window behind itself every time it is started. `-municode' picks
+# the startup object that calls a wide entry, and without it the link stops
+# on `undefined reference to WinMain' with a wmain in plain view.
+WINDOWS_ENTRIES = {"WinMain": ["-mwindows"],
+                   "wWinMain": ["-mwindows", "-municode"],
+                   "wmain": ["-municode"]}
+
+
+def windows_entry(unit):
+	"""Which of `WINDOWS_ENTRIES' this unit's object defines, or None.
+
+    Off the object rather than the source, because `_tWinMain' is a macro
+    and only the compiler knows which it became. In 32-bit COFF the name
+    carries an underscore and a stdcall byte count -- `_WinMain@16' -- and
+    `wmain' only the underscore, so both are taken off before asking.
+    """
+	if _TARGET_OS[0] != "windows":
+		return None
+	for sym in unit.strong:
+		name = sym.split("@")[0]
+		for entry in WINDOWS_ENTRIES:
+			if name == entry or name == "_" + entry:
+				return entry
+	return None
 
 
 # Which end the header is written from, by magic. A thin Mach-O starts with
@@ -12189,6 +12225,8 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			if l[2:] not in declared:
 				declared.append(l[2:])
 	extra_ld += t.conf.get("ldflags", [])
+	if t.kind == "exe":
+		extra_ld += WINDOWS_ENTRIES.get(windows_entry(cl.root), [])
 	for u in cl.link:
 		for lib in u.ann.items("libs"):
 			if lib not in declared:
@@ -13728,6 +13766,11 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				scans[rel] = cache.scan(os.path.join(root, rel), rel)
 			except OSError as exc:
 				unreadable[rel] = f"unreadable: {exc.strerror or exc}"
+				continue
+			# A copy, since the one in the cache is answering for a file
+			# rather than for a target and may be read by a native build.
+			if cfg.os == "windows" and scans[rel].get("win_main"):
+				scans[rel] = {**scans[rel], "has_main": True}
 
 	# Scanned before generating, because @rule lives in a comment and cannot
 	# be read any other way -- and again afterwards, because generating adds
