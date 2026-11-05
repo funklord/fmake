@@ -644,7 +644,8 @@ that had been green about nothing for five commits ·
 [592. A program's icon](#592-a-programs-icon) ·
 [593. The GNU words in the link, walked against ld64](#593-the-gnu-words-in-the-link-walked-against-ld64) ·
 [594. A generator, and what the run cost](#594-a-generator-and-what-the-run-cost) ·
-[595. The real toolchain, kept in the suite](#595-the-real-toolchain-kept-in-the-suite)
+[595. The real toolchain, kept in the suite](#595-the-real-toolchain-kept-in-the-suite) ·
+[596. A sweep's byproduct, and what the plans said](#596-a-sweeps-byproduct-and-what-the-plans-said)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47260,3 +47261,18 @@ the static runtime fails it.
 **It skips on this machine as installed**, since mingw-w64 lives only in
 this run's scratch: `apt install mingw-w64` is what turns it on, and that
 is the holder's. Seen passing with mingw on PATH and skipping without.
+
+## 596. A sweep's byproduct, and what the plans said
+
+Dry-run plans from the run's first commit and from the last, sorted, over
+netcfgd, situ, qtty and fuzzypickles: **identical**. So nothing above reached
+an ELF tree's compile lines, which is what section 581 set out to keep true.
+beerssh's took 82 s, and that is a cold scan of 6402 files, not this work: a
+dry run saves no cache, and its time is in `scan_source`.
+
+The same sweep turned up a traceback in both versions. `hash_of` stats and
+then opens, and stat succeeds on a file its mode forbids reading: a schema
+in situ at 0600, owned by the other account, made `--dry-run` a
+PermissionError. An unreadable input now has no hash, the rule runs, and the
+tool says what is wrong; `scan` opens the file first so that *unreadable*
+reports the errno rather than *no such file*.

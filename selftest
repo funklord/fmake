@@ -35029,6 +35029,33 @@ int main(){ WSADATA d; int r = WSAStartup(MAKEWORD(2,2), &d);
 
 
 @case
+def an_input_nobody_may_read_is_not_a_traceback(t):
+	"""section 596: stat works on a file its mode forbids reading.
+
+	`hash_of' asked stat, which answered, then opened the file. Met in
+	situ, where a schema another account had left at 0600 turned a dry run
+	into a PermissionError traceback. A rule's input now has no hash, the
+	rule runs, and the tool says what is wrong in its own words.
+	"""
+	if os.geteuid() == 0:
+		raise Skip("root reads everything")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("in.txt", "x\n")
+	t.write("fmake.toml", '[generate.g]\ninputs = ["in.txt"]\n'
+	        'outputs = ["g.h"]\ncommand = "cat $in > $out"\n')
+	path = os.path.join(t.dir, "in.txt")
+	os.chmod(path, 0)
+	try:
+		r = t.fmake()
+	finally:
+		os.chmod(path, 0o644)
+	out = r.stdout + r.stderr
+	check("Traceback" not in out, f"a forbidden input is not a crash: {out}")
+	check(r.returncode != 0 and "Permission denied" in out,
+	      f"and what is wrong has to be said: {out}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

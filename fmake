@@ -7979,7 +7979,13 @@ class Cache:
 		sig = [st.st_size, int(st.st_mtime_ns)]
 		if ent and ent.get("sig") == sig:
 			return ent["hash"]
-		h = file_hash(abspath)
+		# Stat succeeds on a file somebody else's mode forbids reading. Met
+		# in situ, a schema another account had left at 0600: a traceback
+		# from `--dry-run'.
+		try:
+			h = file_hash(abspath)
+		except OSError:
+			return None
 		if ent is None:
 			ent = self.files[rel] = {}
 		ent["sig"], ent["hash"] = sig, h
@@ -7992,7 +7998,11 @@ class Cache:
 			# hash_of returns None when the file cannot be stat'd -- a
 			# dangling symlink is the usual way -- and leaves no entry
 			# behind. Raising the error the caller already handles beats
-			# indexing a dict that was never written to.
+			# indexing a dict that was never written to. Opened first, so
+			# a file that is there and forbidden says that rather than
+			# "no such file".
+			with open(abspath, "rb"):
+				pass
 			raise OSError(errno.ENOENT, "no such file", abspath)
 		ent = self.files[rel]
 		if ent.get("scan") is not None and ent.get("scan_h") == h:
