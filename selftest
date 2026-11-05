@@ -34289,7 +34289,9 @@ def an_os_on_the_command_line_finds_its_compiler(t):
 	      and "windows/x86_64" in out and "One of them is wrong" in out,
 	      f"a compiler for something else has to be refused by name: {out}")
 
-	r = t.fmake("--os", "macos", "--arch", "x86_64", env={"PATH": path})
+	# A PATH of nothing else: an osxcross on the real one is an answer.
+	os.symlink(sys.executable, os.path.join(tc, "python3"))
+	r = t.fmake("--os", "macos", "--arch", "x86_64", env={"PATH": tc})
 	out = r.stdout + r.stderr
 	check(r.returncode != 0 and "osxcross" in out,
 	      f"a target with no compiler says how to get one: {out}")
