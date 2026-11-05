@@ -35229,6 +35229,11 @@ def a_failed_guess_is_not_tried_again_until_something_changes(t):
 	check(warm.returncode == 0 and compiled(warm) == [],
 	      f"the same failed guess was compiled again: {compiled(warm)}")
 
+	r = t.fmake("-j4", "-B")
+	check(r.returncode == 0 and "stray.cpp" in compiled(r),
+	      f"--always-make asks every question again: {compiled(r)} "
+	      f"{r.stdout}{r.stderr}")
+
 	t.write("stray.cpp", stray + "// changed\n")
 	r = t.fmake("-j4")
 	check(r.returncode == 0 and compiled(r) == ["stray.cpp"],

@@ -16533,7 +16533,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# and not what anyone typing --always-make is asking for.
 		cache.objects.clear()
 		cache.data.pop("links", None)
-		bad_guess.clear()
+		cache.data.pop("bad_guess", None)
 
 	# ---- vendored archives --------------------------------------------
 	# Anything fmake builds itself is not one of these. A static target
