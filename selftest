@@ -18345,7 +18345,10 @@ def a_cross_built_test_is_not_run_rather_than_failed(t):
 int twice(int v);
 int main(void){ if (twice(21) != 42) return 1; printf("ok\\n"); return 0; }
 """)
-	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n')
+	# `runner' empty: section 586 finds qemu otherwise, and this is about
+	# the machine that has nothing to start it.
+	t.write("fmake.toml", f'[toolchain]\ncc = "{CROSS_CC}"\narch = "aarch64"\n'
+	        'runner = ""\n')
 
 	r = t.fmake("test")
 	out = r.stdout + r.stderr
@@ -34019,7 +34022,7 @@ def run_finds_a_cross_built_artifact_and_says_it_cannot_run_it(t):
 	_pe_or_skip(t)
 	t.write("s.c", "int main(void){ return 0; }\n")
 	t.write("crt.c", "void __main(void){ }\n")
-	t.write("fmake.toml", WIN_CONF)
+	t.write("fmake.toml", WIN_CONF + 'runner = ""\n')
 	# `--run' resolves its file against the cwd rather than the tree,
 	# so the fixture names it absolutely.
 	r = t.fmake("--run", os.path.join(t.dir, "s.c"))
@@ -34040,6 +34043,59 @@ def run_finds_a_cross_built_artifact_and_says_it_cannot_run_it(t):
 		      f"--run on a native tree still runs: {r.stdout}{r.stderr}")
 	finally:
 		u.cleanup()
+
+
+@case
+def a_cross_build_is_started_by_whatever_can_start_it(t):
+	"""section 586: `fmake test' stopped at *not run* with wine installed.
+
+	A test built for another machine was skipped, truthfully, on a box that
+	could have run it: a Windows program has wine and a foreign Linux one
+	has qemu's user mode, and both are a name on PATH like a cross compiler
+	is. Real runs are recorded in the section; here a stand-in `wine'
+	proves the argv, which is the part fmake owns.
+
+	`[toolchain] runner' outranks the inference, and an empty one is what
+	the two cases about a machine with nothing to start it now say.
+	"""
+	_pe_or_skip(t)
+	t.write("bin/wine", '#!/bin/sh\necho "wine started $1 with $2"\n')
+	t.write("bin/other", '#!/bin/sh\necho "other started $1"\n')
+	bindir = os.path.join(t.dir, "bin")
+	for name in ("wine", "other"):
+		os.chmod(os.path.join(bindir, name), 0o755)
+	path = bindir + os.pathsep + os.environ["PATH"]
+	t.write("s.c", "int main(void){ return 0; }\n")
+	t.write("crt.c", "void __main(void){ }\n")
+	t.write("fmake.toml", WIN_CONF)
+	src = os.path.join(t.dir, "s.c")
+
+	r = t.fmake("--run", src, "arg", env={"PATH": path})
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "wine started" in out and "with arg" in out,
+	      f"a Windows program has wine to start it: {out}")
+	check("s.exe" in out, f"and wine is handed the artifact: {out}")
+
+	t.write("fmake.toml", WIN_CONF + f'runner = "{bindir}/other"\n')
+	r = t.fmake("--run", src, env={"PATH": path})
+	out = r.stdout + r.stderr
+	check("other started" in out and "wine started" not in out,
+	      f"a named runner outranks the one found: {out}")
+
+	t.write("fmake.toml", WIN_CONF + 'runner = "no-such-runner"\n')
+	r = t.fmake(env={"PATH": path})
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "no-such-runner" in out,
+	      f"and one that is not there is refused by name: {out}")
+
+	os.remove(src)
+	t.write("tests/one_test.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", WIN_CONF)
+	r = t.fmake("test", env={"PATH": path})
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "wine started" in out
+	      and "one_test.exe" in out,
+	      f"`fmake test' goes through it too: {out}")
 
 
 @case

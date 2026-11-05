@@ -800,6 +800,11 @@ binaries land under `build-<arch>/` so two architectures do not overwrite
 each other. A `$CC` or `[toolchain] cc` for a different architecture is
 refused naming both.
 
+**`fmake test` and `--run` start a cross build with what can start it**:
+`wine` for a Windows program and `qemu-<arch>` for a foreign Linux one,
+when they are on PATH. `[toolchain] runner` names another command line,
+and an empty one means nothing here can.
+
 **A package set off pkg-config's own path is found by naming it.** A Qt
 kit, a library under `/opt` or a home prefix, a foreign-architecture
 tree that is not a whole sysroot: its `.pc` files are somewhere

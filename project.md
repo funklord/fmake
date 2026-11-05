@@ -634,7 +634,8 @@ that had been green about nothing for five commits ·
 [582. `--os`, the other half of a target](#582---os-the-other-half-of-a-target) ·
 [583. Three more spellings of main](#583-three-more-spellings-of-main) ·
 [584. A Windows shared library is two files](#584-a-windows-shared-library-is-two-files) ·
-[585. A binary that starts somewhere else](#585-a-binary-that-starts-somewhere-else)
+[585. A binary that starts somewhere else](#585-a-binary-that-starts-somewhere-else) ·
+[586. A cross build with somebody to start it](#586-a-cross-build-with-somebody-to-start-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46972,3 +46973,33 @@ literally, `_ZSt4cout` had no provider, `--explain` said *no library
 exports these* about a program that linked and ran, and libsupc++ was
 chosen for the type-info tables beside it. `lib_exports` offers `X` for
 `__imp_X`. The link line of a C++ hello is now `-static -Os`.
+
+## 586. A cross build with somebody to start it
+
+`fmake test` on a cross build said *was built for another machine, so it
+was not run*. True, and on this box it was also unnecessary: `wine` is
+here, and so is `qemu-aarch64`. A Windows program has wine and a foreign
+Linux one has qemu's user mode, and each is a name on PATH in exactly the
+way a cross compiler is. So `target_runner` finds it, with the same rule
+`--arch` follows: the name is known, PATH says whether it is here, nothing
+is installed or guessed at. Real runs:
+
+    CC=x86_64-w64-mingw32-gcc fmake test   RUN add_test / add=4 / 1 test passed
+    fmake --arch aarch64 test              RUN add_test / aarch add=4 / ...
+    CC=x86_64-w64-mingw32-gcc fmake --run main.c        hello 5
+
+qemu takes `-L` with the target's root, a sysroot or Debian's
+`/usr/<triplet>`, since the dynamic loader named in the binary means
+nothing on this machine without one.
+
+`[toolchain] runner` is a command line and outranks all of it -- hull, a
+board over ssh, a wrapper that sets up a prefix. **It is a command line
+where `cc` is a program** because nothing asks a runner separate
+questions, which is the whole of `cc`'s reason. Empty means nothing starts
+it, and it is what the two cases about such a machine now say. With no
+runner the ENOEXEC handlers answer as they did; they are not replaced.
+
+Nothing here runs at build time. A generator still needs
+`[build-toolchain]`: a build step going through an emulator would be slow
+and would only work where one is installed, and the point of that key is
+that a tool runs here.

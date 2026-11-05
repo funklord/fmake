@@ -1744,7 +1744,7 @@ CONF_SCHEMA = {
         "moc": S, "uic": S, "rcc": S, "situc": S,
         "rustc": S, "rust-edition": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
-        "pkg-config-path": L, "static-runtime": B,
+        "pkg-config-path": L, "static-runtime": B, "runner": S,
     },
 	# The machine doing the building, as opposed to the one being built for.
 	# Only generators need it: a tool named by `uses` is compiled in order to
@@ -3043,7 +3043,7 @@ def run_tests_now(targets, root, outdir, conf, dry_run=False, known=None,
 	not_run = []
 	for t in sorted(targets, key=lambda x: x.name):
 		exe = os.path.abspath(os.path.join(outdir, t.filename))
-		argv = [exe] + test_args(conf, t)
+		argv = _RUNNER[0] + [exe] + test_args(conf, t)
 		cwd = os.path.join(root, test_cwd(conf, t, root))
 		limit = test_deadline(conf, t)
 		pairs = test_env_pairs(conf, t, bin_paths)
@@ -7194,6 +7194,7 @@ class Config:
 		self.rcc    = tool.get("rcc")
 		self.situc  = tool.get("situc")
 		self.static_runtime = tool.get("static-runtime")
+		self.runner_named = tool.get("runner")
 		self.extra_libdirs = list(tool.get("lib-dirs", []))
 		# A `-L' the project wrote itself is swept for providers too.
 		# pkg-config's own already was -- `_note_dirs' feeds this list --
@@ -12132,6 +12133,44 @@ def compiled_away_includes(cl, opened, incdirs):
 	return out
 
 
+def target_runner(cfg):
+	"""How a program built for this target gets started on this machine.
+
+    `fmake test' on a cross build used to stop at `not run': true, and a
+    suite nobody can run from the machine it was written on. A Windows
+    program has wine and a foreign Linux one has qemu's user mode, the
+    same way `--arch' finds a compiler: the name is known, PATH says
+    whether it is here, and nothing is installed or guessed at. Without
+    one the ENOEXEC handlers answer as they always did.
+
+    `[toolchain] runner' is the exit, and outranks all of it -- hull, a
+    board over ssh, a wrapper setting up a prefix -- and an empty one
+    means nothing is to start it. A command line rather than a program,
+    unlike `cc': nothing here asks it separate questions.
+    """
+	if cfg.runner_named is not None:
+		argv = shell_split(cfg.runner_named, "[toolchain] runner")
+		if argv and not shutil.which(argv[0]):
+			die(f"[toolchain] runner: {argv[0]!r} not found")
+		return argv
+	if cfg.for_build_machine:
+		return []
+	if cfg.os == "windows" and host_os() != "windows":
+		found = shutil.which("wine")
+		return [found] if found else []
+	if cfg.os == host_os() and cfg.arch != host_arch():
+		found = (shutil.which("qemu-" + cfg.arch)
+		         or shutil.which(f"qemu-{cfg.arch}-static"))
+		if not found:
+			return []
+		# Where the target's own loader and libc are: a sysroot if there
+		# is one, and otherwise Debian's cross layout. The dynamic loader
+		# named in the binary means nothing on this machine without it.
+		root = cfg.sysroot or os.path.join("/usr", cfg.triplet)
+		return [found, "-L", root] if os.path.isdir(root) else [found]
+	return []
+
+
 def windows_static_runtime(cfg, libs, paths):
 	"""Whether a Windows program takes its toolchain's runtime inside it.
 
@@ -12657,6 +12696,10 @@ def _ann_install(ann, rel=""):
 # Unset it reads as ELF, which is what every one of these did before, so a
 # path that reaches a Target before the configuration exists is unchanged.
 _TARGET_OS = [None]
+
+# What a program built for this target has to be started through, as an
+# argv prefix; empty for one that runs here. See `target_runner'.
+_RUNNER = [[]]
 
 
 def module_name(name):
@@ -13686,6 +13729,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# discovery and has to spell a shared library the platform's way from
 	# the first question. See `shared_lib_name'.
 	_TARGET_OS[0] = cfg.os
+	_RUNNER[0] = target_runner(cfg)
 	# Built here rather than where the -I flags are worked out, because moc
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.
@@ -25826,6 +25870,13 @@ def main(argv):
 		# exit status, its signals and its terminal are its own, and fmake
 		# is not sitting between it and the shell.
 		try:
+			# A cross build reaches this with somebody to start it. The
+			# runner is the program, and takes the artifact as its first
+			# argument, where the name a script expects in argv[0] cannot
+			# be carried through.
+			if _RUNNER[0]:
+				os.execv(_RUNNER[0][0],
+				         _RUNNER[0] + [os.path.abspath(exe)] + args.run_args)
 			os.execv(exe, [args.run] + args.run_args)
 		except OSError as exc:
 			# `Exec format error' is the kernel declining a binary for
