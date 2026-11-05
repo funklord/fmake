@@ -638,7 +638,7 @@ that had been green about nothing for five commits ·
 [586. A cross build with somebody to start it](#586-a-cross-build-with-somebody-to-start-it) ·
 [587. What a macOS SDK actually is](#587-what-a-macos-sdk-actually-is) ·
 [588. Objective-C, where it is the platform's language](#588-objective-c-where-it-is-the-platforms-language) ·
-[589. An `@` that is the name](#589-an--that-is-the-name) ·
+[589. An at sign that is the name](#589-an-at-sign-that-is-the-name) ·
 [590. Running on Windows and macOS, as far as can be said from here](#590-running-on-windows-and-macos-as-far-as-can-be-said-from-here) ·
 [591. Sibling trees for Windows, and the host's Qt on a mingw line](#591-sibling-trees-for-windows-and-the-hosts-qt-on-a-mingw-line) ·
 [592. A program's icon](#592-a-programs-icon) ·
@@ -47083,7 +47083,7 @@ that is `[project] cflags`), and no `.app` bundle, which is a packaging
 question and belongs with the deployment work section 587 lists as
 needing a Mac.
 
-## 589. An `@` that is the name
+## 589. An at sign that is the name
 
 `@` in a symbol is a version on ELF, and `lib_exports` takes it off. On
 32-bit Windows it is the name: stdcall spells `Sleep` as `_Sleep@4`. So

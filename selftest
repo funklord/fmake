@@ -34778,6 +34778,8 @@ def a_machine_with_gcc_and_no_cc_still_builds(t):
 		if not found:
 			raise Skip(f"{name} not installed")
 		os.symlink(found, os.path.join(bindir, name))
+	# fmake's own shebang asks env for it, and this PATH is all there is.
+	os.symlink(sys.executable, os.path.join(bindir, "python3"))
 	r = t.fmake(env={"PATH": bindir})
 	out = r.stdout + r.stderr
 	check(r.returncode == 0, f"gcc alone has to be enough: {out}")
