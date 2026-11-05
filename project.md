@@ -647,7 +647,8 @@ that had been green about nothing for five commits ·
 [595. The real toolchain, kept in the suite](#595-the-real-toolchain-kept-in-the-suite) ·
 [596. A sweep's byproduct, and what the plans said](#596-a-sweeps-byproduct-and-what-the-plans-said) ·
 [597. One record for a directory per configuration](#597-one-record-for-a-directory-per-configuration) ·
-[598. The second walk: an ELF called `rs.exe`](#598-the-second-walk-an-elf-called-rsexe)
+[598. The second walk: an ELF called `rs.exe`](#598-the-second-walk-an-elf-called-rsexe) ·
+[599. A refused build keeps what it compiled](#599-a-refused-build-keeps-what-it-compiled)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47339,3 +47340,46 @@ Section 569 stays parked: that record says whose decision it is, and nothing
 measured here changes what it costs. For a target named with `--os`, the
 compiler's name is now checked against the arch, which covers the common way
 of getting it wrong.
+
+## 599. A refused build keeps what it compiled
+
+Reported from the guidelines tree on 2026-11-05, with a reproduction, while
+it measured the holder's new rule that a second build right after a build
+writes nothing. fmake met that wherever the first run succeeded. After a
+refusal it did not: `die` leaves by `SystemExit`, every `cache.save()` in
+`build` sits below the refusals, and so a tree that compiled everything and
+was refused for a duplicate symbol recorded nothing and left no `cache.json`.
+raidcfgd recompiled 332 objects and regenerated 13 moc files on each attempt
+until its exclude was written, about 100 seconds a time. **Iterating on a
+failing `fmake.toml` is when somebody retries most**. A file that fails to
+compile was never this fault: that path is not a `die` and reached the saves,
+measured the same before and after.
+
+`build` now saves on the way out of a refusal, around the body rather than at
+each `die` site, so a new refusal cannot be a site somebody
+forgot. Saving more often is not free, and three things had to be settled:
+
+- **Nothing is retired.** `_retire_ghosts` spends a ghost's grace one save at
+  a time and section 523's blame reads those ghosts, so a refused run saves
+  what it learned and spends nothing. A link failure is not a refusal and
+  spends grace as it always did.
+- **The outer build's copy can be behind.** A nested tool build saves the same
+  file, and the merge sat past the generators, so a failing generator would
+  have written over the tool's objects. The merge is `Cache.adopt_disk` now,
+  and a refusal takes it too.
+- **A build that re-entered itself needs no guard.** A mirage calls `build`
+  again with a newer copy, and the refusal passes through both saves. A marker
+  on the exception was written for that and removed when sabotaging it changed
+  nothing: the outer copy has not moved since it saved, and `save` compares.
+
+Whether a kept object can go stale was the first fear, and it could not: a
+link is keyed on the content of its inputs, so an object recompiled by a
+refused run relinks on the next good one. A refused run still does not record
+`units`, so it decides nothing about what the next build's providers are.
+Refusal texts were compared run against run across duplicates, compile errors,
+undefined symbols, `@kind exe` over a mirage and `[target.*]` over one, since
+a refusal's evidence used to be recompiled each time and is now read back.
+
+An interrupt is left as it was. `KeyboardInterrupt` arrives in the middle of a
+sweep with results not yet recorded, so it has less to keep and more that is
+half done; nobody has measured a retry after one as a cost.

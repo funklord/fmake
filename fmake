@@ -7701,6 +7701,9 @@ class Cache:
 	def __init__(self, path):
 		self.path = path
 		self._retired = False
+		# A nested build has written the same file, so this copy is behind
+		# it until `adopt_disk' has run.
+		self.nested_wrote = False
 		# Set for a run that promised to change nothing. `--dry-run' prints
 		# the commands and runs none of them, and it was writing this file
 		# and the lock beside it -- two entries in a tree somebody may only
@@ -7985,6 +7988,58 @@ class Cache:
 			fh.write(text)
 		os.replace(tmp, self.path)
 		self._on_disk = text
+
+	def adopt_disk(self):
+		"""Take in what a nested build wrote to this same file.
+
+    Every keyed section, not a list of three. This named `files',
+    `objects' and `links' and dropped the rest, and the rest is where
+    section 226's 25 seconds went: the nested build's sweep of every
+    library on the machine for the tool's externals was written to
+    `providers', discarded by this save, and taken again on every run --
+    618 nm invocations on a no-op build, measured here with cProfile,
+    against 12 ms for the second Config that section 226 blamed. Distinct
+    keys are what stops the tool's entries and the tree's colliding, in
+    every section alike: an object by its directory, a provider sweep by
+    its symbol set and toolchain, a header by its pkg-config signature.
+    Where a key is shared the outer build's entry wins, as it did for the
+    three. `units' is a list and stays the outer build's own.
+    """
+		self.nested_wrote = False
+		disk = Cache(self.path)
+		for section, held in disk.data.items():
+			if not isinstance(held, dict) or section in ("version", "fmake"):
+				continue
+			merged = dict(held)
+			merged.update(self.data.get(section, {}))
+			self.data[section] = merged
+		self.files = self.data["files"]
+		self.objects = self.data["objects"]
+
+	def save_refused(self):
+		"""Keep what a run that is ending in a refusal had learned.
+
+    Section 599. `die' leaves by SystemExit and every `save' in `build'
+    is further down than the refusals, so a tree that fails compiled
+    every object and recorded none: raidcfgd, stopped by one duplicate
+    symbol until its exclude is written, recompiled 332 objects and
+    regenerated 13 moc files on each retry, about 100 seconds a time --
+    and iterating on a failing fmake.toml is when somebody retries most.
+
+    Nothing is retired. `_retire_ghosts' spends a ghost's grace by the
+    save, and section 523's blame reads those ghosts, so a run that only
+    says what is wrong must not use up the entry that says why.
+
+    A disk that will not take the file is not this run's news: the
+    refusal has already been printed and is the thing to read.
+    """
+		self._retired = True
+		try:
+			if self.nested_wrote:
+				self.adopt_disk()
+			self.save()
+		except OSError as e:
+			vinfo(f"the cache could not be kept: {e.strerror or e}")
 
 	def hash_of(self, abspath, rel):
 		"""Content hash, avoiding the read when size+mtime are unchanged.
@@ -13969,6 +14024,19 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	state  = os.path.join(root, STATE_DIR)
 	cache  = Cache(os.path.join(state, CACHE_FILE))
 	cache.read_only = bool(args.dry_run)
+	try:
+		return build_with(args, root, state, cache, _bootstrapping,
+		                  _after_mirage)
+	except SystemExit:
+		# A build that re-entered itself passes through here too, holding
+		# an older copy than the inner build saved. It writes nothing: it
+		# saved just before re-entering and has not changed since, and
+		# `save' compares.
+		cache.save_refused()
+		raise
+
+
+def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	conf   = Conf(load_conf(root), args.profile)
 	# A config one directory up is not this build's, and saying nothing
 	# about it is how a whole fmake.toml goes unread without a word.
@@ -14156,6 +14224,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		if said:
 			say(f"{YELLOW('TOOL')} {name}")
 		bootstrapped.append(name)
+		cache.nested_wrote = True
 		# The nested build is for this machine and says so in the module's
 		# target state, which then has to be put back: left as it was, a
 		# Windows tree with a generator asked for `gen' from a driver that
@@ -14367,28 +14436,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# them in rather than replacing this cache, which still holds the
 		# generator freshness keys that were just written and are not on
 		# disk yet.
-		disk = Cache(os.path.join(state, CACHE_FILE))
-		# Every keyed section, not a list of three. This named `files',
-		# `objects' and `links' and dropped the rest, and the rest is where
-		# section 226's 25 seconds went: the nested build's sweep of every
-		# library on the machine for the tool's externals was written to
-		# `providers', discarded by this save, and taken again on every
-		# run -- 618 nm invocations on a no-op build, measured here with
-		# cProfile, against 12 ms for the second Config that section 226
-		# blamed. Distinct keys are what stops the tool's entries and the
-		# tree's colliding, in every section alike: an object by its
-		# directory, a provider sweep by its symbol set and toolchain, a
-		# header by its pkg-config signature. Where a key is shared the
-		# outer build's entry wins, as it did for the three. `units' is a
-		# list and stays the outer build's own.
-		for section, held in disk.data.items():
-			if not isinstance(held, dict) or section in ("version", "fmake"):
-				continue
-			merged = dict(held)
-			merged.update(cache.data.get(section, {}))
-			cache.data[section] = merged
-		cache.files = cache.data["files"]
-		cache.objects = cache.data["objects"]
+		cache.adopt_disk()
 
 	if generated:
 		srcs, hdrs, _unbuilt_again = walk_tree(root)

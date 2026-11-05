@@ -34982,6 +34982,162 @@ def a_generator_does_not_change_what_the_tree_is_built_for(t):
 	      f"a tool that is a PE has to be refused by name: {out}")
 
 
+def _refusing_tree(t):
+	"""Two definitions of `f`, one of `g`: everything compiles, nothing links."""
+	t.write("main.c", "int f(void);\nint g(void);\n"
+	        "int main(void){ return f() + g(); }\n")
+	t.write("f1.c", "int f(void){ return 1; }\n")
+	t.write("f2.c", "int f(void){ return 2; }\n")
+	t.write("g.c", "int g(void){ return 3; }\n")
+
+
+def _cached_objects(t):
+	"""The source of every object entry in this tree's cache, or None."""
+	try:
+		with open(os.path.join(t.dir, ".fmake", "cache.json")) as fh:
+			return sorted(json.load(fh)["objects"])
+	except FileNotFoundError:
+		return None
+
+
+@case
+def a_refused_build_keeps_what_it_compiled(t):
+	"""`die` left past every `save`, so a retry recompiled the whole tree.
+
+	Reported from the guidelines tree: raidcfgd, stopped by one duplicate
+	symbol until its exclude was written, recompiled 332 objects and
+	regenerated 13 moc files on every attempt, and iterating on a failing
+	fmake.toml is when somebody retries most.
+
+	The refusal has to survive the saving as well. Its own text comes from
+	a compile that the retry no longer does, so the second run is compared
+	with the first rather than only counted.
+	"""
+	_refusing_tree(t)
+	first = t.fmake("-j4")
+	said = first.stdout + first.stderr
+	check(first.returncode != 0 and "more than one file" in said,
+	      f"the tree must be refused for this to mean anything: {said}")
+	check(len(compiled(first)) == 4,
+	      f"and the refused run must have compiled it: {compiled(first)}")
+
+	again = t.fmake("-j4")
+	check(compiled(again) == [],
+	      f"a retry recompiled what the refusal had: {compiled(again)}")
+	check(again.returncode == first.returncode
+	      and "f1.c" in again.stderr and "f2.c" in again.stderr
+	      and "more than one file" in again.stderr,
+	      f"the retry must refuse exactly as the first run did: "
+	      f"{again.stdout}{again.stderr}")
+
+	# And what was kept has to be usable: the answer the refusal asked for
+	# links from those objects, compiling nothing, and is the right program.
+	t.write("fmake.toml", '[project]\nexclude = ["f2.c"]\n')
+	fixed = t.fmake("-j4")
+	check(fixed.returncode == 0 and compiled(fixed) == [],
+	      f"the fix should only have to link: {compiled(fixed)} "
+	      f"{fixed.stdout}{fixed.stderr}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	check(subprocess.run([prog]).returncode == 4,
+	      "the program linked from the kept objects is the wrong one")
+
+
+@case
+def a_refused_dry_run_still_writes_nothing(t):
+	"""The save on the way out honours what `--dry-run` promised."""
+	t.write("a.c", "int a(void){ return 1; }\n")
+	t.write("fmake.toml", '[target.x]\nroot = "absent.c"\n')
+	r = t.fmake("--dry-run")
+	check(r.returncode != 0, f"this tree has to be refused: {r.stdout}"
+	      f"{r.stderr}")
+	check(_cached_objects(t) is None,
+	      "a dry run that was refused wrote the cache")
+
+
+@case
+def a_refusal_after_a_nested_build_keeps_the_tools_objects(t):
+	"""The outer copy of the cache is behind the nested build's save.
+
+	A generator's tool is compiled by a build inside this one, which saves
+	the same file. The outer build merges that back in further down, past
+	the generator -- so a generator that fails saved a copy which had never
+	heard of the tool, and each retry compiled the tool again.
+
+	The same refusal is what `--clean` needs: the outputs a generator wrote
+	before a later refusal are the only record of them it has.
+	"""
+	t.write("tools/mk.c", '#include <stdio.h>\nint main(void){ '
+	        'puts("int gen_val(void){ return 0; }"); return 0; }\n')
+	t.write("main.c", "int gen_val(void);\n"
+	        "int main(void){ return gen_val(); }\n")
+	t.write("fmake.toml",
+	        '[generate.table]\ninputs = ["tools/mk.c"]\n'
+	        'outputs = ["gen.c"]\nuses = "mk"\n'
+	        'command = "$tool > $out; exit 3"\n'
+	        '\n[target.mk]\nroot = "tools/mk.c"\n')
+	r = t.fmake("-j4")
+	check(r.returncode != 0, f"the generator has to fail: {r.stdout}"
+	      f"{r.stderr}")
+	held = _cached_objects(t)
+	check(held and any("mk.c" in k for k in held),
+	      f"the tool's object fell out of the cache: {held}")
+
+
+@case
+def a_refusal_after_reentering_keeps_the_later_record(t):
+	"""A build that re-entered itself saved more than the one that called it.
+
+	A mirage restarts the plan by calling `build` again, and the inner run
+	has its own copy of the cache, so the refusal passes through two saves
+	and the outer copy is the older. It stays harmless only because that
+	copy has not moved since its last save and `save` compares; a save that
+	wrote regardless would put it back over the inner one.
+	"""
+	t.write("runner.cpp", "struct runner {\n\tint main(void) { return 0; }\n"
+	        "};\nint spawn(void){ runner r; return r.main(); }\n")
+	t.write("a.c", "int f(void){ return 1; }\n")
+	t.write("b.c", "int f(void){ return 2; }\n")
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check("does not export it" in said and r.returncode != 0,
+	      f"the tree has to re-enter and then be refused: {said}")
+	again = t.fmake("-j4")
+	check(compiled(again) == [],
+	      f"the inner run's objects were lost: {compiled(again)}")
+
+
+@case
+def a_refusal_does_not_spend_a_ghosts_grace(t):
+	"""A run that only says what is wrong must not use up why.
+
+	Section 523's blame reads the entries of files that have gone, and
+	`_retire_ghosts` spends them one save at a time. Those saves did not
+	happen on a refused run until refused runs began to save, so several
+	refusals in a row would otherwise use up the entry before the build
+	that needs it. A link failure is not a refusal and saves as it always
+	did, so what is retried here is a duplicate, and the blame is read
+	from the first build past it.
+	"""
+	t.write("main.c", "int helper(void);\nint f(void);\n"
+	        "int main(void){ return helper() + f(); }\n")
+	t.write("helper.c", "int helper(void){ return 0; }\n")
+	t.write("f1.c", "int f(void){ return 0; }\n")
+	check(t.fmake("-j4").returncode == 0, "the tree should build first")
+	os.remove(os.path.join(t.dir, "helper.c"))
+	t.write("main.c", "int helper(void);\nint f(void);\nint only2(void);\n"
+	        "int main(void){ return helper() + f() + only2(); }\n")
+	t.write("f2.c", "int f(void){ return 0; }\nint only2(void){ return 0; }\n")
+	for attempt in range(3):
+		r = t.fmake("-j4")
+		check(r.returncode != 0 and "more than one file" in r.stderr,
+		      f"attempt {attempt} must be the refusal: {r.stdout}{r.stderr}")
+	t.write("f1.c", "int unrelated(void){ return 0; }\n")
+	r = t.fmake("-j4")
+	said = r.stdout + r.stderr
+	check(r.returncode != 0 and "helper.c defined helper" in said,
+	      f"the refusals used up the name of the file that went: {said}")
+
+
 @case
 def a_real_mingw_builds_what_runs_on_windows(t):
 	"""section 595: the whole of 581 to 592 against the real thing.
