@@ -34789,6 +34789,38 @@ def a_machine_with_gcc_and_no_cc_still_builds(t):
 
 
 @case
+def another_os_does_not_ask_the_hosts_pkg_config(t):
+	"""section 591: a mingw compile was handed Linux's Qt.
+
+	Cross-building a real Qt tree for Windows put
+	`-I/usr/include/x86_64-linux-gnu/qt6' and the Linux mkspec on the line,
+	and the failure arrived inside Linux's headers. The pkg-config on PATH
+	answers for the host, and for another OS every word of that is wrong.
+
+	A stand-in that leaves a mark proves it was not asked. The control is
+	the reader saying where the target's packages are, which reopens the
+	question, and an architecture of this same OS is unaffected because
+	multiarch is exactly how that works.
+	"""
+	conf = _mingw_shim(t)
+	mark = os.path.join(t.dir, "asked")
+	t.write("bin/pkg-config", f'#!/bin/sh\necho "$@" >> {mark}\nexit 1\n')
+	os.chmod(os.path.join(t.dir, "bin", "pkg-config"), 0o755)
+	path = os.path.join(t.dir, "bin") + os.pathsep + os.environ["PATH"]
+	t.write("main.c", "#include <frob.h>\nvoid __main(void){ }\n"
+	        "int main(void){ return 0; }\n")
+	t.write("fmake.toml", conf)
+	t.fmake("--explain", env={"PATH": path})
+	check(not os.path.exists(mark),
+	      "the host's pkg-config has no answer about another OS")
+
+	t.fmake("--explain", env={"PATH": path,
+	                          "PKG_CONFIG_PATH": t.dir})
+	check(os.path.exists(mark),
+	      "and is asked again once somebody says where the packages are")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

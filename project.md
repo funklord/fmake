@@ -639,7 +639,8 @@ that had been green about nothing for five commits ·
 [587. What a macOS SDK actually is](#587-what-a-macos-sdk-actually-is) ·
 [588. Objective-C, where it is the platform's language](#588-objective-c-where-it-is-the-platforms-language) ·
 [589. An `@` that is the name](#589-an--that-is-the-name) ·
-[590. Running on Windows and macOS, as far as can be said from here](#590-running-on-windows-and-macos-as-far-as-can-be-said-from-here)
+[590. Running on Windows and macOS, as far as can be said from here](#590-running-on-windows-and-macos-as-far-as-can-be-said-from-here) ·
+[591. Sibling trees for Windows, and the host's Qt on a mingw line](#591-sibling-trees-for-windows-and-the-hosts-qt-on-a-mingw-line)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47126,3 +47127,29 @@ through `open()` with the locale's encoding, which on Windows is not UTF-8,
 and a depfile holding `C:/...`, whose drive colon `parse_depfile` has never
 met. `cl.exe` is not gcc-shaped and is not attempted: mingw and clang are
 what Windows means here.
+
+## 591. Sibling trees for Windows, and the host's Qt on a mingw line
+
+Section 13's lens with a new question: not *does it plan* but *does it
+cross-build*. Eight siblings from `git archive` copies in scratch, `--os
+windows`, the real mingw.
+
+Most are honest Linux programs and stop at a Linux header, which is the
+correct answer: ossacli at `transport_sg.c`, openmlx4 at `src/main.c`,
+anti-avx's `tool/`. situ's `situ-walk-c.exe` and `libsitu.a` built and the
+walker ran under wine, printing its usage -- a sibling's real program
+built for Windows with no file changed.
+
+**The Qt trees found a real fault.** respec and softkeys failed inside
+Linux headers, because the compile line said
+`-I/usr/include/x86_64-linux-gnu/qt6` and the Linux mkspec. The pkg-config
+on PATH answers for the host, section 171's shape, and for another OS
+every word of that answer is wrong. It is no longer asked when the target
+is another OS and nothing says where that OS's packages are: a sysroot,
+`[toolchain] pkg-config-path`, either pkg-config variable, or a
+`x86_64-w64-mingw32-pkg-config` beside the compiler. An architecture of
+this same OS keeps asking, since multiarch is how that works.
+
+The failure is now the true one, *`QApplication`: no such file*: there is
+no Qt for Windows here. Section 271's route, `include-dirs` and `lib-dirs`
+at a kit, is what reaches one.

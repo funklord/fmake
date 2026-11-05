@@ -11344,7 +11344,7 @@ class PkgConfig:
 	"""pkg-config, for the -I flags a library's own headers need."""
 
 	def __init__(self, configured=None, sysroot=None, triplet=None,
-	             sysincs=(), pc_path=()):
+	             sysincs=(), pc_path=(), foreign=False):
 		# A named pkg-config is refused rather than replaced, for the
 		# reason in `require_named_tool' and because the cost here is
 		# higher than for nm: pkg-config decides -I and -l, and left to
@@ -11360,6 +11360,17 @@ class PkgConfig:
 				"pkg-config decides the -I and -l flags, and the one on "
 				"PATH answers for the host, so fmake will not quietly use "
 				"it in place of the one you named.")
+		elif (foreign and not sysroot and not pc_path
+		      and not os.environ.get("PKG_CONFIG_PATH")
+		      and not os.environ.get("PKG_CONFIG_LIBDIR")):
+			# Another OS altogether, with nothing saying where its packages
+			# are. The one on PATH answers for the host, and every word of
+			# that answer is wrong: measured on a Qt tree cross-built for
+			# Windows, a mingw compile was handed
+			# -I/usr/include/x86_64-linux-gnu/qt6 and the Linux mkspec,
+			# and failed inside Linux's own headers. A foreign architecture
+			# of this OS keeps asking, since multiarch is how that works.
+			self.exe = None
 		else:
 			self.exe = (shutil.which("pkg-config")
 			            or shutil.which("pkgconf"))
@@ -13882,7 +13893,8 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# where moc lives.
 	pkg    = PkgConfig(cfg.pkgexe, cfg.sysroot, cfg.triplet,
 	                   cfg.sysincdirs,
-	                   pc_path=cfg.pkg_config_path)
+	                   pc_path=cfg.pkg_config_path,
+	                   foreign=cfg.os != host_os())
 	# Before anything resolves a header, so that every Qt answer in this
 	# build comes from the one major -- including the moc outputs, whose
 	# includes are the ones that gave the disagreement away.
