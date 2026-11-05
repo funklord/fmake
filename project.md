@@ -637,7 +637,8 @@ that had been green about nothing for five commits ·
 [585. A binary that starts somewhere else](#585-a-binary-that-starts-somewhere-else) ·
 [586. A cross build with somebody to start it](#586-a-cross-build-with-somebody-to-start-it) ·
 [587. What a macOS SDK actually is](#587-what-a-macos-sdk-actually-is) ·
-[588. Objective-C, where it is the platform's language](#588-objective-c-where-it-is-the-platforms-language)
+[588. Objective-C, where it is the platform's language](#588-objective-c-where-it-is-the-platforms-language) ·
+[589. An `@` that is the name](#589-an--that-is-the-name)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47072,3 +47073,19 @@ Not done, on purpose: no `-fobjc-arc` (a per-project memory-model choice
 that is `[project] cflags`), and no `.app` bundle, which is a packaging
 question and belongs with the deployment work section 587 lists as
 needing a Mac.
+
+## 589. An `@` that is the name
+
+`@` in a symbol is a version on ELF, and `lib_exports` takes it off. On
+32-bit Windows it is the name: stdcall spells `Sleep` as `_Sleep@4`. So
+the object's `__imp__Sleep@4` matched nothing, and **no Win32 call had a
+provider at all**, on a real i686 mingw with kernel32 in the search path:
+*no coff/0x14c library exports: `__imp__Sleep@4`*. Kept whole for a
+Windows target, only where the tail is digits; the program then links and
+`-lws2_32` resolves by symbol as it does on x86-64.
+
+Section 583's 32-bit entry spelling, `_WinMain@16`, was right first time,
+and a `__stdcall` DLL builds with its import library. What has not been
+done is run one: wine here is 64-bit only, and says so
+(*failed to load syswow64\ntdll.dll*), which is this machine rather than
+the program. `--os windows --arch x86` reaches `build-windows-x86/`.

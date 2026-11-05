@@ -34722,6 +34722,43 @@ def objective_c_is_source_where_it_is_the_platforms_language(t):
 
 
 @case
+def a_stdcall_name_keeps_its_byte_count(t):
+	"""section 589: no Win32 call had a provider on 32-bit Windows.
+
+	`@' in a symbol is a version on ELF and is taken off, and on 32-bit
+	Windows it is the name: stdcall spells `Sleep' as `_Sleep@4'. The
+	object's `__imp__Sleep@4' then matched nothing, so a real i686 mingw
+	build reported *no coff/0x14c library exports* about Sleep, on a
+	machine with kernel32 in the search path.
+	"""
+	_pe_or_skip(t)
+	dep = os.path.join(t.dir, "dep")
+	os.makedirs(dep)
+	with open(os.path.join(dep, "d.c"), "w") as fh:
+		fh.write("__declspec(dllexport) int __stdcall d_call(int v)"
+		         "{ return v; }\n"
+		         "int d_entry(void){ return 0; }\n")
+	got = _run_in(dep, "clang", "-target", "i686-pc-windows-gnu", "-shared",
+	              "-nostdlib", "-Wl,-e,_d_entry",
+	              "-Wl,--out-implib,libd.dll.a", "-o", "d.dll", "d.c")
+	if got.returncode != 0:
+		raise Skip(f"this toolchain cannot link a 32-bit DLL: {got.stderr}")
+	os.remove(os.path.join(dep, "d.c"))
+	t.write("main.c", "__declspec(dllimport) int __stdcall d_call(int);\n"
+	        "void __main(void){ }\n"
+	        "int main(void){ return d_call(1); }\n")
+	t.write("fmake.toml",
+	        '[project]\ncflags = ["-target", "i686-pc-windows-gnu"]\n'
+	        'ldflags = ["-nostdlib"]\nexclude = ["dep"]\n\n'
+	        '[toolchain]\ncc = "clang"\nnm = "llvm-nm"\nar = "llvm-ar"\n'
+	        f'os = "windows"\nlib-dirs = ["{dep}"]\n')
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check(re.search(r"-ld\s+__imp__d_call@4", out),
+	      f"a decorated import has its library as its provider: {out}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

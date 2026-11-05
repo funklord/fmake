@@ -10925,6 +10925,9 @@ def elf_targets(path, dirs=(), _depth=0):
 	return out
 
 
+RE_STDCALL = re.compile(r"@\d+$")
+
+
 def lib_exports(cfg, path):
 	"""Symbols a library offers to a link.
 
@@ -10960,11 +10963,18 @@ def lib_exports(cfg, path):
 	if dyn:
 		cmd.append("-D")
 	r = subprocess.run(cmd + [path], capture_output=True, text=True, errors="replace")
+	windows = cfg.os == "windows"
 	out = set()
 	for line in r.stdout.splitlines():
 		m = RE_NM_POSIX.match(line)
 		if m:
-			name = m.group("name").split("@")[0]
+			name = m.group("name")
+			# `@' is a version on ELF and part of the name on 32-bit
+			# Windows, where stdcall spells `Sleep' as `_Sleep@4'. Taken
+			# off here the object's `__imp__Sleep@4' matched nothing, so
+			# no Win32 call had a provider at all.
+			if not (windows and RE_STDCALL.search(name)):
+				name = name.split("@")[0]
 			out.add(name)
 			# A DLL's DATA is in its import library as `__imp_X' alone,
 			# and an object still names plain `X', which the mingw linker
