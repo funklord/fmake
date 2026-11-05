@@ -7099,12 +7099,8 @@ class Config:
 		# falls back to the bare question: worst case is what fmake did
 		# before, rather than a build that stops.
 		self.probe_flags = [f for f in conf.cflags() if f != "-c"]
-		# Asked apart from the triplet, because -print-multiarch is a
-		# Debian answer about library directories: clang refuses it outright
-		# and gcc answers nothing for mingw. -dumpmachine is the compiler
-		# saying what it builds for.
-		self.machine = self._probe("-dumpmachine")
-		self.triplet = self._probe("-print-multiarch") or self.machine
+		self.triplet = (self._probe("-print-multiarch")
+		                or self._probe("-dumpmachine"))
 		self.nm      = find_nm(tool.get("nm")
 		                       or self._prefixed("nm"))
 		self.sysroot = tool.get("sysroot")
@@ -7132,7 +7128,7 @@ class Config:
 		# `os = "windows"', and the host's name for it linked `hello'
 		# through a driver that wrote `hello.exe'. See `machine_os'.
 		self.os      = canon_platform("os", self.os_named or tool.get("os")
-		                              or machine_os(self.machine)
+		                              or machine_os(self.triplet)
 		                              or host_os())
 		self.arch    = (self.arch_named
 		                or canon_platform("arch", tool.get("arch") or host_arch()))
@@ -14056,7 +14052,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		# One list, used to look for the artifact afterwards and to decide
 		# whether this line is worth printing. Two would be two things to
 		# be wrong.
-		cands = (name, f"lib{name}.so", f"lib{name}.a")
+		cands = (name, f"{name}.exe", f"lib{name}.so", f"lib{name}.a")
 
 		def built_ident():
 			"""What is on disk for this tool now, or None."""
@@ -14096,8 +14092,17 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 		if said:
 			say(f"{YELLOW('TOOL')} {name}")
 		bootstrapped.append(name)
-		if build(sub, _bootstrapping=True) != 0:
-			die(f"could not build {name!r}, which a generator needs")
+		# The nested build is for this machine and says so in the module's
+		# target state, which then has to be put back: left as it was, a
+		# Windows tree with a generator asked for `gen' from a driver that
+		# writes `gen.exe', having named everything before it correctly.
+		target = _TARGET_OS[0], _RUNNER[0]
+		try:
+			if build(sub, _bootstrapping=True) != 0:
+				die(f"could not build {name!r}, which a generator needs")
+		finally:
+			_TARGET_OS[0], _RUNNER[0] = target
+			admit_platform(target[0])
 		if not said and built_ident() != before:
 			say(f"{YELLOW('TOOL')} {name}")
 		for cand in cands:
@@ -14112,6 +14117,13 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				    f"cannot run here.\nA generator runs on the build "
 				    f"machine, so give it a [build-toolchain] in "
 				    f"{CONF_FILE}.")
+			# elf_identity has no opinion about a PE, so a mingw build
+			# with no [build-toolchain] reached here and failed later as
+			# an Exec format error from a rule.
+			if path.endswith(".exe") and host_os() != "windows":
+				die(f"{name!r} was built for Windows and cannot run here.\n"
+				    f"A generator runs on the build machine, so give it a "
+				    f"[build-toolchain] in {CONF_FILE}.")
 			return path
 		die(f"built {name!r} but found no artifact in {_rel(tooldir, root)}")
 

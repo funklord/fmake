@@ -642,7 +642,8 @@ that had been green about nothing for five commits ·
 [590. Running on Windows and macOS, as far as can be said from here](#590-running-on-windows-and-macos-as-far-as-can-be-said-from-here) ·
 [591. Sibling trees for Windows, and the host's Qt on a mingw line](#591-sibling-trees-for-windows-and-the-hosts-qt-on-a-mingw-line) ·
 [592. A program's icon](#592-a-programs-icon) ·
-[593. The GNU words in the link, walked against ld64](#593-the-gnu-words-in-the-link-walked-against-ld64)
+[593. The GNU words in the link, walked against ld64](#593-the-gnu-words-in-the-link-walked-against-ld64) ·
+[594. A generator, and what the run cost](#594-a-generator-and-what-the-run-cost)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47214,3 +47215,27 @@ that merely tolerated the missing flag could not pass by luck.
 
 The table is the useful half: section 577 had filed version scripts as
 "not portable at all", and on Windows they turn out to work.
+
+## 594. A generator, and what the run cost
+
+**A generator reset the target.** A generator's program is a nested
+build for the build machine, and it left the module's target state
+pointing at its own OS. So a Windows tree named everything correctly up
+to the tool and then asked for `gen` from a driver writing `gen.exe`. Saved
+and put back around the nested build, for all three pieces of state.
+This shape was reasoned to rather than stumbled on: `_TARGET_OS` is a
+global, section 574 knew it, and something had to be setting it twice.
+
+With `$CC` naming mingw and no `[build-toolchain]`, the tool is itself a PE.
+`elf_identity` has no opinion about one, so nothing refused it and the
+failure was an Exec format error out of a rule. It is refused now with the
+sentence the ELF case already had.
+
+**Section 8, measured** against the run's first commit, incremental, CPU
+time, interleaved at load 30: `min` 0.38 s before and 0.42 s with a
+`-dumpmachine` probe added on every run. That probe was asked apart from
+the triplet for a reason that turned out not to need it: where
+`-print-multiarch` answers, its answer names the OS just as well, and where
+it does not, `-dumpmachine` is what the triplet already falls back to. So
+`machine_os` reads the triplet and the run adds no process on ELF.
+`driver_libs` and `sdk_root` run only for windows and darwin.

@@ -34935,6 +34935,50 @@ def macos_archives_need_no_group(t):
 
 
 @case
+def a_generator_does_not_change_what_the_tree_is_built_for(t):
+	"""section 594: `LD gen', after a tool built for this machine.
+
+	A generator's program is a nested build for the build machine, and
+	that build set the module's target OS to its own and left it there. So
+	a Windows tree with a generator named everything correctly up to the
+	tool, and then asked for `gen' from a driver writing `gen.exe'.
+
+	The second half: with no [build-toolchain] and $CC naming mingw, the
+	tool is a PE. `elf_identity' has no opinion about one, so nothing
+	refused it, and the failure was an Exec format error from the rule.
+	"""
+	conf = _mingw_shim(t)
+	t.write("tools/mk.c", '#include <stdio.h>\nint main(void){ '
+	        'puts("int gen_val(void){ return 0; }"); return 0; }\n')
+	t.write("crt.c", "void __main(void){ }\n")
+	t.write("main.c", "int gen_val(void);\n"
+	        "int main(void){ return gen_val(); }\n")
+	rule = ('[generate.table]\ninputs = ["tools/mk.c"]\n'
+	        'outputs = ["gen.c"]\nuses = "mk"\n'
+	        'command = "$tool > $out"\n')
+	t.write("fmake.toml", conf + '\n[build-toolchain]\ncc = "cc"\n\n'
+	        + rule + '\n[target.mk]\nroot = "tools/mk.c"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the generated Windows build failed: {out}")
+	prog = os.path.basename(t.dir)
+	check(os.path.exists(os.path.join(t.dir, prog + ".exe")),
+	      f"the tree stays a Windows build past its generator: "
+	      f"{sorted(os.listdir(t.dir))}\n{out}")
+
+	shim = os.path.join(t.dir, "tc", "x86_64-w64-mingw32-gcc")
+	os.remove(os.path.join(t.dir, "gen.c"))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"))
+	t.write("fmake.toml", re.sub(r'\ncc = ".*"\n', "\n", conf) + "\n" + rule
+	        + '\n[target.mk]\nroot = "tools/mk.c"\n')
+	r = t.fmake(env={"CC": shim})
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "cannot run here" in out
+	      and "[build-toolchain]" in out,
+	      f"a tool that is a PE has to be refused by name: {out}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 
