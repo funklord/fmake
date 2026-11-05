@@ -7062,6 +7062,7 @@ class Config:
 		# A tool built to run *here* is a separate build for a separate
 		# machine, and its objects are foreign on purpose.
 		self.for_build_machine = getattr(args, "use_build_toolchain", False)
+		self.named_profile = bool(getattr(conf, "profile_name", None))
 		self.cc      = (os.environ.get("CC") or tool.get("cc")
 		                or default_compiler("cc", "gcc", "clang"))
 		# --arch, a compiler chosen by architecture. Not for a tool built
@@ -7404,6 +7405,18 @@ class Config:
 		                         *self.cflags, "|", *self.override,
 		                         "|", self.rustc, self.rust_edition,
 		                         *self.rustflags]))[:12]
+		# What separates this configuration's entries in the object cache.
+		# The objects themselves have long been apart, one directory per
+		# `key' above, while the record of them was keyed by path alone: so
+		# each switch of profile or target found the other's entry and
+		# recompiled the tree into a directory already holding the answer.
+		# Measured 2026-11-05 on `-p dbg' and `--os windows', alternating:
+		# every file, every time. Empty for the plain native build, which
+		# a one-target tree is and whose entries stay spelled as paths.
+		self.object_slot = ("\0" + self.key
+		                    if (self.named_profile
+		                        or self.os != host_os()
+		                        or self.arch != host_arch()) else "")
 
 	def _probe(self, question):
 		"""Ask the compiler `question', in this project's configuration.
@@ -9186,7 +9199,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	for u in units:
 		if u.compiled:
 			continue
-		ent = cache.objects.get(u.key)
+		ent = cache.objects.get(u.key + cfg.object_slot)
 		key = object_key(u, cfg, cache, root, incflags, iface, None, kmemo)
 		if (ent and ent.get("key") == key and key is not None
 		        and _same_file(u.obj, ent.get("size"))):
@@ -9772,7 +9785,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 			u.undef, u.strong, u.weak = set(), set(), set()
 			u.compiled = True
 			broken.add(u.key)
-			cache.objects.pop(u.key, None)
+			cache.objects.pop(u.key + cfg.object_slot, None)
 
 	if dry_run:
 		for u in todo:
@@ -9788,7 +9801,7 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	read_symbols(made, cfg, jobs)
 	kmemo = {}
 	for u in made:
-		cache.objects[u.key] = {
+		cache.objects[u.key + cfg.object_slot] = {
 		    # The same key the staleness test computed, module graph and
 		    # all: written with a different one, every build would find a
 		    # mismatch and recompile everything.

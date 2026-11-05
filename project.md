@@ -645,7 +645,8 @@ that had been green about nothing for five commits ·
 [593. The GNU words in the link, walked against ld64](#593-the-gnu-words-in-the-link-walked-against-ld64) ·
 [594. A generator, and what the run cost](#594-a-generator-and-what-the-run-cost) ·
 [595. The real toolchain, kept in the suite](#595-the-real-toolchain-kept-in-the-suite) ·
-[596. A sweep's byproduct, and what the plans said](#596-a-sweeps-byproduct-and-what-the-plans-said)
+[596. A sweep's byproduct, and what the plans said](#596-a-sweeps-byproduct-and-what-the-plans-said) ·
+[597. One record for a directory per configuration](#597-one-record-for-a-directory-per-configuration)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47276,3 +47277,27 @@ in situ at 0600, owned by the other account, made `--dry-run` a
 PermissionError. An unreadable input now has no hash, the rule runs, and the
 tool says what is wrong; `scan` opens the file first so that *unreadable*
 reports the errno rather than *no such file*.
+
+## 597. One record for a directory per configuration
+
+Section 8 says objects are kept per configuration so that switching does
+not invalidate the old ones, and the code beside `refresh_key` repeats it.
+**The directories were real and the record was not**: `cache.objects` was
+keyed by path, so a build for one target overwrote the entry of the other,
+and each switch recompiled every file into a directory already holding the
+answer. Found by alternating native, Windows and aarch64 builds in one
+tree to look for state leaking between targets. None leaked; every result
+was right, which is why nobody saw it, and it cost a full compile per switch.
+`-p` had the same fault for as long as profiles have existed.
+
+The entry now carries the configuration behind a NUL, as a variant's already
+does, so `_retire_ghosts` and the deleted-source blame read it unchanged. **A
+plain native build keeps its path as the key**, which leaves a one-target
+tree's cache exactly as it was. After:
+
+    native, -p dbg, native, -p dbg     CC CC, CC CC, LD, LD
+    --os windows, native, --os windows, --arch aarch64, --os windows, native
+                                       CC CC, LD, up to date, CC CC, up to date, up to date
+
+An `LD` remains where two configurations share one output path, as a
+profile does in the tree's root, and is right: the file there is the other's.

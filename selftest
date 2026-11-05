@@ -35058,6 +35058,40 @@ def an_input_nobody_may_read_is_not_a_traceback(t):
 
 
 @case
+def switching_target_or_profile_compiles_nothing_already_compiled(t):
+	"""section 597: a directory per configuration, and one record for all.
+
+	Objects have long been kept one directory per configuration, and
+	section 8 says that is so a switch does not invalidate the old one.
+	The record of them was keyed by path alone, so a tree built for two
+	targets recompiled every file on every switch, into a directory
+	already holding the answer. The second visit to each is the assertion.
+	"""
+	conf = _mingw_shim(t)
+	tc = os.path.join(t.dir, "tc")
+	path = tc + os.pathsep + os.environ["PATH"]
+	t.write("main.c", "void __main(void){ }\nint main(void){ return 0; }\n")
+	t.write("fmake.toml", re.sub(r'cc = ".*"\n', "", conf).replace(
+		'ldflags = ["-nostdlib", "-Wl,-e,main"]\n', "")
+		+ '\n[profile.dbg]\ncflags = ["-g"]\n')
+	win = ("--os", "windows", "--arch", "x86_64", "-p", "dbg",
+	       "--ldflags", "-nostdlib -Wl,-e,main")
+	for label, args_ in (("native", ()), ("profile", ("-p", "dbg")),
+	                     ("windows", win)):
+		r = t.fmake(*args_, env={"PATH": path})
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the {label} build failed: {out}")
+		check("CC  main.c" in out, f"the {label} build compiles once: {out}")
+	for label, args_ in (("native", ()), ("profile", ("-p", "dbg")),
+	                     ("windows", win)):
+		r = t.fmake(*args_, env={"PATH": path})
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"the {label} rebuild failed: {out}")
+		check("CC  main.c" not in out,
+		      f"coming back to {label} has nothing to compile: {out}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 
