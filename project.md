@@ -638,7 +638,8 @@ that had been green about nothing for five commits ·
 [586. A cross build with somebody to start it](#586-a-cross-build-with-somebody-to-start-it) ·
 [587. What a macOS SDK actually is](#587-what-a-macos-sdk-actually-is) ·
 [588. Objective-C, where it is the platform's language](#588-objective-c-where-it-is-the-platforms-language) ·
-[589. An `@` that is the name](#589-an--that-is-the-name)
+[589. An `@` that is the name](#589-an--that-is-the-name) ·
+[590. Running on Windows and macOS, as far as can be said from here](#590-running-on-windows-and-macos-as-far-as-can-be-said-from-here)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47089,3 +47090,39 @@ and a `__stdcall` DLL builds with its import library. What has not been
 done is run one: wine here is 64-bit only, and says so
 (*failed to load syswow64\ntdll.dll*), which is this machine rather than
 the program. `--os windows --arch x86` reaches `build-windows-x86/`.
+
+## 590. Running on Windows and macOS, as far as can be said from here
+
+The focus has two readings, and sections 581 to 589 are the first:
+building *for* those platforms from Linux. The second is fmake running
+*on* them.
+
+**macOS needs almost nothing**, because it is a Unix: `cc` is clang,
+`nm` reads Mach-O, locking works, and `sdk_root` asks a driver that
+answers on a Mac exactly as it does here. It remains unrun.
+
+**Windows was audited for what a POSIX-only assumption would do**, and the
+tree was better than expected: `fcntl` is already optional, paths go through
+`os.sep`, and the state directory is relative. Five real hazards, fixed:
+
+- **`;` in search paths.** `-print-search-dirs`, `LIBRARY_PATH` and
+  `PKG_CONFIG_*` were split on `:`, which would have cut `C:\mingw\lib` in
+  two. `os.pathsep`, identical on POSIX.
+- **`_kill_group`** used `killpg` and `SIGKILL`, neither of which exists
+  there, so a test's deadline would have been a traceback.
+- **`os.execv`** on Windows starts a process and returns the prompt to the
+  shell, so `--run`'s exit status would have been lost.
+- **`cc`** is POSIX's word. MSYS2 and a bare mingw have `gcc` and no `cc`,
+  and the default had no fallback. An unnamed compiler now tries `gcc` and
+  `clang`; a named one is refused as ever. Guarded, since it is the one of
+  the five that can be reached from Linux.
+- `host_arch` already lowercases, so `AMD64` was fine: checked and not a
+  change.
+
+**None of this has run on Windows.** Fetching a Windows Python to run under
+wine was not tried, since this session's sandbox refused a downloaded
+binary. Two things are known unknowns rather than hazards: source files read
+through `open()` with the locale's encoding, which on Windows is not UTF-8,
+and a depfile holding `C:/...`, whose drive colon `parse_depfile` has never
+met. `cl.exe` is not gcc-shaped and is not attempted: mingw and clang are
+what Windows means here.

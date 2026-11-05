@@ -2793,6 +2793,12 @@ def _kill_group(proc):
     ignores TERM is exactly the kind that needed a deadline. The signal
     goes to the group, which is why the child was given its own.
     """
+	# Neither a group nor a SIGKILL exists on Windows, and reaching for them
+	# there would turn a test's deadline into a traceback.
+	if not hasattr(os, "killpg"):
+		proc.kill()
+		proc.wait()
+		return
 	for sig, grace in ((signal.SIGTERM, 3), (signal.SIGKILL, 3)):
 		try:
 			os.killpg(proc.pid, sig)
@@ -6954,6 +6960,19 @@ def compiler_for_os(os_name, arch_name, chosen):
 	    + "    or name one outright with $CC or [toolchain] cc.")
 
 
+def default_compiler(*names):
+	"""The first of these on PATH, or the first, to be refused by name.
+
+    `cc' is POSIX's word and is on every Unix, and a Windows box running
+    MSYS2 or a bare mingw has `gcc' and no `cc'. Only when nobody named a
+    compiler: a named one that is missing is refused, not substituted.
+    """
+	for name in names:
+		if shutil.which(name):
+			return name
+	return names[0]
+
+
 def driver_link_words(driver, lang):
 	"""The words of the commands `driver' (an argv) would run for a link.
 
@@ -7032,7 +7051,8 @@ class Config:
 		# A tool built to run *here* is a separate build for a separate
 		# machine, and its objects are foreign on purpose.
 		self.for_build_machine = getattr(args, "use_build_toolchain", False)
-		self.cc      = os.environ.get("CC")  or tool.get("cc", "cc")
+		self.cc      = (os.environ.get("CC") or tool.get("cc")
+		                or default_compiler("cc", "gcc", "clang"))
 		# --arch, a compiler chosen by architecture. Not for a tool built
 		# to run here, which is the build machine's business.
 		self.arch_named = None
@@ -7054,7 +7074,7 @@ class Config:
 		# wrong anywhere a person would look.
 		self.cxx     = (os.environ.get("CXX") or tool.get("cxx")
 		                or self._prefixed("g++") or self._prefixed("c++")
-		                or "c++")
+		                or default_compiler("c++", "g++", "clang++"))
 		# What the project's own flags make this compiler. `-m32', a
 		# `--target' or a `-B' changes what -print-multiarch and
 		# -print-search-dirs answer, and fmake refuses `cc = "clang
@@ -10769,7 +10789,7 @@ def compiler_lib_dirs(cfg):
 	out = []
 	for line in cfg._probe("-print-search-dirs").splitlines():
 		if line.startswith("libraries:"):
-			for d in line.split(":", 1)[1].lstrip(" =").split(":"):
+			for d in line.split(":", 1)[1].lstrip(" =").split(os.pathsep):
 				if d and os.path.isdir(d):
 					out.append(d)
 	return out
@@ -10799,7 +10819,8 @@ def lib_search_dirs(cfg):
 		if triplet:
 			cands.append(os.path.join(base, triplet))
 		cands.append(base)
-	cands += [d for d in os.environ.get("LIBRARY_PATH", "").split(":") if d]
+	cands += [d for d in os.environ.get("LIBRARY_PATH", "").split(os.pathsep)
+	          if d]
 
 	out, seen = [], set()
 	for d in cands:
@@ -11272,7 +11293,7 @@ def default_link_dirs(cfg):
 	out = set()
 	for line in cfg._probe("-print-search-dirs").splitlines():
 		if line.startswith("libraries:"):
-			for d in line.split(":", 1)[1].lstrip(" =").split(":"):
+			for d in line.split(":", 1)[1].lstrip(" =").split(os.pathsep):
 				if d:
 					out.add(os.path.realpath(d))
 	# `-syslibroot' is the linker's own search, so naming it again would put
@@ -11400,7 +11421,7 @@ class PkgConfig:
 					                            "pkgconfig"))
 				libdirs.append(os.path.join(sysroot, base, "pkgconfig"))
 			self.env["PKG_CONFIG_SYSROOT_DIR"] = sysroot
-			self.env["PKG_CONFIG_LIBDIR"] = ":".join(libdirs)
+			self.env["PKG_CONFIG_LIBDIR"] = os.pathsep.join(libdirs)
 		# Prepended, so a tree's own kit wins over anything the caller's
 		# environment already put on the path, while still deferring to
 		# PKG_CONFIG_LIBDIR when a sysroot set one (a sysroot replaces the
@@ -11410,7 +11431,7 @@ class PkgConfig:
 		# on its own.
 		if pc_path:
 			was = self.env.get("PKG_CONFIG_PATH", "")
-			self.env["PKG_CONFIG_PATH"] = ":".join(
+			self.env["PKG_CONFIG_PATH"] = os.pathsep.join(
 			    list(pc_path) + ([was] if was else []))
 
 	def _run(self, args):
@@ -11514,12 +11535,13 @@ class PkgConfig:
         that decides anything is ever asked about it. The symptom is a
         missing include for a library that is plainly installed.
         """
-		extra = [d for d in self.env.get("PKG_CONFIG_PATH", "").split(":") if d]
+		extra = [d for d in self.env.get("PKG_CONFIG_PATH", "").split(os.pathsep)
+		         if d]
 		if "PKG_CONFIG_LIBDIR" in self.env:
-			return extra + [d for d in self.env["PKG_CONFIG_LIBDIR"].split(":")
+			return extra + [d for d in self.env["PKG_CONFIG_LIBDIR"].split(os.pathsep)
 			                if d]
 		p = self._run(["--variable", "pc_path", "pkg-config"]).stdout.strip()
-		dirs = [d for d in p.split(":") if d] if p else []
+		dirs = [d for d in p.split(os.pathsep) if d] if p else []
 		return extra + (dirs or ["/usr/lib/pkgconfig", "/usr/share/pkgconfig"])
 
 	def signature(self):
@@ -26002,6 +26024,10 @@ def main(argv):
 			if _RUNNER[0]:
 				os.execv(_RUNNER[0][0],
 				         _RUNNER[0] + [os.path.abspath(exe)] + args.run_args)
+			# Windows has no exec: the Python call starts a new process and
+			# returns the prompt to the shell while it is still running.
+			if os.name == "nt":
+				return subprocess.call([exe] + args.run_args)
 			os.execv(exe, [args.run] + args.run_args)
 		except OSError as exc:
 			# `Exec format error' is the kernel declining a binary for

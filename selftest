@@ -34759,6 +34759,36 @@ def a_stdcall_name_keeps_its_byte_count(t):
 
 
 @case
+def a_machine_with_gcc_and_no_cc_still_builds(t):
+	"""section 590: `cc' is POSIX's word, and MSYS2 does not have it.
+
+	The default compiler was `cc' with no fallback, so `fmake' on a bare
+	mingw said *C compiler 'cc' not found* beside a working `gcc'. Only
+	an unnamed compiler falls back: a named one that is missing is
+	refused, which is the second half and the rule everywhere else.
+	"""
+	gcc = shutil.which("gcc")
+	if not gcc:
+		raise Skip("gcc not installed")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	bindir = os.path.join(t.dir, "bin")
+	os.makedirs(bindir)
+	for name in ("gcc", "nm", "ar", "as", "ld"):
+		found = shutil.which(name)
+		if not found:
+			raise Skip(f"{name} not installed")
+		os.symlink(found, os.path.join(bindir, name))
+	r = t.fmake(env={"PATH": bindir})
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"gcc alone has to be enough: {out}")
+
+	r = t.fmake(env={"PATH": bindir, "CC": "cc"})
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "'cc' not found" in out,
+	      f"and a compiler somebody named is not substituted: {out}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 
