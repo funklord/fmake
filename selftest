@@ -34578,6 +34578,8 @@ def _macos_sdk(t):
 	stub("usr/lib/libSystem.tbd", "/usr/lib/libSystem.B.dylib",
 	     "_puts", "dyld_stub_binder")
 	stub("usr/lib/libz.tbd", "/usr/lib/libz.1.dylib", "_zlibVersion")
+	stub("usr/lib/libobjc.tbd", "/usr/lib/libobjc.A.dylib",
+	     "__objc_empty_cache", "_objc_msgSend", "_objc_opt_class")
 	fw = "System/Library/Frameworks/CoreFoundation.framework"
 	stub(f"{fw}/CoreFoundation.tbd",
 	     f"/{fw}/Versions/A/CoreFoundation", "_CFRelease")
@@ -34677,6 +34679,46 @@ def an_include_names_its_framework(t):
 	out = r.stdout + r.stderr
 	check("-framework" not in out,
 	      f"and a quoted include is this tree's own file: {out}")
+
+
+@case
+def objective_c_is_source_where_it_is_the_platforms_language(t):
+	"""section 588: a macOS tree in the macOS language had no source.
+
+	`.m' and `.mm' were not extensions fmake knew, so a Cocoa program
+	reported nothing to build. `#import' was invisible as well, and it is
+	how nearly all of it is written: the header it names has to pair up
+	with its implementation like any other, which is what the second file
+	here tests -- `main.m' reaches `greeter.m' through the header alone.
+
+	Only for a target that has it. `.m' elsewhere is at least as likely to
+	be MATLAB, and the control is a tree on this machine holding one.
+	"""
+	t.write("fmake.toml", _macos_sdk(t))
+	t.write("greeter.h", "__attribute__((objc_root_class))\n"
+	        "@interface Greeter\n+ (int)answer;\n@end\n")
+	t.write("greeter.m", '#import "greeter.h"\n@implementation Greeter\n'
+	        "+ (int)answer { return 42; }\n@end\n")
+	t.write("main.m", '#import "greeter.h"\n'
+	        "int main(void){ return [Greeter answer]; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the Objective-C link failed: {out}")
+	check("greeter.m" in out, f"the header has to reach its .m: {out}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir))
+	check("libobjc" in _dylibs_used(prog),
+	      f"and the runtime is found by symbol: {_dylibs_used(prog)}")
+
+	u = Tree("matlab")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("model.m", "x = 1;\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0 and "model.m" not in out,
+		      f"on any other target it is not source: {out}")
+	finally:
+		u.cleanup()
 
 
 @case

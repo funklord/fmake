@@ -296,6 +296,11 @@ LANGS = {
     ".s": _ASM, ".S": _ASM_CPP,
     ".rs": _RUST,
 }
+# Objective-C, and only where it is the platform's language: `.m' on every
+# other OS is at least as likely to be MATLAB, and a tree full of it would
+# otherwise be compiled. See `admit_objc'.
+OBJC_LANGS = {".m": Lang("Objective-C", "OBJC"),
+              ".mm": Lang("Objective-C++", "OBJCXX", cxx=True)}
 C_EXTS      = {e for e, l in LANGS.items() if l is _C}
 CXX_EXTS    = {e for e, l in LANGS.items() if l.cxx}
 CRATE_EXTS  = {e for e, l in LANGS.items() if l.unit == "crate"}
@@ -320,6 +325,26 @@ HDR_EXTS    = {".h", ".hh", ".hpp", ".hxx", ".h++", ".H", ".inc"}
 # looked at it and nothing said so.
 KNOWN_EXT_LOWER = {e.lower() for e in set(LANGS) | HDR_EXTS
                    | UNBUILT_SRC_EXTS}
+
+
+def admit_objc(target_os):
+	"""Make `.m' and `.mm' sources, for a macOS or iOS target alone.
+
+    The extension sets are consulted from a dozen places that know no OS,
+    so they are what changes, once, as soon as the target is known and
+    before the tree is walked -- the `_TARGET_OS' device for the same
+    reason. `.m' stays in or out rather than being filtered at each.
+    """
+	for ext, lang in OBJC_LANGS.items():
+		if target_os in ("darwin", "ios"):
+			LANGS[ext] = lang
+			SRC_EXTS.add(ext)
+			if lang.cxx:
+				CXX_EXTS.add(ext)
+		else:
+			LANGS.pop(ext, None)
+			SRC_EXTS.discard(ext)
+			CXX_EXTS.discard(ext)
 
 
 def unbuilt_why(rel):
@@ -824,7 +849,9 @@ def strip_comments(text):
 	return "".join(out), comments
 
 
-RE_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"]+)[>"]', re.M)
+# `#import' is Objective-C's, and the way most of it is written.
+RE_INCLUDE = re.compile(r'^[ \t]*#[ \t]*(?:include|import)[ \t]*'
+                        r'([<"])([^>"]+)[>"]', re.M)
 
 RE_PP_COND = re.compile(r"^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b(.*)$")
 
@@ -13817,6 +13844,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# the first question. See `shared_lib_name'.
 	_TARGET_OS[0] = cfg.os
 	_RUNNER[0] = target_runner(cfg)
+	admit_objc(cfg.os)
 	# Built here rather than where the -I flags are worked out, because moc
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.

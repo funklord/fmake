@@ -636,7 +636,8 @@ that had been green about nothing for five commits ·
 [584. A Windows shared library is two files](#584-a-windows-shared-library-is-two-files) ·
 [585. A binary that starts somewhere else](#585-a-binary-that-starts-somewhere-else) ·
 [586. A cross build with somebody to start it](#586-a-cross-build-with-somebody-to-start-it) ·
-[587. What a macOS SDK actually is](#587-what-a-macos-sdk-actually-is)
+[587. What a macOS SDK actually is](#587-what-a-macos-sdk-actually-is) ·
+[588. Objective-C, where it is the platform's language](#588-objective-c-where-it-is-the-platforms-language)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47046,3 +47047,28 @@ Section 15's dyld-cache line is closed by this. **What this cannot say**:
 no program here has run on a Mac, a real SDK's multi-document `.tbd` for
 libSystem has not been read, and a universal binary is not attempted. That
 needs the holder's machine or an SDK.
+
+## 588. Objective-C, where it is the platform's language
+
+A Cocoa program is `.m` files that open with `#import`, and neither word
+meant anything here: a tree of them had no source. Both are small, and the
+interesting part is the gate.
+
+`.m` is Objective-C on a Mac and at least as likely to be MATLAB anywhere
+else, so a tree on Linux with a model in it must not start compiling it.
+**`admit_objc` changes the extension sets once, when the target is known**,
+because `SRC_EXTS` is consulted from a dozen places that know no OS, the
+`_TARGET_OS` device for the same reason. GNUstep is what this declines: it
+exists, nothing here has asked for it, and `.m` on Linux is a guess the
+other way.
+
+`#import` is read everywhere, since it is a preprocessor word and a C
+tree cannot have meant anything else by it. That is what makes the
+closure work unchanged: `main.m` reaches `greeter.m` through the header,
+and the runtime resolves from `libobjc.tbd` by symbol, recorded in the
+load commands. `.mm` is a C++ language, so it links through the C++ driver.
+
+Not done, on purpose: no `-fobjc-arc` (a per-project memory-model choice
+that is `[project] cflags`), and no `.app` bundle, which is a packaging
+question and belongs with the deployment work section 587 lists as
+needing a Mac.
