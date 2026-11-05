@@ -103,9 +103,9 @@ The one question it cannot reach is *what do I compile*. Symbol inference
 answers what to link, and when a library is absent there is no call to
 infer from — so a project whose feature detection decides whether code
 exists at all has to be told those `-D`s. It is not a package manager and
-fetches nothing, it does not do header units or `import std;`, and its
-symbol scan is ELF-shaped, which means Linux and the Unixes rather than
-macOS or Windows.
+fetches nothing, and it does not do header units or `import std;`. It
+builds for Linux and the Unixes, and from a Linux box for Windows with
+mingw and for macOS with an SDK; `cl.exe` is not attempted.
 
 ---
 
@@ -791,6 +791,11 @@ A library available only as a DLL keeps the program dynamic, and
 `[toolchain] static-runtime = false` is the way out for a tree that wants
 one C++ runtime across a DLL boundary. `@kind shared` builds `libfoo.dll`
 and its import library `libfoo.dll.a`, installed to bindir and libdir.
+
+An `.rc` beside a program's source is compiled with windres and linked in,
+so an icon, a version and a manifest need no file. Where several programs
+share a directory, `name.rc` says which it is for. `[toolchain] windres`
+names the tool.
 
 **`--arch NAME` on the command line is the same thing without the file.**
 The compiler is found rather than derived — `dpkg-architecture` is asked
@@ -1483,15 +1488,18 @@ both were reasonable ones.
 - **C++20 header units and `import std;`.** Named modules are built --
   see [C++20 modules](#c20-modules) -- but `import "a.hpp";` and a
   standard library shipped as a module are not.
-- **macOS and Windows.** The symbol scan is ELF-shaped.
+- **MSVC.** Windows means mingw or clang: `cl.exe` has another command line,
+  another object format and no `nm`.
 - **Languages other than C, C++, assembly and Rust.** `.s` and `.S` are built;
   `.asm` is not, being nasm or masm syntax rather than another suffix for
   this assembler.
 - **Logic.** There is deliberately no `fmake.py` and nowhere to put code. If
   something genuinely needs a program, a rule can call one.
 
-Cross-compiling works and answers for the target machine, but has been
-exercised against one toolchain family on Linux.
+Cross-compiling works and answers for the target machine. Windows has been
+built with real mingw-w64 and run under wine. macOS has been linked with
+`ld64.lld` against an SDK's shape and has not run on a Mac, and fmake itself
+has not run on Windows.
 
 ---
 

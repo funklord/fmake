@@ -640,7 +640,8 @@ that had been green about nothing for five commits ·
 [588. Objective-C, where it is the platform's language](#588-objective-c-where-it-is-the-platforms-language) ·
 [589. An `@` that is the name](#589-an--that-is-the-name) ·
 [590. Running on Windows and macOS, as far as can be said from here](#590-running-on-windows-and-macos-as-far-as-can-be-said-from-here) ·
-[591. Sibling trees for Windows, and the host's Qt on a mingw line](#591-sibling-trees-for-windows-and-the-hosts-qt-on-a-mingw-line)
+[591. Sibling trees for Windows, and the host's Qt on a mingw line](#591-sibling-trees-for-windows-and-the-hosts-qt-on-a-mingw-line) ·
+[592. A program's icon](#592-a-programs-icon)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2448,9 +2449,11 @@ rather than code, and one lesson about testing.
   `.dll`, and a version script refused rather than passed to a linker that
   has no such flag.
 
-  So the symbol half of both formats works and is under test; the rest waits
-  on a linker, and the one piece that waits on nothing but a decision is
-  section 569's.
+  So the symbol half of both formats works and is under test, and **sections
+  581 to 591 took the rest with a real runtime**: mingw-w64 and wine for
+  Windows, `ld64.lld` against an SDK's shape for macOS. What is left is
+  running on a Mac and on Windows at all -- section 590 -- and section 569's
+  decision.
 - ~~**The default build builds tests too.**~~ Closed; see §49. The directory
   convention is `test`/`tests` and the two filename shapes, nothing else, and
   it decides only what the *default* target builds rather than what exists —
@@ -47153,3 +47156,39 @@ this same OS keeps asking, since multiarch is how that works.
 The failure is now the true one, *`QApplication`: no such file*: there is
 no Qt for Windows here. Section 271's route, `include-dirs` and `lib-dirs`
 at a kit, is what reaches one.
+
+## 592. A program's icon
+
+`.rc` is how a Windows program gets its icon, version information and
+manifest, so a desktop tool, which is section 1's audience, wants one more
+often than it wants a DLL. windres compiles it to an object with no
+symbols, so **no closure reaches it and a tree with an icon built a program
+without one, saying nothing**. section 19's shape from the other side: not
+a symbol the scan could not see, but a file with no symbols at all.
+
+It joins `PLATFORM_LANGS` with Objective-C, source only for the target that
+has it, and takes the object path whole: `compile_cmd`, the object key,
+`--explain`, both emitters.
+
+**Which program it belongs to is locality.** A script beside the program's
+root is that program's, and where several share a directory `name.rc` says
+which, and is then nobody else's. The first version let `other.rc` fall
+through to `second` as an unclaimed script, and the case found it. This is
+one of the few places fmake decides membership by a file's position rather
+than by what the code says, and it is because a resource says nothing.
+
+**windres writes no depfile, and its real inputs are not `#include`s**:
+they are `app.ico` on a line of the script. So fmake writes the depfile
+itself from the quoted names that are files beside the script, and a new
+icon recompiles. That covers `#include "ids.h"` as well, by the same reading.
+`<windows.h>` is not tracked, which is what the system headers are
+everywhere here.
+
+Verified with the real thing: `LoadStringA` read `hello from resource` back
+out of the program under wine, a changed payload recompiled, an id changed
+in `ids.h` recompiled, and the program built by `make` and by ninja from
+ejected files printed the same.
+
+Not done: an `.rc` in a DLL (`@sources` reaches a program only), and
+`.def` files, which nothing here has asked for and which `@ldflags` can
+already pass.

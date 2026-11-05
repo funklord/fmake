@@ -229,15 +229,16 @@ class Lang:
     to admit a language it had never heard of.
     """
 	__slots__ = ("name", "tag", "cxx", "cpp", "dep_via_as", "unit",
-	             "module_iface")
+	             "module_iface", "resource")
 
 	def __init__(self, name, tag, cxx=False, cpp=True, dep_via_as=False,
-	             unit="object"):
+	             unit="object", resource=False):
 		self.name = name              # what to call it in a message
 		self.tag  = tag               # the progress column, three wide
 		self.cxx  = cxx               # $CXX rather than $CC, and c++ to link
 		self.cpp  = cpp               # the preprocessor runs, so #include means something
 		self.dep_via_as = dep_via_as  # gas writes the depfile, cpp having not run
+		self.resource = resource      # windres and not a compiler; see below
 		# What one unit of this language is. "object": a file becomes an
 		# object, which every language here assumed until Rust. "crate": a
 		# root file plus the files it draws in become one artifact, and the
@@ -262,6 +263,8 @@ class Lang:
         assembler's prerequisites are `.include' files, and a Makefile that
         loses one reports it the ordinary way.
         """
+		if self.resource:
+			return []
 		if self.dep_via_as:
 			return ["-Wa,--MD," + dep]
 		return ["-MD", "-MP", "-MF", dep] if phony else ["-MD", "-MF", dep]
@@ -271,6 +274,8 @@ class Lang:
 		"""The ninja rule name this language compiles under."""
 		if self.unit == "crate":
 			return "rustc"
+		if self.resource:
+			return "rc"
 		return "cxx" if self.cxx else ("as" if self.dep_via_as else "cc")
 
 
@@ -296,11 +301,16 @@ LANGS = {
     ".s": _ASM, ".S": _ASM_CPP,
     ".rs": _RUST,
 }
-# Objective-C, and only where it is the platform's language: `.m' on every
-# other OS is at least as likely to be MATLAB, and a tree full of it would
-# otherwise be compiled. See `admit_objc'.
-OBJC_LANGS = {".m": Lang("Objective-C", "OBJC"),
-              ".mm": Lang("Objective-C++", "OBJCXX", cxx=True)}
+# Languages that are source only where they are the platform's own. `.m' on
+# every other OS is at least as likely to be MATLAB, and a tree full of it
+# would otherwise be compiled; an `.rc' is a Windows program's icon, version
+# and manifest and means nothing to any other linker. See `admit_platform'.
+PLATFORM_LANGS = {
+    ".m": (("darwin", "ios"), Lang("Objective-C", "OBJC")),
+    ".mm": (("darwin", "ios"), Lang("Objective-C++", "OBJCXX", cxx=True)),
+    ".rc": (("windows",), Lang("Windows resource", "RC ", cpp=False,
+                               resource=True)),
+}
 C_EXTS      = {e for e, l in LANGS.items() if l is _C}
 CXX_EXTS    = {e for e, l in LANGS.items() if l.cxx}
 CRATE_EXTS  = {e for e, l in LANGS.items() if l.unit == "crate"}
@@ -327,16 +337,16 @@ KNOWN_EXT_LOWER = {e.lower() for e in set(LANGS) | HDR_EXTS
                    | UNBUILT_SRC_EXTS}
 
 
-def admit_objc(target_os):
-	"""Make `.m' and `.mm' sources, for a macOS or iOS target alone.
+def admit_platform(target_os):
+	"""Make `PLATFORM_LANGS' sources, for the targets that have them.
 
     The extension sets are consulted from a dozen places that know no OS,
     so they are what changes, once, as soon as the target is known and
     before the tree is walked -- the `_TARGET_OS' device for the same
     reason. `.m' stays in or out rather than being filtered at each.
     """
-	for ext, lang in OBJC_LANGS.items():
-		if target_os in ("darwin", "ios"):
+	for ext, (oses, lang) in PLATFORM_LANGS.items():
+		if target_os in oses:
 			LANGS[ext] = lang
 			SRC_EXTS.add(ext)
 			if lang.cxx:
@@ -1772,6 +1782,7 @@ CONF_SCHEMA = {
         "rustc": S, "rust-edition": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
         "pkg-config-path": L, "static-runtime": B, "runner": S,
+        "windres": S,
     },
 	# The machine doing the building, as opposed to the one being built for.
 	# Only generators need it: a tool named by `uses` is compiled in order to
@@ -7240,6 +7251,12 @@ class Config:
 		self.rcc    = tool.get("rcc")
 		self.situc  = tool.get("situc")
 		self.static_runtime = tool.get("static-runtime")
+		_named = os.environ.get("WINDRES") or tool.get("windres")
+		self.windres = (require_named_tool(
+			"windres", _named, tool.get("windres"),
+			"fmake compiles a Windows resource with the windres you "
+			"named, and will not substitute another.") if _named
+		                else self._prefixed("windres") or "windres")
 		self.runner_named = tool.get("runner")
 		self.extra_libdirs = list(tool.get("lib-dirs", []))
 		# A `-L' the project wrote itself is swept for providers too.
@@ -8225,6 +8242,12 @@ def unit_cflags(u, pkg, store, sig):
 def compile_cmd(u, cfg, incflags):
 	if u.lang.unit == "crate":
 		return crate_cmd(u, cfg, u.obj)
+	if u.lang.resource:
+		# windres takes -I and -D and refuses the rest of a compile line.
+		# The `.o' on the output is what tells it to write COFF.
+		flags = [f for f in incflags + cfg.cflags + u.own + cfg.override
+		         if f.startswith(("-I", "-D"))]
+		return [cfg.windres, *flags, u.abs, "-o", u.obj]
 	cc = cfg.driver(u.cxx)
 	# `-x c++' before the file, because the driver decides the language
 	# from the extension and knows neither `.cppm' nor `.ixx': without it
@@ -9082,6 +9105,48 @@ def _module_levels(units):
 	return levels
 
 
+RE_RC_FILE = re.compile(r'"([^"\n]+\.\w+)"')
+
+
+def write_resource_depfile(u):
+	"""What a resource script reads, in the form every other object has.
+
+    windres writes no depfile, and what changes an `.rc''s output is mostly
+    not an `#include': it is the `app.ico' and `app.manifest' named on its
+    lines. Without this a new icon compiled nothing and the program went
+    on carrying the old one. A quoted name that is a file beside the
+    script is taken for one; a string table entry that happens to end in
+    `.txt' with no such file is not.
+    """
+	base = os.path.dirname(u.abs)
+	try:
+		with open(u.abs, errors="replace") as fh:
+			named = RE_RC_FILE.findall(fh.read())
+	except OSError:
+		return
+	found = [os.path.join(base, n) for n in dict.fromkeys(named)
+	         if os.path.isfile(os.path.join(base, n))]
+	with open(u.dep, "w") as fh:
+		fh.write(u.obj + ": " + " ".join(p.replace(" ", "\\ ")
+		                                 for p in [u.abs] + found) + "\n")
+
+
+def resources_for(t, srcs, programs):
+	"""The `.rc' files that belong to this program.
+
+    Nothing references a resource, so no closure reaches one, and its
+    object has no symbols to be reached by. So it is decided by locality:
+    a script beside the program's root is that program's, and where
+    several programs share a directory, `name.rc' says which it is for --
+    and is then nobody else's. `programs' is the names that can claim one.
+    """
+	here = os.path.dirname(t.rel)
+	beside = {r: os.path.splitext(os.path.basename(r))[0] for r in srcs
+	          if r.endswith(".rc") and os.path.dirname(r) == here}
+	own = [r for r, stem in beside.items() if stem == t.name]
+	return own or [r for r, stem in beside.items() if stem not in programs]
+
+
 def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
                   broken=None, tree_headers=(), quiet=False, origins=None,
                   vendored=(), excluded=None, module_exports=()):
@@ -9229,6 +9294,8 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 		if r.returncode == 0 and _file_size(u.obj) is None:
 			return u, 1, (r.stderr + f"{cmd[0]} exited 0 and wrote no "
 			              f"object for {u.rel}\n")
+		if r.returncode == 0 and u.lang.resource:
+			write_resource_depfile(u)
 		return u, r.returncode, r.stderr
 
 	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -13887,7 +13954,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# the first question. See `shared_lib_name'.
 	_TARGET_OS[0] = cfg.os
 	_RUNNER[0] = target_runner(cfg)
-	admit_objc(cfg.os)
+	admit_platform(cfg.os)
 	# Built here rather than where the -I flags are worked out, because moc
 	# has to run before the tree is complete and it is pkg-config that knows
 	# where moc lives.
@@ -15848,6 +15915,9 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 	# unbuilt, since yylex arrives through a macro that the definition-scanning
 	# widening filter cannot see.
 	candidates |= {g for g in generated if g in proj.src_set}
+	# A resource too, and for the same reason as moc output below: nothing
+	# refers to it, so nothing else would compile it.
+	candidates |= {r for r in proj.src_set if r.endswith(".rc")}
 	# Same for moc output, and it needs saying separately because nothing
 	# includes a moc_foo.cpp -- that is the whole reason moc is hard in an
 	# include-graph build. Widening is not a substitute here: it picks its
@@ -17114,8 +17184,14 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 				# came out empty but one that was never fmake's to compute.
 				closures[t] = Closure(units[t.rel])
 			elif t.kind == "exe":
+				rc = [units[r] for r in resources_for(
+					t, units, {x.name for x in targets if x.kind == "exe"})]
+				for u in rc:
+					forced_why.setdefault(u.rel, "a resource beside the "
+					                             "program's source")
+				forced_here = forced + [u for u in rc if u not in forced]
 				closures[t] = close_over_symbols(_root_unit(t),
-				                                 schema_pool(t), forced,
+				                                 schema_pool(t), forced_here,
 				                                 forced_why)
 				# A resource is asserted, not deduced -- nothing references
 				# the object. Which program gets it comes from which of its
@@ -17137,7 +17213,7 @@ def build(args, _bootstrapping=False, _after_mirage=False):
 					extra_why.update(add)
 					closures[t] = close_over_symbols(
 					    _root_unit(t), schema_pool(t),
-					    forced + [units[o] for o in sorted(add)], extra_why)
+					    forced_here + [units[o] for o in sorted(add)], extra_why)
 			else:
 				members = [u for u in pool
 				           if u.rel == t.rel or u.rel not in other_roots]
@@ -20093,6 +20169,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(var("CC", _mk_flag(cfg.cc), assign, own=False))
 	a(var("CXX", _mk_flag(cfg.cxx), assign, own=False))
 	a(var("AR", _mk_flag(cfg.ar_name), assign, own=False))
+	if any(u.lang.resource for t in targets for u in closures[t].link):
+		a(var("WINDRES", _mk_flag(os.path.basename(cfg.windres)), assign,
+		      own=False))
 	# Everything below that reads a deferred module is decided now, so
 	# the variables are declared before the first simply-expanded line
 	# that would read them.
@@ -20684,6 +20763,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# build. fmake's own depfiles are read by fmake, which simply skips a
 		# prerequisite that is gone; a Makefile has no such luxury, and an
 		# ejected Makefile is a Makefile someone will edit.
+		if u.lang.resource:
+			# Only what windres takes. No depfile: `write_resource_depfile'
+			# is fmake's, and a Makefile rebuilds on the script alone.
+			a(f"\t$({P}WINDRES) $(filter -I% -D%,$({P}{flags})) $< -o $@")
+			a("")
+			continue
 		dep = " ".join(u.lang.dep_flags("$(@:.o=.d)", phony=True))
 		# The driver knows neither `.cppm' nor `.ixx' and would treat one
 		# as a linker input, so it is told the language here exactly as
@@ -21247,6 +21332,15 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# so `deps = gcc' is wrong here -- that tells ninja to read the compiler
 	# own dependency stream, which gas does not write. The plain
 	# `depfile' form reads the file itself, which is what --MD leaves.
+	if any(u.lang.resource for t in targets for u in closures[t].link):
+		a(f"windres = {_nj_flag(os.path.basename(cfg.windres))}")
+		rcflags = " ".join(_nj_flag(f) for f in incflags
+		                   if f.startswith(("-I", "-D")))
+		a(f"rcflags = {rcflags}")
+		a("rule rc")
+		a("  command = $windres $rcflags $in -o $out")
+		a("  description = RC $in")
+		a("")
 	a("rule as")
 	a("  command = $cc $cflags $extra $cflags_last -c $in -o $out "
 	  "-Wa,--MD,$out.d")

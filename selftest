@@ -34821,6 +34821,86 @@ def another_os_does_not_ask_the_hosts_pkg_config(t):
 
 
 @case
+def a_resource_script_belongs_to_the_program_beside_it(t):
+	"""section 592: a Windows program's icon, version and manifest.
+
+	Those live in an `.rc', compiled by windres to an object with no
+	symbols, so no closure ever reaches one: a tree with an icon built a
+	program without it and said nothing. Which program it belongs to is
+	decided by locality, and `name.rc' says so where two share a directory.
+
+	windres writes no depfile and what changes its output is mostly not an
+	#include: `app.ico' on a line of the script. So fmake writes one, and
+	the payload edit below is the assertion that it works. The ELF control
+	is the half that keeps `.rc' from being source on a target with no
+	idea what it is.
+	"""
+	found = next((w for w in ("llvm-windres", "llvm-windres-19",
+	                          "llvm-windres-14") if shutil.which(w)), None)
+	if not found:
+		raise Skip("no llvm-windres here")
+	conf = _mingw_shim(t)
+	t.write("tc/windres", '#!/bin/sh\n'
+	        f'exec {found} --no-preprocess '
+	        '--target=x86_64-w64-mingw32 "$@"\n')
+	shim = os.path.join(t.dir, "tc", "windres")
+	os.chmod(shim, 0o755)
+	t.write("fmake.toml", conf + f'windres = "{shim}"\n')
+	t.write("main.c", "void __main(void){ }\nint main(void){ return 0; }\n")
+	t.write("app.rc", '1 RCDATA "payload.bin"\n')
+	t.write("payload.bin", "first\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the resource build failed: {out}")
+	check("RC  app.rc" in out, f"the script has to be compiled: {out}")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("app.rc.o" in out and "a resource beside" in out,
+	      f"and linked, and say why: {out}")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("up to date" in out, f"and be a fixed point: {out}")
+
+	t.write("payload.bin", "second\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check("RC  app.rc" in out,
+	      f"a file the script names is one of its inputs: {out}")
+
+	r = t.fmake("--eject")
+	check("$(WINDRES)" in r.stdout and "WINDRES" in r.stdout,
+	      f"the ejected Makefile compiles it: {r.stdout}")
+	r = t.fmake("--eject", "ninja")
+	check("rule rc" in r.stdout and ": rc " in r.stdout,
+	      f"and so does build.ninja: {r.stdout}")
+
+	# Two programs in one directory.
+	t.write("other.c", "void __main(void){ }\n"
+	        "int main(void){ return 1; }\n")
+	os.remove(os.path.join(t.dir, "main.c"))
+	t.write("second.c", "void __main(void){ }\n"
+	        "int main(void){ return 2; }\n")
+	os.rename(os.path.join(t.dir, "app.rc"), os.path.join(t.dir, "other.rc"))
+	r = t.fmake("--explain", "other")
+	out = r.stdout + r.stderr
+	check("other.rc.o" in out, f"a script named for a program is its: {out}")
+	r = t.fmake("--explain", "second")
+	out = r.stdout + r.stderr
+	check("other.rc.o" not in out, f"and nobody else's: {out}")
+
+	u = Tree("elf-rc")
+	try:
+		u.write("main.c", "int main(void){ return 0; }\n")
+		u.write("app.rc", "this is not a resource for this linker\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode == 0 and "app.rc" not in out,
+		      f"on any other target it is not source: {out}")
+	finally:
+		u.cleanup()
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 
