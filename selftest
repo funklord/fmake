@@ -35094,6 +35094,66 @@ def switching_target_or_profile_compiles_nothing_already_compiled(t):
 
 
 @case
+def rust_is_not_silently_built_for_this_machine(t):
+	"""section 598: an ELF called `rs.exe', and `built rs.exe'.
+
+	rustc targets by `--target' and heard nothing of a cross build, so a
+	Rust tree under `--os windows' built a Linux program with a Windows
+	name, and under `--arch aarch64' an x86-64 one in build-aarch64/. A
+	rustc triple is not the compiler's, so it is not derived: the build
+	stops and asks. `[toolchain] rust-target' answers, with the linker the
+	build is already using, since rustc's default is this machine's `cc'.
+	"""
+	if not shutil.which("rustc"):
+		raise Skip("rustc not installed")
+	conf = _mingw_shim(t)
+	t.write("tc/rustc", '#!/bin/sh\nout=\n'
+	        'for a in "$@"; do [ "$prev" = "-o" ] && out=$a; prev=$a; done\n'
+	        'case "$*" in *--version*) echo rustc 1.0.0; exit 0;; esac\n'
+	        'echo "$@" > $out\n')
+	rustc = os.path.join(t.dir, "tc", "rustc")
+	os.chmod(rustc, 0o755)
+	t.write("main.rs", "fn main(){}\n")
+	t.write("fmake.toml", conf + f'rustc = "{rustc}"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "rust-target" in out,
+	      f"a Rust tree for another machine has to stop and ask: {out}")
+
+	t.write("fmake.toml", conf + f'rustc = "{rustc}"\n'
+	        'rust-target = "x86_64-pc-windows-gnu"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"a named target builds: {out}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir) + ".exe")
+	with open(prog) as fh:
+		said = fh.read()
+	check("--target x86_64-pc-windows-gnu" in said
+	      and "linker=" + os.path.join(t.dir, "tc") in said,
+	      f"rustc has to be told, and given the build's linker: {said}")
+
+
+@case
+def a_depfile_target_ends_at_its_own_colon(t):
+	"""section 598: `C:/w/a.o: C:/w/a.c' has two colons.
+
+	The first colon was taken as the rule's, so on Windows the target
+	became a prerequisite named `/w/a.o:', a file that does not exist.
+	The rule's colon is the one a space or the end of the line follows.
+	Read through the real function, since a Windows gcc is the only thing
+	that writes one and it is not here.
+	"""
+	path = os.path.join(t.dir, "a.d")
+	with open(path, "w") as fh:
+		fh.write("C:/w/a.o: C:/w/a.c C:/w/in\\ c/a.h\n")
+	m = fmake_in_process()
+	got = m.parse_depfile(path)
+	check(got == ["C:/w/a.c", "C:/w/in c/a.h"], f"prerequisites: {got}")
+	check(m.depfile_target(path) == "C:/w/a.o",
+	      f"and the target keeps its drive: {m.depfile_target(path)}")
+
+
+@case
 def a_program_for_windows_is_an_exe(t):
 	"""section 575: fmake asked for one name and the driver wrote another.
 

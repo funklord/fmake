@@ -646,7 +646,8 @@ that had been green about nothing for five commits ·
 [594. A generator, and what the run cost](#594-a-generator-and-what-the-run-cost) ·
 [595. The real toolchain, kept in the suite](#595-the-real-toolchain-kept-in-the-suite) ·
 [596. A sweep's byproduct, and what the plans said](#596-a-sweeps-byproduct-and-what-the-plans-said) ·
-[597. One record for a directory per configuration](#597-one-record-for-a-directory-per-configuration)
+[597. One record for a directory per configuration](#597-one-record-for-a-directory-per-configuration) ·
+[598. The second walk: an ELF called `rs.exe`](#598-the-second-walk-an-elf-called-rsexe)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -11230,11 +11231,13 @@ Declined deliberately, and each for a reason rather than for want of time:
   a tool whose premise is that a tree needs no build file cannot begin by
   reading one. netcfgd's 143 files across thirteen crates are Cargo's and
   stay Cargo's.
-- **Cross builds.** rustc targets by `--target <triple>` and its triples are
-  not the compiler's: `aarch64-linux-gnu` against `aarch64-unknown-linux-gnu`.
-  Mapping one to the other is a guess, and a guess that produces a binary
-  for the wrong machine is the failure §5's architecture check exists to
-  catch.
+- **Deriving a cross target.** rustc targets by `--target <triple>` and its
+  triples are not the compiler's: `aarch64-linux-gnu` against
+  `aarch64-unknown-linux-gnu`. Mapping one to the other is a guess, and a
+  guess that produces a binary for the wrong machine is the failure §5's
+  architecture check exists to catch. **It is named instead -- section 598**,
+  which is what this entry declined to do without noticing the result of
+  declining: a Rust tree in a cross build compiled for this machine.
 - **Rust's own tests.** `#[test]` needs `--test`, which builds a different
   binary with a harness in it. That is a second thing `fmake test` would
   have to know, and no tree here has asked.
@@ -47130,10 +47133,9 @@ tree was better than expected: `fcntl` is already optional, paths go through
 
 **None of this has run on Windows.** Fetching a Windows Python to run under
 wine was not tried, since this session's sandbox refused a downloaded
-binary. Two things are known unknowns rather than hazards: source files read
-through `open()` with the locale's encoding, which on Windows is not UTF-8,
-and a depfile holding `C:/...`, whose drive colon `parse_depfile` has never
-met. `cl.exe` is not gcc-shaped and is not attempted: mingw and clang are
+binary. The two known unknowns this section first listed were both
+reachable after all: section 598 measured a non-UTF-8 locale and fixed a
+depfile's `C:/`. `cl.exe` is not gcc-shaped and is not attempted: mingw and clang are
 what Windows means here.
 
 ## 591. Sibling trees for Windows, and the host's Qt on a mingw line
@@ -47301,3 +47303,39 @@ tree's cache exactly as it was. After:
 
 An `LD` remains where two configurations share one output path, as a
 profile does in the tree's root, and is right: the file there is the other's.
+
+## 598. The second walk: an ELF called `rs.exe`
+
+The stop hook sent this run back to the aims with sections 581 to 597 done,
+and the walk found the worst fault of the run in the one language none of
+them had tried.
+
+**A Rust tree in a cross build compiled for this machine and said so
+nowhere.** `fmake --os windows` wrote `rs.exe`, an x86-64 ELF;
+`fmake --arch aarch64` wrote an x86-64 program into `build-aarch64/`. Section
+129 had declined cross builds for Rust because a derived triple is a guess
+that could produce a binary for the wrong machine, and declining left
+exactly that in place: rustc, told nothing, builds for the host. **Declining
+a feature is not the same as refusing the input.**
+
+So the build stops and asks, with `foreign_target` as the test. The triple
+is still not derived. `[toolchain] rust-target` passes `--target` with `-C
+linker=` set to the build's own compiler, rustc's default being this
+machine's `cc`, and it sits in `rustflags` so both ejected files carry it. A
+`--target` already in `rustflags` counts. Windows' std is not installed here,
+so a real Rust `.exe` was not produced: rustc stopped at E0463 and the case
+reads the argv through a stand-in.
+
+**The two unknowns section 590 had filed as needing Windows did not.**
+
+- **Encoding**: `LC_ALL=POSIX PYTHONCOERCECLOCALE=0 PYTHONUTF8=0`, which gives
+  a strict ASCII default, built trees with UTF-8 and with Latin-1 in source,
+  headers' names and `fmake.toml`. No change needed.
+- **A depfile with a drive**: `C:/w/a.o: C:/w/a.c` was split at the first
+  colon, so the target became a prerequisite called `/w/a.o:`. Fixed by
+  `depfile_halves`, tested through the real functions.
+
+Section 569 stays parked: that record says whose decision it is, and nothing
+measured here changes what it costs. For a target named with `--os`, the
+compiler's name is now checked against the arch, which covers the common way
+of getting it wrong.

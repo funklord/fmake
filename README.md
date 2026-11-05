@@ -1042,9 +1042,10 @@ saw. Per-file `@define`, `@std` and `@pkg` are C flags for the same reason and
 do not apply to a crate; `@ldflags` does.
 
 **What is not done, deliberately:** Cargo (a workspace is a build file, and
-reading one is the thing fmake exists not to do), cross builds (rustc's target
-triples are not the compiler's, and mapping them would be a guess), and Rust's
-own `#[test]` harness. A `main.rs` beside a `lib.rs` is two crates and fmake
+reading one is the thing fmake exists not to do), deriving a cross target
+(rustc's triples are not the compiler's, so a cross build with Rust in it asks
+for `[toolchain] rust-target` and stops without it), and Rust's own `#[test]`
+harness. A `main.rs` beside a `lib.rs` is two crates and fmake
 does not make one available to the other — that is a dependency graph, and
 `use othercrate::` needs Cargo. It says so rather than leaving you with
 rustc's `unresolved import`.

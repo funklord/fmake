@@ -1782,7 +1782,7 @@ CONF_SCHEMA = {
         "rustc": S, "rust-edition": S,
         "sysroot": S, "os": S, "arch": S, "lib-dirs": L,
         "pkg-config-path": L, "static-runtime": B, "runner": S,
-        "windres": S,
+        "windres": S, "rust-target": S,
     },
 	# The machine doing the building, as opposed to the one being built for.
 	# Only generators need it: a tool named by `uses` is compiled in order to
@@ -7174,6 +7174,15 @@ class Config:
 		    os.environ.get("RUSTFLAGS", ""), "$RUSTFLAGS") \
 		    + conf.rustflags() \
 		    + (list(COVERAGE_RUSTFLAGS) if coverage_wanted() else [])
+		# In the flags rather than in `crate_cmd', so that both ejected files
+		# carry it. The linker with it: rustc's default is `cc', which is
+		# this machine's. A `--target' already written in rustflags is the
+		# same answer, and the older spelling of it.
+		self.rust_target = tool.get("rust-target")
+		if self.rust_target:
+			self.rustflags += ["--target", self.rust_target,
+			                   "-C", "linker=" + self.cc]
+		self.rust_target = self.rust_target or "--target" in self.rustflags
 
 		# $SANITIZE goes to both sides, and the link side is the one that
 		# matters. A sanitizer is a runtime as well as an instrumentation:
@@ -7414,9 +7423,13 @@ class Config:
 		# every file, every time. Empty for the plain native build, which
 		# a one-target tree is and whose entries stay spelled as paths.
 		self.object_slot = ("\0" + self.key
-		                    if (self.named_profile
-		                        or self.os != host_os()
-		                        or self.arch != host_arch()) else "")
+		                    if self.named_profile or self.foreign_target
+		                    else "")
+
+	@property
+	def foreign_target(self):
+		"""Whether what this build makes is for another machine."""
+		return self.os != host_os() or self.arch != host_arch()
 
 	def _probe(self, question):
 		"""Ask the compiler `question', in this project's configuration.
@@ -8028,6 +8041,23 @@ class Cache:
 # Depfiles
 # ---------------------------------------------------------------------------
 
+RE_DEP_COLON = re.compile(r":(?=\s|$)")
+
+
+def depfile_halves(text):
+	"""A depfile split at the colon that ends its target, as `partition'.
+
+    The colon a rule writes is followed by a space or the end of the line.
+    The first colon in the text is not that on Windows, where `C:/w/a.o:
+    C:/w/a.c' has one in the drive: taken there, the target became a
+    prerequisite called `/w/a.o:', a file that does not exist.
+    """
+	m = RE_DEP_COLON.search(text)
+	if not m:
+		return text, "", ""
+	return text[:m.start()], ":", text[m.end():]
+
+
 def depfile_target(path):
 	"""The file a depfile says it describes, or None.
 
@@ -8049,7 +8079,7 @@ def depfile_target(path):
 			text = fh.read()
 	except OSError:
 		return None
-	lhs, sep, _ = text.replace("\\\n", " ").partition(":")
+	lhs, sep, _ = depfile_halves(text.replace("\\\n", " "))
 	if not sep:
 		return None
 	name = lhs.strip().replace("\\ ", " ")
@@ -8087,7 +8117,7 @@ def parse_depfile(path):
 	except OSError:
 		return []
 	text = text.replace("\\\n", " ")
-	_, _, rhs = text.partition(":")
+	_, _, rhs = depfile_halves(text)
 	# Every escape Make defines begins with a backslash or a dollar, so a
 	# right-hand side holding neither splits on whitespace and is finished.
 	# That is not a special case bolted on: it is what a depfile looks like
@@ -8426,6 +8456,17 @@ def crate_cmd(u, cfg, out, exe=False):
     dep-info is otherwise an ordinary Make depfile naming the whole module
     graph, so staleness needs nothing that -MD did not already give C.
     """
+	# A cross build's C is compiled for the target and rustc, told nothing,
+	# compiles for this machine: `--os windows' wrote an ELF called `rs.exe',
+	# `--arch aarch64' an x86-64 program in build-aarch64/, and both said
+	# `built'. A rustc triple is not a compiler's, and mapping one to the
+	# other is a guess, so the target is asked for by name.
+	if cfg.foreign_target and not cfg.rust_target:
+		die(f"{u.rel} is Rust and this build is for {cfg.os}/{cfg.arch}, and "
+		    f"rustc would build it for this machine.\n"
+		    f"    Name rustc's own word for the target: [toolchain] "
+		    f"rust-target = \"...\" (`rustc --print target-list'), with "
+		    f"that target's std installed.")
 	return ([cfg.rustc, "--edition", cfg.rust_edition]
 	        + ([] if exe else ["--crate-type=staticlib"])
 	        + ["-o", out, f"--emit=link,dep-info={u.dep}"]
