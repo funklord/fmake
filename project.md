@@ -654,7 +654,8 @@ that had been green about nothing for five commits ·
 [602. A Qt application for Windows, built and run](#602-a-qt-application-for-windows-built-and-run) ·
 [603. What moc could not see](#603-what-moc-could-not-see) ·
 [604. A Qt application for macOS, built and not run](#604-a-qt-application-for-macos-built-and-not-run) ·
-[605. A window with no console behind it, and wine told where the DLLs are](#605-a-window-with-no-console-behind-it-and-wine-told-where-the-dlls-are)
+[605. A window with no console behind it, and wine told where the DLLs are](#605-a-window-with-no-console-behind-it-and-wine-told-where-the-dlls-are) ·
+[606. Real trees: a COMDAT is not a duplicate](#606-real-trees-a-comdat-is-not-a-duplicate)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47633,7 +47634,7 @@ Qt's `...runtime.7z` unpacks `libstdc++-6.dll` and its two companions at the
 kit's root rather than in `bin`, which the installer evidently moves. A kit
 unpacked by hand wants them copied into `bin`, or wine cannot start Qt6Core.
 
-**`-static` stays.** Section 582 links the toolchain's runtime into the
+**`-static` stays.** Section 585 links the toolchain's runtime into the
 program, and that is right here for a reason that section did not have: the
 kit's DLLs were built by GCC 13.1, the program by Debian's 14, and a program
 importing `libstdc++-6.dll` would be handed the kit's older one. Two C++
@@ -47645,3 +47646,31 @@ tested. `[toolchain] static-runtime = false` is the exit.
 machine needs its DLLs and `platforms/qwindows.dll` beside it, which is what
 `windeployqt` does and what a `.app` bundle is on macOS. The question stands
 for the holder, as section 271's did for the `.apk`.
+
+## 606. Real trees: a COMDAT is not a duplicate
+
+Section 591's sweep again, with a kit this time, from `git archive` copies
+and `PKG_CONFIG_PATH=kit/lib/pkgconfig fmake --os windows`. **respec built
+unchanged**: `respec-gui.exe`, `Windows GUI`, importing Qt6Core, Qt6Gui and
+Qt6Widgets, and it printed its version under wine and Xvfb.
+
+**softkeys did not, with nothing wrong with it**, and section 602's program
+was too small to show why:
+
+    !!! symbol '.refptr._ZN12sk_modifiers12held_changedEh' is defined by more
+    than one file ... 88 other symbol(s) are also defined more than once
+
+An inline function, a vtable, a typeinfo and mingw's `.refptr.` pointers are
+one definition per object that the linker folds. ELF's `nm` prints them `W`
+and `V`, which `read_symbols` knows. COFF's prints `T` and `R`, measured with
+both GNU nm and llvm-nm, so each read as strong in every file using it, and a
+library of more than a few C++ files could not be built for Windows at all.
+
+`nm` cannot say this in any format, and the name cannot either:
+`-ffunction-sections` makes `.text$name` for a strong function too. `objdump
+-h` says `LINK_ONCE_DISCARD`, at a process per object. So `coff_comdat`
+reads `IMAGE_SCN_LNK_COMDAT` off the section table, whose layout the PE
+format fixes. The first version of the case had both files pulled in by
+`main`, where there is no choice of provider to get wrong, and its sabotage
+sailed through. The fault fires in a library, and the case is one now, with
+a real duplicate beside it that has to stay refused.

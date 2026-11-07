@@ -120,6 +120,7 @@ import shlex
 import shutil
 import signal
 import stat
+import struct
 import threading
 import subprocess
 import tarfile
@@ -10156,6 +10157,67 @@ def plugin_failure(*streams):
 	return None
 
 
+COFF_MACHINES = (0x8664, 0x14c, 0xaa64)
+COFF_LNK_COMDAT = 0x1000
+COFF_EXTERNAL = 2
+
+
+def coff_comdat(path):
+	"""The external symbols of a COFF object that sit in COMDAT sections.
+
+    What ELF's `nm' prints as W or V, COFF's prints as T and R: an inline
+    function, a vtable, a typeinfo, mingw's `.refptr.' pointers. All of
+    them are one definition per object that the linker folds, and read as
+    strong each is a definition in every file that uses it. softkeys, with
+    nothing wrong with it, built for Windows as *symbol
+    `.refptr._ZN12sk_modifiers12held_changedEh' is defined by more than one
+    file*, and 88 others.
+
+    Not a thing `nm' can say in any format, and not a thing a name can
+    say: `-ffunction-sections' makes `.text$name' for a strong function
+    too. `objdump -h' says LINK_ONCE_DISCARD, and that is a process per
+    object, so the flag is read off the section table itself. The layout
+    is fixed by the PE format. A big object has another header, and reads
+    as having none, which is what every object was before this.
+    """
+	try:
+		with open(path, "rb") as fh:
+			head = fh.read(20)
+			if len(head) < 20:
+				return set()
+			machine, nsect, _when, symptr, nsyms, opt, _flags = \
+			    struct.unpack("<HHIIIHH", head)
+			if machine not in COFF_MACHINES or not symptr:
+				return set()
+			fh.seek(20 + opt)
+			table = fh.read(40 * nsect)
+			comdat = {i + 1 for i in range(nsect) if struct.unpack_from(
+			    "<I", table, 40 * i + 36)[0] & COFF_LNK_COMDAT}
+			if not comdat:
+				return set()
+			fh.seek(symptr)
+			syms = fh.read(18 * nsyms)
+			strings = fh.read()
+	except (OSError, struct.error):
+		return set()
+	out = set()
+	i = 0
+	while i < nsyms:
+		rec = syms[18 * i:18 * i + 18]
+		if len(rec) < 18:
+			break
+		_value, sect, _type, klass, aux = struct.unpack_from("<IhHBB", rec, 8)
+		if klass == COFF_EXTERNAL and sect in comdat:
+			if rec[:4] == b"\0\0\0\0":
+				at = struct.unpack_from("<I", rec, 4)[0]
+				raw = strings[at:strings.find(b"\0", at)]
+			else:
+				raw = rec[:8].rstrip(b"\0")
+			out.add(raw.decode(errors="surrogateescape"))
+		i += 1 + aux
+	return out
+
+
 def read_symbols(units, cfg, jobs):
 	def one(u):
 		# Seventh of the family. nm is read for every object, so an nm
@@ -10242,6 +10304,9 @@ def read_symbols(units, cfg, jobs):
 			elif typ.isupper():
 				strong.add(name)
 			# lowercase: file-local, ignored
+		folded = coff_comdat(u.obj)
+		strong -= folded
+		weak |= folded
 		return u, undef, strong, weak
 
 	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:

@@ -35826,6 +35826,36 @@ def wine_is_told_where_a_kit_keeps_its_dlls(t):
 
 
 @case
+def a_comdat_on_windows_is_one_definition_not_two(t):
+	"""section 606: COFF's nm prints what ELF's calls weak as T and R.
+
+	An inline function, a vtable and mingw's `.refptr.' are one definition
+	per object that the linker folds, and read as strong each was defined
+	in every file using it: softkeys built for Windows as 89 symbols
+	defined more than once, with nothing wrong with it. `selectany' is
+	the same thing from C, so the shim needs no C++ here. The strong twin
+	is the other half: a real duplicate has to stay one.
+	"""
+	conf = _mingw_shim(t)
+	t.write("a.c", "__attribute__((selectany)) int shared = 1;\n"
+	        "int a_get(void){ return shared; }\n")
+	t.write("b.c", "__attribute__((selectany)) int shared = 1;\n"
+	        "int b_get(void){ return shared; }\n")
+	t.write("fmake.toml", conf)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "more than one file" not in out,
+	      f"a folded definition is not a duplicate: {out}")
+
+	t.write("a.c", "int shared = 1;\nint a_get(void){ return shared; }\n")
+	t.write("b.c", "int shared = 1;\nint b_get(void){ return shared; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "more than one file" in out,
+	      f"a real duplicate has to stay one: {out}")
+
+
+@case
 def an_input_nobody_may_read_is_not_a_traceback(t):
 	"""section 596: stat works on a file its mode forbids reading.
 
