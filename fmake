@@ -12034,12 +12034,21 @@ class PkgConfig:
 			if r.returncode == 0:
 				args = shell_split(r.stdout,
 				                   f"pkg-config --cflags --libs {module}")
-				res = ([a for a in args
+				# Homebrew's Qt says `-F${libdir} -framework QtCore'. The
+				# word belongs to no compile line, and which frameworks a
+				# link takes comes from its symbols, so all this needs to
+				# keep is where they are: `-F' is a library directory for
+				# that, and `kit_framework_dirs' reads those.
+				words = [a for i, a in enumerate(args)
+				         if a != "-framework"
+				         and (i == 0 or args[i - 1] != "-framework")]
+				res = ([a for a in words
 				        if not a.startswith(("-l", "-L"))],
-				       [a for a in args if a.startswith("-l")])
-				self._dirs[module] = [a[2:] for a in args
-				                      if a.startswith("-L") and a[2:]
-				                      and os.path.isdir(a[2:])]
+				       [a for a in words if a.startswith("-l")])
+				self._dirs[module] = list(dict.fromkeys(
+				    a[2:] for a in words
+				    if a.startswith(("-L", "-F")) and a[2:]
+				    and os.path.isdir(a[2:])))
 				self._note_dirs(self._dirs[module])
 		self._flags[module] = res
 		return res

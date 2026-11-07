@@ -827,6 +827,9 @@ what generates the code, found by itself.
     [toolchain]
     lib-dirs = ["/path/to/kit/lib"]
 
+Homebrew's Qt has `.pc` files naming its frameworks, and fmake reads those; no
+build against one has been tried yet.
+
 A kit's `.pc` files say where Qt built it, and fmake reads them from where
 they lie. On Windows a program linking QtWidgets or QtGui opens no console,
 which `-mconsole` in `@ldflags` restores, and `--run` and `fmake test` give wine

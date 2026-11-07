@@ -656,7 +656,8 @@ that had been green about nothing for five commits ·
 [604. A Qt application for macOS, built and not run](#604-a-qt-application-for-macos-built-and-not-run) ·
 [605. A window with no console behind it, and wine told where the DLLs are](#605-a-window-with-no-console-behind-it-and-wine-told-where-the-dlls-are) ·
 [606. Real trees: a COMDAT is not a duplicate](#606-real-trees-a-comdat-is-not-a-duplicate) ·
-[607. The sweep's other results, and what moc now costs](#607-the-sweeps-other-results-and-what-moc-now-costs)
+[607. The sweep's other results, and what moc now costs](#607-the-sweeps-other-results-and-what-moc-now-costs) ·
+[608. Homebrew's Qt, read rather than guessed](#608-homebrews-qt-read-rather-than-guessed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47606,9 +47607,7 @@ whose load commands read `@rpath/QtWidgets.framework/Versions/A/QtWidgets`.
 **What this cannot say.** The program has never started: that needs a Mac.
 Nor has fmake run on one, so the `libexec` branch of the tool lookup is
 unexercised. The libc++ stub is mine, so a real SDK's multi-document `.tbd`
-files remain unread by anything here. Homebrew's Qt is untried, and if its
-`.pc` says `-framework`, `flags` would put that on the compile line and not
-the link, where naming its `lib` in `lib-dirs` should reach the route above.
+files remain unread by anything here. Section 608 is Homebrew's Qt.
 `a_real_qt_kit_links_for_macos` needs `FMAKE_QT_MACOS` and `FMAKE_MACOS_CXX`.
 
 ## 605. A window with no console behind it, and wine told where the DLLs are
@@ -47711,3 +47710,37 @@ windeployqt.exe --no-translations --no-opengl-sw --no-system-d3d-compiler
 app.exe` staged the DLLs and `platforms/qwindows.dll` beside the program, and
 it ran on the `windows` platform with the kit moved out of reach and
 `WINEPATH` unset. `macdeployqt` is in the macOS kit and cannot run here.
+
+## 608. Homebrew's Qt, read rather than guessed
+
+Section 604 left Homebrew untried, and it is how most people have Qt on a Mac,
+so its `qtbase` bottle was fetched and its files read, with nothing installed.
+`arm64_sequoia`, Qt 6.12.0:
+
+    libexecdir=${prefix}/share/qt/libexec
+    Libs: -F${libdir} -framework QtCore
+    Cflags: -F${libdir} -I${includedir}/QtCore -I${libdir}/QtCore.framework -DQT_CORE_LIB
+
+So it has `.pc` files where Qt's own kit has none, and they name frameworks.
+Only `-l` reached a link, so `-framework QtCore` went to the compile line and
+the program had no QtCore. `-F` now counts as a library directory, which is
+what section 604's `kit_framework_dirs` reads, so `lib` becomes a named
+framework directory and the symbols choose. `-framework` leaves the compile
+line, where a `-Werror` tree would refuse it as unused. `libexecdir` is
+already in `find_qt_tool`'s list for a native build.
+
+A `.pc` naming an SDK framework, SDL's `-framework Cocoa`, is still not
+carried to the link: the word is dropped and the sources' own includes, or the
+linker's error, decide. Nothing here has asked for one. No Homebrew Qt has
+been built against, only the shape of its `.pc`.
+
+**`fmake test` ran softkeys' QtTest suite under wine**, cross-built from the
+tree as it stands, through section 605's `wine_search`. It printed nothing of
+QtTest's own under wine, so an exit 0 alone said little: with `-o out.txt,txt`
+the log reads *Totals: 17 passed, 0 failed* on Qt 6.8.2, and the binary is
+`Windows CUI`, as a test should be. And the moc change
+of section 603 was checked on the largest moc user here that is not the
+suite: a fresh qtty clone, native, exit 0 then 0 with everything up to date.
+
+hembygd is the one Qt tree that stopped for its own reasons: `unsetenv`,
+`poll.h`, and Windows builds of curl and sqlite it would have to be given.

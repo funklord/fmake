@@ -35648,6 +35648,57 @@ def a_build_with_nothing_to_do_leaves_the_lock_alone(t):
 	check(os.stat(lock).st_mtime == 1000, "the lock was written")
 
 
+def _macos_framework(t, word, code, *headers):
+	"""A real framework under kit/lib, for a tree `_macos_sdk' has set up."""
+	cc = os.path.join(t.dir, "tc", "x86_64-apple-darwin23-clang")
+	src = t.write(f"fw/{word}.c", code)
+	home = os.path.join(t.dir, "kit", "lib", word + ".framework")
+	os.makedirs(home, exist_ok=True)
+	got = subprocess.run(
+	    [cc, "-dynamiclib", "-nostdlib", "-Wl,-undefined,dynamic_lookup",
+	     "-install_name", f"@rpath/{word}.framework/{word}",
+	     src, "-o", os.path.join(home, word)],
+	    capture_output=True, text=True)
+	check(got.returncode == 0, f"{word}: {got.stderr}")
+	for name, text in headers:
+		t.write(f"kit/lib/{word}.framework/Headers/{name}", text)
+
+
+@case
+def a_pc_that_says_framework_links_it(t):
+	"""section 608: Homebrew's Qt says `-F${libdir} -framework QtCore'.
+
+	Read from a bottle rather than guessed. Only `-l' reached the link, so
+	both words went to the compile line, where they do nothing, and the
+	program had no QtCore. `-F' is a library directory by another name,
+	and the symbols then choose as they do for section 604's kit.
+	"""
+	if not shutil.which("pkg-config") and not shutil.which("pkgconf"):
+		raise Skip("no pkg-config to point anywhere")
+	conf = _macos_sdk(t)
+	_macos_framework(t, "Frob", "int frob_get(void){ return 8; }\n")
+	t.write("kit/include/Frob/QFrob", "int frob_get(void);\n")
+	t.write("kit/lib/pkgconfig/Frob.pc",
+	        f"prefix={t.dir}/kit\nlibdir=${{prefix}}/lib\n"
+	        "includedir=${prefix}/include\nName: Frob\nDescription: d\n"
+	        "Version: 1\nLibs: -F${libdir} -framework Frob\n"
+	        "Cflags: -F${libdir} -I${includedir}/Frob\n")
+	t.write("src/main.c", "#include <QFrob>\n"
+	        "int main(void){ return frob_get(); }\n")
+	t.write("src/fmake.toml", conf + 'pkg-config-path = '
+	        '["../kit/lib/pkgconfig"]\n')
+	src = _src(t)
+	r = _run_in(src, FMAKE, "-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the .pc's framework did not link: {out}")
+	used = _dylibs_used(os.path.join(src, "src"))
+	check("@rpath/Frob.framework/Frob" in used, f"by symbol: {used}")
+	r = _run_in(src, FMAKE, "--explain")
+	line = [l for l in r.stdout.splitlines() if " -c main.c" in l]
+	check(line and "-framework" not in line[0],
+	      f"a link word on the compile line is a -Werror failure: {line}")
+
+
 @case
 def a_kit_of_frameworks_resolves_by_header_and_by_symbol(t):
 	"""section 604: Qt's macOS kit has frameworks and no .pc at all.
@@ -35659,28 +35710,14 @@ def a_kit_of_frameworks_resolves_by_header_and_by_symbol(t):
 	left unnamed resolves by symbol, as any library does.
 	"""
 	conf = _macos_sdk(t)
-	cc = os.path.join(t.dir, "tc", "x86_64-apple-darwin23-clang")
-
-	def framework(word, code, *headers):
-		src = t.write(f"fw/{word}.c", code)
-		home = os.path.join(t.dir, "kit", "lib", word + ".framework")
-		os.makedirs(home, exist_ok=True)
-		got = subprocess.run(
-		    [cc, "-dynamiclib", "-nostdlib", "-Wl,-undefined,dynamic_lookup",
-		     "-install_name", f"@rpath/{word}.framework/{word}",
-		     src, "-o", os.path.join(home, word)],
-		    capture_output=True, text=True)
-		check(got.returncode == 0, f"{word}: {got.stderr}")
-		for name, text in headers:
-			t.write(f"kit/lib/{word}.framework/Headers/{name}", text)
-
-	framework("Base", "int base_get(void){ return 7; }\n",
-	          ("base.h", "int base_get(void);\n"))
-	framework("Top", "int top_get(void){ return 8; }\n",
-	          ("TopThing", "#include <Base/base.h>\nint top_get(void);\n"
-	           "static inline int both(void){ "
-	           "return top_get() + base_get(); }\n"))
-	framework("Unused", "int unused_get(void){ return 9; }\n")
+	_macos_framework(t, "Base", "int base_get(void){ return 7; }\n",
+	                 ("base.h", "int base_get(void);\n"))
+	_macos_framework(t, "Top", "int top_get(void){ return 8; }\n",
+	                 ("TopThing", "#include <Base/base.h>\n"
+	                  "int top_get(void);\n"
+	                  "static inline int both(void){ "
+	                  "return top_get() + base_get(); }\n"))
+	_macos_framework(t, "Unused", "int unused_get(void){ return 9; }\n")
 	t.write("main.c", "#include <TopThing>\nint main(void){ return both(); }\n")
 	t.write("fmake.toml", conf.replace('exclude = ["sdk"]',
 	                                   'exclude = ["sdk", "kit", "fw"]')
