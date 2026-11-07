@@ -10218,6 +10218,56 @@ def coff_comdat(path):
 	return out
 
 
+MACHO_LC_SYMTAB = 2
+MACHO_N_EXT = 0x01
+MACHO_N_SECT = 0x0e
+MACHO_N_TYPE = 0x0e
+MACHO_N_WEAK_DEF = 0x80
+
+
+def macho_weak(path):
+	"""The external definitions of a 64-bit Mach-O object marked weak.
+
+    `coff_comdat' for Apple's format, and the same fault: `nm' prints `T'
+    for an inline function, in posix format and in llvm-nm's default, so
+    softkeys built for macOS as 99 symbols defined more than once. A
+    Mach-O carries `N_WEAK_DEF' in each symbol's `n_desc'. A universal
+    object has another header and reads as having none: one comes only
+    from `-arch a -arch b', which is not attempted (section 587).
+    """
+	try:
+		with open(path, "rb") as fh:
+			head = fh.read(32)
+			if head[:4] != b"\xcf\xfa\xed\xfe":
+				return set()
+			ncmds, size = struct.unpack_from("<II", head, 16)
+			cmds = fh.read(size)
+			at = 0
+			for _ in range(ncmds):
+				cmd, length = struct.unpack_from("<II", cmds, at)
+				if cmd == MACHO_LC_SYMTAB:
+					symoff, nsyms, stroff, strsize = \
+					    struct.unpack_from("<IIII", cmds, at + 8)
+					break
+				at += length
+			else:
+				return set()
+			fh.seek(symoff)
+			syms = fh.read(16 * nsyms)
+			fh.seek(stroff)
+			strings = fh.read(strsize)
+	except (OSError, struct.error):
+		return set()
+	out = set()
+	for i in range(nsyms):
+		strx, kind, _sect, desc = struct.unpack_from("<IBBH", syms, 16 * i)
+		if (kind & MACHO_N_EXT and kind & MACHO_N_TYPE == MACHO_N_SECT
+		    and desc & MACHO_N_WEAK_DEF):
+			out.add(strings[strx:strings.find(b"\0", strx)]
+			        .decode(errors="surrogateescape"))
+	return out
+
+
 def read_symbols(units, cfg, jobs):
 	def one(u):
 		# Seventh of the family. nm is read for every object, so an nm
@@ -10304,7 +10354,7 @@ def read_symbols(units, cfg, jobs):
 			elif typ.isupper():
 				strong.add(name)
 			# lowercase: file-local, ignored
-		folded = coff_comdat(u.obj)
+		folded = coff_comdat(u.obj) | macho_weak(u.obj)
 		strong -= folded
 		weak |= folded
 		return u, undef, strong, weak

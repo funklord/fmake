@@ -35856,6 +35856,31 @@ def a_comdat_on_windows_is_one_definition_not_two(t):
 
 
 @case
+def a_weak_definition_on_macos_is_one_definition_not_two(t):
+	"""section 606: Mach-O's nm prints an inline function as T as well.
+
+	`N_WEAK_DEF' is in the symbol's `n_desc' and in no format `nm' has.
+	"""
+	conf = _macos_sdk(t)
+	t.write("a.c", "__attribute__((weak)) int shared = 1;\n"
+	        "int a_get(void){ return shared; }\n")
+	t.write("b.c", "__attribute__((weak)) int shared = 1;\n"
+	        "int b_get(void){ return shared; }\n")
+	t.write("fmake.toml", conf)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "more than one file" not in out,
+	      f"a folded definition is not a duplicate: {out}")
+
+	t.write("a.c", "int shared = 1;\nint a_get(void){ return shared; }\n")
+	t.write("b.c", "int shared = 1;\nint b_get(void){ return shared; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "more than one file" in out,
+	      f"a real duplicate has to stay one: {out}")
+
+
+@case
 def an_input_nobody_may_read_is_not_a_traceback(t):
 	"""section 596: stat works on a file its mode forbids reading.
 

@@ -47674,3 +47674,9 @@ format fixes. The first version of the case had both files pulled in by
 `main`, where there is no choice of provider to get wrong, and its sabotage
 sailed through. The fault fires in a library, and the case is one now, with
 a real duplicate beside it that has to stay refused.
+
+**macOS has the same fault.** llvm-nm prints `T` for an inline function in a
+Mach-O object: 73 `T` and no `W` in a file full of them, and softkeys built
+for macOS as 99 duplicates. `macho_weak` reads `N_WEAK_DEF` from each symbol's
+`n_desc`. 64-bit only, and a universal object reads as having none. softkeys
+then built `libsoftkeys.a` against the frameworks of section 604.
