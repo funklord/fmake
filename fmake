@@ -12736,6 +12736,32 @@ def frameworks_for(cl, cfg, proj):
 	return found
 
 
+def wine_search(pkg):
+	"""Tell wine where a kit keeps what a program it starts will load.
+
+    A DLL is found beside the program or on the path, and an import library
+    is neither, so a Qt program built against a kit left `--run' and `fmake
+    test' at exit 53 with the kit named. The package's `-L' says where the
+    kit is. `bin' beside it holds the DLLs, and `plugins' Qt's platform
+    plugin, without which QApplication aborts. Set here so that everything
+    this build starts inherits it, and in front of what the caller set.
+    """
+	if not _RUNNER[0] or os.path.basename(_RUNNER[0][0]) != "wine":
+		return
+	dlls, plugins = [], []
+	for d in pkg.libdirs:
+		root = os.path.dirname(d)
+		if glob.glob(os.path.join(glob.escape(root), "bin", "*.dll")):
+			dlls.append(os.path.join(root, "bin"))
+		if os.path.isdir(os.path.join(root, "plugins", "platforms")):
+			plugins.append(os.path.join(root, "plugins"))
+	for name, sep, found in (("WINEPATH", ";", dlls),
+	                         ("QT_PLUGIN_PATH", ";", plugins)):
+		was = os.environ.get(name)
+		if found:
+			os.environ[name] = sep.join(found + ([was] if was else []))
+
+
 def target_runner(cfg):
 	"""How a program built for this target gets started on this machine.
 
@@ -12772,6 +12798,21 @@ def target_runner(cfg):
 		root = cfg.sysroot or os.path.join("/usr", cfg.triplet)
 		return [found, "-L", root] if os.path.isdir(root) else [found]
 	return []
+
+
+def windows_qt_gui(t, cfg, libs):
+	"""Whether a Windows program with a plain `main' is a Qt GUI program.
+
+    Qt programs start at `main' on every platform, so section 583's reading
+    of the entry point says console, and the window opens with a console
+    behind it. A program that links QtWidgets or QtGui has a window to
+    show: qmake's win32 default is `CONFIG = windows', with `console' the
+    thing to ask for. `@ldflags -mconsole' is the same exit here, and a
+    test is left alone, since its output is what it is for.
+    """
+	if cfg.os != "windows" or t.test:
+		return False
+	return any(re.fullmatch(r"Qt\d+(Widgets|Gui)", lib) for lib in libs)
 
 
 def windows_static_runtime(cfg, libs, paths):
@@ -12952,7 +12993,13 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 		if any(os.path.dirname(p) == d for p in frameworks.values()):
 			extra_ld += ["-F" + d, "-Wl,-rpath," + d]
 	if t.kind == "exe":
-		extra_ld += WINDOWS_ENTRIES.get(windows_entry(cl.root), [])
+		entry = windows_entry(cl.root)
+		extra_ld += WINDOWS_ENTRIES.get(entry, [])
+		said = extra_ld + cfg.ldflags + [f for u in cl.link
+		                                 for f in u.ann.items("ldflags")]
+		if (not entry and windows_qt_gui(t, cfg, chosen + declared)
+		    and "-mconsole" not in said):
+			extra_ld.append("-mwindows")
 		if windows_static_runtime(cfg, chosen + declared, paths):
 			extra_ld.append("-static")
 	for u in cl.link:
@@ -16955,6 +17002,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# under /opt or a home prefix is in none of them. This is pkg-config
 	# proposing, exactly as it proposes the -I; the symbols still decide.
 	if pkg.libdirs:
+		wine_search(pkg)
 		cfg.extra_libdirs += [d for d in pkg.libdirs
 		                      if d not in cfg.extra_libdirs]
 		cfg._libdirs = None         # recomputed with the new directories

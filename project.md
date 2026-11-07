@@ -653,7 +653,8 @@ that had been green about nothing for five commits ·
 [601. A relative flag under `-C`](#601-a-relative-flag-under--c) ·
 [602. A Qt application for Windows, built and run](#602-a-qt-application-for-windows-built-and-run) ·
 [603. What moc could not see](#603-what-moc-could-not-see) ·
-[604. A Qt application for macOS, built and not run](#604-a-qt-application-for-macos-built-and-not-run)
+[604. A Qt application for macOS, built and not run](#604-a-qt-application-for-macos-built-and-not-run) ·
+[605. A window with no console behind it, and wine told where the DLLs are](#605-a-window-with-no-console-behind-it-and-wine-told-where-the-dlls-are)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47607,3 +47608,40 @@ files remain unread by anything here. Homebrew's Qt is untried, and if its
 `.pc` says `-framework`, `flags` would put that on the compile line and not
 the link, where naming its `lib` in `lib-dirs` should reach the route above.
 `a_real_qt_kit_links_for_macos` needs `FMAKE_QT_MACOS` and `FMAKE_MACOS_CXX`.
+
+## 605. A window with no console behind it, and wine told where the DLLs are
+
+**Qt starts at `main`**, so section 583's reading of the entry point said
+console, and a Widgets program built for Windows opened one behind its
+window on every start: `Subsystem 3 (Windows CUI)`. qmake's
+`win32/default_pre.prf` reads `CONFIG = windows ...`, with `console` the thing
+to ask for, so the prior art is plain. A program linking QtWidgets or QtGui
+gets `-mwindows`. The library says what the entry point cannot. `-mconsole` in
+`@ldflags` or `[project] ldflags` is the exit, and a test keeps its console,
+since its output is what it is for. The first version of the exit looked
+only at the link's own list and missed `[project] ldflags`; the case found it
+with both flags on the line.
+
+**`--run` and `fmake test`** started the program and wine answered exit 53: a
+DLL is found beside the program or on the path, and an import library is
+neither. The package's `-L` says where the kit is, so `wine_search` puts `bin`
+on `WINEPATH` and `plugins` on `QT_PLUGIN_PATH`, in front of what the caller
+set. Measured with Xvfb as well as `-platform offscreen`: the real `windows`
+platform plugin ran the program to exit 0, so it is not offscreen's doing.
+
+Qt's `...runtime.7z` unpacks `libstdc++-6.dll` and its two companions at the
+kit's root rather than in `bin`, which the installer evidently moves. A kit
+unpacked by hand wants them copied into `bin`, or wine cannot start Qt6Core.
+
+**`-static` stays.** Section 582 links the toolchain's runtime into the
+program, and that is right here for a reason that section did not have: the
+kit's DLLs were built by GCC 13.1, the program by Debian's 14, and a program
+importing `libstdc++-6.dll` would be handed the kit's older one. Two C++
+runtimes in one process share msvcrt's heap, so `new` in one and `delete` in
+the other is fine. An exception crossing from Qt into the program is not
+tested. `[toolchain] static-runtime = false` is the exit.
+
+**Not fmake's, and still not done:** a program that starts on another Windows
+machine needs its DLLs and `platforms/qwindows.dll` beside it, which is what
+`windeployqt` does and what a `.app` bundle is on macOS. The question stands
+for the holder, as section 271's did for the `.apk`.
