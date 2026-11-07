@@ -47548,3 +47548,8 @@ line, so `<QObject>`, the road to that header, resolved to nothing.
 The case's two members are chosen so that neither half can pass for the
 other: `FROM_COMPILER` is defined only by a compiler shim, `Q_OS_UNIX` only
 through a Qt header.
+
+**The lock.** The same check of *a second build writes nothing* showed
+`.fmake/lock` moving on every run, native builds included: `open(path, "w")`
+truncates, so the one file meant to say nobody is writing was written. It is
+opened to append now, which holds the lock and changes nothing.

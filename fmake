@@ -7665,7 +7665,7 @@ class TreeLock:
 		try:
 			self.made = not os.path.isdir(os.path.dirname(self.path))
 			os.makedirs(os.path.dirname(self.path), exist_ok=True)
-			self.fh = open(self.path, "w")
+			self.fh = open(self.path, "a")
 		except OSError as exc:
 			here = os.path.dirname(os.path.dirname(self.path))
 			state = os.path.dirname(self.path)

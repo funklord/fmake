@@ -35623,6 +35623,24 @@ int main() {
 
 
 @case
+def a_build_with_nothing_to_do_leaves_the_lock_alone(t):
+	"""section 603: the lock was opened to truncate, on every run.
+
+	`open(path, "w")' moved its mtime each time, so a second build did
+	write a file, and only because of the thing that says no other build
+	is writing. Holding a lock needs a descriptor and no change.
+	"""
+	t.write("main.c", "int main(void){ return 0; }\n")
+	r = t.fmake()
+	check(r.returncode == 0, f"build: {r.stdout}{r.stderr}")
+	lock = os.path.join(t.dir, ".fmake", "lock")
+	os.utime(lock, (1000, 1000))
+	r = t.fmake()
+	check(r.returncode == 0, f"again: {r.stdout}{r.stderr}")
+	check(os.stat(lock).st_mtime == 1000, "the lock was written")
+
+
+@case
 def an_input_nobody_may_read_is_not_a_traceback(t):
 	"""section 596: stat works on a file its mode forbids reading.
 
