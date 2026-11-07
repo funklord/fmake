@@ -35343,6 +35343,207 @@ int main(){ WSADATA d; int r = WSAStartup(MAKEWORD(2,2), &d);
 
 
 @case
+def a_kit_unpacked_elsewhere_is_read_from_where_it_lies(t):
+	"""section 602: Qt's .pc files say where Qt's machines built it.
+
+	A prebuilt kit is unpacked wherever somebody puts it, and its .pc
+	still says /Users/qt/work/install, so `-I' named nothing and the
+	report was `QApplication: no such file' with the kit named in the
+	toml. `--define-prefix' is the remedy and cannot go everywhere: on a
+	multiarch .pc it turns /usr into /usr/lib. So the second kit here is
+	one whose prefix is real and is not where the file sits, which only
+	the narrow rule leaves alone.
+	"""
+	if not shutil.which("pkg-config") and not shutil.which("pkgconf"):
+		raise Skip("no pkg-config to point anywhere")
+	gone = "/nonexistent/qt/work/install"
+	for name, val in (("moved", 7), ("kept", 8)):
+		home = name if name == "moved" else "elsewhere"
+		t.write(f"{home}/include/{name}/{name}.h", f"#define {name.upper()} {val}\n"
+		        f"int {name}_get(void);\n")
+		impl = t.write(f"{name}_impl.c", f"int {name}_get(void){{ return {val}; }}\n")
+		obj = impl + ".o"
+		subprocess.run(["cc", "-c", impl, "-o", obj], check=True)
+		os.makedirs(os.path.join(t.dir, home, "lib"), exist_ok=True)
+		subprocess.run(["ar", "rcs", os.path.join(t.dir, home, "lib",
+		                                          f"lib{name}.a"), obj], check=True)
+	t.write("moved/lib/pkgconfig/moved.pc",
+	        f"prefix={gone}\nName: moved\nDescription: d\nVersion: 1\n"
+	        "Cflags: -I${prefix}/include\nLibs: -L${prefix}/lib -lmoved\n")
+	t.write("kept/lib/pkgconfig/kept.pc",
+	        f"prefix={t.dir}/elsewhere\nName: kept\nDescription: d\nVersion: 1\n"
+	        "Cflags: -I${prefix}/include\nLibs: -L${prefix}/lib -lkept\n")
+	t.write("src/main.c", "#include <moved/moved.h>\n#include <kept/kept.h>\n"
+	        "#include <stdio.h>\n"
+	        'int main(void){ printf("%d %d\\n", moved_get(), kept_get()); '
+	        "return 0; }\n")
+	t.write("src/fmake.toml", '[toolchain]\npkg-config-path = '
+	        '["../moved/lib/pkgconfig", "../kept/lib/pkgconfig"]\n')
+	src = _src(t)
+	r = _run_in(src, FMAKE)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"a moved kit did not resolve: {out}")
+	check(_run_in(src, os.path.join(src, "src")).stdout == "7 8\n",
+	      f"the program is wrong: {out}")
+
+	r = _run_in(src, FMAKE, "--eject", "make")
+	check(r.returncode == 0, f"eject: {r.stdout}{r.stderr}")
+	with open(os.path.join(src, "Makefile"), "w") as fh:
+		fh.write(r.stdout)
+	os.unlink(os.path.join(src, "src"))
+	r = _run_in(src, "make")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the ejected build lost the kit: {out}")
+	check(_run_in(src, os.path.join(src, "src")).stdout == "7 8\n",
+	      f"the ejected program is wrong: {out}")
+
+
+@case
+def the_hosts_packages_do_not_answer_for_another_os(t):
+	"""section 602: with a kit named, the host's .pc files stayed behind it.
+
+	Section 591 stopped asking the host's pkg-config for another OS when
+	nothing said where that OS's packages were. Naming a kit said so, and
+	put the whole host search back, so a header the kit does not hold was
+	answered by Linux.
+	"""
+	if not any(subprocess.run(["pkg-config", "--exists", m]).returncode == 0
+	           for m in ("Qt6Core", "Qt5Core")):
+		raise Skip("no host Qt for the wrong answer to come from")
+	conf = _mingw_shim(t)
+	t.write("kit/lib/pkgconfig/frob.pc",
+	        f"prefix={t.dir}/kit\nName: frob\nDescription: d\nVersion: 1\n")
+	t.write("main.cpp", "#include <QString>\nint main(){ return 0; }\n")
+	t.write("fmake.toml", conf + 'pkg-config-path = ["kit/lib/pkgconfig"]\n')
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode != 0, f"nothing here supplies QString: {out}")
+	check("QString" in out and "/qt" not in out.replace(t.dir, ""),
+	      f"the host's Qt reached a Windows line: {out}")
+
+
+@case
+def a_kit_for_another_os_is_generated_by_this_machines_moc(t):
+	"""section 602: a kit's moc.exe cannot start here, and PATH is no answer.
+
+	The kit's directories hold that OS's tools, so the lookup fell through
+	to PATH, where `moc' is qtchooser's and said Qt 5 for a Qt 6 kit:
+	*The moc has changed too much*. The host's pkg-config knows this
+	machine's tool of the kit's major.
+	"""
+	got = subprocess.run(["pkg-config", "--variable=libexecdir", "Qt6Core"],
+	                     capture_output=True, text=True).stdout.strip()
+	moc = os.path.join(got, "moc") if got else ""
+	if not moc or not os.access(moc, os.X_OK):
+		raise Skip("no host Qt 6 moc")
+	conf = _mingw_shim(t)
+	t.write("kit/bin/moc.exe", "not for this machine\n")
+	t.write("kit/lib/pkgconfig/Qt6Core.pc",
+	        "prefix=/nonexistent/qt/work/install\nbindir=${prefix}/bin\n"
+	        "libexecdir=${prefix}/bin\nincludedir=${prefix}/include\n"
+	        "Name: Qt6 Core\nDescription: d\nVersion: 6.8.2\n"
+	        "Cflags: -I${includedir}/QtCore -I${includedir}\n"
+	        "Libs: -L${prefix}/lib -lQt6Core\n")
+	t.write("kit/include/QtCore/QObject",
+	        "#define Q_OBJECT\nclass QObject {};\n")
+	t.write("obj.h", "#include <QObject>\n"
+	        "class obj : public QObject { Q_OBJECT };\n")
+	t.write("main.cpp", '#include "obj.h"\nint main(){ return 0; }\n')
+	t.write("fmake.toml", conf + 'pkg-config-path = ["kit/lib/pkgconfig"]\n')
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check(re.search(rf"^{re.escape(moc)} .*obj\.h", out, re.M),
+	      f"the host's Qt 6 moc should generate this: {out}")
+
+
+@case
+def a_real_qt_kit_builds_what_runs_on_windows(t):
+	"""section 602: the Qt Company's own kit, and a program that runs.
+
+	Needs what cannot be assumed, so FMAKE_QT_WINDOWS names an unpacked
+	`win64_mingw' kit of the host's Qt 6 version; the section says where
+	it comes from. moc, uic and rcc are all in the program, so a signal,
+	a form and a resource each have to reach the output.
+	"""
+	kit = os.environ.get("FMAKE_QT_WINDOWS")
+	if not kit or not shutil.which("x86_64-w64-mingw32-g++"):
+		raise Skip("no FMAKE_QT_WINDOWS kit, or no mingw-w64")
+	t.write("main.cpp", """
+#include <QApplication>
+#include <QFile>
+#include <QTimer>
+#include "window.h"
+int main(int argc, char **argv)
+{
+	QApplication app(argc, argv);
+	window w;
+	QFile f(":/hello.txt");
+	f.open(QIODevice::ReadOnly);
+	w.set_text(QString::fromUtf8(f.readAll()).trimmed());
+	w.show();
+	QTimer::singleShot(100, &w, &window::finish);
+	return app.exec();
+}
+""")
+	t.write("window.h", """
+#pragma once
+#include <QWidget>
+#include "ui_window.h"
+class window : public QWidget {
+	Q_OBJECT
+public:
+	window();
+	void set_text(const QString &s);
+public slots:
+	void finish();
+signals:
+	void said(const QString &s);
+private:
+	Ui::window ui;
+};
+""")
+	t.write("window.cpp", """
+#include "window.h"
+#include <QApplication>
+#include <cstdio>
+window::window()
+{
+	ui.setupUi(this);
+	connect(this, &window::said, this, [](const QString &s) {
+		std::printf("said %s\\n", qPrintable(s));
+		std::fflush(stdout);
+	});
+}
+void window::set_text(const QString &s) { ui.label->setText(s); }
+void window::finish() { emit said(ui.label->text()); QApplication::quit(); }
+""")
+	t.write("window.ui", """
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>window</class>
+<widget class="QWidget" name="window"><layout class="QVBoxLayout" name="l"><item>
+<widget class="QLabel" name="label"/></item></layout></widget></ui>
+""")
+	t.write("hello.txt", "hello from qrc\n")
+	t.write("app.qrc", '<RCC><qresource prefix="/"><file>hello.txt</file>'
+	        "</qresource></RCC>\n")
+	t.write("fmake.toml", '[toolchain]\ncc = "x86_64-w64-mingw32-gcc"\n'
+	        f'cxx = "x86_64-w64-mingw32-g++"\n'
+	        f'pkg-config-path = ["{kit}/lib/pkgconfig"]\n')
+	r = t.fmake(timeout=600)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the kit did not build: {out}")
+	prog = os.path.join(t.dir, os.path.basename(t.dir) + ".exe")
+	if shutil.which("wine"):
+		e = dict(os.environ, WINEPATH=f"{kit}/bin;{kit}", WINEDEBUG="-all",
+		         QT_PLUGIN_PATH=f"{kit}/plugins")
+		r = subprocess.run(["wine", prog, "-platform", "offscreen"], env=e,
+		                   capture_output=True, text=True, errors="replace",
+		                   timeout=120)
+		check("said hello from qrc" in r.stdout,
+		      f"signal, form and resource have to arrive: {r.stdout}{r.stderr}")
+
+
+@case
 def an_input_nobody_may_read_is_not_a_traceback(t):
 	"""section 596: stat works on a file its mode forbids reading.
 

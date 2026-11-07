@@ -3778,8 +3778,18 @@ def find_qt_tool(name, configured, pkg):
 			    f"not found")
 		return got
 	for mod in QT_CORE_MODULES:
+		# A kit for another OS holds that OS's tools, `moc.exe' or a Mach-O
+		# that cannot start here. moc and its siblings run on the build
+		# machine and write C++, so what a cross build wants is THIS
+		# machine's tool of the same Qt major, which the host's pkg-config
+		# knows. PATH does not: on Debian `moc' there is qtchooser's and
+		# was Qt 5, so a Qt 6 kit stopped on `The moc has changed too
+		# much'. A major the kit does not hold is never asked about.
+		if pkg.foreign and pkg.flags(mod) is None:
+			continue
+		ask = pkg.host_variable if pkg.foreign else pkg.variable
 		for var in ("libexecdir", "host_bins", "bindir"):
-			d = pkg.variable(mod, var)
+			d = ask(mod, var)
 			cand = os.path.join(d, name) if d else None
 			if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
 				return cand
@@ -11643,10 +11653,62 @@ class PkgConfig:
 			was = self.env.get("PKG_CONFIG_PATH", "")
 			self.env["PKG_CONFIG_PATH"] = os.pathsep.join(
 			    list(pc_path) + ([was] if was else []))
+		# Another OS with a kit named: the kit is where its packages are,
+		# and the host's own .pc files are not, so they leave the search
+		# rather than stay behind it. Left there, `<zlib.h>' in a tree
+		# cross-built for Windows was answered with the host's zlib. A
+		# pkg-config named or found beside the compiler keeps its own
+		# search, and so does anybody who set the variable.
+		if (foreign and not sysroot and not configured
+		    and "PKG_CONFIG_LIBDIR" not in self.env):
+			self.env["PKG_CONFIG_LIBDIR"] = ""
+		self._relocated = {}
+		self.foreign = bool(foreign and self.exe)
+
+	def host_variable(self, module, name):
+		"""`variable', answered for the build machine rather than the target."""
+		key = ("host", module, name)
+		if key not in self._vars:
+			env = {k: v for k, v in self.env.items() if k not in
+			       ("PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR",
+			        "PKG_CONFIG_SYSROOT_DIR")}
+			r = subprocess.run([self.exe, f"--variable={name}", module],
+			                   capture_output=True, text=True,
+			                   errors="replace", env=env)
+			self._vars[key] = (r.stdout.strip() or None) \
+			                  if r.returncode == 0 else None
+		return self._vars[key]
 
 	def _run(self, args):
+		if args and self.relocated(args[-1].split(" ")[0]):
+			args = ["--define-prefix"] + args
 		return subprocess.run([self.exe] + args, capture_output=True,
 		                      text=True, errors="replace", env=self.env)
+
+	def relocated(self, module):
+		"""Whether a module's .pc says a prefix that is not on this machine.
+
+        A prebuilt kit is unpacked wherever somebody put it, and its .pc
+        files still say where it was built: Qt's say
+        /Users/qt/work/install for Windows and /home/qt/work/install for
+        Linux, so every -I named a directory that does not exist and the
+        message was `QApplication: no such file' with the kit in plain
+        view. `--define-prefix' is pkg-config's answer, and it cannot be
+        given to everything: it reads the prefix off the file's position,
+        which turns /usr into /usr/lib for a multiarch .pc. So it goes only
+        to a module found on a path the build named, and only when its own
+        prefix is missing: a file that is right is left alone.
+        """
+		if module not in self._relocated:
+			self._relocated[module] = False
+			if not self.sysroot:
+				for d in self.env.get("PKG_CONFIG_PATH", "").split(os.pathsep):
+					pc = os.path.join(d, module + ".pc")
+					if d and os.path.isfile(pc):
+						self._relocated[module] = \
+						    _pc_moved_root(pc) is not None
+						break
+		return self._relocated[module]
 
 	@staticmethod
 	def _consumer_flags(module, cflags):
@@ -11914,7 +11976,10 @@ class PkgConfig:
 			for f in names:
 				if not f.endswith(".pc"):
 					continue
-				for inc in _pc_includedirs(os.path.join(d, f)):
+				pc = os.path.join(d, f)
+				for inc in _pc_includedirs(
+				        pc, _pc_moved_root(pc) if self.relocated(f[:-3])
+				        else None):
 					if os.path.realpath(inc) in self.sysincs:
 						continue
 					self._by_incdir.setdefault(inc.rstrip("/"), f[:-3])
@@ -11924,7 +11989,28 @@ class PkgConfig:
 RE_PC_VAR = re.compile(r"\$\{([^}]+)\}")
 
 
-def _pc_includedirs(path):
+def _pc_moved_root(path):
+	"""Where a moved kit's prefix really is, or None if the .pc is right.
+
+    The directory above `lib/pkgconfig', which is what `--define-prefix'
+    takes. A prefix written in terms of ${pcfiledir} is relocatable already.
+    """
+	try:
+		with open(path, errors="replace") as fh:
+			for line in fh:
+				if line.startswith("prefix="):
+					prefix = line.split("=", 1)[1].strip()
+					break
+			else:
+				return None
+	except OSError:
+		return None
+	if not prefix or "$" in prefix or os.path.isdir(prefix):
+		return None
+	return os.path.dirname(os.path.dirname(os.path.dirname(path)))
+
+
+def _pc_includedirs(path, prefix=None):
 	"""The -I directories a .pc file advertises, with variables expanded."""
 	variables, cflags = {}, ""
 	try:
@@ -11938,6 +12024,8 @@ def _pc_includedirs(path):
 					variables[k.strip()] = v.strip()
 	except OSError:
 		return []
+	if prefix:
+		variables["prefix"] = prefix
 
 	def expand(s, depth=0):
 		if depth > 8:
@@ -18291,6 +18379,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			# machine that may not be this one. ninja is not deferred:
 			# it has no parse-time shell, so a deferred module would be
 			# one pkg-config run per compile rather than one per build.
+			extra["pkg"] = pkg
 			extra["deferred"] = deferred_modules(
 			    pkg, hdr_store, [u for cl in closures.values() for u in cl.link],
 			    wanted)
@@ -20207,7 +20296,7 @@ def _eject_skipped(a, skipped):
 def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
                gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
                fragment=False, prefix=None, outdir=None,
-               deferred=None, asked="make", skipped=None):
+               deferred=None, asked="make", skipped=None, pkg=None):
 	"""A standalone Makefile, or a fragment for an existing one to include.
 
     The fragment exists because replacing a build system is not the only way
@@ -20448,14 +20537,22 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a("PKG_CONFIG_PATH_TREE := "
 			  + shlex.quote(_dirs).replace("$", "$$"))
 			pc_env = 'PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_TREE):$$PKG_CONFIG_PATH" '
+		# What the live side decided about a kit, said where the file asks:
+		# the host's own .pc files stay out of another OS, and a module
+		# whose kit was unpacked away from its prefix is read from where
+		# it lies.
+		if pkg is not None and pkg.env.get("PKG_CONFIG_LIBDIR") == "":
+			pc_env = "PKG_CONFIG_LIBDIR= " + pc_env
 		for module, name in sorted(used.items()):
 			cf, _libs, dirs = deferred[module]
+			moved = ("--define-prefix " if pkg is not None
+			         and pkg.relocated(module) else "")
 			if any(f.startswith(PATH_CFLAGS) for f in cf):
 				a(f"{name}_CFLAGS := $(shell {pc_env}$(PKG_CONFIG) "
-				  f"--cflags {module})")
+				  f"{moved}--cflags {module})")
 			if dirs:
 				a(f"{name}_LDIRS := $(shell {pc_env}$(PKG_CONFIG) "
-				  f"--libs-only-L {module})")
+				  f"{moved}--libs-only-L {module})")
 		a("")
 	a(var("CFLAGS", common))
 	a(var("CXXFLAGS", common))

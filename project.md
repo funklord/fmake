@@ -650,7 +650,8 @@ that had been green about nothing for five commits ·
 [598. The second walk: an ELF called `rs.exe`](#598-the-second-walk-an-elf-called-rsexe) ·
 [599. A refused build keeps what it compiled](#599-a-refused-build-keeps-what-it-compiled) ·
 [600. A guess that did not compile](#600-a-guess-that-did-not-compile) ·
-[601. A relative flag under `-C`](#601-a-relative-flag-under--c)
+[601. A relative flag under `-C`](#601-a-relative-flag-under--c) ·
+[602. A Qt application for Windows, built and run](#602-a-qt-application-for-windows-built-and-run)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47455,3 +47456,57 @@ include search, so the case uses a `@response` file.
 `-C` now means the tree's `x`, not the invoker's. The sweep already read it that
 way, `-o` and `--compile-commands` are root-relative too, and without `-C` the
 two are the same directory.
+
+## 602. A Qt application for Windows, built and run
+
+The question was whether Qt applications build for Windows and macOS, and
+until here the answer was no: section 591 stopped at *there is no Qt for
+Windows here*. There is now, in scratch. Qt publishes each kit as plain
+archives at
+`download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_682/qt6_682/qt.qt6.682.win64_mingw/`,
+and `qtbase` plus the `MinGW...runtime` archive is 24 MB, 149 MB unpacked.
+The version matches the host's Qt 6.8.2 so that the host's `moc` can serve
+it. It is built against msvcrt, the same CRT family as Debian's mingw-w64.
+
+A Widgets program with a `Q_OBJECT` class, a `.ui` form and a `.qrc`
+resource now builds with the real mingw and runs under wine:
+
+    [toolchain]
+    cc = "x86_64-w64-mingw32-gcc"
+    cxx = "x86_64-w64-mingw32-g++"
+    pkg-config-path = ["/path/to/kit/lib/pkgconfig"]
+
+or `PKG_CONFIG_PATH=kit/lib/pkgconfig fmake --os windows` with no file at
+all, which lands in `build-windows-x86_64/`. Three faults stood in the way,
+none of them about Windows as such:
+
+- **A kit's `.pc` says where it was built.** Windows's say
+  `prefix=/Users/qt/work/install`, so every `-I` named nothing and the
+  message was *QApplication: no such file* with the kit named in the toml.
+  Any unpacked kit does this, Linux's included. `--define-prefix` is
+  pkg-config's remedy and cannot be given to everything: measured here it
+  turns `/usr` into `/usr/lib` for a multiarch `.pc`, giving
+  `-I/usr/lib/include/x86_64-linux-gnu/qt6`. So it goes only to a module
+  found on a path the build named, whose own prefix is missing. A `.pc`
+  that is right is left alone, which the case checks with a kit whose real
+  prefix is not where the file sits. `_pc_includedirs` reads files itself
+  and needed the same answer; an ejected Makefile says the flag.
+- **The host's `.pc` files stayed behind a named kit.** Section 591 stopped
+  asking for another OS when nothing said where its packages were. Naming a
+  kit said so and put the whole host search back, so a header the kit does
+  not hold was answered by Linux. `PKG_CONFIG_LIBDIR` is now empty for
+  another OS, unless a sysroot, a named pkg-config or the caller says
+  otherwise.
+- **The generators came from PATH.** A kit's directories hold that OS's
+  `moc.exe`, so the lookup fell through to PATH, where `moc` is qtchooser's
+  and said Qt 5: *The moc has changed too much*. moc, uic and rcc run on the
+  build machine and write C++, so the host's pkg-config is now asked for
+  the kit's Qt major. A kit whose major the host lacks still falls through
+  to PATH, where naming `[toolchain] moc` is the remedy.
+
+`a_real_qt_kit_builds_what_runs_on_windows` needs `FMAKE_QT_WINDOWS` naming
+the unpacked kit, and skips without it. wine has no display here, and a
+program started without one prints its output and then does not exit: pass
+`-platform offscreen`. `QT_QPA_PLATFORM=offscreen` in the environment did
+not take effect under wine in the one run that tried it, and why was not
+looked at.
