@@ -34811,7 +34811,9 @@ def another_os_does_not_ask_the_hosts_pkg_config(t):
 	t.write("bin/pkg-config", f'#!/bin/sh\necho "$@" >> {mark}\nexit 1\n')
 	os.chmod(os.path.join(t.dir, "bin", "pkg-config"), 0o755)
 	path = os.path.join(t.dir, "bin") + os.pathsep + os.environ["PATH"]
-	t.write("main.c", "#include <frob.h>\nvoid __main(void){ }\n"
+	# A module to ask about in both halves, since naming the path alone no
+	# longer needs pkg-config's own search path (section 602).
+	t.write("main.c", "/*! @file\n *  @pkg frob\n */\nvoid __main(void){ }\n"
 	        "int main(void){ return 0; }\n")
 	t.write("fmake.toml", conf)
 	t.fmake("--explain", env={"PATH": path})
