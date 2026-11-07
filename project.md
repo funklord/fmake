@@ -652,7 +652,8 @@ that had been green about nothing for five commits ·
 [600. A guess that did not compile](#600-a-guess-that-did-not-compile) ·
 [601. A relative flag under `-C`](#601-a-relative-flag-under--c) ·
 [602. A Qt application for Windows, built and run](#602-a-qt-application-for-windows-built-and-run) ·
-[603. What moc could not see](#603-what-moc-could-not-see)
+[603. What moc could not see](#603-what-moc-could-not-see) ·
+[604. A Qt application for macOS, built and not run](#604-a-qt-application-for-macos-built-and-not-run)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47553,3 +47554,56 @@ through a Qt header.
 `.fmake/lock` moving on every run, native builds included: `open(path, "w")`
 truncates, so the one file meant to say nobody is writing was written. It is
 opened to append now, which holds the lock and changes nothing.
+
+## 604. A Qt application for macOS, built and not run
+
+Qt's macOS kit shares nothing with its Windows one. It has no `.pc` files,
+since Qt writes none for frameworks, and its libraries are universal
+`QtWidgets.framework` bundles. Section 587 reads a framework from an
+include's first word, and `<QApplication>` has no such word: the file is in
+`QtWidgets.framework/Headers`. Three things were missing, and none needed a
+new key, because `[toolchain] lib-dirs` names a directory of libraries and
+that is what the kit's `lib` is:
+
+    [toolchain]
+    lib-dirs = ["/path/to/kit/lib"]
+
+- **A bare header is answered from `Headers`**, by `for_header`, before
+  anything asks pkg-config. It puts `-I` at those `Headers` and `-F` at the
+  directory, so what the header includes in turn, `<QtCore/qobject.h>`,
+  resolves too. Only directories the build named: an SDK's 250 stubs stay
+  section 587's business.
+- **`-framework` is chosen by symbol.** `<QApplication>` says nothing of
+  QtCore. A named directory's frameworks are ordinary libraries, few and with
+  no umbrellas, so section 587's reason for reading them from the include
+  does not apply: what the sources leave unresolved is looked up in each
+  binary. The first version also read the bare include. The sabotage showed
+  the symbols already covered it, since a framework nothing takes a symbol
+  from needs no linking, and it went. A program with a form that needs no
+  QtGui symbol links without QtGui, which is the design working.
+- **moc.** No `.pc` means no Qt to ask about, so `framework_qt` reads the
+  major from QtCore's `Headers/6.8.2`, the one place the kit says it. On
+  another OS that picks the host's tools as in section 602; on a Mac it is
+  the kit's own `libexec`.
+
+The linked program carries `-Wl,-rpath` at the kit, because Qt's install
+names are `@rpath/QtCore.framework/...` and it would not start otherwise.
+
+**What stood in for an SDK.** Apple's may not be redistributed and none was
+fetched. The zig 0.13 tarball carries macOS's C headers, a real
+`libSystem.tbd`, and libc++'s headers as plain files; they were unpacked as
+data and zig was not run. Two things had to be supplied by hand: a
+`__config_site`, and `#include <__config_site>` restored to libc++'s
+`__config`, which zig patches out for its own driver; and a `libc++.tbd`
+stub, written from what Qt's own frameworks import from libc++ plus the
+`new`/`delete` family. Clang and `ld64.lld` then built the same program as
+section 602: real Qt 6.8.2 headers and frameworks, a host moc, and a Mach-O
+whose load commands read `@rpath/QtWidgets.framework/Versions/A/QtWidgets`.
+
+**What this cannot say.** The program has never started: that needs a Mac.
+Nor has fmake run on one, so the `libexec` branch of the tool lookup is
+unexercised. The libc++ stub is mine, so a real SDK's multi-document `.tbd`
+files remain unread by anything here. Homebrew's Qt is untried, and if its
+`.pc` says `-framework`, `flags` would put that on the compile line and not
+the link, where naming its `lib` in `lib-dirs` should reach the route above.
+`a_real_qt_kit_links_for_macos` needs `FMAKE_QT_MACOS` and `FMAKE_MACOS_CXX`.

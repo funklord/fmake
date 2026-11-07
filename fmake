@@ -3785,7 +3785,13 @@ def find_qt_tool(name, configured, pkg):
 		# knows. PATH does not: on Debian `moc' there is qtchooser's and
 		# was Qt 5, so a Qt 6 kit stopped on `The moc has changed too
 		# much'. A major the kit does not hold is never asked about.
-		if pkg.foreign and pkg.flags(mod) is None:
+		kit = pkg.framework_qt()
+		if kit and kit[0] == mod and not pkg.foreign:
+			cand = os.path.join(kit[1], "libexec", name)
+			if os.path.isfile(cand) and os.access(cand, os.X_OK):
+				return cand
+		if pkg.foreign and pkg.flags(mod) is None \
+		   and not (kit and kit[0] == mod):
 			continue
 		ask = pkg.host_variable if pkg.foreign else pkg.variable
 		for var in ("libexecdir", "host_bins", "bindir"):
@@ -4137,7 +4143,8 @@ def moc_package_incs(root, jobs, scans, pkg, cache, cfg, have):
 					continue
 				got = pkg.for_header(name, store, sig)
 				for f in (got[1] if got else ()):
-					if (f.startswith("-I") and f not in have and f not in out
+					if (f.startswith(("-I", "-F")) and f not in have
+					    and f not in out
 					    and os.path.realpath(f[2:]) not in sysincs):
 						out.append(f)
 	return out
@@ -7601,10 +7608,25 @@ class Config:
 					self._sdk_root = self.sysroot
 		return self._sdk_root or None
 
-	def framework_dirs(self):
-		"""Where this macOS link finds a framework: the SDK's, then `-F'."""
+	def kit_framework_dirs(self):
+		"""Framework directories this build named, the SDK's aside.
+
+        `-F', or a `[toolchain] lib-dirs' entry holding frameworks, which
+        is what a macOS kit's `lib' is: Qt's has no .pc files at all.
+        """
+		if self.os != "darwin":
+			return []
 		out = [f[2:] for f in self.cflags + self.ldflags
 		       if f.startswith("-F") and len(f) > 2]
+		for d in self.extra_libdirs:
+			if d not in out and glob.glob(os.path.join(glob.escape(d),
+			                                           "*.framework")):
+				out.append(d)
+		return [d for d in out if os.path.isdir(d)]
+
+	def framework_dirs(self):
+		"""Where this macOS link finds a framework: named ones, then the SDK's."""
+		out = self.kit_framework_dirs()
 		if self.sdk_root:
 			out += [os.path.join(self.sdk_root, d)
 			        for d in ("System/Library/Frameworks",
@@ -11637,6 +11659,25 @@ def choose_libs(providers, wanted, proposed, implicit_libs=IMPLICIT_LIBS):
 	return chosen, why, implicit, sorted(remaining)
 
 
+# How a header answered from a framework reads where a module name would.
+# Not a word pkg-config can be asked about.
+FRAMEWORK_MODULE = "framework:"
+
+
+def framework_of_header(dirs, name):
+	"""(word, directory) of the framework holding a bare header, or None."""
+	for d in dirs:
+		try:
+			names = sorted(os.listdir(d))
+		except OSError:
+			continue
+		for n in names:
+			if n.endswith(".framework") and os.path.isfile(
+			        os.path.join(d, n, "Headers", name)):
+				return n[:-len(".framework")], os.path.join(d, n)
+	return None
+
+
 class PkgConfig:
 	"""pkg-config, for the -I flags a library's own headers need."""
 
@@ -11751,7 +11792,34 @@ class PkgConfig:
 		    and "PKG_CONFIG_LIBDIR" not in self.env):
 			self.env["PKG_CONFIG_LIBDIR"] = ""
 		self._relocated = {}
-		self.foreign = bool(foreign and self.exe)
+		self.foreign = bool(foreign)
+		self.frameworks = ()
+
+	def use_frameworks(self, dirs):
+		"""Framework directories a header may be answered from.
+
+        Part of the cache key, because a header answered under one kit
+        must not be read back under another.
+        """
+		self.frameworks = tuple(dirs)
+		self.incs_sig += "|" + ",".join(dirs)
+
+	def framework_qt(self):
+		"""(`Qt6Core', the kit's root) for a framework kit, or None.
+
+        A kit of frameworks has no .pc to say which Qt it is. QtCore keeps
+        its private headers under a directory named for the version.
+        """
+		for d in self.frameworks:
+			try:
+				names = os.listdir(os.path.join(d, "QtCore.framework", "Headers"))
+			except OSError:
+				continue
+			for n in names:
+				m = re.fullmatch(r"(\d+)\.\d+\.\d+", n)
+				if m:
+					return f"Qt{m.group(1)}Core", os.path.dirname(d)
+		return None
 
 	def host_variable(self, module, name):
 		"""`variable', answered for the build machine rather than the target."""
@@ -11760,11 +11828,13 @@ class PkgConfig:
 			env = {k: v for k, v in self.env.items() if k not in
 			       ("PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR",
 			        "PKG_CONFIG_SYSROOT_DIR")}
-			r = subprocess.run([self.exe, f"--variable={name}", module],
+			exe = (self.exe or shutil.which("pkg-config")
+			       or shutil.which("pkgconf"))
+			r = subprocess.run([exe, f"--variable={name}", module],
 			                   capture_output=True, text=True,
-			                   errors="replace", env=env)
+			                   errors="replace", env=env) if exe else None
 			self._vars[key] = (r.stdout.strip() or None) \
-			                  if r.returncode == 0 else None
+			                  if r and r.returncode == 0 else None
 		return self._vars[key]
 
 	def _run(self, args):
@@ -12000,6 +12070,16 @@ class PkgConfig:
 			store[key] = ent
 			self._note_dirs((ent or [None, None, None, []])[3])
 			return ent
+		fw = framework_of_header(self.frameworks, name)
+		if fw:
+			# Qt spells `<QApplication>', which is not under `-F' the way
+			# `<QtWidgets/QApplication>' is: the header sits in the
+			# framework's Headers, so that goes on the line, and `-F'
+			# reaches what the header includes in turn.
+			store[key] = [FRAMEWORK_MODULE + fw[0],
+			              ["-F" + os.path.dirname(fw[1]),
+			               "-I" + os.path.join(fw[1], "Headers")], [], []]
+			return store[key]
 		module = HEADER_PKG.get(name)
 		if module is None:
 			incdirs = self.by_includedir()
@@ -12840,15 +12920,37 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			if l[2:] not in declared:
 				declared.append(l[2:])
 	extra_ld += t.conf.get("ldflags", [])
-	for word, path in frameworks_for(cl, cfg, proj).items():
+	frameworks = frameworks_for(cl, cfg, proj)
+	# A named directory's frameworks are ordinary libraries: unlike an SDK's
+	# 250 stubs there are a few of them and none is an umbrella, so what
+	# the sources left unnamed resolves by symbol. `<QApplication>' says
+	# QtWidgets and the QString beside it says nothing, and QtCore has to
+	# come from somewhere.
+	kits = cfg.kit_framework_dirs()
+	for d in kits:
+		for n in sorted(os.listdir(d)) if res["unresolved"] else ():
+			word = n[:-len(".framework")]
+			if not n.endswith(".framework") or word in frameworks:
+				continue
+			exports = lib_exports(cfg, os.path.join(d, n, word))
+			if any(s in exports for s in res["unresolved"]):
+				frameworks[word] = os.path.join(d, n)
+	for word, path in frameworks.items():
 		extra_ld += ["-framework", word]
 		# Nothing left to say about what it exports. What re-exports leave
 		# unseen stays listed, and the linker, which follows them, decides.
 		stub = os.path.join(path, word + ".tbd")
+		if not os.path.isfile(stub):
+			stub = os.path.join(path, word)
 		if res["unresolved"] and os.path.isfile(stub):
 			offered = lib_exports(cfg, stub)
 			res["unresolved"] = [s for s in res["unresolved"]
 			                     if s not in offered]
+	# Where the linker reads them, and where a kit's @rpath install names
+	# find them when the program starts on the machine that built it.
+	for d in kits:
+		if any(os.path.dirname(p) == d for p in frameworks.values()):
+			extra_ld += ["-F" + d, "-Wl,-rpath," + d]
 	if t.kind == "exe":
 		extra_ld += WINDOWS_ENTRIES.get(windows_entry(cl.root), [])
 		if windows_static_runtime(cfg, chosen + declared, paths):
@@ -14303,6 +14405,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	                   cfg.sysincdirs,
 	                   pc_path=cfg.pkg_config_path,
 	                   foreign=cfg.os != host_os())
+	pkg.use_frameworks(cfg.kit_framework_dirs())
 	# Before anything resolves a header, so that every Qt answer in this
 	# build comes from the one major -- including the moc outputs, whose
 	# includes are the ones that gave the disagreement away.

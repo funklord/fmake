@@ -35456,18 +35456,8 @@ def a_kit_for_another_os_is_generated_by_this_machines_moc(t):
 	      f"the host's Qt 6 moc should generate this: {out}")
 
 
-@case
-def a_real_qt_kit_builds_what_runs_on_windows(t):
-	"""section 602: the Qt Company's own kit, and a program that runs.
-
-	Needs what cannot be assumed, so FMAKE_QT_WINDOWS names an unpacked
-	`win64_mingw' kit of the host's Qt 6 version; the section says where
-	it comes from. moc, uic and rcc are all in the program, so a signal,
-	a form and a resource each have to reach the output.
-	"""
-	kit = os.environ.get("FMAKE_QT_WINDOWS")
-	if not kit or not shutil.which("x86_64-w64-mingw32-g++"):
-		raise Skip("no FMAKE_QT_WINDOWS kit, or no mingw-w64")
+def _qt_widgets_program(t):
+	"""moc, uic and rcc in one program: a signal, a form and a resource."""
 	t.write("main.cpp", """
 #include <QApplication>
 #include <QFile>
@@ -35526,6 +35516,21 @@ void window::finish() { emit said(ui.label->text()); QApplication::quit(); }
 	t.write("hello.txt", "hello from qrc\n")
 	t.write("app.qrc", '<RCC><qresource prefix="/"><file>hello.txt</file>'
 	        "</qresource></RCC>\n")
+
+
+@case
+def a_real_qt_kit_builds_what_runs_on_windows(t):
+	"""section 602: the Qt Company's own kit, and a program that runs.
+
+	Needs what cannot be assumed, so FMAKE_QT_WINDOWS names an unpacked
+	`win64_mingw' kit of the host's Qt 6 version; the section says where
+	it comes from. moc, uic and rcc are all in the program, so a signal,
+	a form and a resource each have to reach the output.
+	"""
+	kit = os.environ.get("FMAKE_QT_WINDOWS")
+	if not kit or not shutil.which("x86_64-w64-mingw32-g++"):
+		raise Skip("no FMAKE_QT_WINDOWS kit, or no mingw-w64")
+	_qt_widgets_program(t)
 	t.write("fmake.toml", '[toolchain]\ncc = "x86_64-w64-mingw32-gcc"\n'
 	        f'cxx = "x86_64-w64-mingw32-g++"\n'
 	        f'pkg-config-path = ["{kit}/lib/pkgconfig"]\n')
@@ -35638,6 +35643,112 @@ def a_build_with_nothing_to_do_leaves_the_lock_alone(t):
 	r = t.fmake()
 	check(r.returncode == 0, f"again: {r.stdout}{r.stderr}")
 	check(os.stat(lock).st_mtime == 1000, "the lock was written")
+
+
+@case
+def a_kit_of_frameworks_resolves_by_header_and_by_symbol(t):
+	"""section 604: Qt's macOS kit has frameworks and no .pc at all.
+
+	`<QApplication>' names no framework the way `<QtWidgets/...>' does: the
+	file is in QtWidgets.framework/Headers. And it says nothing of QtCore,
+	whose symbols the program needs all the same. So a named framework
+	directory answers a bare header from Headers, and what the sources
+	left unnamed resolves by symbol, as any library does.
+	"""
+	conf = _macos_sdk(t)
+	cc = os.path.join(t.dir, "tc", "x86_64-apple-darwin23-clang")
+
+	def framework(word, code, *headers):
+		src = t.write(f"fw/{word}.c", code)
+		home = os.path.join(t.dir, "kit", "lib", word + ".framework")
+		os.makedirs(home, exist_ok=True)
+		got = subprocess.run(
+		    [cc, "-dynamiclib", "-nostdlib", "-Wl,-undefined,dynamic_lookup",
+		     "-install_name", f"@rpath/{word}.framework/{word}",
+		     src, "-o", os.path.join(home, word)],
+		    capture_output=True, text=True)
+		check(got.returncode == 0, f"{word}: {got.stderr}")
+		for name, text in headers:
+			t.write(f"kit/lib/{word}.framework/Headers/{name}", text)
+
+	framework("Base", "int base_get(void){ return 7; }\n",
+	          ("base.h", "int base_get(void);\n"))
+	framework("Top", "int top_get(void){ return 8; }\n",
+	          ("TopThing", "#include <Base/base.h>\nint top_get(void);\n"
+	           "static inline int both(void){ "
+	           "return top_get() + base_get(); }\n"))
+	framework("Unused", "int unused_get(void){ return 9; }\n")
+	t.write("main.c", "#include <TopThing>\nint main(void){ return both(); }\n")
+	t.write("fmake.toml", conf.replace('exclude = ["sdk"]',
+	                                   'exclude = ["sdk", "kit", "fw"]')
+	        + 'lib-dirs = ["%s/kit/lib"]\n' % t.dir)
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"a kit of frameworks did not link: {out}")
+	used = _dylibs_used(os.path.join(t.dir, os.path.basename(t.dir)))
+	check("@rpath/Top.framework/Top" in used, f"named by nothing: {used}")
+	check("@rpath/Base.framework/Base" in used,
+	      f"reached only through a header's inline: {used}")
+	check("Unused" not in used, f"nothing asked for this: {used}")
+	got = subprocess.run(["llvm-objdump", "--macho", "--rpaths",
+	                      os.path.join(t.dir, os.path.basename(t.dir))],
+	                     capture_output=True, text=True).stdout
+	check(os.path.join(t.dir, "kit", "lib") in got,
+	      f"a kit's @rpath names have to resolve where it was built: {got}")
+
+
+@case
+def a_kit_of_frameworks_is_generated_by_this_machines_moc(t):
+	"""section 604: such a kit's own moc is a Mach-O, and no .pc names a Qt.
+
+	QtCore keeps its private headers under a directory named for the
+	version, which is the one thing here that says which major this is.
+	"""
+	got = subprocess.run(["pkg-config", "--variable=libexecdir", "Qt6Core"],
+	                     capture_output=True, text=True).stdout.strip()
+	moc = os.path.join(got, "moc") if got else ""
+	if not moc or not os.access(moc, os.X_OK):
+		raise Skip("no host Qt 6 moc")
+	conf = _macos_sdk(t)
+	t.write("kit/lib/QtCore.framework/Headers/6.8.2/QtCore/private/x.h", "\n")
+	t.write("kit/lib/QtCore.framework/Headers/QObject",
+	        "#define Q_OBJECT\nclass QObject {};\n")
+	t.write("obj.h", "#include <QObject>\n"
+	        "class obj : public QObject { Q_OBJECT };\n")
+	t.write("main.cpp", '#include "obj.h"\nint main(){ return 0; }\n')
+	t.write("fmake.toml", conf.replace('exclude = ["sdk"]',
+	                                   'exclude = ["sdk", "kit"]')
+	        + 'lib-dirs = ["%s/kit/lib"]\n' % t.dir)
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	line = re.search(rf"^{re.escape(moc)} .*obj\.h.*$", out, re.M)
+	check(line, f"the host's Qt 6 moc should generate this: {out}")
+	check("QtCore.framework/Headers" in line.group(0),
+	      f"moc has to reach the kit's headers: {line.group(0)}")
+
+
+@case
+def a_real_qt_kit_links_for_macos(t):
+	"""section 604: Qt's own frameworks, in a Mach-O nobody here can run.
+
+	Needs FMAKE_QT_MACOS naming an unpacked `clang_64' kit of the host's
+	Qt 6 version, and FMAKE_MACOS_CXX a driver for macOS with an SDK
+	behind it; the section says what stood in for one.
+	"""
+	kit = os.environ.get("FMAKE_QT_MACOS")
+	cxx = os.environ.get("FMAKE_MACOS_CXX")
+	if not kit or not cxx:
+		raise Skip("no FMAKE_QT_MACOS kit, or no FMAKE_MACOS_CXX driver")
+	_qt_widgets_program(t)
+	t.write("fmake.toml", f'[toolchain]\ncxx = "{cxx}"\n'
+	        f'cc = "{cxx}"\nnm = "llvm-nm"\nar = "llvm-ar"\n'
+	        f'lib-dirs = ["{kit}/lib"]\n')
+	r = t.fmake(timeout=600)
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the kit did not link: {out}")
+	used = _dylibs_used(os.path.join(t.dir, os.path.basename(t.dir)))
+	for fw in ("QtWidgets", "QtCore"):
+		check(f"@rpath/{fw}.framework" in used, f"{fw}: {used}")
 
 
 @case
