@@ -651,7 +651,8 @@ that had been green about nothing for five commits ·
 [599. A refused build keeps what it compiled](#599-a-refused-build-keeps-what-it-compiled) ·
 [600. A guess that did not compile](#600-a-guess-that-did-not-compile) ·
 [601. A relative flag under `-C`](#601-a-relative-flag-under--c) ·
-[602. A Qt application for Windows, built and run](#602-a-qt-application-for-windows-built-and-run)
+[602. A Qt application for Windows, built and run](#602-a-qt-application-for-windows-built-and-run) ·
+[603. What moc could not see](#603-what-moc-could-not-see)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47510,3 +47511,40 @@ program started without one prints its output and then does not exit: pass
 `-platform offscreen`. `QT_QPA_PLATFORM=offscreen` in the environment did
 not take effect under wine in the one run that tried it, and why was not
 looked at.
+
+## 603. What moc could not see
+
+Testing section 602's program for the thing a host `moc` might get wrong
+found a fault that needs no cross build. A member behind a platform macro:
+
+    #ifdef Q_OS_WIN
+        Q_INVOKABLE int only_windows() { return 1; }
+    #endif
+
+compiled in and was missing from the meta-object. `indexOfMethod` answered
+-1 under mingw, and with `Q_OS_LINUX` it answered -1 in a plain Linux build
+as well. No error and no warning: a slot that is simply not there at run
+time, for every fmake Qt build since moc arrived.
+
+moc has its own preprocessor and no target. It was given neither half of
+what `Q_OS_*` needs. The compiler's predefined macros, which is what
+`qsystemdetection.h` reads, went nowhere; and no Qt directory was on moc's
+line, so `<QObject>`, the road to that header, resolved to nothing.
+`moc_cflags` says a missing `-I` costs an unexpanded macro, and it did.
+
+- `.fmake/moc_predefs.h` is the compiler's `-dM -E`, passed with
+  `--include`. qmake's file of the same name and CMake's AUTOMOC are the
+  prior art. It is keyed on the compiler and the `-std`, `-m`, `--target`
+  and `--sysroot` flags, so a build with nothing to do starts no process
+  for it, and its content is in every moc key.
+- The `-I` of the packages moc's inputs include comes from the same cached
+  answer the compile line uses. Asked of the inputs and their `deps`, since
+  the graph does not exist yet.
+- Ejected, `build/moc_predefs.h` is a rule and each moc output waits on it
+  order-only. make writes `$(filter -I% -D%,$(PKG_QT6CORE_CFLAGS))`,
+  because moc reads `-fPIC` as a file to include. ninja bakes the paths, as
+  it does everywhere.
+
+The case's two members are chosen so that neither half can pass for the
+other: `FROM_COMPILER` is defined only by a compiler shim, `Q_OS_UNIX` only
+through a Qt header.

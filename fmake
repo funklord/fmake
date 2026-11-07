@@ -3882,6 +3882,7 @@ def unscanned_moc_inputs(root, link, scans, hdrs, mocced, cfg, conf, pkg):
 	if not moc:
 		return []
 	flags = moc_cflags(root, hdrs, conf)
+	flags += [f for f in getattr(cfg, "moc_extra", ()) if f not in flags]
 	return [h for h in cands if moc_would_generate(root, h, moc, flags)]
 
 
@@ -4057,6 +4058,88 @@ def moc_cflags(root, hdrs, conf):
 	for f in conf.cflags():
 		if f.startswith(("-D", "-I")) and f not in out:
 			out.append(f)
+	return out
+
+
+MOC_PREDEFS = "moc_predefs.h"
+
+
+def moc_predefs(root, cfg, conf, cache, dry_run=False):
+	"""The compiler's own macros, in a file for moc to read first, or None.
+
+    moc has its own preprocessor and no target. `Q_OS_WIN' and its family
+    are worked out in qsystemdetection.h from what the compiler predefines,
+    so with none of that a class read the same on every platform:
+
+        #ifdef Q_OS_WIN
+            Q_INVOKABLE int only_windows();
+        #endif
+
+    compiled in, and was missing from the meta-object, with nothing said:
+    indexOfMethod answered -1 on Windows, and on Linux for Q_OS_LINUX.
+    qmake's moc_predefs.h and CMake's AUTOMOC are this file. Keyed on the
+    compiler, so a build with nothing to do starts no process for it.
+
+    Best effort, as `moc_cflags' is: a compiler that will not answer costs
+    an unexpanded macro, which is what every build had before.
+    """
+	rel = os.path.join(STATE_DIR, MOC_PREDEFS)
+	path = os.path.join(root, rel)
+	flags = [f for f in conf.cflags()
+	         if f.startswith(("-std=", "-m", "--target=", "--sysroot="))]
+	key = sha("|".join([cfg.cxx, cfg.cxxver] + flags))
+	store = cache.data.setdefault("moc_predefs", {})
+	if store.get("key") == key and os.path.isfile(path):
+		return rel
+	if dry_run:
+		return rel if os.path.isfile(path) else None
+	try:
+		r = subprocess.run([cfg.cxx] + flags + ["-dM", "-E", "-x", "c++",
+		                                        os.devnull],
+		                   capture_output=True, text=True, errors="replace")
+	except OSError:
+		return None
+	if r.returncode != 0 or not r.stdout:
+		return None
+	try:
+		with open(path, errors="replace") as fh:
+			same = fh.read() == r.stdout
+	except OSError:
+		same = False
+	if not same:
+		with open(path, "w") as fh:
+			fh.write(r.stdout)
+	store["key"] = key
+	return rel
+
+
+def moc_package_incs(root, jobs, scans, pkg, cache, cfg, have):
+	"""The -I of the packages moc's inputs include.
+
+    A class naming `<QObject>' reached nothing, since no Qt directory was on
+    moc's line, and that header is the road to every Q_OS_ macro. The same
+    question the compile line asks of the same cached answer, for the
+    inputs alone, because the graph is not built yet.
+    """
+	out = []
+	store = cache.data.setdefault("headers", {})
+	sig = pkg.signature()
+	sysincs = {os.path.realpath(d) for d in cfg.sysincdirs}
+	seen = set()
+	for job in jobs:
+		for rel in [job["src"], *job.get("deps", ())]:
+			for kind, name, _line in scans.get(rel, {}).get("incs") or []:
+				if kind != "<" or name in seen:
+					continue
+				seen.add(name)
+				if any(os.path.isfile(os.path.join(d, name))
+				       for d in pkg.explicit_incs):
+					continue
+				got = pkg.for_header(name, store, sig)
+				for f in (got[1] if got else ()):
+					if (f.startswith("-I") and f not in have and f not in out
+					    and os.path.realpath(f[2:]) not in sysincs):
+						out.append(f)
 	return out
 
 
@@ -4445,7 +4528,8 @@ def prune_generated(root, subdir, keep, since=None):
 			pass
 
 
-def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
+def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None,
+            predefs=None):
 	"""Run moc where its input changed. Returns the outputs that now exist.
 
     Keyed on content like everything else, so touching a header re-mocs it
@@ -4458,6 +4542,10 @@ def run_moc(root, jobs, moc, flags, cache, dry_run=False, origin=None):
 	store = cache.data.setdefault("moc", {})
 	produced = []
 	moc_is = tool_identity(moc)
+	if predefs:
+		moc_is += "|" + (cache.hash_of(os.path.join(root, predefs), predefs)
+		                 or "?")
+		flags = flags + ["--include", predefs]
 	for job in jobs:
 		src, out = job["src"], job["out"]
 		abs_out = os.path.join(root, out)
@@ -15088,8 +15176,13 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# applying to what moc READS and not to where it LOOKS was half
 		# an answer.
 		moc_flags = moc_cflags(root, gen_hdrs, conf)
+		moc_flags += moc_package_incs(root, moc_jobs, scans, pkg, cache, cfg,
+		                              moc_flags)
+		predefs = moc_predefs(root, cfg, conf, cache, args.dry_run)
+		cfg.moc_extra = moc_flags[:] + (["--include", predefs]
+		                                if predefs else [])
 		moc_outs = run_moc(root, moc_jobs, moc_exe, moc_flags, cache,
-		                   args.dry_run, tool_origin("moc", cfg.moc))
+		                   args.dry_run, tool_origin("moc", cfg.moc), predefs)
 		done = set(moc_outs)
 		for j in moc_jobs:
 			if j["out"] not in done:
@@ -20497,6 +20590,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	link_flags = {t: _defer(_eject_flags(res["ldflags"], root, _mk_cmd_flag),
 	                        "LDIRS")
 	              for t, res in resolutions.items() if res}
+	# moc takes -I and -D and nothing else a .pc may say: `-fPIC' reads to it
+	# as a file to include.
+	moc_words = [f"$(filter -I% -D%,{f})" if f.endswith("_CFLAGS)") else f
+	             for f in _defer(_eject_flags((moc or {}).get("flags", []),
+	                                          root, _mk_flag), "CFLAGS")]
 	if used:
 		a("# Modules whose flags name a place on the machine that ejected")
 		a("# this file. Asked of this machine's pkg-config instead, at build")
@@ -20953,7 +21051,12 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# if Qt lives elsewhere on the machine doing the building.")
 		a("")
 		a(f"{P}MOC      = {_mk_flag(moc['exe'])}")
-		a(f"{P}MOCFLAGS = {' '.join(_eject_flags(moc.get('flags', []), root, _mk_flag))}")
+		_predefs = os.path.join(EJECT_BUILD_DIR, MOC_PREDEFS)
+		a(f"{P}MOCFLAGS = {' '.join(moc_words + ['--include', _predefs])}")
+		a("")
+		a(f"{_predefs}:")
+		a("\t@mkdir -p $(@D)")
+		a(f"\t$({P}CXX) -dM -E -x c++ /dev/null -o $@")
 		a("")
 		for j in moc_jobs:
 			# The headers the moc'd one includes are prerequisites, the
@@ -20971,7 +21074,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# argument: `build-and-commit.md' names that trap, and the
 			# recipe here was already written the safe way.
 			a(f"{_eject_src(j['out'])}: "
-			  f"{' '.join([j['src'], *j.get('deps', ())])}")
+			  f"{' '.join([j['src'], *j.get('deps', ())])} | {_predefs}")
 			a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}MOC) $({P}MOCFLAGS) $< -o $@")
 			a("")
@@ -21851,7 +21954,13 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	if moc_jobs:
 		a("# Selected by Q_OBJECT in the source, not by a list.")
 		a(f"moc = {_nj_flag(moc['exe'])}")
-		a(f"mocflags = {' '.join(_eject_flags(moc.get('flags', []), root, _nj_flag))}")
+		_predefs = os.path.join(EJECT_BUILD_DIR, MOC_PREDEFS)
+		a(f"mocflags = {' '.join(_eject_flags(moc.get('flags', []), root, _nj_flag) + ['--include', _predefs])}")
+		a("")
+		a("rule moc_predefs")
+		a("  command = $cxx -dM -E -x c++ /dev/null -o $out")
+		a("  description = MOC predefs")
+		a(f"build {_ninja(_predefs)}: moc_predefs")
 		a("")
 		a("rule moc")
 		a("  command = $moc $mocflags $in -o $out")
@@ -21867,7 +21976,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"build {_ninja(_eject_src(j['out']))}: moc "
 			  f"{_ninja(j['src'])}"
 			  + (" | " + " ".join(_ninja(d) for d in mdeps)
-			     if mdeps else ""))
+			     if mdeps else "")
+			  + " || " + _ninja(_predefs))
 		a("")
 	# The uic headers, the .moc bodies and a schema's headers are #included
 	# rather than compiled, so nothing declares a dependency on them until a
