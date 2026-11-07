@@ -21340,7 +21340,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# argument: `build-and-commit.md' names that trap, and the
 			# recipe here was already written the safe way.
 			a(f"{_eject_src(j['out'])}: "
-			  f"{' '.join([j['src'], *j.get('deps', ())])} | {_predefs}")
+			  f"{' '.join([j['src'], *map(_eject_src, j.get('deps', ()))])} "
+			  f"| {_predefs}")
 			a("\t@mkdir -p $(@D)")
 			a(f"\t$({P}MOC) $({P}MOCFLAGS) $< -o $@")
 			a("")
@@ -22238,7 +22239,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# a rebuild and are not in `$in'. A path containing `|' is
 			# refused for this backend (section 355), so the separator
 			# cannot be produced by a filename.
-			mdeps = j.get("deps") or ()
+			mdeps = [_eject_src(d) for d in j.get("deps") or ()]
 			a(f"build {_ninja(_eject_src(j['out']))}: moc "
 			  f"{_ninja(j['src'])}"
 			  + (" | " + " ".join(_ninja(d) for d in mdeps)

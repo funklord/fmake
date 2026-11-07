@@ -35881,6 +35881,34 @@ def a_weak_definition_on_macos_is_one_definition_not_two(t):
 
 
 @case
+def a_moc_input_reaching_a_generated_form_ejects(t):
+	"""section 607: a Q_OBJECT header including its own `ui_x.h'.
+
+	Section 366 made what moc's input includes a prerequisite of its rule,
+	and a generated header is one, under the state directory: the ejected
+	file named `.fmake/ui/ui_form.h', which only fmake's own build writes,
+	and stopped at *No rule to make target*. An ordinary Widgets layout.
+	"""
+	got = subprocess.run(["pkg-config", "--variable=libexecdir", "Qt6Core"],
+	                     capture_output=True, text=True).stdout.strip()
+	if not got or not os.access(os.path.join(got, "moc"), os.X_OK):
+		raise Skip("no host Qt 6 moc")
+	_qt_widgets_program(t)
+	for kind, tool, name in (("make", "make", "Makefile"),
+	                         ("ninja", "ninja", "build.ninja")):
+		if not shutil.which(tool):
+			continue
+		r = t.fmake("--eject", kind, timeout=300)
+		check(r.returncode == 0, f"eject {kind}: {r.stdout}{r.stderr}")
+		t.write(name, r.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		r = _run_in(t.dir, tool)
+		check(r.returncode == 0, f"the {kind} build: {r.stdout}{r.stderr}")
+		os.unlink(os.path.join(t.dir, name))
+
+
+@case
 def an_input_nobody_may_read_is_not_a_traceback(t):
 	"""section 596: stat works on a file its mode forbids reading.
 

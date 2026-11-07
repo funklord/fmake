@@ -655,7 +655,8 @@ that had been green about nothing for five commits ·
 [603. What moc could not see](#603-what-moc-could-not-see) ·
 [604. A Qt application for macOS, built and not run](#604-a-qt-application-for-macos-built-and-not-run) ·
 [605. A window with no console behind it, and wine told where the DLLs are](#605-a-window-with-no-console-behind-it-and-wine-told-where-the-dlls-are) ·
-[606. Real trees: a COMDAT is not a duplicate](#606-real-trees-a-comdat-is-not-a-duplicate)
+[606. Real trees: a COMDAT is not a duplicate](#606-real-trees-a-comdat-is-not-a-duplicate) ·
+[607. The sweep's other results, and what moc now costs](#607-the-sweeps-other-results-and-what-moc-now-costs)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47168,9 +47169,9 @@ is another OS and nothing says where that OS's packages are: a sysroot,
 `x86_64-w64-mingw32-pkg-config` beside the compiler. An architecture of
 this same OS keeps asking, since multiarch is how that works.
 
-The failure is now the true one, *`QApplication`: no such file*: there is
-no Qt for Windows here. Section 271's route, `include-dirs` and `lib-dirs`
-at a kit, is what reaches one.
+The failure is now the true one, *`QApplication`: no such file*: there was
+no Qt for Windows here. Section 602 fetched one, and `pkg-config-path` at
+the kit is what reaches it.
 
 ## 592. A program's icon
 
@@ -47680,3 +47681,26 @@ Mach-O object: 73 `T` and no `W` in a file full of them, and softkeys built
 for macOS as 99 duplicates. `macho_weak` reads `N_WEAK_DEF` from each symbol's
 `n_desc`. 64-bit only, and a universal object reads as having none. softkeys
 then built `libsoftkeys.a` against the frameworks of section 604.
+
+## 607. The sweep's other results, and what moc now costs
+
+**bbq-predictor** built for Windows with the QtPositioning add-on unpacked
+into the kit: `bbq2.exe`, `Windows GUI`, importing Qt6Core, Gui, Network,
+Positioning, Sql and Widgets, and it printed its version under wine and
+Xvfb. Exit 1 is honest, since `publish` and `serve` are its POSIX daemons
+(`grp.h`, `poll.h`, `sys/random.h`) and stopped at those headers. **respec
+built for macOS** too, against section 604's frameworks.
+
+**An ejected Qt tree whose `Q_OBJECT` header includes its own `ui_x.h` did
+not build**, native as well: `.fmake/ui/ui_window.h` was named as a
+prerequisite of the moc rule, and only fmake's own build writes that. Section
+366 made moc's includes prerequisites and did not map the generated ones. It
+predates this run; measured on `d637c92`, exit 2.
+
+**moc is slower for having work to do.** On softkeys' `keyboard.h`, about
+215 ms a header against 6 ms, because it now really reads Qt's headers. That
+is what qmake and CMake pay, and it is less than compiling the output. A build
+with nothing to do pays none of it.
+
+The kit's `lib-dirs` and `pkg-config-path` routes also give a no-op that
+writes nothing: respec for Windows, 0 files changed on a second build.
