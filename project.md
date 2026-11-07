@@ -47704,3 +47704,10 @@ with nothing to do pays none of it.
 
 The kit's `lib-dirs` and `pkg-config-path` routes also give a no-op that
 writes nothing: respec for Windows, 0 files changed on a second build.
+
+**A folder that starts without the kit.** Section 605 leaves deployment out,
+and the kit's own tool already does it for what fmake builds: `wine
+windeployqt.exe --no-translations --no-opengl-sw --no-system-d3d-compiler
+app.exe` staged the DLLs and `platforms/qwindows.dll` beside the program, and
+it ran on the `windows` platform with the kit moved out of reach and
+`WINEPATH` unset. `macdeployqt` is in the macOS kit and cannot run here.

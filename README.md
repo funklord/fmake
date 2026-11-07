@@ -815,6 +815,27 @@ and an empty one means nothing here can.
 resolve from the SDK's `.tbd` stubs by symbol, and `#include
 <CoreFoundation/CoreFoundation.h>` is `-framework CoreFoundation`.
 
+**A Qt application builds for both, from a kit and the host's own Qt.** Qt
+publishes its kits as plain archives, and a tree needs no change.
+moc, uic and rcc run on the build machine, so a host Qt of the kit's major is
+what generates the code, found by itself.
+
+    # Windows: mingw-w64, and Qt's win64_mingw kit
+    PKG_CONFIG_PATH=/path/to/kit/lib/pkgconfig fmake --os windows
+
+    # macOS: an SDK, and Qt's clang_64 kit, which holds frameworks and no .pc
+    [toolchain]
+    lib-dirs = ["/path/to/kit/lib"]
+
+A kit's `.pc` files say where Qt built it, and fmake reads them from where
+they lie. On Windows a program linking QtWidgets or QtGui opens no console,
+which `-mconsole` in `@ldflags` restores, and `--run` and `fmake test` give wine
+the kit's DLLs and plugins. On macOS `<QApplication>` is found in the
+framework that holds it, the `-framework` words come from the symbols, and the
+kit goes on the program's rpath. What is built runs against the kit: putting
+the DLLs or a `.app` around it, for another machine, is `windeployqt` and
+`macdeployqt`.
+
 **A package set off pkg-config's own path is found by naming it.** A Qt
 kit, a library under `/opt` or a home prefix, a foreign-architecture
 tree that is not a whole sysroot: its `.pc` files are somewhere
@@ -1498,9 +1519,10 @@ both were reasonable ones.
   something genuinely needs a program, a rule can call one.
 
 Cross-compiling works and answers for the target machine. Windows has been
-built with real mingw-w64 and run under wine. macOS has been linked with
-`ld64.lld` against an SDK's shape and has not run on a Mac, and fmake itself
-has not run on Windows.
+built with real mingw-w64 and run under wine, Qt applications included.
+macOS has been linked with `ld64.lld` against Qt's own frameworks and macOS's
+real headers, and neither those programs nor fmake itself have run on a Mac.
+fmake has not run on Windows.
 
 ---
 
