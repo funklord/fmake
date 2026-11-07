@@ -7617,7 +7617,7 @@ class Config:
         """
 		if self.os != "darwin":
 			return []
-		out = [f[2:] for f in self.cflags + self.ldflags
+		out = [f[2:] for f in self.cflags + self.override + self.ldflags
 		       if f.startswith("-F") and len(f) > 2]
 		for d in self.extra_libdirs:
 			if d not in out and glob.glob(os.path.join(glob.escape(d),
@@ -10737,8 +10737,11 @@ INTERPOSER_LIBS = {
 # The last six on it came from that check rather than from anybody reading:
 # the bare BSD-era `edata` and `end`, the second spelling of etext, the
 # IRELATIVE relocation bounds a static PIE walks, and the TLS start.
+# The Mach-O names here are spelled with its extra underscore,
+# and ld64 writes them.
 LINKER_SYMBOLS = {
     "_GLOBAL_OFFSET_TABLE_", "_DYNAMIC", "__dso_handle", "__ehdr_start",
+    "___dso_handle", "__mh_execute_header", "__mh_dylib_header",
     "_edata", "_end", "__bss_start", "etext", "_etext", "__data_start",
     "__gmon_start__", "_init", "_fini", "__init_array_start",
     "__init_array_end", "__fini_array_start", "__fini_array_end",
@@ -11383,6 +11386,44 @@ def elf_targets(path, dirs=(), _depth=0):
 RE_STDCALL = re.compile(r"@\d+$")
 
 
+RE_TBD_SECTION = re.compile(r"^(exports|reexports|undefineds):", re.M)
+RE_TBD_LIST = re.compile(r"^\s*(?:- )?(symbols|weak-symbols|thread-local-symbols"
+                         r"|objc-classes):\s*\[([^\]]*)\]", re.M)
+
+
+def tbd_exports(path):
+	"""Everything a text stub exports, across all of its documents.
+
+    `nm' reads the first document and stops. An SDK's libSystem.tbd is 37
+    of them, one per library it re-exports: llvm-nm gave 41 symbols, and
+    `fflush' and `__cxa_atexit' were not among them, so `--explain' told
+    every macOS program its libc calls were unresolved. A stub is text
+    in a fixed shape, so it is read as that. `undefineds' has the same
+    keys and says the opposite, which is why the sections are told apart.
+    """
+	try:
+		with open(path, errors="replace") as fh:
+			text = fh.read()
+	except OSError:
+		return set()
+	out = set()
+	parts = RE_TBD_SECTION.split(text)
+	for kind, body in zip(parts[1::2], parts[2::2]):
+		if kind == "undefineds":
+			continue
+		for key, names in RE_TBD_LIST.findall(body):
+			for name in names.split(","):
+				name = name.strip().strip("'\"")
+				if not name:
+					continue
+				if key == "objc-classes":
+					out.add("_OBJC_CLASS_$_" + name)
+					out.add("_OBJC_METACLASS_$_" + name)
+				else:
+					out.add(name)
+	return out
+
+
 def lib_exports(cfg, path):
 	"""Symbols a library offers to a link.
 
@@ -11413,6 +11454,8 @@ def lib_exports(cfg, path):
 	# error went into stderr, which this function does not look at, and a
 	# library that exports nothing is indistinguishable from one fmake
 	# could not read; see section 573.
+	if path.endswith(".tbd"):
+		return tbd_exports(path)
 	dyn = not path.endswith((".a", ".tbd")) and not macho_object(path)
 	cmd = [cfg.nm, "--defined-only", "--format=posix"]
 	if dyn:
@@ -13100,8 +13143,10 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			exports = lib_exports(cfg, os.path.join(d, n, word))
 			if any(s in exports for s in res["unresolved"]):
 				frameworks[word] = os.path.join(d, n)
+	res["frameworks"] = {}
 	for word, path in frameworks.items():
 		extra_ld += ["-framework", word]
+		res["frameworks"][word] = []
 		# Nothing left to say about what it exports. What re-exports leave
 		# unseen stays listed, and the linker, which follows them, decides.
 		stub = os.path.join(path, word + ".tbd")
@@ -13109,6 +13154,8 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 			stub = os.path.join(path, word)
 		if res["unresolved"] and os.path.isfile(stub):
 			offered = lib_exports(cfg, stub)
+			res["frameworks"][word] = [s for s in res["unresolved"]
+			                           if s in offered]
 			res["unresolved"] = [s for s in res["unresolved"]
 			                     if s not in offered]
 	# Where the linker reads them, and where a kit's @rpath install names
@@ -13124,6 +13171,7 @@ def resolve_libraries(t, cl, cfg, pkg, hdr_store, providers, paths,
 		if (not entry and windows_qt_gui(t, cfg, chosen + declared)
 		    and "-mconsole" not in said):
 			extra_ld.append("-mwindows")
+			res["qt_window"] = True
 		if windows_static_runtime(cfg, chosen + declared, paths):
 			extra_ld.append("-static")
 	for u in cl.link:
@@ -14355,7 +14403,8 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		for u in spare:
 			print(f"    {_col(u.rel, W-4)}{DIM('defines nothing reachable')}")
 
-	if res and (res["chosen"] or res["unresolved"] or res["unused"]):
+	if res and (res["chosen"] or res["unresolved"] or res["unused"]
+	            or res.get("frameworks")):
 		print(f"  {_col(CYAN('libraries'), W)}"
 		      f"{DIM('[from the external symbols above]')}")
 		for lib in res["chosen"]:
@@ -14382,6 +14431,13 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		for w in res.get("wrap", []):
 			print(f"    {_col('-Wl,--wrap=' + w, W-4)}"
 			      f"{DIM('the link set defines __wrap_' + w)}")
+		for word, syms in res.get("frameworks", {}).items():
+			shown = (", ".join(syms[:3]) + (" ..." if len(syms) > 3 else "")
+			         if syms else "named by an include")
+			print(f"    {_col('-framework ' + word, W-4)}{DIM(shown)}")
+		if res.get("qt_window"):
+			print(f"    {_col('-mwindows', W-4)}"
+			      f"{DIM('links Qt Widgets or Gui, so no console; -mconsole keeps it')}")
 		if res["unresolved"]:
 			print(f"    {_col('(unresolved)', W-4)}"
 			      f"{DIM(', '.join(res['unresolved'][:6]))}")
@@ -14402,6 +14458,8 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 	if cl.external:
 		implicit = len(res["implicit"]) if res else 0
 		named = sum(len(v) for v in (res["why"].values() if res else []))
+		named += sum(len(v) for v in (res.get("frameworks", {}).values()
+		                              if res else []))
 		tally = (f"[{len(cl.external)} total, {implicit} in libc, "
 		         f"{named} from the libraries above]")
 		print(f"  {_col(CYAN('external symbols'), W)}{DIM(tally)}")

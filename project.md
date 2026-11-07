@@ -657,7 +657,8 @@ that had been green about nothing for five commits ·
 [605. A window with no console behind it, and wine told where the DLLs are](#605-a-window-with-no-console-behind-it-and-wine-told-where-the-dlls-are) ·
 [606. Real trees: a COMDAT is not a duplicate](#606-real-trees-a-comdat-is-not-a-duplicate) ·
 [607. The sweep's other results, and what moc now costs](#607-the-sweeps-other-results-and-what-moc-now-costs) ·
-[608. Homebrew's Qt, read rather than guessed](#608-homebrews-qt-read-rather-than-guessed)
+[608. Homebrew's Qt, read rather than guessed](#608-homebrews-qt-read-rather-than-guessed) ·
+[609. The aims walked over the new targets](#609-the-aims-walked-over-the-new-targets)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47068,9 +47069,9 @@ unseen stays listed as unresolved, and the linker, which follows them,
 decides.
 
 Section 15's dyld-cache line is closed by this. **What this cannot say**:
-no program here has run on a Mac, a real SDK's multi-document `.tbd` for
-libSystem has not been read, and a universal binary is not attempted. That
-needs the holder's machine or an SDK.
+no program here has run on a Mac, and a universal binary is not attempted.
+That needs the holder's machine or an SDK. A multi-document `.tbd` for
+libSystem has since been read, section 609.
 
 ## 588. Objective-C, where it is the platform's language
 
@@ -47606,8 +47607,8 @@ whose load commands read `@rpath/QtWidgets.framework/Versions/A/QtWidgets`.
 
 **What this cannot say.** The program has never started: that needs a Mac.
 Nor has fmake run on one, so the `libexec` branch of the tool lookup is
-unexercised. The libc++ stub is mine, so a real SDK's multi-document `.tbd`
-files remain unread by anything here. Section 608 is Homebrew's Qt.
+unexercised. The libc++ stub is mine. Section 608 is Homebrew's Qt, and
+section 609 reads a multi-document `.tbd`.
 `a_real_qt_kit_links_for_macos` needs `FMAKE_QT_MACOS` and `FMAKE_MACOS_CXX`.
 
 ## 605. A window with no console behind it, and wine told where the DLLs are
@@ -47744,3 +47745,28 @@ suite: a fresh qtty clone, native, exit 0 then 0 with everything up to date.
 
 hembygd is the one Qt tree that stopped for its own reasons: `unsetenv`,
 `poll.h`, and Windows builds of curl and sqlite it would have to be given.
+
+## 609. The aims walked over the new targets
+
+Principles 1, 4 and 5 asked of sections 602 to 608.
+
+**No magic without an audit trail** failed on macOS. `--explain` said *0 from
+the libraries above* and offered `--ldflags` for symbols whose frameworks were
+on the link line beside it. The libraries section now names each `-framework`
+with the symbols that chose it, and says why `-mwindows` is there.
+
+Most of what it listed as unresolved was a second fault, the one section 587
+named as unread: **a real SDK's `.tbd` holds many documents, and `nm` reads
+the first.** libSystem.tbd is 37, one per library it re-exports, and llvm-nm
+gave 41 symbols of it, so `fflush` had no provider. A stub is text in a fixed
+shape, so `tbd_exports` reads `exports` and `reexports` in every document, and
+skips `undefineds`, which has the same keys and says the opposite. The real
+file here came from section 604's zig tarball. `___dso_handle` joined
+`LINKER_SYMBOLS` in its Mach-O spelling.
+
+**Always an exit** held once measured. Ejected make and ninja built the macOS
+program, and ejected make the Windows one, `Windows GUI` as fmake's own.
+
+**Zero files.** Windows had it with `PKG_CONFIG_PATH`. macOS needed a toml,
+because `--cflags -Fkit/lib` lands in `override`, which `kit_framework_dirs`
+did not read. Now `fmake --cflags -Fkit/lib` reaches a kit.

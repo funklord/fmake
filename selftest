@@ -35820,6 +35820,7 @@ def a_qt_window_on_windows_opens_no_console_behind_it(t):
 	out = r.stdout + r.stderr
 	check("-lQt6Widgets" in out and "-mwindows" in out,
 	      f"a Qt window should have no console: {out}")
+	check("links Qt Widgets or Gui" in out, f"and say why: {out}")
 	t.write("src/fmake.toml", base.replace(
 	    'ldflags = ["-nostdlib", "-Wl,-e,main"]',
 	    'ldflags = ["-nostdlib", "-Wl,-e,main", "-mconsole"]'))
@@ -35945,6 +35946,73 @@ def a_moc_input_reaching_a_generated_form_ejects(t):
 		r = _run_in(t.dir, tool)
 		check(r.returncode == 0, f"the {kind} build: {r.stdout}{r.stderr}")
 		os.unlink(os.path.join(t.dir, name))
+
+
+@case
+def a_stub_is_read_past_its_first_document(t):
+	"""section 609: `nm' stops after one document, and libSystem has 37.
+
+	An SDK's libSystem.tbd holds a document per library it re-exports.
+	llvm-nm gave 41 symbols of it, so `--explain' listed `fflush' as
+	unresolved for every macOS program. `undefineds' has the same keys
+	and says the opposite, so the decoy there must not count.
+	"""
+	conf = _macos_sdk(t)
+	path = os.path.join(t.dir, "sdk", "usr", "lib", "libSystem.tbd")
+	with open(path) as fh:
+		text = fh.read()
+	text = text.replace("exports:\n", "reexported-libraries:\n"
+	                    "  - targets: [ x86_64-macos ]\n"
+	                    "    libraries: [ '/usr/lib/system/libsystem_c.dylib' ]\n"
+	                    "exports:\n", 1)
+	text += ("--- !tapi-tbd\ntbd-version: 4\ntargets: [ x86_64-macos ]\n"
+	         "install-name: '/usr/lib/system/libsystem_c.dylib'\n"
+	         "exports:\n  - targets: [ x86_64-macos ]\n"
+	         "    symbols: [ _second_doc,\n               _wrapped_line ]\n"
+	         "undefineds:\n  - targets: [ x86_64-macos ]\n"
+	         "    symbols: [ _decoy ]\n...\n")
+	with open(path, "w") as fh:
+		fh.write(text)
+	t.write("main.c", "int second_doc(void);\nint wrapped_line(void);\n"
+	        "int main(void){ return second_doc() + wrapped_line(); }\n")
+	t.write("fmake.toml", conf)
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("(unresolved)" not in out, f"the second document was not read: {out}")
+	t.write("main.c", "int decoy(void);\nint main(void){ return decoy(); }\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("(unresolved)" in out and "_decoy" in out,
+	      f"undefineds exports nothing: {out}")
+
+
+@case
+def explain_says_where_a_framework_and_a_window_came_from(t):
+	"""section 609: the flags had `-framework', and the audit trail did not.
+
+	`--explain' said 0 from the libraries above with a link line naming
+	three frameworks, and offered --ldflags for what they had resolved.
+	Principle 4: every inference, down to the argv.
+	"""
+	conf = _macos_sdk(t)
+	_macos_framework(t, "Frob", "int frob_get(void){ return 8; }\n",
+	                 ("QFrob", "int frob_get(void);\n"))
+	t.write("main.c", "#include <QFrob>\nint main(void){ return frob_get(); }\n")
+	t.write("fmake.toml", conf.replace('exclude = ["sdk"]',
+	                                   'exclude = ["sdk", "kit", "fw"]')
+	        + 'lib-dirs = ["%s/kit/lib"]\n' % t.dir)
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check(re.search(r"^\s+-framework Frob\s+_frob_get", out, re.M),
+	      f"which symbol chose it: {out}")
+	check("(unresolved)" not in out, f"it is not unresolved: {out}")
+
+	# And with no key at all: `-F' on the command line names the same thing.
+	t.write("fmake.toml", conf.replace('exclude = ["sdk"]',
+	                                   'exclude = ["sdk", "kit", "fw"]'))
+	r = t.fmake("--cflags", f"-F{t.dir}/kit/lib")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"`-F' alone should reach the kit: {out}")
 
 
 @case
