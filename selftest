@@ -36092,6 +36092,53 @@ def an_archive_is_read_from_its_index(t):
 
 
 @case
+def a_shared_object_is_read_from_its_dynamic_table(t):
+	"""section 612: the provider sweep reads `.dynsym' itself.
+
+	One `nm -D' per shared object was most of a native first build: 599
+	of them in this machine's lib directory, 15 s of a one-line program
+	under load. The dynamic table is all a link binds against, read
+	directly; a name the object only needs, and does not define, is no
+	export of it.
+	"""
+	cc = shutil.which("cc")
+	if not cc:
+		raise Skip("no cc to build a shared object with")
+	libs = os.path.join(t.dir, ".libs")
+	os.makedirs(libs)
+	made = subprocess.run(
+	    [cc, "-shared", "-fPIC", "-x", "c", "-", "-o",
+	     os.path.join(libs, "libdyn.so")],
+	    input="int dyn_fn(void){ return 1; }\n"
+	          "extern int dyn_needs(void);\n"
+	          "int dyn_call(void){ return dyn_needs(); }\n",
+	    capture_output=True, text=True)
+	if made.returncode != 0:
+		raise Skip(f"cc cannot build a shared object: {made.stderr}")
+	log = os.path.join(t.dir, "nm.log")
+	shim = os.path.join(t.dir, "nm-shim")
+	with open(shim, "w") as fh:
+		fh.write(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\nexec nm "$@"\n')
+	os.chmod(shim, 0o755)
+	t.write("fmake.toml", f'[toolchain]\nnm = "{shim}"\nlib-dirs = ["{libs}"]\n')
+	t.write("main.c", "int dyn_fn(void);\n"
+	        "int main(void){ return dyn_fn() != 1; }\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-ldyn" in out, f"the shared object provides: {out}")
+	with open(log) as fh:
+		calls = fh.read()
+	check("libdyn.so" not in calls and " -D " not in f" {calls} ",
+	      f"no nm -D for a shared object: {calls}")
+	t.write("main.c", "int dyn_needs(void);\n"
+	        "int main(void){ return dyn_needs(); }\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-ldyn" not in out,
+	      f"what an object needs is not what it exports: {out}")
+
+
+@case
 def a_weak_definition_on_macos_is_one_definition_not_two(t):
 	"""section 606: Mach-O's nm prints an inline function as T as well.
 

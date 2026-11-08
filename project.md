@@ -660,7 +660,8 @@ that had been green about nothing for five commits ·
 [608. Homebrew's Qt, read rather than guessed](#608-homebrews-qt-read-rather-than-guessed) ·
 [609. The aims walked over the new targets](#609-the-aims-walked-over-the-new-targets) ·
 [610. fmake run on Windows, and an archive read from its index](#610-fmake-run-on-windows-and-an-archive-read-from-its-index) ·
-[611. fmake hosted on Windows, with what Qt's installer gives](#611-fmake-hosted-on-windows-with-what-qts-installer-gives)
+[611. fmake hosted on Windows, with what Qt's installer gives](#611-fmake-hosted-on-windows-with-what-qts-installer-gives) ·
+[612. A shared object read from its dynamic table](#612-a-shared-object-read-from-its-dynamic-table)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47898,3 +47899,23 @@ MinGW `bin`, with `FMAKE_QT_WINDOWS` for the Qt half; the sources are the
 three named above, from python.org and `download.qt.io`
 (`tools_mingw1310/qt.tools.win64_mingw1310`). `a_pc_file_is_read_with_no_pkg_config`
 guards the reader anywhere, with a `PATH` holding only the compiler.
+
+## 612. A shared object read from its dynamic table
+
+Section 610 left the native half of the provider sweep as it was: one
+`nm -D` per shared object, 599 of them in this machine's lib directory, and
+a first build of one line of C took 14 to 16 s under load 43. The dynamic
+symbol table is all a link binds against, and it is a fixed structure, so
+`elf_dynamic_exports` reads `.dynsym` and its string table in Python: no
+process, either byte order, 32 or 64 bits. Anything that is not ELF, or
+holds more than one dynamic table, goes to nm as before.
+
+Compared with `nm -D --defined-only` over 6,889 shared objects -- this
+machine's x86_64 and i386 trees, the aarch64 cross tree, and a 32-bit
+PowerPC and a 64-bit s390x object made with clang for the byte order --
+after `export_names`: no difference, once a section symbol, which has no
+name and which nm does not list, was skipped. The read took 9 s where nm
+took 235 s over the largest set, one process at a time. The same first
+build now takes 4 to 6 s at that load. Guarded by
+`a_shared_object_is_read_from_its_dynamic_table`, whose halves fail with
+the read switched off and with undefined symbols counted as exports.
