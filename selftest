@@ -35896,6 +35896,69 @@ def a_comdat_on_windows_is_one_definition_not_two(t):
 
 
 @case
+def an_archive_is_read_from_its_index(t):
+	"""section 610: the provider sweep reads an archive's symbol index.
+
+	One nm per archive was the cost of a first build for Windows, where
+	mingw's lib directory holds 894 import libraries: 10 s of a cross
+	build from Linux, and 79 s hosted on Windows under wine. The index is
+	the linker's own list of what an archive defines globally, so a name
+	only a member's local symbol carries is no longer offered -- no link
+	could bind it. An archive with no index is still read by nm.
+	"""
+	cc, ar = shutil.which("cc"), shutil.which("ar")
+	if not cc or not ar:
+		raise Skip("no cc and ar to build archives with")
+	# Hidden, so the scan leaves it alone: an archive in the tree is a
+	# member of the link set rather than an installed library.
+	libs = os.path.join(t.dir, ".libs")
+	os.makedirs(libs, exist_ok=True)
+
+	def archive(name, text, flags):
+		obj = os.path.join(libs, name + ".o")
+		made = subprocess.run([cc, "-c", "-x", "c", "-", "-o", obj],
+		                      input=text, capture_output=True, text=True)
+		check(made.returncode == 0, f"cc: {made.stderr}")
+		made = subprocess.run([ar, flags, os.path.join(libs, f"lib{name}.a"), obj],
+		                      capture_output=True, text=True)
+		check(made.returncode == 0, f"ar: {made.stderr}")
+		os.unlink(obj)
+
+	archive("idx", "__attribute__((used)) static int hidden_fn(void){ return 2; }\n"
+	        "int idx_fn(void){ return 1; }\n", "rcs")
+	archive("noidx", "int noidx_fn(void){ return 4; }\n", "rcS")
+	log = os.path.join(t.dir, "nm.log")
+	shim = os.path.join(t.dir, "nm-shim")
+	with open(shim, "w") as fh:
+		fh.write(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\nexec nm "$@"\n')
+	os.chmod(shim, 0o755)
+	t.write("fmake.toml", f'[toolchain]\nnm = "{shim}"\nlib-dirs = ["{libs}"]\n')
+	t.write("main.c", "int idx_fn(void);\n"
+	        "int main(void){ return idx_fn() != 1; }\n")
+	r = t.fmake("--run", os.path.join(t.dir, "main.c"))
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the indexed archive provides: {out}")
+	# ld refuses an archive with no index -- "run ranlib to add one" -- so
+	# that half is asked of the plan rather than of a link.
+	t.write("main.c", "int noidx_fn(void);\n"
+	        "int main(void){ return noidx_fn() != 4; }\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-lnoidx" in out, f"an archive with no index still provides: {out}")
+	with open(log) as fh:
+		calls = fh.read()
+	check("libnoidx.a" in calls, f"an archive with no index goes to nm: {calls}")
+	check("libidx.a" not in calls, f"an indexed archive needs no nm: {calls}")
+
+	t.write("main.c", "int hidden_fn(void);\n"
+	        "int main(void){ return hidden_fn(); }\n")
+	r = t.fmake("--explain")
+	out = r.stdout + r.stderr
+	check("-lidx" not in out,
+	      f"a local symbol is no library's export: {out}")
+
+
+@case
 def a_weak_definition_on_macos_is_one_definition_not_two(t):
 	"""section 606: Mach-O's nm prints an inline function as T as well.
 

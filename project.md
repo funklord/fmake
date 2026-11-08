@@ -658,7 +658,8 @@ that had been green about nothing for five commits ·
 [606. Real trees: a COMDAT is not a duplicate](#606-real-trees-a-comdat-is-not-a-duplicate) ·
 [607. The sweep's other results, and what moc now costs](#607-the-sweeps-other-results-and-what-moc-now-costs) ·
 [608. Homebrew's Qt, read rather than guessed](#608-homebrews-qt-read-rather-than-guessed) ·
-[609. The aims walked over the new targets](#609-the-aims-walked-over-the-new-targets)
+[609. The aims walked over the new targets](#609-the-aims-walked-over-the-new-targets) ·
+[610. fmake run on Windows, and an archive read from its index](#610-fmake-run-on-windows-and-an-archive-read-from-its-index)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47770,3 +47771,49 @@ program, and ejected make the Windows one, `Windows GUI` as fmake's own.
 **Zero files.** Windows had it with `PKG_CONFIG_PATH`. macOS needed a toml,
 because `--cflags -Fkit/lib` lands in `override`, which `kit_framework_dirs`
 did not read. Now `fmake --cflags -Fkit/lib` reaches a kit.
+
+## 610. fmake run on Windows, and an archive read from its index
+
+Section 590 made fmake portable on paper and said none of it had run on
+Windows. On the holder's word it now has: Python 3.12.10's embeddable
+build for amd64, from python.org, under wine 10.0, with Qt's own MinGW 13.1
+(`qt.tools.win64_mingw1310`, the compiler Qt 6.8's `win64_mingw` kit is
+built with) on `WINEPATH`. No `cc`, no `pkg-config`, no MSYS2: what a Qt
+user on Windows has.
+
+What worked first time: `--version`; a zero-file C build, `gcc` found by
+section 590's fallback; a second build writing no file; `--run` with its
+arguments and its exit status; `test`, with a failing test failing the
+run; `--explain`, its object paths in Windows spelling.
+
+**What did not was the first build of every tree: 79 s, silent, for one
+line of C**, and 115 s on a second try under heavier load. Hosted on
+Windows it looked like a hang, and a `timeout` around it left an orphaned
+`nm.exe` reading `libmsxml2.a`. The provider sweep ran one `nm` per
+installed library, and mingw's lib directory is 894 import libraries --
+kernel32's alone 1600 members, each read. It was never "about a second" for
+Windows: a cross build from Linux spent 10 s of its first build on it.
+
+Batching archives several to one `nm` was tried first and proven
+equivalent, and did not help under wine (72 s for the sweep at four jobs):
+the cost is nm reading members, not starting processes. **The fix reads
+the archive's own symbol index**, the `/` or `/SYM64/` member the linker
+consults to choose members, in Python. Compared with `nm --defined-only`
+over 2153 archives (glibc's, Debian's mingw, Qt's mingw 13.1 read by its
+own `nm.exe` under wine, Qt's Windows kit): no name the index has that nm
+lacks, and every name nm has beyond it a local one, `t d r b` and COFF's
+`i`. A local cannot satisfy a link, so the index is also the more correct
+answer: before, a program wanting a name only a static function in an
+archive defined was offered that archive. An archive with no index (BSD
+`__.SYMDEF` on macOS, thin, or `ar S`) still goes to nm, one to a call.
+Batching was kept for those at first, and the suite's Mach-O case failed:
+llvm-nm heads a member `v.o:`, with no archive name, so lines from several
+archives in one call cannot be told apart.
+
+First build, one line of C: 79 s to 11 s hosted on Windows under wine,
+10 s to 1.5 s cross from Linux. A native Linux first build is unchanged at
+about 10 s under this machine's load; that is the shared libraries, read
+one `nm -D` each, and is a separate item. Guarded by
+`an_archive_is_read_from_its_index`, whose two halves fail with the index
+switched off: the shimmed `nm` is handed the indexed archive, and
+`hidden_fn` is offered `-lidx`.

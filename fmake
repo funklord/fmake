@@ -11461,25 +11461,91 @@ def lib_exports(cfg, path):
 	if dyn:
 		cmd.append("-D")
 	r = subprocess.run(cmd + [path], capture_output=True, text=True, errors="replace")
+	return nm_export_names(cfg, r.stdout.splitlines())
+
+
+def nm_export_names(cfg, lines):
+	"""The names in `nm --defined-only --format=posix' lines, as a link
+    would ask for them."""
+	return export_names(cfg, (m.group("name") for m in map(RE_NM_POSIX.match, lines)
+	                          if m))
+
+
+def export_names(cfg, names):
+	"""Defined names as a link would ask for them. Shared by `lib_exports'
+    and `archive_exports', so a library read by nm and one read from its
+    index give one answer."""
 	windows = cfg.os == "windows"
 	out = set()
-	for line in r.stdout.splitlines():
-		m = RE_NM_POSIX.match(line)
-		if m:
-			name = m.group("name")
-			# `@' is a version on ELF and part of the name on 32-bit
-			# Windows, where stdcall spells `Sleep' as `_Sleep@4'. Taken
-			# off here the object's `__imp__Sleep@4' matched nothing, so
-			# no Win32 call had a provider at all.
-			if not (windows and RE_STDCALL.search(name)):
-				name = name.split("@")[0]
-			out.add(name)
-			# A DLL's DATA is in its import library as `__imp_X' alone,
-			# and an object still names plain `X', which the mingw linker
-			# binds through auto-import. Read literally, `std::cout' had no
-			# provider in libstdc++.dll.a and a rival was hunted for it.
-			if name.startswith("__imp_"):
-				out.add(name[len("__imp_"):])
+	for name in names:
+		# `@' is a version on ELF and part of the name on 32-bit
+		# Windows, where stdcall spells `Sleep' as `_Sleep@4'. Taken
+		# off here the object's `__imp__Sleep@4' matched nothing, so
+		# no Win32 call had a provider at all.
+		if not (windows and RE_STDCALL.search(name)):
+			name = name.split("@")[0]
+		out.add(name)
+		# A DLL's DATA is in its import library as `__imp_X' alone,
+		# and an object still names plain `X', which the mingw linker
+		# binds through auto-import. Read literally, `std::cout' had no
+		# provider in libstdc++.dll.a and a rival was hunted for it.
+		if name.startswith("__imp_"):
+			out.add(name[len("__imp_"):])
+	return out
+
+
+def archive_index(path):
+	"""The names an archive's own symbol index lists, or None without one.
+
+    The index is what the linker reads to choose members: every global
+    name a member defines, and nothing else. Measured 2026-11-08 against
+    `nm --defined-only' over 2153 archives -- glibc's, Debian's mingw,
+    Qt's mingw 13.1 and Qt's Windows kit: not one name the index has that
+    nm lacks, and nm's extra names all local (`t', `d', `r', `b', COFF's
+    `i'), which no link can bind. GNU and SysV write `/', 64-bit `/SYM64/'.
+    A BSD `__.SYMDEF', a thin archive or none at all answers None, and is
+    read by nm as before.
+    """
+	try:
+		with open(path, "rb") as fh:
+			if fh.read(8) != b"!<arch>\n":
+				return None
+			hdr = fh.read(60)
+			name = hdr[:16].rstrip(b" ")
+			width = {b"/": 4, b"/SYM64/": 8}.get(name)
+			if width is None or len(hdr) < 60:
+				return None
+			data = fh.read(int(hdr[48:58]))
+	except (OSError, ValueError):
+		return None
+	count = int.from_bytes(data[:width], "big")
+	names = data[width + count * width:].split(b"\0")
+	if len(data) < width + count * width or len(names) < count:
+		return None
+	return [n.decode("utf-8", "replace") for n in names[:count]]
+
+
+def archive_exports(cfg, paths, jobs):
+	"""`lib_exports' for many static archives, from their indexes.
+
+    One nm per archive was the whole cost of a first build for Windows:
+    mingw's lib directory is 894 import libraries, kernel32's alone 1600
+    members, and nm reads every member. 10 s of a first build from Linux,
+    and a minute and more behind a silent prompt hosted on Windows under
+    wine (section 610). The index is a single read; what has none goes to
+    nm, one archive to a call, since llvm-nm heads a member `v.o:' with no
+    archive name and several to a call cannot be told apart.
+    """
+	out = {}
+	rest = []
+	for p in sorted(set(paths)):
+		names = archive_index(p)
+		if names is None:
+			rest.append(p)
+		else:
+			out[p] = export_names(cfg, names)
+	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+		out.update(zip(rest, pool.map(lambda p: lib_exports(cfg, p), rest)))
 	return out
 
 
@@ -11668,9 +11734,9 @@ def find_providers(cfg, wanted, jobs, want_ident=None):
 
 	dirs = cfg.libdirs
 
-	def scan(item):
+	def targets(item):
 		name, path = item
-		syms = set()
+		keep = []
 		for t in elf_targets(path, dirs):
 			# Architecture first: a 20-byte header read is far cheaper than
 			# an nm, and on a cross build most of what is on the machine is
@@ -11678,14 +11744,24 @@ def find_providers(cfg, wanted, jobs, want_ident=None):
 			if want_ident and object_identity(t, UNREADABLE) not in (
 			        None, want_ident):
 				continue
-			syms |= lib_exports(cfg, t)
-		return name, syms & want
+			keep.append(t)
+		return name, keep
+
+	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+		per_lib = list(pool.map(targets, sorted(libs.items())))
+		every = {t for _, ts in per_lib for t in ts}
+		archives = [t for t in every if t.endswith(".a")]
+		others = sorted(every.difference(archives))
+		exports = archive_exports(cfg, archives, jobs)
+		exports.update(zip(others, pool.map(lambda t: lib_exports(cfg, t), others)))
 
 	found = {}
-	with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-		for name, hits in pool.map(scan, sorted(libs.items())):
-			for s in hits:
-				found.setdefault(s, []).append(name)
+	for name, ts in per_lib:
+		syms = set()
+		for t in ts:
+			syms |= exports[t]
+		for s in syms & want:
+			found.setdefault(s, []).append(name)
 	return found, libs
 
 
