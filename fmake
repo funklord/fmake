@@ -130,6 +130,36 @@ import sys
 import tomllib
 import xml.etree.ElementTree as ET
 
+# Every path fmake makes is compared, keyed and written into build files as
+# text, and all of that text assumes `/'. Hosted on Windows the path
+# functions answered with `\', and a tree with one subdirectory did not
+# build: `<sub/util.h>' was never matched to `include\sub\util.h', and
+# --eject refused every generated file (section 611). Windows takes `/' in
+# every path fmake hands it -- the API, gcc, the linker, Qt's tools -- so
+# its paths are made with `/' from the start rather than mended where each
+# is compared. A no-op everywhere else.
+#
+# A copy of the module is wrapped and not `ntpath' itself, whose functions
+# call one another: its `realpath' strips a `\\?\' prefix after its own
+# `normpath', and with that answering `/' the prefix stayed, and every
+# path in the tree came out relative to the wrong root.
+if os.name == "nt":
+	import types
+
+	def _slashed(func):
+		def call(*args, **kwargs):
+			got = func(*args, **kwargs)
+			return got.replace("\\", "/") if isinstance(got, str) else got
+		return call
+	_path = types.ModuleType(os.path.__name__)
+	_path.__dict__.update(vars(os.path))
+	for _name in ("join", "normpath", "relpath", "abspath", "realpath",
+	              "dirname", "expanduser", "commonpath"):
+		setattr(_path, _name, _slashed(getattr(os.path, _name)))
+	os.path = _path
+	os.getcwd = _slashed(os.getcwd)
+	os.sep = "/"
+
 # ---------------------------------------------------------------------------
 # Paths & constants
 # ---------------------------------------------------------------------------
@@ -3797,8 +3827,11 @@ def find_qt_tool(name, configured, pkg):
 		ask = pkg.host_variable if pkg.foreign else pkg.variable
 		for var in ("libexecdir", "host_bins", "bindir"):
 			d = ask(mod, var)
-			cand = os.path.join(d, name) if d else None
-			if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+			# `which' with the directory as its path, because on Windows
+			# the file is `uic.exe' and a bare join named nothing: a Qt
+			# kit's tools were never found hosted there (section 611).
+			cand = shutil.which(name, path=d) if d else None
+			if cand and os.path.isfile(cand):
 				return cand
 	return shutil.which(name)
 
@@ -4032,10 +4065,12 @@ def include_root_for(resolved, inc_name):
 	# displace the real one. What is left is a build file that names a
 	# directory nobody can find, which is the sort of thing a reader stops
 	# trusting the rest of for.
+	# Either separator: a generated header's path is joined by the OS, and
+	# hosted on Windows that is `.fmake\ui\ui_form.h' (section 611).
 	cut = len(resolved) - len(inc_name)
 	on_boundary = (resolved.endswith(inc_name)
-	               and (cut == 0 or resolved[cut - 1] == "/"))
-	left = (resolved[:cut].rstrip("/") if on_boundary
+	               and (cut == 0 or resolved[cut - 1] in ("/", os.sep)))
+	left = (resolved[:cut].rstrip("/" + os.sep) if on_boundary
 	        else os.path.dirname(resolved))
 	return left or "."
 
@@ -6747,7 +6782,7 @@ class Project:
 			# doing none of the filtering its comment claimed.
 			cut = len(matches[0]) - len(inc_name)
 			honoured = (matches[0].endswith(inc_name)
-			            and (cut == 0 or matches[0][cut - 1] == "/"))
+			            and (cut == 0 or matches[0][cut - 1] in ("/", os.sep)))
 			if not honoured:
 				self.guessed.setdefault(inc_name, matches[0])
 			return matches[0]
@@ -11912,6 +11947,227 @@ def framework_of_header(dirs, name):
 	return None
 
 
+# What `PkgConfig.exe' holds when fmake reads the `.pc' files itself.
+PKG_CONFIG_BUILTIN = "fmake's own .pc reader"
+
+RE_PC_VAR_REF = re.compile(r"\$\{([A-Za-z0-9_.]+)\}")
+RE_PC_REQ = re.compile(r"([^\s,<>=!]+)(?:\s*(<=|>=|!=|=|<|>)\s*([^\s,]+))?")
+
+
+def pc_version_cmp(a, b):
+	"""rpmvercmp, which is what pkg-config compares versions with:
+    runs of digits numerically, runs of letters as text, a digit run newer
+    than a letter run, and the longer version newer when one is a prefix."""
+	pa = re.findall(r"\d+|[A-Za-z]+", a)
+	pb = re.findall(r"\d+|[A-Za-z]+", b)
+	for x, y in zip(pa, pb):
+		if x.isdigit() != y.isdigit():
+			return 1 if x.isdigit() else -1
+		if x.isdigit():
+			x, y = int(x), int(y)
+		if x != y:
+			return 1 if x > y else -1
+	return (len(pa) > len(pb)) - (len(pa) < len(pb))
+
+
+class PcFiles:
+	"""pkg-config's reading of `.pc' files, for a machine with none.
+
+    Qt's installer for Windows ships a kit with `.pc' files and a MinGW,
+    and no pkg-config: hosted there, fmake found no Qt at all, and said to
+    install a Qt that was in plain view (section 611). Only what fmake
+    asks is answered, and as pkg-config answers it, which was measured
+    module by module against pkg-config over every `.pc' on the machine and
+    both Qt kits. Used only when neither pkg-config nor pkgconf is on PATH
+    and a `.pc' directory has been named, so nothing changes wherever a
+    real one exists.
+    """
+
+	def __init__(self, env):
+		self.env = env
+		self._cache = {}
+
+	def path(self):
+		dirs = [d for d in self.env.get("PKG_CONFIG_PATH", "").split(os.pathsep) if d]
+		return dirs + [d for d in self.env.get("PKG_CONFIG_LIBDIR", "").split(os.pathsep)
+		               if d]
+
+	def find(self, module):
+		for d in self.path():
+			pc = os.path.join(d, module + ".pc")
+			if os.path.isfile(pc):
+				return pc
+		return None
+
+	def read(self, module, define_prefix):
+		"""(variables, fields) of a module's `.pc', or None."""
+		key = (module, define_prefix)
+		if key in self._cache:
+			return self._cache[key]
+		pc = self.find(module)
+		got = None
+		if pc:
+			try:
+				with open(pc, encoding="utf-8", errors="replace") as fh:
+					text = fh.read()
+			except OSError:
+				text = None
+			if text is not None:
+				got = self._parse(pc, text, define_prefix)
+		self._cache[key] = got
+		return got
+
+	def _parse(self, pc, text, define_prefix):
+		variables, fields = {"pcfiledir": os.path.dirname(pc).replace("\\", "/")}, {}
+		# pkg-config's `--define-prefix': the prefix is where the file
+		# lies, two levels above a `lib/pkgconfig' or `share/pkgconfig'.
+		moved = None
+		if define_prefix:
+			d = os.path.dirname(os.path.abspath(pc))
+			if os.path.basename(d) == "pkgconfig":
+				moved = os.path.dirname(os.path.dirname(d)).replace("\\", "/")
+
+		def expand(value, depth=0):
+			if depth > 64:
+				return value
+			out = RE_PC_VAR_REF.sub(lambda m: variables.get(m.group(1), ""),
+			                        value.replace("$$", "\0"))
+			if RE_PC_VAR_REF.search(out) and depth < 64:
+				return expand(out, depth + 1)
+			return out.replace("\0", "$")
+
+		for raw in text.replace("\\\n", " ").splitlines():
+			line = raw.split("#", 1)[0].strip()
+			if not line:
+				continue
+			m = re.match(r"([A-Za-z0-9_.]+)\s*([:=])\s*(.*)\Z", line)
+			if not m:
+				continue
+			name, kind, value = m.groups()
+			if kind == "=":
+				variables[name] = (moved if name == "prefix" and moved
+				                   else expand(value))
+			else:
+				fields[name] = expand(value)
+		return variables, fields
+
+	@staticmethod
+	def _requires(text):
+		return [(n, op, v) for n, op, v in RE_PC_REQ.findall(text or "")]
+
+	def _walk(self, module, define_prefix, private, seen, out):
+		"""Modules in the order pkg-config takes them: each followed by
+        everything it requires, repeats and all, which the dedupe in
+        `_words' then folds. `seen' is the path from the root, so a cycle
+        ends rather than a diamond."""
+		if module in seen:
+			return True
+		got = self.read(module, define_prefix)
+		if got is None:
+			return False
+		seen = seen | {module}
+		out.append(module)
+		fields = got[1]
+		reqs = self._requires(fields.get("Requires"))
+		if private:
+			reqs += self._requires(fields.get("Requires.private"))
+		ok = True
+		for name, op, version in reqs:
+			if not self._satisfied(name, op, version, define_prefix):
+				return False
+			ok = self._walk(name, define_prefix, private, seen, out) and ok
+		return ok
+
+	def _satisfied(self, name, op, version, define_prefix):
+		got = self.read(name, define_prefix)
+		if got is None:
+			return False
+		if not op:
+			return True
+		c = pc_version_cmp(got[1].get("Version", ""), version)
+		return {"<": c < 0, "<=": c <= 0, "=": c == 0, "!=": c != 0,
+		        ">=": c >= 0, ">": c > 0}[op]
+
+	def _words(self, modules, field, define_prefix):
+		words = []
+		for m in modules:
+			words += shell_split(self.read(m, define_prefix)[1].get(field, ""),
+			                     f"{m}.pc {field}")
+		sysroot = self.env.get("PKG_CONFIG_SYSROOT_DIR")
+		if sysroot:
+			words = [w[:2] + sysroot + w[2:]
+			         if w[:2] in ("-I", "-L") and w[2:3] == "/" else w
+			         for w in words]
+		system = {"-I": self.env.get("PKG_CONFIG_SYSTEM_INCLUDE_PATH", "/usr/include"),
+		          "-L": self.env.get("PKG_CONFIG_SYSTEM_LIBRARY_PATH", "/usr/lib:/lib")}
+		words = [w for w in words if not (
+		         w[:2] in system and w[2:] in system[w[:2]].split(os.pathsep))]
+		# pkgconf's fold, measured: a search directory stays where it was
+		# first named, every other word where it was last, so a library
+		# lands after everything that needs it.
+		place = {}
+		for i, w in enumerate(words):
+			if w[:2] not in ("-I", "-L") or w not in place:
+				place[w] = i
+		return sorted(place, key=place.get)
+
+	def load(self, module, define_prefix, private=False):
+		"""A module's `.pc', or None unless everything it requires is here
+        at the version it asks. pkgconf asks the private requirements as
+        well for `--exists' and `--cflags', and not for the rest."""
+		if not self._walk(module, define_prefix, private, frozenset(), []):
+			return None
+		return self.read(module, define_prefix)
+
+	def run(self, args):
+		"""The subset of pkg-config's command line fmake uses."""
+		define_prefix = "--define-prefix" in args
+		args = [a for a in args if a != "--define-prefix"]
+		opts = [a for a in args if a.startswith("--")]
+		rest = [a for a in args if not a.startswith("--")]
+		res = subprocess.CompletedProcess(args, 1, "", "")
+		if opts == ["--variable"] and rest[:2] == ["pc_path", "pkg-config"]:
+			res.returncode = 0
+			return res
+		if len(opts) == 1 and opts[0].startswith("--variable="):
+			got = self.load(rest[0], define_prefix) if rest else None
+			if got is not None:
+				res.returncode = 0
+				res.stdout = got[0].get(opts[0][len("--variable="):], "") + "\n"
+			return res
+		if opts == ["--exists"]:
+			ok = all(self._satisfied(n, op, v, define_prefix)
+			         and self.load(n, define_prefix, True) is not None
+			         for n, op, v in self._requires(" ".join(rest)))
+			res.returncode = 0 if rest and ok else 1
+			return res
+		if opts == ["--modversion"]:
+			got = self.load(rest[0], define_prefix) if rest else None
+			if got is not None:
+				res.returncode = 0
+				res.stdout = got[1].get("Version", "") + "\n"
+			return res
+		if set(opts) <= {"--cflags", "--libs"} and opts and len(rest) == 1:
+			if self.load(rest[0], define_prefix, "--cflags" in opts) is None:
+				return res
+			words = []
+			if "--cflags" in opts:
+				mods = []
+				if not self._walk(rest[0], define_prefix, True, frozenset(), mods):
+					return res
+				words += self._words(mods, "Cflags", define_prefix)
+			if "--libs" in opts:
+				mods = []
+				if not self._walk(rest[0], define_prefix, False, frozenset(), mods):
+					return res
+				words += self._words(mods, "Libs", define_prefix)
+			res.returncode = 0
+			res.stdout = " ".join(shlex.quote(w) for w in words) + "\n"
+			return res
+		res.stderr = f"fmake's .pc reader does not answer {' '.join(args)}"
+		return res
+
+
 class PkgConfig:
 	"""pkg-config, for the -I flags a library's own headers need."""
 
@@ -11946,6 +12202,7 @@ class PkgConfig:
 		else:
 			self.exe = (shutil.which("pkg-config")
 			            or shutil.which("pkgconf"))
+		self.builtin = None
 		self._flags = {}
 		self._vars = {}
 		# Every -L a resolved package named. A library under /opt or a home
@@ -12028,6 +12285,13 @@ class PkgConfig:
 		self._relocated = {}
 		self.foreign = bool(foreign)
 		self.frameworks = ()
+		# No pkg-config here, and a `.pc' directory named: read the files
+		# rather than find no package at all. `exe' says only that there is
+		# something to ask, and `_run' is the one place that asks.
+		if not self.exe and not configured and (
+		        self.env.get("PKG_CONFIG_PATH") or self.env.get("PKG_CONFIG_LIBDIR")):
+			self.builtin = PcFiles(self.env)
+			self.exe = PKG_CONFIG_BUILTIN
 
 	def use_frameworks(self, dirs):
 		"""Framework directories a header may be answered from.
@@ -12062,8 +12326,8 @@ class PkgConfig:
 			env = {k: v for k, v in self.env.items() if k not in
 			       ("PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR",
 			        "PKG_CONFIG_SYSROOT_DIR")}
-			exe = (self.exe or shutil.which("pkg-config")
-			       or shutil.which("pkgconf"))
+			exe = ((self.exe if not self.builtin else None)
+			       or shutil.which("pkg-config") or shutil.which("pkgconf"))
 			r = subprocess.run([exe, f"--variable={name}", module],
 			                   capture_output=True, text=True,
 			                   errors="replace", env=env) if exe else None
@@ -12074,6 +12338,8 @@ class PkgConfig:
 	def _run(self, args):
 		if args and self.relocated(args[-1].split(" ")[0]):
 			args = ["--define-prefix"] + args
+		if self.builtin:
+			return self.builtin.run(args)
 		return subprocess.run([self.exe] + args, capture_output=True,
 		                      text=True, errors="replace", env=self.env)
 
@@ -18882,7 +19148,11 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			# it has no parse-time shell, so a deferred module would be
 			# one pkg-config run per compile rather than one per build.
 			extra["pkg"] = pkg
-			extra["deferred"] = deferred_modules(
+			# Unless fmake read the `.pc' files itself: this machine has
+			# no pkg-config, so a Makefile asking one at build time could
+			# not be made here, where it was ejected. The places go in as
+			# found, which is what ninja's file does everywhere.
+			extra["deferred"] = {} if pkg.builtin else deferred_modules(
 			    pkg, hdr_store, [u for cl in closures.values() for u in cl.link],
 			    wanted)
 		_situ_eject_per, _situ_eject_all = situ_flags(conf, root, srcs)
@@ -20829,6 +21099,16 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	eject_bins = {x.name: "./" + x.filename for x in targets}
 	eject_files = {x.name: x.filename for x in targets}
 	P = "FM_" if fragment else ""
+	# A Windows build may be made by mingw32-make on a machine with no
+	# sh.exe, which is what Qt's own MinGW is, and that make runs recipes
+	# with cmd.exe. Three things in the build's own path are shell: making a
+	# directory, the flavour stamp and clearing an archive. For Windows they
+	# are spelled through helpers that read which shell they got; for every
+	# other target the file is as it was. Section 611.
+	win = cfg.os == "windows"
+
+	def mkdir(d):
+		return f"\t@$(call {P}MKDIR_P,{d})" if win else f"\t@mkdir -p {d}"
 	# The submodule paths with them: they are targets and prerequisites in
 	# what follows, and a `.gitmodules' path is whatever somebody wrote.
 	# Before this a submodule at `my lib' ejected `my lib/.git:' and make
@@ -20936,6 +21216,19 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a(f"# Built for: {cfg.os}/{cfg.arch}"
 	  + (f"    profile: {conf.profile_name}" if conf.profile_name else ""))
 	a("")
+	if win:
+		a("# mingw32-make with no sh.exe on PATH runs recipes with cmd.exe,")
+		a("# which keeps the quotes sh takes off: that is how this file")
+		a("# tells, and spells the three shell steps of a build for it.")
+		a("# Installing and cleaning still want a POSIX shell.")
+		a(f"ifeq ($(shell echo \"x\"),\"x\")")
+		a(f"{P}CMD := 1")
+		a("endif")
+		a(f"{P}MKDIR_P = $(if $({P}CMD),if not exist $(subst /,\\,$1) "
+		  f"mkdir $(subst /,\\,$1),mkdir -p $1)")
+		a(f"{P}RM_F = $(if $({P}CMD),if exist $(subst /,\\,$1) "
+		  f"del /f /q $(subst /,\\,$1),rm -f $1)")
+		a("")
 	assign = "?=" if fragment else "="
 	# Aligned on the longest name rather than on a column somebody counted
 	# once. BUILD_DIR replacing OBJDIR is two characters longer and put
@@ -21257,10 +21550,24 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# After the default goal, so it cannot become one. `cmp' rather than a
 	# bare write: writing every time would move the timestamp every time
 	# and rebuild the tree on every invocation.
+	if win:
+		# cmd has no `cmp', and wine's `fc' is a stub that cannot be
+		# tested, so make compares: `$(file <)' reads the stamp as the
+		# file is parsed, and FORCE is a prerequisite only when it differs.
+		a(f"ifneq ($({P}CMD),)")
+		a(f"ifneq ($(strip $(file <$({P}FLAVOUR_STAMP))),$(strip $({P}FLAVOUR)))")
+		a(f"$({P}FLAVOUR_STAMP): {P}FORCE")
+		a("endif")
+		a(f"$({P}FLAVOUR_STAMP):")
+		a(mkdir("$(@D)"))
+		a(f"\t@echo.$({P}FLAVOUR)>$(subst /,\\,$@)")
+		a("else")
 	a(f"$({P}FLAVOUR_STAMP): {P}FORCE")
-	a("\t@mkdir -p $(@D)")
+	a(mkdir("$(@D)"))
 	a(f"\t@printf '%s\\n' '$({P}FLAVOUR)' | cmp -s - $@ || \\")
 	a(f"\t\tprintf '%s\\n' '$({P}FLAVOUR)' > $@")
+	if win:
+		a("endif")
 	a("")
 	a(f"{P}FORCE:")
 	a("")
@@ -21308,7 +21615,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# naming it changes what waits for what and nothing else.
 			a(f"{outs[0]}: "
 			  f"{' '.join(ins + deps + ([eject_files[r['uses']]] if tool else []))}")
-			a("\t@mkdir -p $(@D)")
+			a(mkdir("$(@D)"))
 			for c in (r.get("commands") or [r["command"]]):
 				line, quiet, ignore = _recipe_prefix(c)
 				line = _gen_command(line, ins, outs, tool, r.get("stem"))
@@ -21397,7 +21704,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("")
 		for j in uic_jobs:
 			a(f"{_eject_src(j['out'])}: {j['src']}")
-			a("\t@mkdir -p $(@D)")
+			a(mkdir("$(@D)"))
 			a(f"\t$({P}UIC) $< -o $@")
 			a("")
 	rcc = rcc or {}
@@ -21412,7 +21719,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		for j in rcc_jobs:
 			a(f"{_eject_src(j['out'])}: "
 			  f"{' '.join([j['src'], *j.get('deps', ())])}")
-			a("\t@mkdir -p $(@D)")
+			a(mkdir("$(@D)"))
 			a(f"\t$({P}RCC) --name {j['name']} $< -o $@")
 			a("")
 
@@ -21435,7 +21742,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			if not outs:
 				continue
 			a(f"{outs[0]}: {j['src']}")
-			a("\t@mkdir -p $(@D)")
+			a(mkdir("$(@D)"))
 			# A schema with its own flags carries them in its own recipe
 			# rather than through the variable. The variable is the
 			# tree's and stays overridable from the command line; these
@@ -21464,7 +21771,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"{P}MOCFLAGS = {' '.join(moc_words + ['--include', _predefs])}")
 		a("")
 		a(f"{_predefs}:")
-		a("\t@mkdir -p $(@D)")
+		a(mkdir("$(@D)"))
 		a(f"\t$({P}CXX) -dM -E -x c++ /dev/null -o $@")
 		a("")
 		for j in moc_jobs:
@@ -21485,7 +21792,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"{_eject_src(j['out'])}: "
 			  f"{' '.join([j['src'], *map(_eject_src, j.get('deps', ()))])} "
 			  f"| {_predefs}")
-			a("\t@mkdir -p $(@D)")
+			a(mkdir("$(@D)"))
 			a(f"\t$({P}MOC) $({P}MOCFLAGS) $< -o $@")
 			a("")
 
@@ -21586,7 +21893,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		order_only = (" | " + " ".join(after)) if after else ""
 		a(f"{obj}: {_eject_src(rel)}"
 		  f"{(' ' + ' '.join(dating)) if dating else ''}{order_only}")
-		a("\t@mkdir -p $(@D)")
+		a(mkdir("$(@D)"))
 		# -MP as well as -MD: it emits a phony target for every header, so
 		# deleting one leaves `No rule to make target` behind instead of a
 		# build. fmake's own depfiles are read by fmake, which simply skips a
@@ -21622,7 +21929,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			                + [_eject_src(m) for m in sorted(u.members)]
 			                + [f"$({P}FLAVOUR_STAMP)"])
 			a(f"{out}: {deps}")
-			a("\t@mkdir -p $(@D)")
+			a(mkdir("$(@D)"))
 			a(f"\t$({P}RUSTC) $({P}RUSTFLAGS) --crate-type=staticlib \\")
 			a(f"\t    -o $@ --emit=link,dep-info=$(@:.a=.d) {_eject_src(rel)}")
 			a("")
@@ -21652,9 +21959,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# mkdir naming a path of its own is a mkdir that can drift.
 			dep = f"$({P}BUILD_DIR)/{_eject_obj(root_unit.rel)}.d"
 			a(f"{art(t.filename)}: {deps}")
-			a(f"\t@mkdir -p $(dir {dep})")
+			a(mkdir(f"$(dir {dep})"))
 			if outdir:
-				a("\t@mkdir -p $(@D)")
+				a(mkdir("$(@D)"))
 			a(f"\t$({P}RUSTC) $({P}RUSTFLAGS) -o $@ \\")
 			a(f"\t    --emit=link,dep-info={dep} "
 			  f"{_eject_src(root_unit.rel)}")
@@ -21701,14 +22008,14 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		     if (arcs or crate_arcs) else "")
 		  + (f" {t.version_script}" if t.version_script else ""))
 		if outdir:
-			a("\t@mkdir -p $(@D)")
+			a(mkdir("$(@D)"))
 		if t.kind == "static" and not objs and len(crate_arcs) == 1:
 			# The crate's staticlib is the library. Copied rather than
 			# assembled, for the reason link_cmd gives: `ar` over no
 			# objects writes an empty archive and reports success.
 			a(f"\tcp {crate_arcs[0]} $@")
 		elif t.kind == "static":
-			a("\trm -f $@")
+			a(f"\t$(call {P}RM_F,$@)" if win else "\trm -f $@")
 			# The objects by name, not `$^'. A vendored or crate archive is
 			# a PREREQUISITE -- the build has to produce it, and the
 			# consumer links it separately -- but it must not be an INPUT,

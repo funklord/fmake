@@ -105,7 +105,8 @@ infer from — so a project whose feature detection decides whether code
 exists at all has to be told those `-D`s. It is not a package manager and
 fetches nothing, and it does not do header units or `import std;`. It
 builds for Linux and the Unixes, and from a Linux box for Windows with
-mingw and for macOS with an SDK; `cl.exe` is not attempted.
+mingw and for macOS with an SDK; it runs on Windows itself with Python and
+a MinGW, Qt's own included. `cl.exe` is not attempted.
 
 ---
 
@@ -830,6 +831,16 @@ what generates the code, found by itself.
 Homebrew's Qt has `.pc` files naming its frameworks, and fmake reads those; no
 build against one has been tried yet.
 
+**On Windows itself**, Qt's installer gives a kit, a MinGW and no
+pkg-config, and that is enough: with the kit's and MinGW's `bin` on `PATH`,
+
+    set PKG_CONFIG_PATH=C:\Qt\6.8.2\mingw_64\lib\pkgconfig
+    python fmake
+
+fmake reads the `.pc` files itself when no pkg-config is installed, and a
+Makefile from `--eject make` builds under that MinGW's `mingw32-make` with
+no `sh.exe`, cmd.exe running the recipes.
+
 A kit's `.pc` files say where Qt built it, and fmake reads them from where
 they lie. On Windows a program linking QtWidgets or QtGui opens no console,
 which `-mconsole` in `@ldflags` restores, and `--run` and `fmake test` give wine
@@ -1525,7 +1536,8 @@ Cross-compiling works and answers for the target machine. Windows has been
 built with real mingw-w64 and run under wine, Qt applications included.
 macOS has been linked with `ld64.lld` against Qt's own frameworks and macOS's
 real headers, and neither those programs nor fmake itself have run on a Mac.
-fmake has not run on Windows.
+fmake itself has run on Windows under wine, with Python 3.12 and Qt's MinGW,
+and not yet on a Windows machine.
 
 ---
 

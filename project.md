@@ -659,7 +659,8 @@ that had been green about nothing for five commits ·
 [607. The sweep's other results, and what moc now costs](#607-the-sweeps-other-results-and-what-moc-now-costs) ·
 [608. Homebrew's Qt, read rather than guessed](#608-homebrews-qt-read-rather-than-guessed) ·
 [609. The aims walked over the new targets](#609-the-aims-walked-over-the-new-targets) ·
-[610. fmake run on Windows, and an archive read from its index](#610-fmake-run-on-windows-and-an-archive-read-from-its-index)
+[610. fmake run on Windows, and an archive read from its index](#610-fmake-run-on-windows-and-an-archive-read-from-its-index) ·
+[611. fmake hosted on Windows, with what Qt's installer gives](#611-fmake-hosted-on-windows-with-what-qts-installer-gives)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47817,3 +47818,83 @@ one `nm -D` each, and is a separate item. Guarded by
 `an_archive_is_read_from_its_index`, whose two halves fail with the index
 switched off: the shimmed `nm` is handed the indexed archive, and
 `hidden_fn` is offered `-lidx`.
+
+## 611. fmake hosted on Windows, with what Qt's installer gives
+
+Section 610 ran a one-file tree. With more than that, five things stood
+between fmake on Windows and a Qt program, all found by building there:
+Python 3.12.10's embeddable amd64 build, Qt's MinGW 13.1 and Qt 6.8.2's
+`win64_mingw` kit, under wine 10.0, with no `sh.exe`, no `pkg-config` and
+no MSYS2 anywhere.
+
+**A subdirectory broke every tree.** Python's path functions answer with
+`\` there, and every comparison in fmake is of text written with `/`:
+`#include <sub/util.h>` was never matched to `include\sub\util.h`, so the
+include path came out empty and nothing compiled, and `--eject` refused
+every generated file because `\` is special to make's shell. Rather than
+mend each comparison, the path functions are wrapped at startup so that
+fmake's paths are made with `/`, which Windows takes everywhere fmake
+hands one over: the API, gcc, the linker, Qt's tools. `os.sep` follows,
+since a dozen sites build prefixes with it. A copy of `ntpath` is wrapped
+and not the module itself, which was tried first: `ntpath.realpath`
+calls its own `normpath` and then strips a `\\?\` prefix, and with
+`normpath` answering `/` the prefix stayed and every source in the tree
+was `../tmp/...`, unreadable. A no-op on every other OS.
+
+**No pkg-config, so no Qt.** Qt's installer ships `.pc` files and no
+pkg-config, and fmake said to install the Qt development package. When
+neither `pkg-config` nor `pkgconf` is on PATH and a `.pc` directory is named,
+fmake now reads the files itself (`PcFiles`), answering only the queries it
+asks: `--cflags`, `--libs`, `--variable`, `--modversion`, `--exists`, with
+`--define-prefix`. It was made to agree with pkgconf rather than written
+from the manual, by comparing the two over every `.pc` on this machine, 503
+modules and 5,030 queries, and the rules it took are pkgconf's own:
+`Requires` expanded as a tree with repeats, then a search directory kept
+where it was first named and every other word where it was last, so a
+library lands after everything needing it; `-I/usr/include` and the system
+`-L` dropped; `Requires.private` asked for `--exists` and `--cflags` and not
+for the rest. 5,020 answers agree. The ten that do not are pkgconf keeping a
+repeated `-lglib-2.0` in `gmodule-2.0` and the three modules requiring it,
+which changes no link. Qt's Windows kit, 15 modules with `--define-prefix`:
+every answer agrees. Anywhere a real pkg-config exists nothing changes.
+
+**`uic.exe`.** The kit's tools were looked for as `bindir/uic`, a name
+that is `uic.exe` on Windows: `shutil.which` with that directory as its
+path finds either.
+
+**An ejected Makefile asks pkg-config at build time** (section 227), and
+on this machine there is none to ask. When fmake read the `.pc` files
+itself, the flags go into the file as found, which is what ninja's file
+does everywhere.
+
+**An ejected Makefile under cmd.exe.** `mingw32-make` with no `sh.exe` on
+PATH runs recipes with cmd.exe, and the build's own path held three shell
+steps: `mkdir -p`, the flavour stamp's `printf | cmp`, and `rm -f` before
+`ar`. For a Windows target the file now tells which shell it got -- cmd
+keeps the quotes `echo "x"` gets, sh takes them off -- and spells those
+three through `MKDIR_P` and `RM_F`, and compares the stamp in make with
+`$(file <)`, because wine's `fc` is a stub and a comparison nobody can
+test is not one to ship. Installing and cleaning still want a POSIX shell.
+Every other target's file is byte-identical to before, measured on two
+trees, and under sh the Windows file still builds, with a second make
+writing nothing.
+
+The result, under wine: the subdirectory tree and the Qt Widgets program
+(moc, uic, rcc, a form and a resource) build hosted on Windows, run, and
+rebuild writing nothing; their ejected Makefiles build them again under
+`mingw32-make` with cmd.exe and are then up to date. The Qt build took 48
+s under this machine's load. Also fixed on the way: the note *resolved on
+the basename alone* fired for a generated header, whose path ended in `\`
+before the wrapping existed; the boundary test takes either separator.
+
+**Not shown.** Real Windows: wine's cmd is not cmd.exe, and `fc` showed
+how far apart they can be. ninja hosted on Windows: running a downloaded
+`ninja.exe` was refused, so its file, which has no shell in its compile
+and link rules but `rm` and `cp` in two, is untried. `make install` and
+`clean` under cmd. Only Python 3.12; 3.11 is the floor `tomllib` sets.
+`fmake_runs_hosted_on_windows` runs the whole path when
+`FMAKE_WINDOWS_PYTHON` and `FMAKE_WINDOWS_MINGW` name a `python.exe` and a
+MinGW `bin`, with `FMAKE_QT_WINDOWS` for the Qt half; the sources are the
+three named above, from python.org and `download.qt.io`
+(`tools_mingw1310/qt.tools.win64_mingw1310`). `a_pc_file_is_read_with_no_pkg_config`
+guards the reader anywhere, with a `PATH` holding only the compiler.

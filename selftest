@@ -35552,6 +35552,139 @@ def a_real_qt_kit_builds_what_runs_on_windows(t):
 
 
 @case
+def a_pc_file_is_read_with_no_pkg_config(t):
+	"""section 611: Qt's installer for Windows ships `.pc' files and no
+	pkg-config, and hosted there fmake found no package at all.
+
+	`PATH' here holds the compiler and nothing else, so no pkg-config can
+	answer. The module requires another, and its `.pc' says a prefix that
+	is not on this machine, so the answer needs the requirement followed
+	and the prefix taken from where the file lies, as `--define-prefix'
+	does. The header is found by name, as with any other package.
+	"""
+	tools = {n: shutil.which(n) for n in ("cc", "as", "ld", "nm", "ar")}
+	if not all(tools.values()):
+		raise Skip("no cc, as, ld, nm and ar to link into a bare PATH")
+	bin_ = os.path.join(t.dir, ".bin")
+	os.makedirs(bin_)
+	tools["python3"] = sys.executable
+	for name, path in tools.items():
+		os.symlink(path, os.path.join(bin_, name))
+	kit = os.path.join(t.dir, ".kit")
+	t.write(".kit/include/foo/foo.h", "#define FOO_HEADER 1\n")
+	t.write(".kit/lib/pkgconfig/foo.pc", "prefix=/nowhere/kit\n"
+	        "includedir=${prefix}/include\n\nName: foo\nDescription: x\n"
+	        "Version: 1.2\nRequires: bar >= 1.0\n"
+	        "Cflags: -I${includedir}/foo -DFOO_FROM_PC\n")
+	t.write(".kit/lib/pkgconfig/bar.pc", "Name: bar\nDescription: x\n"
+	        "Version: 1.1\nCflags: -DBAR_FROM_PC\n")
+	t.write("main.c", "#include <foo.h>\n"
+	        "#if !defined(FOO_FROM_PC) || !defined(BAR_FROM_PC)\n"
+	        "#error the .pc was not read\n#endif\n"
+	        "int main(void){ return FOO_HEADER - 1; }\n")
+	r = t.fmake(env={"PATH": bin_,
+	                 "PKG_CONFIG_PATH": os.path.join(kit, "lib", "pkgconfig")})
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"foo.pc, read by fmake: {out}")
+	r = t.run(os.path.basename(t.dir))
+	check(r.returncode == 0, f"the program: {r.stdout}{r.stderr}")
+
+
+def _wine_path(path):
+	return "Z:" + path
+
+
+@case
+def fmake_runs_hosted_on_windows(t):
+	"""section 611: fmake itself on Windows, with what Qt's installer gives.
+
+	Needs what cannot be assumed, so FMAKE_WINDOWS_PYTHON names a Windows
+	python.exe and FMAKE_WINDOWS_MINGW a Windows-hosted MinGW's bin, both
+	run under wine; the section says where they come from. A tree with
+	subdirectories, which `\\' in every path broke, and its ejected
+	Makefile under that MinGW's mingw32-make with no sh.exe, so cmd.exe
+	runs the recipes. With FMAKE_QT_WINDOWS as well, the Qt program the
+	same two ways, with no pkg-config on the machine.
+	"""
+	python = os.environ.get("FMAKE_WINDOWS_PYTHON")
+	mingw = os.environ.get("FMAKE_WINDOWS_MINGW")
+	if not python or not mingw or not shutil.which("wine"):
+		raise Skip("no FMAKE_WINDOWS_PYTHON and FMAKE_WINDOWS_MINGW, or no wine")
+	env = dict(os.environ, WINEDEBUG="-all", WINEPATH=_wine_path(mingw))
+	env.pop("CFLAGS", None)
+	env.pop("LDFLAGS", None)
+
+	def wine(*argv, extra=None, timeout=900):
+		e = dict(env, **(extra or {}))
+		return subprocess.run(["wine", *argv], cwd=t.dir, env=e,
+		                      capture_output=True, text=True, errors="replace",
+		                      timeout=timeout, stdin=subprocess.DEVNULL)
+
+	def fmake(*args, extra=None):
+		return wine(python, _wine_path(FMAKE), *args, extra=extra)
+
+	def written_by(step):
+		mark = os.path.join(t.dir, ".mark")
+		with open(mark, "w"):
+			pass
+		os.utime(mark, (time.time() - 2, time.time() - 2))
+		r = step()
+		newer = []
+		for d, _, files in os.walk(t.dir):
+			for f in files:
+				p = os.path.join(d, f)
+				if p != mark and os.path.getmtime(p) > os.path.getmtime(mark):
+					newer.append(os.path.relpath(p, t.dir))
+		return r, newer
+
+	exe = os.path.basename(t.dir) + ".exe"
+
+	def both_ways(expect, extra=None, run_env=None):
+		r = fmake(extra=extra)
+		out = r.stdout + r.stderr
+		check(r.returncode == 0, f"fmake hosted on Windows: {out}")
+		got = wine(os.path.join(t.dir, exe), *expect[1:], extra=run_env, timeout=120)
+		check(expect[0] in got.stdout + got.stderr,
+		      f"the program fmake built: {got.stdout}{got.stderr}")
+		r, newer = written_by(lambda: fmake(extra=extra))
+		check(r.returncode == 0 and not newer,
+		      f"a second build writes nothing: {newer} {r.stdout}{r.stderr}")
+		r = fmake("--eject", "make", extra=extra)
+		check(r.returncode == 0, f"--eject make: {r.stderr}")
+		t.write("Makefile", r.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"))
+		os.unlink(os.path.join(t.dir, exe))
+		r = wine("mingw32-make")
+		check(r.returncode == 0, f"mingw32-make under cmd.exe: {r.stdout}{r.stderr}")
+		got = wine(os.path.join(t.dir, exe), *expect[1:], extra=run_env, timeout=120)
+		check(expect[0] in got.stdout + got.stderr,
+		      f"the program the Makefile built: {got.stdout}{got.stderr}")
+		r, newer = written_by(lambda: wine("mingw32-make"))
+		check(r.returncode == 0 and not newer,
+		      f"a second mingw32-make writes nothing: {newer} {r.stdout}{r.stderr}")
+
+	t.write("src/main.cpp", "#include <sub/util.h>\n#include <cstdio>\n"
+	        'int main(){ std::printf("twice %d\\n", twice(21)); }\n')
+	t.write("include/sub/util.h", "int twice(int);\n")
+	t.write("src/lib/util.cpp", "#include <sub/util.h>\n"
+	        "int twice(int x){ return 2 * x; }\n")
+	both_ways(["twice 42"])
+
+	kit = os.environ.get("FMAKE_QT_WINDOWS")
+	if not kit:
+		return
+	for rel in ("src/main.cpp", "include/sub/util.h", "src/lib/util.cpp",
+	            "Makefile"):
+		os.unlink(os.path.join(t.dir, rel))
+	shutil.rmtree(os.path.join(t.dir, "build"))
+	_qt_widgets_program(t)
+	both_ways(["said hello from qrc", "-platform", "offscreen"],
+	          extra={"PKG_CONFIG_PATH": _wine_path(os.path.join(kit, "lib", "pkgconfig"))},
+	          run_env={"WINEPATH": _wine_path(mingw) + ";" + _wine_path(os.path.join(kit, "bin")),
+	                   "QT_PLUGIN_PATH": _wine_path(os.path.join(kit, "plugins"))})
+
+
+@case
 def moc_reads_what_the_compiler_and_the_packages_say(t):
 	"""section 603: a member behind a platform macro left the meta-object.
 
