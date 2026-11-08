@@ -21288,7 +21288,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# mingw32-make with no sh.exe on PATH runs recipes with cmd.exe,")
 		a("# which keeps the quotes sh takes off: that is how this file")
 		a("# tells, and spells the three shell steps of a build for it.")
-		a("# Installing and cleaning still want a POSIX shell.")
+		a("# Installing still wants a POSIX shell.")
 		a(f"ifeq ($(shell echo \"x\"),\"x\")")
 		a(f"{P}CMD := 1")
 		a("endif")
@@ -22336,6 +22336,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	            + [t.name + ".pc" for t in targets if pc_text(t, conf)]
 	            + [_eject_src(j["out"]) for j in uic_jobs]
 	            + [_eject_src(j["out"]) for j in moc_jobs]
+	            # moc's macros, written by the rule above; clean left it.
+	            + ([os.path.join(EJECT_BUILD_DIR, MOC_PREDEFS)]
+	               if moc_jobs else [])
 	            + [_eject_src(j["out"]) for j in rcc_jobs]
 	            + [f"$({P}FLAVOUR_STAMP)"]
 	            + [o for o in gen_outs if _within(o)])
@@ -22349,7 +22352,16 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"\t{item}" + (" \\" if i < len(leavings) - 1 else ""))
 	a("")
 	a("fmake-clean:" if fragment else "clean:")
+	if win:
+		# One file to a line under cmd: `del' takes `\', and a tree's
+		# whole list on one line passes cmd's 8191 characters.
+		a(f"ifneq ($({P}CMD),)")
+		for item in leavings:
+			a(f"\t@$(call {P}RM_F,{item})")
+		a("else")
 	a(f"\trm -f $({P}CLEAN)")
+	if win:
+		a("endif")
 	a("")
 	# One named list rather than every object spelled out again on the
 	# -include line. That line worked and was unpleasant to hand-edit, in a

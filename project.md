@@ -661,7 +661,8 @@ that had been green about nothing for five commits ·
 [609. The aims walked over the new targets](#609-the-aims-walked-over-the-new-targets) ·
 [610. fmake run on Windows, and an archive read from its index](#610-fmake-run-on-windows-and-an-archive-read-from-its-index) ·
 [611. fmake hosted on Windows, with what Qt's installer gives](#611-fmake-hosted-on-windows-with-what-qts-installer-gives) ·
-[612. A shared object read from its dynamic table](#612-a-shared-object-read-from-its-dynamic-table)
+[612. A shared object read from its dynamic table](#612-a-shared-object-read-from-its-dynamic-table) ·
+[613. `make clean` under cmd.exe, and the file it never removed](#613-make-clean-under-cmdexe-and-the-file-it-never-removed)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47875,7 +47876,8 @@ steps: `mkdir -p`, the flavour stamp's `printf | cmp`, and `rm -f` before
 keeps the quotes `echo "x"` gets, sh takes them off -- and spells those
 three through `MKDIR_P` and `RM_F`, and compares the stamp in make with
 `$(file <)`, because wine's `fc` is a stub and a comparison nobody can
-test is not one to ship. Installing and cleaning still want a POSIX shell.
+test is not one to ship. Installing still wants a POSIX shell; cleaning is
+section 613.
 Every other target's file is byte-identical to before, measured on two
 trees, and under sh the Windows file still builds, with a second make
 writing nothing.
@@ -47891,8 +47893,8 @@ before the wrapping existed; the boundary test takes either separator.
 **Not shown.** Real Windows: wine's cmd is not cmd.exe, and `fc` showed
 how far apart they can be. ninja hosted on Windows: running a downloaded
 `ninja.exe` was refused, so its file, which has no shell in its compile
-and link rules but `rm` and `cp` in two, is untried. `make install` and
-`clean` under cmd. Only Python 3.12; 3.11 is the floor `tomllib` sets.
+and link rules but `rm` and `cp` in two, is untried. `make install` under
+cmd. Only Python 3.12; 3.11 is the floor `tomllib` sets.
 `fmake_runs_hosted_on_windows` runs the whole path when
 `FMAKE_WINDOWS_PYTHON` and `FMAKE_WINDOWS_MINGW` name a `python.exe` and a
 MinGW `bin`, with `FMAKE_QT_WINDOWS` for the Qt half; the sources are the
@@ -47919,3 +47921,17 @@ took 235 s over the largest set, one process at a time. The same first
 build now takes 4 to 6 s at that load. Guarded by
 `a_shared_object_is_read_from_its_dynamic_table`, whose halves fail with
 the read switched off and with undefined symbols counted as exports.
+
+## 613. `make clean` under cmd.exe, and the file it never removed
+
+Section 611 left an ejected Windows Makefile's `clean` as `rm -f`, which
+cmd.exe does not have. Under cmd it is now one `RM_F` line per file --
+`del` wants `\`, and a large tree's list on one line would pass cmd's 8191
+characters -- and `rm -f $(CLEAN)` under sh, as before.
+
+Checking that `clean` left `build/` empty found a fault on every
+platform: an ejected Qt build writes `build/moc_predefs.h` (section 603)
+and `CLEAN` did not name it, so it outlived every `make clean`. It is
+named now. `moc_survives_ejection` asserts `build/` is empty after
+`make clean`, and fails with the name removed; `fmake_runs_hosted_on_windows`
+runs `mingw32-make clean` under cmd for both of its trees.

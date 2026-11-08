@@ -29522,6 +29522,15 @@ int extras_sum(void) { Alpha a; Bravo b; Charlie c; return a.n + b.n + c.n; }
 	check(m.returncode == 0, f"make failed: {m.stdout}{m.stderr}")
 	check(_run_in(t.dir, "./" + prog).returncode == 0,
 	      "the ejected build produced a program whose signal never arrived")
+	# section 613: clean named moc's output and not moc_predefs.h, which
+	# the same ejected file writes, so `build/' kept one file for ever.
+	c = _run_in(t.dir, "make", "clean")
+	left = [os.path.join(d, f) for d, _, fs in
+	        os.walk(os.path.join(t.dir, "build")) for f in fs]
+	check(c.returncode == 0 and not left,
+	      f"the ejected clean leaves what the build wrote: {left}")
+	m = _run_in(t.dir, "make")
+	check(m.returncode == 0, f"make after clean failed: {m.stdout}{m.stderr}")
 
 	# section 383: a header the moc'd one INCLUDES is a moc input, and
 	# the ejected rule listed only the moc'd header. Section 366 taught
@@ -35662,6 +35671,12 @@ def fmake_runs_hosted_on_windows(t):
 		r, newer = written_by(lambda: wine("mingw32-make"))
 		check(r.returncode == 0 and not newer,
 		      f"a second mingw32-make writes nothing: {newer} {r.stdout}{r.stderr}")
+		r = wine("mingw32-make", "clean")
+		left = [os.path.relpath(os.path.join(d, f), t.dir)
+		        for d, _, fs in os.walk(os.path.join(t.dir, "build")) for f in fs]
+		check(r.returncode == 0 and not left
+		      and not os.path.exists(os.path.join(t.dir, exe)),
+		      f"mingw32-make clean under cmd.exe: {left} {r.stdout}{r.stderr}")
 
 	t.write("src/main.cpp", "#include <sub/util.h>\n#include <cstdio>\n"
 	        'int main(){ std::printf("twice %d\\n", twice(21)); }\n')
@@ -35676,7 +35691,7 @@ def fmake_runs_hosted_on_windows(t):
 	for rel in ("src/main.cpp", "include/sub/util.h", "src/lib/util.cpp",
 	            "Makefile"):
 		os.unlink(os.path.join(t.dir, rel))
-	shutil.rmtree(os.path.join(t.dir, "build"))
+	shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
 	_qt_widgets_program(t)
 	both_ways(["said hello from qrc", "-platform", "offscreen"],
 	          extra={"PKG_CONFIG_PATH": _wine_path(os.path.join(kit, "lib", "pkgconfig"))},
