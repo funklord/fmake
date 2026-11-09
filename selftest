@@ -394,6 +394,40 @@ def compiled(r):
 # ---------------------------------------------------------------------------
 
 @case
+def a_dry_run_prints_the_same_plan_every_time(t):
+	"""section 620: `-n' printed compiles in the order threads reached them.
+
+	A dry run starts nothing, and it printed each command from the worker
+	pool, so one fmake over one tree gave a different order from run to
+	run -- measured, three runs and three outputs on ossacli -- and two
+	plans could not be compared with diff, which is what `-n' is for when
+	reviewing a change. The tree is ossacli's shape, a library and three
+	programs over a named include directory, which is a shape that showed
+	it: five orders in twelve runs, where forty files in one directory
+	showed none in twenty. Ten runs, one text.
+	"""
+	t.write("fmake.toml", '[project]\ninclude-dirs = ["include"]\n')
+	t.write("include/x/x.h", "int a(void); int b(void); int c(void);\n")
+	for f in "abc":
+		t.write(f"src/lib/{f}.c",
+		        f"#include <x/x.h>\nint {f}(void){{ return 1; }}\n")
+	t.write("src/cli/main.c",
+	        "#include <x/x.h>\nint main(void){ return a() + b(); }\n")
+	t.write("src/tool/t1.c",
+	        "#include <x/x.h>\nint main(void){ return c(); }\n")
+	t.write("src/tool/t2.c",
+	        "#include <x/x.h>\nint main(void){ return a(); }\n")
+	got = set()
+	for _ in range(10):
+		r = t.fmake("-n")
+		check(r.returncode == 0, f"-n: {r.stdout}{r.stderr}")
+		got.add(r.stdout)
+	check(len(got) == 1, f"{len(got)} different plans from ten runs")
+	check(not os.path.exists(os.path.join(t.dir, ".fmake")),
+	      "a dry run writes nothing")
+
+
+@case
 def hello_needs_no_files(t):
 	"""A lone main.c builds, and takes its name from the directory."""
 	t.write("main.c", """

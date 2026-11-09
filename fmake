@@ -9675,12 +9675,6 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 	def run_one(u):
 		cmd = compile_cmd(u, cfg, incflags)
 		if dry_run:
-			# Quoted, as the four generator printers in this file already
-			# are. `-n' prints a command in order to be read and pasted,
-			# and an unquoted one is a different command: a source under
-			# `sub dir/' printed three arguments where the build passes
-			# one. fmake itself is unaffected -- it runs a list.
-			print(" ".join(shlex.quote(c) for c in cmd))
 			return u, 0, ""
 		# gcc writes its BMIs to `gcm.cache/' relative to the working
 		# directory and offers no flag to move it, so the working
@@ -9741,7 +9735,22 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 				failures.append((u, err))
 				if not quiet:
 					say(f"[{done[0]:>{width}}/{len(todo)}] {RED(tag)} {shown}")
-			elif not dry_run:
+			elif dry_run:
+				# Here, in the order the plan has them, and not from the
+				# worker: a dry run starts nothing, and printing from the
+				# pool gave the threads' order, a different one on every
+				# run of one fmake over one tree -- so two plans could not
+				# be compared with diff (section 620).
+				#
+				# Quoted, as the four generator printers in this file
+				# already are. `-n' prints a command in order to be read
+				# and pasted, and an unquoted one is a different command:
+				# a source under `sub dir/' printed three arguments where
+				# the build passes one. fmake itself is unaffected -- it
+				# runs a list.
+				print(" ".join(shlex.quote(c)
+				               for c in compile_cmd(u, cfg, incflags)))
+			else:
 				if not quiet:
 					say(f"[{done[0]:>{width}}/{len(todo)}] {BLUE(tag)} {shown}")
 				if err.strip():

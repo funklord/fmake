@@ -668,7 +668,8 @@ that had been green about nothing for five commits ·
 [616. The tree lock on Windows, which also made `.fmake/`](#616-the-tree-lock-on-windows-which-also-made-fmake) ·
 [617. A `VERSION` file answered `#include <version>`](#617-a-version-file-answered-include-version) ·
 [618. Rust hosted on Windows, and the kit fetched per run](#618-rust-hosted-on-windows-and-the-kit-fetched-per-run) ·
-[619. The macOS stand-in, fetched per run too](#619-the-macos-stand-in-fetched-per-run-too)
+[619. The macOS stand-in, fetched per run too](#619-the-macos-stand-in-fetched-per-run-too) ·
+[620. Every sibling planned twice, and a dry run that shuffled](#620-every-sibling-planned-twice-and-a-dry-run-that-shuffled)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47653,10 +47654,11 @@ runtimes in one process share msvcrt's heap, so `new` in one and `delete` in
 the other is fine. An exception crossing from Qt into the program is not
 tested. `[toolchain] static-runtime = false` is the exit.
 
-**Not fmake's, and still not done:** a program that starts on another Windows
-machine needs its DLLs and `platforms/qwindows.dll` beside it, which is what
-`windeployqt` does and what a `.app` bundle is on macOS. The question stands
-for the holder, as section 271's did for the `.apk`.
+**Not fmake's, settled:** a program that starts on another Windows machine
+needs its DLLs and `platforms/qwindows.dll` beside it, which is what
+`windeployqt` does and what a `.app` bundle is on macOS. The holder decided
+2026-11-09 that fmake does not stage either: `windeployqt` and `macdeployqt`
+are enough, and section 607 measured the first working on what fmake builds.
 
 ## 606. Real trees: a COMDAT is not a duplicate
 
@@ -48181,3 +48183,34 @@ commands, and the directory is gone afterwards. As section 604 says, the
 program has still never started; that needs a Mac. `windows_kit.py`'s
 default now also runs `a_real_qt_kit_builds_what_runs_on_windows`, the
 other case that reads its kit, with the system's mingw-w64.
+
+## 620. Every sibling planned twice, and a dry run that shuffled
+
+A change to how fmake plans a build reaches every tree it builds, and
+this session's sections 614 to 618 changed compile lines for all of them
+(617's `-idirafter` most of all). `tool/sibling_sweep.py` checks that
+against the projects beside this one. It copies each sibling's tracked
+files with `git archive HEAD` into a temporary directory and runs `-n`
+with an old fmake and the working one. It prints the trees whose plans
+differ and removes each copy before fetching the next. Measured
+2026-11-09 against `3caeffc`, over twenty trees with sources: no plan
+differs in content. Seven differed only in order.
+
+**That order was the finding.** One fmake planning one tree twice printed
+different text: ossacli gave three outputs in three runs. A dry run
+starts nothing, yet it printed each compile from the worker that took
+it, so the threads decided the order, and `-n` could not be compared
+with `diff`. Comparing plans is the use `-n` has when reviewing a change.
+The command is now printed in the loop that consumes the pool's results,
+which `map` returns in the plan's order. Afterwards ossacli, qtty,
+softkeys and mstflint each gave one output over repeated runs. The
+sweep also compares sorted lines, so an order difference is told apart
+from a change of content.
+
+`a_dry_run_prints_the_same_plan_every_time` plans one tree ten times and
+wants one text. It took two tries. Forty files in one directory never
+showed the race in twenty runs with the old fmake, so it was a case
+that could not fail. ossacli's shape could: a library and three
+programs over a named include directory gave five orders in twelve
+runs. The case uses that shape, and with the old fmake it failed three
+runs out of three.
