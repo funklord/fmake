@@ -665,7 +665,8 @@ that had been green about nothing for five commits ·
 [613. `make clean` under cmd.exe, and the file it never removed](#613-make-clean-under-cmdexe-and-the-file-it-never-removed) ·
 [614. The ejected build.ninja hosted on Windows, and tests under cmd.exe](#614-the-ejected-buildninja-hosted-on-windows-and-tests-under-cmdexe) ·
 [615. A library installed on Windows, found from another drive](#615-a-library-installed-on-windows-found-from-another-drive) ·
-[616. The tree lock on Windows, which also made `.fmake/`](#616-the-tree-lock-on-windows-which-also-made-fmake)
+[616. The tree lock on Windows, which also made `.fmake/`](#616-the-tree-lock-on-windows-which-also-made-fmake) ·
+[617. A `VERSION` file answered `#include <version>`](#617-a-version-file-answered-include-version)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48060,3 +48061,35 @@ somebody has open. A tree with nothing to build is still left with no
 `.fmake/`. `fmake_runs_hosted_on_windows` starts two hosted builds in one
 tree, asserts that both succeed and that one says it is waiting, and
 asserts that the lock file exists.
+
+## 617. A `VERSION` file answered `#include <version>`
+
+With the lock in place, bbq-predictor hosted on Windows failed in every
+file with `too many decimal points in number`, in `bbqw/version:1:1`. Qt's
+headers `#include <version>`. The tree root is always on the include
+path, and on Windows the project's top-level `VERSION` is `version`, so
+`0.1.0` was compiled as C++. A cross build on Linux cannot see this.
+macOS's default volume is case-insensitive too, and libc++'s own headers
+include `<version>`, so any C++ tree there with a top-level `VERSION`
+would fail the same way, Qt or not. Every project in this workspace
+that tracks a version keeps one.
+
+**The remedy is order, not removal.** `demote_shadowing` passes an
+include directory as `-idirafter` when the filesystem returns one of
+its files for a standard C++ header name with no extension
+(`STD_BARE_HEADERS`). gcc and clang search an `-idirafter` directory
+after the system headers, so `<version>` reaches the library. The
+tree's own `<sub/x.h>` and `"x.h"` are found exactly as before, unless a
+system header has the same name, which is the case being fixed. It
+applies in `compile_cmd` and at the four compile-flag sites of the two
+emitters, but not to moc, which takes no `-idirafter` and has its own
+preprocessor. Each directory is named once in a note.
+
+The question is put to the filesystem, not to a name comparison, because
+what matters is what the compiler's lookup will find. So on Linux it
+answers only for a file really named `version`, and that file broke
+there too. Linux output for a tree with a `VERSION` is byte-for-byte
+unchanged. `a_file_named_like_a_standard_header_does_not_answer_for_it`
+builds such a tree and its ejected Makefile on Linux, and fails with the
+previous fmake. The hosted case's tree carries a `VERSION` and includes
+`<version>`. bbq-predictor's applet now builds hosted on Windows.

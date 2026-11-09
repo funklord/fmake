@@ -35704,7 +35704,9 @@ def fmake_runs_hosted_on_windows(t):
 			if os.path.exists(os.path.join(t.dir, f)):
 				os.unlink(os.path.join(t.dir, f))
 
-	t.write("src/main.cpp", "#include <sub/util.h>\n#include <cstdio>\n"
+	t.write("VERSION", "0.1.0\n")
+	t.write("src/main.cpp", "#include <sub/util.h>\n#include <version>\n"
+	        "#include <cstdio>\n"
 	        'int main(){ std::printf("twice %d\\n", twice(21)); }\n')
 	t.write("include/sub/util.h", "int twice(int);\n")
 	t.write("src/lib/util.cpp", "#include <sub/util.h>\n"
@@ -35859,6 +35861,37 @@ int main(int argc, char **argv) {
 	          extra={"PKG_CONFIG_PATH": _wine_path(os.path.join(kit, "lib", "pkgconfig"))},
 	          run_env={"WINEPATH": _wine_path(mingw) + ";" + _wine_path(os.path.join(kit, "bin")),
 	                   "QT_PLUGIN_PATH": _wine_path(os.path.join(kit, "plugins"))})
+
+
+@case
+def a_file_named_like_a_standard_header_does_not_answer_for_it(t):
+	"""section 617: the tree root is on the include path, and so is `version'.
+
+	A file the filesystem returns for `#include <version>' stood in for the
+	C++ library's header: a top-level VERSION on Windows or macOS, where
+	case is not significant, and a file really named `version' anywhere.
+	bbq-predictor built hosted on Windows failed in every file. The case
+	uses the second spelling, which is the same lookup on this machine, and
+	needs both the build and the ejected Makefile to reach the real header.
+	"""
+	t.write("version", "0.1.0\n")
+	t.write("main.cpp", "#include <version>\n#include <cstdio>\n"
+	        'int main(){ std::puts("ok"); return 0; }\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the tree's `version' answered <version>: {out}")
+	check("-idirafter" in out and "version" in out,
+	      f"the reordering has to be said: {out}")
+	prog = os.path.basename(t.dir)
+	check(t.run(prog).stdout == "ok\n", "the program did not run")
+	r = t.fmake("--eject", "make")
+	check(r.returncode == 0, f"--eject make: {r.stderr}")
+	t.write("Makefile", r.stdout)
+	shutil.rmtree(os.path.join(t.dir, ".fmake"))
+	os.unlink(os.path.join(t.dir, prog))
+	r = subprocess.run(["make"], cwd=t.dir, capture_output=True, text=True)
+	check(r.returncode == 0 and t.run(prog).stdout == "ok\n",
+	      f"the ejected Makefile: {r.stdout}{r.stderr}")
 
 
 @case

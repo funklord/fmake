@@ -8575,6 +8575,86 @@ def unit_cflags(u, pkg, store, sig):
 	return out
 
 
+# The C++ standard library's headers that carry no extension, which are
+# the names a file of the tree's own can answer by accident: <version> is
+# included by Qt's headers and, on macOS, by libc++'s own.
+STD_BARE_HEADERS = frozenset("""
+algorithm any array atomic barrier bit bitset cassert cctype cerrno cfenv
+cfloat charconv chrono cinttypes climits clocale cmath codecvt compare
+complex concepts condition_variable coroutine csetjmp csignal cstdarg
+cstddef cstdint cstdio cstdlib cstring ctime cuchar cwchar cwctype deque
+exception execution expected filesystem flat_map flat_set format
+forward_list fstream functional future generator initializer_list iomanip
+ios iosfwd iostream istream iterator latch limits list locale map mdspan
+memory memory_resource mutex new numbers numeric optional ostream print
+queue random ranges ratio regex scoped_allocator semaphore set
+shared_mutex source_location span spanstream sstream stack stacktrace
+stdexcept stdfloat stop_token streambuf string string_view strstream
+syncstream system_error text_encoding thread tuple type_traits typeindex
+typeinfo unordered_map unordered_set utility valarray variant vector
+version
+""".split())
+
+_SHADOWS = {}
+
+
+def shadowing_file(d):
+	"""A file in include directory `d' that a standard header resolves to.
+
+    Asked of the filesystem rather than compared by name, because the
+    question is what the compiler's own lookup will find: on Windows and on
+    macOS's default volume a project's `VERSION' IS `version', and Qt's
+    `#include <version>' compiled the version number as C++ -- every file
+    in bbq-predictor, built hosted on Windows, failed with `too many
+    decimal points in number' (section 617). On Linux it answers only for
+    a file that really is called `version', which breaks there too.
+    """
+	if d not in _SHADOWS:
+		got = None
+		try:
+			names = {n.lower(): n for n in os.listdir(d)}
+		except OSError:
+			names = {}
+		for name in sorted(STD_BARE_HEADERS):
+			if name in names and os.path.isfile(os.path.join(d, name)):
+				got = names[name]
+				break
+		_SHADOWS[d] = got
+	return _SHADOWS[d]
+
+
+_SHADOW_SAID = set()
+
+
+def demote_shadowing(flags, root=None):
+	"""`-I' for a directory that shadows a standard header, as -idirafter.
+
+    -idirafter is searched after the system headers, so `<version>' reaches
+    the C++ library while the tree's own `<sub/x.h>' and `"x.h"' are found
+    exactly as before: the one thing that moves is the order against the
+    system's own names, which is the thing that was wrong. gcc and clang
+    both take it joined. Said once per directory, since it changes a flag
+    the reader will see on every compile line.
+    """
+	out = []
+	for f in flags:
+		if f.startswith("-I") and len(f) > 2:
+			d = f[2:] if os.path.isabs(f[2:]) or root is None \
+			    else os.path.join(root, f[2:])
+			hit = shadowing_file(d)
+			if hit:
+				if d not in _SHADOW_SAID:
+					_SHADOW_SAID.add(d)
+					shown = os.path.join(_rel(d, root or os.getcwd()), hit)
+					note(f"{shown} answers #include <{hit.lower()}> on this "
+					     f"filesystem, so its directory is searched after "
+					     f"the system headers (-idirafter)")
+				out.append("-idirafter" + f[2:])
+				continue
+		out.append(f)
+	return out
+
+
 def compile_cmd(u, cfg, incflags):
 	if u.lang.unit == "crate":
 		return crate_cmd(u, cfg, u.obj)
@@ -8599,7 +8679,7 @@ def compile_cmd(u, cfg, incflags):
 	lang_flag = module_lang_flag(u, cc)
 	return ([cc, "-c"] + lang_flag + [u.abs, "-o", u.obj]
 	        + u.lang.dep_flags(u.dep)
-	        + incflags + cfg.cflags + u.own + cfg.override)
+	        + demote_shadowing(incflags + cfg.cflags + u.own + cfg.override))
 
 
 _DEPS_FORMAT = {}
@@ -20660,9 +20740,9 @@ def _eject_flags(flags, root, esc=None, objdir=None):
 	out = []
 	for f in flags:
 		f = _eject_module_flag(f, objdir)
-		for prefix in ("-I", "-L"):
-			if f.startswith(prefix) and os.path.isabs(f[2:]):
-				rel = _rel(f[2:], root)
+		for prefix in ("-idirafter", "-I", "-L"):
+			if f.startswith(prefix) and os.path.isabs(f[len(prefix):]):
+				rel = _rel(f[len(prefix):], root)
 				out.append(prefix + (_eject_src(rel) if rel != root else "."))
 				break
 		else:
@@ -21262,7 +21342,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	_refuse_whitespace(targets, closures, root, gen_srcs,
 	                   asked=asked)
 	any_crate = any(u.crate for t in targets for u in closures[t].link)
-	common = _eject_flags(cfg.base_cflags() + incflags, root, _mk_flag)
+	common = _eject_flags(demote_shadowing(cfg.base_cflags() + incflags),
+	                      root, _mk_flag)
 	override = _eject_flags(cfg.override, root, _mk_flag)
 	L = []
 	a = L.append
@@ -21420,7 +21501,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# both. The suite's "keep both objects" case is what said so.
 	own_flags = {_obj_of(u): _defer([x.replace(BMI_DIR, f"$({P}BUILD_DIR)")
 	                                 for x in _eject_flags(
-	                                     u.own, root, _mk_cmd_flag, objdir)],
+	                                     demote_shadowing(u.own), root,
+	                                     _mk_cmd_flag, objdir)],
 	                                "CFLAGS")
 	             for t in targets
 	             for u in list(closures[t].link) + list(closures[t].modules)
@@ -22556,7 +22638,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	_refuse_leading_dash(targets, closures, root, nj_extra)
 	_refuse_unnameable(targets, closures, root,
 	                 nj_extra + ([outdir] if outdir else []))
-	common = " ".join(_eject_flags(cfg.cflags + incflags, root, _nj_flag))
+	common = " ".join(_eject_flags(demote_shadowing(cfg.cflags + incflags),
+	                               root, _nj_flag))
 	override = " ".join(_eject_flags(cfg.override, root, _nj_flag))
 	L = []
 	a = L.append
@@ -23032,7 +23115,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			own = ninja_deps_flag(cfg) + own
 		if own:
 			shown = [x.replace(BMI_DIR, "$build_dir")
-			         for x in _eject_flags(own, root, _nj_flag, objdir)]
+			         for x in _eject_flags(demote_shadowing(own), root,
+			                               _nj_flag, objdir)]
 			a(f"  extra = {' '.join(shown)}")
 	# One edge per crate, with the members as implicit inputs. The depfile
 	# ninja reads afterwards is rustc's own and names the real module
