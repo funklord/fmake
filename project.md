@@ -664,7 +664,8 @@ that had been green about nothing for five commits ·
 [612. A shared object read from its dynamic table](#612-a-shared-object-read-from-its-dynamic-table) ·
 [613. `make clean` under cmd.exe, and the file it never removed](#613-make-clean-under-cmdexe-and-the-file-it-never-removed) ·
 [614. The ejected build.ninja hosted on Windows, and tests under cmd.exe](#614-the-ejected-buildninja-hosted-on-windows-and-tests-under-cmdexe) ·
-[615. A library installed on Windows, found from another drive](#615-a-library-installed-on-windows-found-from-another-drive)
+[615. A library installed on Windows, found from another drive](#615-a-library-installed-on-windows-found-from-another-drive) ·
+[616. The tree lock on Windows, which also made `.fmake/`](#616-the-tree-lock-on-windows-which-also-made-fmake)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48033,3 +48034,29 @@ shows on Linux, where the same two steps work.
 A tree beside it then builds and runs against the library, with
 `PKG_CONFIG_PATH` spelled with backslashes. After an edit to the
 installed header on `C:`, its next build recompiles.
+
+## 616. The tree lock on Windows, which also made `.fmake/`
+
+The method that finds what fixtures miss is building a real sibling. So
+bbq-predictor, a Qt Widgets applet, was built for Windows two ways:
+cross from Linux with Debian's mingw-w64 and Qt's Windows kit, and with
+fmake hosted on Windows under wine. Cross, the applet built and ran,
+printing its version. Its two server programs did not compile, because
+they use `openat`, `poll.h` and `grp.h`. That is the project's own
+portability, and fmake named each file with `@os` as the remedy.
+
+Hosted, the build crashed at once. `moc_predefs` opens
+`.fmake/moc_predefs.h` for writing, and `.fmake/` did not exist.
+`TreeLock` is what creates it, and with no `fcntl` it returned at once:
+Windows had no lock, so no directory and nothing to keep two builds in
+one tree apart. The Qt case of section 611 passed only because its tree
+has a form, and uic's output directory under `.fmake/` was made first.
+
+`TreeLock` now takes `msvcrt.locking` on the lock file's first byte when
+there is no `fcntl`. It waits in a loop of non-blocking tries, because
+`LK_LOCK` gives up after ten seconds and a build lasts longer. On release
+it closes the file before tidying, since Windows will not remove a file
+somebody has open. A tree with nothing to build is still left with no
+`.fmake/`. `fmake_runs_hosted_on_windows` starts two hosted builds in one
+tree, asserts that both succeed and that one says it is waiting, and
+asserts that the lock file exists.

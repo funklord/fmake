@@ -35711,6 +35711,23 @@ def fmake_runs_hosted_on_windows(t):
 	        "int twice(int x){ return 2 * x; }\n")
 	both_ways(["twice 42"])
 
+	# section 616: the tree lock exists on Windows too, and holds -- two
+	# builds in one tree, one of them waits. Without it there was no
+	# .fmake/ until something else made one, and a Qt tree with no form
+	# crashed writing moc_predefs.h.
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	runs = [subprocess.Popen(["wine", python, _wine_path(FMAKE)], cwd=t.dir,
+	                         env=env, stdout=subprocess.PIPE,
+	                         stderr=subprocess.STDOUT, text=True,
+	                         errors="replace", stdin=subprocess.DEVNULL)
+	        for _ in range(2)]
+	outs = [p.communicate(timeout=900)[0] for p in runs]
+	check(all(p.returncode == 0 for p in runs)
+	      and os.path.isfile(os.path.join(t.dir, ".fmake", "lock")),
+	      f"two hosted builds in one tree: {outs}")
+	check(any("waiting for another fmake" in o for o in outs),
+	      f"one of two builds in one tree has to wait: {outs}")
+
 	# A library and its tests: the archive rule removes what it rebuilds
 	# and the test rules set an environment and a directory, all of which
 	# the shell did and neither cmd nor ninja's CreateProcess does.
