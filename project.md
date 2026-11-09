@@ -666,7 +666,8 @@ that had been green about nothing for five commits ·
 [614. The ejected build.ninja hosted on Windows, and tests under cmd.exe](#614-the-ejected-buildninja-hosted-on-windows-and-tests-under-cmdexe) ·
 [615. A library installed on Windows, found from another drive](#615-a-library-installed-on-windows-found-from-another-drive) ·
 [616. The tree lock on Windows, which also made `.fmake/`](#616-the-tree-lock-on-windows-which-also-made-fmake) ·
-[617. A `VERSION` file answered `#include <version>`](#617-a-version-file-answered-include-version)
+[617. A `VERSION` file answered `#include <version>`](#617-a-version-file-answered-include-version) ·
+[618. Rust hosted on Windows, and the kit fetched per run](#618-rust-hosted-on-windows-and-the-kit-fetched-per-run)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48093,3 +48094,54 @@ unchanged. `a_file_named_like_a_standard_header_does_not_answer_for_it`
 builds such a tree and its ejected Makefile on Linux, and fails with the
 previous fmake. The hosted case's tree carries a `VERSION` and includes
 `<version>`. bbq-predictor's applet now builds hosted on Windows.
+
+## 618. Rust hosted on Windows, and the kit fetched per run
+
+Run with the holder's approval of a downloaded `rustc.exe`: Rust 1.99.1
+for `x86_64-pc-windows-gnu`, made from the `rustc`, `rust-std` and
+`rust-mingw` components of the stable channel and checked against its
+manifest. Hosted under wine, fmake built a C program calling a crate and
+a Rust program, and a second build was up to date. The ejected Makefile
+built, rebuilt nothing and cleaned under cmd.exe, because its Rust rules
+use no shell tool. Three things failed:
+
+- **ninja's Rust rules** ended `&& grep -F "$out: " $dep.all > $dep`.
+  That keeps the one line of rustc's dep-info naming the output, because
+  ninja requires a depfile's first target to be the edge's first output
+  and rustc's rule order has changed between versions (1.99 writes the
+  depfile's own rule first, measured again here). ninja.exe has no shell,
+  so rustc was handed `&&` as a file name. Real Windows has `findstr`,
+  but wine's ignores `/b` and `/l`, so it could not be tested here. On a
+  Windows host the rules use `deps = gcc` instead: ninja reads the
+  depfile once into its own log and does not check which target comes
+  first. Measured: an edit to a `mod` member rebuilt the crate, and a
+  second run did no work. ninja also deletes the depfile in that mode,
+  so those edges declare no depfile outputs. A declared output that never
+  exists was rebuilt on every run, which was the first result. For the
+  same reason a program's depfile sits beside the program there:
+  rustc makes no directory for it, and ninja makes them only for
+  declared outputs.
+- **A library that is only a crate** is the crate's staticlib, copied
+  (the case `a_library_that_is_only_a_crate_is_the_crates_own_archive`).
+  fmake ran `cp` for it, so its own build failed hosted with "That tool
+  cannot execute on this machine". The copy is now done with
+  `shutil.copyfile`; `cp` stays as the word the plan and `--explain`
+  show. The Makefile has a `CP` helper beside `MKDIR_P` and `RM_F`, which
+  is `copy /y` under cmd, and on a Windows host ninja's copy rule is
+  `cmd /c copy`.
+
+**The Windows programs are fetched per run, not kept.** Kept between
+runs, they filled the shared root disk to 94% (the holder asked
+2026-11-09 for scripts rather than stored kits). `tool/windows_kit.py`
+fetches Python, Qt's MinGW, ninja, Qt's `qtbase` with its runtime, and
+Rust into a temporary directory. It checks each against a hash:
+python.org's and ninja's are pinned in the script, Qt's comes from the
+`.sha1` beside each archive, and Rust's from the channel manifest. It
+then makes a wine prefix there, runs `./selftest -j1` with the
+`FMAKE_WINDOWS_*` and `FMAKE_QT_WINDOWS` variables set, stops the
+wineserver and removes the directory. `--keep DIR` keeps it for
+iterating, and `--env` prints the exports. It needs `wine` and `7z`,
+since Qt's archives are 7z and the standard library cannot read them.
+`fmake_runs_hosted_on_windows` reads `FMAKE_WINDOWS_RUSTC`. With it set,
+the C-and-Rust tree goes through fmake, the Makefile under cmd and
+ninja.exe, and the crate-only library through all three.

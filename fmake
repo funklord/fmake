@@ -14648,14 +14648,27 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# archive and the linker, run from wherever fmake was started, did not
 	# -- or found the system's, which is how beerssh's patched libssh
 	# calls met an unpatched library.
-	try:
-		r = run_child(cmd, cwd=root, stdout=subprocess.PIPE,
-		              stderr=subprocess.PIPE,
-		              text=True, errors="replace")
-	except OSError as exc:
-		die(f"could not run {cmd[0]!r}: {exc.strerror or exc}\n"
-		    f"That tool cannot execute on this machine; it is there "
-		    f"and will not start.")
+	# A crate-only library is a copy, and `cp' is the word the plan and
+	# --explain show for it -- but it is done here rather than run, since
+	# Windows has no cp and fmake has needed no program of its own on any
+	# platform (section 618).
+	if cmd[0] == "cp":
+		try:
+			shutil.copyfile(os.path.join(root or ".", cmd[1]),
+			                os.path.join(root or ".", cmd[2]))
+		except OSError as exc:
+			die(f"could not copy {cmd[1]} to {cmd[2]}: "
+			    f"{exc.strerror or exc}")
+		r = subprocess.CompletedProcess(cmd, 0, "", "")
+	else:
+		try:
+			r = run_child(cmd, cwd=root, stdout=subprocess.PIPE,
+			              stderr=subprocess.PIPE,
+			              text=True, errors="replace")
+		except OSError as exc:
+			die(f"could not run {cmd[0]!r}: {exc.strerror or exc}\n"
+			    f"That tool cannot execute on this machine; it is there "
+			    f"and will not start.")
 	# Read here because this is where rustc's words are. The advice they
 	# feed used to be gated on there being a second crate root in the
 	# tree, which is a fact about the layout and not about the failure --
@@ -21436,7 +21449,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	if win:
 		a("# mingw32-make with no sh.exe on PATH runs recipes with cmd.exe,")
 		a("# which keeps the quotes sh takes off: that is how this file")
-		a("# tells, and spells the three shell steps of a build for it.")
+		a("# tells, and spells the shell steps of a build for it.")
 		a("# Installing still wants a POSIX shell.")
 		a(f"ifeq ($(shell echo \"x\"),\"x\")")
 		a(f"{P}CMD := 1")
@@ -21445,6 +21458,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		  f"mkdir $(subst /,\\,$1),mkdir -p $1)")
 		a(f"{P}RM_F = $(if $({P}CMD),if exist $(subst /,\\,$1) "
 		  f"del /f /q $(subst /,\\,$1),rm -f $1)")
+		a(f"{P}CP = $(if $({P}CMD),copy /y $(subst /,\\,$1) "
+		  f"$(subst /,\\,$2) >nul,cp $1 $2)")
 		a("")
 	assign = "?=" if fragment else "="
 	# Aligned on the longest name rather than on a column somebody counted
@@ -22248,7 +22263,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# The crate's staticlib is the library. Copied rather than
 			# assembled, for the reason link_cmd gives: `ar` over no
 			# objects writes an empty archive and reports success.
-			a(f"\tcp {crate_arcs[0]} $@")
+			a(f"\t$(call {P}CP,{crate_arcs[0]},$@)" if win
+			  else f"\tcp {crate_arcs[0]} $@")
 		elif t.kind == "static":
 			a(f"\t$(call {P}RM_F,$@)" if win else "\trm -f $@")
 			# The objects by name, not `$^'. A vendored or crate archive is
@@ -22819,7 +22835,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("  description = AR $out")
 	a("")
 	a("rule copy")
-	a("  command = cp $in $out")
+	# A library that is one crate and nothing else is that crate's
+	# archive, copied. cmd's `copy', like its `del', wants backslashes.
+	if nt:
+		a('  command = cmd /c copy /y "$from" "$native" >nul')
+	else:
+		a("  command = cp $in $out")
 	a("  description = CP $out")
 	a("")
 	if any(u.crate for t in targets for u in closures[t].link):
@@ -22848,13 +22869,27 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# and depends on no ordering at all. The `-MP'-style phony
 		# targets go with it, which costs nothing: ninja handles a
 		# vanished prerequisite itself, and it is make that needs them.
+		#
+		# On a Windows host there is no grep, and wine's findstr ignores
+		# the switches that would make it one. `deps = gcc' answers it
+		# instead: ninja reads the depfile once into its own log and does
+		# not ask which target it names first. It also deletes the file,
+		# so there the edges below declare no depfile among their outputs
+		# -- a declared output that is never there is an edge rebuilt on
+		# every run (section 618).
 		for name, kind in (("rustlib", "--crate-type=staticlib "),
 		                   ("rustbin", "")):
 			a(f"rule {name}")
-			a(f"  command = $rustc $rustflags {kind}-o $out "
-			  f"--emit=link,dep-info=$dep.all $in"
-			  f" && grep -F \"$out: \" $dep.all > $dep")
-			a("  depfile = $dep")
+			if nt:
+				a(f"  command = $rustc $rustflags {kind}-o $out "
+				  f"--emit=link,dep-info=$dep $in")
+				a("  depfile = $dep")
+				a("  deps = gcc")
+			else:
+				a(f"  command = $rustc $rustflags {kind}-o $out "
+				  f"--emit=link,dep-info=$dep.all $in"
+				  f" && grep -F \"$out: \" $dep.all > $dep")
+				a("  depfile = $dep")
 			a(f"  description = RS {'$in' if name == 'rustlib' else '$out'}")
 			a("")
 
@@ -23126,8 +23161,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		mods = (" | " + " ".join(_ninja(_eject_src(m))
 		                         for m in sorted(u.members))) if u.members else ""
 		dep = f"$build_dir/{_ninja(_eject_obj(rel))}.d"
-		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.a | {dep} "
-		  f"{dep}.all: rustlib {_ninja(_eject_src(rel))}{mods}")
+		made = "" if nt else f" | {dep} {dep}.all"
+		a(f"build $build_dir/{_ninja(_eject_obj(rel))}.a{made}"
+		  f": rustlib {_ninja(_eject_src(rel))}{mods}")
 		a(f"  dep = {dep}")
 	a("")
 
@@ -23141,7 +23177,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# program's depfile is an intermediate, and the tree root is
 			# where the program goes.
 			dep = f"$build_dir/{_ninja(_eject_obj(root_unit.rel))}.d"
-			a(f"build {art(t.filename)} | {dep} {dep}.all: rustbin "
+			# Beside the program on Windows: rustc makes no directory for
+			# its depfile, ninja makes them only for declared outputs, and
+			# under `deps = gcc' ninja deletes the file once read, so it
+			# leaves nothing behind there.
+			if nt:
+				dep = art(t.filename) + ".d"
+			made = "" if nt else f" | {dep} {dep}.all"
+			a(f"build {art(t.filename)}{made}: rustbin "
 			  f"{_ninja(_eject_src(root_unit.rel))}{mods}")
 			a(f"  dep = {dep}")
 			continue
@@ -23166,6 +23209,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		              for u in closures[t].link if u.archive and u.crate]
 		if t.kind == "static" and not objs.strip() and len(crate_arcs) == 1:
 			a(f"build {art(t.filename)}: copy {crate_arcs[0]}")
+			if nt:
+				crate = [u for u in closures[t].link
+				         if u.archive and u.crate][0]
+				a("  from = " + _nj_esc(os.path.join(
+				    EJECT_BUILD_DIR, _eject_obj(crate.rel) + ".a")
+				    .replace("/", "\\")))
+				a("  native = " + _nj_esc(
+				    _art_path(t.filename).replace("/", "\\")))
 			continue
 		rule = {"static": "archive", "shared": "solink",
 		        "module": "module"}.get(t.kind, "link")

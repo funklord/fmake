@@ -35617,13 +35617,19 @@ def fmake_runs_hosted_on_windows(t):
 	FMAKE_WINDOWS_NINJA naming ninja.exe, each tree a third way through
 	--eject ninja (section 614), and a library whose tests set an
 	environment, a directory and arguments through both ejected files.
+	With FMAKE_WINDOWS_RUSTC naming a Windows rustc.exe, C calling Rust
+	and a Rust program, and a library that is only a crate (section 618).
+	tool/windows_kit.py fetches all of these, runs this case and deletes
+	them again.
 	"""
 	python = os.environ.get("FMAKE_WINDOWS_PYTHON")
 	mingw = os.environ.get("FMAKE_WINDOWS_MINGW")
 	ninja = os.environ.get("FMAKE_WINDOWS_NINJA")
 	if not python or not mingw or not shutil.which("wine"):
 		raise Skip("no FMAKE_WINDOWS_PYTHON and FMAKE_WINDOWS_MINGW, or no wine")
-	env = dict(os.environ, WINEDEBUG="-all", WINEPATH=_wine_path(mingw))
+	rustc = os.environ.get("FMAKE_WINDOWS_RUSTC")
+	env = dict(os.environ, WINEDEBUG="-all", WINEPATH=_wine_path(mingw)
+	           + (";" + _wine_path(os.path.dirname(rustc)) if rustc else ""))
 	env.pop("CFLAGS", None)
 	env.pop("LDFLAGS", None)
 
@@ -35844,6 +35850,51 @@ int main(int argc, char **argv) {
 		            lib, "hostlib.pc", "test_env.exe", "test_alone.exe",
 		            ".ninja_log",
 		            ".ninja_deps"):
+			if os.path.exists(os.path.join(t.dir, rel)):
+				os.unlink(os.path.join(t.dir, rel))
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+
+	# section 618: with FMAKE_WINDOWS_RUSTC, a C program calling a crate
+	# and a Rust program, the three ways; then a library that is only a
+	# crate, which fmake and the Makefile copied with `cp' and ninja's
+	# Rust rules filtered their depfiles with `grep'.
+	if rustc:
+		for rel in ("src/main.cpp", "src/lib/util.cpp"):
+			if os.path.exists(os.path.join(t.dir, rel)):
+				os.unlink(os.path.join(t.dir, rel))
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		t.write("app/main.c", "#include <stdio.h>\nint rs_twice(int);\n"
+		        'int main(void){ printf("twice %d\\n", rs_twice(21)); }\n')
+		t.write("core/lib.rs", "mod helper;\n#[no_mangle]\n"
+		        'pub extern "C" fn rs_twice(x: i32) -> i32 '
+		        "{ helper::double(x) }\n")
+		t.write("core/helper.rs", "pub fn double(x: i32) -> i32 { x * 2 }\n")
+		t.write("tool1/main.rs", 'fn main() { println!("from rust"); }\n')
+		both_ways(["twice 42"])
+		for rel in ("app", "core", "tool1"):
+			shutil.rmtree(os.path.join(t.dir, rel))
+		t.write("lib.rs", "#[no_mangle]\n"
+		        'pub extern "C" fn only_thing() -> i32 { 1 }\n')
+		lib = os.path.join(t.dir, "lib" + os.path.basename(t.dir) + ".a")
+		for how in ("fmake", "make", "ninja"):
+			shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+			shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+			if os.path.exists(lib):
+				os.unlink(lib)
+			if how == "fmake":
+				r = fmake()
+			else:
+				e = fmake("--eject", how)
+				check(e.returncode == 0, f"--eject {how}: {e.stderr}")
+				t.write("Makefile" if how == "make" else "build.ninja",
+				        e.stdout)
+				shutil.rmtree(os.path.join(t.dir, ".fmake"))
+				r = wine("mingw32-make" if how == "make" else ninja)
+			check(r.returncode == 0 and os.path.getsize(lib) > 8,
+			      f"a crate-only library through {how}: {r.stdout}{r.stderr}")
+		for rel in ("lib.rs", "Makefile", "build.ninja", ".ninja_log",
+		            ".ninja_deps", lib):
 			if os.path.exists(os.path.join(t.dir, rel)):
 				os.unlink(os.path.join(t.dir, rel))
 		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
