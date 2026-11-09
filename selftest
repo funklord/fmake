@@ -35613,10 +35613,14 @@ def fmake_runs_hosted_on_windows(t):
 	subdirectories, which `\\' in every path broke, and its ejected
 	Makefile under that MinGW's mingw32-make with no sh.exe, so cmd.exe
 	runs the recipes. With FMAKE_QT_WINDOWS as well, the Qt program the
-	same two ways, with no pkg-config on the machine.
+	same two ways, with no pkg-config on the machine. With
+	FMAKE_WINDOWS_NINJA naming ninja.exe, each tree a third way through
+	--eject ninja (section 614), and a library whose tests set an
+	environment, a directory and arguments through both ejected files.
 	"""
 	python = os.environ.get("FMAKE_WINDOWS_PYTHON")
 	mingw = os.environ.get("FMAKE_WINDOWS_MINGW")
+	ninja = os.environ.get("FMAKE_WINDOWS_NINJA")
 	if not python or not mingw or not shutil.which("wine"):
 		raise Skip("no FMAKE_WINDOWS_PYTHON and FMAKE_WINDOWS_MINGW, or no wine")
 	env = dict(os.environ, WINEDEBUG="-all", WINEPATH=_wine_path(mingw))
@@ -35632,18 +35636,19 @@ def fmake_runs_hosted_on_windows(t):
 	def fmake(*args, extra=None):
 		return wine(python, _wine_path(FMAKE), *args, extra=extra)
 
+	# Each file's mtime before the step against after it, rather than a
+	# marker dated two seconds back: a file the PREVIOUS step wrote inside
+	# those two seconds read as written by this one, and on a loaded
+	# machine the program run between them is not always that slow.
+	def stamps():
+		return {os.path.join(d, f): os.stat(os.path.join(d, f)).st_mtime_ns
+		        for d, _, files in os.walk(t.dir) for f in files}
+
 	def written_by(step):
-		mark = os.path.join(t.dir, ".mark")
-		with open(mark, "w"):
-			pass
-		os.utime(mark, (time.time() - 2, time.time() - 2))
+		before = stamps()
 		r = step()
-		newer = []
-		for d, _, files in os.walk(t.dir):
-			for f in files:
-				p = os.path.join(d, f)
-				if p != mark and os.path.getmtime(p) > os.path.getmtime(mark):
-					newer.append(os.path.relpath(p, t.dir))
+		newer = sorted(os.path.relpath(p, t.dir)
+		               for p, m in stamps().items() if before.get(p) != m)
 		return r, newer
 
 	exe = os.path.basename(t.dir) + ".exe"
@@ -35677,6 +35682,27 @@ def fmake_runs_hosted_on_windows(t):
 		check(r.returncode == 0 and not left
 		      and not os.path.exists(os.path.join(t.dir, exe)),
 		      f"mingw32-make clean under cmd.exe: {left} {r.stdout}{r.stderr}")
+		os.unlink(os.path.join(t.dir, "Makefile"))
+		if not ninja:
+			return
+		r = fmake("--eject", "ninja", extra=extra)
+		check(r.returncode == 0, f"--eject ninja: {r.stderr}")
+		t.write("build.ninja", r.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"))
+		r = wine(ninja)
+		check(r.returncode == 0, f"ninja.exe, no shell: {r.stdout}{r.stderr}")
+		got = wine(os.path.join(t.dir, exe), *expect[1:], extra=run_env, timeout=120)
+		check(expect[0] in got.stdout + got.stderr,
+		      f"the program ninja built: {got.stdout}{got.stderr}")
+		r, newer = written_by(lambda: wine(ninja))
+		check(r.returncode == 0 and not newer,
+		      f"a second ninja writes nothing: {newer} {r.stdout}{r.stderr}")
+		r = wine(ninja, "-t", "clean")
+		check(r.returncode == 0 and not os.path.exists(os.path.join(t.dir, exe)),
+		      f"ninja -t clean: {r.stdout}{r.stderr}")
+		for f in ("build.ninja", ".ninja_log", ".ninja_deps"):
+			if os.path.exists(os.path.join(t.dir, f)):
+				os.unlink(os.path.join(t.dir, f))
 
 	t.write("src/main.cpp", "#include <sub/util.h>\n#include <cstdio>\n"
 	        'int main(){ std::printf("twice %d\\n", twice(21)); }\n')
@@ -35685,12 +35711,89 @@ def fmake_runs_hosted_on_windows(t):
 	        "int twice(int x){ return 2 * x; }\n")
 	both_ways(["twice 42"])
 
+	# A library and its tests: the archive rule removes what it rebuilds
+	# and the test rules set an environment and a directory, all of which
+	# the shell did and neither cmd nor ninja's CreateProcess does.
+	if ninja:
+		for rel in ("src/main.cpp", "src/lib/util.cpp"):
+			os.unlink(os.path.join(t.dir, rel))
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		t.write("src/lib/util.c", "/*! @target hostlib\n    @kind static\n"
+		        "    @version 1.0\n    @headers include/sub/util.h */\n"
+		        "#include <sub/util.h>\n"
+		        "int twice(int x){ return 2 * x; }\n")
+		t.write("test/data/here.txt", "x\n")
+		t.write("test/test_env.c", """#include <sub/util.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(int argc, char **argv) {
+	const char *m = getenv("MSG");
+	FILE *f = fopen("here.txt", "r");
+	printf("MSG=%s here=%d\\n", m ? m : "-", f != 0);
+	return m && !strcmp(m, "hello world") && f && argc == 2
+	       && !strcmp(argv[1], "a b") && twice(2) == 4 ? 0 : 1;
+}
+""")
+		t.write("test/test_alone.c", "#include <stdlib.h>\n"
+		        'int main(void){ return getenv("MSG") ? 1 : 0; }\n')
+		toml = ('[target.test_env]\ntest-env = ["MSG=%s"]\n'
+		        'test-cwd = "test/data"\ntest-args = ["a b"]\n')
+		lib = "libhostlib.a"
+		for msg, want in (("hello world", 0), ("goodbye", 1)):
+			t.write("fmake.toml", toml % msg)
+			for how, run in (("make", ["mingw32-make", "test"]),
+			                 ("ninja", [ninja, "test"])):
+				r = fmake("--eject", how)
+				check(r.returncode == 0, f"--eject {how}: {r.stderr}")
+				t.write("Makefile" if how == "make" else "build.ninja",
+				        r.stdout)
+				r = wine(*run)
+				out = r.stdout + r.stderr
+				check((r.returncode == 0) == (want == 0),
+				      f"{how} test, MSG={msg}: {out}")
+				if want == 0:
+					check("MSG=hello world here=1" in out, f"{how} test: {out}")
+		# The .pc a declared version asks for is in the default build,
+		# and it was printf; written now with no shell either way.
+		pc = os.path.join(t.dir, "hostlib.pc")
+		r = wine("mingw32-make")
+		check(r.returncode == 0 and os.path.exists(pc)
+		      and "Version: 1.0" in open(pc).read(),
+		      f"mingw32-make, the library and its .pc: {r.stdout}{r.stderr}")
+		os.unlink(pc)
+		# A member the list no longer names leaves the archive.
+		r = wine(ninja)
+		check(r.returncode == 0 and os.path.exists(pc)
+		      and "Version: 1.0" in open(pc).read(),
+		      f"ninja, the library and its .pc: {r.stdout}{r.stderr}")
+		arc = os.path.join(t.dir, lib)
+		obj = os.path.join(t.dir, "build", "src", "lib", "util.c.o")
+		shutil.copy(obj, os.path.join(t.dir, "stale.o"))
+		subprocess.run(["ar", "q", arc, "stale.o"], cwd=t.dir, check=True)
+		time.sleep(1.1)
+		os.utime(os.path.join(t.dir, "src", "lib", "util.c"))
+		r = wine(ninja)
+		names = subprocess.run(["ar", "t", arc], capture_output=True,
+		                       text=True).stdout.split()
+		check(r.returncode == 0 and names == ["util.c.o"],
+		      f"the archive rebuilt from nothing: {names} {r.stdout}{r.stderr}")
+		for rel in ("fmake.toml", "Makefile", "build.ninja", "stale.o",
+		            "src/lib/util.c", "test/test_env.c", "test/test_alone.c",
+		            lib, "hostlib.pc", "test_env.exe", "test_alone.exe",
+		            ".ninja_log",
+		            ".ninja_deps"):
+			if os.path.exists(os.path.join(t.dir, rel)):
+				os.unlink(os.path.join(t.dir, rel))
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+
 	kit = os.environ.get("FMAKE_QT_WINDOWS")
 	if not kit:
 		return
-	for rel in ("src/main.cpp", "include/sub/util.h", "src/lib/util.cpp",
-	            "Makefile"):
-		os.unlink(os.path.join(t.dir, rel))
+	for rel in ("src/main.cpp", "include/sub/util.h", "src/lib/util.cpp"):
+		if os.path.exists(os.path.join(t.dir, rel)):
+			os.unlink(os.path.join(t.dir, rel))
 	shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
 	_qt_widgets_program(t)
 	both_ways(["said hello from qrc", "-platform", "offscreen"],

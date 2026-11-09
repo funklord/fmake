@@ -662,7 +662,8 @@ that had been green about nothing for five commits ·
 [610. fmake run on Windows, and an archive read from its index](#610-fmake-run-on-windows-and-an-archive-read-from-its-index) ·
 [611. fmake hosted on Windows, with what Qt's installer gives](#611-fmake-hosted-on-windows-with-what-qts-installer-gives) ·
 [612. A shared object read from its dynamic table](#612-a-shared-object-read-from-its-dynamic-table) ·
-[613. `make clean` under cmd.exe, and the file it never removed](#613-make-clean-under-cmdexe-and-the-file-it-never-removed)
+[613. `make clean` under cmd.exe, and the file it never removed](#613-make-clean-under-cmdexe-and-the-file-it-never-removed) ·
+[614. The ejected build.ninja hosted on Windows, and tests under cmd.exe](#614-the-ejected-buildninja-hosted-on-windows-and-tests-under-cmdexe)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47935,3 +47936,63 @@ and `CLEAN` did not name it, so it outlived every `make clean`. It is
 named now. `moc_survives_ejection` asserts `build/` is empty after
 `make clean`, and fails with the name removed; `fmake_runs_hosted_on_windows`
 runs `mingw32-make clean` under cmd for both of its trees.
+
+## 614. The ejected build.ninja hosted on Windows, and tests under cmd.exe
+
+Run with the holder's approval of a downloaded `ninja.exe` (the official
+1.12.1 `ninja-win.zip`), under wine beside the Python and MinGW of
+section 611. A plain program built, ran and rebuilt nothing from the
+ejected `build.ninja` as it was. Two rules did not:
+
+- **A static library.** The archive rule was `rm -f $out && $ar rcs ...`.
+  ninja on Windows starts every command with CreateProcess, never with a
+  shell, so it looked for a program called `rm` and failed. The rule is
+  now `cmd /c del /f /q "$native" 2>nul & $ar rcs $out $in`. `$native` is
+  the output again, with backslashes, because `del` reads `/` as a switch.
+  It is joined with `&` because a first build has nothing to delete. The
+  removal is kept, not dropped, because `ar rcs` adds to an existing
+  archive: the case puts a stray member in, rebuilds, and checks it is
+  gone.
+- **Tests, in both ejected files.** The recipe was
+  `cd dir && NAME='v' timeout N ./prog 'arg'`, and every part of that is
+  sh. Windows has a `timeout`, but it waits rather than limiting, and wine
+  has none at all. `mingw32-make test` and `ninja test` both failed on
+  every tree with a test, while `fmake test` passed. Under cmd, each test is now
+  `cd /d "dir" && set "NAME=v" && dir\prog.exe "arg"`, built by
+  `_cmd_test_line`. In the Makefile it sits inside `ifdef CMD`, with the
+  sh line under `else`. In ninja each test gets its own edge, so a `cd` or
+  `set` for one test cannot reach the next: cmd has no subshell. The
+  deadline is dropped under cmd and the file says so.
+
+**The ninja choice is made by the host (`os.name`), not the target.**
+ninja has no conditionals, unlike the Makefile's `CMD` test. A file
+ejected on Linux for a Windows target is run by Linux's ninja under sh.
+Its tool paths are that host's anyway, so it was never a file to carry
+to the other machine. Linux output is byte-for-byte unchanged.
+
+`fmake_runs_hosted_on_windows` reads `FMAKE_WINDOWS_NINJA`. Given it,
+both trees build through `--eject ninja` under ninja.exe: the program
+runs, a second ninja writes nothing, and `ninja -t clean` removes it. A
+library whose test sets an environment, a directory and arguments then
+passes `mingw32-make test` and `ninja test`. With the environment value
+wrong it fails both. Both default builds write its `.pc`, and the stray
+archive member is gone after a rebuild.
+
+- **A library's `.pc`.** A library that declares `version` and `headers`
+  gets its `.pc` written by the default build of both ejected files, and
+  that was `printf`. So `mingw32-make` and `ninja` with no target failed
+  for any such library. Under cmd the Makefile now writes it with
+  `$(file >$@,...)` of a `define` that holds the same lines unquoted.
+  That needs make 4.0, which mingw32-make is and macOS's 3.81 is not, so
+  sh keeps `printf`. On a Windows host, ninja writes it with cmd `echo`s
+  and the prefix baked in, since cmd has no `${PREFIX:=...}` and the
+  install rule that would read one wants sh anyway. Both outputs match,
+  byte for byte, the `.pc` fmake writes itself hosted.
+
+The case's "writes nothing" check dated its marker two seconds back, so
+a file the step before had written inside those two seconds counted
+against the step being checked. It failed that way once, on a loaded
+machine. It now compares each file's mtime before and after the step.
+
+Still sh-only on Windows: `install`, `uninstall` and Rust's rules (`grep`,
+`cp`). They need a POSIX shell, as the Makefile's install already does.

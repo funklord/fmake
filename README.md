@@ -837,9 +837,12 @@ pkg-config, and that is enough: with the kit's and MinGW's `bin` on `PATH`,
     set PKG_CONFIG_PATH=C:\Qt\6.8.2\mingw_64\lib\pkgconfig
     python fmake
 
-fmake reads the `.pc` files itself when no pkg-config is installed, and a
-Makefile from `--eject make` builds under that MinGW's `mingw32-make` with
-no `sh.exe`, cmd.exe running the recipes.
+fmake reads the `.pc` files itself when no pkg-config is installed. A
+Makefile from `--eject make` builds, tests and cleans under that MinGW's
+`mingw32-make` with no `sh.exe`, cmd.exe running the recipes, and a
+`build.ninja` from `--eject ninja` does the same under `ninja.exe`. A
+test's deadline is not enforced there, because cmd has nothing to do it
+with, and `install` still wants a POSIX shell.
 
 A kit's `.pc` files say where Qt built it, and fmake reads them from where
 they lie. On Windows a program linking QtWidgets or QtGui opens no console,

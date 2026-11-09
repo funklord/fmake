@@ -21657,11 +21657,28 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# 2 ./prog' sets the variable for both, where the other order
 			# asks timeout to execute `VAR=x'.
 			limit = test_deadline(conf, t)
-			a("\t" + (f"cd {shlex.quote(where)} && " if where else "")
-			  + f"{env + ' ' if env else ''}"
-			  + (f"timeout {limit} " if limit else "")
-			  + f"{prog}"
-			  + (f" {argv}" if argv else ""))
+			line = ("\t" + (f"cd {shlex.quote(where)} && " if where else "")
+			        + f"{env + ' ' if env else ''}"
+			        + (f"timeout {limit} " if limit else "")
+			        + f"{prog}"
+			        + (f" {argv}" if argv else ""))
+			if not win:
+				a(line)
+				continue
+			# cmd.exe spells every part of the line differently and has
+			# no `timeout' to keep the deadline; `_cmd_test_line' says
+			# why each.
+			a(f"ifdef {P}CMD")
+			# `$(OUTDIR)' is make's to expand, and with backslashes.
+			a("\t" + _mk_cmd(_cmd_test_line(
+			    where, test_env_pairs(conf, t, eject_bins),
+			    os.path.relpath(art(t.filename), where) if where
+			    else art(t.filename),
+			    test_args(conf, t))).replace(
+			    f"$$({P}OUTDIR)", f"$(subst /,\\,$({P}OUTDIR))"))
+			a("else")
+			a(line)
+			a("endif")
 		a("")
 
 	gen_rules = gen_rules if gen_rules is not None else {}
@@ -22216,7 +22233,34 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				return shlex.quote(l.replace("$", "$$"))
 			args_ = " ".join(_pc_line(l)
 			                 for l in text.rstrip("\n").split("\n"))
+			if not win:
+				a(f"\tprintf '%s\\n' {args_} > $@")
+				a("")
+				continue
+			# cmd.exe has no printf, and `echo' would need each line
+			# escaped for it. make writes the file itself instead:
+			# `$(file)' is make 4.0's, which mingw32-make is and macOS's
+			# make 3.81 is not, so it is the cmd side only. The same
+			# lines as above, unquoted, since no shell reads them.
+			def _pc_raw(l):
+				if l.startswith("prefix="):
+					return f"prefix=$({P}PREFIX)"
+				for key, var in (("libdir=", "LIBDIR"),
+				                 ("includedir=", "INCLUDEDIR")):
+					if l.startswith(key):
+						return (f"{key}$(patsubst $({P}PREFIX)/%,"
+						        f"$${{prefix}}/%,$({P}{var}))")
+				return l.replace("$", "$$")
+			pc_var = f"{P}PC_{_mk_ident(t.name).upper()}"
+			a(f"ifdef {P}CMD")
+			a(f"\t$(file >$@,$({pc_var}))")
+			a("else")
 			a(f"\tprintf '%s\\n' {args_} > $@")
+			a("endif")
+			a(f"define {pc_var}")
+			for l in text.rstrip("\n").split("\n"):
+				a(_pc_raw(l))
+			a("endef")
 			a("")
 
 		rule = "fmake-install" if fragment else "install"
@@ -22391,6 +22435,30 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	return "\n".join(L) + "\n"
 
 
+def _cmd_test_line(where, pairs, prog, args):
+	"""One test as cmd.exe runs it, for an ejected build hosted on Windows.
+
+    The shell form cannot be reused: cmd keeps single quotes, has no
+    `VAR=x prog' prefix, reads `./prog' as a command named `.' and takes
+    `cd dir/sub' to mean a switch. `cd /d' and `set "NAME=value"' are its
+    own spellings, and the program and paths go over with backslashes.
+    There is no `timeout' to carry the deadline: Windows has a program of
+    that name, and it waits rather than limits, so the limit is dropped
+    here and said so where the file is read.
+    """
+	def native(path):
+		return path.replace("/", "\\")
+	words = []
+	if where:
+		words.append(f'cd /d "{native(where)}" &&')
+	for p in pairs:
+		words.append(f'set "{p}" &&')
+	if not os.path.isabs(prog) and not prog.startswith((".", "$(")):
+		prog = "./" + prog
+	words.append(subprocess.list2cmdline([native(prog)] + list(args)))
+	return " ".join(words)
+
+
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
                 gen_rules=None, moc=None, uic=None, rcc=None, situ=None,
                 prefix=None, outdir=None, skipped=None):
@@ -22406,6 +22474,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# resolves to the same relative path the recipe below invokes.
 	eject_bins = {x.name: "./" + x.filename for x in targets}
 	eject_files = {x.name: x.filename for x in targets}
+	# ninja on Windows starts every command with CreateProcess, never with
+	# a shell, so a rule that wants one says `cmd /c' there. Keyed on the
+	# host rather than the target: a file ejected on Linux for Windows is
+	# run by Linux's ninja under sh, and its tool paths are this host's
+	# anyway, so it was never a file to carry to the other machine.
+	nt = os.name == "nt"
 	# ninja expresses everything Make cannot -- a space, a dollar, a hash, a
 	# colon -- and this is the one it cannot either, because the difficulty
 	# is downstream of the build file entirely.
@@ -22581,7 +22655,16 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("  description = LD $out")
 	a("")
 	a("rule archive")
-	a("  command = rm -f $out && $ar rcs $out $in")
+	# Removed first because `ar rcs' adds to what is there, and a member
+	# dropped from the list would otherwise stay in the archive. cmd's
+	# `del' reads `/' as a switch, so each edge names its output again
+	# with backslashes; `&' rather than `&&' because a first build has
+	# nothing to delete, and the line's status is ar's.
+	if nt:
+		a('  command = cmd /c del /f /q "$native" 2>nul & '
+		  "$ar rcs $out $in")
+	else:
+		a("  command = rm -f $out && $ar rcs $out $in")
 	a("  description = AR $out")
 	a("")
 	a("rule copy")
@@ -22951,6 +23034,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		after = (" | " + " ".join(implicit)) if implicit else ""
 		also = f" | {art(t.import_lib)}" if t.import_lib else ""
 		a(f"build {art(t.filename)}{also}: {rule} {objs}{after}")
+		if rule == "archive" and nt:
+			a("  native = "
+			  + _nj_esc(_art_path(t.filename).replace("/", "\\")))
 		if t.kind != "static":
 			a(f"  driver = ${'cxx' if any(u.cxx for u in closures[t].link) else 'cc'}")
 			if t.records_soname:
@@ -22996,6 +23082,35 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			    " ".join(_nj_esc(shlex.quote(x))
 			             for x in [prog] + test_args(conf, t))]
 			return " ".join(words)
+		_dep = [_ninja(d) for d in bin_deps(conf, members, eject_files)]
+		_ins = " ".join([art(t.filename) for t in members] + _dep)
+		if nt:
+			# One edge per test, each its own cmd: cmd has no subshell,
+			# so a `cd' or a `set' for one test would reach the next.
+			# The console pool runs them one at a time, as the shell's
+			# `&&' does. No deadline -- `_cmd_test_line' says why.
+			a("# Run by cmd.exe, which has no `timeout' to enforce a "
+			  "test's deadline.")
+			a(f"rule run_{_mk_ident(g)}")
+			a("  command = cmd /c $line")
+			a("  description = RUN $name")
+			a("  pool = console")
+			edges = []
+			for t in members:
+				where = test_cwd(conf, t, root)
+				prog = _art_path(t.filename)
+				if where:
+					prog = os.path.relpath(prog, where)
+				edge = _ninja(f"run-{g}-{t.name}")
+				edges.append(edge)
+				a(f"build {edge}: run_{_mk_ident(g)} | {_ins}")
+				a("  line = " + _nj_esc(_cmd_test_line(
+				    where, test_env_pairs(conf, t, eject_bins), prog,
+				    test_args(conf, t))))
+				a(f"  name = {t.name}")
+			a(f"build run-{g}: phony {' '.join(edges)}")
+			a(f"build {g}: phony run-{g}")
+			continue
 		# Each test in a subshell, so a `cd' for one does not move the next.
 		cmds = " && ".join(f"({_run_one(t)})" if test_cwd(conf, t, root)
 		                   else _run_one(t) for t in members)
@@ -23003,9 +23118,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"  command = {cmds}")
 		a(f"  description = RUN {g}")
 		a("  pool = console")
-		_dep = [_ninja(d) for d in bin_deps(conf, members, eject_files)]
-		a(f"build run-{g}: run_{_mk_ident(g)} | "
-		  f"{' '.join([art(t.filename) for t in members] + _dep)}")
+		a(f"build run-{g}: run_{_mk_ident(g)} | {_ins}")
 		a(f"build {g}: phony run-{g}")
 
 	# ---- install
@@ -23139,7 +23252,27 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 					parts.append(shlex.quote(l).replace("$", "$$"))
 			a("")
 			a(f"rule pc_{_mk_ident(t.name)}")
-			a(f"  command = printf '%s\\n' {' '.join(parts)} > $out")
+			if nt:
+				# cmd's echo, one line at a time, with the prefix this
+				# file was ejected for: cmd has no `${PREFIX:=...}', and
+				# the install rule that would read one wants sh anyway.
+				# `&&' against the text, since cmd's echo keeps a space
+				# before it.
+				def _echo(l):
+					if not l:
+						return "echo."
+					for c in "^&|<>":
+						l = l.replace(c, "^" + c)
+					return "echo " + l
+				lines = text.rstrip("\n").split("\n")
+				lines = [f"prefix={default['prefix']}"
+				         if l.startswith("prefix=") else l for l in lines]
+				body = "&& ".join(f"{'>' if i == 0 else '>>'}$out "
+				                  + _nj_esc(_echo(l))
+				                  for i, l in enumerate(lines))
+				a(f"  command = cmd /c {body}")
+			else:
+				a(f"  command = printf '%s\\n' {' '.join(parts)} > $out")
 			a(f"  description = PC {t.name}.pc")
 			# Rebuilt every run: ninja re-runs on a changed command line,
 			# and this command is identical while the environment that
