@@ -672,7 +672,8 @@ that had been green about nothing for five commits ·
 [620. Every sibling planned twice, and a dry run that shuffled](#620-every-sibling-planned-twice-and-a-dry-run-that-shuffled) ·
 [621. Two answers: a name clash is refused, and Windows installs with fmake](#621-two-answers-a-name-clash-is-refused-and-windows-installs-with-fmake) ·
 [622. A stale `.moc` in an ignored build tree was compiled in place of fmake's](#622-a-stale-moc-in-an-ignored-build-tree-was-compiled-in-place-of-fmakes) ·
-[623. The same, for uic and situ, and one step earlier](#623-the-same-for-uic-and-situ-and-one-step-earlier)
+[623. The same, for uic and situ, and one step earlier](#623-the-same-for-uic-and-situ-and-one-step-earlier) ·
+[624. A wildcard directory exclude kept the include path it excluded](#624-a-wildcard-directory-exclude-kept-the-include-path-it-excluded)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48346,3 +48347,30 @@ and uic's join the list. A tracked header of the same name stays, since
 that is a real collision to report.
 `a_schemas_header_in_an_ignored_build_tree_does_not_stop_it` fails with
 the previous fmake.
+
+## 624. A wildcard directory exclude kept the include path it excluded
+
+Reported from hydra through the inbox, 2026-11-09, after 622 suggested
+an exclude for its Android build tree.
+`exclude = ["build-android-*/**"]` did not keep that tree's headers off
+the include path: its `build_stamp.h` still answered `__has_include`,
+with the exclude and without it. The README promises the opposite in
+its own example, `exclude = ["vendor/**"]  # sources AND the include
+paths under them`.
+
+`incdir_excluded` had two tests. The first asks `exclude_pattern` about
+the directory's own path, and `fnmatch("dir", "dir/**")` is false. The
+second compared `pat.rstrip("/*")` with the directory as text, which
+works for `src/**` but not when the directory part has a wildcard:
+`build-android-*/**` reduced to `build-android-` and named nothing. The
+second test now matches the pattern's directory part with `fnmatch`,
+whose `*` crosses `/` as it does for the files `exclude_by_pattern`
+matches. So `build-android-*/**`, `build-*/*` and `build-android-x/**`
+all drop `-Ibuild-android-x`. `build-android-x/sub/**` still leaves the
+parent alone, as excluding a subdirectory should.
+
+Excluding one header by its own path still leaves its directory on the
+path when the directory holds other things. That is the same answer the
+code gives as before, and hydra is told so rather than it being changed
+here. `a_wildcard_directory_exclude_reaches_the_include_path_too` checks
+the four spellings and fails on hydra's with the previous fmake.

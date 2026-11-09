@@ -24358,6 +24358,40 @@ def the_feature_list_is_derived_from_the_tables(t):
 
 
 @case
+def a_wildcard_directory_exclude_reaches_the_include_path_too(t):
+	"""section 624: `build-android-*/**' kept the include path it excludes.
+
+	Reported from hydra. A directory was matched against `pat.rstrip("/*")'
+	as text, which holds only while the directory part has no wildcard:
+	`build-android-*/**' became `build-android-', named nothing, and the
+	excluded tree's -I stayed -- so its build_stamp.h answered a desktop
+	build's __has_include, with the exclude and without it. The README's
+	own example is `vendor/**', documented as removing the include paths
+	under it. A pattern naming a subdirectory leaves its parent alone.
+	"""
+	t.write("src/main.c", """#if __has_include("build_stamp.h")
+#include "build_stamp.h"
+#else
+#define STAMP "none"
+#endif
+#include <stdio.h>
+int main(void){ puts(STAMP); return 0; }
+""")
+	t.write("build-android-x/build_stamp.h", '#define STAMP "android"\n')
+	prog = os.path.basename(t.dir)
+	for pat, want in (("build-android-*/**", "none"),
+	                  ("build-*/*", "none"),
+	                  ("build-android-x/**", "none"),
+	                  ("build-android-x/sub/**", "android")):
+		t.write("fmake.toml", f'[project]\ninclude-dirs = ["src"]\n'
+		        f'exclude = ["{pat}"]\n')
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		r = t.fmake()
+		got = t.run(prog).stdout.strip() if r.returncode == 0 else r.stderr
+		check(got == want, f"exclude = {pat!r}: {got!r}, wanted {want!r}")
+
+
+@case
 def an_exclude_reaches_the_include_path_too(t):
 	"""`[project] exclude` filtered the sources and not the include set
 	the graph infers, so an excluded subtree still put its directories on

@@ -17298,12 +17298,22 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# `src/generated/**' reduces to `src/generated' and leaves `src'
 	# alone, which is right -- excluding a subdirectory says nothing
 	# about its parent.
+	#
+	# Matched, not compared: the text test held only while the directory
+	# part had no wildcard of its own. `build-android-*/**' reduced to
+	# `build-android-', which names no directory, so the Android build
+	# tree's -I stayed and its build_stamp.h answered a desktop build's
+	# `__has_include' -- reported from hydra, against the README's own
+	# `exclude = ["vendor/**"]  # sources AND the include paths under
+	# them' (section 624). fnmatch's `*' crosses `/' here exactly as it
+	# does for the files `exclude_by_pattern' matches.
 	def incdir_excluded(d):
 		pat = exclude_pattern(d)
 		if pat:
 			return pat
 		for pat in conf.project.get("exclude", []):
-			if pat.rstrip("/*") == d:
+			base = pat.rstrip("*")
+			if base.endswith("/") and fnmatch.fnmatch(d + "/", base):
 				return pat
 		return None
 
