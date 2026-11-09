@@ -48214,3 +48214,32 @@ that could not fail. ossacli's shape could: a library and three
 programs over a named include directory gave five orders in twelve
 runs. The case uses that shape, and with the old fmake it failed three
 runs out of three.
+
+**Then built, not only planned.** `--build` builds each tree with the
+working fmake. Only a tree that fails is built again with the old one,
+from a fresh copy, so a failure this change caused reads `REGRESSION`
+and one that was already there reads `fails both`. The first run
+reported eleven of twenty trees failing both ways, and nearly all of
+that was the sweep's own fault: `git archive` carries `.gitmodules` and
+none of the contents, and fmake rightly refuses such a tree. Each
+submodule the sibling has checked out is now archived into its place.
+One that git will not archive is reported and skipped, without
+overriding git's "dubious ownership" check, because an archive runs the
+filters a repository's own config names: fuzzypickles' and hembygd's
+submodules belong to the other account. Measured 2026-11-09 against
+`3caeffc`: **no regression in any tree.** anti-avx, bbq-predictor,
+fuzznet, hull, hydra, netcfgd, openmlx4, ossacli, qtty, respec, situ and
+softkeys build. The rest fail both ways, each for a reason fmake states:
+- beerssh: its README says `make` must first build the patched libvterm
+  and libssh that fmake links;
+- llama.cpp and tde: two programs share a name;
+- mstflint: a compile error in its own source;
+- raidcfgd: a target ambiguous through vendored fuzznet;
+- roc-toolkit: its checkout has no `vendor` submodule;
+- fuzzypickles and hembygd: their submodules could not be copied.
+
+A sweep killed by `timeout` left its directory in `/tmp`, since Python
+skips `with` cleanup on SIGTERM. All three scripts now turn SIGTERM into
+an ordinary exit. `subprocess.run` then kills the build it was waiting
+on, so nothing is left running in the deleted copy. Measured: killed
+after five seconds mid-build, no directory and no process remained.

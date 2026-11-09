@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -231,6 +232,16 @@ def stop_wine(env):
 		pass
 
 
+def _exit_on_term(signum, _frame):
+	"""SIGTERM as an ordinary exit, so the temporary directory goes.
+
+    `timeout' and a harness stopping a job both send it, and Python's
+    default for it is to die where it stands, skipping every `with'
+    cleanup: a killed sweep left its directory in /tmp.
+    """
+	sys.exit(128 + signum)
+
+
 def main():
 	ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
 	# Every case that reads what this fetches: the hosted one, and the
@@ -247,6 +258,8 @@ def main():
 	ap.add_argument("--timeout", type=int, default=3600,
 	                help="seconds the selftest run may take (default 3600)")
 	args = ap.parse_args()
+	signal.signal(signal.SIGTERM, _exit_on_term)
+	sys.stdout.reconfigure(line_buffering=True)
 	for tool in ("wine", "7z"):
 		if not shutil.which(tool):
 			sys.exit(f"windows_kit: needs {tool}")

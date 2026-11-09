@@ -31,6 +31,7 @@ import glob
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -194,6 +195,16 @@ def prepare(top):
 	        "FMAKE_MACOS_CXX": write_driver(top, sdk, ld64())}
 
 
+def _exit_on_term(signum, _frame):
+	"""SIGTERM as an ordinary exit, so the temporary directory goes.
+
+    `timeout' and a harness stopping a job both send it, and Python's
+    default for it is to die where it stands, skipping every `with'
+    cleanup: a killed sweep left its directory in /tmp.
+    """
+	sys.exit(128 + signum)
+
+
 def main():
 	ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
 	ap.add_argument("cases", nargs="*", default=CASES)
@@ -204,6 +215,8 @@ def main():
 	ap.add_argument("--timeout", type=int, default=1800,
 	                help="seconds the selftest run may take (default 1800)")
 	args = ap.parse_args()
+	signal.signal(signal.SIGTERM, _exit_on_term)
+	sys.stdout.reconfigure(line_buffering=True)
 	for tool in ("clang++", "llvm-objdump", "llvm-nm", "llvm-ar", "7z",
 	             "pkg-config"):
 		if not shutil.which(tool):
