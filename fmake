@@ -16107,15 +16107,28 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 				# goes on the include path of the files that actually pull it
 				# in, and nowhere else. Per-TU flags are already part of the
 				# object's cache key, so this costs nothing extra.
-				flag = "-I" + os.path.join(root, os.path.dirname(j["out"]))
+				#
+				# `-iquote' as well as `-I', and first: a TU's own flags
+				# come after the tree's include path, so any directory on
+				# it holding a file of that name answered first. hydra's
+				# git-ignored Android build tree reached the path through
+				# a header only it held, and its stale network_fetcher.moc
+				# was compiled against the desktop Qt in place of fmake's
+				# own (section 622). `-iquote' is searched before every
+				# `-I' for `#include "foo.moc"', which is how moc's output
+				# is included; `-I' stays for the rare `<foo.moc>'.
+				where = os.path.join(root, os.path.dirname(j["out"]))
+				flags = ["-iquote" + where, "-I" + where]
 				for who in j["includers"]:
 					if who in src_set:
-						moc_own.setdefault(who, []).append(flag)
-					elif flag not in moc_incflags:
+						mine = moc_own.setdefault(who, [])
+						mine.extend(f for f in flags if f not in mine)
+					else:
 						# A header did the including, so every TU reaching it
 						# needs the path and there is no one TU to give it
 						# to. Rare, and worth being conservative about.
-						moc_incflags.append(flag)
+						moc_incflags.extend(f for f in flags
+						                    if f not in moc_incflags)
 			elif j["out"] not in srcs:
 				srcs.append(j["out"])
 		srcs.sort()
@@ -20762,7 +20775,7 @@ def _eject_flags(flags, root, esc=None, objdir=None):
 	out = []
 	for f in flags:
 		f = _eject_module_flag(f, objdir)
-		for prefix in ("-idirafter", "-I", "-L"):
+		for prefix in ("-idirafter", "-iquote", "-I", "-L"):
 			if f.startswith(prefix) and os.path.isabs(f[len(prefix):]):
 				rel = _rel(f[len(prefix):], root)
 				out.append(prefix + (_eject_src(rel) if rel != root else "."))

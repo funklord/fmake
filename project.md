@@ -670,7 +670,8 @@ that had been green about nothing for five commits ·
 [618. Rust hosted on Windows, and the kit fetched per run](#618-rust-hosted-on-windows-and-the-kit-fetched-per-run) ·
 [619. The macOS stand-in, fetched per run too](#619-the-macos-stand-in-fetched-per-run-too) ·
 [620. Every sibling planned twice, and a dry run that shuffled](#620-every-sibling-planned-twice-and-a-dry-run-that-shuffled) ·
-[621. Two answers: a name clash is refused, and Windows installs with fmake](#621-two-answers-a-name-clash-is-refused-and-windows-installs-with-fmake)
+[621. Two answers: a name clash is refused, and Windows installs with fmake](#621-two-answers-a-name-clash-is-refused-and-windows-installs-with-fmake) ·
+[622. A stale `.moc` in an ignored build tree was compiled in place of fmake's](#622-a-stale-moc-in-an-ignored-build-tree-was-compiled-in-place-of-fmakes)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48271,3 +48272,36 @@ since cmd reads `&`, `|`, `<`, `>` and `^` inside an echo. Under sh,
 including a Windows-target Makefile run by MSYS's make, the install is
 unchanged. Linux targets carry nothing new. `fmake_runs_hosted_on_windows`
 asserts both refusals.
+
+## 622. A stale `.moc` in an ignored build tree was compiled in place of fmake's
+
+Reported from hydra through the inbox, 2026-11-09. hydra regenerates its
+test link sets with `fmake --eject make-fragment`. With its git-ignored
+`build-android-arm64-v8a/` present, the run failed compiling that
+directory's `network_fetcher.moc` against the desktop Qt. The report
+suspected an include resolved into the ignored directory, and that is
+what happened, reproduced here with the current fmake. Git-ignored
+directories are skipped as *sources* but not as *headers*. That is
+deliberate: a configure step writes `config.h` into a build directory,
+as the comment at the skip says. hydra's `src/main.cpp` includes
+`build_stamp.h` under `__has_include`, the Android tree is the only
+place holding one, and so that tree went onto the include path. fmake's
+generated `network_fetcher.moc` goes on the include path of the file that
+includes it, as one of that file's own flags. Those come after the tree's
+include path, so the Android build's stale copy answered
+`#include "network_fetcher.moc"` first.
+
+**fmake's own output now wins whatever else is on the path.** The moc
+directory is given as `-iquote` as well as `-I`. `-iquote` is searched
+before every `-I` for a quoted include, which is how moc output is
+included, and the `-I` stays for the rare `<x.moc>`. `_eject_flags`
+makes `-iquote` paths relative as it does `-I`, so both ejected files
+carry it. The keep-headers policy is unchanged: hydra's desktop build
+still reads the Android tree's `build_stamp.h` where nothing else
+provides one, and that is told to hydra rather than changed here.
+
+`a_moc_body_is_fmakes_own_whatever_else_is_on_the_path` reproduces it in
+a git repository with an ignored directory holding a `build_stamp.h` and
+a `fetcher.moc` that is not C++. The build, the ejected Makefile and
+the ninja file must all reach fmake's `.moc`. With the previous fmake it
+fails at the first build.

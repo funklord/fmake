@@ -29491,6 +29491,65 @@ class W : public QObject { Q_OBJECT public: int n = 0; };
 
 
 @case
+def a_moc_body_is_fmakes_own_whatever_else_is_on_the_path(t):
+	"""section 622: a stale `.moc' in a git-ignored build tree was compiled.
+
+	Reported from hydra. Its Android build directory is git-ignored, so
+	its sources are not built -- but a header only it holds still answers
+	an include, which section 31's config.h reasoning keeps, and that put
+	the whole directory on the include path. `#include "x.moc"' then found
+	the Android build's x.moc before fmake's own, because a file's own
+	flags, where fmake's moc directory goes, come after the tree's include
+	path; it failed against the desktop Qt. The stale copy here is not C++
+	at all, so using it cannot pass, and the build and both ejected files
+	have to reach fmake's.
+	"""
+	_need_qt()
+	if not shutil.which("git"):
+		raise Skip("no git")
+	subprocess.run(["git", "init", "-q", t.dir], check=True)
+	t.write(".gitignore", "/build-android*/\n")
+	t.write("build-android-x/fetcher.moc", "this is not C++ at all;\n")
+	t.write("build-android-x/build_stamp.h", '#define STAMP "android"\n')
+	t.write("fetcher.cpp", """#if __has_include("build_stamp.h")
+#include "build_stamp.h"
+#endif
+#include <QObject>
+#include <cstdio>
+class fetcher : public QObject {
+	Q_OBJECT
+public:
+	Q_INVOKABLE int go() { return 1; }
+};
+int main() {
+	fetcher f;
+	std::printf("%d\\n", f.metaObject()->indexOfMethod("go()") >= 0);
+	return 0;
+}
+#include "fetcher.moc"
+""")
+	prog = "fetcher"
+	r = t.fmake()
+	check(r.returncode == 0 and t.run(prog).stdout == "1\n",
+	      f"the ignored tree's fetcher.moc was used: {r.stdout}{r.stderr}")
+	for how in ("make", "ninja"):
+		if not shutil.which(how):
+			continue
+		e = t.fmake("--eject", how)
+		check(e.returncode == 0, f"--eject {how}: {e.stderr}")
+		t.write("Makefile" if how == "make" else "build.ninja", e.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		os.unlink(os.path.join(t.dir, prog))
+		r = subprocess.run([how], cwd=t.dir, capture_output=True, text=True)
+		check(r.returncode == 0 and t.run(prog).stdout == "1\n",
+		      f"the {how} file used the ignored fetcher.moc: "
+		      f"{r.stdout}{r.stderr}")
+		os.unlink(os.path.join(t.dir, "Makefile" if how == "make"
+		                       else "build.ninja"))
+
+
+@case
 def moc_survives_ejection(t):
 	"""An ejected build must regenerate moc output, not depend on fmake's.
 
