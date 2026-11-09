@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch what Windows-hosted testing needs, run the cases, delete it all.
 
-    tool/windows_kit.py                       the hosted case, then clean up
+    tool/windows_kit.py                       the Windows cases, then clean up
     tool/windows_kit.py CASE...               those selftest cases instead
     tool/windows_kit.py --keep DIR [CASE...]  fetch into DIR and leave it
     tool/windows_kit.py --keep DIR --env      fetch, print the exports, run nothing
@@ -233,8 +233,11 @@ def stop_wine(env):
 
 def main():
 	ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+	# Every case that reads what this fetches: the hosted one, and the
+	# cross build against the Qt kit with the system's mingw-w64.
 	ap.add_argument("cases", nargs="*",
-	                default=["fmake_runs_hosted_on_windows"])
+	                default=["fmake_runs_hosted_on_windows",
+	                         "a_real_qt_kit_builds_what_runs_on_windows"])
 	ap.add_argument("--keep", metavar="DIR",
 	                help="fetch into DIR and leave it there")
 	ap.add_argument("--env", action="store_true",

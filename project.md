@@ -667,7 +667,8 @@ that had been green about nothing for five commits ·
 [615. A library installed on Windows, found from another drive](#615-a-library-installed-on-windows-found-from-another-drive) ·
 [616. The tree lock on Windows, which also made `.fmake/`](#616-the-tree-lock-on-windows-which-also-made-fmake) ·
 [617. A `VERSION` file answered `#include <version>`](#617-a-version-file-answered-include-version) ·
-[618. Rust hosted on Windows, and the kit fetched per run](#618-rust-hosted-on-windows-and-the-kit-fetched-per-run)
+[618. Rust hosted on Windows, and the kit fetched per run](#618-rust-hosted-on-windows-and-the-kit-fetched-per-run) ·
+[619. The macOS stand-in, fetched per run too](#619-the-macos-stand-in-fetched-per-run-too)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48145,3 +48146,38 @@ since Qt's archives are 7z and the standard library cannot read them.
 `fmake_runs_hosted_on_windows` reads `FMAKE_WINDOWS_RUSTC`. With it set,
 the C-and-Rust tree goes through fmake, the Makefile under cmd and
 ninja.exe, and the crate-only library through all three.
+
+## 619. The macOS stand-in, fetched per run too
+
+Section 604's stand-in for a Mac SDK was built by hand and then deleted
+with the rest of the kept toolchains, so `a_real_qt_kit_links_for_macos`
+had been skipping. `tool/macos_kit.py` rebuilds it into a temporary
+directory, runs the case and removes it, as `windows_kit.py` does for
+Windows. It imports that script's download, hash and Qt-index helpers.
+
+- **The kit** is `qtbase` for `clang_64`, at the host Qt's own version,
+  read with `pkg-config --modversion Qt6Core`, because moc is the host's.
+  It is checked against Qt's `.sha1`.
+- **The headers** are zig 0.13's tarball, checked against zig's
+  `index.json` and read as data. Only macOS's `any-macos-any` headers,
+  libc++'s and libc++abi's headers and `libSystem.tbd` are taken from
+  it; zig is never run. zig replaces `#include <__config_site>` in
+  libc++'s `__config` with a comment, since it passes those settings as
+  `-D` flags. The script restores the include and writes the file. If
+  that comment ever stops being there, it refuses rather than guess.
+- **`libc++.tbd`** exports what QtCore, QtGui and QtWidgets bind from
+  libc++ and libc++abi, read from `llvm-objdump --dyld-info`, plus the
+  new/delete and C++ ABI family a program's own objects reach. That came
+  to 94 symbols. The first try read the wrong column of that output and
+  got 21, and the link then named `___dynamic_cast`,
+  `std::terminate` and `__si_class_type_info`, all of which Qt binds.
+- **The driver** wraps the host's `clang++` with
+  `-target x86_64-apple-macos12`, Qt 6.8's own minimum, the SDK as
+  sysroot and `ld64.lld` for links.
+
+Measured 2026-11-09: the case links the Widgets program against the real
+frameworks and reads `@rpath/QtWidgets.framework` back from its load
+commands, and the directory is gone afterwards. As section 604 says, the
+program has still never started; that needs a Mac. `windows_kit.py`'s
+default now also runs `a_real_qt_kit_builds_what_runs_on_windows`, the
+other case that reads its kit, with the system's mingw-w64.
