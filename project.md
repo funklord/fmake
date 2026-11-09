@@ -663,7 +663,8 @@ that had been green about nothing for five commits ·
 [611. fmake hosted on Windows, with what Qt's installer gives](#611-fmake-hosted-on-windows-with-what-qts-installer-gives) ·
 [612. A shared object read from its dynamic table](#612-a-shared-object-read-from-its-dynamic-table) ·
 [613. `make clean` under cmd.exe, and the file it never removed](#613-make-clean-under-cmdexe-and-the-file-it-never-removed) ·
-[614. The ejected build.ninja hosted on Windows, and tests under cmd.exe](#614-the-ejected-buildninja-hosted-on-windows-and-tests-under-cmdexe)
+[614. The ejected build.ninja hosted on Windows, and tests under cmd.exe](#614-the-ejected-buildninja-hosted-on-windows-and-tests-under-cmdexe) ·
+[615. A library installed on Windows, found from another drive](#615-a-library-installed-on-windows-found-from-another-drive)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47996,3 +47997,39 @@ machine. It now compares each file's mtime before and after the step.
 
 Still sh-only on Windows: `install`, `uninstall` and Rust's rules (`grep`,
 `cp`). They need a POSIX shell, as the Makefile's install already does.
+
+## 615. A library installed on Windows, found from another drive
+
+Installing the library from section 614 hosted on Windows, then building a
+tree that includes its header, found three faults in a row. None of them
+shows on Linux, where the same two steps work.
+
+- **The prefix as typed.** `fmake --install --prefix C:\inst\nj4` wrote
+  `prefix=C:\inst\nj4` into the `.pc`. To pkg-config, and to fmake's own
+  reader, `\` is an escape, so the next tree was told `-IC:instnj4/include`.
+  `install_dirs` now turns `\` into `/` on Windows. It is the one place
+  the live install and both ejected files take their directories from,
+  and Windows accepts `/` everywhere those paths go.
+- **The host's packages under wine.** With no pkg-config to give a
+  built-in path, `_search_path` fell back to `/usr/lib/pkgconfig` and
+  `/usr/share/pkgconfig`. Under wine those are the build machine's Linux
+  packages, and they went into the header map: `<eigen3/...>` would have
+  resolved to a Debian `.pc`. fmake's own reader now searches only the
+  directories named, which is all `PcFiles.path` ever read. On a real
+  Windows machine the two directories do not exist, so this only ever
+  showed up under wine. It is fixed for what it is.
+- **Two drives.** On Windows no relative path joins `C:` and `Z:`, and
+  `ntpath.relpath` raises rather than answer. A header installed on one
+  drive and included from a tree on another crashed fmake while it was
+  keying the first object. The wrapped `relpath` now answers a cross-drive
+  path with the absolute path. Every "outside the tree?" check either
+  already accepted an absolute answer or now does: the generated-file
+  dependency filter and `object_key`'s outside test, which keeps such a
+  header hashed once per run like any system header. `_rel`, for display,
+  already caught the error.
+
+`fmake_runs_hosted_on_windows` installs its library with
+`--prefix C:\<name>`, which is wine's `drive_c`, while its tree is on `Z:`.
+A tree beside it then builds and runs against the library, with
+`PKG_CONFIG_PATH` spelled with backslashes. After an edit to the
+installed header on `C:`, its next build recompiles.

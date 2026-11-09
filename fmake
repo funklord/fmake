@@ -156,6 +156,22 @@ if os.name == "nt":
 	for _name in ("join", "normpath", "relpath", "abspath", "realpath",
 	              "dirname", "expanduser", "commonpath"):
 		setattr(_path, _name, _slashed(getattr(os.path, _name)))
+
+	# No relative path joins two drives, and ntpath raises for one. A
+	# library installed under C: and used from a tree on D: is ordinary
+	# there, and fmake crashed keying the first object that included its
+	# header (section 615). Answered with the path itself, as absolute:
+	# what a caller asks relpath is "where, from here", and every check
+	# for "outside the tree" accepts an absolute answer as outside.
+	def _relpath(path, start=None, _rel=_path.relpath, _abs=_path.abspath):
+		try:
+			return _rel(path, start) if start is not None else _rel(path)
+		except ValueError:
+			if start is not None and (os.path.splitdrive(_abs(path))[0].lower()
+			                          != os.path.splitdrive(_abs(start))[0].lower()):
+				return _abs(path)
+			raise
+	_path.relpath = _relpath
 	os.path = _path
 	os.getcwd = _slashed(os.getcwd)
 	os.sep = "/"
@@ -3609,7 +3625,8 @@ def run_generators(root, conf, cache, dry_run=False, build_tool=None,
 				# Outside the tree is somebody else's business: a system
 				# header changing is not this rule going stale, and
 				# hashing /usr/include on every build is not free.
-				if not rel.startswith("..") and rel not in r["outputs"]:
+				if (not rel.startswith("..") and not os.path.isabs(rel)
+				        and rel not in r["outputs"]):
 					found.append(rel)
 			gen_deps[name] = sorted(set(found))
 			vinfo(f"{name} reads {len(gen_deps[name])} file(s) "
@@ -8836,8 +8853,10 @@ def object_key(u, cfg, cache, root, incflags, iface=None, _seen=None,
 		rel = _REL_CACHE.get((root, dep))
 		if rel is None:
 			rel = _REL_CACHE[(root, dep)] = os.path.relpath(dep, root)
-		# `..' at the front is relpath saying the path leaves the tree.
-		outside = rel[0] == "." and rel.startswith("..")
+		# `..' at the front is relpath saying the path leaves the tree,
+		# and an absolute answer is another drive, on Windows.
+		outside = ((rel[0] == "." and rel.startswith(".."))
+		           or os.path.isabs(rel))
 		dh = _DEP_HASH.get(dep) if outside else None
 		if dh is None:
 			dh = cache.hash_of(dep, rel)
@@ -12547,6 +12566,12 @@ class PkgConfig:
 		if "PKG_CONFIG_LIBDIR" in self.env:
 			return extra + [d for d in self.env["PKG_CONFIG_LIBDIR"].split(os.pathsep)
 			                if d]
+		# fmake's own reader has no built-in path: the directories named
+		# are all there is, as `PcFiles.path' says. The fallback below is
+		# pkg-config's on a Unix, and hosted on Windows under wine it read
+		# the build machine's Linux packages into the header map.
+		if self.builtin:
+			return extra
 		p = self._run(["--variable", "pc_path", "pkg-config"]).stdout.strip()
 		dirs = [d for d in p.split(os.pathsep) if d] if p else []
 		return extra + (dirs or ["/usr/lib/pkgconfig", "/usr/share/pkgconfig"])
@@ -23676,6 +23701,14 @@ def install_dirs(conf, prefix=None):
 	p.update({k: v for k, v in conf.install.items() if v})
 	if prefix:
 		p["prefix"] = prefix
+	# `--prefix C:\inst' is how a path is typed on Windows, and it went
+	# into a .pc as typed -- where `\' is an escape to pkg-config and to
+	# fmake's own reader alike, so the next tree was told `-IC:inst/...'
+	# and found nothing that had been installed (section 615). Windows
+	# takes `/' everywhere these paths go.
+	if os.name == "nt":
+		p = {k: v.replace("\\", "/") if isinstance(v, str) else v
+		     for k, v in p.items()}
 	return p
 
 

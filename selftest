@@ -35778,6 +35778,48 @@ int main(int argc, char **argv) {
 		                       text=True).stdout.split()
 		check(r.returncode == 0 and names == ["util.c.o"],
 		      f"the archive rebuilt from nothing: {names} {r.stdout}{r.stderr}")
+
+		# Installed on C: as a Windows path is typed, and used from a tree
+		# on Z: (section 615): the .pc said `C:\inst', which its reader
+		# took as escapes, and a header on another drive crashed relpath.
+		drive_c = os.path.join(os.environ.get("WINEPREFIX")
+		                       or os.path.expanduser("~/.wine"), "drive_c")
+		here = os.path.basename(t.dir)
+		inst = os.path.join(drive_c, here)
+		user = t.dir + "-consumer"
+		try:
+			r = fmake("--install", "--prefix", "C:\\" + here)
+			pc = os.path.join(inst, "lib", "pkgconfig", "hostlib.pc")
+			check(r.returncode == 0 and os.path.exists(pc)
+			      and f"prefix=C:/{here}" in open(pc).read(),
+			      f"--install --prefix C:\\...: {r.stdout}{r.stderr}")
+			os.makedirs(user)
+			with open(os.path.join(user, "main.c"), "w") as fh:
+				fh.write("#include <sub/util.h>\n#include <stdio.h>\n"
+				         'int main(void){ printf("got %d\\n", twice(21)); }\n')
+			found = {"PKG_CONFIG_PATH": f"C:\\{here}\\lib\\pkgconfig"}
+
+			def build_user():
+				return subprocess.run(
+				    ["wine", python, _wine_path(FMAKE)], cwd=user,
+				    env=dict(env, **found), capture_output=True, text=True,
+				    errors="replace", timeout=900, stdin=subprocess.DEVNULL)
+			r = build_user()
+			got = subprocess.run(
+			    ["wine", os.path.join(user, os.path.basename(user) + ".exe")],
+			    cwd=user, env=env, capture_output=True, text=True,
+			    errors="replace", timeout=120, stdin=subprocess.DEVNULL)
+			check(r.returncode == 0 and "got 42" in got.stdout,
+			      f"a tree on Z: using what C: has installed: "
+			      f"{r.stdout}{r.stderr}{got.stdout}{got.stderr}")
+			with open(os.path.join(inst, "include", "sub", "util.h"), "a") as fh:
+				fh.write("#define EDITED 1\n")
+			r = build_user()
+			check(r.returncode == 0 and "CC" in r.stdout + r.stderr,
+			      f"an edit on the other drive recompiles: {r.stdout}{r.stderr}")
+		finally:
+			shutil.rmtree(inst, ignore_errors=True)
+			shutil.rmtree(user, ignore_errors=True)
 		for rel in ("fmake.toml", "Makefile", "build.ninja", "stale.o",
 		            "src/lib/util.c", "test/test_env.c", "test/test_alone.c",
 		            lib, "hostlib.pc", "test_env.exe", "test_alone.exe",
