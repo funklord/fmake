@@ -669,7 +669,8 @@ that had been green about nothing for five commits ·
 [617. A `VERSION` file answered `#include <version>`](#617-a-version-file-answered-include-version) ·
 [618. Rust hosted on Windows, and the kit fetched per run](#618-rust-hosted-on-windows-and-the-kit-fetched-per-run) ·
 [619. The macOS stand-in, fetched per run too](#619-the-macos-stand-in-fetched-per-run-too) ·
-[620. Every sibling planned twice, and a dry run that shuffled](#620-every-sibling-planned-twice-and-a-dry-run-that-shuffled)
+[620. Every sibling planned twice, and a dry run that shuffled](#620-every-sibling-planned-twice-and-a-dry-run-that-shuffled) ·
+[621. Two answers: a name clash is refused, and Windows installs with fmake](#621-two-answers-a-name-clash-is-refused-and-windows-installs-with-fmake)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -47884,8 +47885,8 @@ steps: `mkdir -p`, the flavour stamp's `printf | cmp`, and `rm -f` before
 keeps the quotes `echo "x"` gets, sh takes them off -- and spells those
 three through `MKDIR_P` and `RM_F`, and compares the stamp in make with
 `$(file <)`, because wine's `fc` is a stub and a comparison nobody can
-test is not one to ship. Installing still wants a POSIX shell; cleaning is
-section 613.
+test is not one to ship. Installing is `fmake --install` on Windows
+(section 621); cleaning is section 613.
 Every other target's file is byte-identical to before, measured on two
 trees, and under sh the Windows file still builds, with a second make
 writing nothing.
@@ -48001,8 +48002,9 @@ a file the step before had written inside those two seconds counted
 against the step being checked. It failed that way once, on a loaded
 machine. It now compares each file's mtime before and after the step.
 
-Still sh-only on Windows: `install`, `uninstall` and Rust's rules (`grep`,
-`cp`). They need a POSIX shell, as the Makefile's install already does.
+What this left sh-only on Windows is answered since: Rust's rules in
+section 618, and `install` and `uninstall` in section 621, where they
+point a Windows user at `fmake --install`.
 
 ## 615. A library installed on Windows, found from another drive
 
@@ -48243,3 +48245,29 @@ skips `with` cleanup on SIGTERM. All three scripts now turn SIGTERM into
 an ordinary exit. `subprocess.run` then kills the build it was waiting
 on, so nothing is left running in the deleted copy. Measured: killed
 after five seconds mid-build, no directory and no process remained.
+
+## 621. Two answers: a name clash is refused, and Windows installs with fmake
+
+**Two programs with one name stay refused.** The sibling sweep of section
+620 found llama.cpp and tde failing only because two programs share a
+name (`deprecation-warning`, and tde's `test/*/probe.cpp`). Qualifying
+such names by directory would build both trees with no file, and it was
+put to the holder because sections 137 and 410 had chosen to refuse and
+ask. Answered 2026-11-09: keep refusing. A qualified name is a guess
+either way, and the refusal already names both files and the remedy.
+
+**On Windows, installing is `fmake --install`.** Sections 611 to 614
+left an ejected file's `install` and `uninstall` needing a POSIX shell,
+because Windows has no install convention to translate them into. The
+holder answered 2026-11-09 that `fmake --install` is the way there. It
+needs no shell, and section 615 had already made it work on Windows,
+backslash prefix and all. So an ejected file no longer fails on
+`install -d` when it is all a Windows user has. Under cmd.exe the
+Makefile's `install` and `uninstall` first print that this install needs a
+POSIX shell, then name `fmake --install --prefix DIR`, and fail. On a
+Windows host, ninja's two rules say the same through `cmd /c`. The
+sentence is one constant, `WINDOWS_INSTALL_REFUSAL`, in plain words,
+since cmd reads `&`, `|`, `<`, `>` and `^` inside an echo. Under sh,
+including a Windows-target Makefile run by MSYS's make, the install is
+unchanged. Linux targets carry nothing new. `fmake_runs_hosted_on_windows`
+asserts both refusals.

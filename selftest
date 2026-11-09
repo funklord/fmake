@@ -35716,6 +35716,11 @@ def fmake_runs_hosted_on_windows(t):
 		r, newer = written_by(lambda: wine("mingw32-make"))
 		check(r.returncode == 0 and not newer,
 		      f"a second mingw32-make writes nothing: {newer} {r.stdout}{r.stderr}")
+		# section 621: installing on Windows is fmake --install's, and
+		# the ejected file says so rather than failing on `install -d'.
+		r = wine("mingw32-make", "install")
+		check(r.returncode != 0 and "fmake --install" in r.stdout + r.stderr,
+		      f"mingw32-make install under cmd.exe: {r.stdout}{r.stderr}")
 		r = wine("mingw32-make", "clean")
 		left = [os.path.relpath(os.path.join(d, f), t.dir)
 		        for d, _, fs in os.walk(os.path.join(t.dir, "build")) for f in fs]
@@ -35737,6 +35742,9 @@ def fmake_runs_hosted_on_windows(t):
 		r, newer = written_by(lambda: wine(ninja))
 		check(r.returncode == 0 and not newer,
 		      f"a second ninja writes nothing: {newer} {r.stdout}{r.stderr}")
+		r = wine(ninja, "install")
+		check(r.returncode != 0 and "fmake --install" in r.stdout + r.stderr,
+		      f"ninja install on Windows: {r.stdout}{r.stderr}")
 		r = wine(ninja, "-t", "clean")
 		check(r.returncode == 0 and not os.path.exists(os.path.join(t.dir, exe)),
 		      f"ninja -t clean: {r.stdout}{r.stderr}")

@@ -21459,7 +21459,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# mingw32-make with no sh.exe on PATH runs recipes with cmd.exe,")
 		a("# which keeps the quotes sh takes off: that is how this file")
 		a("# tells, and spells the shell steps of a build for it.")
-		a("# Installing still wants a POSIX shell.")
+		a("# Installing is fmake --install's job there: this file's install")
+		a("# wants a POSIX shell, and says so under cmd.exe.")
 		a(f"ifeq ($(shell echo \"x\"),\"x\")")
 		a(f"{P}CMD := 1")
 		a("endif")
@@ -22455,6 +22456,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# In BUILD_DIR rather than under the prefix, for the reason the
 		# constant gives: a manifest in $PREFIX ships inside the package.
 		mani = f"$({P}BUILD_DIR)/{INSTALL_MANIFEST}"
+		if win:
+			a(f"ifdef {P}CMD")
+			a(f"\t@echo {WINDOWS_INSTALL_REFUSAL} & exit 1")
+			a("endif")
 		a(f"\t@mkdir -p $({P}BUILD_DIR)")
 		a(f"\t@: > {mani}")
 		for directory in INSTALL_LANDINGS:
@@ -22493,6 +22498,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		undo = "fmake-uninstall" if fragment else "uninstall"
 		a(f".PHONY: {undo}")
 		a(f"{undo}:")
+		if win:
+			a(f"ifdef {P}CMD")
+			a(f"\t@echo {WINDOWS_INSTALL_REFUSAL} & exit 1")
+			a("endif")
 		# The manifest and nothing else. The list this rule used to emit
 		# was the install plan over again, which is the pair section 348
 		# measured: a dropped header left installed, and another
@@ -22632,6 +22641,16 @@ def _cmd_test_line(where, pairs, prog, args):
 		prog = "./" + prog
 	words.append(subprocess.list2cmdline([native(prog)] + list(args)))
 	return " ".join(words)
+
+
+# What an ejected build's install says where only cmd.exe would run it.
+# Settled by the holder 2026-11-09 (section 621): on Windows, installing
+# is `fmake --install', which needs no shell, rather than a cmd spelling
+# of the POSIX install every other platform runs. Plain words only: cmd
+# reads `&', `|', `<', `>' and `^' in an echo.
+WINDOWS_INSTALL_REFUSAL = (
+    "This install needs a POSIX shell, and cmd.exe would run it. "
+    "On Windows, install with: fmake --install --prefix DIR")
 
 
 def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
@@ -23509,7 +23528,12 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("build always: phony")
 		a("")
 		a("rule install")
-		a("  command = " + "; ".join(steps))
+		# ninja on Windows has no shell to run these steps in (section
+		# 614); installing there is fmake's own (section 621).
+		if nt:
+			a(f"  command = cmd /c echo {WINDOWS_INSTALL_REFUSAL} & exit 1")
+		else:
+			a("  command = " + "; ".join(steps))
 		a("  description = INSTALL")
 		a("  pool = console")
 		deps = " ".join(sorted({art(t.filename) for t in targets}
@@ -23535,7 +23559,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		undo.append(f'printf "" > {_nmani}')
 		a("")
 		a("rule uninstall")
-		a("  command = " + "; ".join(undo))
+		if nt:
+			a(f"  command = cmd /c echo {WINDOWS_INSTALL_REFUSAL} & exit 1")
+		else:
+			a("  command = " + "; ".join(undo))
 		a("  description = UNINSTALL")
 		a("  pool = console")
 		a("build uninstall: uninstall")

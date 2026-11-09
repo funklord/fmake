@@ -842,7 +842,8 @@ Makefile from `--eject make` builds, tests and cleans under that MinGW's
 `mingw32-make` with no `sh.exe`, cmd.exe running the recipes, and a
 `build.ninja` from `--eject ninja` does the same under `ninja.exe`. A
 test's deadline is not enforced there, because cmd has nothing to do it
-with, and `install` still wants a POSIX shell.
+with. On Windows, install with `fmake --install --prefix DIR`, which
+needs no shell; an ejected file's `install` says so under cmd.exe.
 
 A kit's `.pc` files say where Qt built it, and fmake reads them from where
 they lie. On Windows a program linking QtWidgets or QtGui opens no console,
