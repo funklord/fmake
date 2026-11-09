@@ -17293,10 +17293,10 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# how a trap earns the name: two spellings a reader would call
 	# identical, one of them silently weaker.
 	#
-	# `pat.rstrip("/*") == d' is the whole rule and it stays narrow on
-	# purpose. `src/**' reduces to `src' and drops it;
-	# `src/generated/**' reduces to `src/generated' and leaves `src'
-	# alone, which is right -- excluding a subdirectory says nothing
+	# A pattern ending in `/**' or `/*' names the directory in front of
+	# it, and that part is matched against the directory -- the whole rule,
+	# narrow on purpose. `src/**' drops `src'; `src/generated/**' leaves
+	# `src' alone, which is right -- excluding a subdirectory says nothing
 	# about its parent.
 	#
 	# Matched, not compared: the text test held only while the directory
