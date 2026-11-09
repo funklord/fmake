@@ -15720,9 +15720,18 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# Before the plan, because a `[situ.NAME]' table is a declaration the
 	# plan has to honour rather than a set of flags applied afterwards.
 	_situ_per, _situ_all = situ_flags(conf, root, srcs)
-	situ_jobs, situ_unused, situ_why = situ_plan(root, hdrs, scans,
-	                                             skip=_not_compiled_here,
-	                                             declared=set(_situ_per))
+	# A schema's header git is told to ignore is another build's output,
+	# as a `ui_*.h' is for uic below (section 623): "this tree carries
+	# msg.h already" was true only of a stale copy in a build directory,
+	# and the schema was then never compiled. Git is asked about those
+	# names only.
+	_schema_hdrs = {os.path.basename(r)[:-len(SITU_EXT)] + ".h"
+	                for r in find_ext(root, SITU_EXT)}
+	_situ_named = [h for h in hdrs if os.path.basename(h) in _schema_hdrs]
+	_situ_ignored = git_ignored(root, _situ_named) if _situ_named else set()
+	situ_jobs, situ_unused, situ_why = situ_plan(
+	    root, [h for h in hdrs if h not in _situ_ignored], scans,
+	    skip=_not_compiled_here, declared=set(_situ_per))
 	# An empty plan is the one case the prune below cannot reach, because
 	# it is inside the branch that stops running. The three siblings for
 	# uic, rcc and moc prune BEFORE their own `if', keyed only on the dry
@@ -15787,6 +15796,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 				srcs.append(rel)
 			elif ext in HDR_EXTS and rel not in hdrs:
 				hdrs.append(rel)
+		hdrs = drop_superseded(root, hdrs, situ_outs)
 		srcs.sort()
 		hdrs.sort()
 		scan_all(srcs + hdrs)
@@ -15814,8 +15824,20 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# it. Section 503's shape, in a planner rather than a
 	# diagnostic, which is why it changes the outcome instead of
 	# the output.
-	ui_jobs = uic_plan(srcs + gen_hdrs, gen_hdrs, scans, root,
-	                   skip=_not_compiled_here)
+	#
+	# And a `ui_*.h' git is told to ignore is the same case by another
+	# route: another build's output -- qmake's, in a shadow build
+	# directory -- not a header this tree provides. hydra's Android build
+	# tree held one beside a header the include path reached it through,
+	# so uic never ran and the stale copy was compiled (section 623).
+	# Asked of git for those names only; headers in ignored directories
+	# otherwise stay, for the config.h reason at the skip above.
+	_ui_named = [h for h in gen_hdrs
+	             if RE_UI_HEADER.match(os.path.basename(h))]
+	_ui_ignored = git_ignored(root, _ui_named) if _ui_named else set()
+	ui_jobs = uic_plan(srcs + gen_hdrs,
+	                   [h for h in gen_hdrs if h not in _ui_ignored],
+	                   scans, root, skip=_not_compiled_here)
 	if not args.dry_run:
 		prune_generated(root, UI_DIR, [j["out"] for j in ui_jobs])
 	if ui_jobs:
@@ -15829,6 +15851,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		for rel in ui_outs:
 			if rel not in hdrs:
 				hdrs.append(rel)
+		hdrs = drop_superseded(root, hdrs, ui_outs)
 		hdrs.sort()
 		scan_all(hdrs)
 
@@ -17382,6 +17405,15 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		flag = "-I" + os.path.join(root, d) if d else "-I" + root
 		if flag not in base_incflags:
 			base_incflags.append(flag)
+		# And `-iquote', for section 622's reason: these come after the
+		# tree's include path, so a stale header of the same name on it
+		# -- a shadow build's ui_window.h -- answered `#include
+		# "ui_window.h"' before what fmake had just written (section 623).
+		# Not for the root, which is a tree directory and not fmake's.
+		if d:
+			quote = "-iquote" + os.path.join(root, d)
+			if quote not in base_incflags:
+				base_incflags.append(quote)
 	# One list, both collections. These directories are include roots of
 	# fmake's own making -- it puts the -I there itself, for a header
 	# nothing has walked to yet -- and the include graph never sees them
@@ -26784,6 +26816,27 @@ def fetch_submodules(root, dry_run=False):
 			    f"A build that carried on here would compile whatever is "
 			    f"in the tree and report the missing pieces as errors in "
 			    f"your own sources.")
+
+
+def drop_superseded(root, hdrs, outs):
+	"""`hdrs' less any git-ignored header a generated one now stands for.
+
+    A header fmake has just generated and a stale copy of it in a build
+    directory git ignores share a basename, and the include graph matched
+    `#include "msg.h"' to the stale one -- so it proposed that file's
+    neighbours rather than the schema's generated source, and the program
+    failed to link (section 623). The generated file is the one this build
+    means. Only git-ignored copies go: a header the tree tracks under the
+    same name is a real collision, and stays to be reported as one.
+    """
+	names = {os.path.basename(o) for o in outs
+	         if os.path.splitext(o)[1] in HDR_EXTS}
+	others = [h for h in hdrs
+	          if h not in outs and os.path.basename(h) in names]
+	if not others:
+		return hdrs
+	gone = git_ignored(root, others)
+	return [h for h in hdrs if h not in gone] if gone else hdrs
 
 
 def git_ignored(root, paths):

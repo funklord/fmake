@@ -29550,6 +29550,66 @@ int main() {
 
 
 @case
+def a_form_header_is_fmakes_own_whatever_else_is_on_the_path(t):
+	"""section 623: section 622's fault, for uic, and one step earlier.
+
+	A `ui_win.h' in a git-ignored shadow build counted as a header the
+	tree already had, so uic never ran -- and once it did, its directory
+	came after the tree's include path, which the ignored directory was on
+	through a header only it held. The stale copy is not C++, so using it
+	cannot pass; the build and both ejected files have to reach uic's.
+	"""
+	_need_qt()
+	if not shutil.which("git"):
+		raise Skip("no git")
+	subprocess.run(["git", "init", "-q", t.dir], check=True)
+	t.write(".gitignore", "/build-android*/\n")
+	t.write("build-android-x/ui_win.h", "this is not C++ at all;\n")
+	t.write("build-android-x/build_stamp.h", "#define STAMP 1\n")
+	t.write("win.ui", '<?xml version="1.0" encoding="UTF-8"?>\n'
+	        '<ui version="4.0"><class>win</class><widget class="QWidget" '
+	        'name="win"><layout class="QVBoxLayout" name="l"><item><widget '
+	        'class="QLabel" name="label"><property name="text"><string>hi'
+	        '</string></property></widget></item></layout></widget>'
+	        "<resources/><connections/></ui>\n")
+	t.write("main.cpp", """#if __has_include("build_stamp.h")
+#include "build_stamp.h"
+#endif
+#include <QApplication>
+#include <QWidget>
+#include <cstdio>
+#include "ui_win.h"
+int main(int argc, char **argv) {
+	QApplication a(argc, argv);
+	QWidget w;
+	Ui::win u;
+	u.setupUi(&w);
+	std::puts(u.label->text() == "hi" ? "hi" : "?");
+	return 0;
+}
+""")
+	prog = os.path.basename(t.dir)
+	env = {"QT_QPA_PLATFORM": "offscreen"}
+	r = t.fmake()
+	check(r.returncode == 0 and t.run(prog, env=env).stdout == "hi\n",
+	      f"the ignored tree's ui_win.h was used: {r.stdout}{r.stderr}")
+	for how in ("make", "ninja"):
+		if not shutil.which(how):
+			continue
+		e = t.fmake("--eject", how)
+		check(e.returncode == 0, f"--eject {how}: {e.stderr}")
+		name = "Makefile" if how == "make" else "build.ninja"
+		t.write(name, e.stdout)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		os.unlink(os.path.join(t.dir, prog))
+		r = subprocess.run([how], cwd=t.dir, capture_output=True, text=True)
+		check(r.returncode == 0 and t.run(prog, env=env).stdout == "hi\n",
+		      f"the {how} file used the ignored ui_win.h: {r.stdout}{r.stderr}")
+		os.unlink(os.path.join(t.dir, name))
+
+
+@case
 def moc_survives_ejection(t):
 	"""An ejected build must regenerate moc output, not depend on fmake's.
 
@@ -44491,6 +44551,29 @@ def a_schema_is_compiled_because_a_source_includes_its_header(t):
 	# In the state directory, not beside the schema: it is build output.
 	check(os.path.exists(os.path.join(t.dir, ".fmake/situ/msg.c")),
 	      "the generated source is not under the state directory")
+
+
+@case
+def a_schemas_header_in_an_ignored_build_tree_does_not_stop_it(t):
+	"""section 623: "this tree carries msg.h already", of another build's.
+
+	A copy of the header a schema writes, left in a git-ignored build
+	directory, counted as the tree's own, and the schema was not compiled
+	over it; the build then compiled against the stale copy where the
+	include path reached it, and without the schema's source. The copy
+	here is not C, so using it cannot pass.
+	"""
+	if not shutil.which("git"):
+		raise Skip("no git")
+	_situ_tree(t)
+	subprocess.run(["git", "init", "-q", t.dir], check=True)
+	t.write(".gitignore", "/build-old/\n")
+	t.write("build-old/msg.h", "this is not C at all;\n")
+	r = t.fmake()
+	check(r.returncode == 0 and "SITU schema/msg.situ" in r.stdout,
+	      f"the ignored msg.h stopped the schema: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).stdout == "4\n",
+	      "the program did not run on the schema's own header")
 
 
 @case

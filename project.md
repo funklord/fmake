@@ -671,7 +671,8 @@ that had been green about nothing for five commits ·
 [619. The macOS stand-in, fetched per run too](#619-the-macos-stand-in-fetched-per-run-too) ·
 [620. Every sibling planned twice, and a dry run that shuffled](#620-every-sibling-planned-twice-and-a-dry-run-that-shuffled) ·
 [621. Two answers: a name clash is refused, and Windows installs with fmake](#621-two-answers-a-name-clash-is-refused-and-windows-installs-with-fmake) ·
-[622. A stale `.moc` in an ignored build tree was compiled in place of fmake's](#622-a-stale-moc-in-an-ignored-build-tree-was-compiled-in-place-of-fmakes)
+[622. A stale `.moc` in an ignored build tree was compiled in place of fmake's](#622-a-stale-moc-in-an-ignored-build-tree-was-compiled-in-place-of-fmakes) ·
+[623. The same, for uic and situ, and one step earlier](#623-the-same-for-uic-and-situ-and-one-step-earlier)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48305,3 +48306,43 @@ a git repository with an ignored directory holding a `build_stamp.h` and
 a `fetcher.moc` that is not C++. The build, the ejected Makefile and
 the ninja file must all reach fmake's `.moc`. With the previous fmake it
 fails at the first build.
+
+## 623. The same, for uic and situ, and one step earlier
+
+Section 622's shape, looked for elsewhere: does anything else fmake
+generates lose to a same-named file elsewhere on the include path? uic
+does, and worse. A `ui_win.h` in a git-ignored shadow build directory,
+which qmake writes beside its objects, counted as a header the tree
+already had. `uic_plan`'s `have` set reads every header by basename, and
+headers in ignored directories are kept by section 31's policy. So uic
+never ran. The compiler took the stale copy through the ignored
+directory, which a header only it held had put on the include path.
+Once uic did run, its directory still came after the tree's include
+path.
+
+Two changes, and the case needs both: it fails with either removed.
+`uic_plan` is not told of a `ui_*.h` git ignores, which is the
+excluded-subtree fix already at that call made for a second route. Git
+is asked about those names only, so the keep-headers policy stands for
+everything else. And every directory fmake writes headers into (uic's,
+situ's, a `[generate]` rule's) is given as `-iquote` as well as `-I`,
+as the moc directory is since 622. Not the tree root, which is the
+tree's. hydra's Android tree holds no `ui_*.h`, so this one was found
+by the shape and not by a report.
+`a_form_header_is_fmakes_own_whatever_else_is_on_the_path` builds a form
+with a `ui_win.h` that is not C++ in an ignored directory, through the
+build and both ejected files.
+
+**And situ, which went one step further.** Its planner has the same
+`have` set ("this tree carries msg.h already"), and the same filter
+applies: git is asked about the headers a schema would write. That got
+the schema compiled, and then the program failed to link `msg_check`.
+`main.c` had read the right `msg.h`, but the include graph matched
+`#include "msg.h"` to the stale copy, so it proposed that copy's
+neighbours and not the schema's generated `msg.c`. `drop_superseded`
+now removes, from the header list, a git-ignored header that a header
+fmake just generated shares a name with. It applies after situ's outputs
+and uic's join the list. A tracked header of the same name stays, since
+that is a real collision to report.
+`a_schemas_header_in_an_ignored_build_tree_does_not_stop_it` fails with
+the previous fmake.
