@@ -677,6 +677,7 @@ that had been green about nothing for five commits ·
 [625. Stripping comments a run at a time](#625-stripping-comments-a-run-at-a-time)
 [626. The architecture check reads a Mach-O cputype](#626-the-architecture-check-reads-a-mach-o-cputype)
 [627. The arch comes from the compiler, like the os](#627-the-arch-comes-from-the-compiler-like-the-os)
+[628. And a COFF machine field](#628-and-a-coff-machine-field)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48430,8 +48431,8 @@ identity as `x86_64/mach-o`, in ELF's arch-first shape, instead of
 `mach-o/0x1000007`.
 
 What stays unchecked, and says so at `-v` as before: a declared arch
-Apple does not build for (riscv64 is the case's example), and COFF,
-which still has no table. A fat file has no single cputype, so
+Apple does not build for (riscv64 is the case's example). COFF had no
+table either when this was written; section 628 gave it one. A fat file has no single cputype, so
 `macho_cputype` gives no opinion on it.
 
 Measured with x86_64 Mach-O objects and the previous fmake as the
@@ -48487,3 +48488,34 @@ reads one object per arch per run, a cost choice its docstring states,
 so that case puts the annotation on both files. A tree whose files
 disagree only in an annotation can therefore still escape the check.
 
+## 628. And a COFF machine field
+
+Section 626's gap, one format over: a Windows build's objects are COFF,
+the check read nothing from them, and `[toolchain] arch = "aarch64"` over
+x86_64 COFF objects built without a word. At `-v` it said the object was
+"not ELF". The question is the same one section 569 put about Mach-O, a
+table or a tool. **It was decided on the holder's Mach-O answer rather
+than asked again**, and that is an assumption worth checking.
+
+`COFF_MACHINE` has four entries from the PE/COFF specification: I386
+(0x14c), AMD64 (0x8664), ARMNT (0x1c4) and ARM64 (0xaa64). They are the
+machines Windows builds for. `coff_machine` already read the field, with
+structural guards, for the library filter (sections 571-572). The check
+tries Mach-O and then COFF, and a mismatch gets the same refusal. A COFF
+identity prints as `x86_64/coff`; the archive-pick case asserted
+`coff/0x` and now asserts `/coff`. An arch outside the table is
+reported unchecked at `-v` and now names COFF there, not "not ELF".
+
+`a_declared_arch_is_checked_on_coff_too` covers all three answers:
+aarch64 refused, x86_64 passing, riscv64 unchecked. It fails against
+`f317be9`.
+
+**Its first suite run failed two cases**, and the failure was section
+627's fault rather than this change's. Two 32-bit Windows cases set
+`-target i686-pc-windows-gnu` in their cflags and declare no arch, and
+they were refused as x86 objects in an x86_64 build. Once section 627
+took the arch from the compiler's answer they pass unchanged. The real
+toolchains went through the check before the commit:
+`tool/windows_kit.py` passed `fmake_runs_hosted_on_windows` and
+`a_real_qt_kit_builds_what_runs_on_windows` (MinGW, Qt 6.8.2, wine), and
+`tool/macos_kit.py` passed `a_real_qt_kit_links_for_macos`.

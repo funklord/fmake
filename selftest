@@ -34161,6 +34161,45 @@ def a_declared_arch_is_checked_on_mach_o_too(t):
 
 
 @case
+def a_declared_arch_is_checked_on_coff_too(t):
+	"""section 628: a COFF object of the wrong machine is refused.
+
+	The Mach-O case's twin, one format over: `[toolchain] arch =
+	"aarch64"' over x86_64 COFF objects built without a word until
+	COFF_MACHINE existed. The control is the matching arch, which must
+	pass the check, and riscv64, which Windows does not build for and is
+	still reported unchecked at -v -- naming COFF rather than "not ELF".
+	"""
+	_pe_or_skip(t)
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", WIN_CONF + 'arch = "aarch64"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "compiled for x86_64/coff" in out
+	      and "windows/aarch64" in out,
+	      f"x86_64 COFF objects in an aarch64 build are refused, naming "
+	      f"both: {out}")
+	check("arch = 'x86_64'" in out,
+	      f"and the declaration offered is the object's arch word: {out}")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("fmake.toml", WIN_CONF + 'arch = "x86_64"\n')
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("compiled for" not in out and "architecture check" not in out,
+	      f"the matching arch is neither refused nor reported unchecked: "
+	      f"{out}")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("fmake.toml", WIN_CONF + 'arch = "riscv64"\n')
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("architecture check" in out and "COFF" in out,
+	      f"an arch outside the table is reported unchecked, naming the "
+	      f"format: {out}")
+
+
+@case
 def a_version_script_is_refused_for_darwin_before_anything_compiles(t):
 	"""section 577: a GNU linker script handed to a linker without one.
 
@@ -37231,9 +37270,10 @@ def a_coff_library_of_the_wrong_architecture_is_not_offered(t):
 	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
 	r = t.fmake("-v")
 	out = r.stdout + r.stderr
-	check("coff/0x" in out,
+	check("/coff" in out,
 	      f"the identity has to reach the line that reports it, where "
-	      f"the word used to be `unknown': {out}")
+	      f"the word used to be `unknown' (named since section 628, "
+	      f"`x86_64/coff', where it was `coff/0x8664'): {out}")
 
 
 @case
