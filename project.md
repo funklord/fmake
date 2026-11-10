@@ -675,6 +675,7 @@ that had been green about nothing for five commits ·
 [623. The same, for uic and situ, and one step earlier](#623-the-same-for-uic-and-situ-and-one-step-earlier) ·
 [624. A wildcard directory exclude kept the include path it excluded](#624-a-wildcard-directory-exclude-kept-the-include-path-it-excluded)
 [625. Stripping comments a run at a time](#625-stripping-comments-a-run-at-a-time)
+[626. The architecture check reads a Mach-O cputype](#626-the-architecture-check-reads-a-mach-o-cputype)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -46040,7 +46041,9 @@ The alternative to a table is asking a tool -- `llvm-objdump -f` names the
 architecture -- which costs a subprocess per object and makes a second
 binary a requirement of the Mach-O path. Which of those is right is the
 copyright holder's, and the measurement above is what the question needs:
-the check is off either way today, and now it says so.
+the check is off either way today, and now it says so. **Answered
+2026-11-10: the table. Built in section 626**, and the check runs on
+Mach-O now.
 
 ## 570. A library of the wrong architecture, offered confidently
 
@@ -48403,4 +48406,36 @@ same way, against the original function rather than the first step:
 strings, drawn from slashes, backslashes, quotes, stars, `R(x)`, spaces
 and newlines, also agree. Those characters are where the two loops could
 disagree, and real trees rarely put them side by side.
+
+## 626. The architecture check reads a Mach-O cputype
+
+Section 569 found the architecture check off on Mach-O. It read only an
+ELF header, so `[toolchain] arch = "aarch64"` over x86_64 Mach-O objects
+built without a word, and since then it had said so at `-v`. Making it
+run needed a mapping from a declared arch word to a cputype. The choice
+between a fifth hand-written table and asking `llvm-objdump` was left to
+the holder, because section 15 sets a threshold on hand-written lists.
+**Answered 2026-11-10: the table.**
+
+`MACHO_CPUTYPE` has four entries, from `<mach/machine.h>`: x86 (7),
+x86_64 (0x01000007), arm (12) and aarch64 (0x0100000c). Those are all
+the machines a current Mach-O toolchain targets. A Mach-O object whose
+cputype differs from the declared arch's now gets the ELF refusal.
+That refusal is now one function serving both formats: it names both
+machines and offers `[toolchain] arch` in the object's own arch word.
+It offers no declaration when the object's machine has no name, since
+`arch = 'mach-o'` could not work. Refusal messages now print a Mach-O
+identity as `x86_64/mach-o`, in ELF's arch-first shape, instead of
+`mach-o/0x1000007`.
+
+What stays unchecked, and says so at `-v` as before: a declared arch
+Apple does not build for (riscv64 is the case's example), and COFF,
+which still has no table. A fat file has no single cputype, so
+`macho_cputype` gives no opinion on it.
+
+Measured with x86_64 Mach-O objects and the previous fmake as the
+control. Declaring aarch64 is refused now and was built before.
+Declaring x86_64 passes the check, as it did before. Declaring riscv64
+still reports the check off. `a_declared_arch_is_checked_on_mach_o_too`
+fails against the previous fmake.
 

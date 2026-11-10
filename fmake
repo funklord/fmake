@@ -9389,8 +9389,12 @@ def check_object_arch(u, cfg):
     knowledge of triplets. Once per architecture per run, so the cost is
     one 20-byte read rather than one per object.
 
+    The same for a Mach-O object, by its cputype (MACHO_CPUTYPE).
+
     Silent about the VERDICT when it cannot know: an architecture no ELF
-    machine is named for, a non-ELF object, an unreadable file. A guard
+    machine is named for, an object in a format with no table (COFF), a
+    Mach-O object for an arch Apple does not build for, an unreadable
+    file. A guard
     that guesses is worse than none, and this one only ever speaks when
     both sides are certain.
 
@@ -9423,17 +9427,26 @@ def check_object_arch(u, cfg):
 		return
 	ident = elf_identity(u.obj)
 	if ident is None:
+		# A Mach-O object answers with its cputype, compared against
+		# MACHO_CPUTYPE: `[toolchain] arch = "aarch64"' over x86_64
+		# Mach-O objects built without a word until that table existed
+		# (section 569). Checked once per cputype, like the ELF machine.
+		cpu = macho_cputype(u.obj)
+		want_cpu = MACHO_CPUTYPE.get(cfg.arch)
+		if cpu is not None and want_cpu is not None:
+			if ("macho", want_cpu) in _ARCH_CHECKED:
+				return
+			_ARCH_CHECKED.add(("macho", want_cpu))
+			if cpu != want_cpu:
+				_refuse_object_arch(u, cfg, ("macho", cpu))
+			return
 		# The non-ELF half of the argument this docstring already makes
 		# about an unknown arch name: an absent line and a passing check
 		# read the same. Here the reader has typed an arch fmake knows
 		# and is getting no check anyway, which is the worse of the two
 		# silences -- they asked for the guard by declaring the arch.
-		# Measured 2026-11-03: `[toolchain] arch = "aarch64"' over
-		# x86_64 Mach-O objects built without a word. Saying it is as
-		# far as this goes; reading a Mach-O cputype so the check can
-		# actually run is section 568's open question, because the
-		# mapping would be a fifth hand-written list and section 15 has
-		# a threshold about those.
+		# What is left of it after section 569 is a format with no
+		# table, and an arch Apple does not build for.
 		if not getattr(cfg, "arch_declared", False):
 			return                      # nobody asked for the guard
 		what = "Mach-O" if macho_object(u.obj) else "not ELF"
@@ -9445,31 +9458,44 @@ def check_object_arch(u, cfg):
 		return
 	_ARCH_CHECKED.add(want)
 	if ident[2] != want:
-		# Two fixes, and which one is right depends on what was intended.
-		# Naming only the compiler reads as "you chose the wrong one",
-		# which is wrong for the cross build that is going fine and simply
-		# has not said so: a compiler told to target another machine by a
-		# flag rather than by its name -- clang's --target, and every
-		# unprefixed toolchain -- looks exactly like a mistake from here.
-		if getattr(cfg, "arch_named", None) and u.cxx:
-			# --arch found a C compiler and C++ fell back to the host's,
-			# because no <triplet>-g++ is installed. The intent is known,
-			# so the remedy is the package, not a declaration.
-			die(f"{u.rel} compiled for {describe_identity(ident)}, but "
-			    f"--arch asked for {cfg.arch}\n"
-			    f"    {cfg.cc} is here and no C++ compiler beside it is: "
-			    f"the C++ went to {cfg.driver(u.cxx)!r}, the host's\n"
-			    f"    Debian: apt install g++-{(cfg.prefix or '').rstrip('-')}"
-			    f"    or name one with [toolchain] cxx")
-		die(f"{u.rel} compiled for {describe_identity(ident)}, but this "
-		    f"tree is being built for {cfg.os}/{cfg.arch}\n"
-		    f"    the compiler used was {cfg.driver(u.cxx)!r}\n"
-		    f"    name the right one with [toolchain] "
-		    f"{'cxx' if u.cxx else 'cc'}, or $"
-		    f"{'CXX' if u.cxx else 'CC'}\n"
-		    f"    or, if a cross build is what was wanted, declare it: "
-		    f"[toolchain] arch = {describe_identity(ident).split('/')[0]!r}")
+		_refuse_object_arch(u, cfg, ident)
 
+
+def _refuse_object_arch(u, cfg, ident):
+	"""The refusal for an object of the wrong machine, in any format.
+
+    Shared by the ELF and Mach-O halves of `check_object_arch', so the
+    two give one message with the same two remedies.
+    """
+	# Two fixes, and which one is right depends on what was intended.
+	# Naming only the compiler reads as "you chose the wrong one", which
+	# is wrong for the cross build that is going fine and simply has not
+	# said so: a compiler told to target another machine by a flag rather
+	# than by its name -- clang's --target, and every unprefixed
+	# toolchain -- looks exactly like a mistake from here.
+	got = describe_identity(ident)
+	if getattr(cfg, "arch_named", None) and u.cxx:
+		# --arch found a C compiler and C++ fell back to the host's,
+		# because no <triplet>-g++ is installed. The intent is known, so
+		# the remedy is the package, not a declaration.
+		die(f"{u.rel} compiled for {got}, but --arch asked for {cfg.arch}\n"
+		    f"    {cfg.cc} is here and no C++ compiler beside it is: "
+		    f"the C++ went to {cfg.driver(u.cxx)!r}, the host's\n"
+		    f"    Debian: apt install g++-{(cfg.prefix or '').rstrip('-')}"
+		    f"    or name one with [toolchain] cxx")
+	# The declaration to offer is the object's own arch word, which a
+	# machine fmake has no name for does not have: offering `mach-o' or
+	# `machine-0x..' as an arch would be a remedy that cannot work.
+	word = got.split("/")[0]
+	declare = (f"\n    or, if a cross build is what was wanted, declare it: "
+	           f"[toolchain] arch = {word!r}"
+	           if word in ARCH_ELF_CODE or word in MACHO_CPUTYPE else "")
+	die(f"{u.rel} compiled for {got}, but this tree is being built for "
+	    f"{cfg.os}/{cfg.arch}\n"
+	    f"    the compiler used was {cfg.driver(u.cxx)!r}\n"
+	    f"    name the right one with [toolchain] "
+	    f"{'cxx' if u.cxx else 'cc'}, or ${'CXX' if u.cxx else 'CC'}"
+	    f"{declare}")
 
 def _file_size(path):
 	"""The file's size, or None when it cannot be stat'd."""
@@ -11015,6 +11041,20 @@ for _canon, _elf_name in (("riscv64", "riscv"), ("ppc64le", "ppc64"),
 	ARCH_ELF_CODE[_canon] = ARCH_ELF_CODE[_elf_name]
 
 
+# Canonical arch name -> Mach-O cputype, for the architectures Apple
+# builds for: CPU_TYPE_X86 (7) and CPU_TYPE_ARM (12), with
+# CPU_ARCH_ABI64 (0x01000000) for the 64-bit ones, from <mach/machine.h>.
+# Section 569 measured the check off on Mach-O for want of this, and left
+# the choice between a table and asking llvm-objdump to the holder, since
+# section 15 has a threshold about hand-written lists. Answered
+# 2026-11-10: the table. Four entries, because these are all the machines
+# a current Mach-O toolchain targets; an arch outside them is reported as
+# unchecked at -v, as before.
+MACHO_CPUTYPE = {"x86": 0x7, "x86_64": 0x01000007,
+                 "arm": 0xC, "aarch64": 0x0100000C}
+MACHO_CPU_NAME = {code: name for name, code in MACHO_CPUTYPE.items()}
+
+
 # What a linkable library is called, shared forms before the archive.
 #
 # `.dylib' is here because a Mach-O shared library is spelled that way and
@@ -11347,8 +11387,8 @@ def object_identity(path, unreadable=None):
     No name table anywhere in this: the architecture to require comes
     from the tree's own object, so the comparison never needs to know
     what a triplet or an arch word means. Mapping a DECLARED arch name to
-    a Mach-O cputype is a different problem and is section 569's open
-    question.
+    a Mach-O cputype is a different problem, and MACHO_CPUTYPE answers it
+    for `check_object_arch' (section 569).
     """
 	ident = elf_identity(path, unreadable=UNREADABLE)
 	if ident is UNREADABLE:
@@ -11368,12 +11408,17 @@ def describe_identity(ident):
 	# Both shapes: the bare ELF triple `elf_identity' returns, and the
 	# tagged one from `object_identity'. The tag can never collide with a
 	# triple, whose first element is an ELF class byte.
+	if ident[0] == "macho" and ident[1] in MACHO_CPU_NAME:
+		# Named since section 569 gave Mach-O its table, in the ELF
+		# shape -- arch first -- so a reader comparing the two sides of a
+		# refusal reads one vocabulary.
+		return f"{MACHO_CPU_NAME[ident[1]]}/mach-o"
 	if ident[0] in ("macho", "coff"):
-		# A hex machine number rather than a name, because naming it
-		# would be a fifth hand-written table and section 15 has a
-		# threshold about those -- see sections 570 and 571. It appears
-		# in one -v line and in the "no ... library exports" refusal,
-		# where what the reader needs is that the two sides differ.
+		# A hex machine number rather than a name for COFF, and for a
+		# cputype outside MACHO_CPUTYPE -- see sections 570, 571 and 569.
+		# It appears in one -v line and in the "no ... library exports"
+		# refusal, where what the reader needs is that the two sides
+		# differ.
 		return f"{'mach-o' if ident[0] == 'macho' else 'coff'}/0x{ident[1]:x}"
 	if ident[0] == "elf":
 		ident = ident[1:]
@@ -11404,7 +11449,7 @@ def linker_provided_aside(target_ident):
     """
 	if not target_ident or target_ident[0] not in ("macho", "coff"):
 		return
-	note(f"and this is a {describe_identity(target_ident)} build, where "
+	note(f"and this build is for {describe_identity(target_ident)}, where "
 	     f"there is a third: the linker-provided symbols fmake knows are "
 	     f"ELF's, so a name the linker itself defines -- "
 	     f"__mh_execute_header on Mach-O, the mingw startup symbols on "

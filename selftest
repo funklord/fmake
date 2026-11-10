@@ -34045,21 +34045,21 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 	reader typed a name fmake cannot verify against, here they typed one
 	it knows and still got no guard.
 
-	Reading a cputype so the check can really run is left open -- the
-	mapping to ELF machine numbers would be a fifth hand-written list and
-	section 15 has a threshold about those. What is asserted here is that
-	a reader who asked for the check is told it did not happen, and that
-	a reader who did not ask is not told anything.
+	Section 569 then gave Mach-O a cputype table, so aarch64 is checked
+	now (`a_declared_arch_is_checked_on_mach_o_too'). What remains here is
+	an arch Apple does not build for, riscv64: a reader who asked for the
+	check is told it did not happen, and a reader who did not ask is not
+	told anything.
 	"""
 	_mach_o_or_skip(t)
 	t.write("main.c", "int main(void){ return 0; }\n")
-	t.write("fmake.toml", MACH_O_CONF + 'arch = "aarch64"\n')
+	t.write("fmake.toml", MACH_O_CONF + 'arch = "riscv64"\n')
 
 	r = t.fmake("-v")
 	out = r.stdout + r.stderr
 	check("architecture check" in out and "Mach-O" in out,
 	      f"a declared arch that cannot be checked has to say so: {out}")
-	check("aarch64" in out,
+	check("riscv64" in out,
 	      f"and name what was declared, since that is what is not being "
 	      f"honoured: {out}")
 
@@ -34078,6 +34078,41 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 	check("architecture check" not in out,
 	      f"nobody asked for a check, so there is nothing to report "
 	      f"about it being off: {out}")
+
+
+@case
+def a_declared_arch_is_checked_on_mach_o_too(t):
+	"""section 626: a Mach-O object of the wrong machine is refused.
+
+	Until MACHO_CPUTYPE existed the check read nothing from a Mach-O
+	header, so `[toolchain] arch = "aarch64"' over x86_64 objects built
+	without a word, where the same mismatch on ELF is refused. Now the
+	refusal is the ELF one: both machines named, and the declaration
+	that would make it a deliberate cross build offered in the object's
+	own arch word.
+
+	The control is the matching arch, which must not be refused -- a
+	check that refused every Mach-O object would pass the first half.
+	"""
+	_mach_o_or_skip(t)
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", MACH_O_CONF + 'arch = "aarch64"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "compiled for x86_64/mach-o" in out
+	      and "darwin/aarch64" in out,
+	      f"x86_64 Mach-O objects in an aarch64 build are refused, naming "
+	      f"both: {out}")
+	check("arch = 'x86_64'" in out,
+	      f"and the declaration offered is the object's arch word: {out}")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("fmake.toml", MACH_O_CONF + 'arch = "x86_64"\n')
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check("compiled for" not in out and "architecture check" not in out,
+	      f"the matching arch is neither refused nor reported unchecked: "
+	      f"{out}")
 
 
 @case
