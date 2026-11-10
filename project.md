@@ -674,6 +674,7 @@ that had been green about nothing for five commits ·
 [622. A stale `.moc` in an ignored build tree was compiled in place of fmake's](#622-a-stale-moc-in-an-ignored-build-tree-was-compiled-in-place-of-fmakes) ·
 [623. The same, for uic and situ, and one step earlier](#623-the-same-for-uic-and-situ-and-one-step-earlier) ·
 [624. A wildcard directory exclude kept the include path it excluded](#624-a-wildcard-directory-exclude-kept-the-include-path-it-excluded)
+[625. Stripping comments a run at a time](#625-stripping-comments-a-run-at-a-time)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48374,3 +48375,23 @@ path when the directory holds other things. That is the same answer the
 code gives as before, and hydra is told so rather than it being changed
 here. `a_wildcard_directory_exclude_reaches_the_include_path_too` checks
 the four spellings and fails on hydra's with the previous fmake.
+
+## 625. Stripping comments a run at a time
+
+Section 563 measured a cold dry run of beerssh at 78.5 s. Taken again
+2026-11-10 it was 15 s under cProfile, over 618 scanned files, and
+`strip_comments` was the largest single cost: 4.5 s, with six million
+list appends. It copied ordinary code one character at a time.
+
+It now copies each run with no slash and no quote in one regex match.
+Only those two characters can open a comment or a literal, and the
+branches before the fallback handle both, so the output cannot change.
+**Proved rather than argued:** the old and new functions were run over
+every C and C++ file under twelve sibling trees, 20,111 files. Their
+results were identical, and the time fell from 79.3 s to 14.1 s.
+
+Over a whole cold dry run of beerssh the gain is smaller, 12.6 s down to
+11.1 s at load 28, because the rest of `scan_source` dominates once this
+is gone. No other single pattern stood out when each was timed alone,
+so the profile ends here.
+

@@ -898,12 +898,25 @@ def strip_comments(text):
 			i = j
 			continue
 
+		# Everything else, a run at a time: nothing in it can open a
+		# comment or a literal. One character at a time here was a third
+		# of a cold dry run on beerssh.
+		m = RE_PLAIN_CODE.match(text, i)
+		if m:
+			seg = m.group()
+			out.append(seg)
+			line += seg.count("\n")
+			i = m.end()
+			continue
 		out.append(c)
-		if c == "\n":
-			line += 1
 		i += 1
 
 	return "".join(out), comments
+
+
+# What `strip_comments' copies through untouched: no slash, no quote. A
+# lone slash or a quote is handled by the branches above it.
+RE_PLAIN_CODE = re.compile(r"[^/\"']+")
 
 
 # `#import' is Objective-C's, and the way most of it is written.
