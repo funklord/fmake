@@ -676,6 +676,7 @@ that had been green about nothing for five commits ·
 [624. A wildcard directory exclude kept the include path it excluded](#624-a-wildcard-directory-exclude-kept-the-include-path-it-excluded)
 [625. Stripping comments a run at a time](#625-stripping-comments-a-run-at-a-time)
 [626. The architecture check reads a Mach-O cputype](#626-the-architecture-check-reads-a-mach-o-cputype)
+[627. The arch comes from the compiler, like the os](#627-the-arch-comes-from-the-compiler-like-the-os)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48438,4 +48439,51 @@ control. Declaring aarch64 is refused now and was built before.
 Declaring x86_64 passes the check, as it did before. Declaring riscv64
 still reports the check off. `a_declared_arch_is_checked_on_mach_o_too`
 fails against the previous fmake.
+
+## 627. The arch comes from the compiler, like the os
+
+The COFF table that became section 628 broke two suite cases. Both
+build 32-bit Windows objects with `-target i686-pc-windows-gnu` in their
+cflags and declare no arch. That exposed an older fault: **`cflags =
+["-m32"]` alone was refused on ELF too.** fmake answered "main.c
+compiled for x86/32le, but this tree is being built for linux/x86_64".
+Yet the compiler, asked with those flags, answers `i386-pc-linux-gnu`.
+
+The two platform facts were derived differently. The os came from the
+triplet, asked with the project's flags (section 180's `probe_flags`).
+The comment beside that rule says why: the compiler is asked before the
+host is assumed. The arch came from the host unless declared. So a tree
+that targeted another machine by a flag got the right os and the wrong
+arch, and the architecture check then refused the flag the tree had
+asked for. The remedy it printed, declare `arch = "x86"`, worked.
+Section 180 measured `-m32` together with that declaration, so the
+record never chose the refusal; it only never asked without one.
+
+`machine_arch` reads the first word of the triplet. It returns an arch
+only when fmake knows the word (`i686` and `arm64` through
+ARCH_SPELLINGS, the rest as written) and None otherwise, so an unknown
+word such as `armv7l` keeps the host, as before. A declared arch still
+wins, and an arch derived this way counts as not declared, so the quiet
+half of section 569's message is unchanged. The architecture check still
+catches what it was written for. When `cc` targets one machine and the
+C++ compiler, or a `$CXX` left in the shell, builds for another, the
+objects are compared against `cc`'s answer.
+
+Measured with clang here. `-m32` and `-target i686-linux-gnu` each build
+an ELF 32-bit i386 program, and with no flags the build is unchanged at
+x86-64. `a_flag_that_targets_another_machine_sets_the_arch` reads the
+program's ELF class back, and it fails against `f317be9`.
+
+**One case asserted the old behaviour on purpose.**
+`a_cross_toolchain_that_prefixes_nothing_works` expected `--target` in
+`[project] cflags`, with no arch declared, to be refused. Its comment
+gave the reason: from where the check stands, a compiler cross-compiling
+by flag "is indistinguishable from the wrong compiler". That stopped
+being true when section 180 began asking the compiler with the project's
+flags, and the comment outlived it. The case now expects that build to
+produce an aarch64 program. It keeps the refusal and its remedy for a
+target the probe cannot see, set in a file's own `@cflags`. The check
+reads one object per arch per run, a cost choice its docstring states,
+so that case puts the annotation on both files. A tree whose files
+disagree only in an annotation can therefore still escape the check.
 

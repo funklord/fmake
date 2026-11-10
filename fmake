@@ -5719,6 +5719,22 @@ def machine_os(machine):
 	return None
 
 
+def machine_arch(machine):
+	"""The arch a target triple names, canonical, or None.
+
+    Its first word, and only when fmake knows that word as an arch --
+    `i686' and `arm64' through ARCH_SPELLINGS, the rest as written. A
+    word it does not know (`armv7l', `powerpc64le') answers None, so the
+    host is assumed as before rather than an unknown name being invented
+    from a triple: an arch nobody declared is never one fmake made up.
+    """
+	word = (machine or "").split("-")[0].strip().lower()
+	if not word:
+		return None
+	arch = canon_platform("arch", word)
+	return arch if arch in ARCH_ELF_CODE or arch in MACHO_CPUTYPE else None
+
+
 # Spellings of one architecture. `platform.machine()' is where these come
 # from -- it is the machine's own word for itself and differs by kernel --
 # but they are equally what a person writes, in a filename, in `@arch' and
@@ -7304,8 +7320,16 @@ class Config:
 		self.os      = canon_platform("os", self.os_named or tool.get("os")
 		                              or machine_os(self.triplet)
 		                              or host_os())
+		# The arch the same way, which it was not: the os above came from
+		# the compiler's answer and the arch from the host, so `cflags =
+		# ["-m32"]' was a linux build for x86_64 whose objects were x86,
+		# and the architecture check refused the tree for the flag its
+		# own fmake.toml asked for -- with the compiler, asked with that
+		# flag, answering `i386-pc-linux-gnu'. See `machine_arch'.
 		self.arch    = (self.arch_named
-		                or canon_platform("arch", tool.get("arch") or host_arch()))
+		                or canon_platform("arch", tool.get("arch")
+		                                  or machine_arch(self.triplet)
+		                                  or host_arch()))
 		# Whether anybody asked for this arch, as opposed to inheriting the
 		# host's. `self.arch' cannot answer that -- it holds the same string
 		# either way -- and the difference decides whether a reader is owed

@@ -34081,6 +34081,51 @@ def a_declared_arch_says_when_it_cannot_be_checked(t):
 
 
 @case
+def a_flag_that_targets_another_machine_sets_the_arch(t):
+	"""section 627: `cflags = ["-m32"]' alone builds a 32-bit program.
+
+	The os came from the compiler's answer, asked with the project's
+	flags, and the arch from the host. So a tree whose fmake.toml said
+	only `-m32' was a linux/x86_64 build of x86 objects, and the
+	architecture check refused it for the flag it had asked for, telling
+	it to declare `arch = "x86"' -- while the compiler, asked with that
+	flag, answered i386. The arch comes from the same answer now.
+
+	The control is the native build, whose arch must not move, and the
+	program's own ELF class, read back rather than trusted from fmake.
+	"""
+	if not shutil.which("clang"):
+		raise Skip("clang not installed")
+	probe = os.path.join(t.dir, "probe.c")
+	with open(probe, "w") as fh:
+		fh.write("int main(void){ return 0; }\n")
+	got = _run_in(t.dir, "clang", "-m32", "-o",
+	              os.path.join(t.dir, "probe"), probe)
+	if got.returncode != 0:
+		raise Skip("this machine cannot link a 32-bit program")
+	os.remove(probe)
+	os.remove(os.path.join(t.dir, "probe"))
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("fmake.toml", '[project]\ncflags = ["-m32"]\n\n'
+	        '[toolchain]\ncc = "clang"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	check(r.returncode == 0 and os.path.exists(exe),
+	      f"-m32 in cflags is a 32-bit build, not a refusal: {out}")
+	with open(exe, "rb") as fh:
+		check(fh.read(5)[4] == 1, "and the program is ELFCLASS32")
+
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	os.remove(exe)
+	t.write("fmake.toml", '[toolchain]\ncc = "clang"\n')
+	r = t.fmake()
+	with open(exe, "rb") as fh:
+		check(r.returncode == 0 and fh.read(5)[4] == 2,
+		      f"the native build stays 64-bit: {r.stdout}{r.stderr}")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 
@@ -41978,16 +42023,32 @@ def a_cross_toolchain_that_prefixes_nothing_works(t):
 	      f"the binary is not aarch64, so this checked the exit status "
 	      f"rather than the artifact: machine={_elf_machine(prog)}")
 
-	# Undeclare the target and the arch guard fires -- correctly, since
-	# from where it stands a compiler cross-compiling by flag is
-	# indistinguishable from the wrong compiler. What it must not do is
-	# offer only one of the two fixes: this build needs `arch', not a
-	# different cc, and being told to name the right compiler when the
-	# compiler is right is the advice sending the reader the wrong way.
+	# Undeclare the arch. This used to be refused, on the argument that
+	# a compiler cross-compiling by flag is indistinguishable from the
+	# wrong compiler -- and since section 180 asks the compiler WITH the
+	# project's flags, it is not: clang answers aarch64-linux-gnu, and
+	# section 627 takes the arch from that answer as the os already was.
 	t.write("fmake.toml", f'[toolchain]\ncc = "{clang}"\n'
 	        f'\n[project]\ncflags = ["--target=aarch64-linux-gnu"]\n')
 	r = t.fmake("-B")
-	check(r.returncode != 0, "an undeclared cross build should be refused")
+	check(r.returncode == 0 and _elf_machine(prog) == 183,
+	      f"--target in [project] cflags is a declared target, and builds "
+	      f"aarch64: {r.stdout}{r.stderr}")
+
+	# A flag the probe cannot see is still indistinguishable, and there
+	# the guard fires. What it must not do is offer only one of the two
+	# fixes: this build needs `arch', not a different cc, and being told
+	# to name the right compiler when the compiler is right is the advice
+	# sending the reader the wrong way.
+	# On both files, because the check reads one object per arch per run.
+	t.write("fmake.toml", f'[toolchain]\ncc = "{clang}"\n')
+	t.write("helper.c", "/*! @cflags --target=aarch64-linux-gnu */\n"
+	        "int helper(void){ return 7; }\n")
+	t.write("main.c", "/*! @cflags --target=aarch64-linux-gnu */\n"
+	        "int helper(void);\nint main(void){ return helper() - 7; }\n")
+	r = t.fmake("-B")
+	check(r.returncode != 0,
+	      "a target set where the probe cannot see it should be refused")
 	out = r.stdout + r.stderr
 	check("[toolchain] arch = 'aarch64'" in out,
 	      f"the message does not offer the fix this build actually needs, "
