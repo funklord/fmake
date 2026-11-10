@@ -48395,3 +48395,12 @@ Over a whole cold dry run of beerssh the gain is smaller, 12.6 s down to
 is gone. No other single pattern stood out when each was timed alone,
 so the profile ends here.
 
+**The line-comment branch had the same shape**: it read each `//`
+comment one character at a time, looking for a newline no backslash
+continues. It now jumps from newline to newline with `find`. Proved the
+same way, against the original function rather than the first step:
+20,545 files identical, 65.0 s down to 8.9 s. A further 300,000 random
+strings, drawn from slashes, backslashes, quotes, stars, `R(x)`, spaces
+and newlines, also agree. Those characters are where the two loops could
+disagree, and real trees rarely put them side by side.
+
