@@ -679,6 +679,7 @@ that had been green about nothing for five commits ·
 [627. The arch comes from the compiler, like the os](#627-the-arch-comes-from-the-compiler-like-the-os)
 [628. And a COFF machine field](#628-and-a-coff-machine-field)
 [629. Programs that share a file name are named after their directories](#629-programs-that-share-a-file-name-are-named-after-their-directories)
+[630. The other guesses, and the one that has no syntax](#630-the-other-guesses-and-the-one-that-has-no-syntax)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48571,4 +48572,30 @@ libraries, are still refused, because they are not programs. A third,
 `a_root_the_config_states_has_to_agree`, used two `probe.c` as its
 control for a collision; they now build, and its control checks that
 the warning offers the same `root =` key.
+
+## 630. The other guesses, and the one that has no syntax
+
+Section 629's rule, from the holder on 2026-11-11, is general: when a
+finding is uncertain, warn, and prod the author with the fmake syntax
+that settles it. So the other guesses fmake prints were read against
+it.
+
+- **A program renamed off a directory.** `a/main.c` would be built as
+  `a`, the directory it lives in, so fmake calls it `<tree>_a`. It said
+  so with "(@target or fmake.toml picks the name)" and left the reader
+  to work out what to write. It is a warning now, says "a guess", and
+  prints the `[target.NAME]` / `root = ...` lines. Pasted, they keep the
+  name and the warning stops.
+  `a_name_moved_off_a_directory_offers_the_lines_that_keep_it` pastes
+  them, and it fails against `4a9884a`.
+- **A program built and not installed** already did this. The note says
+  why and that `@install yes` ships it.
+- **An include answered on its basename alone** is listed (section 546),
+  for example llama.cpp's `android/log.h` answered by `common/log.h`.
+  **No fmake syntax settles it either way.** No setting says that a
+  header is not the tree's, so a wrong guess cannot be refused, and none
+  confirms a right one, so the note cannot be silenced by agreeing. A
+  new key would be a new convention, so it is put to the holder rather
+  than invented here. Excluding the guessed file's directory works only
+  where nothing else in it is wanted.
 

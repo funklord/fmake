@@ -30617,6 +30617,33 @@ def _two_offer_tree(t):
 
 
 @case
+def a_name_moved_off_a_directory_offers_the_lines_that_keep_it(t):
+	"""section 630: the rename away from a directory is a guess, said so.
+
+	`a/main.c' would be built as `a', the directory it lives in, so
+	fmake calls it `<tree>_a'. That message named @target and fmake.toml
+	and left the reader to work out what to write; since section 629 a
+	guess prints the lines that settle it. Asserted by pasting them: the
+	name is kept and the warning goes.
+	"""
+	t.write("a/main.c", "int main(void){ return 0; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	name = os.path.basename(t.dir) + "_a"
+	check(r.returncode == 0 and "a guess" in out
+	      and f"[target.{name}]" in out,
+	      f"the rename says it is a guess, with the stanza: {out}")
+	stanza = [l.strip() for l in out.splitlines()
+	          if l.strip().startswith(("[target.", "root = "))]
+	t.write("fmake.toml", "\n".join(stanza) + "\n")
+	r = t.fmake("-B")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "a guess" not in out
+	      and os.path.exists(os.path.join(t.dir, name)),
+	      f"pasted, the name is kept and the warning goes: {out}")
+
+
+@case
 def the_stanza_an_ambiguity_prints_can_be_taken_verbatim(t):
 	"""fmake's own remedy did not work where fmake had named the target.
 

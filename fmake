@@ -16900,9 +16900,14 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			continue
 		was = t.filename
 		t.name = alt
-		info(f"{t.rel} would be built as {was}, which is a directory; "
-		     f"calling it {t.filename} instead (@target or {CONF_FILE} "
-		     f"picks the name)")
+		# A guess, and said as one with the lines that settle it -- the
+		# holder's rule of 2026-11-11 (section 629), which this message
+		# predates: it named @target and fmake.toml and left the reader to
+		# work out what to write.
+		warn(f"{t.rel} would be built as {was}, which is a directory; "
+		     f"calling it {t.filename} instead -- a guess. To keep that "
+		     f"name, or choose another, say so in {CONF_FILE}:\n"
+		     f"    [target.{t.name}]\n    root = {t.rel!r}")
 
 	# A target is a name, which is what @target and [target.*] name are
 	# documented to take -- `-o' is how output moves elsewhere. Nothing
