@@ -678,6 +678,7 @@ that had been green about nothing for five commits ·
 [626. The architecture check reads a Mach-O cputype](#626-the-architecture-check-reads-a-mach-o-cputype)
 [627. The arch comes from the compiler, like the os](#627-the-arch-comes-from-the-compiler-like-the-os)
 [628. And a COFF machine field](#628-and-a-coff-machine-field)
+[629. Programs that share a file name are named after their directories](#629-programs-that-share-a-file-name-are-named-after-their-directories)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48257,13 +48258,14 @@ after five seconds mid-build, no directory and no process remained.
 
 ## 621. Two answers: a name clash is refused, and Windows installs with fmake
 
-**Two programs with one name stay refused.** The sibling sweep of section
-620 found llama.cpp and tde failing only because two programs share a
-name (`deprecation-warning`, and tde's `test/*/probe.cpp`). Qualifying
-such names by directory would build both trees with no file, and it was
-put to the holder because sections 137 and 410 had chosen to refuse and
-ask. Answered 2026-11-09: keep refusing. A qualified name is a guess
-either way, and the refusal already names both files and the remedy.
+**Two programs with one name: superseded by section 629.** The sibling
+sweep of section 620 found llama.cpp and tde failing only because two
+programs share a name (`deprecation-warning`, and tde's
+`test/*/probe.cpp`). Qualifying such names by directory was put to the
+holder, and on 2026-11-09 the answer was to keep refusing, because a
+qualified name is a guess either way. The holder revisited it on
+2026-11-11: build it, and warn that the names are a guess, with the
+lines that settle them. Section 629 has the rule and what it measured.
 
 **On Windows, installing is `fmake --install`.** Sections 611 to 614
 left an ejected file's `install` and `uninstall` needing a POSIX shell,
@@ -48519,3 +48521,54 @@ toolchains went through the check before the commit:
 `tool/windows_kit.py` passed `fmake_runs_hosted_on_windows` and
 `a_real_qt_kit_builds_what_runs_on_windows` (MinGW, Qt 6.8.2, wine), and
 `tool/macos_kit.py` passed `a_real_qt_kit_links_for_macos`.
+
+## 629. Programs that share a file name are named after their directories
+
+A program is named after its root file, and `main.c` and the crate roots
+after their directory, walking past `src` and its kin. tde has
+`test/dbus-signal-delivery/probe.cpp` and `test/docked-detect/probe.cpp`.
+Both would be `probe`, so the tree was refused (section 621). The holder
+pointed out that in such a tree the directory is the name, and asked
+that fmake warn about uncertain findings and prod the author to settle
+them in fmake.toml.
+
+**First, measured: the obvious rule is wrong.** "A program alone in a
+directory that is not generic takes the directory's name" was applied
+offline to all 620 programs in twenty sibling trees, using a dry-run
+`--explain` of each. It would rename 16, and most for the worse:
+`node/fuzznetd.c` would build `node`, `cli/hull.c` would build `cli`, and
+`engine/t2.c` would build `engine`. The 526 programs in generic
+directories (`tool`, `test`, `src`) were untouched by it. A narrower
+variant was also measured and dropped: `<dir>_main` takes the directory's
+name. It is right for raidcfgd's `bridge/bridge_main.cpp`, but programs
+are built into the tree root, where `bridge` is the directory itself. So
+the name would become `raidcfgd_bridge`, and raidcfgd's Makefile names
+`bridge_main` among the outputs its `clean` removes. mstflint's
+`mlxlink` meets the same directory.
+
+**What the evidence supports is the clash itself.** When one stem roots
+programs in several directories, the tree has shown that the stem does
+not tell them apart. `name_after_directories` then names each after its
+directory (`directory_name`, the same walk as `main.c`). It applies only
+when every one has a directory name, the names differ, and none is
+already taken. It renames only programs: a library's name is an
+interface, and `c/shared_thing.c` would have built `libc.so`. It never
+renames a target that `@target` or fmake.toml named. Anything else is
+refused as before, with the stanza to paste. tde now builds
+`dbus-signal-delivery` and `docked-detect`; llama.cpp builds
+`deprecation-warning` and `mtmd`.
+
+**The guess is said every build**, as a warning listing each rename and
+the `[target.NAME]` / `root = ...` lines that settle it. Pasting those
+lines makes the names the tree's own, and the warning stops. `--explain`
+labels such a name "named after its directory, a guess".
+`programs_sharing_a_file_name_are_named_after_their_directories` builds
+the pair, pastes the printed lines verbatim, checks that the warning is
+gone, and checks that two `probe.c` under directories of one name are
+still refused. It fails against `5ec4909`. Two older cases moved with
+the rule: a module and a program sharing a stem, and two shared
+libraries, are still refused, because they are not programs. A third,
+`a_root_the_config_states_has_to_agree`, used two `probe.c` as its
+control for a collision; they now build, and its control checks that
+the warning offers the same `root =` key.
+

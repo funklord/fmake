@@ -14706,10 +14706,13 @@ def a_root_the_config_states_has_to_agree(t):
 		u.write("b/probe.c", "int main(void){ return 2; }\n")
 		r = u.fmake()
 		out = r.stdout + r.stderr
-		check(r.returncode != 0 and "root = " in out,
-		      f"the control is wrong: two targets of one name have to "
-		      f"collide, and fmake's advice for it is this very key: "
-		      f"{out}")
+		# Since section 629 they build, each named after its directory,
+		# and the warning that the names are a guess offers this very
+		# key -- which is what the control is about.
+		check(r.returncode == 0 and "a guess" in out and "root = " in out,
+		      f"the control is wrong: two programs of one name are named "
+		      f"after their directories, and fmake's advice for settling "
+		      f"it is this very key: {out}")
 		u.write("fmake.toml",
 		        '[target.a_probe]\nroot = "a/probe.c"\n\n'
 		        '[target.b_probe]\nroot = "b/probe.c"\n')
@@ -16282,6 +16285,59 @@ root = "e/test/other_test.c"
 		      f"the renamed target {name} was not built or run: {out}")
 	check("are called" not in out,
 	      f"the remedy was applied and the clash is still reported: {out}")
+
+
+@case
+def programs_sharing_a_file_name_are_named_after_their_directories(t):
+	"""section 629: tde's two `probe.cpp', named by where they live.
+
+	`test/dbus-signal-delivery/probe.cpp' and `test/docked-detect/
+	probe.cpp' were refused as two targets called `probe'; the directory
+	is what tells them apart. Each is named after it now, with a warning
+	that the names are a guess and the fmake.toml lines that settle them.
+
+	Three things are asserted by doing them: the two programs exist under
+	those names; the lines the warning prints, pasted verbatim, keep the
+	names and silence the warning; and a clash the directories cannot
+	settle -- both under a directory of one name -- is still refused.
+	"""
+	t.write("probes/dbus-delivery/probe.c", "int main(void){ return 1; }\n")
+	t.write("probes/docked/probe.c", "int main(void){ return 2; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the two probes build: {out}")
+	for name in ("dbus-delivery", "docked"):
+		check(os.path.exists(os.path.join(t.dir, name)),
+		      f"{name} was not built under its directory's name: {out}")
+	check("a guess" in out and "[target.docked]" in out,
+	      f"the names are a guess and the build has to say so, with the "
+	      f"lines that settle it: {out}")
+
+	r = t.fmake("-n", "--explain")
+	check("named after its directory" in r.stdout + r.stderr,
+	      f"--explain says where the name came from: {r.stdout}{r.stderr}")
+
+	stanza = [l.strip() for l in out.splitlines()
+	          if l.strip().startswith(("[target.", "root = "))]
+	t.write("fmake.toml", "\n".join(stanza) + "\n")
+	r = t.fmake("-B")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "a guess" not in out,
+	      f"the pasted lines settle it, and the warning goes: {out}")
+	check(os.path.exists(os.path.join(t.dir, "docked")),
+	      f"and the names are kept: {out}")
+
+	u = Tree("probe-same-dirs")
+	try:
+		u.write("x/same/probe.c", "int main(void){ return 0; }\n")
+		u.write("y/same/probe.c", "int main(void){ return 0; }\n")
+		r = u.fmake()
+		out = r.stdout + r.stderr
+		check(r.returncode != 0 and "2 targets are called 'probe'" in out,
+		      f"directories of one name settle nothing, so it refuses: "
+		      f"{out}")
+	finally:
+		u.cleanup()
 
 
 @case

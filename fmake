@@ -14071,6 +14071,84 @@ def default_name(rel, root):
 	return os.path.basename(os.path.abspath(root)) or "a.out"
 
 
+def directory_name(rel):
+	"""The name a file's directory gives it, or None at the tree root.
+
+    The walk `default_name' does for main.c: past the conventional source
+    directories, so `src/probe/x.c' is `probe' and not `src'.
+    """
+	d = os.path.dirname(rel)
+	while d:
+		base = os.path.basename(d)
+		if base.lower() not in GENERIC_SRC_DIRS:
+			return base
+		d = os.path.dirname(d)
+	return None
+
+
+def name_after_directories(targets, conf):
+	"""Name programs after their directories where their files' names clash.
+
+    A file's stem names its program, and when the same stem roots a
+    program in several directories the tree has shown that the stem is
+    not what tells them apart: tde has `test/dbus-signal-delivery/
+    probe.cpp' and `test/docked-detect/probe.cpp', and the directory is
+    the name. Those were refused as two targets called `probe' (section
+    621). Now each is named after its directory -- when every one of
+    them has a directory name, the names differ, and none is taken.
+
+    **It is a guess, and it says so** every build, with the
+    `[target.*]' lines that settle it, because the holder asked for
+    exactly that (2026-11-11): build what can be built, and when unsure,
+    prod the author towards stating it in fmake.toml. A program named by
+    @target or by fmake.toml is never renamed, and once the lines are
+    pasted the warning stops.
+
+    Programs only: a library or module clash is refused as before.
+
+    Measured over twenty sibling trees before this was written: two
+    clashes, both of this shape. Renaming every program that is alone
+    in its directory instead would have changed sixteen names, most for
+    the worse -- `node/fuzznetd.c' would build `node' -- so the evidence
+    used is the clash, which only a stem shared across directories gives.
+    """
+	inferred = {}
+	for t in targets:
+		if not t.rel or t.ann.scalar("target") or t.conf:
+			continue
+		inferred.setdefault(t.name, []).append(t)
+	taken = {t.name for t in targets}
+	said = []
+	for old, group in sorted(inferred.items()):
+		# Programs only. A library's name is an interface -- `-lname',
+		# its `.pc', what a consumer links -- and a module's is what loads
+		# it, so a guessed one would be a guess other code then depends
+		# on: `c/shared_thing.c' would have been `libc.so'. Those clashes
+		# are refused, as before.
+		if len(group) < 2 or any(t.kind != "exe" for t in group):
+			continue
+		alts = [directory_name(t.rel) for t in group]
+		if (None in alts or len(set(alts)) != len(alts)
+		        or any(a != old and a in taken for a in alts)
+		        or any(conf.target(a) for a in alts)):
+			continue                    # the refusal says what to do
+		for t, alt in zip(group, alts):
+			t.name = alt
+			t.name_guess = (old, len(group))
+			taken.add(alt)
+		said.append((old, group))
+	for old, group in said:
+		lines = [f"{len(group)} programs would all be called {old!r}, so "
+		         f"each is named after its directory -- a guess:"]
+		lines += [f"    {t.rel} -> {t.name}" for t in group]
+		lines.append(f"  if those are the right names, say so in "
+		             f"{CONF_FILE} and this goes away; if not, write the "
+		             f"right ones:")
+		for t in group:
+			lines.append(f"    [target.{t.name}]\n    root = {t.rel!r}")
+		warn("\n".join(lines))
+
+
 TEST_DIRS = {"test", "tests"}
 
 DEFAULT_TEST_GROUP = "test"
@@ -14319,13 +14397,17 @@ class Target:
 	             "test_group", "test_why", "version", "description",
 	             "stem", "publishes_pc", "version_script",
 	             "installed", "install_why", "install_guess",
-	             "declared_libs", "declared_pkgs")
+	             "declared_libs", "declared_pkgs", "name_guess")
 
 	def __init__(self, rel, root, ann, conf=None):
 		self.rel  = rel
 		self.ann  = ann
 		self.kind = ann.scalar("kind", "exe")
 		self.name = ann.scalar("target") or default_name(rel, root)
+		# (the name every one of them would have had, how many) when the
+		# name is a directory's, taken because the file's was shared --
+		# see `name_after_directories'.
+		self.name_guess = None
 		# Declaring a version is what asks for a pkg-config file. There is
 		# no default: a `.pc` without a Version is one pkg-config refuses,
 		# and inventing "0.0.0" would publish a number nobody chose into a
@@ -14898,6 +14980,9 @@ def explain(t, cl, cfg, incflags, outdir, all_units, root, other_roots=(),
 		named = f"[target.*] in {CONF_FILE}"
 	elif t.ann.scalar("target"):
 		named = "@target"
+	elif t.name_guess:
+		named = (f"named after its directory, a guess: "
+		         f"{t.name_guess[1]} files would be {t.name_guess[0]!r}")
 	else:
 		named = "no @target"
 	print(f"{BOLD('target')} {BOLD(name)} ({t.kind})  {DIM('[' + named + ']')}")
@@ -16761,6 +16846,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		if not head:
 			return True
 		return any(head.startswith(m) for m in _BUILT_MAGIC)
+
+	name_after_directories(targets, conf)
 
 	# The same collision as the directory one below, in the shape where it
 	# destroys something instead of failing. Measured before this existed:
