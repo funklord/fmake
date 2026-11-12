@@ -268,6 +268,7 @@ is not in the sources.
 | What each program links | **Always** — the symbol closure from its object, the computation a linker does over an archive | — |
 | Which libraries to link | **Almost always** — an undefined symbol found in an installed library | `@libs` for one with no `.pc`; `@sources` for a plugin no symbol reaches |
 | Which `-I` flags | **Almost always** — the package a system header belongs to, via pkg-config | `[project] include-dirs` for a header in a sibling checkout |
+| Which of the tree's headers an include means | **Almost always** — the file at the path it names; a file sharing only its name is used and reported as a guess | `[project] external-includes` refuses one that is not the tree's |
 | Rebuild after a header changes | **Always** — `-MD` depfiles, read back | — |
 | Which files are another platform's | **Almost always** — `_win32`, `_android`, `_aarch64` suffixes | `@os`, `@arch` |
 | Directories holding no source | **Always** — asked of git, not guessed from the name | `[project] exclude` where git is not told |
@@ -276,7 +277,7 @@ is not in the sources.
 | Rust: what a crate contains | **Always** — the root plus what `mod` draws in | `[target.*] name` where the directory name is wrong |
 | situ: which schemas to compile | **Always** — a source includes the header a schema would write | `[situ] flags` for the rung |
 | Vendored submodules | **Always** — `.gitmodules`, fetched before the tree is read | `--no-submodules` declines it |
-| A program's name | **Almost always** — the file, or its directory for `main.c` | `@target`, `[target.*] name` |
+| A program's name | **Almost always** — the file, or its directory for `main.c` and where two programs' files share a name, which it reports as a guess | `@target`, `[target.*] name` |
 | A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library\|module` |
 | Which programs are tests | **Sometimes** — a test directory or a `test_` name; `tests/live/` is the `live` group | `@test`, `@test no` |
 | Which programs ship | **Sometimes** — every program does, a module never does, and a program under `example/` does not | `@install no`, `@install yes`, `[target.*] install` |
@@ -662,6 +663,8 @@ For facts that belong to no single file and need tables.
 cflags  = ["-Wall"]
 exclude = ["vendor/**"]         # sources AND the include paths under them;
                                 # include-dirs below names one back
+external-includes = ["android/log.h"]  # never answered by the tree, even
+                                # by a file that shares its name
 
 [profile.debug]
 cflags  = ["-Og", "-pg"] # -Os is the default; DEBUG=1 gives -Og -g

@@ -1704,6 +1704,7 @@ CONF_SCHEMA = {
         "name": S, "std": S, "profile": S, "needs": S,
         "cflags": L, "ldflags": L, "defines": L, "define": L,
         "libs": L, "pkg": L, "exclude": L, "include-dirs": L,
+        "external-includes": L,
         "test-timeout": N, "test-env": L, "test-cwd": S, "test-args": L,
         "rustflags": L,
     },
@@ -6682,8 +6683,17 @@ wordexp.h
 
 
 class Project:
-	def __init__(self, root, srcs, hdrs, scans, owns=None, excluded=None):
+	def __init__(self, root, srcs, hdrs, scans, owns=None, excluded=None,
+	             external=()):
 		self.root  = root
+		# `[project] external-includes': include names the tree does not
+		# answer, matched as written in the #include. The refusal half of
+		# what section 630 found missing -- a basename guess such as
+		# llama.cpp's `android/log.h' -> `common/log.h' could be seen and
+		# not refused. Settled by the holder 2026-11-12: refusing only.
+		# {pattern: whether any include matched it}, so an entry that
+		# matches nothing can be said rather than ignored.
+		self.external = {p: False for p in external}
 		# Includes resolved by basename ALONE, where the include carried a
 		# path that the file found does not honour -- {inc_name: resolved}.
 		# Principle 4 of section 2 is that there is no magic without an
@@ -6757,6 +6767,12 @@ class Project:
         still needs the directory.
         """
 		inc_name = inc_name.replace(os.sep, "/")
+		if self.external:
+			hit = next((p for p in self.external
+			            if fnmatch.fnmatch(inc_name, p)), None)
+			if hit is not None:
+				self.external[hit] = True
+				return None
 		base = os.path.dirname(from_rel)
 		cand = os.path.normpath(os.path.join(base, inc_name))
 		if cand in self.hdr_by_name.get(os.path.basename(cand), []) or \
@@ -16263,7 +16279,9 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	if moc_jobs:
 		_hdr_graph = Project(root, srcs, hdrs, scans,
 		                     owns=lambda n: toolchain_owns_header(cfg, n),
-		                     excluded=exclude_pattern)
+		                     excluded=exclude_pattern,
+		                     external=conf.project.get(
+		                         "external-includes", []))
 		for job in moc_jobs:
 			job["deps"] = sorted(
 			    _hdr_graph.reachable_headers([job["src"]]))
@@ -16355,7 +16373,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		     + ", ".join(sorted(dir_confs)))
 	proj = Project(root, srcs, hdrs, scans,
 	               owns=lambda n: toolchain_owns_header(cfg, n),
-	               excluded=exclude_pattern)
+	               excluded=exclude_pattern,
+	               external=conf.project.get("external-includes", []))
 	# A predicate that cannot answer says so, because its silence is the
 	# permissive direction: with no search path every name reads as the
 	# tree's, which is the guess STANDARD_HEADERS exists to refuse.
@@ -17585,6 +17604,17 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			note(f"  {inc} -> {proj.guessed[inc]}")
 		if rest:
 			note(f"  ... and {rest} more (-v for all)")
+		# The syntax that settles a wrong one, which section 630 found
+		# missing: the holder's rule is that a guess names it.
+		note(f"  one that is not the tree's file: [project] "
+		     f"external-includes = [{head[0]!r}] in {CONF_FILE}")
+	# A selector that selected nothing is a typo nobody would otherwise
+	# see -- the include it meant is still answered by the tree.
+	unmatched = [p for p, hit in proj.external.items() if not hit]
+	if unmatched:
+		warn(f"[project] external-includes: no include in this build is "
+		     f"{', '.join(repr(p) for p in unmatched)}; an entry is the "
+		     f"name as the #include writes it, such as 'android/log.h'")
 	base_incflags = ["-I" + os.path.join(root, d) if d != "." else "-I" + root
 	                 for d in kept_incdirs]
 	# The same set `install_subpath' reads, recorded where it is known --

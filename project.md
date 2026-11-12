@@ -680,6 +680,7 @@ that had been green about nothing for five commits ·
 [628. And a COFF machine field](#628-and-a-coff-machine-field)
 [629. Programs that share a file name are named after their directories](#629-programs-that-share-a-file-name-are-named-after-their-directories)
 [630. The other guesses, and the one that has no syntax](#630-the-other-guesses-and-the-one-that-has-no-syntax)
+[631. `external-includes` refuses a basename guess](#631-external-includes-refuses-a-basename-guess)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48595,7 +48596,40 @@ it.
   **No fmake syntax settles it either way.** No setting says that a
   header is not the tree's, so a wrong guess cannot be refused, and none
   confirms a right one, so the note cannot be silenced by agreeing. A
-  new key would be a new convention, so it is put to the holder rather
-  than invented here. Excluding the guessed file's directory works only
-  where nothing else in it is wanted.
+  new key would be a new convention, so it was put to the holder.
+  **Settled 2026-11-12: a key that refuses, and none that confirms.**
+  Section 631 built it.
+
+## 631. `external-includes` refuses a basename guess
+
+`[project] external-includes` lists include names the tree does not
+answer, written as the `#include` writes them and matched with fnmatch,
+like `exclude`. `resolve_header` returns nothing for one, so the
+compiler resolves it on its own search path, and no `-I` is inferred
+from it. The holder asked for refusal only, on 2026-11-12. A guess that
+is right needs no key: it builds, and the note is the cost of not
+writing the path out.
+
+Two messages carry it. The basename note of section 546 now ends with
+the key, filled in with the first listed include, so the reader gets the
+line to paste. An entry that matches no include in the build is a
+warning. A selector that selects nothing is otherwise a typo nobody
+sees, and the include it was meant for is still answered by the tree.
+
+`an_include_listed_as_external_is_not_answered_by_the_tree` covers it on
+the section 630 shape. `android/log.h` is included under `__ANDROID__`
+and answered by `common/log.h`, and the guess puts `-Icommon` on the
+path. Listing the include removes both the note and that `-I`, and the
+tree still builds. A misspelt entry is warned about. The case fails
+against `c4e6074`.
+
+**On llama.cpp**, the tree the guess was first measured on, a dry run
+lists seven basename guesses: `android/log.h` -> `common/log.h`, two
+`mbedtls/` and two `wolfssl/` headers answered from `vendor/hash/`, and
+two `sycl/` headers from `ggml/src/ggml-sycl/`. The `sycl` guess put
+`-Iggml/src/ggml-sycl` on every compile line in the tree.
+`external-includes = ["android/*", "mbedtls/*", "sycl/*"]` refuses five
+of them. The note then lists the two `wolfssl` ones and offers the key
+for them, and that `-I` is gone from every line. The README's table of what fmake finds on its own has
+a row for it, and its row for a program's name now covers section 629.
 
