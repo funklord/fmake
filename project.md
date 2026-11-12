@@ -682,6 +682,7 @@ that had been green about nothing for five commits ·
 [630. The other guesses, and the one that has no syntax](#630-the-other-guesses-and-the-one-that-has-no-syntax)
 [631. `external-includes` refuses a basename guess](#631-external-includes-refuses-a-basename-guess)
 [632. Windows and macOS without hardware: what hull gives](#632-windows-and-macos-without-hardware-what-hull-gives)
+[633. fmake on a real Windows 11, with a TPM and Secure Boot](#633-fmake-on-a-real-windows-11-with-a-tpm-and-secure-boot)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48649,7 +48650,9 @@ machine:
   built hull, and 50 GB free on `/home`, where the disk must go because
   `/` has 5.6 GB. What is missing is the system itself. Windows comes
   from Microsoft's evaluation ISO under its evaluation licence, and
-  accepting that is the holder's decision, asked 2026-11-12. hull also
+  accepting that is the holder's decision, asked 2026-11-12, and
+  answered the same day: the Windows 11 Enterprise evaluation (section
+  633). hull also
   records provisioning into a guest as not built yet, so an unattended
   install and the sshd setup would be this tree's script, in the
   manner of `tool/windows_kit.py`.
@@ -48659,4 +48662,78 @@ machine:
   `project.md`, 2026-10-29). So macOS stays a cross toolchain here
   (`tool/macos_kit.py`: Qt's real frameworks and Apple's headers),
   whatever hull gains, until a Mac host runs hull.
+
+## 633. fmake on a real Windows 11, with a TPM and Secure Boot
+
+The holder chose the Windows 11 Enterprise evaluation on 2026-11-12. The
+TPM had to be fully emulated, "as software using it needs to be
+thoroughly tested", so nothing in the setup bypasses Windows 11's checks.
+`tool/windows_vm.py` does the work:
+
+- `list` names every Windows worth testing. Two have a source, Microsoft's
+  evaluation links. The rest have no source yet, as the holder said
+  sources come later.
+- `install` fetches the image, checks it against a pinned SHA-256 and
+  installs it unattended. The answer file goes on a FAT image attached
+  as a USB stick, since no ISO maker is installed and Setup searches
+  USB.
+- `run`, `ssh` and `check` boot the installed disk.
+
+Everything lives in `vm/`, which is git-ignored; `build/` is the other
+account's and this one cannot write there.
+
+**Measured.** The image, linked as 26H2, is 8,225,329,152 bytes, SHA-256
+`bc3f2408…0e38`, and installs as Windows 10.0.26300.9457. The unattended
+install took 73 minutes, on a q35 machine with SMM and OVMF built for
+Secure Boot with Microsoft's keys enrolled. It also had swtpm's TPM 2.0
+on CRB, `-cpu host`, and an e1000e NIC. Setup passed its TPM and Secure
+Boot checks on their merits. Inside, `Get-Tpm` reports present, ready,
+enabled, activated and owned, with manufacturer 1229081856 ("IBM",
+swtpm's), and `Confirm-SecureBootUEFI` is True. `check` boots the
+machine under hull, as described below. It copies in the same pinned
+Python, MinGW 13.1 and ninja that `tool/windows_kit.py` fetches for
+wine, and builds these hosted on Windows:
+
+- hello, built and run;
+- a library with a test, `fmake test` passing;
+- an ejected Makefile under `mingw32-make`;
+- an ejected `build.ninja` under ninja;
+- section 629's two `probe.c`, built as `one.exe` and `two.exe` with the
+  guess warning;
+- `--install --prefix`, laying down `bin\lib.exe`.
+
+All of them pass. Section 631's wine run is now corroborated by a real
+Windows.
+
+**hull ran it.** The holder had hull add a TPM, Secure Boot and a CPU
+model to its `pc` class, which landed as hull `a1ae527` the same
+afternoon. `check` boots the installed disk with `hull run` and
+`(tuning (pc (machine q35) (cpu host) (tpm true) (firmware uefi-secure)
+(state "./") (nic e1000e)))`. The state directory is the machine's own,
+so it boots with the TPM and firmware variables it was installed with.
+A different TPM would make it a different machine to Windows. The
+direct qemu and swtpm path stays for `install`, which must press a key
+at the CD prompt, and for a screenshot. `FMAKE_HULL=none` forces it.
+The hull used was built from `git archive a1ae527`, since the built
+binary in hull's checkout predates it.
+
+**Three faults met on the way, none of them fmake's:**
+
+1. **The firewall.** Windows' own `OpenSSH-Server-In-TCP` rule allows
+   only the Private profile, and qemu's user network is classed Public.
+   So sshd listened on port 22 and the firewall dropped every
+   connection, which looked from outside exactly like a guest that had
+   not booted. Found by logging in at the console through QMP keys and
+   reading the rule. The setup script now widens it to every profile.
+2. **The copy.** scp speaks SFTP by default, which names a Windows
+   drive `/C:/`. `C:/fmake-check/` reported success and put the files
+   elsewhere.
+3. **The unpack.** Windows' sshd hands a command line to `cmd.exe`, so
+   a `cmd /c` inside it ran the `cd` in a shell of its own and the
+   `tar` in the home directory.
+
+**macOS** gains the same kind of list, in `tool/macos_kit.py --list`:
+Tahoe back to Monterey, each with no source yet. A real one still needs
+an Apple host, by Apple's licence and hull's record (section 632), and
+the holder has hull's conflict with that to settle.
 

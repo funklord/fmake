@@ -5,6 +5,7 @@
     tool/macos_kit.py CASE...               those selftest cases instead
     tool/macos_kit.py --keep DIR [CASE...]  fetch into DIR and leave it
     tool/macos_kit.py --keep DIR --env      fetch, print the exports, run nothing
+    tool/macos_kit.py --list                every macOS worth testing, and how
 
 No Mac is reachable from here, and Apple's SDK may not be redistributed, so
 this assembles what section 604 found to stand in for one: Qt's own macOS
@@ -46,6 +47,18 @@ ZIG_VERSION = "0.13.0"
 QT_MAC = "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop"
 TARGET = "x86_64-apple-macos12"     # Qt 6.8's own minimum
 CASES = ["a_real_qt_kit_links_for_macos"]
+
+# Every macOS worth testing fmake on (holder, 2026-11-12: a list of every
+# version, sources to be added later). What runs here is the cross build
+# above, against the SDK headers zig carries for its own target range.
+# A real macOS needs a virtual machine, and hull refuses macOS guests on a
+# non-Apple host because Apple's licence permits them on Apple hardware
+# only (project.md section 632; hull's own record). Where the images come
+# from, and on what host they run, are both still open.
+MACOS_VERSIONS = (
+	("26", "Tahoe"), ("15", "Sequoia"), ("14", "Sonoma"),
+	("13", "Ventura"), ("12", "Monterey"),
+)
 
 CXX_RUNTIME = (
 	"__Znwm", "__Znam", "__ZdlPv", "__ZdaPv", "__ZdlPvm", "__ZdaPvm",
@@ -214,7 +227,15 @@ def main():
 	                help="print the exports and run nothing (needs --keep)")
 	ap.add_argument("--timeout", type=int, default=1800,
 	                help="seconds the selftest run may take (default 1800)")
+	ap.add_argument("--list", action="store_true",
+	                help="every macOS worth testing, and how it is tested")
 	args = ap.parse_args()
+	if args.list:
+		for number, name in MACOS_VERSIONS:
+			print(f"macOS {number:3} {name:9} cross build only here "
+			      f"(target {TARGET}); a VM needs an Apple host, no "
+			      f"source yet")
+		return 0
 	signal.signal(signal.SIGTERM, _exit_on_term)
 	sys.stdout.reconfigure(line_buffering=True)
 	for tool in ("clang++", "llvm-objdump", "llvm-nm", "llvm-ar", "7z",

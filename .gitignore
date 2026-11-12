@@ -4,6 +4,10 @@
 # Where an ejected Makefile or build.ninja puts its objects.
 build/
 
+# tool/windows_vm.py's downloaded system image, disk and keys: gigabytes,
+# and never the project's to ship.
+vm/
+
 # The build products of a tree fmake has been run in. The names come from
 # the sources, so there is nothing general to match -- add your own.
 
