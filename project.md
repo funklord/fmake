@@ -48732,6 +48732,16 @@ binary in hull's checkout predates it.
    a `cmd /c` inside it ran the `cd` in a shell of its own and the
    `tar` in the home directory.
 
+**Rust too.** `check` adds rustc and std for `x86_64-pc-windows-gnu`,
+pinned as `tool/windows_kit.py` pins them, and two trees. The first is a
+Rust program with a module, built and run, then rebuilt from its ejected
+`build.ninja`. That ninja rule is the `deps = gcc` one section 615 chose
+under wine, where `findstr` is a stub. The second is a C program linking
+a Rust crate. Both print 7. The Rust links warn "corrupt .drectve at end
+of def file". That comes from Rust's std meeting the binutils of Qt's
+MinGW 13.1, which `rustc` finds on PATH. It is not fmake's, and the
+programs run.
+
 **A real sibling, as section 616 did under wine.** `windows_vm.py build
 -- bbq-predictor -j4` copies the tree from `git archive` with its
 submodules and adds Qt 6.8.2's MinGW kit. It builds hosted on the real

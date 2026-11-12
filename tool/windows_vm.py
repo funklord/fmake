@@ -558,11 +558,18 @@ CHECK_TREES = {
 	"lib/test/greet_test.c": '#include "../greet.h"\nint main(void){ return greet() == 42 ? 0 : 1; }\n',
 	"probes/p/one/probe.c": "int main(void){ return 0; }\n",
 	"probes/p/two/probe.c": "int main(void){ return 0; }\n",
+	# Rust, which sections 614-615 tested hosted only under wine, where a
+	# stub findstr forced the ejected ninja rule onto deps = gcc.
+	"rs/main.rs": 'mod helper;\nfn main() { println!("rust says {}", helper::seven()); }\n',
+	"rs/helper.rs": "pub fn seven() -> i32 { 7 }\n",
+	"mix/main.c": '#include <stdio.h>\nint rust_seven(void);\nint main(void){ printf("%d\\n", rust_seven()); return 0; }\n',
+	"mix/lib.rs": 'mod helper;\n#[no_mangle]\npub extern "C" fn rust_seven() -> i32 { helper::seven() }\n',
+	"mix/helper.rs": "pub fn seven() -> i32 { 7 }\n",
 }
 
 CHECK_SCRIPT = r"""@echo off
 set K=C:\fmake-check
-set PATH=%K%\mingw\Tools\mingw1310_64\bin;%K%\ninja;%PATH%
+set PATH=%K%\mingw\Tools\mingw1310_64\bin;%K%\ninja;%K%\rust\bin;%PATH%
 set PY=%K%\python\python.exe
 echo == TPM and Secure Boot, as Windows saw them at install
 type C:\fmake-tpm.txt
@@ -577,10 +584,36 @@ echo == ejected build.ninja under ninja
 cd /d %K%\trees\lib && %PY% %K%\fmake --eject ninja > build.ninja && ninja && lib.exe || echo FAIL ninja
 echo == two probe.c named after their directories
 cd /d %K%\trees\probes && %PY% %K%\fmake && one.exe && two.exe || echo FAIL probes
+echo == rust program, then its ejected build.ninja
+cd /d %K%\trees\rs && %PY% %K%\fmake && rs.exe && %PY% %K%\fmake --eject ninja > build.ninja && ninja -t clean >nul && ninja && rs.exe || echo FAIL rust
+echo == a C program linking a Rust crate
+cd /d %K%\trees\mix && %PY% %K%\fmake && mix.exe || echo FAIL mix
 echo == install to a prefix
 cd /d %K%\trees\lib && %PY% %K%\fmake --install --prefix %K%\prefix && dir /s /b %K%\prefix || echo FAIL install
 echo == done
 """
+
+
+def rust_kit_tar():
+	"""rustc and std for x86_64-pc-windows-gnu, as windows_kit pins them."""
+	tar = os.path.join(VM, "rust.tar")
+	if os.path.exists(tar):
+		return tar
+	sys.path.insert(0, os.path.join(HERE, "tool"))
+	import windows_kit  # noqa: E402
+	top = os.path.join(VM, "rustkit")
+	if os.path.isdir(top) and os.path.dirname(top) == VM:
+		shutil.rmtree(top)
+	os.makedirs(os.path.join(top, "download"))
+	try:
+		windows_kit.get_rust(top, os.path.join(top, "download"))
+		os.rmdir(os.path.join(top, "download"))
+		subprocess.run(["tar", "-C", top, "-cf", tar + ".part", "rust"],
+		               check=True)
+		os.replace(tar + ".part", tar)
+	finally:
+		shutil.rmtree(top)
+	return tar
 
 
 def windows_kit_tar():
@@ -703,7 +736,7 @@ def build_tree(name, args):
 
 
 def check(name):
-	tar = windows_kit_tar()
+	tar, rust = windows_kit_tar(), rust_kit_tar()
 	stage = os.path.join(machine_dir(name), "check")
 	if os.path.isdir(stage):
 		shutil.rmtree(stage)
@@ -728,10 +761,10 @@ def check(name):
 		guest = f"{USER}@{m.host}:/C:/fmake-check/"
 		steps = [
 		    ssh_argv(m, "cmd /c if exist C:\\fmake-check rmdir /s /q C:\\fmake-check & mkdir C:\\fmake-check"),
-		    scp + [tar, os.path.join(d, "check.tar"), guest],
+		    scp + [tar, rust, os.path.join(d, "check.tar"), guest],
 		    # sshd hands this to cmd.exe already; a `cmd /c' inside it
 		    # ran the `cd' in a shell of its own and the tars in $HOME.
-		    ssh_argv(m, "cd /d C:\\fmake-check && tar -xf kit.tar && tar -xf check.tar"),
+		    ssh_argv(m, "cd /d C:\\fmake-check && tar -xf kit.tar && tar -xf rust.tar && tar -xf check.tar"),
 		]
 		for argv in steps:
 			if subprocess.run(argv).returncode:
