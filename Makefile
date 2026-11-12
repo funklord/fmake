@@ -98,7 +98,7 @@ MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 # covers the next rule somebody writes.
 .DELETE_ON_ERROR:
 
-.PHONY: all install uninstall check version-check install-check hooks-check deb lint clean test veryclean distclean style style-source style-docs hooks help
+.PHONY: all install uninstall check version-check install-check hooks-check deb lint clean test veryclean distclean style style-source style-tool style-docs hooks help
 
 all: fmake.1 fmake.bash
 
@@ -277,7 +277,15 @@ clean:
 # The shared style gate: one tool, copied verbatim from
 # ~/.claude/tool/style_gate.py into every private project. It refuses to
 # run against a collapsed file list, so a pass means it actually looked.
-style: style-source style-docs
+style: style-tool style-source style-docs
+
+# The style gate's own suite, run ahead of the gate's verdict. A checker
+# that has stopped inspecting anything passes exactly as loudly as one
+# that works, so its pass is worth reading only once its suite has.
+# tool/test_style_gate.py arrives beside tool/style_gate.py and was
+# carried here unrun until 2026-11-12, on the holder's word.
+style-tool:
+	$(PYTHON) tool/test_style_gate.py
 
 style-source:
 	$(PYTHON) tool/style_gate.py check
