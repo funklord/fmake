@@ -681,6 +681,7 @@ that had been green about nothing for five commits ·
 [629. Programs that share a file name are named after their directories](#629-programs-that-share-a-file-name-are-named-after-their-directories)
 [630. The other guesses, and the one that has no syntax](#630-the-other-guesses-and-the-one-that-has-no-syntax)
 [631. `external-includes` refuses a basename guess](#631-external-includes-refuses-a-basename-guess)
+[632. Windows and macOS without hardware: what hull gives](#632-windows-and-macos-without-hardware-what-hull-gives)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48632,4 +48633,30 @@ two `sycl/` headers from `ggml/src/ggml-sycl/`. The `sycl` guess put
 of them. The note then lists the two `wolfssl` ones and offers the key
 for them, and that `-I` is gone from every line. The README's table of what fmake finds on its own has
 a row for it, and its row for a program's name now covers section 629.
+
+## 632. Windows and macOS without hardware: what hull gives
+
+Sections 581 to 619 tested Windows through wine and macOS through a
+cross toolchain, and named "a real Windows machine and a Mac" as what was
+left. The holder said on 2026-11-12 that hull means hardware is never
+needed. Measured that day against hull `c7c7c6c`'s `project.md` and this
+machine:
+
+- **Windows: a real one, under hull's `pc` class.** That class boots a
+  whole PC on qemu, "anything a PC's firmware can boot", modern Windows
+  included, with an ssh door to the guest's own sshd. The machine has
+  what it needs: `/dev/kvm` usable, 188 GB of memory, 24 cores, qemu, a
+  built hull, and 50 GB free on `/home`, where the disk must go because
+  `/` has 5.6 GB. What is missing is the system itself. Windows comes
+  from Microsoft's evaluation ISO under its evaluation licence, and
+  accepting that is the holder's decision, asked 2026-11-12. hull also
+  records provisioning into a guest as not built yet, so an unattended
+  install and the sshd setup would be this tree's script, in the
+  manner of `tool/windows_kit.py`.
+- **macOS: not hardware, a licence.** hull refuses macOS guests on a
+  non-Apple host. Apple's licence permits a macOS virtual machine on
+  Apple hardware only, and hull's section 9 records the decision (its
+  `project.md`, 2026-10-29). So macOS stays a cross toolchain here
+  (`tool/macos_kit.py`: Qt's real frameworks and Apple's headers),
+  whatever hull gains, until a Mac host runs hull.
 
