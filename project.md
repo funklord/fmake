@@ -48732,6 +48732,22 @@ binary in hull's checkout predates it.
    a `cmd /c` inside it ran the `cd` in a shell of its own and the
    `tar` in the home directory.
 
+**A real sibling, as section 616 did under wine.** `windows_vm.py build
+-- bbq-predictor -j4` copies the tree from `git archive` with its
+submodules and adds Qt 6.8.2's MinGW kit. It builds hosted on the real
+Windows and ends with `* built bbq-predictor.exe`. Run there with
+`--version -platform offscreen`, the applet prints its version and
+copyright line and exits 0.
+
+The first try stopped on `QGeoPositionInfo`. The applet's locator uses
+QtPositioning, an add-on the kit did not fetch, and fmake named the
+header as a package to install. `QT_ADDONS` now fetches the add-on
+beside qtbase. Every other failure is the project's own portability:
+`publish` and `serve` use `O_NOFOLLOW`, `grp.h`, `poll.h` and
+`sys/random.h`, as under wine. With the applet named, fmake built it
+and said of those two that every target linked without them, offering
+`[project] exclude`.
+
 **macOS** gains the same kind of list, in `tool/macos_kit.py --list`:
 Tahoe back to Monterey, each with no source yet. A real one still needs
 an Apple host, by Apple's licence and hull's record (section 632), and

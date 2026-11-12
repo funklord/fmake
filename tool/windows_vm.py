@@ -6,6 +6,9 @@
     tool/windows_vm.py run [VERSION] -- CMD boot the installed disk, run CMD over ssh, power off
     tool/windows_vm.py ssh [VERSION]        boot it and give an interactive ssh
     tool/windows_vm.py check [VERSION]      boot it, build fmake's checks in it, power off
+    tool/windows_vm.py build [VERSION] -- TREE [FMAKE ARGS]
+                                            build a sibling project hosted on Windows,
+                                            with Qt's MinGW kit on hand
     tool/windows_vm.py remove [VERSION]     delete that machine (keeps the downloaded image)
 
 Section 632: hull's pc class is the way to a real Windows here, and
@@ -601,6 +604,104 @@ def windows_kit_tar():
 	return tar
 
 
+QT_ADDONS = ("qtpositioning",)
+
+
+def qt_kit_tar():
+	"""Qt's Windows kit for MinGW (qtbase and its runtime), as one tar."""
+	tar = os.path.join(VM, "qt.tar")
+	if os.path.exists(tar):
+		return tar
+	sys.path.insert(0, os.path.join(HERE, "tool"))
+	import windows_kit  # noqa: E402
+	top = os.path.join(VM, "qtkit")
+	if os.path.isdir(top) and os.path.dirname(top) == VM:
+		shutil.rmtree(top)
+	os.makedirs(os.path.join(top, "download"))
+	try:
+		work = os.path.join(top, "download")
+		windows_kit.get_qt(top, work)
+		# The add-on modules a sibling uses beyond qtbase: bbq-predictor's
+		# locator is QtPositioning, and without it the applet stopped on
+		# QGeoPositionInfo, which fmake named as a missing package.
+		for addon in QT_ADDONS:
+			name = f"qt.qt6.682.addons.{addon}.win64_mingw"
+			version, archives = windows_kit.qt_package(windows_kit.QT_DIR, name)
+			for a in archives:
+				windows_kit.qt_archive(windows_kit.QT_DIR, name, version, a,
+				                       work, os.path.join(top, "qt"))
+		os.rmdir(work)
+		subprocess.run(["tar", "-C", top, "-cf", tar + ".part", "qt"],
+		               check=True)
+		os.replace(tar + ".part", tar)
+	finally:
+		shutil.rmtree(top)
+	return tar
+
+
+def build_tree(name, args):
+	"""A sibling project from `git archive', built hosted on Windows.
+
+    Section 616's method -- building a real sibling finds what fixtures
+    miss -- on a real Windows rather than under wine. The tree is the
+    sibling's committed state with its submodules, as tool/sibling_sweep.py
+    copies it, so nothing of the real checkout is touched.
+    """
+	if not args:
+		die("build needs a sibling tree after --")
+	tree, fmake_args = args[0], args[1:]
+	src = tree if os.path.isdir(tree) else os.path.join(os.path.dirname(HERE), tree)
+	if not os.path.isdir(os.path.join(src, ".git")):
+		die(f"{tree} is not a git checkout")
+	tree = os.path.basename(os.path.abspath(src))
+	d = machine_dir(name)
+	stage = os.path.join(d, "tree")
+	if os.path.isdir(stage):
+		shutil.rmtree(stage)
+	sys.path.insert(0, os.path.join(HERE, "tool"))
+	import sibling_sweep  # noqa: E402
+	sibling_sweep.unpack(src, os.path.join(stage, tree))
+	shutil.copyfile(os.path.join(HERE, "fmake"), os.path.join(stage, "fmake"))
+	subprocess.run(["tar", "-C", stage, "-cf", os.path.join(d, "tree.tar"),
+	                tree, "fmake"], check=True)
+	shutil.rmtree(stage)
+	kit, qt = windows_kit_tar(), qt_kit_tar()
+	m = boot(name)
+	try:
+		scp = ["scp", "-q", "-i", os.path.join(d, "key"), "-P", str(m.port),
+		       "-o", "StrictHostKeyChecking=no",
+		       "-o", f"UserKnownHostsFile={d}/known_hosts", "-o", "BatchMode=yes"]
+		guest = f"{USER}@{m.host}:/C:/fmake-build/"
+		for argv in (
+		    ssh_argv(m, "if exist C:\\fmake-build rmdir /s /q C:\\fmake-build & mkdir C:\\fmake-build"),
+		    scp + [kit, qt, os.path.join(d, "tree.tar"), guest],
+		    ssh_argv(m, "cd /d C:\\fmake-build && tar -xf kit.tar && tar -xf qt.tar && tar -xf tree.tar"),
+		):
+			if subprocess.run(argv).returncode:
+				die(f"provisioning failed at: {' '.join(argv[-2:])}")
+		k = "C:\\fmake-build"
+		# `set "X=v"': unquoted, the space before && is part of the value.
+		line = (f'set "PATH={k}\\mingw\\Tools\\mingw1310_64\\bin;{k}\\ninja;'
+		        f'{k}\\qt\\bin;%PATH%" && set "PKG_CONFIG_PATH={k}\\qt\\lib\\pkgconfig"'
+		        f' && set "QT_PLUGIN_PATH={k}\\qt\\plugins" && cd /d {k}\\{tree}'
+		        f" && {k}\\python\\python.exe {k}\\fmake {' '.join(fmake_args)}")
+		r = subprocess.run(ssh_argv(m, line), capture_output=True, text=True,
+		                   errors="replace")
+		out = (r.stdout + r.stderr).replace("\r", "")
+		print(out)
+		with open(os.path.join(d, f"build-{tree}.log"), "w") as fh:
+			fh.write(out)
+		return r.returncode
+	finally:
+		subprocess.run(ssh_argv(m, "shutdown", "/s", "/t", "0"),
+		               capture_output=True)
+		try:
+			m.qemu.wait(300)
+		except subprocess.TimeoutExpired:
+			pass
+		m.stop()
+
+
 def check(name):
 	tar = windows_kit_tar()
 	stage = os.path.join(machine_dir(name), "check")
@@ -660,7 +761,7 @@ def _exit_on_term(signum, _frame):
 def main():
 	ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
 	ap.add_argument("action", choices=("list", "install", "run", "ssh",
-	                                   "check", "remove"))
+	                                   "check", "build", "remove"))
 	ap.add_argument("version", nargs="?", default=DEFAULT)
 	argv = sys.argv[1:]
 	cmd = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -679,6 +780,8 @@ def main():
 		return install(args.version)
 	if args.action == "check":
 		return check(args.version)
+	if args.action == "build":
+		return build_tree(args.version, cmd)
 	if args.action == "remove":
 		d = machine_dir(args.version)
 		if os.path.isdir(d) and os.path.dirname(d) == VM:
