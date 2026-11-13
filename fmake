@@ -446,8 +446,25 @@ SKIP_DIRS   = {STATE_DIR, ".git", ".hg", ".svn", "build", "node_modules",
 # debug build is not a release build carrying symbols, it is a different
 # build. Any non-empty value counts except "0", which is set-but-off
 # rather than an argument about what `ifdef` means in Make.
-DEFAULT_CFLAGS = ["-Os"]
+DEFAULT_CFLAGS = ["-Os", "-ffunction-sections", "-fdata-sections"]
 DEBUG_CFLAGS   = ["-Og", "-g"]
+
+# And the linker drops what nothing calls: build-and-commit.md since
+# 2026-11-05, on fuzznet's 938,419 -> 875,659 bytes. Without it the linker
+# keeps every object whole, so each unused function of a library file
+# rides along, which -Os working one function at a time cannot see.
+# Measured on hal9001's shell example for the Uno: fmake 5,538 bytes of
+# text against its own Makefile's 4,466, the whole of the difference.
+#
+# Link-only, so it is not in the band above: clang warns that a `-Wl,'
+# was unused on every `-c', and -Werror makes that a failure. With the
+# release band only, as -Os is -- a debug build is a different build.
+# Before the project's own ldflags, so a `-Wl,--no-gc-sections' there
+# is the one ld obeys.
+def gc_link_flags(target_os):
+	"""The link half of section GC for `target_os'."""
+	return (["-Wl,-dead_strip"] if target_os in ("darwin", "ios")
+	        else ["-Wl,--gc-sections"])
 
 # The same two bands for rustc, which does not take -Os and would refuse
 # the C spelling outright. `z' rather than `s' is what build-and-commit.md
@@ -7442,6 +7459,8 @@ class Config:
 		self.cflags  += conf.cflags()
 		self.override = list(args.cflags)
 		self.ldflags = conf.ldflags() + list(args.ldflags)
+		self.gc_flags = (gc_link_flags(self.os)
+		                 if self.opt_flags == DEFAULT_CFLAGS else [])
 		# rustc's band is its own. --cflags is a C flag list and handing it
 		# to rustc would fail on the first -Os; $RUSTFLAGS is the spelling
 		# every Rust toolchain already uses for this.
@@ -7625,7 +7644,7 @@ class Config:
         one translation unit, which is section 4's asymmetry and the reason
         `@ldflags` exists separately.
         """
-		return self.cflags + self.override + self.ldflags
+		return self.cflags + self.override + self.gc_flags + self.ldflags
 
 	def base_cflags(self):
 		"""cflags with the two switchable bands taken back off.
@@ -10498,6 +10517,8 @@ def plugin_failure(*streams):
 COFF_MACHINES = (0x8664, 0x14c, 0xaa64)
 COFF_LNK_COMDAT = 0x1000
 COFF_EXTERNAL = 2
+COFF_STATIC = 3
+COFF_COMDAT_NODUPLICATES = 1
 
 
 def coff_comdat(path):
@@ -10538,6 +10559,26 @@ def coff_comdat(path):
 			strings = fh.read()
 	except (OSError, struct.error):
 		return set()
+	# A COMDAT section that admits no duplicate is one strong definition.
+	# `-ffunction-sections' puts every function in a `.text$name' COMDAT
+	# with selection NODUPLICATES (1), and read as foldable that made
+	# `main' weak: every Windows program built as a library, "main.c
+	# looked like it defined main() but the object does not export it".
+	# The selection is in the section symbol's auxiliary record, byte 14.
+	i = 0
+	while i < nsyms:
+		rec = syms[18 * i:18 * i + 18]
+		if len(rec) < 18:
+			break
+		_value, sect, _type, klass, aux = struct.unpack_from("<IhHBB", rec, 8)
+		# A section's own symbol: static, type 0 and value 0, where a
+		# static function is type 0x20 and its aux record another shape.
+		if (klass == COFF_STATIC and aux and sect in comdat
+		        and not _type and not _value
+		        and len(syms) >= 18 * (i + 2)
+		        and syms[18 * (i + 1) + 14] == COFF_COMDAT_NODUPLICATES):
+			comdat.discard(sect)
+		i += 1 + aux
 	out = set()
 	i = 0
 	while i < nsyms:
@@ -22137,6 +22178,9 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		for name in ("CFLAGS", "CXXFLAGS"):
 			a(var(name, _eject_flags(DEFAULT_CFLAGS, root, _mk_flag)
 			      + [f"$({P}{name})"], ":="))
+		# The link half of section GC, for the release band only.
+		a(var("LDFLAGS", _eject_flags(gc_link_flags(cfg.os), root,
+		                              _mk_flag), "+="))
 		a("else")
 		for name in ("CFLAGS", "CXXFLAGS"):
 			a(var(name, _eject_flags(DEBUG_CFLAGS, root, _mk_flag)

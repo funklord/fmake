@@ -684,7 +684,8 @@ that had been green about nothing for five commits ·
 [632. Windows and macOS without hardware: what hull gives](#632-windows-and-macos-without-hardware-what-hull-gives)
 [633. fmake on a real Windows 11, with a TPM and Secure Boot](#633-fmake-on-a-real-windows-11-with-a-tpm-and-secure-boot) ·
 [634. A source another source includes is part of it](#634-a-source-another-source-includes-is-part-of-it) ·
-[635. Firmware: a bare-metal compiler, and the linker script's entry](#635-firmware-a-bare-metal-compiler-and-the-linker-scripts-entry)
+[635. Firmware: a bare-metal compiler, and the linker script's entry](#635-firmware-a-bare-metal-compiler-and-the-linker-scripts-entry) ·
+[636. A release build drops what nothing calls](#636-a-release-build-drops-what-nothing-calls)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48806,8 +48807,8 @@ Arduino Uno from the tree alone. Nine library units are reached from
 `main.c` and fifteen are left as nothing reaches them. hal9001's own
 Makefile lists those units per example by hand (`AVR_UNITS_shell`).
 fmake's build is 5,538 bytes of text against the Makefile's 4,466. The
-difference is the holder's section-GC flags, which fmake does not pass
-yet. That is the next entry.
+difference was section GC, which fmake did not pass. Section 636 closed
+it.
 
 Case `a_source_another_source_includes_is_part_of_it`.
 
@@ -48900,9 +48901,63 @@ and the case checks it.
   with other keys merges by hand. Whether fmake should read a second
   file is open, and it is fmake's decision.
 - fmake's 5,538 bytes against the Makefile's 4,466 for the shell example
-  is section GC, which fmake does not pass by default. That is the
-  holder's 2026-11-05 rule and is its own change.
+  was section GC, which fmake did not pass. Section 636.
 
 Cases `a_bare_metal_compiler_says_what_it_builds_for` and
 `a_linker_script_entry_reaches_the_file_defining_it`.
+
+## 636. A release build drops what nothing calls
+
+The release band is `-Os -ffunction-sections -fdata-sections`, and the
+link adds `-Wl,--gc-sections`, or `-Wl,-dead_strip` for a Darwin or iOS
+target. That is build-and-commit.md's rule since 2026-11-05, which
+fmake had not taken. It showed on hal9001 (sections 634-635): the shell
+example for the Uno was 5,538 bytes of text from fmake and 4,466 from
+hal9001's Makefile, which passes the flags. It is 4,466 from fmake now,
+byte for byte. hal9001's `shell_target` went from 5,896 to 4,932 on the
+Uno and from 7,068 to 5,696 on the STM32VLDISCOVERY. Both still pass
+hal9001's emulated shell test, and the ejected Makefile gives the same
+4,932.
+
+Decisions, with the reasons:
+
+- **The link half is not in the band.** clang warns that a `-Wl,` flag
+  was unused on every `-c`, and `-Werror` makes that a failure. So
+  `gc_link_flags(os)` is its own list, `cfg.gc_flags`, and goes into
+  `link_flags()` before the project's ldflags. A `-Wl,--no-gc-sections`
+  there is the one ld obeys.
+- **Release only, as `-Os` is.** DEBUG=1 is a different build. `--cflags`
+  replacing the band turns GC off too, because forcing the flags means
+  forcing all of them.
+- **Ejected:** the Makefile's release branch adds `LDFLAGS +=
+  -Wl,--gc-sections`, and LDFLAGS is already `$(CFLAGS)` for the compile
+  half. ninja bakes `link_flags()`, as it bakes everything.
+
+What the rule warns of, and why it does not bite here: code reached only
+by section or by name is collected unless kept. A shared object keeps
+its exported symbols, and `.init_array` constructors are kept by ld. A
+firmware's vector table is `KEEP` in its script, as hal9001's is. A
+`dlsym` target in a program is the open case. The rule's remedy for it
+is `__attribute__((used, retain))`, or `-Wl,--no-gc-sections` in
+`[project] ldflags`.
+
+Every object rebuilds once, because the band is in the configuration
+key. That is intended.
+
+**It broke every Windows program, and the suite caught it.** The full
+suite had 14 failures, all COFF, all reading "main.c looked like it
+defined main() but the object does not export it" and building a
+library. `-ffunction-sections` puts each function in a `.text$name`
+COMDAT section. `coff_comdat` read every COMDAT external as foldable,
+the inline/vtable case it exists for, so `main` was weak. The section
+symbol's auxiliary record says which kind it is. Selection 1,
+NODUPLICATES, is one strong definition, where a duplicate is an error.
+Those sections are dropped from the foldable set now. Checked with
+clang's `x86_64-pc-windows-gnu`: `main` and `helper` are strong with and
+without function sections, and a C++ inline `twice` is foldable in both.
+The fifteenth failure was a case that found the link line by the text
+`-Os -nostdlib`. It matches `-Os`, then `-nostdlib` later on the line.
+
+Case `a_release_build_drops_what_nothing_calls`, with DEBUG=1 as its
+control. It fails with the link half taken away.
 

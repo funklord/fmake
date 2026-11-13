@@ -34387,6 +34387,42 @@ def a_linker_script_entry_reaches_the_file_defining_it(t):
 
 
 @case
+def a_release_build_drops_what_nothing_calls(t):
+	"""section 636: -ffunction-sections, -fdata-sections, --gc-sections.
+
+	The holder's rule since 2026-11-05. Without it the linker keeps every
+	linked object whole, so a function nobody calls rides along because
+	its file holds one somebody does: hal9001's shell example for the Uno
+	was 5,538 bytes from fmake and 4,466 from its own Makefile, which
+	passes the flags.
+
+	The control is DEBUG=1, which is a different build and keeps the
+	function: that is what shows the release band did the dropping,
+	rather than the function never having been there. The ejected
+	Makefile carries the link half in its release branch.
+	"""
+	t.write("lib.c", "int used(int x) { return x + 1; }\n"
+	        "int never_called(int x) { return x * 3 + 7; }\n")
+	t.write("main.c", "int used(int);\nint main(void) { return used(-1); }\n")
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	r = t.fmake()
+	check(r.returncode == 0, f"builds: {r.stdout}{r.stderr}")
+	nm = _run_in(t.dir, "nm", "--defined-only", exe).stdout
+	check(re.search(r"\bused\b", nm) and "never_called" not in nm,
+	      f"the release build drops never_called: {nm}")
+
+	r = t.fmake(env={"DEBUG": "1"})
+	check(r.returncode == 0, f"the debug build: {r.stdout}{r.stderr}")
+	nm = _run_in(t.dir, "nm", "--defined-only", exe).stdout
+	check("never_called" in nm, f"and DEBUG=1 keeps it: {nm}")
+
+	mk = t.fmake("--eject", "make").stdout
+	check(re.search(r"(?m)^LDFLAGS\s*\+=\s*-Wl,--gc-sections$", mk)
+	      and "-ffunction-sections" in mk,
+	      f"the ejected Makefile carries both halves: {mk[:2000]}")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 
@@ -34825,7 +34861,8 @@ def a_library_the_driver_links_is_not_chosen_against(t):
 	# at `LD', and a check against it passed with the fault put back.
 	r = t.fmake("--explain")
 	out = r.stdout + r.stderr
-	check("-Os -nostdlib" in out, f"this is not the link line: {out}")
+	check(re.search(r"(?m)-Os\b[^\n]*-nostdlib", out),
+	      f"this is not the link line: {out}")
 	check("-lacrt" not in out,
 	      f"a rival of the driver's own library was linked: {out}")
 
