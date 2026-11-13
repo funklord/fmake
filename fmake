@@ -314,6 +314,14 @@ class Lang:
 			return []
 		if self.dep_via_as:
 			return ["-Wa,--MD," + dep]
+		# SDCC refuses `-MF' as a file it cannot handle and has no `-MP';
+		# its `-MD' writes the object's name with `.d', which is `dep'
+		# exactly, since the object is `x.c.rel' and `dep' `x.c.d'. -MD
+		# and not -MMD: the system headers are how fmake tells an include
+		# the preprocessor opened from one it skipped, and -MMD's list
+		# called hal9001's unconditional <stddef.h> skipped.
+		if _SDCC[0]:
+			return ["-MD"]
 		return ["-MD", "-MP", "-MF", dep] if phony else ["-MD", "-MF", dep]
 
 	@property
@@ -461,6 +469,46 @@ DEBUG_CFLAGS   = ["-Og", "-g"]
 # release band only, as -Os is -- a debug build is a different build.
 # Before the project's own ldflags, so a `-Wl,--no-gc-sections' there
 # is the one ld obeys.
+def is_sdcc(cc):
+	"""Is `cc' Small Device C Compiler, by its name?
+
+    By name because SDCC answers none of the questions fmake asks a
+    gcc-shaped driver (`-dumpmachine' is "unknown compiler option"), and
+    its name is how every install spells it: `sdcc', `sdcc-4.5', a path
+    ending in one of those.
+    """
+	return re.match(r"sdcc(?:-[\d.]+)?$",
+	                os.path.basename(cc or "")) is not None
+
+
+# SDCC's two bands. It has no -Os and no -Og: `--opt-code-size' is its
+# build for size, and `--debug' its debug information. No section GC: its
+# linker places whole areas, and the flags are "unknown compiler option".
+SDCC_DEFAULT_CFLAGS = ["--opt-code-size"]
+SDCC_DEBUG_CFLAGS   = ["--debug"]
+
+
+def opt_bands(sdcc):
+	"""(release, debug) flags for this compiler family."""
+	return ((SDCC_DEFAULT_CFLAGS, SDCC_DEBUG_CFLAGS) if sdcc
+	        else (DEFAULT_CFLAGS, DEBUG_CFLAGS))
+
+
+def obj_ext():
+	"""What an object is called: `.rel' for SDCC, whose linker will not
+    take anything else, and `.o' everywhere else. See `_SDCC'."""
+	return ".rel" if _SDCC[0] else ".o"
+
+
+def sdcc_port(flags):
+	"""The SDCC port the flags select, `-mmcs51' -> `mcs51'; mcs51, its
+    default, where none is given. The arch, since SDCC's objects carry
+    no machine field to read it from."""
+	ports = [f[2:] for f in flags
+	         if re.fullmatch(r"-m[a-z][a-z0-9]+", f)]
+	return ports[-1] if ports else "mcs51"
+
+
 def gc_link_flags(target_os):
 	"""The link half of section GC for `target_os'."""
 	return (["-Wl,-dead_strip"] if target_os in ("darwin", "ios")
@@ -522,10 +570,6 @@ def sanitize_wanted(env=None):
 def coverage_wanted(env=None):
 	"""Whether $COVERAGE asks for a gcov build."""
 	return _switch("COVERAGE", env)
-
-
-def default_cflags(env=None):
-	return list(DEBUG_CFLAGS if debug_wanted(env) else DEFAULT_CFLAGS)
 
 
 def default_rustflags(env=None):
@@ -7412,7 +7456,10 @@ class Config:
 		# mingw gcc is a Windows build whether or not anybody also wrote
 		# `os = "windows"', and the host's name for it linked `hello'
 		# through a driver that wrote `hello.exe'. See `machine_os'.
+		# SDCC answers no -dumpmachine, and builds for no OS on any port.
 		self.os      = canon_platform("os", self.os_named or tool.get("os")
+		                              or ("none" if is_sdcc(self.cc)
+		                                  else None)
 		                              or machine_os(self.triplet)
 		                              or host_os())
 		# The arch the same way, which it was not: the os above came from
@@ -7423,6 +7470,8 @@ class Config:
 		# flag, answering `i386-pc-linux-gnu'. See `machine_arch'.
 		self.arch    = (self.arch_named
 		                or canon_platform("arch", tool.get("arch")
+		                                  or (sdcc_port(self.probe_flags)
+		                                      if is_sdcc(self.cc) else None)
 		                                  or machine_arch(self.triplet)
 		                                  or host_arch()))
 		# Whether anybody asked for this arch, as opposed to inheriting the
@@ -7449,7 +7498,10 @@ class Config:
 		# opt_flags is empty when --cflags replaced the defaults, which is
 		# also the right answer for the ejected file -- somebody who forced
 		# the flags gets them baked, because that is what forcing them means.
-		self.opt_flags = [] if args.cflags else default_cflags()
+		self.sdcc = is_sdcc(self.cc)
+		_release, _debug = opt_bands(self.sdcc)
+		self.opt_flags = ([] if args.cflags else
+		                  list(_debug if debug_wanted() else _release))
 		self.sanitize_flags = (list(SANITIZE_CFLAGS) if sanitize_wanted()
 		                       else [])
 		self.coverage_flags = (list(COVERAGE_CFLAGS) if coverage_wanted()
@@ -7460,7 +7512,8 @@ class Config:
 		self.override = list(args.cflags)
 		self.ldflags = conf.ldflags() + list(args.ldflags)
 		self.gc_flags = (gc_link_flags(self.os)
-		                 if self.opt_flags == DEFAULT_CFLAGS else [])
+		                 if self.opt_flags == DEFAULT_CFLAGS
+		                 and not self.sdcc else [])
 		# rustc's band is its own. --cflags is a C flag list and handing it
 		# to rustc would fail on the first -Os; $RUSTFLAGS is the spelling
 		# every Rust toolchain already uses for this.
@@ -8607,7 +8660,8 @@ class Unit:
 		# can open.
 		self.variant = variant
 		tag = ("." + variant) if variant else ""
-		self.obj  = os.path.join(objdir, rel + tag + ".o")
+		self.obj  = os.path.join(objdir, rel + tag
+		                         + (".rel" if _SDCC[0] else ".o"))
 		self.dep  = os.path.join(objdir, rel + tag + ".d")
 		self.scan = scan
 		self.ann  = Ann(scan.get("dirs"))
@@ -11425,7 +11479,20 @@ def underscores_identifiers(obj):
     `[toolchain] os' or a triplet, because what decides the spelling is
     what the compiler actually produced.
     """
-	return macho_object(obj) or coff_machine(obj) == COFF_I386
+	return (macho_object(obj) or coff_machine(obj) == COFF_I386
+	        or asxxxx_object(obj))
+
+
+def asxxxx_object(obj):
+	"""Is this an asxxxx relocatable, SDCC's `.rel', whose C names carry
+    a leading underscore (`_main')? It opens `XH' or `XL', the header
+    line naming its byte order and address width."""
+	try:
+		with open(obj, "rb") as fh:
+			head = fh.read(3)
+	except OSError:
+		return False
+	return head[:2] in (b"XH", b"XL") and head[2:3].isdigit()
 
 
 def exports_main(unit):
@@ -14502,6 +14569,14 @@ def _ann_install(ann, rel=""):
 # path that reaches a Target before the configuration exists is unchanged.
 _TARGET_OS = [None]
 
+# Whether the C compiler is SDCC, which is not a gcc-shaped driver: its
+# linker refuses an object not named `.rel' ("don't know what to do with
+# file 'm.c.o'. file extension unsupported"), it writes Intel hex, and it
+# takes `-MMD' but not `-MF'. Module-level for `_TARGET_OS''s reason:
+# Unit and the program's file name are spelled before anything could be
+# handed the configuration. See `is_sdcc'.
+_SDCC = [False]
+
 # What a program built for this target has to be started through, as an
 # argv prefix; empty for one that runs here. See `target_runner'.
 _RUNNER = [[]]
@@ -14547,6 +14622,9 @@ def program_name(name):
     """
 	if _TARGET_OS[0] == "windows" and not name.lower().endswith(".exe"):
 		return name + ".exe"
+	# SDCC writes Intel hex, and names it so: `-o prog' is `prog.ihx'.
+	if _SDCC[0] and not name.lower().endswith(".ihx"):
+		return name + ".ihx"
 	return name
 
 
@@ -14947,6 +15025,26 @@ def crate_inputs(u, root):
 	return [u.abs] + [os.path.join(root or "", m) for m in u.members]
 
 
+# What an SDCC link writes beside its program besides the program: the
+# linker's command file, its map, the memory summary, and under --debug
+# the debugger's two. SDCC has no option to put them elsewhere or not
+# write them, and beside the program is the tree's root.
+SDCC_SIDE_FILES = (".lk", ".map", ".mem", ".cdb", ".noi")
+
+
+def sdcc_side_files(out, objdir):
+	"""Move what SDCC's link left beside `out' into `objdir'.
+
+    Named, not globbed: each is the program's stem with one of
+    SDCC_SIDE_FILES, so nothing else beside the program is touched.
+    """
+	stem = os.path.splitext(out)[0]
+	for ext in SDCC_SIDE_FILES:
+		if os.path.isfile(stem + ext):
+			os.replace(stem + ext,
+			           os.path.join(objdir, os.path.basename(stem) + ext))
+
+
 def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
                 root=None, quiet=False):
 	name = t.filename
@@ -15073,6 +15171,8 @@ def link_target(t, cl, cfg, outdir, dry_run, libflags=(), cache=None,
 	# so a parse error in a tree with a lib.rs beside its main.rs was
 	# told about dependency graphs, and `use libc::' in a tree with one
 	# crate was told nothing at all.
+	if r.returncode == 0 and _SDCC[0] and t.kind == "exe" and objs:
+		sdcc_side_files(out, os.path.dirname(cl.root.obj))
 	no_crate, dup_syms = set(), set()
 	if r.returncode != 0:
 		# Read whatever the failure was about, so the report can key on it
@@ -15597,6 +15697,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# discovery and has to spell a shared library the platform's way from
 	# the first question. See `shared_lib_name'.
 	_TARGET_OS[0] = cfg.os
+	_SDCC[0] = cfg.sdcc
 	_RUNNER[0] = target_runner(cfg)
 	admit_platform(cfg.os)
 	# Built here rather than where the -I flags are worked out, because moc
@@ -17058,7 +17159,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	def _looks_built(path):
 		try:
 			with open(path, "rb") as fh:
-				head = fh.read(8)
+				head = fh.read(16)
 		except OSError:
 			return True          # unreadable is not this check's business
 		# An empty file is nobody's work. This guard exists to prevent
@@ -17070,6 +17171,12 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# so the guard called fmake's own output somebody else's and
 		# offered to rename the target.
 		if not head:
+			return True
+		# SDCC's program is Intel hex, which has no magic: it opens on a
+		# record, `:' and its byte count, address and type in hex. Only
+		# for an SDCC build, whose program is the one spelled `.ihx' --
+		# without it fmake called its own last build somebody else's.
+		if _SDCC[0] and re.match(rb":[0-9A-Fa-f]{8}", head):
 			return True
 		return any(head.startswith(m) for m in _BUILT_MAGIC)
 
@@ -22176,14 +22283,18 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# reports rather than a loop it runs.")
 		a("ifeq ($(filter-out 0,$(DEBUG)),)")
 		for name in ("CFLAGS", "CXXFLAGS"):
-			a(var(name, _eject_flags(DEFAULT_CFLAGS, root, _mk_flag)
+			a(var(name, _eject_flags(opt_bands(cfg.sdcc)[0], root, _mk_flag)
 			      + [f"$({P}{name})"], ":="))
 		# The link half of section GC, for the release band only.
-		a(var("LDFLAGS", _eject_flags(gc_link_flags(cfg.os), root,
-		                              _mk_flag), "+="))
+		# By the family and the OS, not `cfg.gc_flags': this is the
+		# release branch whatever the ambient DEBUG, and an ejected file
+		# must not change with it.
+		if not cfg.sdcc:
+			a(var("LDFLAGS", _eject_flags(gc_link_flags(cfg.os), root,
+			                              _mk_flag), "+="))
 		a("else")
 		for name in ("CFLAGS", "CXXFLAGS"):
-			a(var(name, _eject_flags(DEBUG_CFLAGS, root, _mk_flag)
+			a(var(name, _eject_flags(opt_bands(cfg.sdcc)[1], root, _mk_flag)
 			      + [f"$({P}{name})"], ":="))
 		a(var("FLAVOUR", f"$({P}FLAVOUR) DEBUG=1", ":="))
 		a("endif")
@@ -22623,11 +22734,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	_mod_obj = {}
 	for _n, _u in every.items():
 		for _m in (_u.scan.get("modiface") or []):
-			_mod_obj[_m] = f"$({P}BUILD_DIR)/{_n}.o"
+			_mod_obj[_m] = f"$({P}BUILD_DIR)/{_n}{obj_ext()}"
 	for name in sorted(every):
 		u = every[name]
 		rel = u.rel
-		obj = f"$({P}BUILD_DIR)/{name}.o"
+		obj = f"$({P}BUILD_DIR)/{name}{obj_ext()}"
 		# CC pairs with CFLAGS, not CCFLAGS. Getting this wrong expands to an
 		# undefined variable, so every compile silently loses its flags and
 		# only a project that actually needs an -I notices.
@@ -22675,7 +22786,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			a(f"\t$({P}WINDRES) $(filter -I% -D%,$({P}{flags})) $< -o $@")
 			a("")
 			continue
-		dep = " ".join(u.lang.dep_flags("$(@:.o=.d)", phony=True))
+		dep = " ".join(u.lang.dep_flags(f"$(@:{obj_ext()}=.d)", phony=True))
 		# The driver knows neither `.cppm' nor `.ixx' and would treat one
 		# as a linker input, so it is told the language here exactly as
 		# `compile_cmd' tells it.
@@ -22737,7 +22848,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			  f"{_eject_src(root_unit.rel)}")
 			a("")
 			continue
-		objs = [f"$({P}BUILD_DIR)/{_obj_of(u)}.o" for u in closures[t].link
+		objs = [f"$({P}BUILD_DIR)/{_obj_of(u)}{obj_ext()}" for u in closures[t].link
 		        if not u.prebuilt and not u.crate]
 		a(f"{P}{ident}_OBJS = \\")
 		for i, o in enumerate(objs):
@@ -23037,7 +23148,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a(f"\t@printf '' > {mani}")
 		a("")
 
-	all_objs = sorted({f"$({P}BUILD_DIR)/{name}.o" for name in every})
+	all_objs = sorted({f"$({P}BUILD_DIR)/{name}{obj_ext()}" for name in every})
 	# Every file this build creates, named. Not `rm -rf $(BUILD_DIR)`: BUILD_DIR
 	# is an ordinary Make variable and overriding it is expected usage, so
 	# an empty or mistyped one removes something else entirely -- and this
@@ -23063,7 +23174,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		return full.startswith(os.path.join(root, ""))
 
 	a(f"{P}CLEAN = \\")
-	leavings = ([f"$({P}BUILD_DIR)/{name}.o" for name in sorted(every)]
+	leavings = ([f"$({P}BUILD_DIR)/{name}{obj_ext()}" for name in sorted(every)]
 	            + [f"$({P}BUILD_DIR)/{name}.d" for name in sorted(every)]
 	            + [f"$({P}BUILD_DIR)/{_eject_obj(rel)}.a"
 	               for rel in sorted(crate_libs)]
@@ -23110,7 +23221,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	a("")
 	a("# Depfiles the compiler writes as a side effect, so a changed header")
 	a("# rebuilds what includes it.")
-	a(f"-include $({P}OBJS:.o=.d)")
+	a(f"-include $({P}OBJS:{obj_ext()}=.d)")
 	if crate_deps:
 		a("")
 		a("# rustc writes an ordinary Make depfile naming the whole module")
@@ -23232,7 +23343,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# no effect; reporting the switch would name a cause that did not act.
 	# Silent when none is on, so an ordinary eject is unchanged.
 	baked = []
-	if cfg.opt_flags and list(cfg.opt_flags) == list(DEBUG_CFLAGS):
+	if cfg.opt_flags and list(cfg.opt_flags) == list(opt_bands(cfg.sdcc)[1]):
 		baked.append("DEBUG=1")
 	if cfg.sanitize_flags:
 		baked.append("SANITIZE=1")
@@ -23281,8 +23392,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# `deps = gcc` lets ninja read the depfile and then discard it, which is
 	# what makes header dependencies free here too.
 	a("rule cc")
-	a("  command = $cc $cflags $extra $cflags_last -c $in -o $out -MD -MF $out.d")
-	a("  depfile = $out.d")
+	if cfg.sdcc:
+		# SDCC refuses -MF and writes the object's name with `.d', which
+		# ninja cannot spell from $out, so each edge names it as `dep'.
+		a("  command = $cc $cflags $extra $cflags_last -c $in -o $out -MD")
+		a("  depfile = $dep")
+	else:
+		a("  command = $cc $cflags $extra $cflags_last -c $in -o $out -MD -MF $out.d")
+		a("  depfile = $out.d")
 	a("  deps = gcc")
 	a("  description = CC $in")
 	a("")
@@ -23660,10 +23777,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	_mod_obj = {}
 	for _n, _u in every.items():
 		for _m in (_u.scan.get("modiface") or []):
-			_mod_obj[_m] = f"$build_dir/{_ninja(_n)}.o"
+			_mod_obj[_m] = f"$build_dir/{_ninja(_n)}{obj_ext()}"
 	for name in sorted(every):
 		u = every[name]
-		mine = f"$build_dir/{_ninja(name)}.o"
+		mine = f"$build_dir/{_ninja(name)}{obj_ext()}"
 		mods = sorted({_mod_obj[m] for m in (u.scan.get("modimp") or [])
 		               if m in _mod_obj and _mod_obj[m] != mine})
 		tail = tool_after if u.rel in tool_units else after
@@ -23676,6 +23793,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			tail = " | " + " ".join(mods) + tail
 		a(f"build {mine}: "
 		  f"{u.lang.rule} {_ninja(_eject_src(u.rel))}{tail}")
+		if cfg.sdcc and u.lang.rule == "cc":
+			a(f"  dep = $build_dir/{_ninja(name)}.d")
 		# `-x c++' for a module interface, for the reason compile_cmd
 		# gives: the driver does not know the extension and would call
 		# it a linker input.
@@ -23726,7 +23845,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			  f"{_ninja(_eject_src(root_unit.rel))}{mods}")
 			a(f"  dep = {dep}")
 			continue
-		objs = " ".join(f"$build_dir/{_ninja(_obj_of(u))}.o"
+		objs = " ".join(f"$build_dir/{_ninja(_obj_of(u))}{obj_ext()}"
 		                for u in closures[t].link
 		                if not u.prebuilt and not u.crate)
 		# A prebuilt .o is an ordinary input, beside the objects fmake

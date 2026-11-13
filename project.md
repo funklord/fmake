@@ -685,7 +685,8 @@ that had been green about nothing for five commits ·
 [633. fmake on a real Windows 11, with a TPM and Secure Boot](#633-fmake-on-a-real-windows-11-with-a-tpm-and-secure-boot) ·
 [634. A source another source includes is part of it](#634-a-source-another-source-includes-is-part-of-it) ·
 [635. Firmware: a bare-metal compiler, and the linker script's entry](#635-firmware-a-bare-metal-compiler-and-the-linker-scripts-entry) ·
-[636. A release build drops what nothing calls](#636-a-release-build-drops-what-nothing-calls)
+[636. A release build drops what nothing calls](#636-a-release-build-drops-what-nothing-calls) ·
+[637. SDCC, a compiler family of its own](#637-sdcc-a-compiler-family-of-its-own)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48872,7 +48873,7 @@ and the case checks it.
 - hal9001's `tool/genconfig.py` had to be run from hal9001's root,
   because its Kconfig `source`s are relative and `$srctree` was unset.
   That was relayed to hal9001, which fixed it in 4d7285b.
-- **The 8051 (SDCC 4.5) is not built.** Measured with hal9001's
+- ~~**The 8051 (SDCC 4.5) is not built.**~~ Built since section 637. Measured with hal9001's
   unpacked `sdcc`: `sdcc -mmcs51 -c x.c -o o/x.c.o -MMD` compiles and
   writes `o/x.c.d`, and `sdnm` reads the object, with each C name
   prefixed `_` as on Mach-O. But the link refuses any object not named
@@ -48960,4 +48961,78 @@ The fifteenth failure was a case that found the link line by the text
 
 Case `a_release_build_drops_what_nothing_calls`, with DEBUG=1 as its
 control. It fails with the link half taken away.
+
+## 637. SDCC, a compiler family of its own
+
+hal9001's fourth tier is the 8051, compiled by SDCC. Section 635 found
+that fmake could not drive it at all. SDCC is not a gcc-shaped driver:
+
+- its linker refuses an object not named `.rel`;
+- it writes Intel hex;
+- it refuses `-MF` as a file it cannot handle, and has no `-MP`;
+- it warns that `-Os` and the section flags are unknown;
+- it answers no `-dumpmachine`.
+
+Each is now answered where fmake meets it, keyed on `is_sdcc(cc)`, which
+matches the compiler's name (`sdcc`, `sdcc-4.5`, a path to either).
+SDCC answers none of the questions fmake would otherwise ask it, so the
+name is the only thing to go on.
+
+- **Objects are `.rel`**, through `obj_ext()`, in the build and in
+  both ejected files. A module global, `_SDCC`, carries the family,
+  because `Unit` and the program's file name are spelled before anything
+  is handed the configuration. That is `_TARGET_OS`'s reason too.
+- **Depfiles: `-MD`**, which writes the object's name with `.d`. That is
+  `x.c.d` for `x.c.rel`, exactly where fmake reads it. `-MD` and not
+  `-MMD`: with `-MMD` the system headers were missing from the list, and
+  fmake's advisory called hal9001's unconditional `<stddef.h>` "behind a
+  conditional the preprocessor did not take". In the ejected Makefile
+  the depfile is `$(@:.rel=.d)`. The ejected ninja rule cannot spell it
+  from `$out`, so each SDCC edge carries `dep =` and the rule reads
+  `depfile = $dep`.
+- **Bands: `--opt-code-size`**, and `--debug` under DEBUG=1 (`opt_bands`).
+  No section GC, since SDCC's linker places whole areas.
+- **The program is `name.ihx`** (`program_name`). The overwrite guard
+  knew no magic for Intel hex and called fmake's own last build somebody
+  else's file. The selftest case found that on its second run, and an
+  Intel hex record (`:` and eight hex digits) now counts as built, for
+  an SDCC build only.
+- **Platform: OS `none`, arch from the port flag** (`-mmcs51` gives
+  `mcs51`, the default). The arch check reads nothing from a `.rel`,
+  which has no machine field, so it stays off, as for any format it
+  cannot read.
+- **Symbols:** `sdnm` reads `.rel`, and SDCC prefixes `_` to C names as
+  Mach-O does. `asxxxx_object` recognises the `XH`/`XL` header, so
+  `exports_main` accepts `_main` there.
+
+**Verified on hal9001's shell firmware for the AT89C51ED2**, with
+hal9001's unpacked SDCC 4.5.0 and ucsim, through `run_shell.py
+at89c51ed2`. fmake's build, the ejected Makefile's and the ejected
+ninja's each passed 10 checks with 0 failed. A second `make` and a
+second `ninja` compile nothing. Touching the included arch fragment
+(`arch/8051/at89/usart.c`) rebuilds `usart.c` under both. With section
+634 that is every hal9001 target qemu or ucsim can run: AVR, Cortex-M3,
+Cortex-M4 and 8051. MSP430 waits on a linker (section 635). On hull's
+`at89c51ed2` board (hull 021403f, with hal9001's `ucsim_51` on PATH) the
+same firmware answered `echo`, `hex` and `const` over `hull exec --
+console`.
+
+**Left as they are:**
+
+- SDCC's link writes `name.lk`, `name.map` and `name.mem` beside the
+  program, which is the tree's root, and has no option against it.
+  fmake moves them, by name, into the state directory beside the root's
+  object (`sdcc_side_files`). An ejected build leaves them where SDCC
+  puts them. The compile's `.asm`, `.lst` and `.sym` are in the state
+  directory already.
+- Without `-MP`, an ejected Makefile wedges on a deleted header until
+  its depfiles go. hal9001's own Makefile documents the same limit.
+- A library-only tree builds `libNAME.a` through `sdar`, and `sdnm`
+  reads its member (`lib.c.rel: T _twice`). Linking a program against
+  such an archive is untried.
+
+Case `sdcc_builds_an_8051_program_and_ejects_it`, which reads
+`FMAKE_SDCC` where `sdcc` is not on PATH and skips without either. It
+builds, checks `--explain` and the absence of the advisory, then
+rebuilds from each ejected file from nothing and compares the hex.
 

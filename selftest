@@ -34423,6 +34423,73 @@ def a_release_build_drops_what_nothing_calls(t):
 
 
 @case
+def sdcc_builds_an_8051_program_and_ejects_it(t):
+	"""section 637: SDCC is a compiler family, not a gcc-shaped driver.
+
+	Its linker refuses an object not named `.rel', it writes Intel hex,
+	it refuses `-MF' and ignores -Os and the section flags, and it
+	answers no -dumpmachine. Each was a failure on hal9001's 8051 tier.
+	Now: `.rel' objects, `-MD' (whose `x.c.d' is where fmake looks),
+	`--opt-code-size', `prog.ihx', OS none and the arch from `-m'.
+
+	The program is built, then rebuilt from the ejected Makefile and the
+	ejected ninja file, each from nothing, and each must write the same
+	Intel hex. FMAKE_SDCC names an SDCC's bin directory where it is not
+	on PATH; hal9001's `make toolchain-sdcc' unpacks one without root.
+	"""
+	bindir = os.environ.get("FMAKE_SDCC") or ""
+	sdcc = (os.path.join(bindir, "sdcc") if bindir
+	        else shutil.which("sdcc"))
+	if not sdcc or not os.access(sdcc, os.X_OK):
+		raise Skip("no sdcc on PATH and no FMAKE_SDCC")
+	tools = os.path.dirname(sdcc)
+	t.write("lib.c", "int twice(int x) { return 2 * x; }\n")
+	t.write("main.c", "int twice(int);\nvolatile int out;\n"
+	        "void main(void) { out = twice(21); for (;;) ; }\n")
+	t.write("fmake.toml", '[project]\ncflags = ["-mmcs51"]\n\n'
+	        f'[toolchain]\ncc = "{sdcc}"\n'
+	        f'nm = "{os.path.join(tools, "sdnm")}"\n'
+	        f'ar = "{os.path.join(tools, "sdar")}"\n')
+	name = os.path.basename(t.dir)
+	hexfile = os.path.join(t.dir, name + ".ihx")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and os.path.exists(hexfile),
+	      f"builds {name}.ihx: {out}")
+	check("behind a conditional" not in out,
+	      f"no include called unopened (-MD lists system headers): {out}")
+	with open(hexfile) as fh:
+		want = fh.read()
+	check(want.startswith(":"), f"the program is Intel hex: {want[:40]!r}")
+	left = [name + x for x in (".lk", ".map", ".mem")
+	        if os.path.exists(os.path.join(t.dir, name + x))]
+	check(not left, f"SDCC's link files are not left in the root: {left}")
+	ex = t.fmake("--explain")
+	e = ex.stdout
+	check("none/mcs51" in e and ".rel" in e,
+	      f"--explain: none/mcs51, .rel objects: {e}{ex.stderr}")
+
+	for backend, runner in (("make", ["make", "-s", "-f"]),
+	                        ("ninja", ["ninja", "-f"])):
+		if not shutil.which(runner[0]):
+			continue
+		ej = t.fmake("--eject", backend)
+		check(ej.returncode == 0, f"--eject {backend}: {ej.stderr}")
+		path = os.path.join(t.dir, f"ejected.{backend}")
+		with open(path, "w") as fh:
+			fh.write(ej.stdout)
+		shutil.rmtree(os.path.join(t.dir, "build"), ignore_errors=True)
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		os.remove(hexfile)
+		got = _run_in(t.dir, *runner, path)
+		check(got.returncode == 0 and os.path.exists(hexfile),
+		      f"the ejected {backend} build: {got.stdout}{got.stderr}")
+		with open(hexfile) as fh:
+			check(fh.read() == want,
+			      f"the ejected {backend} build writes the same hex")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 
