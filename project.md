@@ -49109,3 +49109,25 @@ which works since hal9001 4d7285b, with `--fmake hal.toml`. The app's
 
 Case `a_config_can_include_a_generated_one`, and a README row.
 
+**What stays out of reach: hal9001's own tree.** hal9001's inbox
+message of 2026-11-12, read 2026-11-13 after this work, came from
+`fmake -n` at hal9001's root (366d20a). It planned host `cc` builds of
+every `hal9001/*.c` and three programs, with no config directory and no
+target compiler, and it put `test/mock/msp430` and `test/mock/freertos`
+on every include path, where they would shadow the real `<msp430.h>`
+and `FreeRTOS.h`. Sections 634 to 638 answer it for an *application*
+against hal9001: one configuration per tree, its header beside it, and
+the part's toolchain included. They do not answer it for the library's
+own repository. That repository builds each example once per board, each
+with its own header directory and compiler, which is a matrix of
+configurations in one tree, and fmake builds one configuration per
+tree. hal9001's `make check` remains its own build. Supporting the
+matrix would be a feature in its own right, a configuration per
+subdirectory selecting toolchain and include directory. Nobody has asked
+for it, and it is recorded here so the gap stays known. The mock
+directories land on the include path because they hold headers the
+tree includes. Under the per-application route they are not in the tree
+at all. ESP32-C6 (hal9001 9715451): its `genconfig --fmake` stanza
+builds all six C6 configurations with fmake, with the arch read from the
+triple. hal9001 ran the shell on Espressif's qemu, 10 of 10.
+
