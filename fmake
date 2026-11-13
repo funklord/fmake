@@ -7498,6 +7498,7 @@ class Config:
 		self.triplet = (self._probe("-print-multiarch")
 		                or self._probe("-dumpmachine"))
 		self.nm      = find_nm(tool.get("nm")
+		                       or self._sdcc_tool("sdnm")
 		                       or self._prefixed("nm"))
 		self.sysroot = tool.get("sysroot")
 		# rustc takes no prefix. It targets by `--target <triple>' rather
@@ -7656,7 +7657,7 @@ class Config:
 			"ar", _ar_named, tool.get("ar"),
 			"fmake archives a static library with the ar you named, and "
 			"will not substitute another.") if _ar_named
-		           else (self._prefixed("ar")
+		           else (self._sdcc_tool("sdar") or self._prefixed("ar")
 		                 or shutil.which("ar") or shutil.which("llvm-ar")))
 		# The bare name in an ejected build file: a resolved absolute path
 		# would not survive being carried to another machine.
@@ -7854,6 +7855,20 @@ class Config:
         """
 		got = _stdout([self.cc, *self.probe_flags, question]).strip()
 		return got or _stdout([self.cc, question]).strip()
+
+	def _sdcc_tool(self, name):
+		"""SDCC's own `sdnm' or `sdar', for an SDCC build: beside the
+        compiler first, then on PATH. The host's nm reads no `.rel'
+        ("file format not recognized"), and SDCC names its binutils with
+        an `sd' rather than a triple, so `_prefixed' cannot find them."""
+		if not is_sdcc(self.cc):
+			return None
+		cc = shutil.which(self.cc)
+		if cc:
+			beside = os.path.join(os.path.dirname(cc), name)
+			if os.access(beside, os.X_OK):
+				return beside
+		return shutil.which(name)
 
 	def _prefixed(self, tool):
 		"""The toolchain's own copy of a binutil, if there is one."""

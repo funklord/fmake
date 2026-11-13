@@ -49003,7 +49003,11 @@ name is the only thing to go on.
   which has no machine field, so it stays off, as for any format it
   cannot read.
 - **Symbols:** `sdnm` reads `.rel`, and SDCC prefixes `_` to C names as
-  Mach-O does. `asxxxx_object` recognises the `XH`/`XL` header, so
+  Mach-O does. `sdnm` and `sdar` are found beside the compiler, then on
+  PATH (`_sdcc_tool`), so `cc = "sdcc"` alone is enough. Before that was
+  added, the host's nm stopped the build with "file format not
+  recognized". This was caught after the commit, because the case named
+  both tools in its config, and it names neither now. `asxxxx_object` recognises the `XH`/`XL` header, so
   `exports_main` accepts `_main` there.
 
 **Verified on hal9001's shell firmware for the AT89C51ED2**, with

@@ -34442,14 +34442,13 @@ def sdcc_builds_an_8051_program_and_ejects_it(t):
 	        else shutil.which("sdcc"))
 	if not sdcc or not os.access(sdcc, os.X_OK):
 		raise Skip("no sdcc on PATH and no FMAKE_SDCC")
-	tools = os.path.dirname(sdcc)
 	t.write("lib.c", "int twice(int x) { return 2 * x; }\n")
 	t.write("main.c", "int twice(int);\nvolatile int out;\n"
 	        "void main(void) { out = twice(21); for (;;) ; }\n")
+	# cc alone: sdnm and sdar are found beside it, which is the case of
+	# an SDCC that is not on PATH.
 	t.write("fmake.toml", '[project]\ncflags = ["-mmcs51"]\n\n'
-	        f'[toolchain]\ncc = "{sdcc}"\n'
-	        f'nm = "{os.path.join(tools, "sdnm")}"\n'
-	        f'ar = "{os.path.join(tools, "sdar")}"\n')
+	        f'[toolchain]\ncc = "{sdcc}"\n')
 	name = os.path.basename(t.dir)
 	hexfile = os.path.join(t.dir, name + ".ihx")
 	r = t.fmake()
