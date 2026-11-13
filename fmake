@@ -5698,13 +5698,21 @@ def host_os():
 # specific first: `aarch64-linux-android' is Android and `arm64-apple-ios'
 # is not macOS. Only the words a triple actually carries; anything else
 # leaves the answer to [toolchain] os and then the host.
+#
+# The last three rows, last so `arm-none-linux-gnueabihf' is Linux: a
+# triple whose OS field says none, or that ends at the object format
+# (`msp430-elf', `riscv64-unknown-elf'), is bare metal. `avr' is
+# avr-gcc's whole -dumpmachine, one word, and no AVR toolchain targets an
+# OS. Without them a bare-metal compiler was a build for the host's OS,
+# and `@os linux' files compiled into firmware.
 MACHINE_OS = (("mingw", "windows"), ("windows", "windows"),
               ("cygwin", "windows"), ("msys", "windows"),
               ("android", "android"), ("ios", "ios"), ("darwin", "darwin"),
               ("macos", "darwin"), ("macosx", "darwin"), ("linux", "linux"),
               ("freebsd", "freebsd"), ("openbsd", "openbsd"),
               ("netbsd", "netbsd"), ("solaris", "solaris"),
-              ("haiku", "haiku"))
+              ("haiku", "haiku"),
+              ("none", "none"), ("elf", "none"), ("avr", "none"))
 
 
 def machine_os(machine):
@@ -5732,6 +5740,12 @@ def machine_arch(machine):
 	word = (machine or "").split("-")[0].strip().lower()
 	if not word:
 		return None
+	# clang names a 32-bit ARM target by its profile -- `thumbv7m',
+	# `thumbv7em', `armv7a', `armv6m' -- and every one is EM_ARM, the
+	# machine the check compares. Unread, `--target=thumbv7m-none-eabi'
+	# was a build for the host's arch and refused as one.
+	if re.fullmatch(r"(?:arm|thumb)(?:v\d[\w.]*)?(?:eb)?", word):
+		return "arm"
 	arch = canon_platform("arch", word)
 	return arch if arch in ARCH_ELF_CODE or arch in MACHO_CPUTYPE else None
 
@@ -10831,13 +10845,91 @@ def close_over_library(units, root_unit):
 	return cl
 
 
-def close_over_symbols(root_unit, units, forced=(), forced_why=None):
+RE_LD_ENTRY = re.compile(r"\bENTRY\s*\(\s*([A-Za-z_.$][\w.$]*)\s*\)")
+RE_LD_EXTERN = re.compile(r"\bEXTERN\s*\(([^)]*)\)")
+RE_LD_INCLUDE = re.compile(r"(?m)^\s*INCLUDE\s+\"?([^\s\";]+)\"?")
+
+
+def linker_scripts_in(flags):
+	"""(scripts, search dirs) the link flags name, in the order given.
+
+    `-T FILE', `-TFILE' and `--script=FILE', said to the driver or
+    through `-Wl,'; `-L DIR' likewise, which is where a script's own
+    INCLUDE is looked for.
+    """
+	args = []
+	for f in flags:
+		args.extend(f[4:].split(",") if f.startswith("-Wl,") else [f])
+	scripts, dirs = [], []
+	it = iter(args)
+	for a in it:
+		if a in ("-T", "--script", "-L"):
+			val = next(it, "")
+			(dirs if a == "-L" else scripts).append(val)
+		elif a.startswith("--script="):
+			scripts.append(a.split("=", 1)[1])
+		elif a.startswith("-T") and len(a) > 2 and a[2] != "-":
+			scripts.append(a[2:])
+		elif a.startswith("-L") and len(a) > 2:
+			dirs.append(a[2:])
+	return [s for s in scripts if s], [d for d in dirs if d]
+
+
+def linker_script_symbols(flags, root):
+	"""{symbol: script} that the linker scripts in `flags' make the link
+    need: ENTRY's and EXTERN's, following INCLUDE.
+
+    A firmware's vector table and reset handler are reached through the
+    script and through nothing in C -- hal9001's `stm32f10x.ld' says
+    ENTRY(Reset_Handler) and no source calls it -- so the closure left
+    `startup.c' out and the link warned "cannot find entry symbol" over
+    an image that would not boot. The caller keeps only symbols the tree
+    defines: ENTRY(_start) on a desktop is crt1's, and a symbol no
+    library will be asked for.
+    """
+	scripts, dirs = linker_scripts_in(flags)
+	out, seen = {}, set()
+	todo = [(s, None) for s in scripts]
+	while todo:
+		name, beside = todo.pop(0)
+		cands = [name] if os.path.isabs(name) else (
+		    ([os.path.join(beside, name)] if beside else [])
+		    + [os.path.join(root, name)]
+		    + [os.path.join(root, d, name) for d in dirs])
+		path = next((c for c in cands if os.path.isfile(c)), None)
+		if not path or os.path.realpath(path) in seen:
+			continue
+		seen.add(os.path.realpath(path))
+		try:
+			with open(path, encoding="utf-8", errors="replace") as fh:
+				text = re.sub(r"/\*.*?\*/", " ", fh.read(), flags=re.S)
+		except OSError:
+			continue
+		shown = os.path.relpath(path, root)
+		for m in RE_LD_ENTRY.finditer(text):
+			out.setdefault(m.group(1), f"ENTRY in {shown}")
+		for m in RE_LD_EXTERN.finditer(text):
+			for sym in re.split(r"[\s,]+", m.group(1).strip()):
+				if sym:
+					out.setdefault(sym, f"EXTERN in {shown}")
+		for m in RE_LD_INCLUDE.finditer(text):
+			todo.append((m.group(1), os.path.dirname(path)))
+	return out
+
+
+def close_over_symbols(root_unit, units, forced=(), forced_why=None,
+                       via=None):
 	"""Transitive closure from a root object over undefined symbols.
 
     `forced` units seed the closure alongside the root. They are what nothing
     references -- constructor-registered plugins and dlopen targets -- so they
     have to be asserted, but once seeded their own dependencies resolve
-    normally."""
+    normally.
+
+    `via' is {symbol: where} for what the root needs because something
+    other than its own code says so -- a linker script's ENTRY -- so the
+    reason given is the script and not the root's source.
+    """
 	strong_by_sym, weak_by_sym = {}, {}
 	for u in units:
 		for s in u.strong:
@@ -10904,7 +10996,8 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None):
 				linked_strong |= p.strong
 				linked_weak |= p.weak
 				cl.link.append(p)
-				cl.why[p.rel] = (sym, cur.rel)
+				cl.why[p.rel] = (sym, via[sym] if via and cur is root_unit
+				                 and sym in via else cur.rel)
 				frontier.append(p)
 
 	for u in cl.link:
@@ -11097,10 +11190,16 @@ def _stderr(cmd):
 
 # e_machine values worth naming. Only for messages -- the comparison is on the
 # raw triple, so an architecture missing from here still works.
+#
+# EM_AVR and EM_MSP430 are the microcontrollers avr-gcc and msp430-elf-gcc
+# (and clang's backends) build for. Named so that `cc = "avr-gcc"' answers
+# `avr' from its -dumpmachine and the check compares against it, where it
+# was `machine-0x53' to be declared.
 ELF_MACHINES = {
     0x03: "x86", 0x3E: "x86_64", 0x28: "arm", 0xB7: "aarch64",
     0xF3: "riscv", 0x08: "mips", 0x14: "ppc", 0x15: "ppc64",
     0x02: "sparc", 0x32: "ia64", 0x16: "s390",
+    0x53: "avr", 0x69: "msp430",
 }
 
 
@@ -18184,6 +18283,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# The artifact said nothing while the terminal said five things,
 	# which is the very gap this list exists to close.
 	skipped = []
+	tree_defs = None   # every scanned definition, for the linker script
 	while True:
 		pool = None   # built below, once the flagged targets are known
 		# A target whose stanza carries `cflags' gets its own copy of the
@@ -18817,9 +18917,27 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 					forced_why.setdefault(u.rel, "a resource beside the "
 					                             "program's source")
 				forced_here = forced + [u for u in rc if u not in forced]
+				# What the linker script makes the link need, as needs of
+				# the root, so the closure and the widening reach the
+				# reset handler as they reach anything else. Only what
+				# the tree defines; see `linker_script_symbols'.
+				_ru = _root_unit(t)
+				_script = linker_script_symbols(
+				    cfg.link_flags() + list(t.conf.get("ldflags", []))
+				    + list(_ru.ann.items("ldflags")), root)
+				if _script:
+					if tree_defs is None:
+						tree_defs = {d for r in srcs
+						             for d in scans.get(r, {}).get("defs", ())}
+					_need = {s for s in _script if s in tree_defs}
+					if _need and _ru.undef is not None:
+						_ru.undef = set(_ru.undef) | _need
+				_via = {s: w for s, w in _script.items()
+				        if _ru.undef and s in _ru.undef
+				        and s not in (_ru.strong or ())}
 				closures[t] = close_over_symbols(_root_unit(t),
 				                                 schema_pool(t), forced_here,
-				                                 forced_why)
+				                                 forced_why, _via)
 				# A resource is asserted, not deduced -- nothing references
 				# the object. Which program gets it comes from which of its
 				# files opened it, so the closure has to exist before the
@@ -18840,7 +18958,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 					extra_why.update(add)
 					closures[t] = close_over_symbols(
 					    _root_unit(t), schema_pool(t),
-					    forced_here + [units[o] for o in sorted(add)], extra_why)
+					    forced_here + [units[o] for o in sorted(add)], extra_why,
+					    _via)
 			else:
 				members = [u for u in pool
 				           if u.rel == t.rel or u.rel not in other_roots]

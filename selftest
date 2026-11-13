@@ -18397,9 +18397,12 @@ def a_bare_metal_target_builds_and_names_its_own_machine(t):
 	binary. Every previous cross test had `aarch64-linux-gnu', where host
 	and target are both Linux and the default is right by accident.
 
-	`[toolchain] os' is the remedy and it is what this checks, in both
-	directions: with it the file is excluded, and fmake says which file and
-	why rather than leaving an undefined symbol."""
+	`[toolchain] os' was the remedy. Section 635 made it unnecessary:
+	avr-gcc's `-dumpmachine' says `avr', a triple with no OS, so fmake
+	builds for none/avr with nothing declared. Checked both ways: the
+	file is excluded undeclared, named with its reason, and a declared
+	`os' still outranks the compiler and compiles it. The old remedy,
+	`arch = "machine-0x53"', still builds, for a tree that took it."""
 	if not shutil.which("avr-gcc"):
 		raise Skip("avr-gcc not installed")
 
@@ -18413,12 +18416,13 @@ int main(void){ return host_helper(); }
  */
 int host_helper(void) { return 1; }
 """)
-	base = ('[toolchain]\ncc   = "avr-gcc"\narch = "machine-0x53"\n%s'
+	base = ('[toolchain]\ncc   = "avr-gcc"\n%s'
 	        '\n[project]\ncflags = ["-mmcu=atmega328p", "-Os"]\n')
 
-	# Without an OS declared, the host's is assumed and the Linux-only file
-	# is compiled into a bare-metal binary.
-	t.write("fmake.toml", base % "")
+	# A declared OS outranks the compiler: the Linux-only file compiles
+	# into a bare-metal binary because somebody said so -- and the old
+	# remedy for the arch, the synthesised name, still builds.
+	t.write("fmake.toml", base % 'arch = "machine-0x53"\nos   = "linux"\n')
 	r = t.fmake()
 	check(r.returncode == 0, f"the AVR build failed: {r.stdout}{r.stderr}")
 	prog = os.path.join(t.dir, "blink")
@@ -18427,10 +18431,12 @@ int host_helper(void) { return 1; }
 	check(machine == 0x53,
 	      f"the artifact is not an AVR object: e_machine={machine}")
 
-	# Declaring it excludes the file, and the message names which and why
-	# rather than leaving the reader an undefined symbol.
+	# Undeclared, the compiler's `avr' is bare metal: the file is excluded,
+	# and the message names which and why rather than leaving the reader
+	# an undefined symbol.
 	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
-	t.write("fmake.toml", base % 'os   = "none"\n')
+	os.remove(prog)
+	t.write("fmake.toml", base % "")
 	r = t.fmake()
 	out = r.stdout + r.stderr
 	check(r.returncode != 0,
@@ -34312,6 +34318,72 @@ def a_source_another_source_includes_is_part_of_it(t):
 	e = t.fmake("--explain").stdout
 	check("#included by" not in e,
 	      f"and that source is not called a fragment: {e}")
+
+
+@case
+def a_bare_metal_compiler_says_what_it_builds_for(t):
+	"""section 635: `cc = "avr-gcc"' alone is a none/avr build.
+
+	avr-gcc's -dumpmachine is the one word `avr', which named neither an
+	arch fmake knew nor an OS, so the build was for the host's: linux/
+	x86_64, its objects refused as `machine-0x53' until both were
+	declared by hand. Now EM_AVR is named and a triple with no OS field
+	(`avr', `*-none-*', `*-elf') is bare metal.
+
+	The check is still on, which is the half a quiet pass would hide:
+	the program's own ELF machine is read back as AVR.
+	"""
+	if not shutil.which("avr-gcc"):
+		raise Skip("avr-gcc not installed")
+	t.write("main.c", "int main(void) { for (;;) ; }\n")
+	t.write("fmake.toml", '[project]\ncflags = ["-mmcu=atmega328p"]\n\n'
+	        '[toolchain]\ncc = "avr-gcc"\n')
+	r = t.fmake()
+	check(r.returncode == 0, f"builds with nothing declared: "
+	      f"{r.stdout}{r.stderr}")
+	e = t.fmake("--explain").stdout
+	check("none/avr" in e, f"and says it builds for none/avr: {e}")
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	with open(exe, "rb") as fh:
+		head = fh.read(20)
+	check(head[:4] == b"\x7fELF" and head[18] == 0x53,
+	      f"the program is an AVR ELF: {head!r}")
+
+
+@case
+def a_linker_script_entry_reaches_the_file_defining_it(t):
+	"""section 635: EXTERN and ENTRY in a -T script are needs of the link.
+
+	A firmware's reset handler is reached through its linker script and
+	through nothing in C, so the closure left hal9001's `startup.c' out
+	and lld warned "cannot find entry symbol" over an image that would
+	not boot. Here the host's own default script, with an EXTERN added,
+	names a function nothing calls; the program must carry it.
+
+	The same script says ENTRY(_start), which is crt1's and in no
+	source here. That is the control: a script symbol the tree does not
+	define is left to the linker, not hunted for in libraries.
+	"""
+	got = _run_in(t.dir, "cc", "-Wl,--verbose", "-x", "c", "/dev/null",
+	              "-o", os.devnull)
+	parts = got.stdout.split("=" * 50)
+	if len(parts) < 3:
+		raise Skip("this linker prints no default script")
+	script = parts[1]
+	t.write("ld/keep.ld", "EXTERN(kept_by_script)\n" + script)
+	t.write("keep.c", "int kept_by_script(void) { return 7; }\n")
+	t.write("main.c", "int main(void) { return 0; }\n")
+	t.write("fmake.toml", '[project]\nldflags = ["-Wl,-T,ld/keep.ld"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"links with the script: {out}")
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	nm = _run_in(t.dir, "nm", "--defined-only", exe).stdout
+	check(re.search(r"\bT kept_by_script\b", nm),
+	      f"the function only the script names is in the program: {out}")
+	e = t.fmake("--explain").stdout
+	check("EXTERN in ld/keep.ld" in e,
+	      f"--explain credits the script, not main.c: {e}")
 
 
 @case

@@ -683,7 +683,8 @@ that had been green about nothing for five commits ·
 [631. `external-includes` refuses a basename guess](#631-external-includes-refuses-a-basename-guess)
 [632. Windows and macOS without hardware: what hull gives](#632-windows-and-macos-without-hardware-what-hull-gives)
 [633. fmake on a real Windows 11, with a TPM and Secure Boot](#633-fmake-on-a-real-windows-11-with-a-tpm-and-secure-boot) ·
-[634. A source another source includes is part of it](#634-a-source-another-source-includes-is-part-of-it)
+[634. A source another source includes is part of it](#634-a-source-another-source-includes-is-part-of-it) ·
+[635. Firmware: a bare-metal compiler, and the linker script's entry](#635-firmware-a-bare-metal-compiler-and-the-linker-scripts-entry)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2368,22 +2369,15 @@ rather than code, and one lesson about testing.
   ignoring it, and named that back as the thing to declare. The remedy it
   printed worked verbatim.
 
-  **The target OS is the gap that trip found, and it is a real asymmetry.**
-  `arch` is checked against the object and the build refused when they
-  disagree; `os` is never checked, and undeclared it defaults to the
-  *host's*. So a file marked `@os linux` compiles into a bare-metal binary.
-  Every earlier cross test used `aarch64-linux-gnu`, where host and target
-  are both Linux and the default is right by accident. `[toolchain] os` is
-  the remedy, and with it the exclusion is reported well — `linux_only.c is
-  excluded (@os linux (building for none)) and appears to define one of
-  them`.
-
-  **fmake cannot detect this and should not warn about it**, which is why
-  the asymmetry stays. Nothing in a bare-metal ELF says whether an
-  operating system is underneath it; and a warning on "arch declared, os
-  not" would fire on `aarch64-linux-gnu`, the common cross build, where the
-  host default is correct. That is the shape of exception §5 keeps
-  refusing, so this is documented rather than diagnosed.
+  ~~**The target OS is the gap that trip found.**~~ Closed by section
+  635. Undeclared, the OS defaulted to the host's, so a file marked
+  `@os linux` compiled into a bare-metal binary. This entry said fmake
+  could not detect that, since nothing in a bare-metal ELF names an OS.
+  The object cannot, but the compiler's triple does: `avr`,
+  `arm-none-eabi` and `msp430-elf` say "no OS" in words fmake had not
+  read. They are OS `none` now, and EM_AVR is named `avr`.
+  `[toolchain] os` still outranks the compiler, and
+  `arch = "machine-0x53"`, the remedy this entry printed, still builds.
 - ~~**Header-only libraries.**~~ Correctly need no link, and signal 2
   naturally produces no external symbols for them. The remaining case — one
   needing `-I` somewhere non-standard — was closed by §30 as a side effect:
@@ -48813,7 +48807,102 @@ Arduino Uno from the tree alone. Nine library units are reached from
 Makefile lists those units per example by hand (`AVR_UNITS_shell`).
 fmake's build is 5,538 bytes of text against the Makefile's 4,466. The
 difference is the holder's section-GC flags, which fmake does not pass
-yet.
+yet. That is the next entry.
 
 Case `a_source_another_source_includes_is_part_of_it`.
+
+## 635. Firmware: a bare-metal compiler, and the linker script's entry
+
+The rest of what building hal9001's firmware found, after section 634.
+With these, an application against hal9001 builds from its tree for the
+Arduino Uno with
+
+    [project]
+    cflags = ["-mmcu=atmega328p", "-std=gnu11"]
+
+    [toolchain]
+    cc = "avr-gcc"
+
+and for the STM32VLDISCOVERY with `cc = "clang"`, `--target`, `-mcpu`
+and `-mthumb` in cflags, and `-nostdlib`, lld and `-Wl,-T,<the part's
+script>` in ldflags. That is what hal9001's `config.mk` holds for the
+part. Each was checked with hal9001's own shell test, `test/qemu/
+run_shell.py`, against its `shell_target.c` built by fmake: 10 of 10 on
+the Uno and 11 of 11 on the STM32VLDISCOVERY. The Uno was also checked
+from the ejected Makefile, which gives the same 5,896 bytes. On hull's
+`arduino-uno` board (hull 021403f, `image:` source, `hull exec --
+console`) the same firmware answered `echo`, `hex` and `const`.
+
+**A bare-metal compiler says what it builds for.** avr-gcc's
+`-dumpmachine` is the one word `avr`. That named no arch fmake knew and
+no OS, so the build was for the host, linux/x86_64, and its objects
+were refused as `machine-0x53`. EM_AVR (0x53) and EM_MSP430 (0x69) are
+in `ELF_MACHINES` now. A triple whose OS field is `none`, or that ends
+at the object format (`msp430-elf`, `riscv64-unknown-elf`), or that is
+`avr`, is OS `none`. Those rows come last, so `arm-none-linux-gnueabihf`
+stays Linux. This also answers what section 112 left as "cannot
+detect": a bare-metal triple does say so, in words fmake did not read.
+
+**clang names a 32-bit ARM by its profile.** `--target=thumbv7m-none-
+eabi` answers `thumbv7m-unknown-none-eabi`, and `thumbv7m` was not an
+arch, so the build was for x86_64 and refused. `machine_arch` maps every
+`armv*` and `thumbv*` word to `arm`, the one ELF machine they share.
+
+**The linker script is a reader of symbols too.** hal9001's
+`stm32f10x.ld` says `ENTRY(Reset_Handler)`, and no C calls the reset
+handler, so the closure left `hal9001/startup.c` out. lld warned
+"cannot find entry symbol" over an image with no vector table.
+`linker_script_symbols` reads the scripts named by `-T`, `-Tfile` and
+`--script=`, given to the driver or through `-Wl,`. It follows
+`INCLUDE` beside the script and along `-L`. Each `ENTRY` and `EXTERN`
+symbol becomes a need of the program's root. That holds only where a
+source in the tree defines it: the default script's `ENTRY(_start)` is
+crt1's, and must not send fmake looking in libraries. The case uses
+exactly that script, with an `EXTERN` added, as its control. The case
+passed vacuously at first: `nm` lists an `EXTERN` symbol as undefined
+in a program that lacks it. It reads `--defined-only` now, and fails
+with the hook disabled. `--explain` credits the script:
+`hal9001/startup.c <- Reset_Handler (ENTRY in .../stm32f10x.ld)`, not
+the program's main file. That comes from `close_over_symbols(via=)`,
+and the case checks it.
+
+**Not done, and why.**
+
+- hal9001's `tool/genconfig.py` had to be run from hal9001's root,
+  because its Kconfig `source`s are relative and `$srctree` was unset.
+  That was relayed to hal9001, which fixed it in 4d7285b.
+- **The 8051 (SDCC 4.5) is not built.** Measured with hal9001's
+  unpacked `sdcc`: `sdcc -mmcs51 -c x.c -o o/x.c.o -MMD` compiles and
+  writes `o/x.c.d`, and `sdnm` reads the object, with each C name
+  prefixed `_` as on Mach-O. But the link refuses any object not named
+  `.rel` ("don't know what to do with file 'o/m.c.o'. file extension
+  unsupported") and writes `.ihx`. `-MF` is refused the same way, and
+  `-Os` and the section flags are ignored with a warning (SDCC spells it
+  `--opt-code-size`). fmake hardcodes `.o` objects in the build and in
+  both ejected files. So the 8051 needs an object suffix per compiler
+  family first, then an SDCC dialect for the flags. That is a feature of
+  its own.
+- **MSP430 cannot link here.** hal9001 compiles it with clang's
+  backend, and no MSP430 linker is installed: lld has no MSP430 target
+  and `msp430-elf-ld` is not packaged here. fmake always links a
+  program, so this waits on a toolchain, as hal9001's own build does.
+- **Does fmake need to understand Kconfig?** No. Kconfig makes the
+  header, which only the C code reads, and the part's toolchain facts.
+  Writing those facts twice (the defconfig's board, the toml's `-mmcu`)
+  was the remaining cost, and the cure was on hal9001's side. Offered,
+  and hal9001 a8f21f1 added `genconfig.py DEFCONFIG HEADER --fmake
+  fmake.toml`, which writes `[toolchain] cc` and `[project]`
+  cflags/ldflags from the same symbols its Makefile reads (AVR and ARM;
+  MSP430 and 8051 refuse rather than guess). hal9001 checked it against
+  this working tree: the Uno shell example came out at 4,466 bytes, and
+  the shell test passed on the Uno and the STM32VLDISCOVERY. hal9001
+  also noted that the generated file is a whole `fmake.toml`, so an app
+  with other keys merges by hand. Whether fmake should read a second
+  file is open, and it is fmake's decision.
+- fmake's 5,538 bytes against the Makefile's 4,466 for the shell example
+  is section GC, which fmake does not pass by default. That is the
+  holder's 2026-11-05 rule and is its own change.
+
+Cases `a_bare_metal_compiler_says_what_it_builds_for` and
+`a_linker_script_entry_reaches_the_file_defining_it`.
 
