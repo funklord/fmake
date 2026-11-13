@@ -6444,6 +6444,54 @@ def walk_tree(root, pruned=None):
 	return sorted(srcs), sorted(hdrs), unbuilt
 
 
+def included_sources(srcs, hdrs, scans):
+	"""{source: includer} for each source another file `#include's.
+
+    Such a source is a fragment of its includer rather than a unit of its
+    own: hal9001's `usart.c' picks `arch/avr/avr8/usart.c' with an #if
+    and includes it, and that file compiled alone has no `def.h' above it
+    and cannot build -- for any target. Compiled anyway, every arch the
+    library knows was a compile error on every build.
+
+    Only where an includer is not a program's main file, though. A test
+    that includes `../src/foo.c' to reach its statics is the common case
+    of a source included AND compiled, and there the program that needs
+    foo.c still needs it as a unit; the include is the test's business.
+    A header including a source counts (C++ templates keep definitions
+    in a `.cpp' some header includes).
+
+    The name resolves the way the compiler's quoted form does where it
+    can: beside the includer first, then from the root, then -- for an
+    `-I' fmake has not decided yet -- the one source whose path ends
+    with it. An ambiguous suffix answers nothing.
+    """
+	srcset = set(srcs)
+	out = {}
+	for rel in list(srcs) + list(hdrs):
+		scan = scans.get(rel)
+		if not scan or (rel in srcset and scan.get("has_main")):
+			continue
+		for _kind, name, _line in scan.get("incs", ()):
+			if os.path.splitext(name)[1] not in SRC_EXTS:
+				continue
+			hit = None
+			for cand in (os.path.join(os.path.dirname(rel), name), name):
+				cand = os.path.normpath(cand)
+				if cand in srcset:
+					hit = cand
+					break
+			if hit is None:
+				tail = "/" + os.path.normpath(name).lstrip("./")
+				ends = [s for s in srcs if ("/" + s).endswith(tail)]
+				if len(ends) == 1:
+					hit = ends[0]
+			# A program is never somebody's fragment: losing one silently
+			# is worse than the compile error a stray include gives.
+			if hit and hit != rel and not scans.get(hit, {}).get("has_main"):
+				out.setdefault(hit, rel)
+	return out
+
+
 def _gitmodule_paths(path):
 	"""The paths one `.gitmodules' declares, relative to its own tree.
 
@@ -15842,10 +15890,29 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	for _r, _w in ignored_why.items():
 		excluded.setdefault(_r, _w)
 	by_name = []
+	fragments = included_sources(srcs, hdrs, scans)
+	# What a fragment defines, its includer defines: the closure finds a
+	# unit by the symbols its scan lists, and `lib_value' written in
+	# `arch/b/impl.c' is nowhere in `lib.c''s own text. Up the chain, to
+	# the first includer that is a unit; a header includer is left alone,
+	# since every unit including it would be the definer. A copy, not an
+	# edit: the scan cache holds what each file says itself.
+	for frag in fragments:
+		owner, seen = fragments[frag], {frag}
+		while owner in fragments and owner not in seen:
+			seen.add(owner)
+			owner = fragments[owner]
+		if owner in scans and owner in srcs and owner not in fragments:
+			scans[owner] = dict(scans[owner], defs=sorted(
+			    set(scans[owner].get("defs", ()))
+			    | set(scans[frag].get("defs", ()))))
 	for rel in list(srcs):
 		pat = exclude_pattern(rel)
 		if pat:
 			excluded[rel] = f"[project] exclude = {pat!r}"
+		elif rel in fragments:
+			excluded[rel] = (f"#included by {fragments[rel]}, so part of "
+			                 f"it rather than a unit of its own")
 		else:
 			ann = Ann(scans[rel].get("dirs"))
 			platform_contradiction(ann, rel)

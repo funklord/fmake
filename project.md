@@ -682,7 +682,8 @@ that had been green about nothing for five commits ·
 [630. The other guesses, and the one that has no syntax](#630-the-other-guesses-and-the-one-that-has-no-syntax)
 [631. `external-includes` refuses a basename guess](#631-external-includes-refuses-a-basename-guess)
 [632. Windows and macOS without hardware: what hull gives](#632-windows-and-macos-without-hardware-what-hull-gives)
-[633. fmake on a real Windows 11, with a TPM and Secure Boot](#633-fmake-on-a-real-windows-11-with-a-tpm-and-secure-boot)
+[633. fmake on a real Windows 11, with a TPM and Secure Boot](#633-fmake-on-a-real-windows-11-with-a-tpm-and-secure-boot) ·
+[634. A source another source includes is part of it](#634-a-source-another-source-includes-is-part-of-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48762,4 +48763,57 @@ and said of those two that every target linked without them, offering
 Tahoe back to Monterey, each with no source yet. A real one still needs
 an Apple host, by Apple's licence and hull's record (section 632), and
 the holder has hull's conflict with that to settle.
+
+## 634. A source another source includes is part of it
+
+Found by building an application against hal9001, the holder's embedded
+HAL (AVR, MSP430, 8051, STM32), from a scratch tree: `main.c` from its
+shell example, the `hal9001_config.h` its Kconfig writes, and the
+`hal9001/` library copied in. `cc = "avr-gcc"` and `-mmcu` in
+`[project] cflags`.
+
+hal9001 keeps one generic `.c` per API, and that file picks the arch's
+implementation with an `#if` and `#include`s it:
+`hal9001/usart.c` includes `hal9001/arch/avr/avr8/usart.c` on an AVR. An
+arch file has no `def.h` above it and cannot compile alone for any
+target. fmake compiled all sixteen as units, so every build failed with
+`unknown type name '__sfr'`, `USART_AMOUNT undeclared` and the rest, one
+for each arch the library knows.
+
+**A source that a non-main file includes is a fragment now**
+(`included_sources`). It is excluded with the reason `#included by
+hal9001/usart.c, so part of it rather than a unit of its own`, which
+`--explain` prints. The name resolves beside the includer, then from the
+root, then as the one source whose path ends with it.
+
+Two halves that the first version missed or might have:
+
+- **What a fragment defines, its includer defines.** The closure picks
+  a unit by the definitions its scan lists, and `lib_value` written in
+  the fragment is not in the includer's text. The first version built
+  hal9001 only because each generic file defines something of its own.
+  The selftest case, where the includer defines nothing itself, failed
+  to link until the fragment's definitions were credited up the chain to
+  the first includer that is a unit. That is done on a copy, as
+  `win_main` is, so the scan cache keeps what each file says itself.
+- **A program's main file including a source does not take it away.** A
+  test including `../src/foo.c` to reach its statics is the common case
+  of a source included and also compiled. The program that needs foo.c
+  still needs it as a unit. So an includer with `main` makes no
+  fragment. The case's control checks this. Nor is a file with its own
+  `main` ever made a fragment: losing a program silently is worse than
+  the compile error a stray include gives.
+
+Freshness needs nothing new: the includer's depfile names the fragment,
+and the case edits the fragment and sees the exit status move.
+
+With the fragments left out, hal9001's shell example builds for the
+Arduino Uno from the tree alone. Nine library units are reached from
+`main.c` and fifteen are left as nothing reaches them. hal9001's own
+Makefile lists those units per example by hand (`AVR_UNITS_shell`).
+fmake's build is 5,538 bytes of text against the Makefile's 4,466. The
+difference is the holder's section-GC flags, which fmake does not pass
+yet.
+
+Case `a_source_another_source_includes_is_part_of_it`.
 

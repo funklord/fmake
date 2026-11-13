@@ -34257,6 +34257,64 @@ def a_flag_that_targets_another_machine_sets_the_arch(t):
 
 
 @case
+def a_source_another_source_includes_is_part_of_it(t):
+	"""section 634: a `.c' that a library file `#include's is a fragment.
+
+	hal9001 picks each arch's implementation with an #if in the generic
+	file and includes it; the arch file has no `def.h' above it and
+	cannot compile alone, for any target. fmake compiled every one as a
+	unit of its own, so every arch the library knew was an error on
+	every build. The fragment is left out now, with the reason under
+	--explain, and the program runs.
+
+	Freshness is the half that could regress silently: the fragment is
+	never a unit, so an edit to it has to rebuild its includer. Checked
+	by the exit status moving with the edit.
+
+	The control is a program's own main file including a source -- a
+	test reaching a file's statics -- which must not take that source
+	away from the build: there the included file is still compiled.
+	"""
+	t.write("def.h", "#pragma once\n#define LIB_BASE 40\n")
+	t.write("lib.c", '#include "def.h"\n#if defined(USE_A)\n'
+	        '#include "arch/a/impl.c"\n#else\n#include "arch/b/impl.c"\n'
+	        '#endif\n')
+	t.write("arch/a/impl.c", "int lib_value(void) { return LIB_BASE + 1; }\n")
+	t.write("arch/b/impl.c", "int lib_value(void) { return LIB_BASE + 2; }\n")
+	t.write("main.c", "int lib_value(void);\n"
+	        "int main(void) { return lib_value() - 42; }\n")
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"builds, no fragment compiled alone: {out}")
+	check(subprocess.run([exe]).returncode == 0,
+	      "and the b fragment answers 42")
+	e = t.fmake("--explain").stdout
+	check("#included by lib.c" in e,
+	      f"--explain gives the fragment's reason: {e}")
+
+	t.write("arch/b/impl.c", "int lib_value(void) { return LIB_BASE + 3; }\n")
+	r = t.fmake()
+	check(r.returncode == 0 and subprocess.run([exe]).returncode == 1,
+	      f"an edit to the fragment rebuilds its includer: "
+	      f"{r.stdout}{r.stderr}")
+
+	for rel in ("def.h", "lib.c", "arch/a/impl.c", "arch/b/impl.c"):
+		os.remove(os.path.join(t.dir, rel))
+	shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+	t.write("util.c", "int util_twice(int x) { return 2 * x; }\n")
+	t.write("main.c", '#include "util.c"\n'
+	        "int main(void) { return util_twice(21) - 42; }\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a main file including a source still builds: "
+	      f"{r.stdout}{r.stderr}")
+	e = t.fmake("--explain").stdout
+	check("#included by" not in e,
+	      f"and that source is not called a fragment: {e}")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 
