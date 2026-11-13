@@ -48908,6 +48908,27 @@ and the case checks it.
 Cases `a_bare_metal_compiler_says_what_it_builds_for` and
 `a_linker_script_entry_reaches_the_file_defining_it`.
 
+**Every hal9001 example, 2026-11-13** (hal9001 ed7f23a, fmake b472239).
+Each `example/<name>/<board>` was built by fmake in an application tree
+of its own. That tree held the example's `.c`, the library, and the
+header and `hal.toml` from `genconfig.py --fmake`, included from an
+`fmake.toml` that adds only `--ld-path` for clang. For the four 8051
+configs, which genconfig refuses, the tree held an SDCC stanza from
+`config.mk` instead. MSP430 (no linker) and the FreeRTOS config (no
+kernel) were left out. All 35 others built. Text plus data, against
+hal9001's own build:
+
+- **AVR, 14 examples: identical to hal9001's Makefile, byte for byte.**
+  That includes blink at 158 bytes on the Uno, which hal9001's README
+  quotes. The Makefile names each example's units
+  (`AVR_UNITS_<name>`). fmake finds the same set from what `main`
+  reaches.
+- **ARM, 17 links against `check-arm`:** equal or smaller. blink and spi
+  are 184 to 404 bytes smaller, because `check-arm` links every unit and
+  a USART's interrupt handler survives section GC. vcc and persist are 4
+  bytes larger on three boards, with every symbol the same size. That is
+  alignment padding from a different object order on the link line.
+
 ## 636. A release build drops what nothing calls
 
 The release band is `-Os -ffunction-sections -fdata-sections`, and the
@@ -49034,7 +49055,12 @@ console`.
   its depfiles go. hal9001's own Makefile documents the same limit.
 - A library-only tree builds `libNAME.a` through `sdar`, and `sdnm`
   reads its member (`lib.c.rel: T _twice`). Linking a program against
-  such an archive is untried.
+  an archive in the tree failed at first: SDCC refuses a bare
+  `vendor/libtw.a` on its line ("file extension unsupported") and exits
+  0, which fmake caught as "produced no ...ihx". SDCC takes a library
+  as `-l<path>`, whatever its extension, and searches each one
+  repeatedly, so that is how `archive_flags` and both ejectors pass
+  them, with no group. Case `sdcc_links_an_archive_in_the_tree`.
 
 Case `sdcc_builds_an_8051_program_and_ejects_it`, which reads
 `FMAKE_SDCC` where `sdcc` is not on PATH and skips without either. It

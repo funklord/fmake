@@ -15079,6 +15079,12 @@ def archive_flags(cl):
     a cycle between two archives without naming one of them twice.
     """
 	arcs = [u.obj for u in cl.link if u.archive]
+	# SDCC takes a library only as `-l': a bare `libtw.a' on its line is
+	# "don't know what to do with file ... file extension unsupported",
+	# and it still exits 0. Its linker searches each repeatedly, so it
+	# needs no group either.
+	if _SDCC[0]:
+		return ["-l" + a for a in arcs]
 	if len(arcs) < 2:
 		return arcs
 	return link_group(arcs)
@@ -22961,7 +22967,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		objs_txt = f"$({P}{ident}_OBJS)" + (
 		    " " + " ".join(blobs) if blobs else "")
 		arcs_txt = " ".join(arcs)
-		if len(arcs) > 1:
+		if cfg.sdcc:
+			# SDCC takes a library only as `-l'; see archive_flags.
+			arcs_txt = " ".join("-l" + x for x in arcs)
+		elif len(arcs) > 1:
 			arcs_txt = " ".join(link_group([arcs_txt]))
 		tail = ((f" {arcs_txt}" if arcs_txt else "")
 		        + (f" {libs}" if libs else "") + f" $({P}LDFLAGS)")
@@ -23990,7 +23999,10 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 					  f"-Wl,--version-script,{t.version_script}")
 			if arcs:
 				txt = " ".join(arcs)
-				if len(arcs) > 1:
+				if cfg.sdcc:
+					# SDCC takes a library only as `-l'; see archive_flags.
+					txt = " ".join("-l" + x for x in arcs)
+				elif len(arcs) > 1:
 					txt = " ".join(link_group([txt]))
 				a(f"  arcs = {txt}")
 			res = resolutions.get(t)
