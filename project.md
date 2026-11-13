@@ -48850,6 +48850,11 @@ detect": a bare-metal triple does say so, in words fmake did not read.
 eabi` answers `thumbv7m-unknown-none-eabi`, and `thumbv7m` was not an
 arch, so the build was for x86_64 and refused. `machine_arch` maps every
 `armv*` and `thumbv*` word to `arm`, the one ELF machine they share.
+`riscv32` was the same gap one ISA over, and hal9001 reported it
+from its ESP32-C3 port: `--target=riscv32-unknown-none-elf` was refused
+as an x86_64 build until hal9001's stanza wrote `arch = "riscv"`. It is
+EM_RISCV's third spelling in `ARCH_ELF_CODE` now. Case
+`a_riscv32_target_flag_sets_the_arch`, which fails without the alias.
 
 **The linker script is a reader of symbols too.** hal9001's
 `stm32f10x.ld` says `ENTRY(Reset_Handler)`, and no C calls the reset

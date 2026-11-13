@@ -11409,7 +11409,11 @@ ELF_MACHINES = {
 # the machine alone -- and widening it is a separate question from having
 # the lookup work at all.
 ARCH_ELF_CODE = {name: code for code, name in ELF_MACHINES.items()}
-for _canon, _elf_name in (("riscv64", "riscv"), ("ppc64le", "ppc64"),
+# riscv32 too, which clang's --target=riscv32-unknown-none-elf answers
+# for hal9001's ESP32-C3 port: unknown, it was a build for the host's
+# arch and refused as one (hal9001's report, 2026-11-13).
+for _canon, _elf_name in (("riscv64", "riscv"), ("riscv32", "riscv"),
+                          ("ppc64le", "ppc64"),
                           ("mips64", "mips"), ("s390x", "s390")):
 	ARCH_ELF_CODE[_canon] = ARCH_ELF_CODE[_elf_name]
 

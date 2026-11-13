@@ -34584,6 +34584,39 @@ def sdcc_links_an_archive_in_the_tree(t):
 
 
 @case
+def a_riscv32_target_flag_sets_the_arch(t):
+	"""section 635: `--target=riscv32-unknown-none-elf' is riscv32/none.
+
+	hal9001's ESP32-C3 port compiles with exactly that, and with no arch
+	key fmake refused its objects -- "compiled for riscv/32le, but this
+	tree is being built for none/x86_64" -- where `thumbv7m-none-eabi'
+	already needed none. riscv32 is EM_RISCV's third spelling now. The
+	program is read back as a 32-bit RISC-V ELF.
+	"""
+	lld = shutil.which("ld.lld") or shutil.which("ld.lld-19")
+	if not shutil.which("clang") or not lld:
+		raise Skip("clang or ld.lld not installed")
+	t.write("main.c", "int main(void) { for (;;) ; }\n"
+	        "void _start(void) { main(); }\n")
+	t.write("fmake.toml", '[project]\ncflags = ["--target=riscv32-unknown-'
+	        'none-elf", "-march=rv32imc", "-mabi=ilp32", "-ffreestanding"]\n'
+	        f'ldflags = ["-nostdlib", "-fuse-ld=lld", "--ld-path={lld}", '
+	        '"-Wl,-e,_start"]\n\n[toolchain]\ncc = "clang"\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	if "unknown target" in out or "No available targets" in out:
+		raise Skip("this clang has no RISC-V target")
+	check(r.returncode == 0, f"builds with no arch key: {out}")
+	e = t.fmake("--explain").stdout
+	check("none/riscv32" in e, f"--explain says none/riscv32: {e}")
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	with open(exe, "rb") as fh:
+		head = fh.read(20)
+	check(head[4] == 1 and head[18] == 0xF3,
+	      f"the program is a 32-bit RISC-V ELF: {head!r}")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 
