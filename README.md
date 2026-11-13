@@ -659,6 +659,10 @@ for — it goes through the same parser:
 For facts that belong to no single file and need tables.
 
 ```toml
+include = ["hal9001.toml"]      # read first, this file on top: tables
+                                # merge, lists add, a value here wins --
+                                # for a stanza a generator writes
+
 [project]
 cflags  = ["-Wall"]
 exclude = ["vendor/**"]         # sources AND the include paths under them;
@@ -813,6 +817,19 @@ refused naming both.
 `wine` for a Windows program and `qemu-<arch>` for a foreign Linux one,
 when they are on PATH. `[toolchain] runner` names another command line,
 and an empty one means nothing here can.
+
+**Firmware builds the same way.** A bare-metal compiler says so in its
+triple -- `avr`, `arm-none-eabi`, `msp430-elf` -- and fmake builds for OS
+`none`, so a file marked `@os linux` stays out. The part goes in
+`[project] cflags` (`-mmcu=atmega328p`, or clang's `--target` and
+`-mcpu`), the linker script in `ldflags`, and the script's `ENTRY` and
+`EXTERN` reach the file that defines them, so a reset handler nothing
+calls is still linked. A library that picks each architecture's code
+with an `#if` and `#include`s it is read as one unit per generic file,
+not one per architecture. SDCC builds the 8051 tier: `.rel` objects
+and an Intel hex program, from the tree and from either ejected build.
+A stanza a configurator writes (hal9001's `genconfig.py --fmake`) is
+pulled in with `include`, so the part is stated once.
 
 **macOS** builds from an SDK the compiler already knows about, an
 `x86_64-apple-darwin*-clang` from osxcross or a Mac's own `cc`. Libraries

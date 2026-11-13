@@ -34490,6 +34490,51 @@ def sdcc_builds_an_8051_program_and_ejects_it(t):
 
 
 @case
+def a_config_can_include_a_generated_one(t):
+	"""section 638: `include = ["gen.toml"]' layers a file under fmake.toml.
+
+	hal9001's `genconfig.py --fmake' writes the part's compiler and flags
+	from its Kconfig, as a whole fmake.toml, and an application with keys
+	of its own had to merge that by hand and lose it at the next
+	generation. Included, the generated file is read first and the root
+	one on top: lists add, as a profile's do, so both cflags reach the
+	compile, and a scalar the root states wins.
+
+	Then the refusals: an unknown key is reported against the file that
+	holds it, a file including itself is named with its chain, and a
+	path out of the tree is refused, since its paths are read from the
+	root.
+	"""
+	t.write("gen.toml", '[project]\ncflags = ["-DFROM_GEN=1"]\nstd = "c99"\n')
+	t.write("fmake.toml", 'include = ["gen.toml"]\n\n'
+	        '[project]\ncflags = ["-DFROM_ROOT=2"]\nstd = "c11"\n')
+	t.write("main.c", "int main(void) {\n"
+	        "#if __STDC_VERSION__ != 201112L\n  return 9;\n#endif\n"
+	        "  return FROM_GEN + FROM_ROOT - 3;\n}\n")
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	r = t.fmake()
+	check(r.returncode == 0, f"builds: {r.stdout}{r.stderr}")
+	check(subprocess.run([exe]).returncode == 0,
+	      "both files' cflags reached the compile, and the root's std won")
+
+	t.write("gen.toml", '[project]\ncflagz = ["-DX"]\n')
+	r = t.fmake()
+	check(r.returncode != 0 and "gen.toml is not valid" in r.stderr
+	      and "cflagz" in r.stderr,
+	      f"an unknown key is named with its file: {r.stderr}")
+
+	t.write("gen.toml", 'include = ["fmake.toml"]\n')
+	r = t.fmake()
+	check(r.returncode != 0 and "includes itself" in r.stderr,
+	      f"a cycle is refused by name: {r.stderr}")
+
+	t.write("fmake.toml", 'include = ["../elsewhere.toml"]\n')
+	r = t.fmake()
+	check(r.returncode != 0 and "outside the tree" in r.stderr,
+	      f"a file out of the tree is refused: {r.stderr}")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 

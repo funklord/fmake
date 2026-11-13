@@ -2236,14 +2236,87 @@ def load_conf(root):
 	path = os.path.join(root, CONF_FILE)
 	if not os.path.isfile(path):
 		return {}
+	data = _read_conf_file(root, CONF_FILE, ())
+	_check_needs(data)
+	# After validation, so a malformed file is reported as malformed rather
+	# than as an unreadable $file() inside it.
+	data = _expand_conf_files(data, root)
+	_refuse_unexpanded(data)
+	return data
+
+
+def _merge_conf(base, over):
+	"""`over' on top of `base': tables merge, lists add, `over' wins.
+
+    Lists add because that is what a flag list means everywhere else
+    here -- a profile's cflags follow the project's, a `[directory]''s
+    follow its parent's -- so `include' of a generated stanza and a
+    project's own `cflags = ["-Wall"]' both reach the compile.
+    """
+	out = dict(base)
+	for key, value in over.items():
+		if isinstance(value, dict) and isinstance(out.get(key), dict):
+			out[key] = _merge_conf(out[key], value)
+		elif isinstance(value, list) and isinstance(out.get(key), list):
+			out[key] = out[key] + [v for v in value]
+		else:
+			out[key] = value
+	return out
+
+
+def _read_conf_file(root, rel, chain):
+	"""One configuration file, validated, with what it includes merged
+    under it. `rel' is root-relative; `chain' is the includes that led
+    here, so a cycle is named rather than followed.
+
+    `include = ["hal9001.toml"]' exists for a file something else writes:
+    hal9001's `genconfig.py --fmake' derives the part's compiler and
+    flags from its Kconfig, and an application's own keys would otherwise
+    be merged into that file by hand and lost at the next generation
+    (hal9001's report, 2026-11-13). An included file is read as the root
+    one is: its paths are the tree's, which is why it must be in it.
+    """
+	path = os.path.join(root, rel)
 	try:
 		with open(path, "rb") as fh:
 			data = tomllib.load(fh)
 	except tomllib.TOMLDecodeError as exc:
-		die(f"{CONF_FILE}: {exc}")
+		die(f"{rel}: {exc}")
 	except OSError as exc:
-		die(f"{CONF_FILE}: {exc}")
+		die(f"{rel}: {exc}")
 
+	includes = data.pop("include", [])
+	if isinstance(includes, str):
+		includes = [includes]
+	problems = []
+	if not isinstance(includes, list) or not all(
+	        isinstance(i, str) for i in includes):
+		problems.append(f"{rel}: include must be a list of file names")
+		includes = []
+	base = {}
+	for inc in includes:
+		norm = os.path.normpath(inc)
+		if os.path.isabs(inc) or norm.split(os.sep)[0] == "..":
+			problems.append(f"{rel}: include {inc!r} is outside the tree; "
+			                f"an included file's paths are read from the "
+			                f"root, so it has to be in it")
+			continue
+		if norm in chain or norm == rel:
+			problems.append(f"{rel}: include {inc!r} includes itself "
+			                f"(through {' -> '.join(chain + (rel,))})")
+			continue
+		if not os.path.isfile(os.path.join(root, norm)):
+			problems.append(f"{rel}: include {inc!r}: no such file")
+			continue
+		base = _merge_conf(base, _read_conf_file(root, norm, chain + (rel,)))
+	if problems:
+		die(f"{rel} is not valid:\n    " + "\n    ".join(problems))
+	_validate_conf(data, rel)
+	return _merge_conf(base, data)
+
+
+def _validate_conf(data, shown):
+	"""Die naming every problem in one file's sections and keys."""
 	problems = []
 	for section, value in data.items():
 		spec = CONF_SCHEMA.get(section)
@@ -2261,17 +2334,17 @@ def load_conf(root):
 			# several causes, and advice that fits only one of them.
 			if section in CONF_DIR_SECTIONS:
 				problems.append(
-				    f"{CONF_FILE}: [{section}] is read from a "
+				    f"{shown}: [{section}] is read from a "
 				    f"subdirectory's {CONF_FILE}, not the root one -- it "
 				    f"carries a fact about the files below it. "
 				    f"[project] is where a flag for the whole tree goes")
 				continue
-			problems.append(f"{CONF_FILE}: unknown section [{section}] "
+			problems.append(f"{shown}: unknown section [{section}] "
 			                f"(expected one of: "
 			                f"{', '.join(sorted(CONF_SCHEMA))})")
 			continue
 		if not isinstance(value, dict):
-			problems.append(f"{CONF_FILE}: [{section}] must be a table")
+			problems.append(f"{shown}: [{section}] must be a table")
 			continue
 		if "*" in spec:
 			# A spec may carry flat keys BESIDE its wildcard, which `[situ]'
@@ -2287,7 +2360,7 @@ def load_conf(root):
 					_conf_check({name: sub}, flat, f"[{section}]", problems)
 					continue
 				if not isinstance(sub, dict):
-					problems.append(f"{CONF_FILE}: [{section}.{name}] must "
+					problems.append(f"{shown}: [{section}.{name}] must "
 					                f"be a table")
 					continue
 				_conf_check(sub, spec["*"], f"[{section}.{name}]", problems)
@@ -2295,13 +2368,7 @@ def load_conf(root):
 			_conf_check(value, spec, f"[{section}]", problems)
 
 	if problems:
-		die(f"{CONF_FILE} is not valid:\n    " + "\n    ".join(problems))
-	_check_needs(data)
-	# After validation, so a malformed file is reported as malformed rather
-	# than as an unreadable $file() inside it.
-	data = _expand_conf_files(data, root)
-	_refuse_unexpanded(data)
-	return data
+		die(f"{shown} is not valid:\n    " + "\n    ".join(problems))
 
 
 class Conf:

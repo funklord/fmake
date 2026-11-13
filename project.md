@@ -686,7 +686,8 @@ that had been green about nothing for five commits ·
 [634. A source another source includes is part of it](#634-a-source-another-source-includes-is-part-of-it) ·
 [635. Firmware: a bare-metal compiler, and the linker script's entry](#635-firmware-a-bare-metal-compiler-and-the-linker-scripts-entry) ·
 [636. A release build drops what nothing calls](#636-a-release-build-drops-what-nothing-calls) ·
-[637. SDCC, a compiler family of its own](#637-sdcc-a-compiler-family-of-its-own)
+[637. SDCC, a compiler family of its own](#637-sdcc-a-compiler-family-of-its-own) ·
+[638. A config can include a generated one](#638-a-config-can-include-a-generated-one)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -48899,8 +48900,8 @@ and the case checks it.
   this working tree: the Uno shell example came out at 4,466 bytes, and
   the shell test passed on the Uno and the STM32VLDISCOVERY. hal9001
   also noted that the generated file is a whole `fmake.toml`, so an app
-  with other keys merges by hand. Whether fmake should read a second
-  file is open, and it is fmake's decision.
+  with other keys merges by hand. Section 638 answers that with
+  `include`.
 - fmake's 5,538 bytes against the Makefile's 4,466 for the shell example
   was section GC, which fmake did not pass. Section 636.
 
@@ -49035,4 +49036,41 @@ Case `sdcc_builds_an_8051_program_and_ejects_it`, which reads
 `FMAKE_SDCC` where `sdcc` is not on PATH and skips without either. It
 builds, checks `--explain` and the absence of the advisory, then
 rebuilds from each ejected file from nothing and compares the hex.
+
+## 638. A config can include a generated one
+
+hal9001's `genconfig.py --fmake` (hal9001 a8f21f1) writes the part's
+compiler and flags as a whole `fmake.toml`, from the same Kconfig
+symbols its Makefile reads. An application with keys of its own had to
+merge that stanza by hand, and lose the merge at the next generation.
+hal9001 raised it as fmake's decision. Decided here: a top-level
+`include = ["hal9001.toml"]`.
+
+- **Each named file is read first, and the including file on top**
+  (`_read_conf_file`, `_merge_conf`). Tables merge and lists add, as a
+  profile's cflags follow the project's and a `[directory]`'s follow its
+  parent's. A scalar the including file states wins. The rejected
+  option was replacing lists, as most config layers do: then an app's
+  `cflags = ["-Wall"]` would drop the part's `-mmcu`, and the
+  application would have to repeat what the generator writes.
+- **Each file is validated as itself**, so an unknown key is reported
+  as `gen.toml is not valid`, naming the file that holds it. `$file()`
+  expansion and `needs` run once, on the merged result.
+- **Its paths are the tree's**, read from the root as `fmake.toml`'s
+  are. So an included file must be in the tree, and a path out of it is
+  refused. A file that includes itself, directly or through another, is
+  refused with its chain.
+- Nothing else reads the root file raw, apart from `-i`, which appends
+  to it and is unchanged. A changed included file rebuilds what its
+  flags reach, because flags are in the keys.
+
+**Measured end to end** with hal9001 at a8f21f1, from a fresh `git
+archive`. `genconfig.py` was run from the application's own directory,
+which works since hal9001 4d7285b, with `--fmake hal.toml`. The app's
+`fmake.toml` is `include = ["hal.toml"]` plus `[project] cflags =
+["-Wall"]`. The shell firmware compiled with `-mmcu=atmega328p
+-std=gnu11 -Wall` (from `--explain`), came to 4,932 bytes, and passed
+`run_shell.py uno` 10 of 10.
+
+Case `a_config_can_include_a_generated_one`, and a README row.
 
