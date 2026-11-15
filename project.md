@@ -48934,6 +48934,19 @@ hal9001's own build:
   bytes larger on three boards, with every symbol the same size. That is
   alignment padding from a different object order on the link line.
 
+**Open after this run (2026-11-15), for the next session:**
+
+- MSP430 firmware needs a linker. The question to the holder is whether
+  to fetch TI's msp430-gcc with a fetch-then-delete script, like
+  `tool/windows_kit.py`.
+- The `.deb` in `build/deb` is the 0731e80 build. The holder asked for
+  that one, and it predates sections 634-638.
+- hal9001's own example-by-board matrix stays its Makefile's (section
+  638's note). It is a feature only if asked for.
+- 57 `/tmp/fmake-*` directories from two interrupted suite runs on
+  2026-11-13 were left for the holder to remove. The session's own sweep
+  of them was refused by the harness.
+
 ## 636. A release build drops what nothing calls
 
 The release band is `-Os -ffunction-sections -fdata-sections`, and the
