@@ -34651,6 +34651,53 @@ def a_fragment_its_includer_does_not_deliver_is_a_unit(t):
 
 
 @case
+def msp430_gcc_builds_a_program_with_nothing_declared(t):
+	"""section 639: TI's msp430-gcc, with only cc and the part named.
+
+	`msp430-elf' is a triple with no OS and EM_MSP430 is named (section
+	635), so the build is none/msp430 with no arch key, and the link takes
+	the part's script from TI's support files through -L. The image is
+	read back as an MSP430 ELF, and rebuilt from the ejected Makefile to
+	the same bytes.
+
+	FMAKE_MSP430 names msp430-gcc's bin directory and FMAKE_MSP430_INCLUDE
+	TI's support files' include directory; hal9001's `make
+	toolchain-msp430gcc' and `toolchain-msp430ti' unpack both without
+	root. Skipped without them.
+	"""
+	bindir = os.environ.get("FMAKE_MSP430") or ""
+	inc = os.environ.get("FMAKE_MSP430_INCLUDE") or ""
+	cc = os.path.join(bindir, "msp430-elf-gcc")
+	if not (bindir and inc and os.access(cc, os.X_OK)
+	        and os.path.isfile(os.path.join(inc, "msp430g2553.h"))):
+		raise Skip("no FMAKE_MSP430 and FMAKE_MSP430_INCLUDE")
+	t.write("blink.c", "#include <msp430.h>\nint main(void) {\n"
+	        "  WDTCTL = WDTPW | WDTHOLD;\n  P1DIR |= BIT0;\n"
+	        "  for (;;) P1OUT ^= BIT0;\n}\n")
+	t.write("fmake.toml", '[project]\ncflags = ["-mmcu=msp430g2553", '
+	        f'"-isystem", "{inc}"]\nldflags = ["-L", "{inc}"]\n\n'
+	        f'[toolchain]\ncc = "{cc}"\n')
+	exe = os.path.join(t.dir, "blink")
+	r = t.fmake()
+	check(r.returncode == 0, f"builds: {r.stdout}{r.stderr}")
+	e = t.fmake("--explain").stdout
+	check("none/msp430" in e, f"--explain says none/msp430: {e}")
+	with open(exe, "rb") as fh:
+		want = fh.read()
+	check(want[:4] == b"\x7fELF" and want[18] == 0x69,
+	      f"the program is an MSP430 ELF: {want[:20]!r}")
+	path = os.path.join(t.dir, "ejected.make")
+	with open(path, "w") as fh:
+		fh.write(t.fmake("--eject", "make").stdout)
+	os.remove(exe)
+	got = _run_in(t.dir, "make", "-s", "-f", path)
+	check(got.returncode == 0 and os.path.exists(exe),
+	      f"the ejected Makefile builds it: {got.stdout}{got.stderr}")
+	with open(exe, "rb") as fh:
+		check(fh.read() == want, "and writes the same bytes")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 

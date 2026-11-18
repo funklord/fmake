@@ -687,7 +687,8 @@ that had been green about nothing for five commits ·
 [635. Firmware: a bare-metal compiler, and the linker script's entry](#635-firmware-a-bare-metal-compiler-and-the-linker-scripts-entry) ·
 [636. A release build drops what nothing calls](#636-a-release-build-drops-what-nothing-calls) ·
 [637. SDCC, a compiler family of its own](#637-sdcc-a-compiler-family-of-its-own) ·
-[638. A config can include a generated one](#638-a-config-can-include-a-generated-one)
+[638. A config can include a generated one](#638-a-config-can-include-a-generated-one) ·
+[639. MSP430, and who fetches a toolchain](#639-msp430-and-who-fetches-a-toolchain)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49180,4 +49181,61 @@ tree includes. Under the per-application route they are not in the tree
 at all. ESP32-C6 (hal9001 9715451): its `genconfig --fmake` stanza
 builds all six C6 configurations with fmake, with the arch read from the
 triple. hal9001 ran the shell on Espressif's qemu, 10 of 10.
+
+## 639. MSP430, and who fetches a toolchain
+
+The holder asked (2026-11-18) whether fmake should fetch `msp430-gcc`,
+or hal9001 should. **hal9001 does, and already did.** hal9001's
+`make toolchain-msp430gcc` fetches TI's prebuilt msp430-gcc 9.3.1.11
+for x86_64 Linux. `make toolchain-msp430ti` fetches TI's support files
+1.207, the device headers and linker scripts. Both are pinned by SHA-256
+and unpacked into hal9001's own `build/toolchain`, beside SDCC. Debian
+carries no MSP430 compiler any more. The reasoning for keeping it there:
+
+- The toolchain belongs to the code that targets the part, and
+  hal9001's `make check` is what needs it.
+- fmake needs a compiler only to be tested against, and reads one from
+  wherever it is, as `FMAKE_SDCC` reads hal9001's SDCC. A second copy
+  under fmake would be 64 MB of somebody else's pinned download kept in
+  two places, and it would drift.
+
+**fmake builds hal9001's MSP430 tier with it**, with no change to fmake.
+The stanza is `cc = ".../msp430-elf-gcc"`, `-mmcu`, TI's headers as
+`-isystem` and `-L` for their linker scripts. hal9001's `genconfig
+--fmake` refuses MSP430 so far, so the sweep wrote the stanza by hand.
+EM_MSP430 and the `msp430-elf` triple give `none/msp430` with no arch
+key (section 635). There is no MSP430 emulator here, so the check is
+the link and the image size. hal9001 runs its host suites under
+`msp430-elf-run` (`check-msp430-sim`), and has no firmware test.
+Case `msp430_gcc_builds_a_program_with_nothing_declared` reads
+`FMAKE_MSP430` (the bin directory) and `FMAKE_MSP430_INCLUDE` (TI's
+support files), and skips without them. It builds a G2553 blink, checks
+`none/msp430` and the ELF machine, and rebuilds it from the ejected
+Makefile to the same bytes.
+
+**Every hal9001 example, again, at hal9001 a636faa:** 95 of the 125
+configurations build. Not covered: the 23 Xtensa ones, for which
+hal9001's genconfig writes no stanza, and the FreeRTOS one, which has no
+kernel. Six more build but exit 1. In those, `device/ssd1306.c`,
+`device/nt7534.c` or `device/spi_fram.c` is compiled as a candidate and
+stops on `#error hal9001: no i2c` (or `no spi`) `for this mcu`, on the
+AT89C51ED2, the Blue Pill, the ESP32-C3 and the MSP430 FR parts. That is
+hal9001's README promise, every `.c` compiling to nothing where its
+driver is absent, not holding for those three files. It is reported to
+hal9001. The committed fmake behaves the same way there.
+
+Against hal9001's own builds of the same examples:
+
+- **AVR:** 16 of 18 match byte for byte. `button` is 70 bytes smaller on
+  both parts. hal9001's list links `delay.c`, whose timer-overflow
+  interrupt and `delay_wraps` nothing in `button` references.
+- **8051:** 10 of 12 match. Two Si102x images are 3 bytes smaller.
+- **MSP430:** 9 of 24 match. The rest are smaller, 42 bytes on the FR
+  parts, for the same reason: units the hand list adds and nothing
+  references.
+
+The link resolving without those units is the evidence that nothing
+calls them. A unit that acts only through its vector table, never
+referenced and only switched on by register writes elsewhere, would be
+dropped as well. `@sources` is the way to name one.
 
