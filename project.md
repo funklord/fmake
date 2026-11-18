@@ -689,7 +689,8 @@ that had been green about nothing for five commits ·
 [637. SDCC, a compiler family of its own](#637-sdcc-a-compiler-family-of-its-own) ·
 [638. A config can include a generated one](#638-a-config-can-include-a-generated-one) ·
 [639. MSP430, and who fetches a toolchain](#639-msp430-and-who-fetches-a-toolchain) ·
-[640. Xtensa, and an entry point in inline asm](#640-xtensa-and-an-entry-point-in-inline-asm)
+[640. Xtensa, and an entry point in inline asm](#640-xtensa-and-an-entry-point-in-inline-asm) ·
+[641. A call passing a lambda is not a definition](#641-a-call-passing-a-lambda-is-not-a-definition)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49285,4 +49286,62 @@ its bus or store is absent. Rebuilt from hal9001 3d78a51 on 2026-11-18,
 all 10 build cleanly, so all 124 do. The linker-script case now also
 defines a symbol only in inline asm, and that half fails on the fmake
 before this change.
+
+
+## 641. A call passing a lambda is not a definition
+
+raidcfgd reported (inbox 20261118T1327Z) that a plain `fmake` there
+compiles nine of its own Qt test programs in the closure phase and links
+none of them, measured against the installed 1.0 with `nm -C` over all
+twelve programs. Reproduced at this checkout in a copy: widening proposed
+`test/test_daemon.cpp` and `test/gui_tray.cpp` for `QObject` and
+`connect`, and seven more for `read`, `name`, `at`, `count`, `listen`
+and `start`.
+
+**Two of the nine were a scanner fault.** `RE_FUNC_DEF` and
+`RE_MEMBER_DEF` allowed `(` inside a parameter list, so in
+`QObject::connect(&w, &W::done, [&](int n) {` the lambda's own list
+closed the match and its body supplied the brace. Every lambda connected
+in a Qt tree "defined" `connect` and `QObject`. Neither pattern allows
+`(` there now. This loses no real definition: a `(` inside the list has
+to be closed by the `)` that ends the match, which leaves the name's own
+paren unclosed, so no balanced list can match that way. A nested list
+belongs to `RE_FUNC_PTR_DEF`. Measured over 24,792 C and C++ files in
+ten sibling trees, the two patterns lose 495 names. Every sampled one is
+a call passing a lambda, or a compound literal in a macro argument. Two
+names are gained, where a false match had consumed the text of a real
+one. Case `a_call_passing_a_lambda_is_not_a_definition`.
+
+**The other seven remain, and they are section 424's question again.**
+Qt's unresolved symbols mangle as a scope plus a method name.
+`symbol_tokens` offers each part separately, so a file defining any
+`read` matches `QIODevice::read`. In raidcfgd those files are local
+fakes overriding `read()` and `name()`. They are compiled once and then
+come from the object cache, so the cost falls on cold builds and header
+changes. Two fixes are open and neither is taken here:
+- **Match a nested name only where the file also defines its scope.**
+  This needs namespace names in the scan, because `raid::foo` is defined
+  inside `namespace raid {` with nothing spelling `raid::`. It also needs
+  a real parse of a mangled name: template arguments arrive as tokens
+  too. A miss is a build that does not happen.
+- **Keep held-back test roots out of the widening pool.** Section 424
+  withdrew the wider clause, every target root, because a function
+  beside another program's `main` is meant to be reachable and the
+  collision is reported with its remedy. For a test root that argument
+  is weaker, but it would still need its own failure line.
+
+**Two pieces of news from the inbox, recorded so they can be deleted.**
+- raidcfgd now commits the one exclude section 558's advice named, on
+  the holder's instruction of 2026-11-18. Its `fmake.toml` carries
+  `fuzznet/wire/generated/situ.c`, so a plain `fmake` with nothing added
+  builds all twelve programs, exit 0, and `raidtray` prints the same
+  version as the `make` build.
+- ossacli (inbox 20261113T1622Z, ossacli f268fe4) keeps its shim
+  exclusion until an installed fmake carries section 292's module route.
+  The packaged 1.0 on this machine reports a58f7179 and has neither
+  b66ad11 nor e19a087. Its `make test` fmake arm, which reads every link
+  set from `--explain`, is what will show adoption is safe. Its
+  `libossa.a` exclusion stays for good, and its bare `make` no longer
+  builds the two interposers (`make shims`, ossacli 679b78e). Nothing in
+  its `fmake.toml` depended on that.
 

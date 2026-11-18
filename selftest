@@ -8244,6 +8244,33 @@ def a_symbol_that_starts_with_an_underscore_finds_its_file(t):
 
 
 @case
+def a_call_passing_a_lambda_is_not_a_definition(t):
+	"""`work(f, [](int n) { ...' is a call, though a brace follows a `)'.
+
+    The definition pattern allowed `(' inside a parameter list, so the
+    lambda's own list closed the match and its body supplied the brace:
+    every `QObject::connect(..., [&](...) {' in a tree "defined" connect
+    and QObject. Widening then compiled whatever file made such a call
+    whenever a symbol of that name was unresolved, which in raidcfgd was
+    nine Qt test programs a build, linked into nothing (2026-11-18).
+
+    The control is the definer, which takes a callback and has to stay
+    found by the pattern beside this one.
+    """
+	t.write("main.cpp", "int work(int (*f)(int));\n"
+	        "int main(){ return work([](int n){ return n; }) == 1 ? 0 : 1; }\n")
+	t.write("work.cpp", "int work(int (*f)(int)) { return f(0) + 1; }\n")
+	t.write("noise.cpp", "int work(int (*f)(int));\n"
+	        "int noise(){\n\treturn work([](int n) { return n + 1; });\n}\n")
+	r = t.fmake("-v")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0, f"the build failed: {out}")
+	check(re.search(r"widening: work\.cpp may define 'work'", out),
+	      f"the definer was not proposed: {out}")
+	check(not re.search(r"noise\.cpp may define|CXX\s+noise\.cpp", out),
+	      f"a call passing a lambda was read as a definition: {out}")
+
+@case
 def a_definition_taking_a_callback_is_still_a_definition(t):
 	"""The parameter list forbade `)', and every callback parameter has one.
 

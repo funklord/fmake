@@ -1036,8 +1036,19 @@ def include_guards(code):
 # A *definition* -- a name, a parameter list, then a brace. Declarations and
 # calls do not match. Everything found here is confirmed later against the
 # object's symbol table, so these only have to be good, not perfect.
+#
+# No `(' inside the list either, and that is what keeps a call passing a
+# lambda from reading as a definition: `QObject::connect(&w, &W::done,
+# [&](int n) {' has its first `)' and then a brace, so with `(' allowed
+# it defined `connect' and `QObject'. Every Qt test that connects a lambda
+# then "defined" what Qt's own symbols name, and widening compiled nine of
+# raidcfgd's test programs for each build to link none of them (raidcfgd,
+# 2026-11-18). Nothing real is lost: a `(' in the list has to be closed by
+# the `)' that ends the match, so the name's own paren is the unclosed one
+# and no balanced definition can match that way. A list that genuinely
+# nests is RE_FUNC_PTR_DEF's, below.
 RE_FUNC_DEF = re.compile(
-    r'(?:^|[;}\s*&:])([^\W\d]\w*)[ \t\n]*\([^;{)]*\)'
+    r'(?:^|[;}\s*&:])([^\W\d]\w*)[ \t\n]*\([^;{()]*\)'
     r'(?:[ \t\n]*(?:const|noexcept|override|final))*[ \t\n]*\{', re.M)
 
 # The same definition, where a parameter is itself a function pointer. The
@@ -1097,7 +1108,7 @@ RE_MEMBER_DEF = re.compile(
     r'([^\W\d]\w*)[ \t]*::[ \t]*'
     r'~?(?:operator[ \t]*(?:[^\w\s]{1,3}|[^\W\d]\w*)'
     r'|[^\W\d]\w*)'
-    r'[ \t\n]*\([^;{)]*\)'
+    r'[ \t\n]*\([^;{()]*\)'
     r'(?:[ \t\n]*(?:const|noexcept|override|final))*'
     r'(?:[ \t\n]*:[^;{]*)?[ \t\n]*\{', re.M)
 
