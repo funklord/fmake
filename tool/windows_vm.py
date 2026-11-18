@@ -9,6 +9,8 @@
     tool/windows_vm.py build [VERSION] -- TREE [FMAKE ARGS]
                                             build a sibling project hosted on Windows,
                                             with Qt's MinGW kit on hand
+    tool/windows_vm.py compact [VERSION]    boot it, decrypt and TRIM C:, power off,
+                                            so the image holds only what Windows uses
     tool/windows_vm.py remove [VERSION]     delete that machine (keeps the downloaded image)
 
 Section 632: hull's pc class is the way to a real Windows here, and
@@ -91,6 +93,7 @@ MEMORY = "8G"
 CPUS = "4"
 INSTALL_TIMEOUT = 3 * 3600
 SSH_TIMEOUT = 900
+DECRYPT_TIMEOUT = 3 * 3600
 
 
 def say(text):
@@ -173,6 +176,9 @@ UNATTEND = """<?xml version="1.0" encoding="utf-8"?>
   <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
    <ComputerName>FMAKE-WIN</ComputerName><TimeZone>UTC</TimeZone>
   </component>
+  <component name="Microsoft-Windows-SecureStartup-FilterDriver" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+   <PreventDeviceEncryption>true</PreventDeviceEncryption>
+  </component>
  </settings>
  <settings pass="oobeSystem">
   <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -216,6 +222,9 @@ if (-not (Get-NetFirewallRule -Name OpenSSH-Server-In-TCP -ErrorAction SilentlyC
 # network is classed Public: sshd listened and the firewall dropped every
 # connection, found from the console 2026-11-12.
 Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -Profile Any
+# Nothing here hibernates, and the file is 3.2G of an image that only
+# shrinks by trimming (measured 2026-11-18).
+powercfg /h off
 $keys = 'C:\ProgramData\ssh\administrators_authorized_keys'
 Copy-Item (Join-Path $here 'fmake.pub') $keys
 icacls $keys /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F'
@@ -281,7 +290,8 @@ class Machine:
 		    "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
 		    "-device", "tpm-crb,tpmdev=tpm0",
 		    "-device", "ahci,id=ahci",
-		    "-drive", f"if=none,id=disk,format=qcow2,file={d}/disk.qcow2",
+		    "-drive", f"if=none,id=disk,format=qcow2,file={d}/disk.qcow2,"
+		              "discard=unmap,detect-zeroes=unmap",
 		    "-device", "ide-hd,drive=disk,bus=ahci.0,bootindex=1",
 		    "-nic", f"user,model=e1000e,hostfwd=tcp:127.0.0.1:{self.port}-:22",
 		    "-vga", "std", "-display", "none",
@@ -546,6 +556,83 @@ def run(name, cmd, interactive=False):
 		m.stop()
 
 
+
+def allocated(path):
+	return os.stat(path).st_blocks * 512
+
+
+def powershell(m, script, **kw):
+	return subprocess.run(ssh_argv(m, "powershell", "-NoProfile", "-Command",
+	                               script), capture_output=True, text=True, **kw)
+
+
+def compact(name):
+	"""Give the space Windows is not using back to the host.
+
+    The disk is a sparse qcow2, but a cluster Windows once wrote stays
+    allocated after it frees it unless the guest TRIMs and the host
+    unmaps. Two things stood in the way, found 2026-11-18 when /home
+    reached 98% and the image held 23.8G of 64G: Windows 11 turned on
+    device encryption during setup, so the free space is ciphertext no
+    tool outside can tell from data, and the disk was attached with no
+    discard. So this boots by qemu directly (hull's pc class passes no
+    discard), decrypts C: where it is encrypted, re-TRIMs it, and powers
+    off. Machines installed since carry PreventDeviceEncryption and the
+    discard, and need only the TRIM.
+    """
+	d = machine_dir(name)
+	disk = os.path.join(d, "disk.qcow2")
+	if not os.path.exists(os.path.join(d, "installed")):
+		die(f"{name} is not installed")
+	before = allocated(disk)
+	m = Machine(d)
+	try:
+		m.start()
+		wait_for_ssh(m)
+		status = "(Get-BitLockerVolume -MountPoint C:).VolumeStatus"
+		r = powershell(m, status)
+		say(f"C: is {r.stdout.strip() or '?'}")
+		if r.stdout.strip() != "FullyDecrypted":
+			r = subprocess.run(ssh_argv(m, "manage-bde", "-off", "C:"),
+			                   capture_output=True, text=True)
+			if r.returncode:
+				die(f"manage-bde -off failed:\n{r.stdout}{r.stderr}")
+			end = time.time() + DECRYPT_TIMEOUT
+			while time.time() < end:
+				time.sleep(60)
+				r = powershell(m, f"{status}; (Get-BitLockerVolume -MountPoint C:).EncryptionPercentage")
+				words = r.stdout.split()
+				say(f"C: {' '.join(words)}")
+				if words[:1] == ["FullyDecrypted"]:
+					break
+			else:
+				die(f"C: not decrypted after {DECRYPT_TIMEOUT // 60} min")
+		# What fills the disk besides Windows, measured 2026-11-18: the
+		# trees `check' and `build' unpack (4.4G; each run makes its own
+		# afresh), the hibernation file (3.2G; nothing here hibernates),
+		# the update download cache (1.5G) and superseded components.
+		subprocess.run(ssh_argv(
+		    m, "rmdir /s /q C:\\fmake-check & rmdir /s /q C:\\fmake-build"
+		       " & powercfg /h off"
+		       " & net stop wuauserv & rmdir /s /q"
+		       " C:\\Windows\\SoftwareDistribution\\Download"
+		       " & Dism /Online /Cleanup-Image /StartComponentCleanup"
+		       " /ResetBase"), timeout=DECRYPT_TIMEOUT)
+		r = powershell(m, "Optimize-Volume -DriveLetter C -ReTrim -Verbose")
+		print(r.stdout + r.stderr, end="")
+		subprocess.run(ssh_argv(m, "shutdown", "/s", "/t", "0"),
+		               capture_output=True)
+		try:
+			m.qemu.wait(300)
+		except subprocess.TimeoutExpired:
+			pass
+	finally:
+		m.stop()
+	after = allocated(disk)
+	say(f"{disk}: {before / 2**30:.1f}G allocated before, "
+	    f"{after / 2**30:.1f}G after")
+	return 0
+
 # What `check' builds inside Windows, hosted: each tree is written into
 # the guest, built by fmake with the MinGW and ninja windows_kit fetches,
 # and the result run. A failing line prints FAIL and the script goes on,
@@ -794,7 +881,7 @@ def _exit_on_term(signum, _frame):
 def main():
 	ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
 	ap.add_argument("action", choices=("list", "install", "run", "ssh",
-	                                   "check", "build", "remove"))
+	                                   "check", "build", "compact", "remove"))
 	ap.add_argument("version", nargs="?", default=DEFAULT)
 	argv = sys.argv[1:]
 	cmd = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -815,6 +902,8 @@ def main():
 		return check(args.version)
 	if args.action == "build":
 		return build_tree(args.version, cmd)
+	if args.action == "compact":
+		return compact(args.version)
 	if args.action == "remove":
 		d = machine_dir(args.version)
 		if os.path.isdir(d) and os.path.dirname(d) == VM:

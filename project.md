@@ -690,7 +690,8 @@ that had been green about nothing for five commits ·
 [638. A config can include a generated one](#638-a-config-can-include-a-generated-one) ·
 [639. MSP430, and who fetches a toolchain](#639-msp430-and-who-fetches-a-toolchain) ·
 [640. Xtensa, and an entry point in inline asm](#640-xtensa-and-an-entry-point-in-inline-asm) ·
-[641. A call passing a lambda is not a definition](#641-a-call-passing-a-lambda-is-not-a-definition)
+[641. A call passing a lambda is not a definition](#641-a-call-passing-a-lambda-is-not-a-definition) ·
+[642. The Windows VM image, and what actually shrank it](#642-the-windows-vm-image-and-what-actually-shrank-it)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49345,3 +49346,33 @@ changes. Two fixes are open and neither is taken here:
   builds the two interposers (`make shims`, ossacli 679b78e). Nothing in
   its `fmake.toml` depended on that.
 
+## 642. The Windows VM image, and what actually shrank it
+
+The holder asked for disk on 2026-11-18 with `/home` at 98%, and a session
+in claude-guidelines (inbox 20261118T2228Z) found section 633's image
+could not be compacted from outside. Windows 11 had turned on BitLocker
+device encryption during setup, and `tool/windows_vm.py` attached the
+disk with no discard. Both are fixed for new installs:
+`PreventDeviceEncryption` sits in the answer file's specialize pass, and
+qemu attaches the disk with `discard=unmap,detect-zeroes=unmap`.
+`powercfg /h off` was added to the first-logon script.
+
+**`windows_vm.py compact` is the repair for an existing image.** It boots
+by qemu directly, decrypts C: where needed, and removes the `C:\fmake-check`
+and `C:\fmake-build` trees, which each run unpacks afresh anyway. It also
+turns hibernation off, empties the update download cache, runs `Dism
+/StartComponentCleanup /ResetBase`, re-TRIMs, and powers off. It does not
+use hull, because hull's pc class attaches the disk with no discard,
+which was sent to hull's inbox as information.
+
+**What it measured, which corrects the diagnosis it started from.**
+Decrypting and re-trimming alone took the image from 23.8G to 24.4G, and
+`virt-sparsify --in-place` after that freed 0.1G. Every allocated
+cluster held data NTFS was using (29.5 GB used, measured inside).
+Device encryption encrypts used space only, so the free space had never
+been written to the image, and there was nothing outside the guest to
+reclaim. What shrank it was removing data inside: 4.4G of kit trees,
+3.2G of `hiberfil.sys`, 1.5G of the update cache, and superseded
+components. NTFS then held 21.2 GB used, and the image dropped from 21.1G
+to 15.9G. So the TRIM path through the new discard attachment does work.
+`/home` went from 98% to 96%.
