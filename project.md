@@ -49278,9 +49278,11 @@ fault of section 639. It is reported to hal9001, which is already
 sweeping `device/` for it.
 
 With section 639's sweep, 124 of hal9001's 125 example configurations
-produce an image with fmake, all but the FreeRTOS one. 114 build
-cleanly, and 10 exit 1 on a driver's `#error`. Those 10 should build
-cleanly once hal9001's sweep lands. The linker-script case now also
+produce an image with fmake, all but the FreeRTOS one. 114 built
+cleanly at first, and 10 exited 1 on a driver's `#error`. hal9001 fixed
+those drivers (13d5057, 3d78a51), so each `.c` compiles to nothing where
+its bus or store is absent. Rebuilt from hal9001 3d78a51 on 2026-11-18,
+all 10 build cleanly, so all 124 do. The linker-script case now also
 defines a symbol only in inline asm, and that half fails on the fmake
 before this change.
 
