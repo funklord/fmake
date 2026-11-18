@@ -34617,6 +34617,40 @@ def a_riscv32_target_flag_sets_the_arch(t):
 
 
 @case
+def a_fragment_its_includer_does_not_deliver_is_a_unit(t):
+	"""section 634: an included source comes back when nothing delivers it.
+
+	hal9001's rv3028.c is a unit on every target, and on the 8051 alone
+	rv3028_alarm.c and rv3028_eeprom.c #include it for a part each, so
+	SDCC can drop the parts a program does not call. Read from the text
+	it is a fragment everywhere, and an rtc example linked on no target
+	at all. Now a fragment whose includers are all compiled and still do
+	not export what it defines is compiled alone, as a last resort.
+
+	Both shapes, by -DSPLIT: unsplit, the part file compiles to nothing
+	and core.c is the unit; split, part.c delivers its part and core.c
+	the rest (its CORE half only, so nothing is defined twice).
+	"""
+	t.write("core.c", "#if !defined(PART_EXTRA)\n#define PART_CORE\n#endif\n"
+	        "#if !defined(SPLIT)\n#define PART_EXTRA\n#endif\n"
+	        "#ifdef PART_CORE\nint core_value(void) { return 40; }\n#endif\n"
+	        "#ifdef PART_EXTRA\nint extra_value(void) { return 2; }\n#endif\n")
+	t.write("part.c", "#ifdef SPLIT\n#define PART_EXTRA\n#include \"core.c\"\n"
+	        "#endif\n")
+	t.write("main.c", "int core_value(void);\nint extra_value(void);\n"
+	        "int main(void) { return core_value() + extra_value() - 42; }\n")
+	exe = os.path.join(t.dir, os.path.basename(t.dir))
+	for flags in ("", '"-DSPLIT"'):
+		shutil.rmtree(os.path.join(t.dir, ".fmake"), ignore_errors=True)
+		t.write("fmake.toml", f"[project]\ncflags = [{flags}]\n")
+		r = t.fmake()
+		check(r.returncode == 0,
+		      f"links with cflags [{flags}]: {r.stdout}{r.stderr}")
+		check(subprocess.run([exe]).returncode == 0,
+		      f"and core_value + extra_value is 42 with [{flags}]")
+
+
+@case
 def a_declared_arch_is_checked_on_mach_o_too(t):
 	"""section 626: a Mach-O object of the wrong machine is refused.
 

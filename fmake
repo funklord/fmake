@@ -6587,7 +6587,7 @@ def walk_tree(root, pruned=None):
 
 
 def included_sources(srcs, hdrs, scans):
-	"""{source: includer} for each source another file `#include's.
+	"""{source: [includers]} for each source another file `#include's.
 
     Such a source is a fragment of its includer rather than a unit of its
     own: hal9001's `usart.c' picks `arch/avr/avr8/usart.c' with an #if
@@ -6630,7 +6630,8 @@ def included_sources(srcs, hdrs, scans):
 			# A program is never somebody's fragment: losing one silently
 			# is worse than the compile error a stray include gives.
 			if hit and hit != rel and not scans.get(hit, {}).get("has_main"):
-				out.setdefault(hit, rel)
+				if rel not in out.setdefault(hit, []):
+					out[hit].append(rel)
 	return out
 
 
@@ -16230,22 +16231,35 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# the first includer that is a unit; a header includer is left alone,
 	# since every unit including it would be the definer. A copy, not an
 	# edit: the scan cache holds what each file says itself.
+	# Every includer, not the first: hal9001 builds its 8051 delay and
+	# RV-3028 code as parts, delay.c, delay_us.c and delay_timer.c each
+	# including arch/8051/delay.c for a part of it, and a symbol credited
+	# to one includer when another delivers it sends the closure to the
+	# wrong one.
 	for frag in fragments:
-		owner, seen = fragments[frag], {frag}
-		while owner in fragments and owner not in seen:
+		todo, seen = list(fragments[frag]), {frag}
+		while todo:
+			owner = todo.pop()
+			if owner in seen:
+				continue
 			seen.add(owner)
-			owner = fragments[owner]
-		if owner in scans and owner in srcs and owner not in fragments:
-			scans[owner] = dict(scans[owner], defs=sorted(
-			    set(scans[owner].get("defs", ()))
-			    | set(scans[frag].get("defs", ()))))
+			if owner in fragments:
+				todo.extend(fragments[owner])
+				continue
+			if owner in scans and owner in srcs:
+				scans[owner] = dict(scans[owner], defs=sorted(
+				    set(scans[owner].get("defs", ()))
+				    | set(scans[frag].get("defs", ()))))
 	for rel in list(srcs):
 		pat = exclude_pattern(rel)
 		if pat:
 			excluded[rel] = f"[project] exclude = {pat!r}"
 		elif rel in fragments:
-			excluded[rel] = (f"#included by {fragments[rel]}, so part of "
-			                 f"it rather than a unit of its own")
+			_by = fragments[rel]
+			excluded[rel] = (f"#included by {_by[0]}"
+			                 + (f" and {len(_by) - 1} more" if len(_by) > 1
+			                    else "")
+			                 + ", so part of it rather than a unit of its own")
 		else:
 			ann = Ann(scans[rel].get("dirs"))
 			platform_contradiction(ann, rel)
@@ -18394,6 +18408,10 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 
 	# ---- compile, close, widen ----------------------------------------
 	tried, broken = set(), set()
+	# Fragments given their second chance (see the pool below), so each is
+	# offered once: a symbol already tried is tried again only for a
+	# fragment whose includer has since been compiled and did not export it.
+	fragments_retried = set()
 	# What widening compiled, and the names it compiled each one for.
 	tried_for = {}
 	# What failed to compile as a guess and turned out not to be needed.
@@ -19224,8 +19242,37 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		for cl in closures.values():
 			unresolved |= set(cl.external)
 		fresh = unresolved - tried
-		if not fresh or args.widen_all or args.dry_run:
+
+		def _owed_fragments():
+			"""Fragments whose includers are all compiled and did not
+            export what the fragment defines, with the names still owed.
+            The last resort, so asked only when ordinary widening has
+            nothing left to try: in a pass that still compiles a part
+            file (delay_us.c), every other arch's delay.c looks owed the
+            part's symbols."""
+			out = []
+			for _f, _incs in sorted(fragments.items()):
+				if (_f in units or _f in fragments_retried
+				        or _f not in scans
+				        or not all(i in units and units[i].strong is not None
+				                   for i in _incs)):
+					continue
+				# Through symbol_tokens, as widening matches: SDCC and Mach-O
+				# spell `rv3028_get_time' as `_rv3028_get_time'.
+				_defs = set(scans[_f].get("defs", ()))
+				_names = sorted(x for x in unresolved
+				                if symbol_tokens(x) & _defs)
+				if _names:
+					out.append((Unit(_f, root, objdir, scans[_f]), _names))
+			return out
+
+		owed = None
+		if args.widen_all or args.dry_run:
 			break
+		if not fresh:
+			owed = _owed_fragments()
+			if not owed:
+				break
 		tried |= fresh
 
 		# fmake runs moc, uic and rcc itself, so a file one of them wrote
@@ -19260,6 +19307,14 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# say so.
 		pool = [rel for rel in srcs
 		        if rel not in units and rel not in crate_members]
+		# A fragment comes back as a unit of its own when its includer,
+		# compiled, did not deliver what the fragment defines: a symbol it
+		# defines is still unresolved and the includer's object is here.
+		# Decided by the objects because the text cannot: hal9001's
+		# rv3028_alarm.c includes rv3028.c only on the 8051 and only for
+		# its alarm part, so everywhere else -- and for the core part on
+		# the 8051 itself -- rv3028.c is a unit, while an arch file whose
+		# includer exports its functions stays a fragment.
 		theirs = [rel for rel in pool if scans[rel].get("genby")
 		          and not rel.startswith(STATE_DIR + os.sep)]
 		# And the second route, which is the one the candidate filter
@@ -19330,7 +19385,16 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			     f"    {shown}")
 			declined_generated |= {u.rel for u in would}
 		if not extra:
-			break
+			if owed is None:
+				owed = _owed_fragments()
+			if not owed:
+				break
+			extra = owed
+			fragments_retried.update(u.rel for u, _n in owed)
+			for u, _names in owed:
+				vinfo(f"widening: {u.rel} is a fragment its includers did "
+				      f"not deliver, compiled alone for "
+				      + ", ".join(repr(x) for x in _names))
 		vinfo(f"widening: {len(extra)} more file(s) may define "
 		      f"{len(fresh)} unresolved symbol(s)")
 		# And which name reached, per file. The summary above counts both

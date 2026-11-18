@@ -48804,6 +48804,43 @@ Two halves that the first version missed or might have:
 Freshness needs nothing new: the includer's depfile names the fragment,
 and the case edits the fragment and sees the exit status move.
 
+**Corrected 2026-11-18: a fragment its includers do not deliver is a
+unit.** The rule above, decided from the text alone, broke hal9001 once
+hal9001 split code into parts (0f2ee56 and after). `rv3028.c` is a unit
+on every target. On the 8051 alone, `rv3028_alarm.c` and
+`rv3028_eeprom.c` `#include` it for a part each, so SDCC can drop the
+parts a program does not call, and the 8051's `delay.c`, `delay_us.c`
+and `delay_timer.c` include `arch/8051/delay.c` the same way. Read as a
+fragment everywhere, `rv3028.c` was linked on no target, and `rtc` failed
+on the Uno, the MSP430 and the 8051. Three changes:
+
+- **A fragment records every includer**, and its definitions are
+  credited to each one. The first version credited only the first, so a
+  part's symbols were sought in the wrong part file.
+- **As a last resort a fragment is compiled alone** (`_owed_fragments`):
+  when ordinary widening finds no candidate, all of the fragment's
+  includers are compiled, and a symbol it defines is still unresolved.
+  It has to be the last resort. Offered any earlier, in the pass where
+  `delay_us.c` is still being compiled, every other architecture's
+  `delay.c` looks owed `delay_us`, and seven of them failed to compile.
+  Names are matched through `symbol_tokens`, because SDCC and Mach-O
+  spell `rv3028_get_time` as `_rv3028_get_time`. On the 8051, SDCC's own
+  runtime names (`__divuint`, ...) stay unresolved for fmake, since the
+  SDCC driver links them, so the trigger is "widening found nothing" and
+  not "nothing is unresolved".
+- **The question is decided by objects, because the text cannot decide
+  it.** Two text tests were measured and rejected. One was whether the
+  include is under a conditional: hal9001's arch includes all are. The
+  other was whether the file compiles on its own: on the Blue Pill seven
+  of the current arch's fragments do, `stm32f10x/delay.c` among them,
+  and as units they would define what `delay.c` defines.
+
+Checked against hal9001's own builds at a636faa. The 8051 `rtc` image
+has 9,097 bytes of code from both, and the MSP430 `rtc` is 4,222 bytes
+from both. Case `a_fragment_its_includer_does_not_deliver_is_a_unit`
+builds both shapes, part file empty and part file delivering. It fails
+on the fmake before this change.
+
 With the fragments left out, hal9001's shell example builds for the
 Arduino Uno from the tree alone. Nine library units are reached from
 `main.c` and fifteen are left as nothing reaches them. hal9001's own
