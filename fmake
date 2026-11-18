@@ -1527,6 +1527,11 @@ RE_ASM_WEAK = re.compile(
     r"^[ \t]*\.weak[ \t]+"
     r"([A-Za-z_.$][\w.$]*(?:[ \t]*,[ \t]*[A-Za-z_.$][\w.$]*)*)", re.M)
 RE_ASM_LABEL = re.compile(r"^[ \t]*([A-Za-z_.$][\w.$]*)[ \t]*:", re.M)
+# The same two inside a C string literal, which is inline asm's text.
+RE_C_ASM_GLOBAL = re.compile(
+    r'"[ \t]*\.(?:globl|global)[ \t]+'
+    r"([A-Za-z_.$][\w.$]*(?:[ \t]*,[ \t]*[A-Za-z_.$][\w.$]*)*)")
+RE_C_ASM_LABEL = re.compile(r'"[ \t]*([A-Za-z_.$][\w.$]*)[ \t]*:')
 RE_ASM_ALIAS = re.compile(
     r"^[ \t]*\.(?:set|equ|equiv)[ \t]+([A-Za-z_.$][\w.$]*)[ \t]*,", re.M)
 
@@ -1656,6 +1661,17 @@ def scan_source(path):
 		for group in RE_DATA_DEF_LIST.findall(code):
 			defs |= set(RE_DECLARATOR.findall(group))
 		defs |= set(RE_MEMBER_DEF.findall(code))
+		# A global defined in a C file's inline asm, which is where a
+		# firmware's entry point often lives: hal9001's ESP32 startup.c
+		# defines `hal_esp32_entry' as `.global' and a label inside
+		# asm(""), its script says ENTRY(hal_esp32_entry), and unread the
+		# entry was never linked and --gc-sections kept nothing at all.
+		# Both halves, as an assembly file is read: `.global' alone may
+		# name a symbol defined elsewhere.
+		_asm_labels = set(RE_C_ASM_LABEL.findall(code))
+		for group in RE_C_ASM_GLOBAL.findall(code):
+			defs |= {n.strip() for n in group.split(",")
+			         if n.strip() in _asm_labels}
 		for m in RE_TEMPLATE_INST.finditer(code):
 			defs |= set(re.findall(r"[^\W\d]\w*", m.group(1)))
 		for m in RE_TEMPLATE_SPEC.finditer(code):
@@ -11372,12 +11388,14 @@ def _stderr(cmd):
 # EM_AVR and EM_MSP430 are the microcontrollers avr-gcc and msp430-elf-gcc
 # (and clang's backends) build for. Named so that `cc = "avr-gcc"' answers
 # `avr' from its -dumpmachine and the check compares against it, where it
-# was `machine-0x53' to be declared.
+# was `machine-0x53' to be declared. EM_XTENSA likewise, for Espressif's
+# xtensa-esp-elf and xtensa-lx106-elf (hal9001's ESP32, ESP32-S3 and
+# ESP8266): unnamed, their objects were refused as `machine-0x5e'.
 ELF_MACHINES = {
     0x03: "x86", 0x3E: "x86_64", 0x28: "arm", 0xB7: "aarch64",
     0xF3: "riscv", 0x08: "mips", 0x14: "ppc", 0x15: "ppc64",
     0x02: "sparc", 0x32: "ia64", 0x16: "s390",
-    0x53: "avr", 0x69: "msp430",
+    0x53: "avr", 0x69: "msp430", 0x5E: "xtensa",
 }
 
 

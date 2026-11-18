@@ -688,7 +688,8 @@ that had been green about nothing for five commits ·
 [636. A release build drops what nothing calls](#636-a-release-build-drops-what-nothing-calls) ·
 [637. SDCC, a compiler family of its own](#637-sdcc-a-compiler-family-of-its-own) ·
 [638. A config can include a generated one](#638-a-config-can-include-a-generated-one) ·
-[639. MSP430, and who fetches a toolchain](#639-msp430-and-who-fetches-a-toolchain)
+[639. MSP430, and who fetches a toolchain](#639-msp430-and-who-fetches-a-toolchain) ·
+[640. Xtensa, and an entry point in inline asm](#640-xtensa-and-an-entry-point-in-inline-asm)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49238,4 +49239,48 @@ The link resolving without those units is the evidence that nothing
 calls them. A unit that acts only through its vector table, never
 referenced and only switched on by register writes elsewhere, would be
 dropped as well. `@sources` is the way to name one.
+
+## 640. Xtensa, and an entry point in inline asm
+
+hal9001's 23 Xtensa configurations (ESP32, ESP32-S3, ESP8266) were the
+part of its examples section 639 could not reach. Its `genconfig --fmake`
+writes no stanza for them, and clang 19 has no Xtensa front end, so they
+are built with Espressif's GCC and Debian's `xtensa-lx106-elf`, both of
+which hal9001 unpacks into its `build/toolchain`. Two faults:
+
+- **EM_XTENSA (0x5E) had no name.** `xtensa-esp-elf` and
+  `xtensa-lx106-elf` named neither an arch nor, until section 635's `elf`
+  row, an OS, so the objects were refused as `machine-0x5e` from an
+  x86_64 build. They are `none/xtensa` now.
+- **The entry point was defined in a C file's inline asm, and nothing
+  read it there.** hal9001's `arch/xtensa/esp32/startup.c` defines
+  `hal_esp32_entry` as `.global` and a label inside `asm("")`, and its
+  `esp32.ld` says `ENTRY(hal_esp32_entry)`. Section 635 takes a script's
+  `ENTRY` only where the tree defines the symbol, and the C scanner did
+  not see this one. So `startup.c` was never linked, and `--gc-sections`
+  kept nothing: an image of 0 bytes, linked without an error. The
+  scanner now reads `.global NAME` inside a C string literal, where the
+  same file's asm also has the label `NAME:` (`RE_C_ASM_GLOBAL`,
+  `RE_C_ASM_LABEL`). A `.global` alone may name a symbol defined
+  elsewhere, as in an assembly file. The ESP32 shell image is 7,200
+  bytes, section for section the same as hal9001's own build.
+  `--explain` says `hal9001/startup.c <- hal_esp32_entry (ENTRY in
+  .../esp32.ld)`.
+
+The stanzas follow hal9001's Makefile. ESP32 and ESP32-S3 use
+`-mabi=call0 -mtext-section-literals -ffreestanding -std=gnu11`, the
+ESP8266 the same without call0, and all link with `-nostdlib
+-Wl,-T,<part script>`. All 23 build a non-empty image. Four exit 1 on
+`#error hal9001: no spi for this mcu`, in `device/nt7534.c`,
+`sharp_mlcd.c` and `ssd1680.c` for display and oled on the ESP32 and
+ESP32-S3, and `spi_nor.c` in the ESP32 shell test. That is the driver
+fault of section 639. It is reported to hal9001, which is already
+sweeping `device/` for it.
+
+With section 639's sweep, 124 of hal9001's 125 example configurations
+produce an image with fmake, all but the FreeRTOS one. 114 build
+cleanly, and 10 exit 1 on a driver's `#error`. Those 10 should build
+cleanly once hal9001's sweep lands. The linker-script case now also
+defines a symbol only in inline asm, and that half fails on the fmake
+before this change.
 

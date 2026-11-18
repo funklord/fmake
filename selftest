@@ -34370,8 +34370,14 @@ def a_linker_script_entry_reaches_the_file_defining_it(t):
 	if len(parts) < 3:
 		raise Skip("this linker prints no default script")
 	script = parts[1]
-	t.write("ld/keep.ld", "EXTERN(kept_by_script)\n" + script)
+	t.write("ld/keep.ld", "EXTERN(kept_by_script kept_in_asm)\n" + script)
 	t.write("keep.c", "int kept_by_script(void) { return 7; }\n")
+	# Defined only in inline asm, as hal9001's ESP32 entry point is: the
+	# scanner has to read `.global' and the label out of the string.
+	t.write("asmkeep.c", '__asm__(".text\\n"\n'
+	        '        ".global kept_in_asm\\n"\n'
+	        '        "kept_in_asm:\\n"\n'
+	        '        "ret\\n");\n')
 	t.write("main.c", "int main(void) { return 0; }\n")
 	t.write("fmake.toml", '[project]\nldflags = ["-Wl,-T,ld/keep.ld"]\n')
 	r = t.fmake()
@@ -34381,6 +34387,8 @@ def a_linker_script_entry_reaches_the_file_defining_it(t):
 	nm = _run_in(t.dir, "nm", "--defined-only", exe).stdout
 	check(re.search(r"\bT kept_by_script\b", nm),
 	      f"the function only the script names is in the program: {out}")
+	check(re.search(r"\bT kept_in_asm\b", nm),
+	      f"and so is one defined only in inline asm: {out}")
 	e = t.fmake("--explain").stdout
 	check("EXTERN in ld/keep.ld" in e,
 	      f"--explain credits the script, not main.c: {e}")
