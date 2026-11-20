@@ -1,24 +1,16 @@
-<!-- The three rules and their detail are copied from
-     ~/.claude/guidelines/code-style.md -- the source. Keep in sync; fix
-     drift the moment you notice it. -->
+<!-- Copied from ~/.claude/guidelines/code-style.md by tool/sync.py.
+     Edit the source, not this part: this project's own rules follow
+     the end-of-copy line below. -->
 
 # code-style.md
 
-Code style for this project -- `fmake` itself, `selftest`, the `Makefile`
-and the packaging, **and the build files `fmake` ejects**.
+Code style for private projects. This file is the **source**. Every private
+project except the one holding it carries a copy at its repo root, written
+by `tool/sync.py` -- see *Keeping the copies in sync* at the end.
 
-`project.md` section 16 records how the work is done and points here for the
-style; where the two disagree, `project.md` wins. **Above both sits the
-global source**, `~/.claude/guidelines/code-style.md`, which applies to
-every private project. Where either disagrees with it, that is **drift to
-fix, not a local override**. A genuine divergence needs a technical reason
-and is signalled to the list in `claude-guidelines`' `project.md` rather
-than decided in passing -- and when a conflict between the three actually
-comes up, stop and ask instead of picking a winner.
-
-Nothing is vendored. The reference projects in section 16 are fetched into scratch
-directories and are not part of this repository, so their style is their
-own and never ours to correct.
+Vendored submodules, generated sources and attic/historical material are
+exempt: they keep whatever their upstream or generator produces. Each
+project names its own exempt paths in its part of the file.
 
 ## The three rules
 
@@ -26,25 +18,321 @@ own and never ours to correct.
 2. **Tabs for indentation, spaces for alignment.**
 3. **Lowercase filenames,** unless a tool demands otherwise.
 
-Everything below is those three rules in detail, plus the exceptions that
-are already settled. An exception not listed is not yet settled: signal it
-to the list in `claude-guidelines`' `project.md` rather than deciding it in
-passing.
+Everything below is these three rules in detail, plus the exceptions that
+are already settled. An exception not listed here is not yet settled: raise
+it rather than deciding in passing.
 
 ## 1. Naming
 
-`snake_case` for functions, variables and attributes; the tool is one file
-of stdlib-only Python, so there is no library surface to prefix and no
-prefix is used.
+`snake_case` for functions, variables, type names and fields.
+
+This holds **even inside a toolkit whose own API is `camelCase`**. Call the
+foreign API exactly as it is spelled (`setParent`, `addWidget`) -- that is
+the API's name, not a violation. But names *you* introduce stay
+`snake_case`; do not let the surrounding convention pull them across.
+
+- **Name the thing, not its category**: `plan`, not `plan_struct` or
+  `plan_result`.
+- **No abbreviations that are not already vocabulary.** `observed`, not
+  `obs`; `interface`, not `iff`. This matters most where an internal name
+  escapes into something you cannot rename later -- a wire format, a config
+  key, a CLI output, an on-disk path.
+- **One word per concept, everywhere** -- the same word in the type name,
+  the file path, the subcommand and the documentation. A synonym introduced
+  for variety reads as a second concept.
+
+### Prefixes, and visibility
+
+Prefixes keep this project's symbols from colliding with a library's, so
+they follow **visibility**, and the choice is judgement rather than a
+mechanical rule:
+
+- **Anything with more than small visibility carries the project prefix**
+  -- the public API, and anything a linker or importer outside its own
+  module can reach.
+- **Module-private symbols are left unprefixed**, so that the absence of a
+  prefix reads as "this does not leave the module."
+
+The middle case decides itself on link safety, not taste. A symbol internal
+by intent but still reaching the linker -- cross-file within a library, not
+`static`, not part of the API -- is *not* private for this purpose: prefix
+it. A deliberate parallel copy of a function in two libraries needs a
+**distinct** name; the assumption that nothing will ever link both sides
+fails later, at a call site that changed nothing, and names files you did
+not touch.
+
+Where a language enforces its own scheme, accept it, and say in the
+project's part of this file that the toolchain is doing it:
+
+- **Rust** -- `non_snake_case` and `non_camel_case_types` are on by
+  default, so types are `PascalCase` and constants `SCREAMING_SNAKE_CASE`
+  -- the toolchain's, not a choice. Package systems that demand kebab-case
+  (Cargo crates, Debian packages) read back with their own spelling; do not
+  invent a third by naming the directory differently from the package.
+- **Python** -- a leading underscore (`_name`) is the language's private
+  marker and stands in for "unprefixed" above.
+
+## 2. Indentation and alignment
+
+Indent structural nesting with **tab** characters, one tab per level. When
+lining up tokens *within* a line -- continuation parameters under an open
+paren, a block comment's `*` column, an aligned trailing comment -- use
+**spaces**, after the indent tabs. Alignment is then relative to the shared
+leading tabs, so it survives at any tab width. No tab width is prescribed;
+the viewer decides.
+
+```c
+int thing_do(thing_t *thing, const char *name, size_t name_len,
+              uint8_t *out, size_t out_cap) {
+>---if (!thing) return ERR_MALFORMED;
+>---return thing_write(thing, name, name_len, out, out_cap,
+>---                    THING_DEFAULT_FLAGS);
+}
+```
+
+(`>---` marks a tab; everything lining up under `(` is spaces.)
+
+Never mix tabs and spaces *within* the indent itself. Tabs come first and
+spaces after; the reverse, or an alternation, breaks at a different tab
+width -- and in Python it is a syntax error.
+
+### Settled exceptions
+
+Divergence needs a technical reason. These are accepted:
+
+- **Makefile recipe lines** -- `make` requires a literal tab. Compliant by
+  construction.
+- **YAML** -- the spec forbids tabs for indentation. Use spaces.
+- **Markdown** -- list continuation and code fences are space-indented by
+  specification. Exempt.
+- **Debian packaging files** -- exempt, for two reasons measured against
+  dpkg. `debian/changelog` has a fixed layout with no tab in it:
+  `dpkg-parsechangelog` calls a tab-indented change line "unrecognized"
+  and loses the trailer if a tab precedes `--`. A deb822 continuation in
+  `control` or `copyright` may lead with a space *or* a tab, but that
+  whitespace is field syntax rather than indentation, and everything past
+  it is alignment.
+- **Go** -- `gofmt` emits tabs natively. Compliant already.
+- **Vendored, generated and attic sources** -- exempt, per the header.
+
+**Python**: PEP 8 prefers spaces, but the language's only hard rule is that
+indentation must not be *ambiguous*, and tabs-then-spaces is unambiguous at
+every tab width. Continuation lines inside brackets are not
+indentation-significant at all. Never a space *before* a tab in leading
+whitespace -- that is what raises `TabError`.
+
+Anything else that seems to need spaces: signal it to the list in
+`claude-guidelines`' `project.md`, follow the rule meanwhile, and it is
+settled here in a pass rather than in whichever project met it first.
+
+## 3. Filenames
+
+**Lowercase, always**, for everything the project names itself:
+`main_window.cpp`, not `MainWindow.cpp`.
+
+**The separator follows what the name binds to**, which is a technical
+difference rather than taste:
+
+- **`snake_case` where the filename becomes an identifier** -- a source
+  file, a header, a module. `desired_state.rs` *is* the module
+  `desired_state`, and `desired-state.rs` cannot be a module at all, a
+  hyphen not being legal in a Rust path; Python imports are the same. That
+  is the language's requirement, and not negotiable where it applies.
+- **`kebab-case` for prose** -- documentation, design notes, decision
+  records. Nothing imports `code-style.md`, so no identifier is at stake,
+  and kebab-case is what markdown and URLs settled on. (When this rule said
+  `snake_case` for documentation too, 174 of 197 markdown names across the
+  workspace were already kebab-case.)
+
+Settled exceptions:
+
+- **Names a tool will not accept lowercased** -- `Makefile`,
+  `CMakeLists.txt`, `AndroidManifest.xml`, `Dockerfile`, `Cargo.toml`.
+- **Root files with an established convention** -- `README.md`, `LICENSE`,
+  `CHANGELOG.md`, `AUTHORS`, `VERSION`. The last is this workspace's own: a
+  project that packages or ships a version tracks one, and the build reads
+  it for the package version and for what the program prints, so the
+  number lives in one place. `claude-guidelines` packages nothing and has
+  none.
+- **Package-system spellings** -- kebab-case where Cargo or Debian require
+  it, which is the spelling prose uses, so a crate directory and the design
+  note beside it agree by construction.
+
+### Singular, unless somebody else standardised the plural
+
+**Prefer the singular for a directory this project names itself**:
+`helper/`, `doc/`, `fixture/`. The name says what kind of thing lives
+there, not how many, and should not have to change when the count does.
+
+Two exceptions, and they are not equal -- the same shape as the lowercase
+rule, which yields first to `Makefile` because make will read nothing else,
+and only then to `README.md` because the world settled it.
+
+**First: a name a tool requires is not a name we choose.** It outranks the
+singular as it outranks lowercase, needs no measurement, and the test is
+whether something breaks when the name changes. It is open-ended: a tool
+met tomorrow that demands a name gets the same answer, whether the name is
+plural, singular, capitalised or none of those. Present here: **Cargo**
+looks for `tests/`, `examples/` and `benches/`, and `cargo-fuzz` for
+`fuzz_targets/`; **GitHub** requires `.github/workflows/`; **git** keeps
+`hooks/`, hence `tool/hooks/`. **A foreign package's directory names are
+the same exception one layer out**: the Android SDK's `platform-tools/` and
+`build-tools/` are the SDK's spelling. A word-boundary rewrite of `tools/`
+once reached into `platform-tools/`, the hyphen being a boundary, and every
+adb target in four projects pointed at a binary that was not there -- so a
+sweep skips compound names it does not own. Package-system spellings (Cargo
+crates, Debian packages) under *Filenames* above are this same carve-out.
+
+**Second: a plural an ecosystem has settled** -- a convention rather than a
+requirement: nothing breaks, but a reader would be surprised. Cargo
+workspaces keep members in `crates/`. **These need measuring**, and the
+project's part of this file names what it measured against, so the next
+reader does not reopen it.
+
+Say which kind is being claimed: confusing them lands on whoever renames a
+directory that looked like a convention and finds the build broken. And an
+inventory name in `harmonization.md` moves only when its owner says so, in
+a deliberate pass with each project's gates run against the result -- as
+`tools/`, `docs/` and `docs/decisions/` became `tool/`, `doc/` and
+`doc/decision/` -- never as a side effect of a style rule.
+
+## ASCII in source
+
+Source and comments are ASCII. Write `--` where prose would use an em dash,
+and "section" for a section sign.
+
+This governs **the text the repository writes about itself**, not the data
+the software handles. Three exceptions, which are the rule's shape rather
+than holes in it:
+
+- **Documentation.** Markdown may use typographic punctuation.
+- **User-facing text in UI software.** A tick a program prints is output,
+  not prose -- `GREEN('gpg ')` is correct as it stands.
+- **Anything that genuinely requires Unicode**: a fixture for a UTF-8
+  parser, a terminal emulator's character tables, a font tool.
+
+Where a project needs the rule enforced, `ascii_only` in `.style-gate.toml`
+turns it on. In Python and in C/C++ it enforces exactly that shape -- ASCII
+outside string literals, Unicode allowed inside -- reading Python with
+`tokenize` and C and C++ with a scanner written for the purpose. Every
+other language gets a whole-file byte check, and so does a file in those
+two that will not lex: a file nobody can parse is not a file that has been
+cleared.
+
+**An exception wider than its reason is how a rule stops being enforced.**
+The check was once whole-file for everyone, so a project printing two
+status ticks switched it off, and an em dash arrived in a comment; in a Qt
+tree that kept it off for its toolbar glyphs, 854 of 1114 non-ASCII
+characters turned out to be prose in comments.
+
+## Formatters
+
+A formatter is allowed **only if it can be configured to honour the three
+rules completely**. Configuration gaps are disqualifying: a formatter that
+gets indentation right and alignment wrong rewrites the tree on somebody's
+next save. So the decision is per tool, per project, and a real evaluation:
+
+- If it can be made to comply, use it, and commit the config with a comment
+  saying which setting is load-bearing and what happens without it.
+- If it cannot, do not run it -- **not even ad hoc on a single file**. The
+  failure is a silent conversion of files that were already correct,
+  found later as a reverted commit rather than an error.
+- If no existing tool fits and the rule is worth mechanising, write our
+  own. A checker that only gates indentation is worth more than a formatter
+  that reflows everything.
+
+**Record the decision and the finding that produced it** in the project's
+part of this file -- which tool, what failed, what would change the answer.
+A verdict without its evidence gets re-litigated, and a tool that improves
+later is never reconsidered because nobody remembers what was wrong with
+it.
+
+Naming and filename rules are review items, not automated ones.
+
+## Precedence
+
+Three layers, and they are not equals:
+
+1. **The global guidelines** (`~/.claude/CLAUDE.md` and the files it
+   imports) -- the source, and they win.
+2. **The project's `project.md`** -- project-specific design and
+   conventions.
+3. **The project's `code-style.md`** -- this file, copied, and the
+   project's own part after it.
+
+A project file that disagrees with the source is **drift, not an
+override**: fix it. A project that genuinely needs to diverge needs a
+technical reason, and that is not a decision to make while working on
+something else -- signal it to the list in `claude-guidelines`'
+`project.md` and keep following the source meanwhile.
+
+**When a conflict between layers actually comes up, stop and ask.** Do not
+silently pick a winner, even the global one.
+
+This precedence rule lives here and in the global guidelines only. It does
+not belong in a `project.md`.
+
+## Keeping the copies in sync
+
+Each private project keeps `code-style.md` at its root, in two parts: this
+source, verbatim, under a header naming it; then, after a line marking the
+end of the copy, **the project's own part**, holding only what is genuinely
+its own -- its exempt paths, formatter verdicts, language-specific notes
+and tooling commands, under its own headings. `claude-guidelines` is the
+exception: it holds the source at `guidelines/code-style.md`, and its root
+file points here.
+
+**`tool/sync.py` writes the copied part and never touches the project's
+part**, the same way it spreads the gate. So a copy cannot drift, and a
+project that wants a rule to read differently changes the source, through
+the signal list, rather than its copy. Until 2026-11-20 copies were adapted
+by hand and audited only for their headings, and most had drifted in prose
+no audit could see.
+
+**Keep a census out of this document.** A count written here is copied
+into every tree and goes stale in all of them at once; state the rule and
+the criterion that decides it, and keep the count where it can be
+recounted once.
+
+**This source is plain ASCII**, so that it is valid in a tree whose own
+rules restrict the characters its files may contain. Keep it so.
+
+**Re-read this source before writing a project's own part, or anything
+about the rules**, rather than working from what was loaded at the start of
+the session: text written against a stale source is drift being written.
+**A copied part that differs from the source** -- a tree the spread has not
+reached, a hand edit -- is put right with `sync.py --commit <tree>`, never
+by editing the copy; `sync.py --check` lists any that differ. A project's
+`project.md` may state the three rules in brief and point here; it does not
+restate the precedence rule.
+
+<!-- End of the copied part. What follows is this project's own. -->
+
+## This project
+
+Code style for this project -- `fmake` itself, `selftest`, the `Makefile`
+and the packaging, **and the build files `fmake` ejects**. `project.md`
+section 16 records how the work is done and points here for the style.
+
+### Exempt paths
+
+Nothing is vendored. The reference projects in section 16 are fetched into
+scratch directories and are not part of this repository, so their style is
+their own and never ours to correct.
+
+### Naming: no prefix, and where names escape
+
+The tool is one file of stdlib-only Python, so there is no library surface
+to prefix and no prefix is used.
 
 - **No abbreviations that are not already vocabulary.** This has teeth
   here: a name invented inside the tool escapes into directive spellings,
   `fmake.toml` keys and `--explain` output, where it can no longer be
   renamed without breaking somebody's build file.
-- **One word per fact, wherever it is written** -- section 4 already states this
-  for the directive set, and it is the same rule. The word in the directive
-  is the word in the config key is the word in the diagnostic.
-- Prefer the plain descriptive name over the decorated one.
+- **One word per fact, wherever it is written** -- section 4 of
+  `project.md` already states this for the directive set, and it is the
+  same rule. The word in the directive is the word in the config key is the
+  word in the diagnostic.
 - **A leading underscore is the private marker.** Python's `_name` is what
   stands in for the source's "module-private symbols are left unprefixed",
   since there is no linker here to collide with and therefore no prefix.
@@ -52,81 +340,14 @@ prefix is used.
 Naming and filename rules are review items rather than automated ones; the
 gate checks indentation and text, not what things are called.
 
-### Prefixes, and visibility
+### Settled exceptions: as they apply here
 
-Prefixes exist to keep this project's symbols from colliding with a
-library's. So they follow **visibility**, and the choice is a matter of
-judgement rather than a mechanical rule:
-
-- **Anything with more than small visibility carries the project prefix** --
-  the public API, and anything a linker or importer outside its own module
-  can reach.
-- **Module-private symbols are left unprefixed**, precisely so that the
-  absence of a prefix reads as "this does not leave the module."
-
-The middle case decides itself on link safety, not on taste. A symbol that
-is internal by intent but still reaches the linker -- cross-file within a
-library, not `static`, not part of the API -- is *not* private for this
-purpose. Prefix it. A deliberate parallel copy of a function in two
-libraries needs a **distinct** name, not the same name in both on the
-assumption that nothing will ever link both sides; that assumption fails
-later, at a call site that changed nothing, and names files you did not
-touch.
-
-Where a language enforces its own scheme, accept it rather than fight it,
-and say in the project's copy that the toolchain is doing it:
-
-- **Rust** -- `non_snake_case` and `non_camel_case_types` are on by default,
-  so types are `PascalCase` and constants `SCREAMING_SNAKE_CASE`. That is
-  the toolchain's, not a choice. Package systems that demand kebab-case
-  (Cargo crate names, Debian package names) likewise read back with their
-  own spelling; do not invent a third by naming the directory differently
-  from the package.
-- **Python** -- a leading underscore (`_name`) is the language's private
-  marker and stands in for "unprefixed" above.
-
-## 2. Indentation and alignment
-
-Tabs carry structural indent level; spaces carry alignment within a level.
-Continuation lines use tabs to the structural level, then spaces to the
-alignment column. Never a space before a tab in leading whitespace.
-
-No tab width is prescribed anywhere. The viewer decides.
-
-Python accepts this: the language's only hard rule is that indentation must
-not be *ambiguous* across tab widths, and tabs-then-spaces is unambiguous
-at every width. Continuation lines inside brackets are not
-indentation-significant at all.
-
-### Settled exceptions
-
-Every one of these exists in this tree, and each has a technical reason
-rather than a preference behind it:
-
-- **Markdown** -- list continuation and code fences are space-indented by
-  specification. Exempt.
-- **YAML** -- the spec forbids tabs for indentation outright, so
-  `.github/workflows/ci.yml` is space-indented. `.style-gate.toml` puts
-  `.yml` in `text_suffixes` and leaves it out of the indent check for that
-  reason, which widens what is checked without demanding what the format
-  forbids.
-- **Debian packaging files** -- exempt, and the two halves for different
-  reasons. `debian/changelog` has a fixed layout that a tab is not part of:
-  `dpkg-parsechangelog` calls a tab-indented change line "unrecognized" and
-  loses the trailer outright if a tab precedes `--`. A deb822 continuation
-  in `control` or `copyright` is the opposite case -- `deb822(5)` allows a
-  leading space *or* tab and dpkg round-trips either, but that leading
-  whitespace is field syntax rather than indentation, so the rule has
-  nothing to say about it and everything past it is alignment. Both
-  measured against dpkg rather than read off the manual.
-- **Makefile recipe lines** -- `make` requires a literal tab, so they are
-  compliant by construction. Where that matters here is the ejected output,
-  below.
-
-Anything else that seems to need spaces: signal it to the list in
-`claude-guidelines`' `project.md`, follow the rule meanwhile, and it gets
-settled and added here in a pass rather than in whichever project met it
-first.
+- **YAML** -- `.github/workflows/ci.yml` is space-indented.
+  `.style-gate.toml` puts `.yml` in `text_suffixes` and leaves it out of
+  the indent check for that reason, which widens what is checked without
+  demanding what the format forbids.
+- **Makefile recipe lines** -- compliant by construction. Where that
+  matters here is the ejected output, below.
 
 ### Ejected build files
 
@@ -175,7 +396,7 @@ program shares a header with the program:
   header: there are no pattern rules, nothing is an intermediate, and a
   bare one would reintroduce the hazard the flat output does not have.
 
-### No autoformatter
+### Formatters: no autoformatter
 
 `black` and `ruff format` rewrite tabs to spaces unconditionally and cannot
 be configured out of it. **Do not run either, not even ad hoc on a single
@@ -194,106 +415,41 @@ The conversion from spaces was mechanical, and is worth describing because
 the same job is waiting in the sibling projects. It is not a search and
 replace. A continuation line aligned under an open paren has no structural
 indent of its own, so it takes the tabs of the logical line it belongs to
-and expresses the remaining columns in spaces; a line at module level keeps
-pure spaces, because at level zero there are no tabs to align against. Lines
-inside a triple-quoted string are data -- C fixtures, Makefile snippets,
-expected output -- and are left alone entirely.
+and expresses the remaining columns in spaces; a line at module level
+keeps pure spaces, because at level zero there are no tabs to align
+against. Lines inside a triple-quoted string are data -- C fixtures,
+Makefile snippets, expected output -- and are left alone entirely.
 
 What made it safe to believe was not the diff. `ast.dump(ast.parse(...))`
 was identical before and after for both files, which proves every string
-literal survived byte for byte -- and string literals are exactly where this
-conversion could have done real damage, in a place a whitespace-insensitive
-diff would never have shown it.
+literal survived byte for byte -- and string literals are exactly where
+this conversion could have done real damage, in a place a
+whitespace-insensitive diff would never have shown it.
 
-## 3. Filenames
+### Filenames: as they apply here
 
-**Lowercase, always**, for everything this project names itself. The tool is
-`fmake`, extensionless and executable; the suite is `selftest`, the same.
+The tool is `fmake`, extensionless and executable; the suite is
+`selftest`, the same. `tool/style_gate.py` *is* the module `style_gate`,
+and `style-gate.py` could not be imported under any name, because a hyphen
+is not legal in a Python one.
 
-**The separator follows what the name binds to**, and the two cases are a
-technical difference rather than a matter of taste:
+The snake/kebab distinction had never come up here: the two programs this
+project names are one word each, with no separator to argue about, and
+every document it names was kebab-case or a single word already.
 
-- **`snake_case` where the filename becomes an identifier** -- a source
-  file, a header, a module. `tool/style_gate.py` *is* the module
-  `style_gate`, and `style-gate.py` could not be imported under any name,
-  because a hyphen is not legal in a Python one. That is the language's
-  requirement wearing a convention's clothes, and it is not negotiable
-  where it applies.
-- **`kebab-case` for prose** -- documentation, design notes, decision
-  records. Nothing imports `code-style.md`, so no identifier is at stake,
-  and kebab-case is what markdown and URLs settled on long ago.
-
-The rule used to say `snake_case` for prose as well, and was rewritten
-against a count of what the private projects actually do -- the source
-carries the numbers. The distinction had never come up here: the two
-programs this project names are one word each, with no separator to argue
-about, and every document it names was kebab-case or a single word already.
-
-Settled exceptions:
+The settled exceptions present in this tree:
 
 - **Names a tool will not accept lowercased** -- `Makefile`, and the
   `debian/` files native packaging dictates.
 - **Root files with an established convention** -- `README.md`, `LICENSE`
   and `VERSION`.
-- **Package-system spellings** -- kebab-case where Debian requires it. That
-  is now the same spelling prose uses, so the packaging and the documents
-  beside it agree by construction rather than by coincidence.
+- **Package-system spellings** -- kebab-case where Debian requires it.
 
 `tool/hooks/commit-msg` needs none of these: git dictates that name
 exactly, which is rule 3's "unless a tool demands otherwise", and it is
 lowercase in any case.
 
-### Singular, unless somebody else standardised the plural
-
-**Prefer the singular for a directory this project names itself.** `helper/`
-rather than `helpers/`, `doc/` rather than `docs/`, `fixture/` rather than
-`fixtures/`. The name says what kind of thing lives there, not how many;
-one of them and forty of them go in the same place, and the directory
-should not have to be renamed when the count changes.
-
-There are two exceptions, and they are not equal. This is the same shape
-as the lowercase rule above, which yields first to `Makefile` because make
-will not read anything else, and only then to `README.md` because the world
-settled it.
-
-**First: a name a tool requires is not a name we choose.** It outranks the
-singular exactly as it outranks lowercase, it needs no measurement and no
-argument, and the test is whether something breaks when the name changes.
-This is a *technical* fact, so it is open-ended rather than a list -- a
-tool met tomorrow that demands a name gets the same answer, whether the
-name it demands is plural, singular, capitalised or none of those.
-
-Present here: **Cargo** looks for `tests/`, `examples/` and `benches/` by
-those exact names, and `cargo-fuzz` for `fuzz_targets/`. **GitHub**
-requires `.github/workflows/`. **git** keeps `hooks/`, which is why
-`tool/hooks/` is spelled that way.
-
-**Second: a plural an ecosystem has settled**, which is a convention rather
-than a requirement -- nothing breaks, but a reader would be surprised by
-the singular. Cargo workspaces conventionally keep members in `crates/`,
-and that is this kind rather than the first. **These need measuring**, and
-the project's copy names what it was measured against, so the next reader
-does not reopen it.
-
-Where the two are confused, the cost lands on whoever renames a directory
-because it looked like a convention and finds the build no longer works.
-So say which kind is being claimed.
-
-**The settled inventory took this rule by the holder's instruction, not by
-sweep.** When this section was first written, three canonical names in
-`harmonization.md` were plural -- `tools/`, `docs/` and `docs/decisions/` --
-and the paragraph here held them out of reach, because renaming an inventory
-entry is a cross-project rewrite rather than a spelling change: the decision
-records were cited by path hundreds of times, and `tools/` was named from
-`sync.py`, every Makefile's hook target and the `~/.claude` symlink the
-copies are spread from. The holder then said to rename all three, and they
-are `tool/`, `doc/` and `doc/decision/` now, moved in a deliberate pass with
-each project's gates run against the result. The history is kept because the
-next inventory entry will raise the same question, and the answer stays the
-same: an inventory name moves when its owner says so, at whatever cost was
-measured, and not as a side effect of a style rule.
-
-## 4. Editing `selftest`
+### Editing `selftest`
 
 Not style, but it lives with the style rules because it is a formatting
 hazard: **edit `selftest` with an editor, not a generated patch.** Three
@@ -302,151 +458,24 @@ breaking while being quoted through nested layers, each costing more than
 the bug being fixed. Mutations go through a script reading before-and-after
 text from files, never through a shell heredoc.
 
-## ASCII in source
+### ASCII in source: enabled here
 
-Source and comments are ASCII. Write `--` where prose would use an em dash,
-and "section" for a section sign.
+Enabled here (`ascii_only` in `.style-gate.toml`): this is a build tool
+with no user-facing Unicode and nothing that needs it.
 
-This governs the text the repository writes about itself, not the data the
-software handles. Documentation may use typographic punctuation; so may
-user-facing text in UI software, and anything that genuinely requires
-Unicode.
+fmake is Python, so the check means ASCII *outside string literals* -- the
+gate reads the file with `tokenize` -- and Unicode inside a literal passes.
+The C and C++ half does not arise here, since this project has no C or C++
+of its own. Nothing here needs the string-literal allowance today, but the
+gate is carried verbatim and behaves this way.
 
-Enabled here (`ascii_only` in `.style-gate.toml`): this is a build tool with
-no user-facing Unicode and nothing that needs it.
+### The commit-msg hook
 
-The check is not a byte scan. fmake is Python, so it means ASCII *outside
-string literals* -- the gate reads the file with `tokenize` -- and Unicode
-inside a literal passes. C and C++ get the same shape from a scanner written
-for the purpose, nothing in the standard library lexing them; that half does
-not arise here, since this project has no C or C++ of its own, but the gate
-is carried verbatim and it is what a sibling's copy will be describing.
-Every other language gets a whole-file byte check, having no lexer, and so
-does a file in either of those two that will not lex: a file nobody can
-parse is not a file that has been cleared.
-
-It was the whole file for everyone until a project that prints two status
-ticks had to switch the check off to keep them, which switched it off for
-its comments as well, and an em dash arrived in one. **An exception wider
-than its reason is how a rule stops being enforced.** Nothing here needs
-the allowance today, but the gate is carried verbatim and behaves this way.
-
-## Formatters
-
-A formatter is allowed **only if it can be configured to honour the three
-rules completely**. Configuration gaps are disqualifying, not something to
-work around: a formatter that gets indentation right and alignment wrong
-will rewrite the tree on somebody's next save.
-
-So the decision is per tool, per project, and it is a real evaluation:
-
-- If it can be made to comply, use it, and commit the config with a comment
-  saying which setting is load-bearing and what happens without it.
-- If it cannot, do not run it -- **not even ad hoc on a single file**. The
-  failure mode is a silent conversion of files that were already correct,
-  discovered later as a reverted commit rather than an error.
-- If no existing tool fits and the rule is worth mechanising, write our
-  own. A checker that only gates indentation is worth more than a formatter
-  that reflows everything.
-
-**Record the decision and the finding that produced it** in the project's
-copy of this file -- which tool, what specifically failed, what would change
-the answer. A verdict without its evidence gets re-litigated, and a tool
-that improves later never gets reconsidered because nobody remembers what
-was actually wrong with it.
-
-Naming and filename rules are review items, not automated ones.
-
-## Precedence
-
-Three layers, and they are not equals:
-
-1. **The global guidelines** (`~/.claude/CLAUDE.md` and the files it
-   imports) -- the source, and they win.
-2. **The project's `project.md`** -- project-specific design and conventions.
-3. **The project's `code-style.md`** -- this file, copied.
-
-A project copy that disagrees with the source is **drift, not an
-override**: fix it. A project that genuinely needs to diverge needs a
-technical reason, and that is not a decision to make while working on
-something else -- signal it to the list in `claude-guidelines`'
-`project.md` and keep following the source meanwhile.
-
-**When a conflict between layers actually comes up, stop and ask.** Do not
-silently pick a winner, even the global one.
-
-This precedence rule lives here and in the global guidelines only. It does
-not belong in a `project.md`.
-
-## Keeping the copies in sync
-
-Each private project keeps a copy of this file at its repo root -- except
-the one this file lives in. `claude-guidelines` holds the source at
-`guidelines/code-style.md`, and a copy beside it would be the same document
-twice in one repository with nothing to keep the two honest; its root
-`code-style.md` says so and points here. Every other private project carries
-a copy, opening with a header that names the source:
-
-```markdown
-<!-- Copied from ~/.claude/guidelines/code-style.md -- the source. Keep in
-     sync; fix drift the moment you notice it. -->
-```
-
-Below the copied rules, a project adds only what is genuinely its own: its
-exempt paths, its formatter verdicts, its language-specific notes, its
-tooling commands.
-
-**This source is deliberately plain ASCII** -- no em dashes, no section
-signs, no arrows -- so that a copy can be byte-verbatim in every project,
-including one whose own rules restrict the characters its files may
-contain. Keep it that way when editing: a typographic character introduced
-here becomes a transliteration problem in every repository that carries a
-copy.
-
-Where a copy must still be adapted, **"do not diverge" means semantically
-identical, not byte-identical**: a project transliterating to satisfy its
-own character-set rule, or renumbering a heading to fit its own structure,
-is that project's rule working correctly, **not drift, and not something to
-reconcile back**. What must match is every rule and every exception, in
-substance.
-
-**`sync.py --check` now reports the copies that have fallen behind**, which
-until 2026-08-24 nothing did. The three files spread verbatim were checked on
-every run and this one -- the document that says what the rules are -- was
-checked by nobody, so drift was indistinguishable from the adaptation the
-section above asks for. It found real losses: four copies had dropped
-*Precedence*, the section saying this source outranks them; three had dropped
-*Formatters*, whose rule was paid for by a formatter rewriting committed
-files; one had dropped *ASCII in source*; and seven had dropped this very
-section, which is the one that would have told a reader to look.
-
-It asks the weaker question that can actually be answered -- does the copy
-still carry a section for every section here -- and it never writes this
-file, because overwriting a copy would delete the part the project owns. A
-heading that *extends* one of these satisfies it, since that is what
-recording a project's own formatter verdict looks like.
-
-**If you notice a copy diverging from the source, reconcile it as soon as
-you notice** -- do not leave it for later and do not work around it. If the
-divergence looks deliberate rather than stale, that is the conflict case
-above: ask.
-
-Noticing requires looking. **Re-read this source before writing or
-reconciling any project's copy**, rather than working from what was loaded
-at the start of the session -- it may have changed since, and a copy
-reconciled against a stale source is drift being written rather than
-fixed.
-
-The project's `project.md` may state the three rules in brief and point
-here for the detail. It does not restate the precedence rule.
-
-## The commit-msg hook
-
-The commit-msg hook is `tool/hooks/commit-msg`, installed with `make hooks`.
-It rejects generator attribution, a subject over 75 columns, and body prose
-over 75 columns. It lives in the tree rather than only in `.git/hooks` so
-that it is reviewable and survives a clone; the copy that runs is installed
-from it.
+The commit-msg hook is `tool/hooks/commit-msg`, installed with
+`make hooks`. It rejects generator attribution, a subject over 75 columns,
+and body prose over 75 columns. It lives in the tree rather than only in
+`.git/hooks` so that it is reviewable and survives a clone; the copy that
+runs is installed from it.
 
 The body limit was stated long before anything checked it, and only the
 subject was checked -- so a body line at 76 columns went through while a
@@ -463,8 +492,8 @@ end of a path under the tree is still refused.
 
 **What git is about to discard**: comment lines, and the diff that
 `git commit -v` puts below the scissors line. Reading those refused commits
-over text that never reaches the message -- the hook's own diff contains its
-own pattern list, so it rejected every commit that edited it.
+over text that never reaches the message -- the hook's own diff contains
+its own pattern list, so it rejected every commit that edited it.
 
 **Three shapes the length check exempts**, each because wrapping it is the
 actual mistake rather than a concession: a *trailer*, since git parses the
@@ -476,10 +505,7 @@ included for. It cannot tell prose opening `Note:` from a trailer, so it
 forgives that -- the wrong way round would refuse a real trailer, and that
 is the expensive error.
 
-## See also
+### See also
 
-- **`~/.claude/guidelines/code-style.md`** -- the source this file copies.
-- **`~/.claude/guidelines/build-and-commit.md`** -- the Make conventions the
-  ejected output has to satisfy.
-- **`project.md` section 16** -- how the work is done, and the rule that every fix
-  gets a case that must fail when the fix is reverted.
+- **`project.md` section 16** -- how the work is done, and the rule that
+  every fix gets a case that must fail when the fix is reverted.
