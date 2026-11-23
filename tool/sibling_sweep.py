@@ -179,6 +179,12 @@ def main():
 		trees.append(os.path.abspath(path))
 	trees = trees or siblings(parent)
 
+	# A TMPDIR inside a checkout -- /tmp being short, say -- puts every
+	# copy under that checkout's ignore rules, and both fmakes then
+	# rightly build nothing: every tree read "fails both". Git looks no
+	# further up than the temporary root, for both sweeps' directories.
+	os.environ["GIT_CEILING_DIRECTORIES"] = os.path.realpath(
+	    tempfile.gettempdir())
 	with tempfile.TemporaryDirectory(prefix="fmake-sweep-") as work:
 		old = os.path.join(work, "fmake.old")
 		r = subprocess.run(["git", "-C", HERE, "show", f"{args.old}:fmake"],

@@ -48268,6 +48268,14 @@ an ordinary exit. `subprocess.run` then kills the build it was waiting
 on, so nothing is left running in the deleted copy. Measured: killed
 after five seconds mid-build, no directory and no process remained.
 
+**A `TMPDIR` inside a checkout made every tree "fail both"** (2026-11-23).
+With `/` at 94% the sweep was pointed at this tree's ignored `.fmake/`, so
+each copy sat under fmake's own ignore rules, and both fmakes rightly
+reported every source as ignored. Nothing said the verdict was about the
+sweep rather than the trees. The sweep now sets `GIT_CEILING_DIRECTORIES`
+to the temporary root, so git stops there; bbq-predictor built from
+`.fmake/sweep-tmp` afterwards.
+
 ## 621. Two answers: a name clash is refused, and Windows installs with fmake
 
 **Two programs with one name: superseded by section 629.** The sibling
