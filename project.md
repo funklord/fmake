@@ -699,7 +699,7 @@ that had been green about nothing for five commits ·
 [647. The ejected fetch: a nested source, and a tree with no .git](#647-the-ejected-fetch-a-nested-source-and-a-tree-with-no-git) ·
 [648. A release from a worktree](#648-a-release-from-a-worktree) ·
 [649. A meta-object nothing asked for links does not stop the tests](#649-a-meta-object-nothing-asked-for-links-does-not-stop-the-tests) ·
-[650. --explain exits as the build does over a needless guess](#650---explain-exits-as-the-build-does-over-a-needless-guess)
+[650. --explain and --eject exit as the build does over a needless guess](#650---explain-and---eject-exit-as-the-build-does-over-a-needless-guess)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49743,7 +49743,7 @@ because both use POSIX-only interfaces (`ioctl`, `SIGALRM`, `sigset_t`,
 cross `g++`, which only mingw has here, and for Windows it has no Qt;
 its C++ test `t2.exe` built.
 
-## 650. --explain exits as the build does over a needless guess
+## 650. --explain and --eject exit as the build does over a needless guess
 
 The last lens of the day was the two outputs the sweeps had not run:
 `--explain` and `--eject ninja`, on anti-avx, ossacli, openmlx4, respec,
@@ -49768,9 +49768,13 @@ tokens widening guessed by. A generated unit stays a failure here,
 since what it would have provided cannot be read from a file that did
 not compile. With a skipped target, everything stays, as in the build.
 
-Case `explain_exits_as_the_build_does_over_a_needless_guess`: two
-providers of `start()`, one that does not compile; then the good one
-removed, as the control. Checked by hand (section 15): b3ca0c1 exits 1
-on the first and this exits 0; both exit 1 on the control. snurra's
-`--explain` exits 0 now.
+**`--eject` is the other mode that does not link**, and it exited 1 on
+snurra over the same two files, as the section 647 run showed. Both
+modes now call one helper, `needless_guesses`.
+
+Case `explain_and_eject_exit_as_the_build_does_over_a_needless_guess`:
+two providers of `start()`, one that does not compile; then the good
+one removed, as the control. Checked by hand (section 15), both modes:
+b3ca0c1 exits 1 on the first, this exits 0, and both exit 1 on the
+control. snurra's `--explain` exits 0 now.
 

@@ -4702,7 +4702,7 @@ def a_library_will_not_hold_two_definitions(t):
 
 
 @case
-def explain_exits_as_the_build_does_over_a_needless_guess(t):
+def explain_and_eject_exit_as_the_build_does_over_a_needless_guess(t):
 	"""Widening compiles a file because a name in it matches a symbol
 	still unresolved, and the build forgives one that fails once every
 	target links without it (section 600). --explain never links, so it
@@ -4722,15 +4722,20 @@ def explain_exits_as_the_build_does_over_a_needless_guess(t):
 	check(r.returncode == 0 and "only tried because" in r.stdout + r.stderr,
 	      f"the fixture is wrong: the build was meant to forgive b.c: "
 	      f"{r.stdout}{r.stderr}")
-	r = t.fmake("--explain")
-	check(r.returncode == 0,
-	      f"--explain failed over a guess the build forgives: "
-	      f"{r.stdout}{r.stderr}")
+	# --eject does not link either, and exited 1 the same way.
+	for mode in (["--explain"], ["--eject", "make"]):
+		r = t.fmake(*mode)
+		check(r.returncode == 0,
+		      f"{mode[0]} failed over a guess the build forgives: "
+		      f"{r.stdout[-600:]}{r.stderr}")
+	keep = open(os.path.join(t.dir, "a.c")).read()
 	os.unlink(os.path.join(t.dir, "a.c"))
-	r = t.fmake("--explain")
-	check(r.returncode != 0,
-	      f"--explain passed a tree whose only provider of start() did "
-	      f"not compile: {r.stdout}{r.stderr}")
+	for mode in (["--explain"], ["--eject", "make"]):
+		r = t.fmake(*mode)
+		check(r.returncode != 0,
+		      f"{mode[0]} passed a tree whose only provider of start() "
+		      f"did not compile: {r.stdout[-600:]}{r.stderr}")
+	t.write("a.c", keep)
 
 
 @case

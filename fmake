@@ -1449,6 +1449,29 @@ def version_fallback_text(root, rel, macro):
 	return None
 
 
+def needless_guesses(broken, wanted, closures, resolutions, tried_for):
+	"""The failed units a mode that never links may forgive.
+
+    A widening guess in no link set, none of whose names is left among a
+    resolution's `unresolved' -- the build forgives such a file once
+    every target links (section 600), and --explain and --eject reach no
+    link. Not being in a link set alone is not enough: a guess that was
+    the ONLY provider failed too, and its names are what stays
+    unresolved. Section 650.
+    """
+	in_sets = {u.rel for t in wanted for u in closures[t].link}
+	open_ = {tok for t in wanted
+	         for s in ((resolutions.get(t) or {}).get("unresolved") or ())
+	         for tok in symbol_tokens(s)}
+	out = set()
+	for key in broken:
+		rel = key.partition("\0")[0]
+		if (rel not in in_sets and rel in tried_for
+		    and not set(tried_for[rel]) & open_):
+			out.add(key)
+	return out
+
+
 def version_from_header(proj, root, rel, macro):
 	"""The header that gives `macro' its value for `rel', or None.
 
@@ -20306,6 +20329,12 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			     "main(): " + ", ".join(absent)
 			     + "\n@kind or [target.*] settles what such a file is; "
 			       "until then a program is missing from the file below")
+		# The same forgiveness as --explain's, below, and for the same
+		# reason: this mode does not link either. snurra's eject exited
+		# 1 over the two needless guesses its plain build forgives.
+		if not skipped:
+			broken -= needless_guesses(broken, wanted, closures,
+			                           resolutions, tried_for)
 		return 1 if broken or absent else 0
 
 	all_units = [units[r] for r in sorted(units)]
@@ -20392,17 +20421,9 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# the same source tokens widening guessed by. A generated unit
 		# stays broken here, since what it would have provided is not
 		# known from a file that did not compile.
-		if broken and not skipped:
-			_in_sets = {u.rel for t in wanted for u in closures[t].link}
-			_open = {tok for t in wanted
-			         for s in ((resolutions.get(t) or {})
-			                   .get("unresolved") or ())
-			         for tok in symbol_tokens(s)}
-			for key in sorted(broken):
-				rel = key.partition("\0")[0]
-				if (rel not in _in_sets and rel in tried_for
-				    and not set(tried_for[rel]) & _open):
-					broken.discard(key)
+		if not skipped:
+			broken -= needless_guesses(broken, wanted, closures,
+			                           resolutions, tried_for)
 		if broken:
 			say()
 			warn(f"{len(broken)} file(s) did not compile")
