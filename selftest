@@ -15552,6 +15552,47 @@ def a_rebuilt_situc_recompiles_the_schemas_it_compiled(t):
 
 
 @case
+def a_meta_object_no_asked_for_target_links_does_not_stop_the_tests(t):
+	"""Every Q_OBJECT header is moc'd and its output compiled, whatever the
+	invocation builds; the include path comes from the walk of what it
+	builds. situ's `fmake test' compiled the meta-object of qtkit's
+	portal_listener.h, which only the GUI links, without the
+	`-Iqtkit/include' the GUI's main.cpp brings, and the twelve tests --
+	all built -- were not run: "1 file(s) did not compile; not running
+	tests".
+
+	A failed guess was already forgiven once every target linked
+	(section 600). A generated unit that nothing built here links is the
+	same: it says so and the tests run. The control is a plain build,
+	which builds the GUI, brings the directory, and compiles the unit."""
+	if not shutil.which("moc") and not glob.glob("/usr/lib/qt6/libexec/moc"):
+		raise Skip("no moc to run")
+	t.write("kit/include/kit/k.h", "#pragma once\n#define KIT_N 1\n")
+	t.write("kit/src/listener.h",
+	        '#pragma once\n#include <QObject>\n#include "kit/k.h"\n'
+	        "class Listener : public QObject {\n\tQ_OBJECT\npublic:\n"
+	        "\tQ_INVOKABLE int n() { return KIT_N; }\n};\n")
+	t.write("gui/main.cpp", '#include "kit/k.h"\n'
+	        '#include "../kit/src/listener.h"\n'
+	        "int main(void){ Listener l; return l.n() - KIT_N; }\n")
+	t.write("tests/t_test.c", "int main(void){ return 0; }\n")
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check("kit/k.h" in out or "nothing built here links it" in out,
+	      f"the fixture is wrong: the meta-object compiled without the "
+	      f"GUI's directory, so nothing was tested: {out}")
+	check(r.returncode == 0 and "1 test passed" in out,
+	      f"a meta-object only an unasked-for program links stopped the "
+	      f"tests: {out}")
+	check("nothing built here links it" in out,
+	      f"the unit that did not compile was not named: {out}")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"the control: a plain build of the GUI failed: "
+	      f"{r.stdout}{r.stderr}")
+
+
+@case
 def a_header_the_mocd_one_includes_is_an_input_to_moc(t):
 	"""The moc key held its input's hash and nothing about what that
 	input INCLUDES.

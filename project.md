@@ -697,7 +697,8 @@ that had been green about nothing for five commits ·
 [645. A header whose path cannot fit the include is no candidate](#645-a-header-whose-path-cannot-fit-the-include-is-no-candidate) ·
 [646. Sibling sweep of 2026-11-23: copies of one project at two depths](#646-sibling-sweep-of-2026-11-23-copies-of-one-project-at-two-depths) ·
 [647. The ejected fetch: a nested source, and a tree with no .git](#647-the-ejected-fetch-a-nested-source-and-a-tree-with-no-git) ·
-[648. A release from a worktree](#648-a-release-from-a-worktree)
+[648. A release from a worktree](#648-a-release-from-a-worktree) ·
+[649. A meta-object nothing asked for links does not stop the tests](#649-a-meta-object-nothing-asked-for-links-does-not-stop-the-tests)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49682,4 +49683,38 @@ Case `a_release_is_cut_from_a_worktree_too`, with a tree that has no
 repository as its control. Checked by hand (section 15): HEAD's fmake
 refuses the worktree, this one writes `release/`, and the control is
 refused by both.
+
+## 649. A meta-object nothing asked for links does not stop the tests
+
+situ's fmake.toml says its twelve generated C test programs build and
+pass under `fmake test`. At situ HEAD neither held, for two reasons, one
+of them fmake's.
+
+- **situ's**: since its 5b49be91 (2026-11-12) the tests include
+  `situ_check.h`, which `test/generated/Makefile` writes from
+  `situc/codegen/c/selfcheck.py`. fmake has no way to know that rule. A
+  `[generate.situ_check]` stanza running the same Python one-liner, with
+  the header written beside the tests, builds all twelve. That went to
+  situ's inbox.
+- **fmake's**: every Q_OBJECT header in the tree is moc'd and its output
+  compiled, whatever the invocation builds, while the inferred include
+  path comes from the walk of what it builds. `fmake test` builds no
+  GUI, so the meta-object of qtkit's `portal_listener.h` compiled without
+  the `-Iqtkit/include` the GUI's `main.cpp` brings, and it failed. The
+  twelve tests all linked, and then `1 file(s) did not compile; not
+  running tests`.
+
+Section 600 already forgave a widening guess that failed once every
+target had linked. A generated unit that no target built here links is
+the same case: it is named in a warning ("nothing built here links it:
+it is generated from ..., which only targets not asked for use"), and
+the tests run. A plain build builds the GUI, links the unit, and still
+fails on it as before. With the stanza and this change, situ's `fmake
+test` ran its twelve tests and all passed.
+
+Case `a_meta_object_no_asked_for_target_links_does_not_stop_the_tests`:
+a Q_OBJECT header whose include needs a directory only the GUI's main
+brings, and one C test. Checked by hand (section 15): HEAD prints "not
+running tests" and exits 1, this runs the test and exits 0, and the
+plain build, the control, builds the GUI with both.
 

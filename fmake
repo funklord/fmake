@@ -20961,6 +20961,24 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 				     + (f" and {_more} more" if _more else "")
 				     + f".\n    [project] exclude keeps it out of the "
 				       f"build if it is not meant to be part of this one")
+		# The same holds for a generated unit no target asked for here
+		# links. Every Q_OBJECT header in the tree is moc'd and its
+		# output compiled, whatever this invocation builds, and the
+		# include directories come from the walk of what it builds. So
+		# `fmake test' in situ compiled the meta-object of qtkit's
+		# portal_listener.h, which only the GUI links, without the
+		# `-Iqtkit/include' that the GUI's main.cpp would have brought;
+		# it failed, and the twelve tests, all built, were not run. A
+		# plain `fmake' builds the GUI, links the unit, and still fails
+		# on it, as it should.
+		for key in sorted(broken):
+			rel = key.partition("\0")[0]
+			if rel in generated_from and rel not in linked_by:
+				broken.discard(key)
+				warn(f"{rel} did not compile, and nothing built here "
+				     f"links it: it is generated from "
+				     f"{generated_from[rel]}, which only targets not "
+				     f"asked for use")
 	# And none of it stands once a target has failed: a file left out on
 	# the strength of an earlier link is the first place to look.
 	elif bad_guess:
