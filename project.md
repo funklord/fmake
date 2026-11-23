@@ -696,7 +696,8 @@ that had been green about nothing for five commits ·
 [644. A version a header supplies is not "unknown"](#644-a-version-a-header-supplies-is-not-unknown) ·
 [645. A header whose path cannot fit the include is no candidate](#645-a-header-whose-path-cannot-fit-the-include-is-no-candidate) ·
 [646. Sibling sweep of 2026-11-23: copies of one project at two depths](#646-sibling-sweep-of-2026-11-23-copies-of-one-project-at-two-depths) ·
-[647. The ejected fetch: a nested source, and a tree with no .git](#647-the-ejected-fetch-a-nested-source-and-a-tree-with-no-git)
+[647. The ejected fetch: a nested source, and a tree with no .git](#647-the-ejected-fetch-a-nested-source-and-a-tree-with-no-git) ·
+[648. A release from a worktree](#648-a-release-from-a-worktree)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49635,4 +49636,22 @@ Case `an_ejected_build_fetches_a_nested_source_and_skips_a_filled_tree`.
 Like sections 644 and 645 it was checked by hand, not through the suite
 (section 15); a scratch harness running the case's own code was refused
 as a way round that, rightly.
+
+## 648. A release from a worktree
+
+The lens from section 647: where else does fmake decide on `.git` rather
+than on what it stands for? `--release` asked whether the root was a
+repository with `os.path.isdir(root/.git)`. That is the spelling
+`git_dir`'s docstring records as wrong: in a worktree, and in a
+submodule checkout, `.git` is a file. So `fmake --release` in a worktree
+said "this tree is not a repository", although `git archive` works there
+as anywhere. It is `os.path.exists` now. Not `git_dir`, which climbs and
+would accept a subdirectory; the release is of the repository whose root
+this is. The other `.git` tests in fmake are `exists` already
+(`ensure_gitignore`, the vendored-checkout probe), or ask git.
+
+Case `a_release_is_cut_from_a_worktree_too`, with a tree that has no
+repository as its control. Checked by hand (section 15): HEAD's fmake
+refuses the worktree, this one writes `release/`, and the control is
+refused by both.
 

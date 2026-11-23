@@ -13263,6 +13263,47 @@ def an_ebuild_is_ejected_in_gentoos_words(t):
 
 
 @case
+def a_release_is_cut_from_a_worktree_too(t):
+	"""`--release' asked whether the root was a repository with
+	`os.path.isdir(root/.git)'. In a worktree `.git' is a file naming the
+	real directory, which `git_dir' records as the spelling that once
+	dropped a backend, and the release said "this tree is not a
+	repository" of a worktree. `git archive' works there as anywhere.
+
+	The control: a tree with no repository is still refused."""
+	if not shutil.which("git"):
+		raise Skip("git is needed")
+	t.write("main.c", "int main(void){ return 0; }\n")
+	t.write("VERSION", "1.0.0\n")
+	t.write(".gitignore", ".fmake/\nrelease/\n")
+	r = t.fmake("--release")
+	check(r.returncode != 0 and "not a repository" in r.stdout + r.stderr,
+	      f"a tree with no repository was not refused: {r.stdout}{r.stderr}")
+	g = ["git", "-C", t.dir, "-c", "user.name=t", "-c",
+	     "user.email=t@example.invalid"]
+	subprocess.run(g + ["init", "-q", "."], capture_output=True)
+	subprocess.run(g + ["add", "main.c", "VERSION", ".gitignore"],
+	               capture_output=True)
+	subprocess.run(g + ["commit", "-qm", "v"], capture_output=True)
+	wt = t.dir + "-wt"
+	try:
+		w = subprocess.run(g + ["worktree", "add", "-q", wt],
+		                   capture_output=True, text=True)
+		if w.returncode != 0:
+			raise Skip(f"this git will not add a worktree: {w.stderr}")
+		check(os.path.isfile(os.path.join(wt, ".git")),
+		      "the fixture is wrong: the worktree's .git is not a file")
+		r = subprocess.run([FMAKE, "-C", wt, "--release"],
+		                   capture_output=True, text=True)
+		said = r.stdout + r.stderr
+		check(r.returncode == 0, f"--release in a worktree failed: {said}")
+		check(os.path.exists(os.path.join(wt, "release", "SHA256SUMS")),
+		      f"--release in a worktree wrote no release/: {said}")
+	finally:
+		shutil.rmtree(wt, ignore_errors=True)
+
+
+@case
 def a_release_carries_everything_downloadable_with_its_checksum(t):
 	"""Section 227's page: the manifest, and pandoc when present.
 

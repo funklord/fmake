@@ -26977,8 +26977,12 @@ def do_release(targets, closures, root, outdir, conf, cfg, args):
 		die("release/ already exists here. A release is written once, "
 		    "whole, so that its manifest and its checksums are of one "
 		    "moment; remove it to make another.")
-	if not shutil.which("git") or not os.path.isdir(os.path.join(root,
-	                                                               ".git")):
+	# `exists', not `isdir': in a worktree or a submodule checkout `.git'
+	# is a FILE (see git_dir), and a release from a worktree was refused
+	# as "not a repository". Not git_dir either, which climbs: the release
+	# is of the repository whose root this is.
+	if not shutil.which("git") or not os.path.exists(os.path.join(root,
+	                                                                ".git")):
 		die("a release is cut from git -- `git archive' at HEAD is the "
 		    "source tarball -- and this tree is not a repository.")
 	dirty = subprocess.run(["git", "-C", root, "status", "--porcelain",
