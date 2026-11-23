@@ -20373,6 +20373,36 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# `|| { echo "fmake --explain failed"; exit 1; }' before counting
 		# blocks, so non-zero is the signal that consumer was written for,
 		# and a healthy tree still exits 0 and its count is unchanged.
+		#
+		# Healthy as the build judges it. A widening guess, or a generated
+		# unit, that failed and is in no link set explained here changes
+		# no explanation, and the build forgives both once every target
+		# links -- which this mode never reaches, so it asks the link
+		# sets instead. Measured on snurra: plain fmake exited 0 and
+		# --explain 1, over an Android-only file widening tried and a
+		# test-only define, neither in snurra's link set. A skipped
+		# target keeps everything, as in the build.
+		#
+		# Only a guess, and only one whose names something else
+		# provides. Not being in a link set is not enough without a
+		# link: a guess that was the ONLY provider failed, so it is in
+		# no link set either, and its names are left to libraries that
+		# do not have them, with the program unable to link. So the
+		# names must not be among a resolution's `unresolved', read as
+		# the same source tokens widening guessed by. A generated unit
+		# stays broken here, since what it would have provided is not
+		# known from a file that did not compile.
+		if broken and not skipped:
+			_in_sets = {u.rel for t in wanted for u in closures[t].link}
+			_open = {tok for t in wanted
+			         for s in ((resolutions.get(t) or {})
+			                   .get("unresolved") or ())
+			         for tok in symbol_tokens(s)}
+			for key in sorted(broken):
+				rel = key.partition("\0")[0]
+				if (rel not in _in_sets and rel in tried_for
+				    and not set(tried_for[rel]) & _open):
+					broken.discard(key)
 		if broken:
 			say()
 			warn(f"{len(broken)} file(s) did not compile")

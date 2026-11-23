@@ -698,7 +698,8 @@ that had been green about nothing for five commits ·
 [646. Sibling sweep of 2026-11-23: copies of one project at two depths](#646-sibling-sweep-of-2026-11-23-copies-of-one-project-at-two-depths) ·
 [647. The ejected fetch: a nested source, and a tree with no .git](#647-the-ejected-fetch-a-nested-source-and-a-tree-with-no-git) ·
 [648. A release from a worktree](#648-a-release-from-a-worktree) ·
-[649. A meta-object nothing asked for links does not stop the tests](#649-a-meta-object-nothing-asked-for-links-does-not-stop-the-tests)
+[649. A meta-object nothing asked for links does not stop the tests](#649-a-meta-object-nothing-asked-for-links-does-not-stop-the-tests) ·
+[650. --explain exits as the build does over a needless guess](#650---explain-exits-as-the-build-does-over-a-needless-guess)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49741,4 +49742,35 @@ because both use POSIX-only interfaces (`ioctl`, `SIGALRM`, `sigset_t`,
 `endian.h`), which is the code's and not the build's. respec needs a
 cross `g++`, which only mingw has here, and for Windows it has no Qt;
 its C++ test `t2.exe` built.
+
+## 650. --explain exits as the build does over a needless guess
+
+The last lens of the day was the two outputs the sweeps had not run:
+`--explain` and `--eject ninja`, on anti-avx, ossacli, openmlx4, respec,
+softkeys, qtkit, situ and snurra. No traceback anywhere. Each
+`build.ninja` built, and a second `ninja` said `no work to do`.
+openmlx4's ninja file, from the same test-double refusal as its Makefile
+(section 647), has no targets and says `no work to do`, where make says
+`No targets`. The eject itself exits 1 with the refusal, so that stays a
+note.
+
+**snurra exited 0 from plain fmake and 1 from `--explain`.** The two
+files that failed were widening guesses: an Android-only
+`output_aaudio.cpp` and `test/handover_test.cpp`, which wants a
+test-only define. The build forgives such a guess once every target
+links (section 600). `--explain` never links, so it counted them as
+failures. Comparing against the link sets is not enough. A guess that
+was the only provider of a name also failed, is in no link set either,
+and its program cannot link. So the explanation forgives a failed guess
+only when it is in no explained link set and none of the names it was
+tried for is among a resolution's `unresolved`, compared as the source
+tokens widening guessed by. A generated unit stays a failure here,
+since what it would have provided cannot be read from a file that did
+not compile. With a skipped target, everything stays, as in the build.
+
+Case `explain_exits_as_the_build_does_over_a_needless_guess`: two
+providers of `start()`, one that does not compile; then the good one
+removed, as the control. Checked by hand (section 15): b3ca0c1 exits 1
+on the first and this exits 0; both exit 1 on the control. snurra's
+`--explain` exits 0 now.
 
