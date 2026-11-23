@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Copied from ~/.claude/tool/test_style_gate.py -- the source. Keep in sync;
-# fix drift the moment you notice it.
 """Regression tests for the style gate and the commit-msg hook beside it,
 each one a fault that shipped.
 
@@ -945,6 +943,125 @@ class PythonStructuralDepth(unittest.TestCase):
 		self.assertEqual(self.gate(
 			"def f(a, b):\n\treturn g(a,\n\t\t\t     b)\n"), 0)
 
+
+
+class ShellIsGated(unittest.TestCase):
+	"""`.sh` was in no suffix list while a suffixless shell script was.
+
+	Signalled from raidcfgd 2026-10-01: `tool/hooks/commit-msg` was gated
+	and `tool/inject.sh` beside it was not. Settled by the holder
+	2026-11-23 -- tabs wherever they cannot change what the script does,
+	and not for a script that must stay short or that nobody reads.
+	"""
+
+	def gate(self, src: str, name: str = "a.sh", config: str = "") -> int:
+		return gate_rc({name: src}, "floor = 0.1\n" + config)
+
+	def test_tab_indented_shell_passes(self) -> None:
+		self.assertEqual(self.gate("#!/bin/sh\nif true; then\n\techo a\nfi\n"), 0)
+
+	def test_space_indented_shell_is_caught(self) -> None:
+		self.assertNotEqual(self.gate("#!/bin/sh\nif true; then\n    echo a\nfi\n"), 0)
+
+	def test_heredoc_body_is_data(self) -> None:
+		"""A config written out byte for byte keeps its spaces."""
+		self.assertEqual(self.gate(
+			"#!/bin/sh\ncat > f <<EOF\n  key = value\n    nested\nEOF\necho done\n"), 0)
+
+	def test_quoted_heredoc_and_dash_heredoc_are_data(self) -> None:
+		self.assertEqual(self.gate(
+			"#!/bin/sh\ncat <<'X'\n  a $b\nX\nif true; then\n\tcat <<-Y\n\t  c\n\tY\nfi\n"), 0)
+
+	def test_code_after_a_heredoc_is_checked_again(self) -> None:
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\ncat <<EOF\n  data\nEOF\nif true; then\n    echo a\nfi\n"), 0)
+
+	def test_multi_line_string_is_data(self) -> None:
+		self.assertEqual(self.gate(
+			"#!/bin/sh\nusage=\"usage: x\n    -h  help\n    -v  verbose\"\necho \"$usage\"\n"), 0)
+
+	def test_a_shift_is_not_a_heredoc(self) -> None:
+		"""Read as one, it would claim the rest of the file as data."""
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\nx=$(( 1 << n ))\nif true; then\n    echo a\nfi\n"), 0)
+
+	def test_an_unterminated_heredoc_claims_nothing(self) -> None:
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\ncat <<EOF\nif true; then\n    echo a\nfi\n"), 0)
+
+	def test_an_apostrophe_in_a_comment_opens_nothing(self) -> None:
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\n# don't\nif true; then\n    echo a\nfi\n"), 0)
+
+	def test_tab_exempt_names_a_script(self) -> None:
+		src = "#!/bin/sh\nif true; then\n    echo a\nfi\n"
+		self.assertEqual(self.gate(src, "tool/tiny.sh",
+		                           'tab_exempt = ["tool/tiny.sh"]\n'), 0)
+		self.assertEqual(self.gate(src, "tool/tiny.sh",
+		                           'tab_exempt = ["tool/*.sh"]\n'), 0)
+
+	def test_tab_exempt_keeps_the_text_checks(self) -> None:
+		self.assertNotEqual(self.gate("#!/bin/sh\necho a   \n", "t.sh",
+		                              'tab_exempt = ["t.sh"]\n'), 0)
+
+	def test_an_array_aligned_under_its_paren_is_alignment(self) -> None:
+		"""hembygd's mutate.sh: a file list aligned under `FILES=(`."""
+		self.assertEqual(self.gate(
+			"#!/bin/bash\nFILES=(a.cpp b.cpp\n       c.cpp)\necho ok\n"), 0)
+
+	def test_code_after_an_array_is_checked_again(self) -> None:
+		self.assertNotEqual(self.gate(
+			"#!/bin/bash\nFILES=(a\n       b)\nif true; then\n    echo a\nfi\n"), 0)
+
+	def test_a_line_after_an_operator_is_continuation(self) -> None:
+		"""netcfgd, hull, beerssh: `if a &&` with `   b; then` aligned under it."""
+		self.assertEqual(self.gate(
+			"#!/bin/sh\nif true &&\n   true; then\n\techo a\nfi\n"
+			"ls |\n    wc -l\n"), 0)
+
+	def test_an_operator_in_a_comment_continues_nothing(self) -> None:
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\nif true; then # a &&\n    echo a\nfi\n"), 0)
+
+	def test_a_group_with_content_aligns_its_rows(self) -> None:
+		"""fuzzypickles' e2e `|| { bad ...` and hull's `(cmd` / ` cmd) &`."""
+		self.assertEqual(self.gate(
+			"#!/bin/sh\ntrue || { echo a\n       echo b; }\n"
+			"(sleep 1\n echo c) &\n"), 0)
+
+	def test_a_block_opened_at_line_end_is_indentation(self) -> None:
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\nf() {\n    echo a\n}\n"), 0)
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\n(\n    echo a\n)\n"), 0)
+
+	def test_braces_in_expansions_open_nothing(self) -> None:
+		self.assertNotEqual(self.gate(
+			"#!/bin/sh\necho ${x} {a,b}\nif true; then\n    echo a\nfi\n"), 0)
+
+	def ascii_gate(self, src: str) -> int:
+		return self.gate(src, config="ascii_only = true\n")
+
+	def test_unicode_in_a_string_is_output(self) -> None:
+		"""fuzzypickles' e2e: `--text "Grattis \u00c5sa!"` is test data."""
+		self.assertEqual(self.ascii_gate(
+			'#!/bin/sh\nsend --text "Grattis \u00c5sa!" \'\u00b0\'\n'), 0)
+
+	def test_unicode_in_a_heredoc_is_output(self) -> None:
+		self.assertEqual(self.ascii_gate(
+			"#!/bin/sh\npython3 - <<'EOF'\nprint('S 180\u00b0')\nEOF\n"), 0)
+
+	def test_unicode_in_a_comment_is_prose(self) -> None:
+		self.assertNotEqual(self.ascii_gate("#!/bin/sh\n# an em dash \u2014 here\necho a\n"), 0)
+
+	def test_unicode_in_code_is_caught(self) -> None:
+		self.assertNotEqual(self.ascii_gate("#!/bin/sh\necho \u00e5\n"), 0)
+
+	def test_unicode_after_an_unterminated_quote_is_caught(self) -> None:
+		self.assertNotEqual(self.ascii_gate("#!/bin/sh\necho \"open\n# \u2014\n"), 0)
+
+	def test_suffixless_shell_gets_the_same_scanner(self) -> None:
+		self.assertEqual(self.gate("#!/usr/bin/env bash\ncat <<E\n  x\nE\n", "run"), 0)
 
 
 class RustIsGated(unittest.TestCase):
@@ -2076,3 +2193,172 @@ class DocsPathsAreAskedOfTheIndex(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main(verbosity=1)
+
+
+DOC = "project.md"
+# Concatenated: a literal citation in this file would be one in every tree
+# the suite is spread into.
+CITE = DOC + "#"
+
+
+class DecisionsAndCitations(unittest.TestCase):
+	"""A `project.md` that contradicts itself, and a citation that dangles.
+
+	Signalled from raidcfgd 2026-11-17. A /go run read a section saying a
+	question was open and parked the area; the holder had settled it three
+	days earlier, further down the same file. The same session renamed a
+	heading and left `daemon/write.h` citing the old name. Both are shapes
+	a tool can see, and these are the controls that it does.
+	"""
+
+	ENV = DocsPathsAreAskedOfTheIndex.ENV
+
+	def gate(self, root: Path, *args: str) -> tuple[int, str]:
+		gate = Path(__file__).resolve().parent / "style_gate.py"
+		r = subprocess.run([sys.executable, str(gate), *args], cwd=root,
+		                   capture_output=True, text=True, timeout=120)
+		return r.returncode, r.stdout + r.stderr
+
+	def tree(self, files: dict[str, str], *args: str,
+	         git: bool = True) -> tuple[int, str]:
+		with tempfile.TemporaryDirectory() as d:
+			root = Path(d)
+			for name, text in files.items():
+				(root / name).parent.mkdir(parents=True, exist_ok=True)
+				(root / name).write_text(text, encoding="utf-8")
+			if git:
+				for cmd in (["init", "-q"], ["add", "-A"]):
+					subprocess.run(["git", "-C", str(root), *cmd],
+					               env=self.ENV, capture_output=True,
+					               timeout=120, check=True)
+			return self.gate(root, *(args or ("docs",)))
+
+	def decision(self, title: str, status: str, key: str,
+	             anchor: str = "") -> str:
+		tag = f" {{#{anchor}}}" if anchor else ""
+		return (f"## {title}{tag}\n\nStatus:  {status}\nDecides: {key}\n\n"
+		        f"The answer to {title}. More prose.\n\n")
+
+	def test_open_beside_settled_is_refused(self) -> None:
+		"""The raidcfgd case itself."""
+		doc = (self.decision("The open question", "open", "exec-route")
+		       + self.decision("Settled", "settled 2026-11-10", "exec-route"))
+		rc, out = self.tree({DOC: doc})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("`exec-route` is open here and settled", out)
+
+	def test_two_settled_are_refused(self) -> None:
+		doc = (self.decision("First", "settled 2026-11-01", "k")
+		       + self.decision("Second", "settled 2026-11-10", "k"))
+		rc, out = self.tree({DOC: doc})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("mark one superseded", out)
+
+	def test_superseded_resolves_it(self) -> None:
+		"""The control on the two above: the way out they name works."""
+		doc = (self.decision("First", "superseded by #second", "k")
+		       + self.decision("Second", "settled 2026-11-10", "k"))
+		rc, out = self.tree({DOC: doc})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("2 decision(s)", out)
+
+	def test_settled_needs_a_date_and_status_a_known_word(self) -> None:
+		rc, out = self.tree({DOC: self.decision("A", "settled", "k")
+		                     + self.decision("B", "decided", "j")})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("settled with no date", out)
+		self.assertIn("not 'decided'", out)
+
+	def test_a_document_without_the_shapes_is_untouched(self) -> None:
+		"""Opt-in: fmake carries a top-level `Status:` line with no
+		`Decides:`, and nothing in any tree used these shapes when they
+		arrived (measured 2026-11-20, 23 trees)."""
+		rc, out = self.tree({DOC: "# fmake\n\nStatus: phases 1-6 done\n"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("0 decision(s)", out)
+
+	def test_a_dangling_citation_is_refused(self) -> None:
+		"""The renamed heading: the source still cites the old anchor."""
+		rc, out = self.tree({
+			DOC: "# Doc\n\n## Write path {#write-path}\n\nprose\n",
+			"src/write.h": f"/* see {CITE}old-name */\n"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("src/write.h:1:1: cites", out)
+		self.assertIn("old-name", out)
+
+	def test_a_resolving_citation_passes_and_is_counted(self) -> None:
+		"""Explicit anchors and GitHub's own slugs both resolve, and a
+		path from the root or from the citing file's directory both
+		name the document."""
+		rc, out = self.tree({
+			DOC: "# Doc\n\n## Write path {#write-path}\n\n"
+			     "## The `make` targets\n\nprose\n",
+			"src/a.h": f"/* {CITE}write-path */\n",
+			"src/b.h": f"/* ../{CITE}the-make-targets */\n",
+			"c.py": f"# {CITE}write-path\n"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("3 citation(s)", out)
+
+	def test_another_documents_fragment_is_not_ours(self) -> None:
+		rc, out = self.tree({DOC: "# Doc\n",
+		                     "a.md": "see doc/other-" + CITE + "x and "
+		                             "sub/" + CITE + "y\n"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("0 citation(s)", out)
+
+	def test_an_internal_link_must_resolve(self) -> None:
+		rc, out = self.tree({DOC: "# Doc\n\n## Real\n\nsee [x](#real) "
+		                          "and [y](#gone)\n"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("links to #gone", out)
+		self.assertNotIn("#real,", out)
+
+	def test_a_repeated_anchor_is_refused(self) -> None:
+		rc, out = self.tree({DOC: "# A {#x}\n\n# B {#x}\n"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("anchor #x repeats line 1", out)
+
+	def test_without_git_citations_say_so(self) -> None:
+		rc, out = self.tree({DOC: "# Doc\n"}, git=False)
+		self.assertEqual(rc, 0, out)
+		self.assertIn("citations not checked, no git here", out)
+
+	def test_index_lists_decisions_with_their_lead(self) -> None:
+		doc = (self.decision("Exec route", "settled 2026-11-10", "exec",
+		                     anchor="exec")
+		       + self.decision("Pin format", "open", "pins")
+		       + "## Narrative\n\nnothing decided\n")
+		rc, out = self.tree({DOC: doc}, "index")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("settled\t2026-11-10\texec\t#exec\tExec route", out)
+		self.assertIn("The answer to Exec route.", out)
+		self.assertIn("2 of 2 decision-bearing", out)
+		self.assertNotIn("Narrative", out.split("\n\n")[0])
+		rc, out = self.tree({DOC: doc}, "index", "open")
+		self.assertIn("pins", out)
+		self.assertNotIn("\texec\t", out)
+		rc, out = self.tree({DOC: doc}, "index", "nosuchkey")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("0 of 2", out)
+
+	def test_cites_finds_the_citing_lines(self) -> None:
+		files = {DOC: "# Doc\n\n## W {#w}\n",
+		         "a.c": f"x\n/* {CITE}w */\n", "b.c": f"/* {CITE}v */\n"}
+		rc, out = self.tree(files, "cites", "w")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("a.c:2", out)
+		self.assertNotIn("b.c", out)
+		self.assertIn("1 of 2 citation(s)", out)
+
+
+class GateCarriesNoCitation(unittest.TestCase):
+	"""The gate and this suite travel into every tree, so a literal
+	citation in either would be a citation of that tree's document --
+	the first draft's usage text had one and turned this tree red."""
+
+	def test_no_literal_citation_in_the_spread_files(self) -> None:
+		here = Path(__file__).resolve().parent
+		for name in ("style_gate.py", "test_style_gate.py"):
+			text = (here / name).read_text(encoding="utf-8")
+			self.assertNotRegex(text, r"project\.md#[A-Za-z0-9_-]",
+			                    name)

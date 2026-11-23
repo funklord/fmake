@@ -216,7 +216,7 @@ that had been green about nothing for five commits ·
 [163. Concurrency, and the compilers that outlived the build](#163-concurrency-and-the-compilers-that-outlived-the-build) ·
 [164. The lenses, turned on the code that came out of them](#164-the-lenses-turned-on-the-code-that-came-out-of-them) ·
 [165. Whose rule it is, said out loud](#165-whose-rule-it-is-said-out-loud) ·
-[166. `out: in | dir`, which is what every Makefile writes](#166-out-in-dir-which-is-what-every-makefile-writes) ·
+[166. `out: in | dir`, which is what every Makefile writes](#166-out-in--dir-which-is-what-every-makefile-writes) ·
 [167. The rest of the Makefile forms, and a dollar that became a process id](#167-the-rest-of-the-makefile-forms-and-a-dollar-that-became-a-process-id) ·
 [168. Both parsers finished: four more in fmake.mk, one in the TOML](#168-both-parsers-finished-four-more-in-fmakemk-one-in-the-toml) ·
 [169. Quoting is not escaping, and the fix was an hour old](#169-quoting-is-not-escaping-and-the-fix-was-an-hour-old) ·
@@ -332,7 +332,7 @@ that had been green about nothing for five commits ·
 [279. `@completion`: a bash completion under the command name](#279-completion-a-bash-completion-under-the-command-name) ·
 [280. A service's companion systemd units](#280-a-services-companion-systemd-units) ·
 [281. A module's sources are its own](#281-a-modules-sources-are-its-own) ·
-[282. From ossacli: `test = false` makes a test an installed program](#282-from-ossacli-test-false-makes-a-test-an-installed-program) ·
+[282. From ossacli: `test = false` makes a test an installed program](#282-from-ossacli-test--false-makes-a-test-an-installed-program) ·
 [283. From raidcfgd: a landed fix that nothing arms](#283-from-raidcfgd-a-landed-fix-that-nothing-arms) ·
 [284. situ's twelve tests, and the half of 174 that was not measured](#284-situs-twelve-tests-and-the-half-of-174-that-was-not-measured) ·
 [285. respec: the same binary as make, from two different fmakes](#285-respec-the-same-binary-as-make-from-two-different-fmakes) ·
@@ -2973,6 +2973,12 @@ survive being picked up cold.
 Version is a literal in `fmake` (`VERSION`), currently 0.1.0. `fmake -V` prints
 it with the author and licence, and a case checks it against
 `debian/changelog`, which is the one number that exists twice.
+
+`make style`'s docs mode refuses an internal link in this file that names no
+heading (claude-guidelines e74b34a, 2026-11-20). The slug is GitHub's:
+punctuation is dropped but each space stays a hyphen, so `` `out: in | dir` ``
+slugs to `out-in--dir`, with two hyphens; §166's and §282's contents links
+had one, and the gate's spread was held back until they were fixed.
 
 ### The rule that produced most of the findings
 

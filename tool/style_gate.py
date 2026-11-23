@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Copied from ~/.claude/tool/style_gate.py -- the source. Keep in sync;
-# fix drift the moment you notice it.
 """The indentation and whitespace gate for private projects.
 
 One tool, merged from three that had grown apart:
@@ -39,6 +37,9 @@ Usage:
     style_gate.py fix   [--root DIR] PATH...
     style_gate.py list  [--root DIR]      # what would be checked, and why
     style_gate.py docs  [--root DIR]      # hold project.md to the tree
+    style_gate.py index [--root DIR] [open|settled|superseded|KEY]
+                                          # its decision-bearing sections
+    style_gate.py cites [--root DIR] ID   # where the document's #ID is cited
 
 Configuration is `.style-gate.toml` at the project root; every key is
 optional. See DEFAULTS below for the meaning and the shipped values.
@@ -144,8 +145,16 @@ DEFAULTS: Config = {
 	# had been generalised from the tree that measured it.
 	#
 	# So Rust gets the checks that need no parser and not the one that does.
+	#
+	# `.sh` since 2026-11-23 (holder): shell takes tabs wherever they cannot
+	# change what the script does. A shell script with no suffix and a
+	# shebang was already gated; one with the suffix was not, so two
+	# scripts in one directory answered to different rules. What tabs could
+	# change -- heredoc bodies and multi-line quoted strings -- is skipped
+	# by shell_literal_lines, and a script that must stay short or that
+	# nobody reads is named in `tab_exempt`.
 	"indent_suffixes": [".c", ".h", ".cpp", ".hpp", ".cc", ".hh", ".py",
-	                    ".situ", ".ebnf", ".lua", ".rs"],
+	                    ".situ", ".ebnf", ".lua", ".rs", ".sh"],
 	"indent_names": [],
 
 	# Files that get the text checks (trailing space, final newline, and
@@ -174,6 +183,12 @@ DEFAULTS: Config = {
 	# across every project and none of them real; checking table rows
 	# produces zero false positives across all eight.
 	"doc_check_paths": True,
+
+	# Files the tab rule does not govern though their kind is, each a claim
+	# a tree makes by listing it: a script that must stay short, or one
+	# nobody reads (holder, 2026-11-23, of shell). Paths from the tree's
+	# root, or globs over them. They still get the text checks.
+	"tab_exempt": [],
 }
 
 SKIP_DIR_NAMES = frozenset({"__pycache__", ".git"})
@@ -490,6 +505,13 @@ def has_shebang(path: Path) -> bool:
 			return handle.readline(2) == b"#!"
 	except OSError:
 		return False
+
+
+def tab_exempt(rel: Path, cfg: Config) -> bool:
+	"""A file the tree has named as outside the tab rule."""
+	name = rel.as_posix()
+	return any(name == e.strip("/") or fnmatch.fnmatchcase(name, e.strip("/"))
+	           for e in cfg["tab_exempt"])
 
 
 def wants_text(path: Path, cfg: Config) -> bool:
@@ -944,6 +966,200 @@ def picolisp_literal_lines(text: str) -> frozenset[int]:
 	return frozenset(inside)
 
 
+SHELLS = (b"sh", b"bash", b"dash", b"ksh", b"zsh", b"busybox")
+
+
+def is_shell(path: Path) -> bool:
+	"""Shell by suffix, or by a shebang naming a shell for a command with none."""
+	if path.suffix in (".sh", ".bash"):
+		return True
+	if path.suffix:
+		return False
+	try:
+		with path.open("rb") as handle:
+			first = handle.readline(80)
+	except OSError:
+		return False
+	if not first.startswith(b"#!"):
+		return False
+	words = first[2:].split()
+	if not words:
+		return False
+	name = words[0].rsplit(b"/", 1)[-1]
+	if name == b"env" and len(words) > 1:
+		name = words[1]
+	return name in SHELLS
+
+
+HEREDOC = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([A-Za-z_0-9.-]+))""")
+
+
+def shell_scan(text: str) -> tuple[frozenset[int], list[tuple[int, int, str]]]:
+	"""Read a shell script for what is data and what is the script.
+
+	Returns the rows whose leading whitespace is data, not indent, and the
+	non-ASCII characters that stand outside any literal -- in code or in a
+	comment -- which are what the ASCII rule governs (code-style.md: a
+	string a program prints or feeds a test is output, not prose).
+
+	Data, either of which a retab would change:
+
+	- **A heredoc body and its terminator.** The body is written out byte
+	  for byte -- a config, a C file, a usage text -- and under `<<WORD`
+	  the terminator must stand at column one. `<<-WORD` strips leading
+	  TABS, so a tab there is legal and a space is content; the body is
+	  skipped either way.
+	- **A line that begins inside a quoted string**, single or double,
+	  opened on an earlier line: its leading spaces are in the value.
+
+	And one that is alignment rather than data: **a row under a `(` or a
+	group's `{` still open with content after it on its own line** --
+	`FILES=(a b` with `       c d)` under it, `|| { bad ...` with the next
+	command under `bad`, a backgrounded `(cmd` with its second command
+	under the first. It is the shell form of a C argument list aligned
+	under its paren, which code-style.md allows; hembygd's mutate.sh
+	carried 17 such rows. A `{` or `(` ending its line opens a block,
+	whose rows are indentation and checked. So is **a line after one
+	ending in `&&`, `||` or `|`**, which continues the command as a
+	backslash would: netcfgd, hull and beerssh align a condition's second
+	half under its first.
+
+	A scanner, not a parser: it knows quotes, backslash escapes outside
+	single quotes, `#` comments at the start of a word, and heredoc
+	openers. `$(...)` nested inside double quotes is not followed, and a
+	quote inside one can end the string early; such a script reports a
+	line it should not, which is the failure that shows itself, rather than
+	skipping one it should check. And a heredoc or a quote that never ends
+	was misread -- a shift the arithmetic check missed, an apostrophe the
+	scanner took for code -- so its rows and characters go back to being
+	checked: claiming the rest of a file as data would be a pass over
+	nothing.
+	"""
+	inside: set[int] = set()
+	loose: list[tuple[int, int, str]] = []
+	lines = text.split("\n")
+	pending: list[tuple[str, bool]] = []
+	claimed: list[int] = []
+	held: list[tuple[int, int, str]] = []	# characters in an open literal
+	quoted: list[int] = []
+	quote = ""
+	# Openers -- `(` and a group's `{` -- still open, each with whether
+	# content followed it on its own line. While one that had content is
+	# open, the rows under it align with that content rather than indent:
+	# `FILES=(a b` / `       c)`, `|| { bad ...` / `       c ...; }`.
+	open_: list[bool] = []
+	line_openers: list[int] = []	# indices into open_ opened on this line
+	continued = False	# the last line ended in && || or |
+
+	def close() -> None:
+		nonlocal quoted, held
+		inside.update(quoted)
+		quoted = []
+		held = []
+
+	for number, line in enumerate(lines):
+		row = number + 1
+		if pending:
+			word, strip_tabs = pending[0]
+			claimed.append(row)
+			held.extend((row, col + 1, ch) for col, ch in enumerate(line) if ord(ch) > 127)
+			if (line.lstrip("\t") if strip_tabs else line) == word:
+				pending.pop(0)
+				inside.update(claimed)
+				claimed = []
+				held = []
+			continue
+		if quote:
+			quoted.append(row)
+		elif continued or any(open_):
+			inside.add(row)
+		i, n = 0, len(line)
+		code_end = n
+		line_openers = []
+		opener_at: list[int] = []
+		while i < n:
+			c = line[i]
+			if ord(c) > 127:
+				(held if quote else loose).append((row, i + 1, c))
+			if quote == "'":
+				if c == "'":
+					quote = ""
+					close()
+				i += 1
+				continue
+			if c == "\\":
+				if i + 1 < n and ord(line[i + 1]) > 127:
+					(held if quote else loose).append((row, i + 2, line[i + 1]))
+				i += 2
+				continue
+			if quote == '"':
+				if c == '"':
+					quote = ""
+					close()
+				i += 1
+				continue
+			if c in "'\"":
+				quote = c
+				i += 1
+				continue
+			if c == "#" and (i == 0 or line[i - 1] in " \t;&|()"):
+				loose.extend((row, j + 1, line[j]) for j in range(i + 1, n)
+				             if ord(line[j]) > 127)
+				code_end = i
+				break
+			if c == "(" or (c == "{" and (i + 1 == n or line[i + 1] in " \t")
+			                 and (i == 0 or line[i - 1] in " \t;&|(")):
+				open_.append(False)
+				line_openers.append(len(open_) - 1)
+				opener_at.append(i)
+				i += 1
+				continue
+			if (c == ")" or (c == "}" and (i == 0 or line[i - 1] in " \t;&"))) and open_:
+				open_.pop()
+				if line_openers and line_openers[-1] == len(open_):
+					line_openers.pop()
+					opener_at.pop()
+				i += 1
+				continue
+			if c == "<" and line.startswith("<<<", i):
+				i += 3
+				continue
+			if c == "<" and line.startswith("<<", i):
+				# `1 << n` inside $(( )) or (( )) is a shift, not a heredoc.
+				before = line[:i]
+				if before.count("((") > before.count("))"):
+					i += 2
+					continue
+				m = HEREDOC.match(line, i)
+				if m:
+					word = m.group(2) if m.group(2) is not None else (
+					       m.group(3) if m.group(3) is not None else m.group(4))
+					pending.append((word, m.group(1) == "-"))
+					i = m.end()
+					continue
+				i += 2
+				continue
+			i += 1
+		for index, at in zip(line_openers, opener_at):
+			if index < len(open_) and line[at + 1:code_end].strip():
+				open_[index] = True
+		tail = line[:code_end].rstrip()
+		continued = not quote and not pending and tail.endswith(("&&", "||", "|"))
+	loose.extend(held)
+	return frozenset(inside), sorted(loose)
+
+
+def shell_literal_lines(text: str) -> frozenset[int]:
+	"""Rows of a shell script whose leading whitespace is data; see shell_scan."""
+	return shell_scan(text)[0]
+
+
+def shell_ascii_problems(text: str, where: Path) -> list["Problem"]:
+	"""Non-ASCII in shell code and comments, not in its literals; see shell_scan."""
+	return [Problem(where, row, col, f"non-ASCII character {ch!r} outside a literal")
+	        for row, col, ch in shell_scan(text)[1]]
+
+
 # --------------------------------------------------------------- checks
 
 class Problem:
@@ -1043,6 +1259,7 @@ def check_file(path: Path, root: Path, cfg: Config) -> list[Problem]:
 		found = None
 		reader = (python_ascii_problems if is_python(path)
 		          else c_ascii_problems if path.suffix in C_SUFFIXES
+		          else shell_ascii_problems if is_shell(path)
 		          else None)
 		if reader is not None:
 			try:
@@ -1098,9 +1315,12 @@ def check_file(path: Path, root: Path, cfg: Config) -> list[Problem]:
 		skip = python_literal_lines(text)
 	elif path.suffix == ".l":
 		skip = picolisp_literal_lines(text)
+	elif is_shell(path):
+		skip = shell_literal_lines(text)
 	else:
 		skip = frozenset()
-	problems.extend(check_text(text, rel, wants_indent(path, cfg), skip,
+	governed = wants_indent(path, cfg) and not tab_exempt(rel, cfg)
+	problems.extend(check_text(text, rel, governed, skip,
 	                           heuristic=wants_column_heuristic(path)))
 
 	# Where a fixer exists, "tabs-then-spaces" is the weaker of two possible
@@ -1110,7 +1330,7 @@ def check_file(path: Path, root: Path, cfg: Config) -> list[Problem]:
 	# not. Migrating to this tool without asking the stronger question would
 	# have quietly weakened two projects' gates, which is the exact failure
 	# the floor above exists to prevent, arriving by a different door.
-	if wants_indent(path, cfg) and has_fixer(path):
+	if governed and has_fixer(path):
 		dual: set[int] = set()
 		short: dict[int, int] = {}
 		fixed, error = fixed_text(path, text, cfg, dual, short)
@@ -2152,6 +2372,10 @@ def check_docs(root: Path, cfg: Config,
 					numbers[key] = number
 
 	counts["headings"] = len(seen)
+	sections = doc_sections(text)
+	problems += decision_problems(sections, rel)
+	counts["decisions"] = sum(1 for s in sections if s.decides)
+	problems += citation_problems(root, name, text, sections, counts)
 	if not cfg["doc_check_paths"]:
 		return problems
 
@@ -2199,6 +2423,270 @@ def check_docs(root: Path, cfg: Config,
 		        else "names a file git does not track")
 		problems.append(Problem(rel, number, 1, f"{note}: {token}"))
 	return problems
+
+
+# ------------------------------------------------- decisions and anchors
+#
+# A `project.md` larger than a context window cannot be authoritative,
+# because nobody can read it. Signalled from raidcfgd 2026-11-17: a /go
+# run read a section saying a question was open, parked the whole area,
+# and the holder had settled it three days earlier in a section further
+# down the same file. The same session renamed a heading and broke a
+# source comment citing it by name. Both are things a tool can see, and
+# nothing was looking.
+#
+# So three opt-in shapes, each silent in a document that does not use it:
+#
+#   ### Nothing can send either write verb {#write-exec-route}
+#
+#   Status:  settled 2026-11-10
+#   Decides: write-exec-route
+#
+# `{#id}` is pandoc's and kramdown's heading-id syntax, chosen over a
+# bracketed `[W7]` because `x[N2]` is ordinary code and a citation gate
+# must not read array subscripts. A citation is the document's name, a
+# `#` and the id -- a URL fragment, which nothing else in a source tree
+# spells. (Not written out here: this file is spread into every tree,
+# and a literal one in it would be a citation in each.) GitHub's own
+# heading slugs resolve too, so a link that works in a browser passes.
+#
+# A section is DECISION-BEARING when its header block carries `Decides:`,
+# and only those are checked -- absent is not drift, mismatched is.
+
+ANCHOR_RE = re.compile(r"\s*\{#([A-Za-z0-9_-]+)\}\s*$")
+HEADER_RE = re.compile(r"^(Status|Decides):\s*(.*?)\s*$")
+STATUS_WORDS = ("open", "settled", "superseded")
+DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+@dataclass
+class Section:
+	line: int
+	level: int
+	title: str
+	anchor: str          # the explicit {#id}, or ""
+	slug: str            # GitHub's slug of the title
+	status: str = ""     # first word of Status:, or ""
+	date: str = ""
+	decides: str = ""
+	header_at: int = 0   # line of the Decides: field
+	lead: str = ""       # the first sentence of the section's prose
+
+
+def github_slug(title: str) -> str:
+	"""The anchor GitHub gives a heading: lowercased, punctuation dropped,
+	spaces to hyphens. Backticks and asterisks are punctuation, so the
+	slug of `` `make` targets `` is `make-targets`."""
+	slug = re.sub(r"[^\w\- ]", "", title.strip().lower())
+	return slug.replace(" ", "-")
+
+
+def first_sentence(paragraph: str) -> str:
+	text = " ".join(paragraph.split())
+	match = re.search(r"(?<=[.!?])\**\s", text)
+	lead = text[:match.start()].rstrip() if match else text
+	return lead if len(lead) <= 200 else lead[:197] + "..."
+
+
+def doc_sections(text: str) -> list[Section]:
+	"""Every heading with its anchors, its header block and its lead.
+
+	The header block is the run of `Status:` and `Decides:` lines that
+	follows the heading, blank lines allowed before it. The lead is the
+	first sentence of the first paragraph after that -- extracted, never
+	written separately, which is what lets an index of them be trusted:
+	a summary somebody wrote apart from the section is a second set of
+	claims that can be wrong where no gate looks.
+	"""
+	sections: list[Section] = []
+	slugs: dict[str, int] = {}
+	lines = dict(outside_fences(text))
+	numbers = sorted(lines)
+	for pos, number in enumerate(numbers):
+		line = lines[number]
+		if not line.startswith("#"):
+			continue
+		level = len(line) - len(line.lstrip("#"))
+		if level > 6 or line[level:level + 1] not in (" ", ""):
+			continue
+		title = line[level:].strip()
+		anchor = ""
+		match = ANCHOR_RE.search(title)
+		if match:
+			anchor = match.group(1)
+			title = title[:match.start()].rstrip()
+		base = github_slug(title)
+		seen = slugs.get(base, 0)
+		slugs[base] = seen + 1
+		section = Section(number, level, title, anchor,
+		                  base if not seen else f"{base}-{seen}")
+		paragraph: list[str] = []
+		in_header = True
+		for later in numbers[pos + 1:]:
+			body = lines[later]
+			if body.startswith("#") and body.lstrip("#")[:1] in (" ", ""):
+				break
+			field = HEADER_RE.match(body) if in_header else None
+			if field:
+				key, value = field.groups()
+				if key == "Status":
+					section.status = (value.split() or [""])[0].lower()
+					date = DATE_RE.search(value)
+					section.date = date.group(1) if date else ""
+				else:
+					section.decides = value
+					section.header_at = later
+				continue
+			if not body.strip():
+				if paragraph:
+					break
+				continue
+			in_header = False
+			paragraph.append(body.strip().lstrip("-* ").strip())
+		section.lead = first_sentence(" ".join(paragraph))
+		sections.append(section)
+	return sections
+
+
+def decision_problems(sections: list[Section], rel: Path) -> list[Problem]:
+	"""Refuse a document that contradicts itself about a decision.
+
+	The raidcfgd case exactly: one section says a question is open and
+	another says it is settled, or two say settled with nothing marking
+	either superseded. A reader finds whichever one comes first.
+	"""
+	problems: list[Problem] = []
+	anchors: dict[str, int] = {}
+	by_key: dict[str, list[Section]] = {}
+	for s in sections:
+		if s.anchor:
+			if s.anchor in anchors:
+				problems.append(Problem(rel, s.line, 1,
+					f"anchor #{s.anchor} repeats line {anchors[s.anchor]}"))
+			else:
+				anchors[s.anchor] = s.line
+		if not s.decides:
+			continue
+		if s.status not in STATUS_WORDS:
+			problems.append(Problem(rel, s.header_at, 1,
+				f"Decides: {s.decides} needs a Status: of "
+				f"{', '.join(STATUS_WORDS)}"
+				+ (f", not {s.status!r}" if s.status else "")))
+			continue
+		if s.status == "settled" and not s.date:
+			problems.append(Problem(rel, s.header_at, 1,
+				f"Decides: {s.decides} is settled with no date; "
+				f"write `Status: settled YYYY-MM-DD`"))
+		by_key.setdefault(s.decides, []).append(s)
+	for key, group in by_key.items():
+		live = [s for s in group if s.status != "superseded"]
+		settled = [s for s in live if s.status == "settled"]
+		opened = [s for s in live if s.status == "open"]
+		if len(settled) > 1:
+			for s in settled[1:]:
+				problems.append(Problem(rel, s.line, 1,
+					f"`{key}` is settled here and at line "
+					f"{settled[0].line}; mark one superseded"))
+		if settled and opened:
+			for s in opened:
+				problems.append(Problem(rel, s.line, 1,
+					f"`{key}` is open here and settled at line "
+					f"{settled[0].line}; close this one or supersede "
+					f"that"))
+	return problems
+
+
+CITE_RE = r"[A-Za-z0-9_./-]*{doc}#([A-Za-z0-9_-]+)"
+
+
+def doc_citations(root: Path, name: str) -> list[tuple[str, int, str]] | None:
+	"""(file, line, id) for every `<doc>#id` in the tracked text files.
+
+	Asked of `git grep`, which reads the index's list and skips binaries,
+	so a build product or a vendored submodule's contents are never read.
+	None when there is no git to ask: the caller says so rather than
+	reporting zero citations it never looked for.
+	"""
+	pattern = CITE_RE.format(doc=re.escape(name))
+	try:
+		r = subprocess.run(["git", "-C", str(root), "grep", "-I", "-n",
+		                    "-o", "-E", pattern, "--", "."],
+		                   capture_output=True, text=True, timeout=120)
+	except (OSError, subprocess.TimeoutExpired):
+		return None
+	if r.returncode not in (0, 1):
+		return None
+	found: list[tuple[str, int, str]] = []
+	for row in r.stdout.splitlines():
+		parts = row.split(":", 2)
+		if len(parts) != 3 or not parts[1].isdigit():
+			continue
+		path, number, hit = parts
+		# The path before the name must be the document itself: from the
+		# tree root, or from the citing file's own directory.
+		prefix = hit.split("#", 1)[0]
+		cited = prefix[:-len(name)]
+		where = (root / cited / name, root / Path(path).parent / prefix)
+		if prefix != name and not any(p.resolve() == (root / name).resolve()
+		                              for p in where):
+			continue
+		found.append((path, int(number), hit.split("#", 1)[1]))
+	return found
+
+
+def citation_problems(root: Path, name: str, text: str,
+                      sections: list[Section],
+                      counts: dict[str, int]) -> list[Problem]:
+	"""A citation naming an anchor the document no longer has.
+
+	The second raidcfgd failure: a heading renamed, and `daemon/write.h`
+	still citing it by name. Nothing could catch that while citations
+	were prose; a fragment can be resolved.
+	"""
+	known = {s.anchor for s in sections if s.anchor}
+	known |= {s.slug for s in sections}
+	problems: list[Problem] = []
+	rel = Path(name)
+	# Links inside the document to its own sections.
+	for number, line in outside_fences(text):
+		for anchor in re.findall(r"\]\(#([A-Za-z0-9_-]+)\)", line):
+			if anchor not in known:
+				problems.append(Problem(rel, number, 1,
+					f"links to #{anchor}, which no heading here carries"))
+	cites = doc_citations(root, name)
+	if cites is None:
+		return problems
+	counts["citations"] = len(cites)
+	for path, number, anchor in cites:
+		if anchor not in known:
+			problems.append(Problem(Path(path), number, 1,
+				f"cites {name}#{anchor}, which no heading there carries"))
+	return problems
+
+
+def index_lines(sections: list[Section], which: str) -> list[str]:
+	"""The decision-bearing sections, one line each, for `index`.
+
+	Generated on demand rather than committed: a committed index is a
+	second file every session appending a decision must regenerate, two
+	sessions doing it at once conflict on it, and the only thing a gate
+	could check is that it equals what this function prints -- which is
+	this function, run again.
+	"""
+	rows = []
+	for s in sections:
+		if not s.decides:
+			continue
+		if which in ("open", "settled", "superseded"):
+			if s.status != which:
+				continue
+		elif which and which != s.decides:
+			continue
+		anchor = f"#{s.anchor or s.slug}"
+		rows.append(f"{s.line}\t{s.status or '?'}\t{s.date or '-'}\t"
+		            f"{s.decides}\t{anchor}\t{s.title}"
+		            + (f"\n\t{s.lead}" if s.lead else ""))
+	return rows
 
 
 def summaryless_docs(root: Path, files: list[Path],
@@ -2259,9 +2747,52 @@ def summaryless_docs(root: Path, files: list[Path],
 
 # ----------------------------------------------------------------- main
 
+def lookup(mode: str, root: Path, cfg: Config, words: list[str]) -> int:
+	"""`index [open|settled|superseded|KEY]` and `cites ID`: the named
+	lookups, so that a session asks the document a question with a tool
+	whose detector has been seen to work rather than with a grep it wrote
+	a moment ago. Exit 1 when nothing matched, so a script can tell an
+	empty answer from a failed one -- and the empty answer says how many
+	sections were looked at.
+	"""
+	name = cfg["doc_file"]
+	doc = root / name
+	if not doc.is_file():
+		print(f"style-gate: no {name} here to ask", file=sys.stderr)
+		return 2
+	sections = doc_sections(doc.read_text(encoding="utf-8",
+	                                      errors="replace"))
+	decisions = sum(1 for s in sections if s.decides)
+	if mode == "index":
+		rows = index_lines(sections, words[0] if words else "")
+		for row in rows:
+			print(row)
+		print(f"\n{len(rows)} of {decisions} decision-bearing section(s) "
+		      f"in {name} ({len(sections)} heading(s))", file=sys.stderr)
+		return 0 if rows else 1
+	if len(words) != 1:
+		print("usage: style_gate.py cites ID", file=sys.stderr)
+		return 2
+	anchor = words[0].lstrip("#")
+	cites = doc_citations(root, name)
+	if cites is None:
+		print("style-gate: no git here to ask for citations",
+		      file=sys.stderr)
+		return 2
+	hits = [c for c in cites if c[2] == anchor]
+	for path, number, _ in hits:
+		print(f"{path}:{number}")
+	target = [s for s in sections if anchor in (s.anchor, s.slug)]
+	where = (f"line {target[0].line}" if target
+	         else "which no heading carries")
+	print(f"\n{len(hits)} of {len(cites)} citation(s) of {name} name "
+	      f"#{anchor}, {where}", file=sys.stderr)
+	return 0 if hits else 1
+
+
 def resolve(argv: list[str]) -> tuple[str, Path, list[Path]]:
 	mode = argv[0] if argv else "check"
-	if mode not in ("check", "fix", "list", "docs"):
+	if mode not in ("check", "fix", "list", "docs", "index", "cites"):
 		print(__doc__, file=sys.stderr)
 		raise SystemExit(2)
 	rest = argv[1:]
@@ -2276,7 +2807,10 @@ def resolve(argv: list[str]) -> tuple[str, Path, list[Path]]:
 		if rest[i] in ("-h", "--help"):
 			print(__doc__)
 			raise SystemExit(0)
-		paths.append(Path(rest[i]).resolve())
+		# `index` and `cites` take a word rather than paths; it is carried
+		# as a Path and read back with `.name` by main().
+		paths.append(Path(rest[i]) if mode in ("index", "cites")
+		             else Path(rest[i]).resolve())
 		i += 1
 	return mode, root, paths
 
@@ -2284,6 +2818,8 @@ def resolve(argv: list[str]) -> tuple[str, Path, list[Path]]:
 def main(argv: list[str]) -> int:
 	mode, root, explicit = resolve(argv)
 	cfg = load_config(root)
+	if mode in ("index", "cites"):
+		return lookup(mode, root, cfg, [str(p) for p in explicit])
 	if explicit:
 		files, raw = explicit, 0
 	else:
@@ -2334,6 +2870,10 @@ def main(argv: list[str]) -> int:
 		scanned = (f" ({counts.get('headings', 0)} heading(s)"
 		           + (f", {counts['paths']} path(s){by}" if "paths" in counts
 		              else ", paths not checked")
+		           + f", {counts.get('decisions', 0)} decision(s)"
+		           + (f", {counts['citations']} citation(s)"
+		              if "citations" in counts
+		              else ", citations not checked, no git here")
 		           + doc_size(counts) + ")")
 		for name, c in extra:
 			scanned += (f", {name} ({c.get('headings', 0)} heading(s)"
