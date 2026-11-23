@@ -20971,8 +20971,16 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# it failed, and the twelve tests, all built, were not run. A
 		# plain `fmake' builds the GUI, links the unit, and still fails
 		# on it, as it should.
+		#
+		# Not when a target asked for was skipped: its root did not
+		# compile, so it is in neither `failed' nor `linked_by', and
+		# the unit may be its. Measured on respec cross-built for
+		# Windows with no Qt there: the GUI was skipped and its
+		# meta-object was said to belong to "targets not asked for".
 		for key in sorted(broken):
 			rel = key.partition("\0")[0]
+			if skipped:
+				break
 			if rel in generated_from and rel not in linked_by:
 				broken.discard(key)
 				warn(f"{rel} did not compile, and nothing built here "

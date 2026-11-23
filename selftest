@@ -15591,6 +15591,25 @@ def a_meta_object_no_asked_for_target_links_does_not_stop_the_tests(t):
 	      f"the control: a plain build of the GUI failed: "
 	      f"{r.stdout}{r.stderr}")
 
+	# And not when the program the unit belongs to was asked for and
+	# skipped, its own root having failed. Measured on respec built for
+	# Windows with no Qt there: the GUI was skipped, and its meta-object
+	# was said to belong to "targets not asked for". A second program
+	# that builds, because with nothing built fmake stops before it gets
+	# this far.
+	t.write("tools/hello.c", "int main(void){ return 0; }\n")
+	t.write("kit/src/listener.h",
+	        '#pragma once\n#include <QObject>\n#include "absent.h"\n'
+	        "class Listener : public QObject {\n\tQ_OBJECT\npublic:\n"
+	        "\tQ_INVOKABLE int n() { return 1; }\n};\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "skipped" in out,
+	      f"the fixture is wrong: the GUI was meant to be skipped: {out}")
+	check("nothing built here links it" not in out,
+	      f"the meta-object of a skipped program was called nobody's: "
+	      f"{out}")
+
 
 @case
 def a_header_the_mocd_one_includes_is_an_input_to_moc(t):

@@ -49649,6 +49649,11 @@ define `nanosleep` and nothing says which test takes which, so the
 ejected file has no targets (inbox 20261123T1950Z). Both are the trees'
 to settle; fmake's refusal is the designed one.
 
+A second batch: respec, softkeys and hydra eject with exit 0, and their
+Makefiles build and settle; hydra's has 177 compile lines. snurra ejects
+with exit 1 on its tests, an Android header and a test-only define, and
+its Makefile builds. situ's eject died, which is the next paragraph.
+
 **And a fault this section's own fix added, found by the same sweep.**
 cc75769 named a loop variable `_rel` inside `eject_make`, which already
 called the module-level `_rel()` for situc's path. Python then read
@@ -49712,9 +49717,28 @@ the tests run. A plain build builds the GUI, links the unit, and still
 fails on it as before. With the stanza and this change, situ's `fmake
 test` ran its twelve tests and all passed.
 
+**Narrowed the same day**, after a cross sweep built respec for Windows,
+where there is no Qt. The GUI was asked for and skipped,
+because its own `main.cpp` failed, and the warning then said its
+meta-object belonged to "targets not asked for". A skipped target is in
+neither `failed` nor `linked_by`, so the forgiveness now requires that
+nothing was skipped either. The case's second control is that shape: a
+skipped GUI, plus a program that builds so the run reaches the check.
+44d974b names the GUI's unit as nobody's there; this does not.
+
 Case `a_meta_object_no_asked_for_target_links_does_not_stop_the_tests`:
 a Q_OBJECT header whose include needs a directory only the GUI's main
 brings, and one C test. Checked by hand (section 15): HEAD prints "not
 running tests" and exits 1, this runs the test and exits 0, and the
 plain build, the control, builds the GUI with both.
+
+**The cross sweep that found it** (2026-11-23; section 162's was the
+last). ossacli, respec and openmlx4 were built from `git archive` copies
+with `CC`/`CXX` set to the aarch64, riscv64 and i686 Linux and the
+x86_64 mingw-w64 cross compilers. ossacli and openmlx4 build for all
+three Linux triples with nothing declared. Neither builds for Windows,
+because both use POSIX-only interfaces (`ioctl`, `SIGALRM`, `sigset_t`,
+`endian.h`), which is the code's and not the build's. respec needs a
+cross `g++`, which only mingw has here, and for Windows it has no Qt;
+its C++ test `t2.exe` built.
 
