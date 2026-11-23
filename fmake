@@ -1449,6 +1449,39 @@ def version_fallback_text(root, rel, macro):
 	return None
 
 
+def version_from_header(proj, root, rel, macro):
+	"""The header that gives `macro' its value for `rel', or None.
+
+    A fallback is only a fallback when nothing else defines the macro, and
+    the build's flags are not the only other place. bbq-predictor moved
+    its version into a header the build writes from VERSION (its
+    `bbq_version.h', included on line 1), keeping the `#ifndef' fallback
+    below it; the binary said 9.9.9 and fmake said it "reports
+    "unknown"" on every build. So a header reachable by include that
+    defines the macro with a value answers it -- unless that header's own
+    definition is the same guarded fallback, which supplies nothing.
+
+    Read at report time, like `version_fallback_text', and only for the
+    files already found falling back: a scan field would cost a cache
+    migration for a note that is printed a few times a run. Where the
+    include sits relative to the `#ifndef' is not checked; a header
+    defining the macro after the fallback would draw a redefinition
+    warning from the compiler, which says so better than fmake could.
+    """
+	for hdr in sorted(proj.reachable_headers([rel])):
+		try:
+			with open(os.path.join(root, hdr), errors="replace") as fh:
+				code = fh.read()
+		except OSError:
+			continue
+		if macro in version_fallbacks(code):
+			continue
+		for name, value in RE_DEFINE_VALUED.findall(code):
+			if name == macro and value.lstrip().startswith('"'):
+				return hdr
+	return None
+
+
 def version_fallbacks(code):
 	"""Version macros this file defines for itself when the build does not.
 
@@ -20776,7 +20809,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		in_artifact = {u.rel for _n, cl, _r, _c, _d in built
 		               for u in cl.link}
 		fallen = [(rel, name) for rel, name in version_fallen
-		          if rel in in_artifact]
+		          if rel in in_artifact
+		          and not version_from_header(proj, root, rel, name)]
 		_fhead, _frest = capped(fallen, 3)
 		for rel, name in _fhead:
 			text = version_fallback_text(root, rel, name)

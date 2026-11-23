@@ -691,7 +691,9 @@ that had been green about nothing for five commits ·
 [639. MSP430, and who fetches a toolchain](#639-msp430-and-who-fetches-a-toolchain) ·
 [640. Xtensa, and an entry point in inline asm](#640-xtensa-and-an-entry-point-in-inline-asm) ·
 [641. A call passing a lambda is not a definition](#641-a-call-passing-a-lambda-is-not-a-definition) ·
-[642. The Windows VM image, and what actually shrank it](#642-the-windows-vm-image-and-what-actually-shrank-it)
+[642. The Windows VM image, and what actually shrank it](#642-the-windows-vm-image-and-what-actually-shrank-it) ·
+[643. hal9001 again: 139 of 140, and a refusal that is out of date](#643-hal9001-again-139-of-140-and-a-refusal-that-is-out-of-date) ·
+[644. A version a header supplies is not "unknown"](#644-a-version-a-header-supplies-is-not-unknown)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49390,3 +49392,64 @@ reclaim. What shrank it was removing data inside: 4.4G of kit trees,
 components. NTFS then held 21.2 GB used, and the image dropped from 21.1G
 to 15.9G. So the TRIM path through the new discard attachment does work.
 `/home` went from 98% to 96%.
+
+## 643. hal9001 again: 139 of 140, and a refusal that is out of date
+
+hal9001 grew from 125 example configurations to 140 after section 640,
+with a new part family (the AVR128DB48) and the comparator, rtc, spi and
+sprint examples on more boards. Measured 2026-11-23 at hal9001 f14ce4b,
+fmake b49732d, each configuration in an application tree of its own as in
+section 634: the example's sources, `hal9001/`, and the header and stanza
+from `genconfig.py --fmake`, from a `git archive`.
+
+- **84 configurations get a stanza from genconfig: 83 build.** The 84th is
+  `shell/bluepill_freertos`, which has no kernel, as before.
+- **The AVR128DB48 needed nothing.** blink and shell are 316 and 5,724
+  bytes of text and data, the same as hal9001's own build of them.
+- **genconfig refuses the other 56, MSP430 and Xtensa**, saying fmake "has
+  not been seen to build" them. Sections 639 and 640 made that out of
+  date. With the stanzas those sections describe, written by hand, all 56
+  build. One trap in the MSP430 stanza: `-mmcu` belongs in `cflags`
+  only. fmake's link line carries the cflags, and a second `-mmcu` in
+  `ldflags` makes msp430-gcc pass the part's linker script twice
+  (`linker script file 'msp430fr5994.ld' appears multiple times`).
+
+Whether genconfig writes those stanzas is hal9001's decision. The finding
+and the stanzas went to its inbox (20261123T1829Z) as information.
+
+## 644. A version a header supplies is not "unknown"
+
+bbq-predictor has not built with fmake since its c86c41a (2026-11-13),
+while its README still shows the fmake line. To make `make VERSION=x`
+rebuild, the version moved out of a `-D` and into `bbq_version.h`, which
+qmake writes and both mains include on line 1. fmake has nothing to write
+it, so `src/main.cpp` and `src/publish/main.cpp` stop on a missing
+header. The same failure comes from the fmake at 3caeffc, so it is not a
+regression here. A `[generate.version]` rule fixes it: a five-line script
+writes `gen/bbq_version.h` from VERSION, only when the text changes. With
+it the tree builds, both programs print the version, a second fmake
+writes no file, and changing VERSION recompiles the two mains and nothing
+else. That stanza went to bbq-predictor's inbox; the build is theirs.
+
+**It also found a false note here.** Each of those builds printed
+`src/main.cpp defines BBQ_VERSION_STRING itself because the build did
+not, so this binary reports "unknown"`, with the `$file(VERSION)` define
+as the remedy, while the binary printed 9.9.9. The note (sections 124,
+307 and 308) counted only a `-D` and the file's own directives as
+supplying the macro. A header the file includes was not
+counted, though in C that is the usual place for it.
+`version_from_header` now walks the file's reachable headers at report
+time. A header that defines the macro with a string value answers it,
+unless its definition is the same guarded fallback, which supplies
+nothing. The include's position against the `#ifndef` is not checked; a
+header defining it afterwards draws the compiler's redefinition warning.
+
+Case `a_version_a_header_supplies_is_not_called_unknown`: a tracked
+header, a generated one, and the control, an included header carrying
+only the fallback, where the note must still fire. **The suite was not
+run in this session.** A privacy plugin refuses to execute `selftest`,
+which carries the holder's address. The three shapes were run by hand
+with fmake: with the fix, the two supplied shapes are silent and print
+3.1.4, and the control prints "unknown" and keeps its note. Against
+b49732d's fmake all three fire.
+

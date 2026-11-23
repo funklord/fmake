@@ -3937,6 +3937,74 @@ def a_version_a_source_invents_for_itself_is_reported(t):
 
 
 @case
+def a_version_a_header_supplies_is_not_called_unknown(t):
+	"""A fallback is only used when nothing defines the macro first, and
+	a header can. bbq-predictor (its c86c41a) writes `bbq_version.h' from
+	VERSION and includes it on line 1, above its `#ifndef' fallback, so a
+	header tracks the version and a bump recompiles the two mains. fmake
+	built that tree through a `[generate]' rule and the binary said 9.9.9,
+	and every build still printed that it "reports "unknown"", with the
+	`$file(VERSION)' define as a remedy for a tree already doing the
+	equivalent.
+
+	Three shapes: a tracked header, the generated one, and the control --
+	an included header carrying only the same guarded fallback supplies
+	nothing, and the note must still fire."""
+	t.write("VERSION", "3.1.4\n")
+	fallback = ('#ifndef APP_VERSION_STRING\n'
+	            '#define APP_VERSION_STRING "unknown"\n'
+	            '#endif\n'
+	            'int main(void){ printf("%s\\n", APP_VERSION_STRING); '
+	            'return 0; }\n')
+	t.write("version.h", '#define APP_VERSION_STRING "3.1.4"\n')
+	t.write("main.c", '#include <stdio.h>\n#include "version.h"\n' + fallback)
+	out = t.fmake().stdout
+	exe = "main" if os.path.exists(os.path.join(t.dir, "main")) \
+	    else os.path.basename(t.dir)
+	check(t.run(exe).stdout.strip() == "3.1.4",
+	      "the fixture is wrong: the header's version did not reach the "
+	      "binary")
+	check("defines APP_VERSION_STRING itself" not in out,
+	      f"a version a tracked header supplies was called unknown: {out}")
+
+	# The generated header: what bbq-predictor's tree needs, end to end.
+	os.unlink(os.path.join(t.dir, "version.h"))
+	t.write("tool/version-header",
+	        '#!/bin/sh\nprintf \'#define APP_VERSION_STRING "%s"\\n\' '
+	        '"$(cat "$1")" > "$2"\n')
+	os.chmod(os.path.join(t.dir, "tool/version-header"), 0o755)
+	t.write("fmake.toml", '[generate.version]\n'
+	        'command = "mkdir -p gen && tool/version-header VERSION '
+	        'gen/app_version.h"\n'
+	        'inputs  = ["VERSION"]\n'
+	        'outputs = ["gen/app_version.h"]\n')
+	t.write("main.c", '#include <stdio.h>\n#include "app_version.h"\n'
+	        + fallback)
+	r = t.fmake("-B")
+	check(r.returncode == 0, f"the generated header did not build: "
+	      f"{r.stdout}")
+	check(t.run(exe).stdout.strip() == "3.1.4",
+	      "the fixture is wrong: the generated version did not reach the "
+	      "binary")
+	check("defines APP_VERSION_STRING itself" not in r.stdout,
+	      f"a version a generated header supplies was called unknown: "
+	      f"{r.stdout}")
+
+	# The control. A header whose only definition is the same guarded
+	# fallback supplies nothing, so main.c's binary does report
+	# "unknown" and the note is right.
+	os.unlink(os.path.join(t.dir, "fmake.toml"))
+	t.write("version.h", '#ifndef APP_VERSION_STRING\n'
+	        '#define APP_VERSION_STRING "unknown"\n#endif\n')
+	t.write("main.c", '#include <stdio.h>\n#include "version.h"\n' + fallback)
+	out = t.fmake("-B").stdout
+	check(t.run(exe).stdout.strip() == "unknown",
+	      "the control's fixture is wrong: it is meant to print unknown")
+	check("main.c defines APP_VERSION_STRING itself" in out,
+	      f"an included fallback was taken for a supplied version: {out}")
+
+
+@case
 def a_version_the_build_system_injects_is_named_with_its_value(t):
 	"""Three trees in two projects would not compile for want of a macro
 	no source defines, and the compiler cannot say what to do about it.
