@@ -49648,6 +49648,18 @@ define `nanosleep` and nothing says which test takes which, so the
 ejected file has no targets (inbox 20261123T1950Z). Both are the trees'
 to settle; fmake's refusal is the designed one.
 
+**And a fault this section's own fix added, found by the same sweep.**
+cc75769 named a loop variable `_rel` inside `eject_make`, which already
+called the module-level `_rel()` for situc's path. Python then read
+`_rel` as a local throughout the function, and `--eject make` on situ
+died with `UnboundLocalError` before writing a line. No case ejects a
+tree with both a schema and a submodule, so nothing reached it. The
+variable is renamed, and `no_function_shadows_a_module_function_it_calls`
+asks fmake's source for the whole class: a function that assigns a name
+it also reads, where the name is one of fmake's own functions. It finds
+cc75769's case, it finds a planted control, and on the fixed source it
+finds nothing.
+
 Case `an_ejected_build_fetches_a_nested_source_and_skips_a_filled_tree`.
 Like sections 644 and 645 it was checked by hand, not through the suite
 (section 15); a scratch harness running the case's own code was refused

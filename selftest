@@ -40783,6 +40783,71 @@ def the_source_imports_only_the_standard_library(t):
 	      f"so it is no longer one file")
 
 
+def _shadowing(src):
+	"""(line, function, names): a function that assigns a name it also
+	reads where the name is a module-level function or class of fmake's.
+
+	Python makes a name local to the whole function once anything in it
+	assigns the name, so a read of the module-level function anywhere in
+	that function raises UnboundLocalError -- but only on the path that
+	reaches the read before the assignment. Over-approximate on purpose:
+	nested scopes are walked as one, so a hit may be a false alarm, and
+	the fix for a false alarm (renaming a local) is free."""
+	tree = ast.parse(src)
+	top = {n.name for n in tree.body
+	       if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+	found = []
+
+	def look(fn):
+		stored, read, declared = set(), set(), set()
+		for n in ast.walk(fn):
+			if isinstance(n, ast.Name):
+				(stored if isinstance(n.ctx, ast.Store) else read).add(n.id)
+			elif isinstance(n, ast.arg):
+				stored.add(n.arg)
+			elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+			     and n is not fn:
+				stored.add(n.name)
+			elif isinstance(n, (ast.Global, ast.Nonlocal)):
+				declared |= set(n.names)
+		bad = (stored & read & top) - declared
+		if bad:
+			found.append((fn.lineno, fn.name, sorted(bad)))
+	for n in tree.body:
+		if isinstance(n, ast.FunctionDef):
+			look(n)
+		elif isinstance(n, ast.ClassDef):
+			for m in n.body:
+				if isinstance(m, ast.FunctionDef):
+					look(m)
+	return found
+
+
+@case
+def no_function_shadows_a_module_function_it_calls(t):
+	"""Section 647's fix named a loop variable `_rel' inside eject_make,
+	which already called the module-level `_rel()' for situc's path. The
+	whole function then read `_rel' as a local, and `--eject make' on any
+	tree with situ schemas died with UnboundLocalError -- situ itself.
+	Nothing in the suite ejects a tree with both a schema and a
+	submodule, so no case reached the line. This asks the source instead,
+	for the whole class at once.
+
+	The control is the same check on a function written to fail it, so a
+	check that has stopped finding anything cannot pass silently."""
+	planted = ("def helper():\n    return 1\n\n"
+	           "def user():\n    x = helper()\n"
+	           "    for helper in range(2):\n        pass\n    return x\n")
+	check([f for _l, f, _n in _shadowing(planted)] == ["user"],
+	      f"the check misses a planted shadow: {_shadowing(planted)}")
+	found = _shadowing(open(FMAKE).read())
+	check(not found,
+	      "these functions assign a name they also read, and the name is "
+	      "one of fmake's own functions, so the read raises "
+	      "UnboundLocalError: "
+	      + "; ".join(f"line {l} {f}: {', '.join(n)}" for l, f, n in found))
+
+
 @case
 def the_completion_offers_every_option(t):
 	"""--completion is generated from the parser, for the same reason --man

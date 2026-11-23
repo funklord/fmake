@@ -22991,8 +22991,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# recipe that waits for the fetch is the rule it lacked.
 			_inside = sorted(u.rel for u in every.values()
 			                 if u.rel.startswith(path + "/"))
-			for _rel in _inside:
-				a(f"{_eject_src(_rel)}: | {path}/.git")
+			for _inner in _inside:
+				a(f"{_eject_src(_inner)}: | {path}/.git")
 			if _inside:
 				a("")
 
