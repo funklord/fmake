@@ -7076,6 +7076,22 @@ class Project:
 		# first, and no assertion could tell the two apart.
 		if len(matches) > 1 and self.is_excluded:
 			matches = [m for m in matches if not self.is_excluded(m)]
+		# An include that names a path can only be answered by a header
+		# whose own path ends with it: no -I makes `qtty/theme.h' what
+		# "qtkit/theme.h" finds. Basename ambiguity among the rest is no
+		# ambiguity at all. Measured on snurra: a real clone fetches
+		# fuzznet's nested qtty, whose include/qtty/theme.h made
+		# "qtkit/theme.h" two-way ambiguous, so it resolved to nothing,
+		# no -I was inferred, and the build stopped -- while a `git
+		# archive' copy without that nested checkout built. Only where
+		# one or more fit; with none, the ambiguity stands as it was.
+		if len(matches) > 1 and "/" in inc_name:
+			fits = [m for m in matches
+			        if m.endswith(inc_name)
+			        and (len(m) == len(inc_name)
+			             or m[len(m) - len(inc_name) - 1] in ("/", os.sep))]
+			if fits:
+				matches = fits
 		if len(matches) == 1:
 			self._note_incdir(self.incdir_for(matches[0], inc_name),
 			                  inc_name, from_rel)

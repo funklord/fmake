@@ -1561,7 +1561,8 @@ built with real mingw-w64 and run under wine, Qt applications included.
 macOS has been linked with `ld64.lld` against Qt's own frameworks and macOS's
 real headers, and neither those programs nor fmake itself have run on a Mac.
 fmake itself has run on Windows under wine, with Python 3.12 and Qt's MinGW,
-and not yet on a Windows machine.
+and hosted on Windows 11 itself, in a virtual machine with a TPM and Secure
+Boot.
 
 ---
 

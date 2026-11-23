@@ -693,7 +693,8 @@ that had been green about nothing for five commits ·
 [641. A call passing a lambda is not a definition](#641-a-call-passing-a-lambda-is-not-a-definition) ·
 [642. The Windows VM image, and what actually shrank it](#642-the-windows-vm-image-and-what-actually-shrank-it) ·
 [643. hal9001 again: 139 of 140, and a refusal that is out of date](#643-hal9001-again-139-of-140-and-a-refusal-that-is-out-of-date) ·
-[644. A version a header supplies is not "unknown"](#644-a-version-a-header-supplies-is-not-unknown)
+[644. A version a header supplies is not "unknown"](#644-a-version-a-header-supplies-is-not-unknown) ·
+[645. A header whose path cannot fit the include is no candidate](#645-a-header-whose-path-cannot-fit-the-include-is-no-candidate)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -2950,6 +2951,13 @@ rather than code, and one lesson about testing.
   wherever one Qt is installed, which is why the suite has always passed
   elsewhere -- and why the case that closed it skips there rather than
   reporting a pass it did not earn.
+- **The suite cannot be run by a session in this account (2026-11-23).**
+  A privacy plugin refuses to execute the suite, which carries the
+  holder's address in its copyright line beside reverse-domain fixture
+  names. Sessions are not to work around it. 233a06e (section 644) and the
+  path-fit fix (section 645) were checked by hand, case shapes and
+  mutation, not by the suite. The holder's to settle: run the suite on
+  them, or allow the plugin to run it.
 
 ---
 
@@ -49452,4 +49460,46 @@ which carries the holder's address. The three shapes were run by hand
 with fmake: with the fix, the two supplied shapes are silent and print
 3.1.4, and the control prints "unknown" and keeps its note. Against
 b49732d's fmake all three fire.
+
+## 645. A header whose path cannot fit the include is no candidate
+
+snurra a14ceda (2026-11-23) added `include-dirs = ["qtkit/include"]`,
+saying fmake does not find `qtkit/theme.h` in its vendored qtkit. A
+`git archive` copy of the commit before it planned `-Iqtkit/include`
+without help, with this fmake and the packaged one. A real clone of that
+commit stopped: `qtkit/theme.h: No such file or directory`, in qtkit's
+own `src/portal_listener.h` through its moc output and in `src/main.cpp`.
+
+**The difference was a second `theme.h`.** On a clone fmake fetches
+fuzznet's nested submodules, and qtty brings `include/qtty/theme.h`. The
+resolver's basename fallback then had two candidates for
+`"qtkit/theme.h"`, resolved neither, and inferred no `-I`. The archive
+copy had no nested qtty, so it had one candidate. But
+`qtty/include/qtty/theme.h` was never a candidate in fact: no `-I` makes
+it what `"qtkit/theme.h"` finds. Where an include names a path and more
+than one header shares its basename, only those whose path ends with the
+include's, at a separator, are kept now. If none fits, the ambiguity
+stands as before. A bare `"theme.h"` names no path and stays ambiguous.
+`_headers_in_tree`, which the missing-header advice uses, already
+matched on whole path components; the resolver was the one place that
+did not.
+
+With it, the real clone of snurra a14ceda~1 builds with no fmake.toml,
+and the player runs. qtkit on its own gets `-Iinclude` from this fmake
+and the one before, so the "fmake does not guess" comment in qtkit's and
+snurra's fmake.toml held only for snurra's clone, and only because of
+this fault. Both trees were told (inbox 20261123T1900Z); the lines are
+theirs to keep or drop.
+
+Case `a_header_whose_path_cannot_fit_the_include_is_no_candidate`:
+`kit/include/kit/theme.h` beside `other/include/other/theme.h`. The
+path-qualified include builds against kit's; the bare name stays
+ambiguous. Run by hand with fmake, since `selftest` cannot be run here
+(section 644): it fails against 233a06e, and the control holds on both.
+
+The same run also corrected README's line that fmake had not run on a
+Windows machine. Section 633 ran it hosted on Windows 11.
+
+**Not run in this session: the full suite**, for the reason in section
+644. Holder's question: run `./selftest -j4` on 233a06e and this commit.
 

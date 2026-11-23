@@ -9978,6 +9978,41 @@ def an_excluded_header_loses_a_basename_tie_to_one_that_is_not(t):
 
 
 @case
+def a_header_whose_path_cannot_fit_the_include_is_no_candidate(t):
+	"""`#include "kit/theme.h"` can only ever be answered by a file whose
+	path ends in `kit/theme.h`: no -I turns `other/include/other/theme.h`
+	into what that line finds. The basename index counted it anyway, so a
+	second `theme.h` anywhere in the tree made a path-qualified include
+	ambiguous, it resolved to nothing, no -I was inferred, and the build
+	stopped on a header fmake had in front of it.
+
+	Measured on snurra: a real clone fetches fuzznet's nested qtty, whose
+	`include/qtty/theme.h` did this to qtkit's "qtkit/theme.h". A `git
+	archive' copy without that nested checkout built, so whether snurra
+	built depended on which way it was copied.
+
+	The control: a bare `"theme.h"` names no path, both candidates fit it,
+	and it stays ambiguous."""
+	t.write("kit/include/kit/theme.h", "#pragma once\n#define THEME 1\n")
+	t.write("other/include/other/theme.h", "#pragma once\n#define THEME 2\n")
+	t.write("main.c", '#include "kit/theme.h"\n'
+	        "int main(void){ return THEME - 1; }\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"an include naming a path was ambiguous with a header whose "
+	      f"path cannot fit it: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "and the header that fits is the one compiled against")
+
+	t.write("main.c", '#include "theme.h"\n'
+	        "int main(void){ return THEME - 1; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode != 0 and "could be it" in out,
+	      f"a bare name both candidates fit must stay ambiguous: {out}")
+
+
+@case
 def a_pc_publishes_a_define_a_published_header_tests(t):
 	"""The quietest of the three .pc faults, and the only one with no
 	error at all.
