@@ -21463,6 +21463,15 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 # ---------------------------------------------------------------------------
 
 EJECT_BUILD_DIR = "build"
+
+
+def _sub_stamp(path):
+	"""Where an ejected build.ninja records that a submodule is present.
+
+    Under the build directory rather than the submodule's `.git', which a
+    tree can lack while holding every file: see the submodule rule.
+    """
+	return os.path.join(EJECT_BUILD_DIR, "submodule", path + ".stamp")
 # Where fmake's generated trees land inside an ejected build's object
 # directory. A standalone build file should not write into the bookkeeping of
 # the tool it no longer needs, and `fmake --clean` must not be able to delete
@@ -22939,16 +22948,53 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	if subs:
 		a("# ---- submodules " + "-" * 46)
 		a("")
+		_comma_said = False
 		for path in subs:
 			# The target is a Make path and the argument is a shell word,
 			# and they are quoted differently for that reason. What the
 			# whitelist above allows is safe in both, so this is the belt
 			# to that pair of braces rather than the only guard.
+			# And only where the directory is empty. A tree can hold
+			# the submodule's files and no `.git' -- a `git archive'
+			# with its submodules, a release tarball, a Debian source
+			# package -- and there the rule ran git outside any
+			# repository and the build stopped at `not a git
+			# repository' on a tree fmake itself builds. Measured on
+			# hull, whose situ and qtty were both present. `$(wildcard)'
+			# answers at the time the recipe expands, so a filled
+			# directory gets an empty recipe: no shell, no git, and
+			# nothing printed, as before on a checkout.
+			#
+			# MAKE_SAFE allows a comma, which would split `$(if)'s
+			# arguments; inside the nested `$(wildcard)' it does not.
+			_have = f"$(wildcard {path}/*)"
+			_say = shlex.quote('fetching submodule ' + path)
+			_get = shlex.quote(path)
+			if "," in path:
+				if not _comma_said:
+					a("fmake_comma := ,")
+					_comma_said = True
+				_say = _say.replace(",", "$(fmake_comma)")
+				_get = _get.replace(",", "$(fmake_comma)")
 			a(f"{path}/.git:")
-			a(f"\t@echo {shlex.quote('fetching submodule ' + path)}")
-			a(f"\tgit submodule update --init --recursive -- "
-			  f"{shlex.quote(path)}")
+			a(f"\t$(if {_have},,@echo {_say})")
+			a(f"\t$(if {_have},,git submodule update --init --recursive "
+			  f"-- {_get})")
 			a("")
+			# A source inside the submodule is a prerequisite of its
+			# object, and make checks that a prerequisite exists or has
+			# a rule before it runs anything -- so on a fresh clone it
+			# stopped at `No rule to make target' and the fetch never
+			# ran. The comment above was measured with a header the
+			# tree includes from a submodule, which make cannot see;
+			# a source it compiles from one, it can. A rule with no
+			# recipe that waits for the fetch is the rule it lacked.
+			_inside = sorted(u.rel for u in every.values()
+			                 if u.rel.startswith(path + "/"))
+			for _rel in _inside:
+				a(f"{_eject_src(_rel)}: | {path}/.git")
+			if _inside:
+				a("")
 
 	# One rule per object, because per-file flags are the point: @cflags and
 	# @define belong to a translation unit, so a single pattern rule cannot
@@ -23968,8 +24014,9 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# cloned. Both backends had to be told separately, which section 172
 	# says is how an eject fix gets half done.
 	#
-	# Keyed on the submodule's own `.git', so the edge fires when it is
-	# absent and never otherwise, and order-only for every object rather
+	# Keyed on a stamp of this build's (below says why not the
+	# submodule's `.git'), so the edge runs once, and order-only for every
+	# object rather
 	# than for the ones inside the submodule: a file that INCLUDES from
 	# one is not under it, and ninja cannot know which until it has
 	# compiled the file that needs the fetch.
@@ -23982,7 +24029,18 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# custom variable set to `a b.txt' hands the shell two arguments
 		# where $in hands it one -- so a submodule at `my lib' reached git
 		# as `my' and `lib'. The description keeps the readable form.
-		a("  command = git submodule update --init --recursive -- $qpath")
+		# Fetched only where the directory is empty, and the edge's own
+		# output is a stamp of this build's rather than the submodule's
+		# `.git'. A tree can hold the files and no `.git' -- `git
+		# archive' with submodules, a release tarball, a Debian source
+		# package -- and keyed on `.git' the edge ran git outside any
+		# repository there and the build stopped on a tree fmake builds;
+		# measured on hull. make can ask `$(wildcard)' when it reads the
+		# rule; ninja evaluates nothing at load time, so the check is the
+		# command's, and the stamp is what makes it run once.
+		a("  command = { test -n \"$$(ls -A $qpath 2>/dev/null)\" || "
+		  "git submodule update --init --recursive -- $qpath; } && "
+		  "mkdir -p $qstampdir && touch $qstamp")
 		a("  description = SUB $path")
 		a("")
 		for path in subs:
@@ -23995,15 +24053,26 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# needed different answers rather than the same one twice.
 			made = [_ninja(u.rel) for u in every.values()
 			        if u.rel == path or u.rel.startswith(path + "/")]
-			outs = " ".join([f"{_ninja(path)}/.git"] + sorted(made))
-			a(f"build {outs}: submodule")
+			# The sources are phony edges on the stamp, not outputs of
+			# the fetch. ninja creates every output's directory before
+			# it runs an edge, so `kit/src/' existed when git came to
+			# clone into `kit', and git refuses a directory that is not
+			# empty: a fresh clone never fetched, with or without the
+			# stamp. A phony edge runs nothing and creates nothing, and
+			# still gives ninja a producer for the input it validates.
+			a(f"build {_ninja(_sub_stamp(path))}: submodule")
 			a(f"  path = {path}")
 			a(f"  qpath = {shlex.quote(path)}")
+			a(f"  qstamp = {shlex.quote(_sub_stamp(path))}")
+			a(f"  qstampdir = "
+			  f"{shlex.quote(os.path.dirname(_sub_stamp(path)))}")
+			for src in sorted(made):
+				a(f"build {src}: phony {_ninja(_sub_stamp(path))}")
 		a("")
 
 	# Order-only: a generated header must exist before anything compiles,
 	# but the depfiles decide when a change to it forces a rebuild.
-	subs_order = [f"{_ninja(p)}/.git" for p in subs]
+	subs_order = [_ninja(_sub_stamp(p)) for p in subs]
 	order = [_ninja(g) for g in gen_outs] + subs_order
 	after = (" || " + " ".join(order)) if order else ""
 	# A generator's own tool waits for the submodules and not for what it

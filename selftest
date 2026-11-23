@@ -41215,13 +41215,132 @@ def an_ejected_build_fetches_the_submodule_too(t):
 			      f"the ejected {backend} build produced a different "
 			      f"program: {got.stdout!r}")
 
-			# A second run fetches nothing: the marker is the submodule's
-			# own .git, so there is no stamp to go stale and no git
-			# process on a build with nothing to do.
+			# A second run fetches nothing: make's marker is the
+			# submodule's own .git, ninja's a stamp under build/ (see
+			# an_ejected_build_fetches_a_nested_source_and_skips_a_filled_tree),
+			# so no git process runs on a build with nothing to do.
 			again = subprocess.run(run, capture_output=True, text=True,
 			                       env=env)
 			check("submodule update" not in again.stdout,
 			      f"a settled {backend} tree fetches again: {again.stdout}")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
+def an_ejected_build_fetches_a_nested_source_and_skips_a_filled_tree(t):
+	"""Two faults in the ejected fetch, both found by building real trees.
+
+	**A source one directory down in the submodule.** The case above puts
+	`lib.c` at the submodule's top, and passes by luck. make checks that a
+	prerequisite exists or has a rule before running anything, so
+	`kit/src/answer.c` stopped a fresh clone at `No rule to make target`
+	whenever the object for it came before one waiting for the fetch, as
+	it does at -j2. ninja created `kit/src/` for the source it named as an
+	output of the fetch, before running the fetch, and git refuses to clone
+	into a directory that is not empty. Neither backend fetched.
+
+	**A filled submodule with no `.git`**: `git archive` with its
+	submodules, a release tarball, a Debian source package. Keyed on the
+	submodule's `.git`, both backends ran `git submodule update` outside
+	any repository, and the build stopped at `not a git repository` on a
+	tree fmake itself builds. Measured on hull, whose situ and qtty were
+	both present.
+
+	make now waits for the fetch through a recipe-less rule per source
+	inside the submodule, and fetches only when `$(wildcard path/*)` is
+	empty. ninja's fetch edge writes a stamp under build/, fetches only
+	into an empty directory, and gives each source a phony edge on the
+	stamp, which creates no directory."""
+	if not shutil.which("git"):
+		raise Skip("git is needed")
+	backends = [b for b in ("make", "ninja") if shutil.which(b)]
+	if not backends:
+		raise Skip("neither make nor ninja is installed")
+	work = tempfile.mkdtemp(prefix="fmake-ejsub2-")
+	env = dict(os.environ, GIT_CONFIG_COUNT="1",
+	           GIT_CONFIG_KEY_0="protocol.file.allow",
+	           GIT_CONFIG_VALUE_0="always")
+
+	def git(where, *a):
+		return subprocess.run(["git", "-C", where, *a], capture_output=True,
+		                      text=True, env=env)
+	try:
+		kit, app = os.path.join(work, "kit"), os.path.join(work, "app")
+		for d in (kit, app):
+			os.makedirs(d)
+			git(d, "init", "-q", ".")
+			git(d, "config", "user.email", "t@example.invalid")
+			git(d, "config", "user.name", "t")
+		os.makedirs(os.path.join(kit, "include", "kit"))
+		os.makedirs(os.path.join(kit, "src"))
+		with open(os.path.join(kit, "include", "kit", "answer.h"), "w") as fh:
+			fh.write("int kit_answer(void);\n")
+		with open(os.path.join(kit, "src", "answer.c"), "w") as fh:
+			fh.write('#include "kit/answer.h"\n'
+			         "int kit_answer(void){ return 42; }\n")
+		git(kit, "add", "-A"); git(kit, "commit", "-qm", "kit")
+		with open(os.path.join(app, "main.c"), "w") as fh:
+			fh.write('#include <stdio.h>\n#include "kit/answer.h"\n'
+			         'int main(void){ printf("%d\\n", kit_answer()); '
+			         "return 0; }\n")
+		if git(app, "submodule", "add", "-q", kit, "kit").returncode != 0:
+			raise Skip("this git will not add a submodule over a local path")
+		for backend in backends:
+			out = "Makefile" if backend == "make" else "build.ninja"
+			e = subprocess.run([FMAKE, "-C", app, "--eject", backend],
+			                   capture_output=True, text=True, env=env)
+			check(e.returncode == 0, f"--eject {backend} failed: {e.stderr}")
+			with open(os.path.join(app, out), "w") as fh:
+				fh.write(e.stdout)
+		# By name: the eject may leave the program itself in app/, and a
+		# committed binary would let the run checks below pass unbuilt.
+		git(app, "add", "--", "main.c", ".gitmodules", "kit",
+		    *("Makefile" if b == "make" else "build.ninja"
+		      for b in backends))
+		git(app, "commit", "-qm", "app")
+		run = {"make": ["make", "-j2"], "ninja": ["ninja"]}
+
+		for backend in backends:
+			# A fresh clone: the build file committed, kit/ empty.
+			tree = os.path.join(work, "clone-" + backend)
+			git(work, "clone", "-q", app, tree)
+			check(not os.listdir(os.path.join(tree, "kit")),
+			      "the fixture is wrong: the clone's kit/ is not empty")
+			r = subprocess.run(run[backend], cwd=tree, capture_output=True,
+			                   text=True, env=env)
+			check(r.returncode == 0,
+			      f"the ejected {backend} build did not fetch a submodule "
+			      f"whose nested source it compiles: "
+			      f"{r.stdout[-600:]}{r.stderr[-600:]}")
+			got = subprocess.run([os.path.join(tree, "app")],
+			                     capture_output=True, text=True)
+			check(got.stdout.strip() == "42",
+			      f"the {backend} build's program is wrong: {got.stdout!r}")
+
+			# The archive shape: every file, no .git anywhere.
+			arch = os.path.join(work, "archive-" + backend)
+			os.makedirs(os.path.join(arch, "kit"))
+			for src, dest in ((app, arch),
+			                  (kit, os.path.join(arch, "kit"))):
+				a = subprocess.run(["git", "-C", src, "archive", "HEAD"],
+				                   capture_output=True)
+				subprocess.run(["tar", "-x", "-C", dest], input=a.stdout)
+			benv = dict(env, GIT_CEILING_DIRECTORIES=work)
+			r = subprocess.run(run[backend], cwd=arch, capture_output=True,
+			                   text=True, env=benv)
+			check(r.returncode == 0,
+			      f"the ejected {backend} build ran git on a tree that has "
+			      f"the submodule's files and no .git: "
+			      f"{r.stdout[-600:]}{r.stderr[-600:]}")
+			check("submodule update" not in r.stdout + r.stderr,
+			      f"the {backend} build tried to fetch a filled submodule: "
+			      f"{r.stdout[-400:]}")
+			again = subprocess.run(run[backend], cwd=arch,
+			                       capture_output=True, text=True, env=benv)
+			check(again.returncode == 0 and "CC" not in again.stdout
+			      and "cc " not in again.stdout,
+			      f"a second {backend} run did work: {again.stdout}")
 	finally:
 		shutil.rmtree(work, ignore_errors=True)
 

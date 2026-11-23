@@ -694,7 +694,9 @@ that had been green about nothing for five commits ·
 [642. The Windows VM image, and what actually shrank it](#642-the-windows-vm-image-and-what-actually-shrank-it) ·
 [643. hal9001 again: 139 of 140, and a refusal that is out of date](#643-hal9001-again-139-of-140-and-a-refusal-that-is-out-of-date) ·
 [644. A version a header supplies is not "unknown"](#644-a-version-a-header-supplies-is-not-unknown) ·
-[645. A header whose path cannot fit the include is no candidate](#645-a-header-whose-path-cannot-fit-the-include-is-no-candidate)
+[645. A header whose path cannot fit the include is no candidate](#645-a-header-whose-path-cannot-fit-the-include-is-no-candidate) ·
+[646. Sibling sweep of 2026-11-23: copies of one project at two depths](#646-sibling-sweep-of-2026-11-23-copies-of-one-project-at-two-depths) ·
+[647. The ejected fetch: a nested source, and a tree with no .git](#647-the-ejected-fetch-a-nested-source-and-a-tree-with-no-git)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49502,4 +49504,135 @@ Windows machine. Section 633 ran it hosted on Windows 11.
 
 **Not run in this session: the full suite**, for the reason in section
 644. Holder's question: run `./selftest -j4` on 233a06e and this commit.
+
+## 646. Sibling sweep of 2026-11-23: copies of one project at two depths
+
+`tool/sibling_sweep.py --build --old 3caeffc` over the private trees at
+their HEADs, each from a `git archive` with its checked-out submodules.
+The fmake under test was the working tree, which moved under the sweep
+(233a06e, 5316a04), so later trees ran later code. **No tree regressed.**
+Every failure below fails the same way with 3caeffc's fmake.
+
+| tree | result |
+|---|---|
+| anti-avx, hull, hydra, netcfgd, openmlx4, ossacli, qtkit, qtty | build |
+| bbq-predictor | fails both: a header its qmake build writes (section 644) |
+| beerssh | fails both: two situ runtimes, see below |
+| fuzznet | fails both: two `remote_test` programs, section 629's refusal, by design |
+| fuzzypickles | fails both: nested copies, see below |
+| hembygd | fails both: `miniaudio.h` twice, see below |
+| kconfig_tree | has no C, C++ or Rust source; named by hand, which the sweep's own filter would not have |
+
+raidcfgd, respec, situ, snurra, softkeys and tde were still running when
+this was written.
+
+**Four of the failures have one shape: a tree vendors a project, and a
+copy of the same thing arrives at a second depth.**
+
+- **fuzzypickles**: `snurra/fuzznet` beside `fuzznet`, and
+  `fuzznet/thorvg` beside `thorvg`. The nested copies appear because
+  fmake fetches nested submodules (sections 186, 188, 290), and every
+  symbol is then defined twice. Its fmake.toml already carries five
+  excludes for this one rule (`fuzznet/monocypher`, `/flog`, `/qtty`,
+  `/quirc`), and it needs two or three more since fuzznet vendored thorvg
+  on 2026-11-14 and fuzzypickles vendored snurra.
+- **beerssh**: two situ runtimes, its own `src/session/generated/situ.c`
+  and fuzznet's `wire/generated/situ.c`, since it vendored fuzznet on
+  2026-11-18. These are not one repository at two depths; they are one
+  generator's runtime emitted twice.
+- **hembygd**: `vendor/miniaudio/miniaudio.h` and llama.cpp's
+  `vendor/miniaudio/miniaudio.h` both fit `"miniaudio/miniaudio.h"`, so
+  the include resolves to nothing and no `-Ivendor` is inferred. Section
+  645's path test cannot separate them, since both fit. Tested:
+  `include-dirs = ["vendor"]` puts it back and the file compiles.
+- **snurra** (section 645) was the same shape, and the one fmake could
+  fix alone, because there only one candidate fit.
+
+Each tree was sent its reproduction and remedy (inbox 20261123T1911Z
+fuzzypickles, 1912Z beerssh, 1916Z hembygd). bbq-predictor's failure is
+different, a header its qmake build writes (section 644, inbox 1835Z).
+
+### Two proposals, not made: the holder's to settle
+
+**A nested checkout of a repository the tree already vendors is a
+duplicate.** Its URL in its parent's `.gitmodules` matches one declared
+higher up. The top copy is the one the tree chose with its own gitlink.
+The nested one exists for the vendored project's own standalone build,
+whose programs fmake already leaves to it. Excluding the nested copy
+automatically, with a note naming it, would have removed every one of
+fuzzypickles' five hand-written excludes and today's breakage. Measured
+over the trees' initialised submodules: fuzzypickles 4 of 13, netcfgd 1
+of 8 (`fuzznet/qtty` = `qtty`), none elsewhere, and snurra's nested ones
+once fmake fetches them. Rejected alternatives: leaving it to each
+consumer's excludes (the cost measured above, and it recurs whenever a
+dependency vendors something new); not fetching nested submodules (they
+are needed, section 188); preferring byte-identical copies only (pins
+differ, as fuzzypickles' qtty does). The risk is a tree that really
+builds the nested copy and not the top one. Nothing measured does.
+
+**An include from a tree's own source should prefer the tree's own copy
+over a vendored checkout's**, as each project's real build puts its own
+directories on its own path. hembygd is the case. It is not a resolver
+change alone. The inferred include path is one global sorted list
+(`kept_incdirs`), so a `-Illama.cpp/vendor` inferred for llama.cpp's
+sources sorts ahead of `-Ivendor`, and hembygd's file would still get
+llama.cpp's copy. It needs the tree's own directories ordered first, or
+per-owner include paths. That is a larger change to how one build serves
+several projects.
+
+**Neither was made, for one reason beyond whose decision it is**: the
+suite cannot be run from this session (section 15), and both change what
+every vendoring tree resolves. Each wants a full suite run and a sibling
+sweep behind it.
+
+## 647. The ejected fetch: a nested source, and a tree with no .git
+
+The sweep only builds, so the exit was checked separately: eject a Makefile
+from a sibling that builds, then run make on it. anti-avx built. hull did
+not, and neither does any tree with submodules in the two shapes below.
+Both faults were in both backends, and both predate this session.
+
+- **A filled submodule with no `.git`**, as in a `git archive` with its
+  submodules, a release tarball or a Debian source package. The fetch
+  rule was keyed on `path/.git`, so on hull, whose situ and qtty were
+  present, make ran `git submodule update` outside any repository and
+  stopped on `not a git repository`. fmake itself builds that tree.
+- **A source one directory down in a submodule, on a fresh clone.** make
+  checks that a prerequisite exists or has a rule before it runs
+  anything, so `kit/src/answer.c` stopped the build at `No rule to make
+  target`. That happens whenever its object comes before one that waits
+  for the fetch, as it does at `-j2`. ninja named the submodule's sources
+  as outputs of the fetch edge, so it created `kit/src/` before running
+  the fetch, and git refuses to clone into a directory that is not
+  empty. Neither backend fetched. `an_ejected_build_fetches_the_submodule_too`
+  passed throughout: its `lib.c` sits at the submodule's top, where ninja
+  has no subdirectory to create, and at `-j1` make happened to reach the
+  object for `main.c`, which waits for the fetch, first.
+
+**make**: the recipe is `$(if $(wildcard path/*),,...)`, so a filled
+directory gets an empty recipe, with no shell, no git and nothing
+printed. Each source inside a submodule gets a rule with no recipe,
+`kit/src/answer.c: | kit/.git`, which is the rule make lacked. A comma,
+which MAKE_SAFE allows, goes through `$(fmake_comma)`, so it cannot
+split `$(if)`. **ninja**: the fetch edge's only output is a stamp under
+`build/submodule/`. Its command fetches only into an empty directory,
+and each source is a `phony` edge on the stamp. A phony edge runs
+nothing and creates nothing, and it still gives ninja the producer it
+needs when it validates the file. The stamp is what the old comment
+declined ("no stamp of fmake's invention"). make still needs none,
+because `$(wildcard)` answers at the time the recipe expands, and ninja
+has no such thing.
+
+Measured with a two-repository fixture (`kit/src/answer.c`,
+`kit/include/kit/answer.h`) and on hull. On a fresh clone, make `-j2`
+and ninja both fetch, build and run, and a second run does nothing
+(`ninja: no work to do`). On an archive copy both build without
+touching git. HEAD's fmake fails all four combinations. hull's archive
+copy builds from the ejected Makefile, and a second make prints
+nothing.
+
+Case `an_ejected_build_fetches_a_nested_source_and_skips_a_filled_tree`.
+Like sections 644 and 645 it was checked by hand, not through the suite
+(section 15); a scratch harness running the case's own code was refused
+as a way round that, rightly.
 
