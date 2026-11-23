@@ -49516,16 +49516,18 @@ Every failure below fails the same way with 3caeffc's fmake.
 
 | tree | result |
 |---|---|
-| anti-avx, hull, hydra, netcfgd, openmlx4, ossacli, qtkit, qtty | build |
+| anti-avx, hull, hydra, netcfgd, openmlx4, ossacli, qtkit, qtty, respec, situ, snurra, softkeys | build |
 | bbq-predictor | fails both: a header its qmake build writes (section 644) |
 | beerssh | fails both: two situ runtimes, see below |
 | fuzznet | fails both: two `remote_test` programs, section 629's refusal, by design |
 | fuzzypickles | fails both: nested copies, see below |
 | hembygd | fails both: `miniaudio.h` twice, see below |
 | kconfig_tree | has no C, C++ or Rust source; named by hand, which the sweep's own filter would not have |
+| raidcfgd | fails both: fuzznet's `node/daemon.c` wants fuzznet's subsystem defines (section 411), since raidcfgd started serving through it today (its 4ca4718); everything else built |
+| tde | fails both: a committed `displayconfig_skel.cpp` includes a header the tree does not have; tde claims no fmake build |
 
-raidcfgd, respec, situ, snurra, softkeys and tde were still running when
-this was written.
+raidcfgd and netcfgd were told (inbox 20261123T1946Z and 1944Z, the
+latter about the ejected tests, section 647's run).
 
 **Four of the failures have one shape: a tree vendors a project, and a
 copy of the same thing arrives at a second depth.**
@@ -49631,6 +49633,20 @@ and ninja both fetch, build and run, and a second run does nothing
 touching git. HEAD's fmake fails all four combinations. hull's archive
 copy builds from the ejected Makefile, and a second make prints
 nothing.
+
+**The other trees, ejected the same way** (`--eject make`, then `make
+-j4`, then `make` again, from a `git archive` with submodules, fmake
+67b7d9c). In anti-avx, ossacli and qtkit the eject exits 0, the Makefile
+builds, and the second make does nothing. netcfgd and qtty eject with
+exit 1, because the eject covers test targets and a plain build does
+not, yet their Makefiles build and settle. netcfgd has 16 GUI tests that
+need a define their `.pro` files supply (inbox 20261123T1944Z). qtty has
+one fuzz harness reached by widening whose bare include gets no `-I`.
+That is section 68's open question, and fmake prints the `include-dirs`
+line that settles it. openmlx4 refuses, also on tests: two test doubles
+define `nanosleep` and nothing says which test takes which, so the
+ejected file has no targets (inbox 20261123T1950Z). Both are the trees'
+to settle; fmake's refusal is the designed one.
 
 Case `an_ejected_build_fetches_a_nested_source_and_skips_a_filled_tree`.
 Like sections 644 and 645 it was checked by hand, not through the suite
