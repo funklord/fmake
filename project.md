@@ -49768,13 +49768,18 @@ tokens widening guessed by. A generated unit stays a failure here,
 since what it would have provided cannot be read from a file that did
 not compile. With a skipped target, everything stays, as in the build.
 
-**`--eject` is the other mode that does not link**, and it exited 1 on
-snurra over the same two files, as the section 647 run showed. Both
-modes now call one helper, `needless_guesses`.
+**`--eject` and `--compile-commands` are the other modes that do not
+link.** The eject exited 1 on snurra over the same two files, as the
+section 647 run showed. `--compile-commands` was made to exit 1 on a
+widened failure "because a plain build of the same tree exits 1", which
+section 600 made untrue for a needless guess. All three now call one
+helper, `needless_guesses`. The existing cases that pin exit 1 for each
+mode use a failing file that is the only provider, and that still exits
+1.
 
 Case `explain_and_eject_exit_as_the_build_does_over_a_needless_guess`:
 two providers of `start()`, one that does not compile; then the good
-one removed, as the control. Checked by hand (section 15), both modes:
+one removed, as the control. Checked by hand (section 15), all three modes:
 b3ca0c1 exits 1 on the first, this exits 0, and both exit 1 on the
 control. snurra's `--explain` exits 0 now.
 

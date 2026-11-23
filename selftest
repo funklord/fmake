@@ -4723,14 +4723,16 @@ def explain_and_eject_exit_as_the_build_does_over_a_needless_guess(t):
 	      f"the fixture is wrong: the build was meant to forgive b.c: "
 	      f"{r.stdout}{r.stderr}")
 	# --eject does not link either, and exited 1 the same way.
-	for mode in (["--explain"], ["--eject", "make"]):
+	for mode in (["--explain"], ["--eject", "make"],
+	             ["--compile-commands", "cc.json"]):
 		r = t.fmake(*mode)
 		check(r.returncode == 0,
 		      f"{mode[0]} failed over a guess the build forgives: "
 		      f"{r.stdout[-600:]}{r.stderr}")
 	keep = open(os.path.join(t.dir, "a.c")).read()
 	os.unlink(os.path.join(t.dir, "a.c"))
-	for mode in (["--explain"], ["--eject", "make"]):
+	for mode in (["--explain"], ["--eject", "make"],
+	             ["--compile-commands", "cc.json"]):
 		r = t.fmake(*mode)
 		check(r.returncode != 0,
 		      f"{mode[0]} passed a tree whose only provider of start() "

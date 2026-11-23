@@ -20356,6 +20356,11 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# way, never reaching here, so only the widened case was wrong --
 		# which is the harder one to notice, the database having been
 		# written and the tool having said nothing.
+		# Except what the plain build forgives (section 600) and this
+		# mode, which does not link, cannot see it would: section 650.
+		if not skipped:
+			broken -= needless_guesses(broken, wanted, closures,
+			                           resolutions, tried_for)
 		if rc == 0 and broken:
 			say()
 			warn(f"{len(broken)} file(s) did not compile")
