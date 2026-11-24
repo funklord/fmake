@@ -119,9 +119,15 @@ class Tree:
 			# bytes the filesystem holds and a name need not be valid
 			# UTF-8 -- a strict decode here turns the tool being honest
 			# into the suite crashing.
+			# stdin from /dev/null, not the suite's: run from a
+			# terminal, `-i' found one and waited at its prompt until
+			# the timeout, failing i_asks_nothing_when_there_is_no_
+			# terminal, which passes wherever the suite's stdin is not
+			# a terminal. A case that means to answer uses _pty_fmake.
 			r = subprocess.run([FMAKE, "-C", self.dir, *args],
 			                   capture_output=True, text=True,
 			                   errors="replace", env=e,
+			                   stdin=subprocess.DEVNULL,
 			                   timeout=timeout)
 		except subprocess.TimeoutExpired:
 			# A bound the suite carries itself, rather than one whoever
@@ -15814,8 +15820,14 @@ def a_meta_object_no_asked_for_target_links_does_not_stop_the_tests(t):
 
 	A failed guess was already forgiven once every target linked
 	(section 600). A generated unit that nothing built here links is the
-	same: it says so and the tests run. The control is a plain build,
-	which builds the GUI, brings the directory, and compiles the unit."""
+	same: it says so and the tests run.
+
+	situ's own shape no longer fails at all: since section 655 the unit
+	gets the include path its own includes need, so it is asserted to
+	compile. The forgiveness is reached by a unit that fails for a
+	reason no include path fixes -- here a define only the GUI's target
+	sets, which moc's single compile never sees -- and the control is a
+	plain build, which links the unit and so must not forgive it."""
 	if not shutil.which("moc") and not glob.glob("/usr/lib/qt6/libexec/moc"):
 		raise Skip("no moc to run")
 	t.write("kit/include/kit/k.h", "#pragma once\n#define KIT_N 1\n")
@@ -15829,18 +15841,34 @@ def a_meta_object_no_asked_for_target_links_does_not_stop_the_tests(t):
 	t.write("tests/t_test.c", "int main(void){ return 0; }\n")
 	r = t.fmake("test")
 	out = r.stdout + r.stderr
-	check("kit/k.h" in out or "nothing built here links it" in out,
-	      f"the fixture is wrong: the meta-object compiled without the "
-	      f"GUI's directory, so nothing was tested: {out}")
+	check(r.returncode == 0 and "1 test passed" in out
+	      and "did not compile" not in out,
+	      f"situ's shape: the meta-object should compile with the "
+	      f"directory its own include needs, and the tests run: {out}")
+
+	t.write("kit/src/listener.h",
+	        '#pragma once\n#include <QObject>\n#include "kit/k.h"\n'
+	        "#ifndef GUI_ON\n#error the GUI target defines GUI_ON\n#endif\n"
+	        "class Listener : public QObject {\n\tQ_OBJECT\npublic:\n"
+	        "\tQ_INVOKABLE int n() { return KIT_N; }\n};\n")
+	t.write("fmake.toml", "[target.guiapp]\nroot = 'gui/main.cpp'\n"
+	        "defines = ['GUI_ON']\n")
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check("GUI_ON" in out,
+	      f"the fixture is wrong: the meta-object compiled, so nothing "
+	      f"was tested: {out}")
 	check(r.returncode == 0 and "1 test passed" in out,
 	      f"a meta-object only an unasked-for program links stopped the "
 	      f"tests: {out}")
 	check("nothing built here links it" in out,
 	      f"the unit that did not compile was not named: {out}")
 	r = t.fmake()
-	check(r.returncode == 0,
-	      f"the control: a plain build of the GUI failed: "
-	      f"{r.stdout}{r.stderr}")
+	check(r.returncode != 0 and "moc_listener.cpp did not compile"
+	      in r.stdout + r.stderr,
+	      f"the control: a plain build links the unit and must not "
+	      f"forgive it: {r.stdout}{r.stderr}")
+	os.remove(os.path.join(t.dir, "fmake.toml"))
 
 	# And not when the program the unit belongs to was asked for and
 	# skipped, its own root having failed. Measured on respec built for
@@ -23212,21 +23240,32 @@ def every_include_directory_the_tree_could_supply_is_named_at_once(t):
 	thorvg gave ten, spread over three directories, and each line named one
 	-- so the reader collects them by hand and re-runs to find the next.
 	fmake already knows all of them when it prints the first, so it says so
-	in one line. Following it took that tree from 48 files failing to 11."""
-	t.write("vendor/a/one.h", "#pragma once\nint one(void);\n")
-	t.write("vendor/b/two.h", "#pragma once\nint two(void);\n")
-	t.write("vendor/a/one.c", '#include "one.h"\nint one(void){ return 1; }\n')
-	t.write("vendor/b/two.c", '#include "two.h"\nint two(void){ return 2; }\n')
+	in one line. Following it took that tree from 48 files failing to 11.
+
+	Since section 655 a widened file gets the directories its own
+	includes resolve to, so thorvg's shape -- `<one.h>' found once in the
+	tree -- builds, and the advice is reached only by an include the
+	resolver declines. The headers here carry a path and a name the
+	toolchain owns, `pa/math.h', which the resolver does not guess (the
+	`proj/math.h' half of a_header_the_tree_already_holds_is_named)."""
+	t.write("vendor/a/pa/math.h", "#pragma once\nint one(void);\n")
+	t.write("vendor/b/pb/time.h", "#pragma once\nint two(void);\n")
+	t.write("vendor/a/one.c", '#include "pa/math.h"\n'
+	        "int one(void){ return 1; }\n")
+	t.write("vendor/b/two.c", '#include "pb/time.h"\n'
+	        "int two(void){ return 2; }\n")
 	# Reached by widening, which is where the directory is not yet known.
 	# A third header in a directory already named, so the list has to
 	# collapse duplicates -- without that it repeats vendor/a, and a fixture
 	# with one header per directory never notices.
-	t.write("vendor/a/three.h", "#pragma once\nint three(void);\n")
-	t.write("vendor/a/three.c", '#include "three.h"\n'
+	t.write("vendor/a/pa/string.h", "#pragma once\nint three(void);\n")
+	t.write("vendor/a/three.c", '#include "pa/string.h"\n'
 	        "int three(void){ return 0; }\n")
-	t.write("src/use_one.c", "#include <one.h>\nint u1(void){ return one(); }\n")
-	t.write("src/use_two.c", "#include <two.h>\nint u2(void){ return two(); }\n")
-	t.write("src/use_three.c", "#include <three.h>\n"
+	t.write("src/use_one.c", "#include <pa/math.h>\n"
+	        "int u1(void){ return one(); }\n")
+	t.write("src/use_two.c", "#include <pb/time.h>\n"
+	        "int u2(void){ return two(); }\n")
+	t.write("src/use_three.c", "#include <pa/string.h>\n"
 	        "int u3(void){ return three(); }\n")
 	t.write("src/main.c", "int u1(void); int u2(void); int u3(void);\n"
 	        "int main(void){ return u1() + u2() + u3() - 3; }\n")
@@ -23258,7 +23297,10 @@ def a_header_the_tree_already_holds_is_named(t):
 	fmake knows every header in the tree, so when the missing one is among
 	them it says where and what would find it. That is exact rather than a
 	guess, which is why it replaces the two speculative remedies instead of
-	joining them."""
+	joining them.
+
+	beerssh's own shape now builds (section 655), so the advice is held
+	to the includes the resolver declines, below."""
 	# The including file has to be one fmake reaches by widening rather
 	# than through the root's include graph -- which is beerssh's shape,
 	# and the first version of this fixture put the include in main.c,
@@ -23270,22 +23312,14 @@ def a_header_the_tree_already_holds_is_named(t):
 	t.write("src/main.c", "int emu_start(void);\n"
 	        "int main(void){ return emu_start(); }\n")
 
+	# Since section 655 a widened file gets the directories its own
+	# includes resolve to, so beerssh's shape builds and needs no advice.
+	# The advice is asserted below on an include the resolver declines.
 	r = t.fmake()
 	out = r.stdout + r.stderr
-	check("thing.h is on no include path here" in out,
-	      f"the missing header should be named: {out}")
-	check("vendor/include/thing.h" in out,
-	      f"and where the tree holds it: {out}")
-	check("include-dirs" in out,
-	      f"and what would find it: {out}")
-	check("install it or name it with @pkg" not in out,
-	      f"it is not a missing package: {out}")
-
-	# And the advice works when followed.
-	t.write("fmake.toml", "[project]\ninclude-dirs = ['vendor/include']\n")
-	r = t.fmake("-B")
-	check(r.returncode == 0,
-	      f"following the advice should build: {r.stdout}{r.stderr}")
+	check(r.returncode == 0 and "on no include path here" not in out,
+	      f"a widened file's header found once in the tree should be on "
+	      f"its own include path: {out}")
 
 	# The shape where the two possible answers differ. Everything above
 	# uses `<thing.h>' -- unqualified, so the directory holding the file
@@ -23300,7 +23334,6 @@ def a_header_the_tree_already_holds_is_named(t):
 	# `math.h' is not a perverse choice: the resolver refuses to guess from
 	# a basename the toolchain owns, which is what lands a project with its
 	# own math.h in this diagnostic rather than having it resolved.
-	os.remove(os.path.join(t.dir, "fmake.toml"))
 	t.write("include/proj/math.h", "#pragma once\nint add(int, int);\n")
 	t.write("src/adder.c", '#include "proj/math.h"\n'
 	        "int add(int a, int b){ return a + b; }\n")
@@ -23311,12 +23344,17 @@ def a_header_the_tree_already_holds_is_named(t):
 	        "int main(void){ return add(2, 2) - 4; }\n")
 	r = t.fmake("-B")
 	out = r.stdout + r.stderr
+	check("proj/math.h is on no include path here" in out,
+	      f"the missing header should be named: {out}")
+	check("include/proj/math.h" in out,
+	      f"and where the tree holds it: {out}")
+	check("install it or name it with @pkg" not in out,
+	      f"it is not a missing package: {out}")
 	check("include-dirs = ['include']" in out,
 	      f"the advice must name the directory the include text resolves "
 	      f"from, not the one holding the file: {out}")
-	# src/emu.c belongs to the assertions above and its header is no longer
-	# on the path, so it would fail here and make the exit non-zero whatever
-	# this program did. The section below writes it again.
+	# src/emu.c belongs to the assertions above; it is set aside so the
+	# exit is this program's alone. The section below writes it again.
 	os.remove(os.path.join(t.dir, "src/emu.c"))
 	t.write("fmake.toml", "[project]\ninclude-dirs = ['include']\n")
 	r = t.fmake("-B")
@@ -42407,9 +42445,14 @@ def the_contents_index_lists_every_section(t):
 	            if line.startswith("## ") and line[3:].strip() != "Contents"]
 	check(len(headings) > 20, f"only {len(headings)} sections found")
 
+	# GitHub's slug: each space becomes a hyphen, so a dropped `|' or
+	# `=' between two spaces leaves two hyphens. This collapsed runs of
+	# spaces into one, and so disagreed with GitHub and with the style
+	# gate's docs mode, which 071e368 satisfied by correcting the links
+	# to sections 166 and 282.
 	def anchor(heading):
 		slug = re.sub(r"[^\w\s-]", "", heading.lower())
-		return "#" + re.sub(r"\s+", "-", slug.strip())
+		return "#" + slug.strip().replace(" ", "-")
 
 	links = re.findall(r"\]\((#[^)]+)\)", index)
 	check(len(links) > 20, f"only {len(links)} links found; the split is wrong")

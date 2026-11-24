@@ -706,7 +706,8 @@ that had been green about nothing for five commits ·
 [654. A nested copy of a vendored project is not fetched](#654-a-nested-copy-of-a-vendored-project-is-not-fetched) ·
 [655. A widened file gets the include path its own includes need](#655-a-widened-file-gets-the-include-path-its-own-includes-need) ·
 [656. A release's source tarball carries the submodules](#656-a-releases-source-tarball-carries-the-submodules) ·
-[657. A failed guess is tried again once what linked in its place has gone](#657-a-failed-guess-is-tried-again-once-what-linked-in-its-place-has-gone)
+[657. A failed guess is tried again once what linked in its place has gone](#657-a-failed-guess-is-tried-again-once-what-linked-in-its-place-has-gone) ·
+[658. The suite on eaafd5e, and the six failures that were its own](#658-the-suite-on-eaafd5e-and-the-six-failures-that-were-its-own)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -50176,4 +50177,42 @@ Checked by hand (section 15). The case's sequence on HEAD gives exit 0
 from each of the three modes. With the change, all three exit 1, and
 `--explain` compiles `b.c` and shows its error. The `close()` fixture
 still compiles nothing on its warm run, and its memo records `{}`.
+
+## 658. The suite on eaafd5e, and the six failures that were its own
+
+The holder ran `./selftest -j4` on eaafd5e: 864 cases, 7 failed, 10
+skipped. Section 657 was fmake's. The other six were the suite's.
+
+- **The contents check disagreed with the style gate.**
+  `the_contents_index_lists_every_section` collapsed a run of spaces
+  into one hyphen. GitHub's slug does not, and 071e368 corrected the
+  links to sections 166 and 282 for the gate. The check now makes one
+  hyphen per space, and all 655 links resolve.
+  `a_pattern_matching_nothing_is_refused_beside_one_that_matches` runs
+  that case as its control, so it failed with it.
+- **`-i` found a terminal.** The helper `Tree.fmake` passed the suite's
+  own stdin through. Run from a terminal, `-i` saw one and waited at
+  its prompt until the 300-second bound, so
+  `i_asks_nothing_when_there_is_no_terminal` failed. The helper now
+  gives fmake `/dev/null`. A case that means to answer uses
+  `_pty_fmake`. The one case that feeds stdin calls `subprocess`
+  itself.
+- **Three cases tested a failure that section 655 removed.** Each needed
+  a widened file to miss its header's directory, and since section 655
+  it gets that directory.
+  - `a_meta_object_no_asked_for_target_links_does_not_stop_the_tests`:
+    situ's shape now compiles, which the case asserts; c0108e3 still
+    fails it. The forgiveness is reached by a meta-object that needs a
+    define only the GUI's target sets, which moc's single compile does
+    not see. The control is a plain build, which links that unit and
+    must not forgive it.
+  - `every_include_directory_the_tree_could_supply_is_named_at_once`
+    and `a_header_the_tree_already_holds_is_named`: beerssh's and
+    thorvg's shapes now build. The advice is held to includes the
+    resolver declines: a path ending in a name the toolchain owns,
+    `pa/math.h`.
+
+Checked by hand (section 15), since the session cannot run the suite:
+each changed half replayed with the working tree's fmake, and the suite
+parses.
 
