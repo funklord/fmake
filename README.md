@@ -231,6 +231,20 @@ it stops rather than building less: an unpacked archive carries
 would report the missing pieces as errors in your own sources.
 `--no-submodules` declines all of it.
 
+**A project vendored twice is built once, from the copy your tree
+chose.** When your tree vendors `qtty` and `fuzznet`, and `fuzznet`
+vendors its own `qtty`, both copies are in the tree and every symbol in
+them is defined twice. The copy nearer the top is the one your own
+gitlink pins, so the nested one is left out and fmake names it. Two
+addresses that spell one repository differently (https or SSH, with or
+without `.git`, relative to the parent) count as one. Excluding the top
+copy chooses the nested one.
+
+**Each project in the tree gets its own copy of a header.** When your
+`src/` and a vendored project both include `"miniaudio/miniaudio.h"` and
+each vendors one, your files get yours and the vendored project's files
+get its own, the way each project's own build would have it.
+
 **C, C++, assembly and Rust.** The first three are one file per object, and
 they mix in a single link set because the closure reads symbol tables rather
 than source. Rust is not one file per object: a crate root — `main.rs` or
@@ -277,6 +291,7 @@ is not in the sources.
 | Rust: what a crate contains | **Always** — the root plus what `mod` draws in | `[target.*] name` where the directory name is wrong |
 | situ: which schemas to compile | **Always** — a source includes the header a schema would write | `[situ] flags` for the rung |
 | Vendored submodules | **Always** — `.gitmodules`, fetched before the tree is read | `--no-submodules` declines it |
+| A project vendored twice | **Always** — the nested copy of a repository a shallower submodule already is, left out and named | `[project] exclude` the top copy to build the nested one |
 | A program's name | **Almost always** — the file, or its directory for `main.c` and where two programs' files share a name, which it reports as a guess | `@target`, `[target.*] name` |
 | A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library\|module` |
 | Which programs are tests | **Sometimes** — a test directory or a `test_` name; `tests/live/` is the `live` group | `@test`, `@test no` |

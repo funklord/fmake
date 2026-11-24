@@ -699,7 +699,9 @@ that had been green about nothing for five commits ·
 [647. The ejected fetch: a nested source, and a tree with no .git](#647-the-ejected-fetch-a-nested-source-and-a-tree-with-no-git) ·
 [648. A release from a worktree](#648-a-release-from-a-worktree) ·
 [649. A meta-object nothing asked for links does not stop the tests](#649-a-meta-object-nothing-asked-for-links-does-not-stop-the-tests) ·
-[650. --explain and --eject exit as the build does over a needless guess](#650---explain-and---eject-exit-as-the-build-does-over-a-needless-guess)
+[650. --explain and --eject exit as the build does over a needless guess](#650---explain-and---eject-exit-as-the-build-does-over-a-needless-guess) ·
+[651. A project vendored twice is built from the copy the tree chose](#651-a-project-vendored-twice-is-built-from-the-copy-the-tree-chose) ·
+[652. Each project in the tree gets its own copy of a header](#652-each-project-in-the-tree-gets-its-own-copy-of-a-header)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49559,6 +49561,9 @@ different, a header its qmake build writes (section 644, inbox 1835Z).
 
 ### Two proposals, not made: the holder's to settle
 
+**Settled 2026-11-24: the holder said yes to both; built as sections
+651 and 652.** The text below is what was proposed.
+
 **A nested checkout of a repository the tree already vendors is a
 duplicate.** Its URL in its parent's `.gitmodules` matches one declared
 higher up. The top copy is the one the tree chose with its own gitlink.
@@ -49783,3 +49788,170 @@ one removed, as the control. Checked by hand (section 15), all three modes:
 b3ca0c1 exits 1 on the first, this exits 0, and both exit 1 on the
 control. snurra's `--explain` exits 0 now.
 
+## 651. A project vendored twice is built from the copy the tree chose
+
+Section 646's first proposal, which the holder accepted on 2026-11-24.
+`duplicate_checkouts` walks `.gitmodules` down through every checked-out
+submodule. A nested checkout is left out when a strictly shallower
+declared checkout is the same repository and has something in it. The
+copy nearer the top is the one the tree's own gitlink pins. The nested
+copy exists for the vendored project's standalone build. fmake names
+each one it leaves out, once per build: `fuzznet/qtty is left out: a
+second checkout of github.com/funklord/qtty, which this tree vendors at
+qtty`.
+
+- **One repository, several spellings.** `repository_key` reduces https,
+  `ssh://` and `git@host:` addresses to `host/path`, without `.git` or a
+  trailing slash. A relative address (`../lib`) is resolved against the
+  address of the repository that declares it. At the top there is no
+  such address, so a top-level relative address matches nothing.
+- **Plumbing.** The result is `Conf.implied_exclude`, which
+  `exclude_by_pattern` reads beside `[project] exclude`. Every pass that
+  honours an exclude honours this one too: sources, moc and uic, the
+  include path, and the resolver's tie-break. `exclude_words` gives the
+  reason as `--explain` shows it, so a duplicate is never reported as an
+  `[project] exclude` line the reader never wrote.
+- **When it is worked out.** After the submodule fetch, which may fill a
+  nested copy, and before anything asks about excludes.
+- **Choosing the nested copy.** A tree that excludes the top copy has
+  chosen the nested one, so a top copy under the reader's own exclude
+  does not count.
+- **Two copies at one depth** are left alone. Neither is the tree's
+  choice over the other, and section 3's refusal to guess stands.
+- **A duplicate inside a duplicate** is named once, by its outermost
+  copy.
+- **A copy with nothing in it** is still recorded but not named, since
+  it leaves nothing out.
+- **It is still fetched.** The fetch runs `update --init --recursive`
+  on a parent, which brings in the parent's children along with it
+  (sections 186, 188). Skipping a duplicate would mean fetching one
+  level at a time, which changes a path that works, only to save a
+  clone. A duplicate fmake has fetched is left out like any other.
+
+Nested submodules in the sibling trees on 2026-11-24, from their
+working checkouts:
+
+| tree | nested checkouts | duplicates of a shallower one |
+|---|---|---|
+| fuzzypickles | fuzznet's five, snurra/fuzznet | fuzznet/monocypher, /quirc, /qtty, /thorvg; snurra/fuzznet (empty) |
+| netcfgd | fuzznet's five | fuzznet/qtty |
+| beerssh | fuzznet's five (two filled); snurra/* not checked out | none |
+| raidcfgd | fuzznet's five | none |
+| snurra | fuzznet's five (one filled) | none |
+
+Rejected alternatives: see section 646. Case
+`a_second_checkout_of_a_vendored_project_is_left_out` covers it, with the
+user's exclude of the top copy as the control.
+
+Checked by hand, since the suite cannot run here (section 15). The case's
+two shapes build with this change and fail with e15988a. Two mutations
+were each caught by the case: no duplicate detection fails the first
+build, and ignoring the reader's exclude fails the control.
+
+## 652. Each project in the tree gets its own copy of a header
+
+Section 646's second proposal, which the holder accepted on 2026-11-24.
+hembygd's `src/audio/snd_device.cpp` and llama.cpp's
+`tools/mtmd/mtmd-helper.cpp` each include `"miniaudio/miniaudio.h"`, and
+each project vendors one. Both fit, so the include resolved to nothing.
+Each project's own build searches its own directories first. Four
+pieces make fmake's one build do the same.
+
+1. **The resolver.** Of several candidates that all carry the path the
+   include names, the one in the includer's own checkout wins, if there
+   is exactly one. The tree's own files count as one checkout, the one
+   `in_vendor` answers None for. Without the fit test, the tie-break
+   would answer `android/log.h` with the includer's own `common/log.h`
+   over another project's `log.h`: a basename guess, made without the
+   report a guess gets.
+2. **The shared path.** `kept_incdirs` puts the tree's own directories
+   before any vendored checkout's: the root first, then the own ones by
+   name, then the vendored ones by name. Before this, `llama.cpp/vendor`
+   sorted ahead of `vendor`. On every tree with an inferred vendored
+   directory, the `-I` order changes, so each object rebuilds once. On
+   hull, for example, `qtty/include` moves behind the tree's own `sexpr`,
+   `spec` and `store`. No other flag changed.
+3. **A vendored checkout's own files.** A checkout gets `-iquote` for its
+   own kept directories, in their order, on its units alone. This happens
+   only where a header under those directories has an include name that
+   an earlier directory belonging to somebody else also answers. `-iquote`
+   is searched before every `-I` for a quote include, wherever it stands
+   on the line. So the path shared by every other unit and by both
+   ejected builds stays one variable, and the per-unit flag reaches the
+   ejected Makefile, `build.ninja` and `compile_commands.json` through
+   the unit's own flags, the way `[directory]` flags already do. An angle
+   include is not searched there and keeps the shared order. None
+   measured needs otherwise.
+4. **A basename guess stays in the includer's own checkout.** The
+   build sweep found this one as a regression on hembygd. hembygd's own
+   `vendor/miniaudio/miniaudio.h` has `#include <android/log.h>` under
+   `__ANDROID__`. Once piece 1 let `"miniaudio/miniaudio.h"` resolve,
+   that header was walked for the first time, and the tree's one `log.h`
+   is llama.cpp's `common/log.h`. The single-candidate basename guess
+   (sections 546, 631) took it. That put `-Illama.cpp/common` on every
+   line and llama.cpp's `common/*.cpp` into the build, where hembygd's
+   `-fno-exceptions` stopped six of them. e15988a built hembygd only
+   because its resolver never walked miniaudio.h.
+
+   A header that does not carry the path asked for, in another
+   project's checkout, is not what the includer's own build would find.
+   So it is left to the compiler, as `external-includes` would leave it.
+   A guess inside the includer's own checkout is made and reported as
+   before. The shape fails with e15988a too, so the fault predates this
+   section. Case
+   `a_basename_guess_does_not_reach_into_another_projects_checkout`
+   covers it, with a guess inside `big` as the control.
+
+**Rejected**:
+
+- Fully per-owner include paths. This means a separate `-I` list per
+  checkout, carried through the object keys and both ejected builds, for
+  the same answer that one `-iquote` gives to quote includes.
+- Reordering the shared path alone. This would give llama.cpp's file
+  hembygd's copy.
+
+**Known limit, unchanged (section 68).** A unit that joins only by
+widening contributes no `-I`, so its include is answered by whatever the
+path already holds. If that unit is vendored and its header clashes, it
+gets the other project's copy without a word. Measured in the case's
+fixture before `big.h` was added, it printed `1 1`. Reaching the unit
+through a header is what puts its directory on the path.
+
+The case is `a_projects_own_header_wins_over_a_vendored_copy`, and
+`android/log.h` is its control. Checked by hand: e15988a fails to build
+it. Four mutations were each caught by the case:
+
+| mutation | result |
+|---|---|
+| no `-iquote` | the vendored file gets the tree's copy |
+| no own-first order | the tree's file gets the vendored copy |
+| no tie-break | the build stops on the ambiguity |
+| no fit test | the `android/log.h` guess |
+
+The ejected Makefile and `build.ninja` build the fixture and run it, and
+a second run does nothing.
+
+### The sibling sweeps behind sections 651 and 652
+
+- **Plan sweep.** Every sibling was planned against e15988a. Plans
+  changed only in the trees that vendor a sibling:
+  - bbq-predictor, hull, snurra and hembygd: the `-I` order only (piece
+    2).
+  - raidcfgd and fuzzypickles: `-iquote` on fuzznet's units, and one
+    more unit of their own, whose `wire/generated` header now resolves.
+  - beerssh: `-Ifuzznet/wire/generated` added. Separately, its old
+    `android/log.h` -> `fuzznet/log/log.h` guess is gone (piece 4), and
+    with it `fuzznet/log/log.c`.
+  - netcfgd: nothing. Its duplicate `fuzznet/qtty` sits under its own
+    `fuzznet` exclude, so it is not named.
+- **Build sweep** (`--build --old e15988a`):
+  - netcfgd, hull, snurra and hembygd build. hembygd also built with
+    e15988a, because it carries `include-dirs = ["vendor"]`. The first
+    build sweep caught it as a REGRESSION, which piece 4 fixed.
+  - fuzzypickles, beerssh and raidcfgd fail the same way with both
+    fmakes. None of these failures involves a duplicate checkout or a
+    header clash:
+    - fuzzypickles builds five of its six programs. fzpd fails on
+      fuzznet's `node/daemon.c`, the same failure as raidcfgd's (section
+      646).
+    - beerssh fails on its two situ runtimes (section 646).

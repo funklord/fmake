@@ -2475,6 +2475,10 @@ class Conf:
 			die(f"{CONF_FILE}: no profile {self.profile_name!r} "
 			    f"(defined: {', '.join(sorted(profiles)) or 'none'})")
 		self.profile = profiles.get(self.profile_name, {})
+		# {path: why} for subtrees fmake leaves out without being told:
+		# a second checkout of a repository the tree vendors higher up
+		# (section 651). Read by `exclude_by_pattern' beside `exclude'.
+		self.implied_exclude = {}
 
 	def __bool__(self):
 		"""True when this project configures anything at all.
@@ -3550,10 +3554,21 @@ def exclude_by_pattern(conf, rel):
     exist. Two readings of `[project] exclude' that disagree is the shape
     sections 447 and 448 were both about, so there is one.
     """
-	for pat in conf.project.get("exclude", []):
+	for pat in (list(conf.project.get("exclude", []))
+	            + list(getattr(conf, "implied_exclude", {}))):
 		if fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/*") + "/"):
 			return pat
 	return None
+
+
+def exclude_words(conf, pat):
+	"""What left a path out, as a reader is told it.
+
+    `[project] exclude = 'p'' names a line in the reader's own file; a
+    duplicate checkout is in no file, so it is named by what it is.
+    """
+	why = getattr(conf, "implied_exclude", {}).get(pat)
+	return why if why else f"[project] exclude = {pat!r}"
 
 
 def rules_from_comments(root, srcs, scans):
@@ -6740,6 +6755,124 @@ def _gitmodule_paths(path):
 	return out
 
 
+def _gitmodule_rows(path):
+	"""(path, url) for each submodule one `.gitmodules' declares.
+
+    `_gitmodule_paths' with the url beside each path, which only the
+    duplicate test below wants. A section with no url is kept with an
+    empty one, which matches nothing.
+    """
+	try:
+		with open(path, encoding="utf-8", errors="replace") as f:
+			text = f.read()
+	except OSError:
+		return []
+	out = []
+	for sect in re.split(r"(?m)^[ \t]*\[", text)[1:]:
+		p = re.search(r"(?m)^[ \t]*path[ \t]*=[ \t]*(.+?)[ \t]*$", sect)
+		u = re.search(r"(?m)^[ \t]*url[ \t]*=[ \t]*(.+?)[ \t]*$", sect)
+		if not p:
+			continue
+		p = p.group(1).strip().strip('"').strip("/")
+		if p and not p.startswith("/") and ".." not in p.split("/"):
+			out.append((os.path.normpath(p),
+			            u.group(1).strip().strip('"') if u else ""))
+	return out
+
+
+def repository_key(url, base=""):
+	"""One spelling for the addresses of one repository, or "".
+
+    `git@github.com:o/r.git', `https://github.com/o/r' and
+    `ssh://git@github.com/o/r/' are one repository, and the sibling trees
+    use both of the first two for the same project (raidcfgd names
+    ossacli by SSH, every other row here is https). A relative address
+    is relative to the repository that declares it, so it is resolved
+    against `base', that declarer's own key; with no base it cannot be
+    compared and is "".
+    """
+	u = url.strip().rstrip("/")
+	if u.endswith(".git"):
+		u = u[:-4]
+	if u.startswith(("./", "../")):
+		if not base:
+			return ""
+		parts = base.split("/")
+		for step in u.split("/"):
+			if step == "..":
+				if len(parts) <= 1:
+					return ""
+				parts.pop()
+			elif step not in (".", ""):
+				parts.append(step)
+		return "/".join(parts)
+	m = re.match(r"^[\w.+-]+://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.*)$", u)
+	if not m:
+		m = re.match(r"^(?:[^@/:]*@)?([^/:]+):(?!//)(.*)$", u)
+	if not m:
+		return ""
+	return m.group(1).lower() + "/" + m.group(2).strip("/")
+
+
+def duplicate_checkouts(root, excluded=None):
+	"""{nested path: why} for each checkout this tree already vendors higher.
+
+    Section 651, the holder's word on section 646's first proposal.
+    fuzzypickles vendors fuzznet and qtty, and fuzznet vendors qtty too:
+    fmake fetches nested submodules (sections 186, 188), so both copies
+    are in the tree and every symbol in them is defined twice. The copy
+    the tree chose is the one its own gitlink pins, the shallower one;
+    the nested copy exists for the vendored project's standalone build.
+
+    A nested checkout is a duplicate when a strictly shallower declared
+    checkout has the same repository key and something in it to build.
+    The shallower one wins only while it is in the build: a tree that
+    excludes it has chosen the nested copy, and gets that. Two copies at
+    one depth are left alone -- neither is the tree's choice over the
+    other, and fmake will not guess (section 3).
+    """
+	rows, queue = [], [(0, "", "", r) for r in
+	                   _gitmodule_rows(os.path.join(root, ".gitmodules"))]
+	# Each directory read once, by where it really is: a submodule path
+	# that is a symlink back up the tree would otherwise be walked until
+	# the path grew too long to open.
+	seen = set()
+	while queue:
+		depth, parent, parent_key, (rel, url) = queue.pop(0)
+		path = os.path.normpath(os.path.join(parent, rel))
+		key = repository_key(url, parent_key)
+		rows.append((depth, path, key))
+		real = os.path.realpath(os.path.join(root, path))
+		if real in seen:
+			continue
+		seen.add(real)
+		queue += [(depth + 1, path, key, r) for r in _gitmodule_rows(
+		          os.path.join(root, path, ".gitmodules"))]
+
+	def _filled(path):
+		try:
+			return bool(os.listdir(os.path.join(root, path)))
+		except OSError:
+			return False
+
+	out = {}
+	for depth, path, key in rows:
+		if not key or depth == 0:
+			continue
+		tops = sorted((d, p) for d, p, k in rows
+		              if k == key and d < depth
+		              and not path.startswith(p + "/")
+		              and not p.startswith(path + "/")
+		              and _filled(p)
+		              and not (excluded and excluded(p)))
+		if tops:
+			out[path] = (f"a second checkout of {key}, which this tree "
+			             f"vendors at {tops[0][1]}")
+	# A duplicate inside a duplicate is said once, by its outermost.
+	return {p: w for p, w in out.items()
+	        if not any(p.startswith(q + "/") for q in out)}
+
+
 def vendored_dirs(root, srcs):
 	"""Subtrees that are a checkout of some other project.
 
@@ -6958,8 +7091,12 @@ wordexp.h
 
 class Project:
 	def __init__(self, root, srcs, hdrs, scans, owns=None, excluded=None,
-	             external=()):
+	             external=(), vendored=()):
 		self.root  = root
+		# The checkouts of other projects in this tree, `vendored_dirs'.
+		# Read only to break a tie: of several headers that fit, the one
+		# in the includer's own checkout wins (section 652).
+		self.vendored = set(vendored)
 		# `[project] external-includes': include names the tree does not
 		# answer, matched as written in the #include. The refusal half of
 		# what section 630 found missing -- a basename guess such as
@@ -7115,9 +7252,31 @@ class Project:
 			             or m[len(m) - len(inc_name) - 1] in ("/", os.sep))]
 			if fits:
 				matches = fits
+		# Of several that fit, the includer's own checkout's. Each project
+		# builds against its own copy -- its own build puts its own
+		# directories on its own path -- and the tree's own files are a
+		# project too, the one `in_vendor' answers None for. hembygd's
+		# `src/audio/snd_device.cpp' and llama.cpp's
+		# `tools/mtmd/mtmd-helper.cpp' each include
+		# "miniaudio/miniaudio.h", each vendors one, both fit, and the
+		# include resolved to nothing. With one candidate of the
+		# includer's own, that is the answer; with none or several, the
+		# ambiguity stands as it was.
+		# Only among headers that carry the path the include names: a
+		# tie-break that answered `android/log.h' with the includer's own
+		# `common/log.h', where another project's `log.h' competed, would
+		# be a basename guess made silently. The case measures it.
+		if len(matches) > 1 and self.vendored and all(
+		        m.endswith(inc_name)
+		        and (len(m) == len(inc_name)
+		             or m[len(m) - len(inc_name) - 1] in ("/", os.sep))
+		        for m in matches):
+			mine = in_vendor(from_rel, self.vendored)
+			own = [m for m in matches
+			       if in_vendor(m, self.vendored) == mine]
+			if len(own) == 1:
+				matches = own
 		if len(matches) == 1:
-			self._note_incdir(self.incdir_for(matches[0], inc_name),
-			                  inc_name, from_rel)
 			# Reported only when the include NAMED A PATH that the answer
 			# does not carry. A bare `#include "foo.h"' matching the one
 			# `foo.h' in the tree is the fallback working as intended and
@@ -7137,6 +7296,21 @@ class Project:
 			cut = len(matches[0]) - len(inc_name)
 			honoured = (matches[0].endswith(inc_name)
 			            and (cut == 0 or matches[0][cut - 1] in ("/", os.sep)))
+			# Not across checkouts (section 652). A header that does not
+			# carry the path asked for, in another project's checkout, is
+			# not what the includer's own build would find: hembygd's
+			# `vendor/miniaudio/miniaudio.h' asks for <android/log.h>
+			# under __ANDROID__, the tree's one `log.h' is llama.cpp's
+			# `common/log.h', and the guess put `-Illama.cpp/common' on
+			# every line and llama.cpp's `common/*.cpp' into the build,
+			# which hembygd's -fno-exceptions does not compile. Left to
+			# the compiler, as `external-includes' would leave it.
+			if (not honoured and self.vendored
+			        and in_vendor(matches[0], self.vendored)
+			        != in_vendor(from_rel, self.vendored)):
+				return None
+			self._note_incdir(self.incdir_for(matches[0], inc_name),
+			                  inc_name, from_rel)
 			if not honoured:
 				self.guessed.setdefault(inc_name, matches[0])
 			return matches[0]
@@ -10405,8 +10579,8 @@ def compile_units(units, cfg, cache, root, incflags, jobs, dry_run,
 					# see.
 					pat = excluded(want) if excluded else None
 					if pat:
-						note(f"   {want} is under [project] exclude = "
-						     f"{pat!r}, which is why it is not on the "
+						note(f"   {want} is under {pat}, which is why "
+						     f"it is not on the "
 						     f"path: naming it above overrides that for "
 						     f"this one directory")
 					owner = in_vendor(want, vendored)
@@ -16093,6 +16267,28 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# fetch_submodules.
 	if not args.no_submodules:
 		fetch_submodules(root, dry_run=bool(args.dry_run))
+	# After the fetch, which may fill a nested copy, and before anything
+	# asks `exclude_by_pattern'. Asked with `implied_exclude' empty, so
+	# only the reader's own excludes take a top copy out of the running.
+	# Said only of a copy with something in it: an empty one leaves
+	# nothing out.
+	# Nor of one the reader's own exclude already covers: netcfgd
+	# excludes `fuzznet', and naming `fuzznet/qtty' there tells it
+	# nothing.
+	conf.implied_exclude = {}
+	_dups = duplicate_checkouts(root, lambda p: exclude_by_pattern(conf, p))
+	_theirs = {p for p in _dups if exclude_by_pattern(conf, p)}
+	conf.implied_exclude = _dups
+	if not _bootstrapping:
+		_head, _rest = capped(sorted(
+		    (p, w) for p, w in _dups.items()
+		    if p not in _theirs
+		    and os.path.isdir(os.path.join(root, p))
+		    and os.listdir(os.path.join(root, p))))
+		for _p, _w in _head:
+			info(f"{_p} is left out: {_w}")
+		if _rest:
+			info(f"... and {_rest} more (-v for all)")
 	_pruned = {}
 	srcs, hdrs, unbuilt = walk_tree(root, _pruned)
 	# A directory skipped because of its NAME, holding source this tree
@@ -16354,7 +16550,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	for rel in list(srcs):
 		pat = exclude_pattern(rel)
 		if pat:
-			excluded[rel] = f"[project] exclude = {pat!r}"
+			excluded[rel] = exclude_words(conf, pat)
 		elif rel in fragments:
 			_by = fragments[rel]
 			excluded[rel] = (f"#included by {_by[0]}"
@@ -16796,7 +16992,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		                     owns=lambda n: toolchain_owns_header(cfg, n),
 		                     excluded=exclude_pattern,
 		                     external=conf.project.get(
-		                         "external-includes", []))
+		                         "external-includes", []),
+		                     vendored=vendored_dirs(root, srcs))
 		for job in moc_jobs:
 			job["deps"] = sorted(
 			    _hdr_graph.reachable_headers([job["src"]]))
@@ -16889,7 +17086,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	proj = Project(root, srcs, hdrs, scans,
 	               owns=lambda n: toolchain_owns_header(cfg, n),
 	               excluded=exclude_pattern,
-	               external=conf.project.get("external-includes", []))
+	               external=conf.project.get("external-includes", []),
+	               vendored=vendored_dirs(root, srcs))
 	# A predicate that cannot answer says so, because its silence is the
 	# permissive direction: with no search path every name reads as the
 	# tree's, which is the guess STANDARD_HEADERS exists to refuse.
@@ -18054,12 +18252,47 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 
 	excluded_incdirs = {}
 	kept_incdirs = []
-	for d in sorted(proj.incdirs | {"."}):
+	# The tree's own directories before any vendored checkout's (section
+	# 652). One build serves several projects with one path, and each
+	# project's own build searches its own directories first: hembygd's
+	# `vendor' sorted after llama.cpp's `llama.cpp/vendor', so with both on
+	# the path hembygd's "miniaudio/miniaudio.h" would have been
+	# llama.cpp's copy. The root first as before, then the rest by name.
+	for d in sorted(proj.incdirs | {"."},
+	                key=lambda d: (d != ".", in_vendor(d, vendored) is not None,
+	                               d)):
 		pat = incdir_excluded(d) if d != "." else None
 		if pat:
 			excluded_incdirs[d] = pat
 		else:
 			kept_incdirs.append(d)
+	# And a vendored checkout's own directories first for its own files,
+	# where it needs that: a header under one of them whose include name
+	# an earlier directory of somebody else's also answers. -iquote, on
+	# that checkout's units alone, because a quote include searches it
+	# before every -I wherever it stands on the line -- which keeps the
+	# one path every other unit and both ejected builds share, and costs
+	# nothing on the trees with no such clash. llama.cpp's
+	# `tools/mtmd/mtmd-helper.cpp' is the case. An angle include is not
+	# searched there and still takes the shared order; none measured
+	# needs otherwise.
+	_under = {d: {os.path.relpath(h, d) if d != "." else h for h in hdrs
+	              if d == "." or h.startswith(d + "/")}
+	          for d in kept_incdirs}
+	_first = {}
+	for d in kept_incdirs:
+		for r in _under[d]:
+			_first.setdefault(r, d)
+	own_quote = {}
+	for v in sorted({in_vendor(d, vendored) for d in kept_incdirs} - {None}):
+		mine = [d for d in kept_incdirs if in_vendor(d, vendored) == v]
+		if any(in_vendor(_first[r], vendored) != v
+		       for d in mine for r in _under[d]):
+			own_quote[v] = ["-iquote" + os.path.join(root, d) for d in mine]
+	for v in sorted(own_quote):
+		vinfo(f"{v}'s own include directories are searched first for its "
+		      f"own quote includes (-iquote): a header there has a name "
+		      f"another project's directory answers too")
 	# Printed whenever this project excludes anything, at zero if that is
 	# the answer -- not only when the set is non-empty. Reported from
 	# raidcfgd, who had four excludes, got a `kept' line and no `dropped'
@@ -18248,7 +18481,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		# its flags sit in front of the file's own. For `-D' and
 		# `-std=' the later wins, so an annotation still overrides a
 		# directory, which is what locality asks for.
-		return (dir_flags_for(u.rel, dir_confs)
+		return (own_quote.get(in_vendor(u.rel, vendored), [])
+		        + dir_flags_for(u.rel, dir_confs)
 		        + unit_cflags(u, pkg, hdr_store, pkg_sig)
 		        + moc_own.get(u.rel, []))
 
@@ -18764,7 +18998,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		              # drops `vendor' now, and a remedy that did not say
 		              # so would tell a reader to name a directory the
 		              # config has already refused.
-		              excluded=incdir_excluded,
+		              excluded=lambda d: (lambda p: p and exclude_words(
+		                  conf, p))(incdir_excluded(d)),
 		              module_exports={m for sc in scans.values()
 		                              for m in (sc.get("modiface") or [])})
 		# The architecture to require is whatever fmake just compiled. Asking

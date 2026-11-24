@@ -10052,6 +10052,138 @@ def a_header_whose_path_cannot_fit_the_include_is_no_candidate(t):
 
 
 @case
+def a_second_checkout_of_a_vendored_project_is_left_out(t):
+	"""fuzzypickles vendors qtty and fuzznet, and fuzznet vendors qtty
+	too. fmake fetches nested submodules, so both copies were in the tree,
+	every symbol in them was defined twice, and the build refused to guess
+	until the tree wrote an exclude for each nested copy -- five of them
+	by the time it was measured, and two more due.
+
+	The tree's own gitlink chose the shallower copy, so the nested one is
+	left out and said. The addresses differ in spelling on purpose: one
+	https with `.git', one SSH, and the nested one relative to its
+	parent's, which is how the trees here write them.
+
+	The control: a tree that excludes the top copy has chosen the nested
+	one, and the nested one is built."""
+	t.write(".gitmodules", '[submodule "lib"]\n\tpath = lib\n'
+	        "\turl = https://example.invalid/o/lib.git\n"
+	        '[submodule "mid"]\n\tpath = mid\n'
+	        "\turl = git@example.invalid:o/mid\n")
+	t.write("mid/.gitmodules", '[submodule "lib"]\n\tpath = lib\n'
+	        "\turl = ../lib\n")
+	for d in ("lib", "mid/lib"):
+		t.write(f"{d}/lib.c", "int lib_value(void) { return 42; }\n")
+	t.write("mid/src/mid.c", "int lib_value(void);\n"
+	        "int mid_value(void) { return lib_value() - 42; }\n")
+	t.write("main.c", "int mid_value(void);\n"
+	        "int main(void) { return mid_value(); }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0,
+	      f"a nested copy of a vendored project stopped the build: {out}")
+	check("mid/lib is left out: a second checkout of example.invalid/o/lib"
+	      ", which this tree vendors at lib" in out,
+	      f"and leaving it out is said, naming both copies: {out}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "and the program runs")
+
+	t.write("fmake.toml", '[project]\nexclude = ["lib"]\n')
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "left out" not in out,
+	      f"excluding the top copy chooses the nested one: {out}")
+
+
+@case
+def a_projects_own_header_wins_over_a_vendored_copy(t):
+	"""hembygd's `src/audio/snd_device.cpp' and llama.cpp's
+	`tools/mtmd/mtmd-helper.cpp' each include "miniaudio/miniaudio.h",
+	and each project vendors one. Both fit the include, so it resolved to
+	nothing, no -I was inferred, and the build stopped.
+
+	Each project's own build searches its own directories first, so each
+	file gets its own project's copy: the tree's own directories go first
+	on the shared path, and the vendored checkout's own files search its
+	directories first with -iquote. MA_WHO says which copy each file got.
+
+	`big' is reached through its header, so its include is walked before
+	the path is fixed; a unit that joins only by symbol contributes no -I
+	(section 68), which this does not change.
+
+	The control is `android/log.h', which no `log.h' here carries the
+	path of: the includer's own `common/log.h' must not win it over the
+	tree's `src/log.h', or the tie-break is a basename guess made
+	silently. Found by mutation, removing the fit test."""
+	t.write(".gitmodules", '[submodule "big"]\n\tpath = big\n'
+	        "\turl = https://example.invalid/o/big.git\n")
+	t.write("vendor/ma/ma.h", "#define MA_WHO 1\n")
+	t.write("big/vendor/ma/ma.h", "#define MA_WHO 2\n")
+	t.write("big/common/log.h", "#define LOGGED 1\n")
+	t.write("src/log.h", "#define LOGGED 2\n")
+	t.write("big/src/big.h", "int big_who(void);\n")
+	t.write("big/src/big.c", '#include "ma/ma.h"\n'
+	        '#if __has_include("android/log.h")\n'
+	        '#include "android/log.h"\n#endif\n'
+	        "int big_who(void) { return MA_WHO; }\n")
+	t.write("src/main.c", '#include "ma/ma.h"\n#include "big/src/big.h"\n'
+	        "int main(void) { return MA_WHO * 10 + big_who() - 12; }\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"two projects' copies of one header stopped the build: "
+	      f"{r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "each file compiles against its own project's copy")
+	check("basename alone" not in r.stdout + r.stderr,
+	      f"an include no candidate carries the path of went to the "
+	      f"includer's own copy: {r.stdout}{r.stderr}")
+
+
+@case
+def a_basename_guess_does_not_reach_into_another_projects_checkout(t):
+	"""hembygd's own `vendor/miniaudio/miniaudio.h' includes
+	<android/log.h> under __ANDROID__. The tree's one `log.h' is
+	llama.cpp's `common/log.h', which does not carry the path, and the
+	basename guess (section 546) took it: `-Illama.cpp/common' went on
+	every line, and llama.cpp's `common/*.cpp' went into the build, where
+	hembygd's -fno-exceptions does not compile them. The old resolver
+	never walked miniaudio.h, so the guess was found only when section 652
+	let the include resolve.
+
+	A guess stays inside the includer's own checkout. Here `big/common.c'
+	beside `big/common/log.h' does not compile, standing in for the
+	exceptions: if the guess is made, the header proposes it.
+
+	The control: the same include from a file of `big''s own, reached
+	through its header, is still guessed and reported, as section 631
+	has it."""
+	t.write(".gitmodules", '[submodule "big"]\n\tpath = big\n'
+	        "\turl = https://example.invalid/o/big.git\n")
+	t.write("big/common/log.h", "void big_log(void);\n")
+	t.write("big/common/log.c", "#error not this tree's\n")
+	t.write("vendor/ma.h", "#ifdef __ANDROID__\n#include <android/log.h>\n"
+	        "#endif\n#define MA 0\n")
+	t.write("main.c", '#include "vendor/ma.h"\n'
+	        "int main(void) { return MA; }\n")
+	r = t.fmake()
+	out = r.stdout + r.stderr
+	check(r.returncode == 0
+	      and "android/log.h -> big/common/log.h" not in out,
+	      f"a guess reached into another project's checkout: {out}")
+
+	t.write("big/tool.h", "int big_tool(void);\n")
+	t.write("big/tool.c", "#ifdef __ANDROID__\n#include <android/log.h>\n"
+	        "#endif\nint big_tool(void) { return 0; }\n")
+	t.write("main.c", '#include "vendor/ma.h"\n#include "big/tool.h"\n'
+	        "int main(void) { return MA + big_tool(); }\n")
+	r = t.fmake("-n")
+	out = r.stdout + r.stderr
+	check("android/log.h -> big/common/log.h" in out,
+	      f"a guess inside the includer's own checkout is still made and "
+	      f"said: {out}")
+
+
+@case
 def a_pc_publishes_a_define_a_published_header_tests(t):
 	"""The quietest of the three .pc faults, and the only one with no
 	error at all.
