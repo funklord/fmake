@@ -11369,7 +11369,7 @@ def linker_script_symbols(flags, root):
 
 
 def close_over_symbols(root_unit, units, forced=(), forced_why=None,
-                       via=None):
+                       via=None, withheld=None):
 	"""Transitive closure from a root object over undefined symbols.
 
     `forced` units seed the closure alongside the root. They are what nothing
@@ -11380,13 +11380,21 @@ def close_over_symbols(root_unit, units, forced=(), forced_why=None,
     `via' is {symbol: where} for what the root needs because something
     other than its own code says so -- a linker script's ENTRY -- so the
     reason given is the script and not the root's source.
+
+    `withheld' is {path: symbols} a unit defines and offers to nobody but
+    a program it roots: another program's stand-in for a libc function
+    (section 653). The root's own are never withheld from it.
     """
+	withheld = withheld or {}
 	strong_by_sym, weak_by_sym = {}, {}
 	for u in units:
+		keep = withheld.get(u.rel, ()) if u is not root_unit else ()
 		for s in u.strong:
-			strong_by_sym.setdefault(s, []).append(u)
+			if s not in keep:
+				strong_by_sym.setdefault(s, []).append(u)
 		for s in u.weak:
-			weak_by_sym.setdefault(s, []).append(u)
+			if s not in keep:
+				weak_by_sym.setdefault(s, []).append(u)
 
 	cl = Closure(root_unit)
 	seeds = [root_unit] + [u for u in forced if u is not root_unit]
@@ -19433,6 +19441,28 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 						module_material.add(rel)
 
 
+		# Another program's stand-in for a libc function is that program's
+		# alone (section 653). openmlx4's test_burn.c and vendor_burn.c
+		# each define nanosleep() as a stub for their own program, beside
+		# their own main(); test_cmdif calls nanosleep and means libc's,
+		# as its Makefile links it. Offered as candidates, the two stubs
+		# made section 3 refuse to choose -- between two files neither of
+		# which can be linked into test_cmdif at all, since each brings a
+		# second main(). Withheld per symbol rather than per file: a
+		# program root defining a PROJECT function another program needs
+		# still gets the "Both define main()" advice, which is right
+		# there. Unless libc cannot be read: then nothing is withheld and
+		# the refusal stands, the conservative side.
+		root_interposers = {}
+		if other_roots:
+			libc_syms = libc_exports(cfg, cache)
+			if libc_syms:
+				for u in pool:
+					if u.rel in other_roots and u.strong:
+						hit = set(u.strong) & libc_syms
+						if hit:
+							root_interposers[u.rel] = hit
+
 		def schema_pool(t):
 			"""`pool` without what this program must not link: the schemas
 			it never included, a module's sources, and -- unless it is
@@ -19531,7 +19561,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 				        and s not in (_ru.strong or ())}
 				closures[t] = close_over_symbols(_root_unit(t),
 				                                 schema_pool(t), forced_here,
-				                                 forced_why, _via)
+				                                 forced_why, _via,
+				                                 root_interposers)
 				# A resource is asserted, not deduced -- nothing references
 				# the object. Which program gets it comes from which of its
 				# files opened it, so the closure has to exist before the
@@ -19553,7 +19584,7 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 					closures[t] = close_over_symbols(
 					    _root_unit(t), schema_pool(t),
 					    forced_here + [units[o] for o in sorted(add)], extra_why,
-					    _via)
+					    _via, root_interposers)
 			else:
 				members = [u for u in pool
 				           if u.rel == t.rel or u.rel not in other_roots]

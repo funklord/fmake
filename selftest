@@ -10184,6 +10184,44 @@ def a_basename_guess_does_not_reach_into_another_projects_checkout(t):
 
 
 @case
+def another_programs_stand_in_for_libc_is_not_offered(t):
+	"""openmlx4's test_burn.c and vendor_burn.c each stub nanosleep()
+	for their own program, beside their own main(). test_cmdif calls
+	nanosleep and means libc's. Both stubs were offered to it, section 3
+	refused to choose, and `fmake test' stopped -- over two files neither
+	of which can be in test_cmdif's link, each bringing a second main().
+
+	A program root's definitions of libc names are its own. The control
+	is a PROJECT function defined beside another program's main(): that
+	still gets the advice to move it into a file of its own, because no
+	library answers it."""
+	stub = ("#include <time.h>\n"
+	        "int nanosleep(const struct timespec *a, struct timespec *b)\n"
+	        "{ (void)a; (void)b; return %d; }\n"
+	        "int main(void) { struct timespec s = {0, 1};"
+	        " return nanosleep(&s, 0); }\n")
+	t.write("test/test_burn.c", stub % 0)
+	t.write("test/vendor_burn.c", stub % 0)
+	t.write("test/test_cmdif.c", "#include <time.h>\n"
+	        "int main(void) { struct timespec s = {0, 1};"
+	        " return nanosleep(&s, 0); }\n")
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check(r.returncode == 0 and "more than one file" not in out,
+	      f"another program's libc stand-in was offered: {out}")
+
+	t.write("test/helper_prog.c", "int shared_helper(void) { return 0; }\n"
+	        "int main(void) { return shared_helper(); }\n")
+	t.write("test/test_user.c", "int shared_helper(void);\n"
+	        "int main(void) { return shared_helper(); }\n")
+	r = t.fmake("test")
+	out = r.stdout + r.stderr
+	check("test_user links test/helper_prog.c, which roots helper_prog"
+	      in out,
+	      f"a project function beside another main() lost its advice: {out}")
+
+
+@case
 def a_pc_publishes_a_define_a_published_header_tests(t):
 	"""The quietest of the three .pc faults, and the only one with no
 	error at all.

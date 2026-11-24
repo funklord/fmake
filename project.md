@@ -701,7 +701,8 @@ that had been green about nothing for five commits ·
 [649. A meta-object nothing asked for links does not stop the tests](#649-a-meta-object-nothing-asked-for-links-does-not-stop-the-tests) ·
 [650. --explain and --eject exit as the build does over a needless guess](#650---explain-and---eject-exit-as-the-build-does-over-a-needless-guess) ·
 [651. A project vendored twice is built from the copy the tree chose](#651-a-project-vendored-twice-is-built-from-the-copy-the-tree-chose) ·
-[652. Each project in the tree gets its own copy of a header](#652-each-project-in-the-tree-gets-its-own-copy-of-a-header)
+[652. Each project in the tree gets its own copy of a header](#652-each-project-in-the-tree-gets-its-own-copy-of-a-header) ·
+[653. Another program's stand-in for libc is its own](#653-another-programs-stand-in-for-libc-is-its-own)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49955,3 +49956,45 @@ a second run does nothing.
       fuzznet's `node/daemon.c`, the same failure as raidcfgd's (section
       646).
     - beerssh fails on its two situ runtimes (section 646).
+
+## 653. Another program's stand-in for libc is its own
+
+Reported by openmlx4 in inbox 20261124T0153Z, in reply to section 647's
+note. openmlx4's `test/test_burn.c` and `test/vendor_burn.c` each define
+`nanosleep()` as a stub for their own program, beside their own
+`main()`. `test_cmdif`, `test_gwflash` and `test_imgedit` call
+`nanosleep` and mean libc's, which is how openmlx4's Makefile links
+them. Both stubs were offered to those programs, and section 3 refused
+to choose. So `fmake test` and `--eject` stopped, over two files that
+neither of those programs can link at all, because each brings a second
+`main()`. With one stub, the build stopped instead on the "Both define main()"
+advice, which tells the reader to move the stub, wrongly.
+
+**The rule:** a program root's definitions of names libc exports are
+withheld from every other program's closure, so another program's
+reference to that name goes to libc. `close_over_symbols` takes
+`withheld`, {path: symbols}, and the root's own are never withheld from
+it.
+
+- **Per symbol, not per file.** A program root that defines a project
+  function another program needs keeps the "Both define main()" advice,
+  since no library answers that function.
+- **If libc cannot be read,** nothing is withheld and the refusal
+  stands, which is the conservative side. This is the same discriminator
+  as the test doubles of section 219 and the module interposers of
+  section 292.
+
+openmlx4's `@interpose` on both files changed nothing and still changes
+nothing. That annotation is about a file being linked on purpose, and
+here the question is which program the file belongs to.
+
+Case `another_programs_stand_in_for_libc_is_not_offered`, with the
+project-function advice as its control. Checked by hand (section 15):
+
+- **The case's shape** passes. It fails with c0108e3, and also with the
+  withholding removed.
+- **On an openmlx4 archive at 2df62d3**, `fmake test` links all 17
+  programs; c0108e3 refused on `nanosleep`. The one file that does not
+  compile, `test/diff_layouts.c`, wants a `tools_layouts/` header the
+  tree does not have, as section 647 said.
+

@@ -296,7 +296,7 @@ is not in the sources.
 | A library or shared object | **Never** — nothing in a source says "this is a library" | `@kind static\|shared\|library\|module` |
 | Which programs are tests | **Sometimes** — a test directory or a `test_` name; `tests/live/` is the `live` group | `@test`, `@test no` |
 | Which programs ship | **Sometimes** — every program does, a module never does, and a program under `example/` does not | `@install no`, `@install yes`, `[target.*] install` |
-| A file standing in for libc | **Reported, never guessed** — yours is linked and said, a vendored one is refused | `@interpose`, `@kind module`, `[project] exclude` |
+| A file standing in for libc | **Reported, never guessed** — yours is linked and said, a vendored one is refused, and one beside another program's `main()` is that program's alone | `@interpose`, `@kind module`, `[project] exclude` |
 | Generated sources | **Never** — a generator is a command nobody can infer | `[generate.*]`, `@rule`, `fmake.mk` |
 | A macro the build injects | **Never** — `-DVERSION=...` is not in the tree | `[project] defines`, `$file(VERSION)` |
 | Public headers to install | **Never** — which headers are API is a decision | `@headers` |
