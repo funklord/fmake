@@ -18839,8 +18839,25 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
         new question, whatever the file did last time, so it is compiled
         and may turn out to be the provider.
         """
-		held, _, stamp = bad_guess.get(rel, "").rpartition("|")
-		return stamp == guess_stamp(rel) and set(names) <= set(held.split())
+		held, _, rest = bad_guess.get(rel, "").partition("|")
+		providers, _, stamp = rest.rpartition("|")
+		if stamp != guess_stamp(rel) or not set(names) <= set(held.split()):
+			return False
+		# And only while what linked in its place is still what it was.
+		# The memo says every target linked without this file; where one
+		# of the tree's own files supplied its names, deleting or editing
+		# that file takes the reason away. Measured: with a.c's start()
+		# deleted, the failed guess b.c was the only provider left, the
+		# memo kept it from being compiled, and --explain, which links
+		# nothing, exited 0 over a program that could not link.
+		# A provider outside the tree -- libc's close(), hembygd's case
+		# -- is not recorded, and the memo holds as before.
+		try:
+			was = json.loads(providers) if providers else {}
+		except ValueError:
+			return False
+		return all(cache.hash_of(os.path.join(root, r), r) == h
+		           for r, h in was.items())
 	# Generated files widening was offered and turned down. Kept so the
 	# report at the end does not give them a second, wrong reason.
 	declined_generated = set()
@@ -21336,8 +21353,18 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 			rel = key.partition("\0")[0]
 			if rel in tried_for:
 				broken.discard(key)
+				_wanted_names = set(tried_for[rel])
+				_providers = {
+				    u.rel: cache.hash_of(os.path.join(root, u.rel), u.rel)
+				    for t in wanted if t in closures
+				    for u in closures[t].link
+				    if u.rel != rel and any(
+				        symbol_tokens(sym) & _wanted_names
+				        for sym in (getattr(u, "strong", None) or set())
+				        | (getattr(u, "weak", None) or set()))}
 				bad_guess[rel] = (" ".join(tried_for[rel]) + "|"
-				                  + guess_stamp(rel))
+				                  + json.dumps(_providers, sort_keys=True)
+				                  + "|" + guess_stamp(rel))
 				_names, _more = capped(tried_for[rel], 3)
 				warn(f"{rel} did not compile, and every target linked "
 				     f"without it: it was only tried because it looks "

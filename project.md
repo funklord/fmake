@@ -705,7 +705,8 @@ that had been green about nothing for five commits ·
 [653. Another program's stand-in for libc is its own](#653-another-programs-stand-in-for-libc-is-its-own) ·
 [654. A nested copy of a vendored project is not fetched](#654-a-nested-copy-of-a-vendored-project-is-not-fetched) ·
 [655. A widened file gets the include path its own includes need](#655-a-widened-file-gets-the-include-path-its-own-includes-need) ·
-[656. A release's source tarball carries the submodules](#656-a-releases-source-tarball-carries-the-submodules)
+[656. A release's source tarball carries the submodules](#656-a-releases-source-tarball-carries-the-submodules) ·
+[657. A failed guess is tried again once what linked in its place has gone](#657-a-failed-guess-is-tried-again-once-what-linked-in-its-place-has-gone)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -50140,4 +50141,39 @@ submodules. **No tree regressed.**
 openmlx4 joined the trees that build: section 653 is what lets its tests
 link. The sweep copies carry no `.git`, so sections 654 and 656 are not
 exercised by it. The fixtures in those sections are their evidence.
+
+## 657. A failed guess is tried again once what linked in its place has gone
+
+The holder ran the suite on eaafd5e: 7 of 864 failed (the section after
+this has the rest). One was fmake's:
+`explain_and_eject_exit_as_the_build_does_over_a_needless_guess`, whose
+control has failed since d6b3107 added it. Section 650's hand check ran
+the control on a fresh tree; the case runs it after a plain build.
+
+**The memo hid the only provider.** The plain build compiles `b.c` as a
+guess for `start()`, it fails, `a.c` provides `start()`, and every target
+links. So the build records `b.c` in `bad_guess`: a failed guess, not to
+be compiled again until it changes or is asked about a new name. With
+`a.c` deleted, `b.c` is the only provider. It is asked about the same
+name, the memo holds, and it is not compiled. A plain build then fails
+at the link, and a failed target clears the memo. `--explain`, `--eject`
+and `--compile-commands` never link, so nothing cleared it. They
+reported `start` unresolved and exited 0, because no file had failed to
+compile in that run.
+
+**The memo now records what linked in the guess's place.** For each of
+the tree's own files in a link set that defines a name the guess was
+tried for, it stores the file's hash. The memo holds only while each of
+those files still has that hash. Deleting or editing the provider
+reopens the question. A name a library provides records nothing:
+hembygd's `close()` comes from libc, and its memo holds as before
+(`a_failed_guess_is_not_tried_again_until_something_changes`). The
+providers are a JSON map in a middle field of the stamp string. An entry
+written before this has no middle field and reads as having no
+providers.
+
+Checked by hand (section 15). The case's sequence on HEAD gives exit 0
+from each of the three modes. With the change, all three exit 1, and
+`--explain` compiles `b.c` and shows its error. The `close()` fixture
+still compiles nothing on its warm run, and its memo records `{}`.
 
