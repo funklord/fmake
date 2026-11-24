@@ -50126,3 +50126,18 @@ tarball has 6 entries, with `lib/` and `mid/` empty. Now it has 12,
 `mid/lib` stays out, and the unpacked tarball builds and runs with no
 git. Added to case `a_nested_copy_of_a_vendored_project_is_not_fetched`.
 
+### The build sweep behind sections 653 to 655
+
+`tool/sibling_sweep.py --build --old c0108e3` was run with ffd7be5's
+fmake over every sibling, from `git archive` copies with their
+submodules. **No tree regressed.**
+
+| result | trees |
+|---|---|
+| build | anti-avx, bbq-predictor, hembygd, hull, hydra, netcfgd, openmlx4, ossacli, qtkit, qtty, respec, situ, snurra, softkeys |
+| fail the same way with both fmakes | beerssh, fuzznet, fuzzypickles, hal9001, mstflint-4.22, raidcfgd, roc-toolkit, tde |
+
+openmlx4 joined the trees that build: section 653 is what lets its tests
+link. The sweep copies carry no `.git`, so sections 654 and 656 are not
+exercised by it. The fixtures in those sections are their evidence.
+
