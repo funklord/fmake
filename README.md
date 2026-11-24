@@ -231,6 +231,9 @@ it stops rather than building less: an unpacked archive carries
 would report the missing pieces as errors in your own sources.
 `--no-submodules` declines all of it.
 
+**A submodule of a submodule is fetched one level at a time**, so a
+nested copy of something your tree already vendors is never cloned.
+
 **A project vendored twice is built once, from the copy your tree
 chose.** When your tree vendors `qtty` and `fuzznet`, and `fuzznet`
 vendors its own `qtty`, both copies are in the tree and every symbol in

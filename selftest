@@ -41341,9 +41341,11 @@ def a_submodule_that_vendors_one_of_its_own_is_fetched_too(t):
 	which is what an unfetched submodule does every time it is not
 	noticed.
 
-	`--recursive` on both the question and the answer. It never moves a
-	pin: recursion is about depth, `--remote` is about advancing, and only
-	the second is refused."""
+	`--recursive` on the question, and since section 654 one level at a
+	time on the answer, so a nested copy of something the tree already
+	vendors is not cloned. It never moves a pin: depth is not
+	`--remote`, which is about advancing, and only the second is
+	refused."""
 	if not shutil.which("git"):
 		raise Skip("git not installed")
 	work = tempfile.mkdtemp(prefix="fmake-nested-")
@@ -41396,11 +41398,80 @@ def a_submodule_that_vendors_one_of_its_own_is_fetched_too(t):
 		      f"{r.stdout[-400:]}{r.stderr[-400:]}")
 		check("vendor/inner/deep.c" in r.stdout,
 		      f"the grandchild's source was never compiled, so the "
-		      f"recursive fetch did not happen: {r.stdout}")
+		      f"nested fetch did not happen: {r.stdout}")
 		got = subprocess.run([os.path.join(tree, "fresh")],
 		                     capture_output=True, text=True)
 		check(got.stdout.strip() == "7",
 		      f"the program does not run: {got.stdout!r}")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
+def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
+	"""Section 654. The leaf vendors one copy of each dependency at its
+	root and a consumer never fetches recursively (harmonization.md,
+	2026-11-24). `update --init --recursive' on `mid' cloned `mid/lib'
+	although the tree vendors `lib' itself, and section 651 then left the
+	clone out: a fetch of code nothing builds.
+
+	The control is `mid/deep', which nothing above it vendors: it is
+	fetched, a level after its parent, and linked."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	work = tempfile.mkdtemp(prefix="fmake-dup-sub-")
+	env = dict(os.environ, GIT_ALLOW_PROTOCOL="file")
+	allow = ["-c", "protocol.file.allow=always"]
+
+	def git(where, *a):
+		return subprocess.run(["git", "-C", where, *allow, *a],
+		                      capture_output=True, text=True)
+	try:
+		repos = {n: os.path.join(work, n)
+		         for n in ("lib", "deep", "mid", "top")}
+		for d in repos.values():
+			os.makedirs(d)
+			git(d, "init", "-q", ".")
+			git(d, "config", "user.email", "t@example.invalid")
+			git(d, "config", "user.name", "t")
+		for name, text in (("lib", "int lib_value(void){ return 42; }\n"),
+		                   ("deep", "int deep_value(void){ return 1; }\n")):
+			with open(os.path.join(repos[name], name + ".c"), "w") as fh:
+				fh.write(text)
+			git(repos[name], "add", "-A")
+			git(repos[name], "commit", "-qm", name)
+		with open(os.path.join(repos["mid"], "mid.c"), "w") as fh:
+			fh.write("int lib_value(void);\nint deep_value(void);\n"
+			         "int mid_value(void){ return lib_value() - 42"
+			         " + deep_value() - 1; }\n")
+		for sub in ("lib", "deep"):
+			if git(repos["mid"], "submodule", "add", "-q", repos[sub],
+			       sub).returncode != 0:
+				raise Skip("this git will not add a submodule over a "
+				           "local path")
+		git(repos["mid"], "add", "-A"); git(repos["mid"], "commit", "-qm", "m")
+		with open(os.path.join(repos["top"], "main.c"), "w") as fh:
+			fh.write("int mid_value(void);\n"
+			         "int main(void){ return mid_value(); }\n")
+		for sub in ("lib", "mid"):
+			git(repos["top"], "submodule", "add", "-q", repos[sub], sub)
+		git(repos["top"], "add", "-A"); git(repos["top"], "commit", "-qm", "t")
+
+		tree = os.path.join(work, "fresh")
+		subprocess.run(["git", *allow, "clone", "-q", repos["top"], tree],
+		               capture_output=True, text=True)
+		r = subprocess.run([FMAKE, "-C", tree], capture_output=True,
+		                   text=True, env=env)
+		check(r.returncode == 0,
+		      f"the tree does not build: {r.stdout[-600:]}{r.stderr[-400:]}")
+		check(not os.listdir(os.path.join(tree, "mid", "lib")),
+		      f"the nested copy of lib was fetched: {r.stdout}")
+		check("SUB mid/deep" in r.stdout
+		      and os.path.isfile(os.path.join(tree, "mid", "deep", "deep.c")),
+		      f"a nested submodule nothing above vendors was not fetched: "
+		      f"{r.stdout}")
+		check(subprocess.run([os.path.join(tree, "fresh")]).returncode == 0,
+		      "the program does not run")
 	finally:
 		shutil.rmtree(work, ignore_errors=True)
 

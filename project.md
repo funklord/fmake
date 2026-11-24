@@ -702,7 +702,8 @@ that had been green about nothing for five commits ·
 [650. --explain and --eject exit as the build does over a needless guess](#650---explain-and---eject-exit-as-the-build-does-over-a-needless-guess) ·
 [651. A project vendored twice is built from the copy the tree chose](#651-a-project-vendored-twice-is-built-from-the-copy-the-tree-chose) ·
 [652. Each project in the tree gets its own copy of a header](#652-each-project-in-the-tree-gets-its-own-copy-of-a-header) ·
-[653. Another program's stand-in for libc is its own](#653-another-programs-stand-in-for-libc-is-its-own)
+[653. Another program's stand-in for libc is its own](#653-another-programs-stand-in-for-libc-is-its-own) ·
+[654. A nested copy of a vendored project is not fetched](#654-a-nested-copy-of-a-vendored-project-is-not-fetched)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49997,4 +49998,49 @@ project-function advice as its control. Checked by hand (section 15):
   programs; c0108e3 refused on `nanosleep`. The one file that does not
   compile, `test/diff_layouts.c`, wants a `tools_layouts/` header the
   tree does not have, as section 647 said.
+
+## 654. A nested copy of a vendored project is not fetched
+
+harmonization.md gained a rule on 2026-11-24 (claude-guidelines
+f26d139): the program at the end of the chain vendors one copy of each
+dependency, flat at its root, and **a consumer never fetches
+recursively**. fmake's fetch ran `submodule update --init --recursive`
+on each parent, which cloned every nested copy along with it. Section
+651 then left those copies out of the build, so the clone was of code
+nothing builds.
+
+`fetch_submodules` now fetches one level at a time. It runs `update
+--init` with no `--recursive`, then asks `submodule status --recursive`
+again. Before each round it drops whatever `duplicate_checkouts` now
+calls a duplicate. A nested submodule that nothing above vendors is
+still fetched, one round after its parent; that is still needed
+(section 188). The reader's own `[project] exclude` decides whether a
+top copy counts, as in section 651.
+
+- **Termination.** A path is fetched at most once, so each round either
+  fetches something new or ends, and a tree declares finitely many
+  submodules.
+- **Dry run.** `-n` fetches nothing, so it prints only the first level's
+  commands.
+
+**Local addresses.** `repository_key` now keys an absolute path or a
+`file://` address by the path. A relative address under a local parent
+resolves against that path. Before, a local address had no key at all,
+so a tree whose submodules point at local paths had no duplicate
+detected, and section 651 did nothing for it. The fixture found this.
+
+**Not changed: the ejected builds.** Their fetch rule (section 647) is
+still `--recursive` on each top-level submodule. A duplicate it clones
+is left out of the compile, so what they build is right, only the clone
+is spare. Fixing that means a rule per nested submodule, each ordered
+after its parent, in both backends, so it is its own piece of work.
+
+Case `a_nested_copy_of_a_vendored_project_is_not_fetched`, with
+`mid/deep` as the control. Checked by hand (section 15): a fresh clone
+of the fixture builds and runs, `mid/lib` stays uninitialised, and a
+second build fetches nothing. 6c08467 fetches `mid/lib`, and because
+the addresses are local it does not leave it out either, so it refuses
+`lib_value` as defined twice. The two existing nested-fetch cases'
+shapes (three deep; a parent at its pin with an empty child) build with
+this.
 

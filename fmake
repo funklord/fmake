@@ -6789,7 +6789,7 @@ def repository_key(url, base=""):
     ossacli by SSH, every other row here is https). A relative address
     is relative to the repository that declares it, so it is resolved
     against `base', that declarer's own key; with no base it cannot be
-    compared and is "".
+    compared and is "". A local path, bare or `file://', is its own key.
     """
 	u = url.strip().rstrip("/")
 	if u.endswith(".git"):
@@ -6806,6 +6806,12 @@ def repository_key(url, base=""):
 			elif step not in (".", ""):
 				parts.append(step)
 		return "/".join(parts)
+	# A local repository: an absolute path, or file:// naming one. Its
+	# key is the path itself, which no host/path key can equal.
+	if u.startswith("file://"):
+		u = u[len("file://"):]
+	if u.startswith("/"):
+		return os.path.normpath(u)
 	m = re.match(r"^[\w.+-]+://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.*)$", u)
 	if not m:
 		m = re.match(r"^(?:[^@/:]*@)?([^/:]+):(?!//)(.*)$", u)
@@ -16274,7 +16280,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 	# scans as no sources rather than as something missing. See
 	# fetch_submodules.
 	if not args.no_submodules:
-		fetch_submodules(root, dry_run=bool(args.dry_run))
+		fetch_submodules(root, dry_run=bool(args.dry_run),
+		                 excluded=lambda p: exclude_by_pattern(conf, p))
 	# After the fetch, which may fill a nested copy, and before anything
 	# asks `exclude_by_pattern'. Asked with `implied_exclude' empty, so
 	# only the reader's own excludes take a top copy out of the running.
@@ -27990,7 +27997,7 @@ def submodules_to_fetch(root):
 	return out
 
 
-def fetch_submodules(root, dry_run=False):
+def fetch_submodules(root, dry_run=False, excluded=None):
 	"""Fetch what the tree vendors, before anything looks at the tree.
 
     Set by the copyright holder 2026-09-07 and written into
@@ -28019,7 +28026,20 @@ def fetch_submodules(root, dry_run=False):
     for an empty directory, and the reason a build that produces less has
     to stop rather than report.
     """
-	want = submodules_to_fetch(root)
+	# A nested checkout the tree already vendors higher up is not
+	# fetched (section 654): the leaf vendors one copy of each
+	# dependency at its root and a consumer never fetches recursively
+	# (harmonization.md, holder 2026-11-24). So one level at a time,
+	# asking after each which of the children now visible are
+	# duplicates, rather than `--recursive' on the parent, which would
+	# clone them along with it. `excluded' is the reader's own
+	# `[project] exclude', which decides whether a top copy counts.
+	def _wanted():
+		dups = duplicate_checkouts(root, excluded)
+		return [(p, why) for p, why in submodules_to_fetch(root)
+		        if not any(p == d or p.startswith(d + "/") for d in dups)]
+
+	want = _wanted()
 	if not want:
 		return
 	if not shutil.which("git"):
@@ -28040,28 +28060,37 @@ def fetch_submodules(root, dry_run=False):
 		      "archive' carries .gitmodules and none of the contents.\n"
 		      "Clone the repository, or build with --no-submodules and "
 		      "accept that what they contain will be missing.")
-	for path, why in want:
-		info(f"{CYAN('SUB')} {path} ({why})")
-		# Run where the pathspec means something: see submodule_owner.
-		where, spec = submodule_owner(root, path)
-		cmd = ["git", "-C", where, "submodule", "update", "--init",
-		       "--recursive", "--", spec]
+	# Terminates: a path is fetched at most once, so each round either
+	# fetches something new or ends, and a tree declares finitely many.
+	# A dry run fetches nothing, so it can see only the first level.
+	done = set()
+	while want:
+		for path, why in want:
+			done.add(path)
+			info(f"{CYAN('SUB')} {path} ({why})")
+			# Run where the pathspec means something: see submodule_owner.
+			where, spec = submodule_owner(root, path)
+			cmd = ["git", "-C", where, "submodule", "update", "--init",
+			       "--", spec]
+			if dry_run:
+				print(" ".join(shlex.quote(c) for c in cmd))
+				continue
+			try:
+				r = subprocess.run(cmd,
+				                   capture_output=True, text=True,
+				                   errors="replace", timeout=600)
+			except (OSError, subprocess.SubprocessError) as exc:
+				die(f"fetching the submodule {path} failed: {exc}")
+			if r.returncode != 0:
+				said = (r.stderr.strip() or r.stdout.strip()
+				        or f"git exited {r.returncode}")
+				die(f"fetching the submodule {path} failed:\n    {said}\n"
+				    f"A build that carried on here would compile whatever "
+				    f"is in the tree and report the missing pieces as "
+				    f"errors in your own sources.")
 		if dry_run:
-			print(" ".join(shlex.quote(c) for c in cmd))
-			continue
-		try:
-			r = subprocess.run(cmd,
-			                   capture_output=True, text=True,
-			                   errors="replace", timeout=600)
-		except (OSError, subprocess.SubprocessError) as exc:
-			die(f"fetching the submodule {path} failed: {exc}")
-		if r.returncode != 0:
-			said = (r.stderr.strip() or r.stdout.strip()
-			        or f"git exited {r.returncode}")
-			die(f"fetching the submodule {path} failed:\n    {said}\n"
-			    f"A build that carried on here would compile whatever is "
-			    f"in the tree and report the missing pieces as errors in "
-			    f"your own sources.")
+			return
+		want = [(p, w) for p, w in _wanted() if p not in done]
 
 
 def drop_superseded(root, hdrs, outs):
