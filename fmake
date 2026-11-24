@@ -21835,6 +21835,48 @@ EJECT_GENDIRS = ((MOC_DIR, "moc"), (UI_DIR, "ui"), (QRC_DIR, "qrc"),
                  (SITU_DIR, "situ"))
 
 
+def eject_submodules(root, conf):
+	"""[(path, parent, where, spec)] for each submodule an ejected build
+	fetches, every parent before its children.
+
+    One level at a time, as `fetch_submodules' does since section 654:
+    the ejected rule ran `update --init --recursive' on each top-level
+    submodule, which cloned a nested copy of something the tree vendors
+    higher up. So each nested submodule gets a rule of its own, after
+    its parent's, run where its pathspec means something (`where' and
+    `spec', from `submodule_owner', relative to the root), and the
+    duplicates section 651 found -- `conf.implied_exclude' -- get none.
+    Nested ones are read from the parents this checkout holds, which
+    fmake fetched before it ejected.
+    """
+	dups = tuple(getattr(conf, "implied_exclude", None) or ())
+	out, seen = [], set()
+	queue = [(p, None) for p in _gitmodule_paths(
+	    os.path.join(root, ".gitmodules"))]
+	while queue:
+		path, parent = queue.pop(0)
+		if path in seen or any(path == d or path.startswith(d + "/")
+		                       for d in dups):
+			continue
+		seen.add(path)
+		where, spec = submodule_owner(root, path)
+		out.append((path, parent, os.path.relpath(where, root), spec))
+		queue += [(os.path.normpath(os.path.join(path, c)), path)
+		          for c in _gitmodule_paths(
+		              os.path.join(root, path, ".gitmodules"))]
+	return out
+
+
+def innermost_submodule(rel, paths):
+	"""The deepest of `paths' holding `rel', or None."""
+	best = None
+	for p in paths:
+		if (rel == p or rel.startswith(p + "/")) and (
+		        best is None or len(p) > len(best)):
+			best = p
+	return best
+
+
 def _tool_units(gen_rules, targets, closures):
 	"""The sources of every target a generator runs.
 
@@ -22566,7 +22608,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# stopped on `*** [Makefile:66: my] Error 1', out of an --eject that
 	# had exited 0.
 	gen_srcs = (_tool_paths(moc, uic, rcc, gen_rules)
-	            + list(declared_submodules(root))
+	            + [r[0] for r in eject_submodules(root, conf)]
 	            # `-o out dir' is a path make cannot name either, and the
 	            # refusals below already know how to say so and where to
 	            # send the reader. Without it the emitted file split the
@@ -23299,12 +23341,13 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# fmake solves by fetching before it walks the tree, arriving here in
 	# the same shape. An order-only prerequisite that is already satisfied
 	# costs nothing.
-	subs = declared_submodules(root)
+	sub_rows = eject_submodules(root, conf)
+	subs = [r[0] for r in sub_rows]
 	if subs:
 		a("# ---- submodules " + "-" * 46)
 		a("")
 		_comma_said = False
-		for path in subs:
+		for path, parent, where, spec in sub_rows:
 			# The target is a Make path and the argument is a shell word,
 			# and they are quoted differently for that reason. What the
 			# whitelist above allows is safe in both, so this is the belt
@@ -23324,16 +23367,20 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# arguments; inside the nested `$(wildcard)' it does not.
 			_have = f"$(wildcard {path}/*)"
 			_say = shlex.quote('fetching submodule ' + path)
-			_get = shlex.quote(path)
-			if "," in path:
+			_get = shlex.quote(spec)
+			_where = shlex.quote(where)
+			if "," in path or "," in where:
 				if not _comma_said:
 					a("fmake_comma := ,")
 					_comma_said = True
 				_say = _say.replace(",", "$(fmake_comma)")
 				_get = _get.replace(",", "$(fmake_comma)")
-			a(f"{path}/.git:")
+				_where = _where.replace(",", "$(fmake_comma)")
+			# A nested one waits for its parent, which is what puts
+			# its `.gitmodules' there to be read.
+			a(f"{path}/.git:" + (f" | {parent}/.git" if parent else ""))
 			a(f"\t$(if {_have},,@echo {_say})")
-			a(f"\t$(if {_have},,git submodule update --init --recursive "
+			a(f"\t$(if {_have},,git -C {_where} submodule update --init "
 			  f"-- {_get})")
 			a("")
 			# A source inside the submodule is a prerequisite of its
@@ -23345,7 +23392,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 			# a source it compiles from one, it can. A rule with no
 			# recipe that waits for the fetch is the rule it lacked.
 			_inside = sorted(u.rel for u in every.values()
-			                 if u.rel.startswith(path + "/"))
+			                 if innermost_submodule(u.rel, subs) == path)
 			for _inner in _inside:
 				a(f"{_eject_src(_inner)}: | {path}/.git")
 			if _inside:
@@ -23938,7 +23985,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# colon -- and this is the one it cannot either, because the difficulty
 	# is downstream of the build file entirely.
 	nj_extra = (_tool_paths(moc, uic, rcc, gen_rules)
-	            + list(declared_submodules(root)))
+	            + [r[0] for r in eject_submodules(root, conf)])
 	_refuse_leading_dash(targets, closures, root, nj_extra)
 	_refuse_unnameable(targets, closures, root,
 	                 nj_extra + ([outdir] if outdir else []))
@@ -24375,7 +24422,8 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	# than for the ones inside the submodule: a file that INCLUDES from
 	# one is not under it, and ninja cannot know which until it has
 	# compiled the file that needs the fetch.
-	subs = declared_submodules(root)
+	sub_rows = eject_submodules(root, conf)
+	subs = [r[0] for r in sub_rows]
 	if subs:
 		a("rule submodule")
 		# `qpath' rather than `$path', because ninja shell-quotes $in and
@@ -24394,11 +24442,11 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 		# rule; ninja evaluates nothing at load time, so the check is the
 		# command's, and the stamp is what makes it run once.
 		a("  command = { test -n \"$$(ls -A $qpath 2>/dev/null)\" || "
-		  "git submodule update --init --recursive -- $qpath; } && "
+		  "git -C $qwhere submodule update --init -- $qspec; } && "
 		  "mkdir -p $qstampdir && touch $qstamp")
 		a("  description = SUB $path")
 		a("")
-		for path in subs:
+		for path, parent, where, spec in sub_rows:
 			# The sources this build takes from inside the submodule are
 			# named as outputs of the fetch, because ninja validates the
 			# whole graph when it loads the file: an input no edge
@@ -24407,7 +24455,7 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# when it reaches the rule, which is why the two backends
 			# needed different answers rather than the same one twice.
 			made = [_ninja(u.rel) for u in every.values()
-			        if u.rel == path or u.rel.startswith(path + "/")]
+			        if innermost_submodule(u.rel, subs) == path]
 			# The sources are phony edges on the stamp, not outputs of
 			# the fetch. ninja creates every output's directory before
 			# it runs an edge, so `kit/src/' existed when git came to
@@ -24415,9 +24463,14 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 			# empty: a fresh clone never fetched, with or without the
 			# stamp. A phony edge runs nothing and creates nothing, and
 			# still gives ninja a producer for the input it validates.
-			a(f"build {_ninja(_sub_stamp(path))}: submodule")
+			# A nested one waits for its parent's stamp: see
+			# eject_submodules.
+			a(f"build {_ninja(_sub_stamp(path))}: submodule"
+			  + (f" || {_ninja(_sub_stamp(parent))}" if parent else ""))
 			a(f"  path = {path}")
 			a(f"  qpath = {shlex.quote(path)}")
+			a(f"  qwhere = {shlex.quote(where)}")
+			a(f"  qspec = {shlex.quote(spec)}")
 			a(f"  qstamp = {shlex.quote(_sub_stamp(path))}")
 			a(f"  qstampdir = "
 			  f"{shlex.quote(os.path.dirname(_sub_stamp(path)))}")

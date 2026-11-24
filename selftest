@@ -41472,6 +41472,33 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 		      f"{r.stdout}")
 		check(subprocess.run([os.path.join(tree, "fresh")]).returncode == 0,
 		      "the program does not run")
+
+		# The ejected Makefile, on a clone it has never seen: the same
+		# two answers, from a rule per submodule, each after its parent.
+		if shutil.which("make"):
+			ej = subprocess.run([FMAKE, "-C", tree, "--eject", "make"],
+			                    capture_output=True, text=True, env=env)
+			check("--recursive" not in ej.stdout
+			      and "git -C mid submodule update --init -- deep"
+			      in ej.stdout,
+			      f"the ejected fetch is not a level at a time: "
+			      f"{ej.stdout}")
+			other = os.path.join(work, "other")
+			subprocess.run(["git", *allow, "clone", "-q", repos["top"],
+			                other], capture_output=True, text=True)
+			with open(os.path.join(other, "Makefile"), "w") as fh:
+				fh.write(ej.stdout)
+			mk = subprocess.run(
+			    ["make", "-C", other, "-j2"], capture_output=True,
+			    text=True, env=dict(env, GIT_CONFIG_COUNT="1",
+			                        GIT_CONFIG_KEY_0="protocol.file.allow",
+			                        GIT_CONFIG_VALUE_0="always"))
+			check(mk.returncode == 0
+			      and not os.listdir(os.path.join(other, "mid", "lib"))
+			      and os.path.isfile(os.path.join(other, "mid", "deep",
+			                                      "deep.c")),
+			      f"the ejected build fetched the duplicate or missed the "
+			      f"nested one: {mk.stdout}{mk.stderr}")
 	finally:
 		shutil.rmtree(work, ignore_errors=True)
 

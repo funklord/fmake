@@ -50029,16 +50029,28 @@ resolves against that path. Before, a local address had no key at all,
 so a tree whose submodules point at local paths had no duplicate
 detected, and section 651 did nothing for it. The fixture found this.
 
-**Not changed: the ejected builds.** Their fetch rule (section 647) is
-still `--recursive` on each top-level submodule. A duplicate it clones
-is left out of the compile, so what they build is right, only the clone
-is spare. Fixing that means a rule per nested submodule, each ordered
-after its parent, in both backends, so it is its own piece of work.
+**The ejected builds too.** Their fetch rule (section 647) ran `update
+--init --recursive` on each top-level submodule. `eject_submodules` now
+lists every submodule an ejected build fetches, parents first, with the
+duplicates in `conf.implied_exclude` dropped. Each one gets a rule of its
+own: in make, `mid/deep/.git: | mid/.git` with `git -C mid submodule
+update --init -- deep`; in ninja, a stamp edge ordered `||` after its
+parent's stamp. A source waits for the innermost submodule that holds
+it. The paths in the nested rules go through the same MAKE_SAFE and
+ninja refusals as the top-level ones. The nested submodules are read
+from the parents in the checkout being ejected, which fmake has just
+fetched.
 
 Case `a_nested_copy_of_a_vendored_project_is_not_fetched`, with
-`mid/deep` as the control. Checked by hand (section 15): a fresh clone
-of the fixture builds and runs, `mid/lib` stays uninitialised, and a
-second build fetches nothing. 6c08467 fetches `mid/lib`, and because
+`mid/deep` as the control, and an ejected Makefile built on a clone it
+has never seen. Checked by hand (section 15): a fresh clone of the
+fixture builds and runs, `mid/lib` stays uninitialised, and a second
+build fetches nothing. On another fresh clone, the ejected Makefile at
+`-j2` and the ejected `build.ninja` each fetch `mid` and `mid/deep`,
+leave `mid/lib` alone, and build and run, and a second ninja does
+nothing. c7b9110's ejected files clone `mid/lib`. On hull's archive
+copy, which has no `.git`, both ejected files build without running
+git, as in section 647. 6c08467 fetches `mid/lib`, and because
 the addresses are local it does not leave it out either, so it refuses
 `lib_value` as defined twice. The two existing nested-fetch cases'
 shapes (three deep; a parent at its pin with an empty child) build with
