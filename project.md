@@ -703,7 +703,8 @@ that had been green about nothing for five commits ·
 [651. A project vendored twice is built from the copy the tree chose](#651-a-project-vendored-twice-is-built-from-the-copy-the-tree-chose) ·
 [652. Each project in the tree gets its own copy of a header](#652-each-project-in-the-tree-gets-its-own-copy-of-a-header) ·
 [653. Another program's stand-in for libc is its own](#653-another-programs-stand-in-for-libc-is-its-own) ·
-[654. A nested copy of a vendored project is not fetched](#654-a-nested-copy-of-a-vendored-project-is-not-fetched)
+[654. A nested copy of a vendored project is not fetched](#654-a-nested-copy-of-a-vendored-project-is-not-fetched) ·
+[655. A widened file gets the include path its own includes need](#655-a-widened-file-gets-the-include-path-its-own-includes-need)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -49912,12 +49913,11 @@ pieces make fmake's one build do the same.
 - Reordering the shared path alone. This would give llama.cpp's file
   hembygd's copy.
 
-**Known limit, unchanged (section 68).** A unit that joins only by
-widening contributes no `-I`, so its include is answered by whatever the
-path already holds. If that unit is vendored and its header clashes, it
-gets the other project's copy without a word. Measured in the case's
-fixture before `big.h` was added, it printed `1 1`. Reaching the unit
-through a header is what puts its directory on the path.
+**Known limit (section 68), closed by section 655.** A unit that joined
+only by widening contributed no `-I`, so its include was answered by
+whatever the path already held. If that unit was vendored and its header
+clashed, it got the other project's copy without a word. In the case's
+fixture before `big.h` was added, the program printed `1 1`.
 
 The case is `a_projects_own_header_wins_over_a_vendored_copy`, and
 `android/log.h` is its control. Checked by hand: e15988a fails to build
@@ -50055,4 +50055,43 @@ the addresses are local it does not leave it out either, so it refuses
 `lib_value` as defined twice. The two existing nested-fetch cases'
 shapes (three deep; a parent at its pin with an empty child) build with
 this.
+
+## 655. A widened file gets the include path its own includes need
+
+The shared include path is fixed before widening adds a file, so a
+widened file's includes put nothing on it. Section 68 recorded this as a
+known limit, and the beerssh case there failed to compile. Section 652
+made it worse: a widened vendored file whose header clashes with another
+project's directory on the path compiled against that project's copy,
+with nothing said.
+
+`widened_incdirs` walks each unit's own include graph, noting into a
+scratch set so the shared record of why each directory is on the path
+stays as the build reported it. What the unit needs and the shared path
+lacks goes on the unit's own line: `-I` for each such directory, after
+the shared ones, and `-iquote` as well where that directory clashes with
+an earlier directory of another checkout, as piece 3 of section 652
+does. An excluded directory stays excluded. The flags reach both ejected
+builds and `compile_commands.json` through the unit's own flags.
+
+**Asked of every unit, not only on the widening path.** The first
+version keyed it on the widening path and was measured unstable. A file
+widened in one build is in the pool from the start of the next, so it
+lost the flag on the second build, failed, was widened again on the
+third, and passed: the builds alternated. For a unit the shared path
+was built from, the walk finds nothing missing and adds nothing. On
+hembygd, the largest tree here, the plan was not slower (49 s against
+61 s for c7b9110 on a loaded machine), and not one compile line changed.
+
+Case `a_widened_file_gets_the_include_path_its_own_includes_need`. It
+covers both shapes (`<vterm.h>` from `vt/include`, and `big`'s
+`ma/ma.h`), and its second and third builds must both be up to date.
+Checked by hand (section 15):
+
+- **The case's shape** builds, runs, and is up to date on the next two
+  builds.
+- **c7b9110** fails to compile `vterm.c`.
+- **With the walk removed**, the same failure.
+- **Without the `-iquote`**, `big` gets the tree's copy, and the program
+  exits 255 where it should exit 0.
 

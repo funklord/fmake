@@ -18447,6 +18447,59 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 
 	incflags, proposed = list(base_incflags), {}
 
+	def widened_incdirs(u):
+		"""Per-unit include flags for a unit the shared path does not serve.
+
+        Section 655. The shared path is fixed before widening adds a
+        unit, so a widened file's includes put nothing on it (section
+        68's known limit): where its header was elsewhere on the path
+        the compile failed with advice, and where another project's
+        header of the same name was on it -- section 652's clash -- the
+        file compiled against the wrong copy without a word. So its own
+        include graph is walked here, and what it needs that the shared
+        path lacks goes on its own line: `-I' for each such directory,
+        after the shared ones, and `-iquote' as well where one clashes
+        with an earlier directory of another checkout, as piece 3 of
+        section 652 does for the shared ones.
+
+        Asked of every unit, not only on the widening path: a file
+        widened in one build is in the pool from the start of the next,
+        and keyed on how it joined, its flag came and went on alternate
+        builds -- measured, the second build failed and the third
+        passed. For a unit the shared path was built from, the walk
+        finds nothing missing and adds nothing.
+
+        The walk notes into a scratch set, so the shared record of why
+        each directory is on the path is left as the build reported it.
+        """
+		saved = proj.incdirs, proj.incdir_why
+		proj.incdirs, proj.incdir_why = set(), dict(saved[1])
+		try:
+			proj.reachable_headers([u.rel])
+			noted = proj.incdirs
+		finally:
+			proj.incdirs, proj.incdir_why = saved
+		kept = set(kept_incdirs)
+		extra = sorted(d for d in noted
+		               if d not in kept and d != "."
+		               and not incdir_excluded(d))
+		if not extra:
+			return []
+		mine = in_vendor(u.rel, vendored)
+		out = ["-I" + os.path.join(root, d) for d in extra]
+		for d in extra:
+			if in_vendor(d, vendored) != mine:
+				continue
+			names = [os.path.relpath(h, d) for h in hdrs
+			         if h.startswith(d + "/")]
+			if any(in_vendor(e, vendored) != mine
+			       and os.path.isfile(os.path.join(root, e, r))
+			       for r in names for e in kept_incdirs):
+				out.append("-iquote" + os.path.join(root, d))
+		vinfo(f"widening: {u.rel} gets its own "
+		      + ", ".join(f.replace(root + os.sep, "") for f in out))
+		return out
+
 	def own_flags(u):
 		"""The compile flags a TU asked for, plus any fmake owes it.
 
@@ -18499,7 +18552,8 @@ def build_with(args, root, state, cache, _bootstrapping, _after_mirage):
 		return (own_quote.get(in_vendor(u.rel, vendored), [])
 		        + dir_flags_for(u.rel, dir_confs)
 		        + unit_cflags(u, pkg, hdr_store, pkg_sig)
-		        + moc_own.get(u.rel, []))
+		        + moc_own.get(u.rel, [])
+		        + widened_incdirs(u))
 
 	for rel in sorted(units):
 		units[rel].own = own_flags(units[rel])

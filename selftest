@@ -10108,8 +10108,8 @@ def a_projects_own_header_wins_over_a_vendored_copy(t):
 	directories first with -iquote. MA_WHO says which copy each file got.
 
 	`big' is reached through its header, so its include is walked before
-	the path is fixed; a unit that joins only by symbol contributes no -I
-	(section 68), which this does not change.
+	the path is fixed; a unit that joins only by symbol is section 655's
+	case.
 
 	The control is `android/log.h', which no `log.h' here carries the
 	path of: the includer's own `common/log.h' must not win it over the
@@ -10219,6 +10219,47 @@ def another_programs_stand_in_for_libc_is_not_offered(t):
 	check("test_user links test/helper_prog.c, which roots helper_prog"
 	      in out,
 	      f"a project function beside another main() lost its advice: {out}")
+
+
+@case
+def a_widened_file_gets_the_include_path_its_own_includes_need(t):
+	"""Section 655, closing section 68's known limit. The shared include
+	path is fixed before widening adds a file, so a widened file's
+	includes put nothing on it. `vt/src/vterm.c', reached only by the
+	symbol main() calls, includes <vterm.h> from `vt/include' and did
+	not compile -- the shape beerssh met. And where another project's
+	header of the same name was on the path, a widened vendored file
+	compiled against that copy without a word: `big/src/big.c' got the
+	tree's `ma/ma.h' (MA_WHO 1) where its own says 2.
+
+	Each widened file walks its own includes and gets what the shared
+	path lacks on its own line. The second and third builds are the
+	control: keyed on how the file joined rather than on what it is, the
+	flag came and went on alternate builds, so the third must be as up
+	to date as the second."""
+	t.write("vt/include/vterm.h", "int vt_value(void);\n")
+	t.write("vt/src/vterm.c", "#include <vterm.h>\n"
+	        "int vt_value(void) { return 0; }\n")
+	t.write(".gitmodules", '[submodule "big"]\n\tpath = big\n'
+	        "\turl = https://example.invalid/o/big.git\n")
+	t.write("vendor/ma/ma.h", "#define MA_WHO 1\n")
+	t.write("big/vendor/ma/ma.h", "#define MA_WHO 2\n")
+	t.write("big/src/big.c", '#include "ma/ma.h"\n'
+	        "int big_who(void) { return MA_WHO; }\n")
+	t.write("main.c", '#include "ma/ma.h"\nint vt_value(void);\n'
+	        "int big_who(void);\n"
+	        "int main(void) { return vt_value() + MA_WHO * 10"
+	        " + big_who() - 12; }\n")
+	r = t.fmake()
+	check(r.returncode == 0,
+	      f"a widened file's include was on no path: {r.stdout}{r.stderr}")
+	check(t.run(os.path.basename(t.dir)).returncode == 0,
+	      "a widened vendored file compiled against another project's copy")
+	for n in (2, 3):
+		r = t.fmake()
+		check(r.returncode == 0 and "up to date" in r.stdout,
+		      f"build {n} did not find the tree up to date: "
+		      f"{r.stdout}{r.stderr}")
 
 
 @case
