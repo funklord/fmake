@@ -49,6 +49,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import tarfile
 import sys
 import tempfile
 import threading
@@ -41540,6 +41541,34 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 			                                      "deep.c")),
 			      f"the ejected build fetched the duplicate or missed the "
 			      f"nested one: {mk.stdout}{mk.stderr}")
+
+		# And the release's source tarball (section 656): it carried
+		# `lib/' and `mid/' empty, so it could not build anywhere.
+		with open(os.path.join(tree, "VERSION"), "w") as fh:
+			fh.write("1.0\n")
+		git(tree, "add", "VERSION"); git(tree, "commit", "-qm", "v")
+		rel = subprocess.run([FMAKE, "-C", tree, "--release"],
+		                     capture_output=True, text=True, env=env)
+		check(rel.returncode == 0,
+		      f"--release failed: {rel.stdout}{rel.stderr}")
+		with tarfile.open(os.path.join(tree, "release",
+		                               "fresh-1.0.tar.gz")) as tf:
+			names = set(tf.getnames())
+			check({"fresh-1.0/lib/lib.c", "fresh-1.0/mid/deep/deep.c"}
+			      <= names and "fresh-1.0/mid/lib/lib.c" not in names,
+			      f"the source tarball's submodules are wrong: "
+			      f"{sorted(names)}")
+			unpacked = os.path.join(work, "unpacked")
+			# `filter' exists from 3.11.4 and 3.12; fmake runs on 3.11.
+			if hasattr(tarfile, "data_filter"):
+				tf.extractall(unpacked, filter="data")
+			else:
+				tf.extractall(unpacked)
+		src = os.path.join(unpacked, "fresh-1.0")
+		b = subprocess.run([FMAKE, "-C", src], capture_output=True,
+		                   text=True, env=env)
+		check(b.returncode == 0,
+		      f"the source tarball does not build: {b.stdout}{b.stderr}")
 	finally:
 		shutil.rmtree(work, ignore_errors=True)
 

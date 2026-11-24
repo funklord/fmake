@@ -109,6 +109,7 @@ import copy
 import datetime
 import email.utils
 import hashlib
+import io
 import itertools
 import json
 import fnmatch
@@ -27416,6 +27417,62 @@ def _html(text):
 	        .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+def _write_source_tarball(root, conf, prefix, dest):
+	"""`git archive' of HEAD, with what each submodule's gitlink pins.
+
+    Section 656. `git archive' carries a submodule as an empty
+    directory, so a vendoring tree's source tarball could not build
+    anywhere: unpacked it is not a git checkout, so nothing can fetch
+    into it, and the .deb this release builds from that same tarball
+    would compile less or stop. So each submodule an ejected build
+    would fetch -- every level, the duplicates of section 651 left out,
+    `eject_submodules' -- goes in at the commit its parent's tree
+    names, read with `ls-tree' rather than trusted from the checkout's
+    HEAD. One gzip of one tar: concatenated gzip members are a valid
+    gzip and not a valid tar, whose reader stops at the first archive's
+    end. An unfetched submodule refuses the release, naming it.
+    """
+	parts = []
+
+	def _archive(where, rev, sub_prefix):
+		r = subprocess.run(["git", "-C", where, "archive", "--format=tar",
+		                    f"--prefix={sub_prefix}", rev],
+		                   capture_output=True)
+		if r.returncode != 0:
+			die(f"git archive failed in {_rel(where, root)}: "
+			    f"{r.stderr.decode(errors='replace').strip()}")
+		parts.append(r.stdout)
+
+	_archive(root, "HEAD", prefix + "/")
+	for path, _parent, where, spec in eject_submodules(root, conf):
+		ls = subprocess.run(["git", "-C", os.path.join(root, where),
+		                     "ls-tree", "HEAD", "--", spec],
+		                    capture_output=True, text=True)
+		fields = ls.stdout.split()
+		if ls.returncode != 0 or len(fields) < 3 or fields[1] != "commit":
+			die(f"{path} is declared in .gitmodules and its parent's HEAD "
+			    f"pins no commit for it, so the source tarball cannot "
+			    f"carry it")
+		if not os.path.exists(os.path.join(root, path, ".git")):
+			die(f"{path} is not fetched, so the source tarball cannot "
+			    f"carry it: `git submodule update --init -- {path}', or "
+			    f"build once, which fetches it")
+		_archive(os.path.join(root, path), fields[2],
+		         f"{prefix}/{path}/")
+	# A submodule's directory is in its parent's archive and its own, so
+	# each name goes in once.
+	seen = set()
+	with tarfile.open(dest, "w:gz") as out_tar:
+		for blob in parts:
+			with tarfile.open(fileobj=io.BytesIO(blob)) as part:
+				for member in part:
+					if member.name in seen:
+						continue
+					seen.add(member.name)
+					out_tar.addfile(member, part.extractfile(member)
+					                if member.isfile() else None)
+
+
 def do_release(targets, closures, root, outdir, conf, cfg, args):
 	"""Write release/ with every artifact this tree can produce, and a page.
 
@@ -27460,12 +27517,8 @@ def do_release(targets, closures, root, outdir, conf, cfg, args):
 
 	# 1. the source
 	src_tar = f"{name}-{version}.tar.gz"
-	r = subprocess.run(["git", "-C", root, "archive", "--format=tar.gz",
-	                    f"--prefix={name}-{version}/",
-	                    "-o", os.path.join(out, src_tar), "HEAD"],
-	                   capture_output=True, text=True)
-	if r.returncode != 0:
-		die(f"git archive failed: {r.stderr.strip()}")
+	_write_source_tarball(root, conf, f"{name}-{version}",
+	                      os.path.join(out, src_tar))
 	made.append((src_tar, "source"))
 	info(f"source: {src_tar}")
 

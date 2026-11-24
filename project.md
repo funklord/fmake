@@ -704,7 +704,8 @@ that had been green about nothing for five commits ·
 [652. Each project in the tree gets its own copy of a header](#652-each-project-in-the-tree-gets-its-own-copy-of-a-header) ·
 [653. Another program's stand-in for libc is its own](#653-another-programs-stand-in-for-libc-is-its-own) ·
 [654. A nested copy of a vendored project is not fetched](#654-a-nested-copy-of-a-vendored-project-is-not-fetched) ·
-[655. A widened file gets the include path its own includes need](#655-a-widened-file-gets-the-include-path-its-own-includes-need)
+[655. A widened file gets the include path its own includes need](#655-a-widened-file-gets-the-include-path-its-own-includes-need) ·
+[656. A release's source tarball carries the submodules](#656-a-releases-source-tarball-carries-the-submodules)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -50094,4 +50095,34 @@ Checked by hand (section 15):
 - **With the walk removed**, the same failure.
 - **Without the `-iquote`**, `big` gets the tree's copy, and the program
   exits 255 where it should exit 0.
+
+## 656. A release's source tarball carries the submodules
+
+Found by deriving a lens from section 654: what else takes a whole
+repository where the build needs its parts? The release's source tarball
+was `git archive HEAD`, which carries a submodule as an empty directory.
+So a vendoring tree's source release could not build anywhere. Unpacked,
+it is not a git checkout, so nothing can fetch into it (fmake refuses, as
+section 647's message says). The `.deb` that `--release` builds from
+that same tarball would have stopped the same way. This holds for every
+tree here that vendors a sibling.
+
+`_write_source_tarball` archives HEAD, then each submodule that
+`eject_submodules` lists: every level, with section 651's duplicates
+left out. Each one goes in at the commit its parent's tree pins, read
+with `ls-tree` rather than taken from the checkout's HEAD. The release's
+dirty check already refuses a submodule moved off its pin.
+
+- **One tar.** The parts are merged into one gzip of one tar, each name
+  once. Concatenated gzip members are valid gzip but not a valid tar,
+  whose reader stops at the end of the first archive.
+- **Unfetched.** A submodule that is declared but not fetched refuses the
+  release, naming it. Its parent's tree pinning no commit refuses it too.
+- **No submodules.** The tarball has the same contents as before. Its
+  bytes differ, since Python writes the gzip, and nothing compares them.
+
+Checked by hand (section 15) on the section 654 fixture. c7b9110's
+tarball has 6 entries, with `lib/` and `mid/` empty. Now it has 12,
+`mid/lib` stays out, and the unpacked tarball builds and runs with no
+git. Added to case `a_nested_copy_of_a_vendored_project_is_not_fetched`.
 
