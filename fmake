@@ -6822,7 +6822,8 @@ def repository_key(url, base=""):
 
 
 def duplicate_checkouts(root, excluded=None):
-	"""{nested path: why} for each checkout this tree already vendors higher.
+	"""{nested path: why} for each checkout this tree already vendors
+	higher, and for each one beside them that the tree does not build.
 
     Section 651, the holder's word on section 646's first proposal.
     fuzzypickles vendors fuzznet and qtty, and fuzznet vendors qtty too:
@@ -6837,6 +6838,18 @@ def duplicate_checkouts(root, excluded=None):
     excludes it has chosen the nested copy, and gets that. Two copies at
     one depth are left alone -- neither is the tree's choice over the
     other, and fmake will not guess (section 3).
+
+    **And the rest of a parent's submodules, once the tree has taken one
+    of them over** (section 660). The leaf vendors every dependency it
+    compiles, flat at its root (harmonization.md, holder 2026-11-24), so
+    a parent one of whose children the tree vendors higher up is a
+    parent whose dependencies the tree builds from its own copies; a
+    child of it the tree does not vendor is one it does not build.
+    Reported from raidcfgd, which vendors fuzznet's monocypher, flog and
+    qtty at its root: fmake still fetched `fuzznet/quirc' and
+    `fuzznet/thorvg', which nothing there compiles, and six of the seven
+    files it reported as not compiling were ThorVG's. A parent none of
+    whose children is taken over keeps them all (section 188).
     """
 	rows, queue = [], [(0, "", "", r) for r in
 	                   _gitmodule_rows(os.path.join(root, ".gitmodules"))]
@@ -6848,7 +6861,7 @@ def duplicate_checkouts(root, excluded=None):
 		depth, parent, parent_key, (rel, url) = queue.pop(0)
 		path = os.path.normpath(os.path.join(parent, rel))
 		key = repository_key(url, parent_key)
-		rows.append((depth, path, key))
+		rows.append((depth, path, key, parent))
 		real = os.path.realpath(os.path.join(root, path))
 		if real in seen:
 			continue
@@ -6863,10 +6876,10 @@ def duplicate_checkouts(root, excluded=None):
 			return False
 
 	out = {}
-	for depth, path, key in rows:
+	for depth, path, key, _parent in rows:
 		if not key or depth == 0:
 			continue
-		tops = sorted((d, p) for d, p, k in rows
+		tops = sorted((d, p) for d, p, k, _ in rows
 		              if k == key and d < depth
 		              and not path.startswith(p + "/")
 		              and not p.startswith(path + "/")
@@ -6875,6 +6888,17 @@ def duplicate_checkouts(root, excluded=None):
 		if tops:
 			out[path] = (f"a second checkout of {key}, which this tree "
 			             f"vendors at {tops[0][1]}")
+	dups = set(out)
+	for depth, path, key, parent in rows:
+		if depth == 0 or path in dups:
+			continue
+		taken = sorted(p for _d, p, _k, q in rows
+		               if q == parent and p in dups)
+		if taken:
+			out[path] = (f"a submodule of {parent} this tree does not "
+			             f"vendor at its root, where it vendors "
+			             f"{parent}'s other dependencies ({taken[0]} "
+			             f"among them), so nothing here builds it")
 	# A duplicate inside a duplicate is said once, by its outermost.
 	return {p: w for p, w in out.items()
 	        if not any(p.startswith(q + "/") for q in out)}

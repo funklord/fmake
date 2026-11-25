@@ -708,7 +708,8 @@ that had been green about nothing for five commits ·
 [656. A release's source tarball carries the submodules](#656-a-releases-source-tarball-carries-the-submodules) ·
 [657. A failed guess is tried again once what linked in its place has gone](#657-a-failed-guess-is-tried-again-once-what-linked-in-its-place-has-gone) ·
 [658. The suite on eaafd5e, and the six failures that were its own](#658-the-suite-on-eaafd5e-and-the-six-failures-that-were-its-own) ·
-[659. An ejected build fetches one submodule at a time](#659-an-ejected-build-fetches-one-submodule-at-a-time)
+[659. An ejected build fetches one submodule at a time](#659-an-ejected-build-fetches-one-submodule-at-a-time) ·
+[660. A dependency's other submodules are not fetched once the tree took one over](#660-a-dependencys-other-submodules-are-not-fetched-once-the-tree-took-one-over)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -50248,4 +50249,57 @@ chain and the pool, since one passing build of a race shows nothing,
 and then builds a fresh clone at `-j8` with each backend. Checked by
 hand (section 15): with this fmake both ejected files carry the order
 and build; with 02e1b08 neither does, and its Makefile fails at `-j8`.
+
+## 660. A dependency's other submodules are not fetched once the tree took one over
+
+Reported from raidcfgd (inbox 20261124T2320Z). Under the rule *the leaf
+decides: one copy of each dependency, at the top* (harmonization.md,
+claude-guidelines f26d139), raidcfgd vendors monocypher, flog and qtty
+at its root and never fetches fuzznet's own submodules. Section 654
+left fuzznet's copies of those three unfetched. It still fetched
+`fuzznet/quirc` and `fuzznet/thorvg`, which raidcfgd does not vendor
+and nothing there compiles, and six of the seven files fmake reported
+as not compiling were ThorVG's.
+
+**The decision, fmake's to make:** a nested submodule is not fetched,
+and is left out of the build if present, when the tree vendors at its
+root one of its parent's other submodules. The rule says the leaf
+vendors *every* dependency it compiles. A tree that has taken over one
+of a parent's dependencies follows it for that parent, so a child of
+that parent which the tree does not vendor is one it does not build. A
+parent none of whose children the tree took over keeps all of them, as
+section 188 needs. That is the `--recursive` convention of a tree that
+predates the rule, or one outside this workspace.
+
+`duplicate_checkouts` returns these beside the duplicates, with their
+own reason. Everything that already reads it follows: the fetch, the
+ejected fetch rules, the release tarball (section 656) and the build's
+`[project] exclude`. A copy already fetched, as in raidcfgd's own
+checkout, is named `is left out` once per build, as a duplicate is.
+
+**Rejected:**
+- **Deciding per child from what the build reaches.** An unfetched
+  directory has nothing to read, so whether a parent's file needs it
+  cannot be known before fetching it, and fetching to find out is the
+  fault.
+- **Never fetching a nested submodule.** That breaks section 188's
+  trees, where no copy is at the root.
+
+**The cost:** a tree that vendors one of a parent's dependencies at its
+root for its own use, and leans on the parent's nested copy of another,
+now builds without the second. It stops on a missing header in the
+parent's file. The remedy is the rule's: vendor it at the root.
+
+Case `a_nested_copy_of_a_vendored_project_is_not_fetched` gains
+`mid/extra`, which does not compile. Its control moves to `side/deep`,
+under a parent with no dependency taken over. Before, `mid/deep` sat
+beside the duplicate `mid/lib` and was fetched, which is now the shape
+declined. Checked by hand (section 15): with this fmake, a fresh clone
+leaves `mid/extra` empty, builds and runs; the ejected Makefile and the
+release tarball leave it out; and a clone with it already fetched names
+it as left out. 3b0b224 fetches, ejects and packs it. On a fresh local
+clone of raidcfgd at 443871c, `fuzznet/quirc` and `fuzznet/thorvg` stay
+empty. One file fails to compile, fuzznet's `node/daemon.c`, where
+there were seven. Ten programs are built and raidcfgd is not, as
+raidcfgd's README says.
 

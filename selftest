@@ -41495,8 +41495,17 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 	although the tree vendors `lib' itself, and section 651 then left the
 	clone out: a fetch of code nothing builds.
 
-	The control is `mid/deep', which nothing above it vendors: it is
-	fetched, a level after its parent, and linked."""
+	Nor `mid/extra' (section 660), which the tree does not vendor at all:
+	having taken one of mid's dependencies over, it builds mid's
+	dependencies from its own copies, so mid's others are not built
+	here. Reported from raidcfgd, which vendors fuzznet's monocypher,
+	flog and qtty and had fuzznet's quirc and ThorVG cloned and
+	compiled. `extra.c' does not compile, so a fetch that slipped
+	through shows.
+
+	The control is `side/deep': `side' has no dependency the tree
+	took over, so its child is fetched, a level after its parent, and
+	linked (section 188)."""
 	if not shutil.which("git"):
 		raise Skip("git not installed")
 	work = tempfile.mkdtemp(prefix="fmake-dup-sub-")
@@ -41508,32 +41517,40 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 		                      capture_output=True, text=True)
 	try:
 		repos = {n: os.path.join(work, n)
-		         for n in ("lib", "deep", "mid", "top")}
+		         for n in ("lib", "deep", "extra", "mid", "side", "top")}
 		for d in repos.values():
 			os.makedirs(d)
 			git(d, "init", "-q", ".")
 			git(d, "config", "user.email", "t@example.invalid")
 			git(d, "config", "user.name", "t")
 		for name, text in (("lib", "int lib_value(void){ return 42; }\n"),
-		                   ("deep", "int deep_value(void){ return 1; }\n")):
+		                   ("deep", "int deep_value(void){ return 1; }\n"),
+		                   ("extra", "#include <no_such_header_here.h>\n"
+		                             "int extra_value(void){ return 0; }\n")):
 			with open(os.path.join(repos[name], name + ".c"), "w") as fh:
 				fh.write(text)
 			git(repos[name], "add", "-A")
 			git(repos[name], "commit", "-qm", name)
 		with open(os.path.join(repos["mid"], "mid.c"), "w") as fh:
-			fh.write("int lib_value(void);\nint deep_value(void);\n"
-			         "int mid_value(void){ return lib_value() - 42"
-			         " + deep_value() - 1; }\n")
-		for sub in ("lib", "deep"):
-			if git(repos["mid"], "submodule", "add", "-q", repos[sub],
+			fh.write("int lib_value(void);\n"
+			         "int mid_value(void){ return lib_value() - 42; }\n")
+		with open(os.path.join(repos["side"], "side.c"), "w") as fh:
+			fh.write("int deep_value(void);\n"
+			         "int side_value(void){ return deep_value() - 1; }\n")
+		for parent, sub in (("mid", "lib"), ("mid", "extra"),
+		                    ("side", "deep")):
+			if git(repos[parent], "submodule", "add", "-q", repos[sub],
 			       sub).returncode != 0:
 				raise Skip("this git will not add a submodule over a "
 				           "local path")
-		git(repos["mid"], "add", "-A"); git(repos["mid"], "commit", "-qm", "m")
+		for parent in ("mid", "side"):
+			git(repos[parent], "add", "-A")
+			git(repos[parent], "commit", "-qm", parent)
 		with open(os.path.join(repos["top"], "main.c"), "w") as fh:
-			fh.write("int mid_value(void);\n"
-			         "int main(void){ return mid_value(); }\n")
-		for sub in ("lib", "mid"):
+			fh.write("int mid_value(void);\nint side_value(void);\n"
+			         "int main(void){ return mid_value()"
+			         " + side_value(); }\n")
+		for sub in ("lib", "mid", "side"):
 			git(repos["top"], "submodule", "add", "-q", repos[sub], sub)
 		git(repos["top"], "add", "-A"); git(repos["top"], "commit", "-qm", "t")
 
@@ -41546,8 +41563,12 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 		      f"the tree does not build: {r.stdout[-600:]}{r.stderr[-400:]}")
 		check(not os.listdir(os.path.join(tree, "mid", "lib")),
 		      f"the nested copy of lib was fetched: {r.stdout}")
-		check("SUB mid/deep" in r.stdout
-		      and os.path.isfile(os.path.join(tree, "mid", "deep", "deep.c")),
+		check(not os.listdir(os.path.join(tree, "mid", "extra")),
+		      f"mid's dependency the tree does not build was fetched: "
+		      f"{r.stdout}")
+		check("SUB side/deep" in r.stdout
+		      and os.path.isfile(os.path.join(tree, "side", "deep",
+		                                      "deep.c")),
 		      f"a nested submodule nothing above vendors was not fetched: "
 		      f"{r.stdout}")
 		check(subprocess.run([os.path.join(tree, "fresh")]).returncode == 0,
@@ -41559,8 +41580,9 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 			ej = subprocess.run([FMAKE, "-C", tree, "--eject", "make"],
 			                    capture_output=True, text=True, env=env)
 			check("--recursive" not in ej.stdout
-			      and "git -C mid submodule update --init -- deep"
-			      in ej.stdout,
+			      and "git -C side submodule update --init -- deep"
+			      in ej.stdout
+			      and "update --init -- extra" not in ej.stdout,
 			      f"the ejected fetch is not a level at a time: "
 			      f"{ej.stdout}")
 			other = os.path.join(work, "other")
@@ -41575,7 +41597,8 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 			                        GIT_CONFIG_VALUE_0="always"))
 			check(mk.returncode == 0
 			      and not os.listdir(os.path.join(other, "mid", "lib"))
-			      and os.path.isfile(os.path.join(other, "mid", "deep",
+			      and not os.listdir(os.path.join(other, "mid", "extra"))
+			      and os.path.isfile(os.path.join(other, "side", "deep",
 			                                      "deep.c")),
 			      f"the ejected build fetched the duplicate or missed the "
 			      f"nested one: {mk.stdout}{mk.stderr}")
@@ -41592,8 +41615,9 @@ def a_nested_copy_of_a_vendored_project_is_not_fetched(t):
 		with tarfile.open(os.path.join(tree, "release",
 		                               "fresh-1.0.tar.gz")) as tf:
 			names = set(tf.getnames())
-			check({"fresh-1.0/lib/lib.c", "fresh-1.0/mid/deep/deep.c"}
-			      <= names and "fresh-1.0/mid/lib/lib.c" not in names,
+			check({"fresh-1.0/lib/lib.c", "fresh-1.0/side/deep/deep.c"}
+			      <= names and "fresh-1.0/mid/lib/lib.c" not in names
+			      and "fresh-1.0/mid/extra/extra.c" not in names,
 			      f"the source tarball's submodules are wrong: "
 			      f"{sorted(names)}")
 			unpacked = os.path.join(work, "unpacked")
