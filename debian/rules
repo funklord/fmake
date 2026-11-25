@@ -19,10 +19,10 @@ override_dh_auto_build:
 # an error to anything else in this build. Measured with the recipe piping
 # through `head -0': install-check fails and no package is produced.
 #
-# Not the stale-artifact case that .DELETE_ON_ERROR fixes -- dpkg-build-
-# package runs `debian/rules clean' first and `clean' names both generated
-# files, so a package build cannot inherit one. It installs into a scratch
-# DESTDIR of its own and removes it on both paths.
+# Not the stale-artifact case: `make deb' builds with -nc, so a package
+# build can inherit a truncated file from a failed `make', and the
+# Makefile's .DELETE_ON_ERROR is what removes one. install-check installs
+# into a scratch DESTDIR of its own and removes it on both paths.
 #
 # Not hooks-check, which needs git -- developer tooling the package does
 # not carry and must not build-depend on.

@@ -90,9 +90,10 @@ MANDIR  = $(DESTDIR)$(PREFIX)/share/man/man1
 # Measured, with the script left unexecutable so the generation fails and
 # its mtime does not move: `Error 126', a zero-byte `fmake.1', and then a
 # second `make' that built only the completion and exited 0. `make install'
-# would have shipped the empty manual page. Not `make deb', which cleans
-# first -- measured too, and the reason install-check runs in the package
-# build is a different one, stated in debian/rules.
+# would have shipped the empty manual page, and so would `make deb', which
+# no longer cleans first (-nc, below) and so builds on whatever `make' left.
+# install-check runs in the package build for a different reason, stated
+# in debian/rules.
 #
 # One declaration rather than a `mv' dance in each recipe, because it also
 # covers the next rule somebody writes.
@@ -242,9 +243,20 @@ version-check:
 # dependency of producing the thing.
 # The package. dpkg-buildpackage drives debian/rules, which is three lines
 # of dh; everything the package declares is in debian/control.
+#
+# -nc, so a second `make deb' rebuilds nothing: without it dpkg-buildpackage
+# first runs `debian/rules clean', which is this file's clean, and every
+# package regenerated the manual page and the completion from nothing. The
+# debhelper stamp goes first, since while dh finds it it skips the whole
+# build sequence and packages whatever the last build left; and
+# debian/.debhelper, debhelper's own working state, which only the skipped
+# clean emptied. Not dh_clean, which also deletes every *.orig, *.rej and
+# *~ in the tree. A from-clean package is `make clean deb'.
 deb: version-check
 	@test -n "$(DEB_DIR)" || { echo "deb: DEB_DIR is empty, refusing" >&2; exit 1; }
-	dpkg-buildpackage -b -us -uc
+	rm -f debian/debhelper-build-stamp
+	rm -rf debian/.debhelper
+	dpkg-buildpackage -b -us -uc -nc
 	@mkdir -p $(DEB_DIR)
 	@for f in fmake_$(VERSION)_all.deb \
 	          fmake_$(VERSION)_$(DEB_ARCH).buildinfo \
