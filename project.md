@@ -707,7 +707,8 @@ that had been green about nothing for five commits ·
 [655. A widened file gets the include path its own includes need](#655-a-widened-file-gets-the-include-path-its-own-includes-need) ·
 [656. A release's source tarball carries the submodules](#656-a-releases-source-tarball-carries-the-submodules) ·
 [657. A failed guess is tried again once what linked in its place has gone](#657-a-failed-guess-is-tried-again-once-what-linked-in-its-place-has-gone) ·
-[658. The suite on eaafd5e, and the six failures that were its own](#658-the-suite-on-eaafd5e-and-the-six-failures-that-were-its-own)
+[658. The suite on eaafd5e, and the six failures that were its own](#658-the-suite-on-eaafd5e-and-the-six-failures-that-were-its-own) ·
+[659. An ejected build fetches one submodule at a time](#659-an-ejected-build-fetches-one-submodule-at-a-time)
 
 If you read one section, read §3: everything else follows from it. If you read
 two, read §14, which is where the design was checked against itself and lost
@@ -50214,5 +50215,37 @@ skipped. Section 657 was fmake's. The other six were the suite's.
 
 Checked by hand (section 15), since the session cannot run the suite:
 each changed half replayed with the working tree's fmake, and the suite
-parses.
+parses. The holder's run of `./selftest -j4` on 02e1b08: all 854
+passed, 10 skipped.
+
+## 659. An ejected build fetches one submodule at a time
+
+Each submodule's fetch rule in an ejected build (sections 647 and 654)
+ran `git -C <where> submodule update --init -- <path>` on its own, with
+no order between siblings. So `make -j` and ninja ran two at once in
+one repository. Both write its `.git/config`, and the second stopped:
+
+    error: could not lock config file .git/config: File exists
+    fatal: Failed to register url for submodule path 'mid'
+
+Measured on a fresh clone with three top-level submodules and a nested
+one, at `-j8`: 12 of 15 ejected Makefiles and 11 of 15 `build.ninja`
+files failed. ninja's default `-j` is wide enough for a reader who
+types `ninja` to meet it. Found while replaying section 654's case by
+hand: one `-j2` run failed and the next twelve did not.
+
+- **make:** each fetch rule now waits, order-only, for the one before
+  it as well as for its parent: `mid/.git: | lib/.git`.
+- **ninja:** the `submodule` rule runs in a pool of depth 1.
+
+Either way the compiles stay parallel. The order-only chain would serve
+ninja too, at a line per edge; the pool is ninja's own word for it.
+After the fix, 0 of 15 failed for each backend, and a second ninja does
+nothing.
+
+Case `two_ejected_fetches_in_one_repository_take_turns`. It asserts the
+chain and the pool, since one passing build of a race shows nothing,
+and then builds a fresh clone at `-j8` with each backend. Checked by
+hand (section 15): with this fmake both ejected files carry the order
+and build; with 02e1b08 neither does, and its Makefile fails at `-j8`.
 

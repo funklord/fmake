@@ -41809,6 +41809,83 @@ def an_ejected_build_fetches_the_submodule_too(t):
 
 
 @case
+def two_ejected_fetches_in_one_repository_take_turns(t):
+	"""Section 659. Each submodule's fetch rule ran `git -C . submodule
+	update --init' on its own, so `make -j' and ninja ran two at once in
+	one repository; both write its `.git/config', and the second stopped
+	on `could not lock config file .git/config: File exists'. Measured on
+	a fresh clone with two top-level submodules and a nested one: 12 of
+	15 ejected Makefiles and 11 of 15 build.ninja files failed at -j8.
+
+	The order is asserted as well as the build, because one passing
+	build of a race shows nothing: make chains each fetch order-only
+	after the one before, ninja puts them in a pool of depth 1."""
+	if not shutil.which("git"):
+		raise Skip("git not installed")
+	work = tempfile.mkdtemp(prefix="fmake-ejrace-")
+	env = dict(os.environ, GIT_ALLOW_PROTOCOL="file",
+	           GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="protocol.file.allow",
+	           GIT_CONFIG_VALUE_0="always")
+
+	def git(where, *a):
+		return subprocess.run(["git", "-C", where, *a], capture_output=True,
+		                      text=True, env=env)
+	try:
+		repos = {n: os.path.join(work, n) for n in ("one", "two", "app")}
+		for name, d in repos.items():
+			os.makedirs(d)
+			git(d, "init", "-q", ".")
+			git(d, "config", "user.email", "t@example.invalid")
+			git(d, "config", "user.name", "t")
+			if name != "app":
+				with open(os.path.join(d, name + ".c"), "w") as fh:
+					fh.write(f"int {name}_value(void){{ return 0; }}\n")
+				git(d, "add", "-A"); git(d, "commit", "-qm", name)
+		with open(os.path.join(repos["app"], "main.c"), "w") as fh:
+			fh.write("int one_value(void);\nint two_value(void);\n"
+			         "int main(void){ return one_value() + two_value(); }\n")
+		for sub in ("one", "two"):
+			if git(repos["app"], "submodule", "add", "-q", repos[sub],
+			       sub).returncode != 0:
+				raise Skip("this git will not add a submodule over a "
+				           "local path")
+		git(repos["app"], "add", "-A"); git(repos["app"], "commit", "-qm", "a")
+		tree = os.path.join(work, "fresh")
+		git(work, "clone", "-q", repos["app"], tree)
+		r = subprocess.run([FMAKE, "-C", tree], capture_output=True,
+		                   text=True, env=env)
+		check(r.returncode == 0, f"the tree does not build: {r.stdout}")
+		for backend, out in (("make", "Makefile"), ("ninja", "build.ninja")):
+			e = subprocess.run([FMAKE, "-C", tree, "--eject", backend],
+			                   capture_output=True, text=True, env=env)
+			check(e.returncode == 0, f"--eject {backend}: {e.stderr}")
+			if backend == "make":
+				check("two/.git: | one/.git" in e.stdout,
+				      f"the second fetch does not wait for the first: "
+				      f"{e.stdout}")
+			else:
+				check("pool = submodule_fetch" in e.stdout
+				      and "depth = 1" in e.stdout,
+				      f"ninja's fetches are not in a pool of one: "
+				      f"{e.stdout}")
+			if not shutil.which(backend):
+				continue
+			other = os.path.join(work, backend)
+			git(work, "clone", "-q", repos["app"], other)
+			with open(os.path.join(other, out), "w") as fh:
+				fh.write(e.stdout)
+			b = subprocess.run([backend, "-C", other, "-j8"],
+			                   capture_output=True, text=True, env=env,
+			                   timeout=300)
+			check(b.returncode == 0
+			      and os.path.isfile(os.path.join(other, "two", "two.c")),
+			      f"the ejected {backend} build failed at -j8: "
+			      f"{b.stdout[-600:]}{b.stderr[-600:]}")
+	finally:
+		shutil.rmtree(work, ignore_errors=True)
+
+
+@case
 def an_ejected_build_fetches_a_nested_source_and_skips_a_filled_tree(t):
 	"""Two faults in the ejected fetch, both found by building real trees.
 

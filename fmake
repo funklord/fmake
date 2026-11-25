@@ -23429,6 +23429,7 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# ---- submodules " + "-" * 46)
 		a("")
 		_comma_said = False
+		_before = None
 		for path, parent, where, spec in sub_rows:
 			# The target is a Make path and the argument is a shell word,
 			# and they are quoted differently for that reason. What the
@@ -23459,8 +23460,18 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				_get = _get.replace(",", "$(fmake_comma)")
 				_where = _where.replace(",", "$(fmake_comma)")
 			# A nested one waits for its parent, which is what puts
-			# its `.gitmodules' there to be read.
-			a(f"{path}/.git:" + (f" | {parent}/.git" if parent else ""))
+			# its `.gitmodules' there to be read. And each waits for
+			# the fetch before it, so they run one at a time: two
+			# `submodule update --init' in one repository both write
+			# its `.git/config', and the second stops on `could not
+			# lock config file' -- 12 of 15 fresh clones failed so at
+			# -j8, with `lib' and `mid' fetched side by side
+			# (section 659).
+			_after = [p for p in (parent, _before) if p]
+			a(f"{path}/.git:" + (" | " + " ".join(
+			    f"{p}/.git" for p in dict.fromkeys(_after))
+			    if _after else ""))
+			_before = path
 			a(f"\t$(if {_have},,@echo {_say})")
 			a(f"\t$(if {_have},,git -C {_where} submodule update --init "
 			  f"-- {_get})")
@@ -24507,7 +24518,17 @@ def eject_ninja(targets, closures, resolutions, cfg, incflags, root, conf,
 	sub_rows = eject_submodules(root, conf)
 	subs = [r[0] for r in sub_rows]
 	if subs:
+		# One fetch at a time, for the reason the make backend gives:
+		# two in one repository race for its `.git/config' lock, and
+		# ninja's default -j is wide enough to lose it (11 of 15 fresh
+		# clones at -j8). A pool serialises them and leaves the
+		# compiles parallel, which an order-only chain would too, at
+		# the cost of a line per edge.
+		a("pool submodule_fetch")
+		a("  depth = 1")
+		a("")
 		a("rule submodule")
+		a("  pool = submodule_fetch")
 		# `qpath' rather than `$path', because ninja shell-quotes $in and
 		# $out when it expands them into a command and does NOT quote a
 		# variable of your own. Measured: a rule whose command holds a
