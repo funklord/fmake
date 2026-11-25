@@ -1318,7 +1318,7 @@ fmake --explain          print every decision and why
 fmake --compile-commands write compile_commands.json for clangd
 fmake --install          install artifacts and @headers
 fmake --eject > Makefile leave, taking the build with you
-fmake --eject deb        write debian/ and a Makefile; dpkg-buildpackage does the rest
+fmake --eject deb        write debian/ and a Makefile; make deb builds the package
 fmake --eject ebuild     write gentoo/<category>/<name>/ and the Makefile
 fmake --eject apk        write alpine/APKBUILD and the Makefile; abuild does the rest
 fmake --release          everything downloadable, with checksums, and a page

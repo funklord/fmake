@@ -22837,7 +22837,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# once. BUILD_DIR replacing OBJDIR is two characters longer and put
 	# three assignments out of line, which is what a hand-spaced table does
 	# the first time a name changes.
-	width = len(P) + len("CFLAGS_LAST")
+	# ENV_CPPFLAGS is the longest outside a fragment, which has none.
+	width = len(P) + len("CFLAGS_LAST" if fragment else "ENV_CPPFLAGS")
 
 	def var(name, value, how="=", own=True):
 		"""One assignment, padded to the widest name this file emits.
@@ -22958,6 +22959,25 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 				a(f"{name}_LDIRS := $(shell {pc_env}$(PKG_CONFIG) "
 				  f"{moved}--libs-only-L {module})")
 		a("")
+	# What a packager hands in through the environment -- dpkg's
+	# hardening under dh, Portage's CFLAGS under emake, abuild's -- is
+	# added after this file's flags and each file's own, the way fmake
+	# adds $CFLAGS and $LDFLAGS itself. Captured here, before the
+	# assignments below replace them: make imports the environment, but a
+	# plain assignment in the file wins over it, and that is how every
+	# ejected package was built with none of Debian's hardening, no -g
+	# and no _FORTIFY_SOURCE -- measured on this file's own fixture,
+	# 2026-11-26. Only the environment: `make CFLAGS=...' on the command
+	# line still replaces the set, as it always did. Not in a fragment,
+	# whose parent owns these names.
+	if not fragment:
+		a("# Flags from the environment, added after this file's own: a")
+		a("# package build's (dh, emake, abuild hand them in this way).")
+		a("# `make CFLAGS=...' on the command line still replaces the set.")
+		for name in ENV_FLAG_NAMES:
+			a(var(f"ENV_{name}",
+			      f"$(if $(findstring environment,$(origin {name})),"
+			      f"$({name}))", ":="))
 	a(var("CFLAGS", common))
 	a(var("CXXFLAGS", common))
 	# Emitted separately so it stays after each file's own flags, which is
@@ -22970,7 +22990,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# out a second time -- a recursive `=' expands when the recipe runs, by
 	# which point every conditional in this file has been decided.
 	a(var("LDFLAGS", [f"$({P}CFLAGS)", f"$({P}CFLAGS_LAST)"]
-	      + _eject_flags(cfg.ldflags, root, _mk_flag)))
+	      + _eject_flags(cfg.ldflags, root, _mk_flag)
+	      + ([] if fragment else ["$(ENV_LDFLAGS)"])))
 	if any_crate:
 		# rustc has no CC/CFLAGS convention to inherit, so both are ours
 		# and both are plain assignments even in a fragment: a parent
@@ -23001,6 +23022,15 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	# become part of the stamp's contents and a tree would rebuild when a
 	# variable nothing here owns changed.
 	a(var("FLAVOUR", "", ":="))
+	if not fragment:
+		# The environment's flags are part of what every object was
+		# compiled with, so they go in the stamp: a plain `make' after a
+		# package build, or the other way round, recompiles rather than
+		# linking objects built under the other set. Empty, and so the
+		# stamp unchanged, wherever none were handed in.
+		a(var("FLAVOUR", "$(if $(strip " + " ".join(
+		    f"$(ENV_{n})" for n in ENV_FLAG_NAMES) + "),"
+		    + "".join(f"[$(ENV_{n})]" for n in ENV_FLAG_NAMES) + ")", ":="))
 	a("")
 
 	# DEBUG and SANITIZE survive the exit.
@@ -23155,7 +23185,8 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("# than its input, so nothing would rebuild it.")
 		a(".DELETE_ON_ERROR:")
 		a("")
-		a(".PHONY: all clean FORCE" + (" " + phonies if phonies else ""))
+		a(".PHONY: all clean FORCE" + ("" if win else " deb")
+		  + (" " + phonies if phonies else ""))
 		a(f"all: {names}" + (" " + pc_files if pc_files else ""))
 	a("")
 	# After the default goal, so it cannot become one. `cmp' rather than a
@@ -23175,8 +23206,11 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		a("else")
 	a(f"$({P}FLAVOUR_STAMP): {P}FORCE")
 	a(mkdir("$(@D)"))
-	a(f"\t@printf '%s\\n' '$({P}FLAVOUR)' | cmp -s - $@ || \\")
-	a(f"\t\tprintf '%s\\n' '$({P}FLAVOUR)' > $@")
+	# Quoted for the shell: the environment's flags are in it, and
+	# nothing keeps a quote out of those.
+	quoted = f"'$(subst ','\\'',$({P}FLAVOUR))'"
+	a(f"\t@printf '%s\\n' {quoted} | cmp -s - $@ || \\")
+	a(f"\t\tprintf '%s\\n' {quoted} > $@")
 	if win:
 		a("endif")
 	a("")
@@ -23592,8 +23626,10 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 		# `compile_cmd' tells it.
 		xf = module_lang_flag(u, cfg.driver(u.cxx))
 		xflag = (" ".join(xf) + " ") if xf else ""
+		env = ("" if fragment else
+		       f"$(ENV_CPPFLAGS) $(ENV_{flags}) ")
 		a(f"\t$({var}) $({P}{flags}){' ' + own if own else ''} $({P}CFLAGS_LAST) "
-		  f"-c {xflag}$< -o $@ {dep}")
+		  f"{env}-c {xflag}$< -o $@ {dep}")
 		a("")
 
 	if crate_libs:
@@ -24015,6 +24051,30 @@ def eject_make(targets, closures, resolutions, cfg, incflags, root, conf,
 	if win:
 		a("endif")
 	a("")
+	if not fragment and not win:
+		# The package `--eject deb' writes, built so a second one compiles
+		# nothing. dpkg-buildpackage without -nc runs `debian/rules clean'
+		# first -- this file's clean, under dh -- and every package was
+		# built from nothing: the holder's report of 2026-11-25, for every
+		# tree here. The stamp goes, or dh skips the build sequence and
+		# packages whatever the last build left; so does debian/.debhelper,
+		# where dh_strip collects each build's debug file and which only
+		# the skipped clean emptied, or -dbgsym ships every old binary's.
+		# Not dh_clean, which deletes every *.orig, *.rej and *~ in the
+		# tree. Emitted in every Makefile, since the deb, ebuild and apk
+		# emitters write the same one; without debian/ it says so.
+		a("# The package `fmake --eject deb' writes, rebuilding only what")
+		a("# changed; `make clean deb' builds it from nothing. -nc skips")
+		a("# the pre-clean, so debhelper's stamp and its working state go")
+		a("# by name instead: with either left, dh skips the build or")
+		a("# -dbgsym ships the debug files of every earlier build.")
+		a("deb:")
+		a("\t@test -f debian/rules || { echo 'deb: no debian/ here; "
+		  "fmake --eject deb writes one' >&2; exit 1; }")
+		a("\trm -f debian/debhelper-build-stamp")
+		a("\trm -rf debian/.debhelper")
+		a("\tdpkg-buildpackage -b -us -uc -nc")
+		a("")
 	# One named list rather than every object spelled out again on the
 	# -include line. That line worked and was unpleasant to hand-edit, in a
 	# file whose header invites hand-editing.
@@ -26503,6 +26563,11 @@ def deb_packages(targets, closures, root, conf, src_name):
 	return list(packages.values())
 
 
+#: The flags a packager hands an ejected Makefile through the environment,
+#: in the order the stamp records them.
+ENV_FLAG_NAMES = ("CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS")
+
+
 def refuse_to_overwrite(root, made, makefile):
 	"""A packaging that exists is somebody's; a Makefile that matches is ours.
 
@@ -26545,6 +26610,27 @@ def _deb_wrap(text):
 			out.append(" " + line)
 		out.append(" .")
 	return "\n".join(out[:-1]) if out else ""
+
+
+def _deb_opt_append(cfg):
+	"""debian/rules lines putting the tree's optimisation back after dpkg's.
+
+    dh hands the build dpkg's CFLAGS, which carry -O2, and the ejected
+    Makefile adds them after its own -- so -O2 would win over the -Os the
+    tree's release build asks for. dpkg-buildflags appends
+    DEB_<FLAG>_MAINT_APPEND after its own set, which is the documented way
+    to keep a package's choice. The release band unless the flags were
+    forced at eject, in which case the forced set is the tree's choice.
+    """
+	band = (opt_bands(cfg.sdcc)[0] if cfg.opt_flags else cfg.override)
+	opt = [f for f in band if f.startswith("-O")]
+	if not opt:
+		return []
+	return ["# dpkg's flags carry -O2 and come after the tree's own, so the",
+	        f"# tree's {opt[-1]} is put back after them.",
+	        f"export DEB_CFLAGS_MAINT_APPEND = {opt[-1]}",
+	        f"export DEB_CXXFLAGS_MAINT_APPEND = {opt[-1]}",
+	        ""]
 
 
 def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
@@ -26773,6 +26859,7 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 	     "%:",
 	     "\tdh $@",
 	     "",
+	     ] + _deb_opt_append(cfg) + [
 	     "override_dh_auto_build:",
 	     "\t$(MAKE) $(CROSS)",
 	     "",
@@ -26942,7 +27029,8 @@ def eject_deb(targets, closures, resolutions, root, conf, cfg, pkg,
 		print(f"{GREEN('->')} {w}")
 	info(f"wrote a Debian source package for {src_name} {version} "
 	     f"({', '.join(p['name'] for p in packages)}); build it with "
-	     f"`dpkg-buildpackage -b -us -uc'")
+	     f"`make deb', which rebuilds only what changed, or "
+	     f"`dpkg-buildpackage -b -us -uc' from clean")
 	return 0
 
 

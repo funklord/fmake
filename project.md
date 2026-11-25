@@ -19602,6 +19602,67 @@ contain `#DEBHELPER#`, or the snippets that start and restart the
 service are dropped without a word -- netcfgd shipped that way for
 months.
 
+**A second `make deb` compiles nothing, and the package is built with
+Debian's flags added to the tree's** (2026-11-26, from the holder's
+report that `make deb` rebuilt everything in every tree, inbox
+20261125T1430Z). Two faults, both measured on the selftest's fixture
+before the change:
+
+- `dpkg-buildpackage -b -us -uc` runs `debian/rules clean` first, which
+  under dh is the ejected `clean`, so every package was built from
+  nothing. The ejected Makefile gains `deb`: remove
+  `debian/debhelper-build-stamp` (while dh finds it, it skips the build
+  sequence and packages what the last build left), remove
+  `debian/.debhelper` (dh_strip collects each build's debug file there
+  and dh_prep never empties it: with the stamp alone, `-dbgsym` held the
+  old binary's debug file beside the new one's), then
+  `dpkg-buildpackage -b -us -uc -nc`. Not `dh_clean`, which also deletes
+  every `*.orig`, `*.rej` and `*~` in the tree. `make clean deb` is the
+  from-clean build, and so is calling dpkg-buildpackage directly. The
+  target is in every ejected Makefile, since the three packaging emitters
+  write the same one, and says so when there is no `debian/`.
+- **The package had none of Debian's flags.** dh hands the build
+  dpkg-buildflags' set through the environment, and the Makefile's own
+  `CFLAGS = -I.` replaced it: the compile line was `-Os
+  -ffunction-sections -fdata-sections -I.`, with no `-g`, no stack
+  protector, no `_FORTIFY_SOURCE`, no relro on the link, and no debug
+  information for `-dbgsym` to carry. The Makefile now captures `CPPFLAGS`, `CFLAGS`,
+  `CXXFLAGS` and `LDFLAGS` from the environment before its own
+  assignments, as `ENV_*`, and adds them after each file's own flags --
+  the place fmake gives `$CFLAGS` -- and `$(ENV_LDFLAGS)` to the link.
+  Only the environment: `make CFLAGS=...` still replaces the set. This
+  serves the ebuild and the APKBUILD too, whose emake and abuild hand
+  flags the same way and which were ignored the same way.
+  `debian/rules` exports `DEB_CFLAGS_MAINT_APPEND` and its C++ twin as
+  the tree's release `-O` (or the forced set's, where `--cflags` forced
+  one), so dpkg's `-O2`, which now lands after the tree's `-Os`, does not
+  win.
+
+The environment's flags go into the flavour stamp, so a plain `make`
+after a package build recompiles rather than linking objects built under
+the other set, and the other way round. **A separate object tree,
+`DEB_BUILD_DIR`, was the other answer and is rejected here for the
+reason the stamp's own comment gives**: the binaries land at the root,
+not under `BUILD_DIR`, so after a package build a plain `make` would find
+`greetd` newer than its plain objects and relink nothing -- the
+package's binary left in the plain tree. So switching between the two
+costs one rebuild each way, and repeating either costs nothing:
+
+    make, make deb, make deb, edit + make deb, make, make
+    compiles  2, 2, 0, 1, 2, 0
+
+`a_second_make_deb_compiles_nothing_and_takes_debians_flags` holds that
+sequence, every dpkg CPPFLAGS and CFLAGS word on each package compile
+with `-Os` last, dpkg's LDFLAGS on the link, and exactly one debug file
+in `-dbgsym`, named for the shipped binary's build-id, after three
+package builds. Without the `.debhelper` removal it fails with two debug
+files; without the environment's flags on the compile line, naming
+every missing flag.
+
+One edge, left: flags in the environment when `--eject` runs are baked
+into `CFLAGS_LAST`, as forcing them always meant, so building with the
+same environment passes them twice. A repeated flag changes nothing.
+
 **Refused rather than invented**: no `LICENSE`, a `LICENSE` matching no
 known text, SPDX lines that disagree, no `VERSION`, no maintainer, a
 name Debian's package-name rule rejects, a service in a tree of several

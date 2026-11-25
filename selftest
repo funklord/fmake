@@ -13417,6 +13417,109 @@ def u_toml(u):
 
 
 @case
+def a_second_make_deb_compiles_nothing_and_takes_debians_flags(t):
+	"""`make deb' in an ejected tree rebuilds only what changed, and the
+	package is built with dpkg's flags added to the tree's own.
+
+    Both were wrong until 2026-11-26. dpkg-buildpackage without -nc runs
+    `debian/rules clean' first, which under dh is the ejected clean, so
+    every package was built from nothing; and the ejected Makefile's own
+    `CFLAGS = ...' replaced the CFLAGS dh hands the build, so every package
+    went out with no -g, no stack protector and no _FORTIFY_SOURCE --
+    measured on this case's fixture, the compile line read `-Os
+    -ffunction-sections -fdata-sections -I.' and nothing else.
+
+    Asserted, in order: a plain `make' compiles both sources; `make deb'
+    compiles both again, since dpkg's flags are a different set and the
+    flavour stamp records them; a second `make deb' compiles nothing; an
+    edit to one source compiles that one; a plain `make' afterwards
+    compiles both, under the tree's flags alone, and a second compiles
+    nothing. Each package compile carries every one of dpkg-buildflags'
+    CPPFLAGS and CFLAGS with the tree's -Os last, the link carries its
+    LDFLAGS, and the -dbgsym package holds exactly one debug file, named for
+    the shipped binary's build-id -- after three package builds, so a
+    debhelper working directory left between them would have shown as
+    more. The environment's own flags are removed first: dh fills in only
+    what is unset."""
+	_deb_tools()
+	for tool in ("make", "cc", "readelf", "dpkg-buildflags"):
+		if not shutil.which(tool):
+			raise Skip(f"{tool} not installed")
+	_deb_tree(t)
+	_run_in(_src(t), "git", "init", "-q", ".")
+	_run_in(_src(t), "git", "-c", "user.name=t", "-c", "user.email=t@t",
+	        "commit", "-q", "--allow-empty", "-m", "init")
+	r = _deb(t, "--eject", "deb")
+	check(r.returncode == 0, f"--eject deb failed: {r.stdout}{r.stderr}")
+	shutil.rmtree(os.path.join(_src(t), ".fmake"), ignore_errors=True)
+	bare = {k: "" for k in ("CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS")}
+
+	def run(*target):
+		# Unset, not empty: an empty CFLAGS in the environment is still
+		# "set" to dh, and would be handed on as it is.
+		e = {k: v for k, v in os.environ.items()
+		     if k not in bare and k not in ("MAKEFLAGS", "MAKELEVEL",
+		                                    "MFLAGS")}
+		b = subprocess.run(["make", *target], cwd=_src(t),
+		                   capture_output=True, text=True, env=e)
+		check(b.returncode == 0,
+		      f"make {' '.join(target)} failed:\n{b.stdout}\n{b.stderr}")
+		return [l for l in b.stdout.splitlines()
+		        if re.match(r"^cc .* -c ", l)], b.stdout
+
+	got = []
+	got.append(len(run()[0]))
+	deb1, out = run("deb")
+	got.append(len(deb1))
+	got.append(len(run("deb")[0]))
+	with open(os.path.join(_src(t), "hello.c"), "a") as fh:
+		fh.write("int hello_probe(void){ return 3; }\n")
+	got.append(len(run("deb")[0]))
+	got.append(len(run()[0]))
+	got.append(len(run()[0]))
+	check(got == [2, 2, 0, 1, 2, 0],
+	      f"compiles per step (make, deb, deb, edit+deb, make, make) were "
+	      f"{got}, expected [2, 2, 0, 1, 2, 0]")
+
+	def flags(name):
+		return subprocess.run(["dpkg-buildflags", "--get", name],
+		                      capture_output=True, text=True).stdout.split()
+	want = [f for f in flags("CPPFLAGS") + flags("CFLAGS")
+	        if not f.startswith("-ffile-prefix-map=")]
+	check(want, "dpkg-buildflags printed nothing: this compares nothing")
+	for line in deb1:
+		words = line.split()
+		missing = [f for f in want if f not in words]
+		check(not missing, f"a package compile lacks dpkg's {missing}: {line}")
+		opts = [w for w in words if w.startswith("-O")]
+		check(opts and opts[-1] == "-Os",
+		      f"the tree's -Os is not the last -O in the package: {line}")
+	links = [l for l in out.splitlines() if l.startswith("cc -o greetd ")]
+	check(links and all(f in links[0].split() for f in flags("LDFLAGS")),
+	      f"the package link lacks dpkg's LDFLAGS: {links}")
+
+	prog = next(os.path.join(t.dir, n) for n in os.listdir(t.dir)
+	            if n.startswith("greetd_") and n.endswith(".deb"))
+	dbg = next(os.path.join(t.dir, n) for n in os.listdir(t.dir)
+	           if n.startswith("greetd-dbgsym_") and n.endswith(".deb"))
+	root = os.path.join(t.dir, "unpacked")
+	subprocess.run(["dpkg-deb", "-x", prog, root], check=True)
+	note_ = subprocess.run(["readelf", "-n",
+	                        os.path.join(root, "usr/bin/greetd")],
+	                       capture_output=True, text=True).stdout
+	m = re.search(r"Build ID: ([0-9a-f]+)", note_)
+	check(m, f"the shipped greetd carries no build-id: {note_}")
+	listing = subprocess.run(["dpkg-deb", "-c", dbg], capture_output=True,
+	                         text=True).stdout
+	debug = [l.split()[-1] for l in listing.splitlines()
+	         if l.endswith(".debug")]
+	bid = m.group(1)
+	check(debug == [f"./usr/lib/debug/.build-id/{bid[:2]}/{bid[2:]}.debug"],
+	      f"greetd-dbgsym should hold exactly the shipped binary's debug "
+	      f"file, build-id {bid}: {debug}")
+
+
+@case
 def an_ebuild_is_ejected_in_gentoos_words(t):
 	"""Section 227's other emitter, proved by reading, and it says so.
 
@@ -42705,7 +42808,13 @@ def an_ejected_clean_names_what_it_removes(t):
 
 	body = "\n".join(l for l in r.stdout.splitlines()
 	                  if not l.lstrip().startswith("#"))
-	check("rm -rf" not in body, "the ejected build still has an rm -rf")
+	# One exception, a literal path: `deb' removes debhelper's own
+	# working directory, which -nc no longer has dh_clean empty, or
+	# -dbgsym ships every earlier build's debug files. A computed path
+	# under rm -rf is what this guards against; that line names its own.
+	rmrf = [l.strip() for l in body.splitlines() if "rm -rf" in l]
+	check(rmrf in ([], ["rm -rf debian/.debhelper"]),
+	      f"the ejected build has an rm -rf besides debhelper's: {rmrf}")
 	check("*" not in body.split("clean:")[-1],
 	      f"the clean target has a wildcard: {body.split('clean:')[-1][:200]}")
 
