@@ -6,6 +6,17 @@
 # Nothing to build: fmake is a script.
 override_dh_auto_build:
 
+# dh_auto_clean would run the Makefile's distclean, the first of distclean,
+# realclean and clean it finds -- `rm -rf build`, every package `make deb`
+# collected there, from a dpkg-buildpackage run only to make one more.
+# `make deb` passes -nc and runs none of this; Debian's builders and a bare
+# dpkg-buildpackage do. dh_clean removes debhelper's own state; this removes
+# what the build generates in the tree, which a source package built
+# afterwards would otherwise carry, and leaves build/ alone.
+override_dh_auto_clean:
+	rm -f fmake.1 fmake.bash
+	find . -name .git -prune -o -name __pycache__ -type d -prune -exec rm -rf {} +
+
 # The suite needs a compiler, a linker and several optional libraries --
 # fine on a developer's machine and not something a package build should
 # depend on. The version check needs none of that, and it is the one thing

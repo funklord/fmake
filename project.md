@@ -19659,6 +19659,17 @@ package builds. Without the `.debhelper` removal it fails with two debug
 files; without the environment's flags on the compile line, naming
 every missing flag.
 
+**fmake's own package: a bare `dpkg-buildpackage` keeps `build/`**
+(2026-11-26). `make deb` passes `-nc`; Debian's builders and anybody
+typing the command do not, and with no `override_dh_auto_clean` dh ran
+the Makefile's `distclean` -- `rm -rf build`, every package `make deb`
+had collected. `debian/rules` now cleans only what the build generates in
+the tree (`fmake.1`, `fmake.bash`, `__pycache__`, which a source package
+would otherwise carry); debhelper's own state is `dh_clean`'s. Measured in
+a scratch clone: a file under `build/` gone after a bare build before,
+kept after; two `make deb` and the bare build give the same package,
+byte for byte; lintian clean.
+
 One edge, left: flags in the environment when `--eject` runs are baked
 into `CFLAGS_LAST`, as forcing them always meant, so building with the
 same environment passes them twice. A repeated flag changes nothing.
